@@ -177,6 +177,14 @@ def rules_for(relative: Path) -> tuple[str, tuple[str, ...]] | None:
         return ("api/browser", ("state", "compat", "renderer", "rendergraph", "glutin"))
     if first == "api" and (second == "native" or relative.name == "native.rs"):
         return ("api/native", ("state", "compat"))
+    # EGL/WGL files are native context-provider implementations from the frozen
+    # Checkpoint A stack: they drive GL through glow plus their platform loader
+    # (khronos-egl / glutin_wgl_sys), so unlike core-profile files they may name
+    # glow, but they must never reach state, compat, or browser APIs.
+    if first == "api" and (second == "egl" or relative.name == "egl.rs"):
+        return ("api/egl-provider", ("state", "compat", "web_sys", "js_sys", "wasm_bindgen"))
+    if first == "api" and (second == "wgl" or relative.name == "wgl.rs"):
+        return ("api/wgl-provider", ("state", "compat", "web_sys", "js_sys", "wasm_bindgen"))
     if first == "api":
         return ("api/core-profile", ("state", "compat", "platform", "renderer", "rendergraph", "web_sys", "glow", "glutin"))
     if first == "state" or relative.name == "state.rs":

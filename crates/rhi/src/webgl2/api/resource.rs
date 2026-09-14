@@ -1,6 +1,6 @@
 //! Platform-neutral resource descriptions and validation.
 
-use super::{BufferId, GlFormat, TextureId};
+use super::{BufferId, GlFormat, RenderbufferId, TextureId};
 
 /// Buffer operations permitted for a resource.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +80,31 @@ pub(crate) enum GlTextureDimension {
     D3,
     Cube,
     D2Array,
+}
+
+/// Immutable creation facts for a renderbuffer.
+///
+/// Renderbuffers are the GL-family's render-only two-dimensional attachment
+/// storage; they are never sampled and never mipmapped, so the descriptor is
+/// deliberately narrower than [`GlTextureDesc`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GlRenderBufferDesc {
+    pub format: GlFormat,
+    pub width: u32,
+    pub height: u32,
+    pub samples: u32,
+}
+
+impl GlRenderBufferDesc {
+    pub(crate) fn validate(self) -> Result<(), GlResourceValidationError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(GlResourceValidationError::ZeroRenderBufferExtent);
+        }
+        if self.samples == 0 {
+            return Err(GlResourceValidationError::ZeroSampleCount);
+        }
+        Ok(())
+    }
 }
 
 /// Texture operations permitted for a resource.
@@ -323,6 +348,7 @@ pub(crate) enum GlResourceValidationError {
     ZeroRangeSize,
     BufferRangeOutOfBounds,
     ZeroTextureExtent,
+    ZeroRenderBufferExtent,
     ZeroMipLevelCount,
     ZeroSampleCount,
     EmptyTextureUsage,
@@ -349,8 +375,16 @@ pub(crate) trait GlResourceApi: super::GlFamilyApi {
     fn create_buffer_resource(&mut self, desc: GlBufferDesc) -> Result<BufferId, super::GlError>;
     fn create_texture_resource(&mut self, desc: GlTextureDesc)
     -> Result<TextureId, super::GlError>;
+    fn create_render_buffer(
+        &mut self,
+        desc: GlRenderBufferDesc,
+    ) -> Result<RenderbufferId, super::GlError>;
     fn destroy_buffer_resource(&mut self, buffer: BufferId) -> Result<(), super::GlError>;
     fn destroy_texture_resource(&mut self, texture: TextureId) -> Result<(), super::GlError>;
+    fn destroy_render_buffer(
+        &mut self,
+        render_buffer: RenderbufferId,
+    ) -> Result<(), super::GlError>;
 }
 
 #[cfg(test)]
@@ -386,6 +420,24 @@ mod tests {
             }
             .validate_for(d),
             Err(GlResourceValidationError::BufferRangeOutOfBounds)
+        );
+    }
+    #[test]
+    fn renderbuffer_descriptors_reject_zero_extent_and_samples() {
+        let base = GlRenderBufferDesc {
+            format: GlFormat::Rgba8Unorm,
+            width: 4,
+            height: 4,
+            samples: 4,
+        };
+        assert_eq!(base.validate(), Ok(()));
+        assert_eq!(
+            GlRenderBufferDesc { width: 0, ..base }.validate(),
+            Err(GlResourceValidationError::ZeroRenderBufferExtent)
+        );
+        assert_eq!(
+            GlRenderBufferDesc { samples: 0, ..base }.validate(),
+            Err(GlResourceValidationError::ZeroSampleCount)
         );
     }
     #[test]

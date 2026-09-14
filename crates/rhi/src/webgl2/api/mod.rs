@@ -8,6 +8,7 @@
     reason = "Layer 1 re-exports are the stable private seam for later state and compat layers"
 )]
 
+mod binding;
 #[cfg(all(target_arch = "wasm32", feature = "webgl2"))]
 mod browser;
 mod compute;
@@ -42,6 +43,7 @@ mod vertex;
 #[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 mod wgl;
 
+pub(crate) use binding::*;
 pub(crate) use compute::*;
 pub(crate) use copy::*;
 
@@ -70,9 +72,9 @@ pub(crate) use mock::{MockCall, MockComputeStorageApi, MockGlFamilyApi};
 pub(crate) use object::{
     BufferId, BufferObject, ContextEpoch, ContextStamp, DeviceIdentity, FramebufferId,
     FramebufferObject, GlObjectKind, ObjectIdentity, OwnerThreadIdentity, ProgramId, ProgramObject,
-    QueryId, QueryObject, SamplerId, SamplerObject, ShaderId, ShaderObject, SurfaceImageId,
-    SurfaceImageObject, SyncId, SyncObject, TextureId, TextureObject, VertexArrayId,
-    VertexArrayObject,
+    QueryId, QueryObject, RenderbufferId, RenderbufferObject, SamplerId, SamplerObject, ShaderId,
+    ShaderObject, SurfaceImageId, SurfaceImageObject, SyncId, SyncObject, TextureId, TextureObject,
+    VertexArrayId, VertexArrayObject,
 };
 pub(crate) use presentation::*;
 pub(crate) use profile::{GlFamilyProfile, GlVersion};

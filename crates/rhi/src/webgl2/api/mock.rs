@@ -11,6 +11,8 @@ pub enum MockCall {
     DestroyBuffer(BufferId),
     CreateTexture(TextureId),
     DestroyTexture(TextureId),
+    CreateRenderBuffer(RenderbufferId),
+    DestroyRenderBuffer(RenderbufferId),
     CreateSampler(SamplerId),
     DestroySampler(SamplerId),
     CreateShader(ShaderId),
@@ -38,8 +40,38 @@ pub enum MockCall {
         source: TextureId,
         destination: TextureId,
     },
+    UploadBuffer {
+        buffer: BufferId,
+        offset: u64,
+        size: u64,
+    },
+    ReadBuffer {
+        buffer: BufferId,
+        offset: u64,
+        size: u64,
+    },
     UploadTexture(TextureId),
     ReadTexture(TextureId),
+    ActiveTexture(u32),
+    BindTexture {
+        unit: u32,
+        target: GlTextureTarget,
+        texture: Option<TextureId>,
+    },
+    BindSampler {
+        unit: u32,
+        sampler: Option<SamplerId>,
+    },
+    BindUniformBuffer {
+        index: u32,
+        buffer: Option<BufferId>,
+        offset: u32,
+        size: u32,
+    },
+    BlitFramebuffer {
+        source: FramebufferId,
+        destination: FramebufferId,
+    },
     CreateFence(GlFenceLease),
     DestroyFence(GlFenceLease),
     PollFence(GlFenceLease),
@@ -81,6 +113,7 @@ pub struct MockGlFamilyApi {
     next_slot: u32,
     buffers: BTreeMap<BufferId, GlBufferDesc>,
     textures: BTreeMap<TextureId, GlTextureDesc>,
+    render_buffers: BTreeMap<RenderbufferId, GlRenderBufferDesc>,
     samplers: BTreeSet<SamplerId>,
     shaders: BTreeSet<ShaderId>,
     programs: BTreeSet<ProgramId>,
@@ -107,6 +140,7 @@ impl MockGlFamilyApi {
             next_slot: 0,
             buffers: BTreeMap::new(),
             textures: BTreeMap::new(),
+            render_buffers: BTreeMap::new(),
             samplers: BTreeSet::new(),
             shaders: BTreeSet::new(),
             programs: BTreeSet::new(),
@@ -219,6 +253,33 @@ impl MockGlFamilyApi {
             None => self.invalid(op, "texture is not live"),
         }
     }
+    fn render_buffer(
+        &mut self,
+        op: &'static str,
+        id: RenderbufferId,
+    ) -> Result<GlRenderBufferDesc, GlError> {
+        self.stamp(op, id.context)?;
+        match self.render_buffers.get(&id).copied() {
+            Some(desc) => Ok(desc),
+            None => self.invalid(op, "renderbuffer is not live"),
+        }
+    }
+    fn binding_limits(&self) -> GlBindingLimits {
+        let limits = self.discovery.limits();
+        GlBindingLimits {
+            max_texture_units: limits.max_combined_texture_image_units,
+            max_uniform_buffer_bindings: limits.max_uniform_buffer_bindings,
+            uniform_buffer_offset_alignment: limits.uniform_buffer_offset_alignment,
+        }
+    }
+    fn invalid_binding(&mut self, op: &'static str, error: GlBindingValidationError) -> GlError {
+        let error = GlError::Validation {
+            operation: op,
+            message: error.message().into(),
+        };
+        self.error(error.clone());
+        error
+    }
     fn live<K: GlObjectKind, F: FnOnce(&Self) -> bool>(
         &mut self,
         op: &'static str,
@@ -235,6 +296,7 @@ impl MockGlFamilyApi {
     fn reset_objects(&mut self) {
         self.buffers.clear();
         self.textures.clear();
+        self.render_buffers.clear();
         self.samplers.clear();
         self.shaders.clear();
         self.programs.clear();
@@ -471,6 +533,56 @@ impl GlResourceApi for MockGlFamilyApi {
         self.calls.push(MockCall::DestroyTexture(id));
         Ok(())
     }
+    fn create_render_buffer(
+        &mut self,
+        desc: GlRenderBufferDesc,
+    ) -> Result<RenderbufferId, GlError> {
+        self.ready("create-render-buffer")?;
+        desc.validate().map_err(|_| GlError::Validation {
+            operation: "create-render-buffer",
+            message: "invalid renderbuffer descriptor".into(),
+        })?;
+        let limits = self.discovery.limits();
+        if desc.samples > limits.max_samples
+            || desc.width > limits.max_renderbuffer_size
+            || desc.height > limits.max_renderbuffer_size
+        {
+            return self.invalid(
+                "create-render-buffer",
+                "renderbuffer samples or extent exceed the discovered limits",
+            );
+        }
+        let facts = self
+            .discovery
+            .formats()
+            .get_for(
+                GlFormatResourceKind::Renderbuffer,
+                desc.format,
+                desc.samples,
+            )
+            .ok_or_else(|| GlError::Validation {
+                operation: "create-render-buffer",
+                message: "no exact discovered format fact for this renderbuffer allocation".into(),
+            })
+            .inspect_err(|error| self.error(error.clone()))?;
+        if !facts.renderable {
+            return self.invalid(
+                "create-render-buffer",
+                "format is not renderable for this sample count",
+            );
+        }
+        let id = RenderbufferId::new(self.stamp, self.slot()?, 0);
+        self.render_buffers.insert(id, desc);
+        self.calls.push(MockCall::CreateRenderBuffer(id));
+        Ok(id)
+    }
+    fn destroy_render_buffer(&mut self, id: RenderbufferId) -> Result<(), GlError> {
+        self.ready("destroy-render-buffer")?;
+        self.render_buffer("destroy-render-buffer", id)?;
+        self.render_buffers.remove(&id);
+        self.calls.push(MockCall::DestroyRenderBuffer(id));
+        Ok(())
+    }
 }
 impl GlSamplerApi for MockGlFamilyApi {
     fn create_sampler(&mut self, d: GlSamplerDesc) -> Result<SamplerId, GlError> {
@@ -490,6 +602,79 @@ impl GlSamplerApi for MockGlFamilyApi {
         self.live("destroy-sampler", id, |this| this.samplers.contains(&id))?;
         self.samplers.remove(&id);
         self.calls.push(MockCall::DestroySampler(id));
+        Ok(())
+    }
+}
+impl GlBindingApi for MockGlFamilyApi {
+    fn active_texture(&mut self, unit: u32) -> Result<(), GlError> {
+        self.ready("active-texture")?;
+        if let Err(error) = validate_texture_unit(unit, self.binding_limits()) {
+            return Err(self.invalid_binding("active-texture", error));
+        }
+        self.calls.push(MockCall::ActiveTexture(unit));
+        Ok(())
+    }
+    fn bind_texture(
+        &mut self,
+        unit: u32,
+        target: GlTextureTarget,
+        texture: Option<TextureId>,
+    ) -> Result<(), GlError> {
+        self.ready("bind-texture")?;
+        if let Err(error) = validate_texture_unit(unit, self.binding_limits()) {
+            return Err(self.invalid_binding("bind-texture", error));
+        }
+        if let Some(texture) = texture {
+            self.texture("bind-texture", texture)?;
+        }
+        self.calls.push(MockCall::BindTexture {
+            unit,
+            target,
+            texture,
+        });
+        Ok(())
+    }
+    fn bind_sampler(&mut self, unit: u32, sampler: Option<SamplerId>) -> Result<(), GlError> {
+        self.ready("bind-sampler")?;
+        if let Err(error) = validate_texture_unit(unit, self.binding_limits()) {
+            return Err(self.invalid_binding("bind-sampler", error));
+        }
+        if let Some(sampler) = sampler {
+            self.live("bind-sampler", sampler, |this| {
+                this.samplers.contains(&sampler)
+            })?;
+        }
+        self.calls.push(MockCall::BindSampler { unit, sampler });
+        Ok(())
+    }
+    fn bind_uniform_buffer(
+        &mut self,
+        index: u32,
+        buffer: Option<BufferId>,
+        offset: u32,
+        size: u32,
+    ) -> Result<(), GlError> {
+        self.ready("bind-uniform-buffer")?;
+        if let Err(error) =
+            validate_uniform_buffer_binding(index, buffer, offset, size, self.binding_limits())
+        {
+            return Err(self.invalid_binding("bind-uniform-buffer", error));
+        }
+        if let Some(buffer) = buffer {
+            let desc = self.buffer("bind-uniform-buffer", buffer)?;
+            if !desc.usage.contains(GlBufferUsage::UNIFORM) {
+                return self.invalid("bind-uniform-buffer", "buffer lacks uniform usage");
+            }
+            if let Err(error) = validate_uniform_range(offset, size, desc.size) {
+                return Err(self.invalid_binding("bind-uniform-buffer", error));
+            }
+        }
+        self.calls.push(MockCall::BindUniformBuffer {
+            index,
+            buffer,
+            offset,
+            size,
+        });
         Ok(())
     }
 }
@@ -523,9 +708,22 @@ impl GlShaderApi for MockGlFamilyApi {
                 operation: "create-program",
                 message: "invalid program descriptor".into(),
             })?;
+        if matches!(d.kind, GlProgramKind::Compute { .. })
+            && !self
+                .discovery
+                .capabilities()
+                .supports(GlCapability::Compute)
+        {
+            return self.error_result(GlError::Unsupported {
+                operation: "create-program",
+                reason: "compute program requires proved compute capability",
+            });
+        }
         let id = ProgramId::new(self.stamp, self.slot()?, 0);
         self.programs.insert(id);
         self.calls.push(MockCall::CreateProgram(id));
+        // True link reflection is a later wave; every program kind reflects as
+        // empty so compute never invents raster-stage vocabulary.
         Ok((
             id,
             GlProgramReflection {
@@ -594,11 +792,15 @@ impl GlFramebufferApi for MockGlFamilyApi {
         {
             self.frame_view("create-framebuffer", v)?;
         }
-        d.validate(self.discovery.limits().max_color_attachments, self.stamp)
-            .map_err(|_| GlError::Validation {
-                operation: "create-framebuffer",
-                message: "invalid framebuffer descriptor".into(),
-            })?;
+        d.validate(
+            self.discovery.limits().max_color_attachments,
+            self.discovery.limits().max_draw_buffers,
+            self.stamp,
+        )
+        .map_err(|_| GlError::Validation {
+            operation: "create-framebuffer",
+            message: "invalid framebuffer descriptor".into(),
+        })?;
         let id = FramebufferId::new(self.stamp, self.slot()?, 0);
         self.framebuffers.insert(id, d.clone());
         self.calls.push(MockCall::CreateFramebuffer(id));
@@ -628,6 +830,7 @@ impl GlFramebufferApi for MockGlFamilyApi {
         d.validate(
             &framebuffer,
             self.discovery.limits().max_color_attachments,
+            self.discovery.limits().max_draw_buffers,
             self.stamp,
         )
         .map_err(|_| GlError::Validation {
@@ -651,6 +854,73 @@ impl GlFramebufferApi for MockGlFamilyApi {
         }
         self.pass_active = false;
         self.calls.push(MockCall::EndRenderPass);
+        Ok(())
+    }
+    fn blit_framebuffer(
+        &mut self,
+        source: FramebufferId,
+        destination: FramebufferId,
+        region: GlBlitRegion,
+        filter: GlFilterMode,
+        masks: GlBlitMask,
+    ) -> Result<(), GlError> {
+        self.ready("blit-framebuffer")?;
+        self.live("blit-framebuffer", source, |this| {
+            this.framebuffers.contains_key(&source)
+        })?;
+        self.live("blit-framebuffer", destination, |this| {
+            this.framebuffers.contains_key(&destination)
+        })?;
+        if source == destination {
+            return self.invalid(
+                "blit-framebuffer",
+                "blit source and destination are identical",
+            );
+        }
+        if masks.is_empty() {
+            return self.invalid(
+                "blit-framebuffer",
+                "blit selects no color/depth/stencil plane",
+            );
+        }
+        region.validate().map_err(|_| GlError::Validation {
+            operation: "blit-framebuffer",
+            message: "invalid blit region".into(),
+        })?;
+        let sample_count = |descriptor: &GlFramebufferDescriptor| {
+            descriptor
+                .color_attachments
+                .first()
+                .map(|view| view.sample_count)
+                .or_else(|| {
+                    descriptor
+                        .depth_stencil_attachment
+                        .as_ref()
+                        .map(|view| view.sample_count)
+                })
+                .unwrap_or(1)
+        };
+        // Both descriptors were proven live above; sample counts come from the
+        // recorded attachment views exactly as a real completeness check would.
+        if filter != GlFilterMode::Nearest {
+            let multisampled = |id: FramebufferId| {
+                self.framebuffers
+                    .get(&id)
+                    .map(sample_count)
+                    .map(|count| count > 1)
+                    .unwrap_or(false)
+            };
+            if multisampled(source) || multisampled(destination) {
+                return self.invalid(
+                    "blit-framebuffer",
+                    "multisampled blit targets only accept nearest filtering",
+                );
+            }
+        }
+        self.calls.push(MockCall::BlitFramebuffer {
+            source,
+            destination,
+        });
         Ok(())
     }
 }
@@ -713,6 +983,43 @@ impl GlCopyDomainApi for MockGlFamilyApi {
             size: s.size,
         });
         Ok(())
+    }
+    fn upload_buffer(&mut self, d: GlBufferRange, bytes: &[u8]) -> Result<(), GlError> {
+        self.ready("upload-buffer")?;
+        let desc = self.buffer("upload-buffer", d.buffer)?;
+        d.validate_for(desc).map_err(|_| GlError::Validation {
+            operation: "upload-buffer",
+            message: "invalid buffer range".into(),
+        })?;
+        if u64::try_from(bytes.len()).ok() != Some(d.size) {
+            return self.invalid("upload-buffer", "byte length mismatch");
+        }
+        self.calls.push(MockCall::UploadBuffer {
+            buffer: d.buffer,
+            offset: d.offset,
+            size: d.size,
+        });
+        Ok(())
+    }
+    fn read_buffer(&mut self, s: GlBufferRange) -> Result<Vec<u8>, GlError> {
+        self.ready("read-buffer")?;
+        let desc = self.buffer("read-buffer", s.buffer)?;
+        s.validate_for(desc).map_err(|_| GlError::Validation {
+            operation: "read-buffer",
+            message: "invalid buffer range".into(),
+        })?;
+        let bytes = vec![
+            0;
+            usize::try_from(s.size).map_err(|_| GlError::OutOfMemory {
+                operation: "read-buffer"
+            })?
+        ];
+        self.calls.push(MockCall::ReadBuffer {
+            buffer: s.buffer,
+            offset: s.offset,
+            size: s.size,
+        });
+        Ok(bytes)
     }
     fn copy_texture_region(
         &mut self,

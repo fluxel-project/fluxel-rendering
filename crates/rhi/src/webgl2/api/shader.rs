@@ -94,10 +94,20 @@ pub(crate) struct GlProgramReflection {
 pub(crate) struct GlPipelineLayout {
     pub bindings: Vec<GlLogicalBinding>,
 }
+/// Explicit program routing. A linked program is raster or compute, never both.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum GlProgramKind {
+    Raster {
+        vertex: GlShaderSource,
+        fragment: GlShaderSource,
+    },
+    Compute {
+        shader: GlShaderSource,
+    },
+}
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct GlProgramDescriptor {
-    pub vertex: GlShaderSource,
-    pub fragment: GlShaderSource,
+    pub kind: GlProgramKind,
     pub layout: GlPipelineLayout,
     pub debug_name: Option<String>,
 }
@@ -132,24 +142,39 @@ impl GlPipelineLayout {
 }
 impl GlProgramDescriptor {
     pub(crate) fn validate(&self) -> Result<(), GlShaderValidationError> {
-        if self.vertex.stage != GlShaderStage::Vertex
-            || self.fragment.stage != GlShaderStage::Fragment
-        {
-            return Err(GlShaderValidationError::WrongStage);
+        match &self.kind {
+            GlProgramKind::Raster { vertex, fragment } => {
+                if vertex.stage != GlShaderStage::Vertex
+                    || fragment.stage != GlShaderStage::Fragment
+                {
+                    return Err(GlShaderValidationError::WrongStage);
+                }
+                vertex.validate()?;
+                fragment.validate()?;
+            }
+            GlProgramKind::Compute { shader } => {
+                if shader.stage != GlShaderStage::Compute {
+                    return Err(GlShaderValidationError::WrongStage);
+                }
+                shader.validate()?;
+            }
         }
-        self.vertex.validate()?;
-        self.fragment.validate()?;
         self.layout.validate()
     }
 
-    /// Validates that both already-lowered sources target this exact context.
+    /// Validates that every already-lowered source targets this exact context.
     pub(crate) fn validate_for(
         &self,
         profile: GlFamilyProfile,
     ) -> Result<(), GlShaderValidationError> {
         self.validate()?;
-        self.vertex.validate_for(profile)?;
-        self.fragment.validate_for(profile)
+        match &self.kind {
+            GlProgramKind::Raster { vertex, fragment } => {
+                vertex.validate_for(profile)?;
+                fragment.validate_for(profile)
+            }
+            GlProgramKind::Compute { shader } => shader.validate_for(profile),
+        }
     }
 }
 impl GlShaderSource {
@@ -234,6 +259,12 @@ impl GlProgramReflection {
         Ok(())
     }
 }
+/// Shader, program, and reflection domain.
+///
+/// `create_program` routes on the descriptor's explicit [`GlProgramKind`]; a
+/// provider accepts the compute kind only after its discovery snapshot proved
+/// the compute capability. Reflection for compute programs is empty until the
+/// dedicated reflection wave lands.
 pub(crate) trait GlShaderApi: GlFamilyApi {
     fn create_shader(&mut self, source: &GlShaderSource) -> Result<ShaderId, GlError>;
     fn destroy_shader(&mut self, shader: ShaderId) -> Result<(), GlError>;
@@ -315,6 +346,59 @@ mod tests {
             shader.validate_for(GlFamilyProfile::Desktop { major: 4, minor: 3 }),
             Err(GlShaderValidationError::EmptyEntryPoint)
         );
+    }
+    #[test]
+    fn program_kind_routes_stage_validation() {
+        let raster = |vertex: GlShaderSource, fragment: GlShaderSource| GlProgramDescriptor {
+            kind: GlProgramKind::Raster { vertex, fragment },
+            layout: GlPipelineLayout { bindings: vec![] },
+            debug_name: None,
+        };
+        let desktop = GlFamilyProfile::Desktop { major: 4, minor: 3 };
+        assert!(
+            raster(
+                source(
+                    GlShaderStage::Vertex,
+                    GlShaderDialect::Desktop { version: 430 }
+                ),
+                source(
+                    GlShaderStage::Fragment,
+                    GlShaderDialect::Desktop { version: 430 }
+                ),
+            )
+            .validate_for(desktop)
+            .is_ok()
+        );
+        assert_eq!(
+            raster(
+                source(
+                    GlShaderStage::Compute,
+                    GlShaderDialect::Desktop { version: 430 }
+                ),
+                source(
+                    GlShaderStage::Fragment,
+                    GlShaderDialect::Desktop { version: 430 }
+                ),
+            )
+            .validate(),
+            Err(GlShaderValidationError::WrongStage)
+        );
+        let mut compute = GlProgramDescriptor {
+            kind: GlProgramKind::Compute {
+                shader: source(
+                    GlShaderStage::Vertex,
+                    GlShaderDialect::Desktop { version: 430 },
+                ),
+            },
+            layout: GlPipelineLayout { bindings: vec![] },
+            debug_name: None,
+        };
+        assert_eq!(compute.validate(), Err(GlShaderValidationError::WrongStage));
+        if let GlProgramKind::Compute { shader } = &mut compute.kind {
+            shader.stage = GlShaderStage::Compute;
+            shader.dialect = GlShaderDialect::Desktop { version: 430 };
+        }
+        assert!(compute.validate_for(desktop).is_ok());
     }
     #[test]
     fn rejects_duplicate_executable_assignments() {

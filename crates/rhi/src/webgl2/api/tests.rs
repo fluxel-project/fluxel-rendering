@@ -511,6 +511,10 @@ fn mock_rejects_command_on_non_owner_thread_before_recording() {
 }
 
 fn mock_texture_desc() -> GlTextureDesc {
+    texture_desc(1)
+}
+
+fn texture_desc(sample_count: u32) -> GlTextureDesc {
     GlTextureDesc {
         dimension: GlTextureDimension::D2,
         extent: GlExtent3d {
@@ -519,10 +523,492 @@ fn mock_texture_desc() -> GlTextureDesc {
             depth_or_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         format: GlFormat::Rgba8Unorm,
         usage: GlTextureUsage::RENDER_ATTACHMENT,
     }
+}
+
+fn texture_view(texture: TextureId, sample_count: u32) -> GlTextureView {
+    GlTextureView {
+        target: GlAttachmentTarget::Texture(texture),
+        format: GlFormat::Rgba8Unorm,
+        mip_level: 0,
+        array_layer: 0,
+        width: 1,
+        height: 1,
+        sample_count,
+    }
+}
+
+/// One extra exact fact beyond the single-sample baseline table.
+fn snapshot_with_fact(
+    resource_kind: GlFormatResourceKind,
+    sample_count: u32,
+) -> GlDiscoverySnapshot {
+    let texture_facts = resource_kind == GlFormatResourceKind::Texture;
+    let mut formats = formats(false);
+    formats
+        .record(GlFormatCapabilities {
+            format: GlFormat::Rgba8Unorm,
+            resource_kind,
+            sample_count,
+            evidence: GlFormatEvidence::CoreGuaranteed,
+            sampled: texture_facts,
+            filterable: texture_facts,
+            renderable: true,
+            blendable: texture_facts,
+            storage_read: false,
+            storage_write: false,
+            copy_source: texture_facts,
+            copy_destination: texture_facts,
+        })
+        .expect("extra exact fact");
+    GlDiscoveryBuilder::new(
+        stamp(ContextEpoch::INITIAL),
+        context(GlFamilyProfile::WebGl2),
+        GlExtensionSet::default(),
+        limits(),
+        formats,
+    )
+    .expect("test discovery")
+    .build()
+}
+
+fn sampler_desc() -> GlSamplerDesc {
+    GlSamplerDesc {
+        address_mode_u: GlAddressMode::ClampToEdge,
+        address_mode_v: GlAddressMode::ClampToEdge,
+        address_mode_w: GlAddressMode::ClampToEdge,
+        mag_filter: GlFilterMode::Linear,
+        min_filter: GlFilterMode::Linear,
+        mipmap_filter: GlMipmapFilterMode::Linear,
+        lod_min_bits: 0.0f32.to_bits(),
+        lod_max_bits: 1.0f32.to_bits(),
+        compare: None,
+        max_anisotropy_bits: None,
+    }
+}
+
+#[test]
+fn mock_binding_vocabulary_records_each_word_and_enforces_unit_limits() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let texture = api
+        .create_texture_resource(texture_desc(1))
+        .expect("texture");
+    let sampler = api.create_sampler(sampler_desc()).expect("sampler");
+    let buffer = api
+        .create_buffer_resource(GlBufferDesc {
+            size: 512,
+            usage: GlBufferUsage::UNIFORM,
+        })
+        .expect("uniform buffer");
+
+    api.active_texture(3).expect("active texture");
+    api.bind_texture(3, GlTextureTarget::D2, Some(texture))
+        .expect("bind texture");
+    api.bind_sampler(3, Some(sampler)).expect("bind sampler");
+    api.bind_uniform_buffer(4, Some(buffer), 256, 256)
+        .expect("bind uniform buffer");
+    api.bind_texture(3, GlTextureTarget::D2, None)
+        .expect("unbind texture");
+    assert!(api.calls().ends_with(&[
+        MockCall::ActiveTexture(3),
+        MockCall::BindTexture {
+            unit: 3,
+            target: GlTextureTarget::D2,
+            texture: Some(texture),
+        },
+        MockCall::BindSampler {
+            unit: 3,
+            sampler: Some(sampler),
+        },
+        MockCall::BindUniformBuffer {
+            index: 4,
+            buffer: Some(buffer),
+            offset: 256,
+            size: 256,
+        },
+        MockCall::BindTexture {
+            unit: 3,
+            target: GlTextureTarget::D2,
+            texture: None,
+        },
+    ]));
+
+    // Identical repeated bindings are legal; deduplication is Layer 2 work.
+    api.bind_sampler(3, Some(sampler))
+        .expect("repeated binding");
+    assert!(matches!(
+        api.calls().last(),
+        Some(MockCall::BindSampler {
+            unit: 3,
+            sampler: Some(_),
+        })
+    ));
+
+    let trace_len = api.calls().len();
+    assert!(matches!(
+        api.active_texture(16),
+        Err(GlError::Validation { .. })
+    ));
+    assert!(matches!(
+        api.bind_texture(16, GlTextureTarget::D2, Some(texture)),
+        Err(GlError::Validation { .. })
+    ));
+    assert!(matches!(
+        api.bind_sampler(16, None),
+        Err(GlError::Validation { .. })
+    ));
+    assert!(
+        !api.calls()[trace_len..].iter().any(|call| matches!(
+            call,
+            MockCall::ActiveTexture(_)
+                | MockCall::BindTexture { .. }
+                | MockCall::BindSampler { .. }
+        )),
+        "failed binding words must not be recorded as executed calls"
+    );
+}
+
+#[test]
+fn mock_uniform_bindings_reject_bad_ranges_and_roles_before_recording() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let buffer = api
+        .create_buffer_resource(GlBufferDesc {
+            size: 512,
+            usage: GlBufferUsage::UNIFORM,
+        })
+        .expect("uniform buffer");
+    let copy_only = api
+        .create_buffer_resource(GlBufferDesc {
+            size: 64,
+            usage: GlBufferUsage::COPY_SOURCE,
+        })
+        .expect("copy buffer");
+
+    // Every failure below must leave the trace without a uniform binding word.
+    let trace_len = api.calls().len();
+    assert!(api.bind_uniform_buffer(0, Some(buffer), 3, 16).is_err());
+    assert!(api.bind_uniform_buffer(0, Some(buffer), 256, 512).is_err());
+    assert!(api.bind_uniform_buffer(0, Some(buffer), 1024, 0).is_err());
+    assert!(api.bind_uniform_buffer(0, None, 0, 256).is_err());
+    assert!(api.bind_uniform_buffer(24, Some(buffer), 0, 16).is_err());
+    assert!(api.bind_uniform_buffer(0, Some(copy_only), 0, 16).is_err());
+    assert!(
+        !api.calls()[trace_len..]
+            .iter()
+            .any(|call| matches!(call, MockCall::BindUniformBuffer { .. }))
+    );
+
+    api.bind_uniform_buffer(0, Some(buffer), 0, 0)
+        .expect("size zero binds through the allocation end");
+    api.bind_uniform_buffer(1, Some(buffer), 256, 0)
+        .expect("size zero binds the tail range");
+    api.bind_uniform_buffer(2, None, 0, 0)
+        .expect("plain unbind");
+    assert!(api.calls().ends_with(&[
+        MockCall::BindUniformBuffer {
+            index: 0,
+            buffer: Some(buffer),
+            offset: 0,
+            size: 0,
+        },
+        MockCall::BindUniformBuffer {
+            index: 1,
+            buffer: Some(buffer),
+            offset: 256,
+            size: 0,
+        },
+        MockCall::BindUniformBuffer {
+            index: 2,
+            buffer: None,
+            offset: 0,
+            size: 0,
+        },
+    ]));
+}
+
+#[test]
+fn mock_buffer_upload_and_readback_check_bounds_and_exact_lengths() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let buffer = api
+        .create_buffer_resource(GlBufferDesc {
+            size: 64,
+            usage: GlBufferUsage::COPY_SOURCE | GlBufferUsage::COPY_DESTINATION,
+        })
+        .expect("buffer");
+    let range = |offset, size| GlBufferRange {
+        buffer,
+        offset,
+        size,
+    };
+
+    api.upload_buffer(range(0, 16), &[7; 16])
+        .expect("subrange upload");
+    let bytes = api.read_buffer(range(16, 16)).expect("readback");
+    assert_eq!(bytes.len(), 16);
+    assert!(api.calls().ends_with(&[
+        MockCall::UploadBuffer {
+            buffer,
+            offset: 0,
+            size: 16,
+        },
+        MockCall::ReadBuffer {
+            buffer,
+            offset: 16,
+            size: 16,
+        },
+    ]));
+
+    assert!(api.upload_buffer(range(0, 0), &[]).is_err());
+    assert!(api.upload_buffer(range(16, 16), &[0; 15]).is_err());
+    assert!(api.upload_buffer(range(48, 17), &[0; 17]).is_err());
+    assert!(api.read_buffer(range(48, 17)).is_err());
+    assert!(api.read_buffer(range(0, 0)).is_err());
+}
+
+#[test]
+fn mock_blit_is_the_resolve_word_and_rejects_incompatible_requests() {
+    let mut api =
+        MockGlFamilyApi::from_discovery(snapshot_with_fact(GlFormatResourceKind::Texture, 4));
+    let multisample_texture = api
+        .create_texture_resource(texture_desc(4))
+        .expect("multisample texture");
+    let multisample_framebuffer = api
+        .create_framebuffer(&GlFramebufferDescriptor {
+            color_attachments: vec![texture_view(multisample_texture, 4)],
+            depth_stencil_attachment: None,
+            draw_buffers: vec![],
+        })
+        .expect("multisample framebuffer");
+    let texture = api
+        .create_texture_resource(texture_desc(1))
+        .expect("texture");
+    let framebuffer = api
+        .create_framebuffer(&GlFramebufferDescriptor {
+            color_attachments: vec![texture_view(texture, 1)],
+            depth_stencil_attachment: None,
+            draw_buffers: vec![],
+        })
+        .expect("framebuffer");
+    let region = GlBlitRegion {
+        src_offset: [0; 2],
+        src_extent: [1, 1],
+        dst_offset: [0; 2],
+        dst_extent: [1, 1],
+    };
+    let color = GlBlitMask {
+        color: true,
+        depth: false,
+        stencil: false,
+    };
+
+    // The one legal MSAA path: resolve with nearest filtering.
+    assert!(
+        api.blit_framebuffer(
+            multisample_framebuffer,
+            framebuffer,
+            region,
+            GlFilterMode::Linear,
+            color
+        )
+        .is_err()
+    );
+    api.blit_framebuffer(
+        multisample_framebuffer,
+        framebuffer,
+        region,
+        GlFilterMode::Nearest,
+        color,
+    )
+    .expect("resolve blit");
+    assert!(matches!(
+        api.calls().last(),
+        Some(MockCall::BlitFramebuffer { .. })
+    ));
+
+    assert!(
+        api.blit_framebuffer(
+            framebuffer,
+            framebuffer,
+            region,
+            GlFilterMode::Nearest,
+            color
+        )
+        .is_err(),
+        "identical source and destination are rejected"
+    );
+    assert!(
+        api.blit_framebuffer(
+            framebuffer,
+            multisample_framebuffer,
+            region,
+            GlFilterMode::Nearest,
+            GlBlitMask {
+                color: false,
+                depth: false,
+                stencil: false,
+            },
+        )
+        .is_err(),
+        "an empty mask selects no plane"
+    );
+    assert!(
+        api.blit_framebuffer(
+            framebuffer,
+            multisample_framebuffer,
+            GlBlitRegion {
+                src_extent: [0, 1],
+                ..region
+            },
+            GlFilterMode::Nearest,
+            color,
+        )
+        .is_err()
+    );
+    let unknown = FramebufferId::new(api.context_stamp(), 9_999, 0);
+    assert!(
+        api.blit_framebuffer(unknown, framebuffer, region, GlFilterMode::Nearest, color)
+            .is_err()
+    );
+}
+
+#[test]
+fn mock_renderbuffer_allocation_uses_renderbuffer_kind_facts() {
+    let mut api =
+        MockGlFamilyApi::from_discovery(snapshot_with_fact(GlFormatResourceKind::Renderbuffer, 4));
+    let desc = GlRenderBufferDesc {
+        format: GlFormat::Rgba8Unorm,
+        width: 8,
+        height: 8,
+        samples: 4,
+    };
+    let renderbuffer = api.create_render_buffer(desc).expect("renderbuffer");
+    api.destroy_render_buffer(renderbuffer)
+        .expect("destroy renderbuffer");
+    assert!(
+        api.calls()
+            .contains(&MockCall::CreateRenderBuffer(renderbuffer))
+    );
+    assert!(
+        api.calls()
+            .contains(&MockCall::DestroyRenderBuffer(renderbuffer))
+    );
+
+    assert!(
+        api.create_render_buffer(GlRenderBufferDesc { samples: 8, ..desc })
+            .is_err(),
+        "sample count must stay within the discovered max_samples"
+    );
+    assert!(
+        api.create_render_buffer(GlRenderBufferDesc { width: 0, ..desc })
+            .is_err()
+    );
+
+    let mut without_facts = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let trace_len = without_facts.calls().len();
+    assert!(
+        without_facts.create_render_buffer(desc).is_err(),
+        "a texture-only format table cannot authorize a renderbuffer"
+    );
+    assert!(
+        !without_facts.calls()[trace_len..]
+            .iter()
+            .any(|call| matches!(call, MockCall::CreateRenderBuffer(_)))
+    );
+}
+
+#[test]
+fn mock_framebuffer_draw_buffers_selection_is_validated_and_applied() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let texture = api
+        .create_texture_resource(texture_desc(1))
+        .expect("texture");
+    let view = texture_view(texture, 1);
+    let descriptor = |color_count: usize, draw_buffers: Vec<u32>| GlFramebufferDescriptor {
+        color_attachments: vec![view; color_count],
+        depth_stencil_attachment: None,
+        draw_buffers,
+    };
+
+    assert_eq!(
+        api.create_framebuffer(&descriptor(1, vec![1])),
+        Err(GlError::Validation {
+            operation: "create-framebuffer",
+            message: "invalid framebuffer descriptor".into(),
+        })
+    );
+    assert!(api.create_framebuffer(&descriptor(1, vec![0, 0])).is_err());
+    assert!(
+        api.create_framebuffer(&descriptor(4, vec![0, 1, 2, 3, 0]))
+            .is_err()
+    );
+    let mrt = api
+        .create_framebuffer(&descriptor(2, vec![1, 0]))
+        .expect("explicit MRT selection");
+    assert!(matches!(
+        api.calls().last(),
+        Some(MockCall::CreateFramebuffer(created)) if *created == mrt
+    ));
+    let stored = api
+        .create_framebuffer(&GlFramebufferDescriptor {
+            color_attachments: vec![view],
+            depth_stencil_attachment: None,
+            draw_buffers: vec![],
+        })
+        .expect("default selection stays legal");
+    assert_ne!(stored, mrt);
+}
+
+fn compute_program(dialect: GlShaderDialect) -> GlProgramDescriptor {
+    GlProgramDescriptor {
+        kind: GlProgramKind::Compute {
+            shader: GlShaderSource {
+                stage: GlShaderStage::Compute,
+                dialect,
+                entry_point: "main".into(),
+                source_hash: ShaderSourceHash([9; 32]),
+                text: "void main() {}".into(),
+                debug_name: None,
+            },
+        },
+        layout: GlPipelineLayout { bindings: vec![] },
+        debug_name: None,
+    }
+}
+
+#[test]
+fn mock_compute_program_requires_proved_capability_and_reflects_empty() {
+    let mut web = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let trace_len = web.calls().len();
+    assert!(matches!(
+        web.create_program(&compute_program(GlShaderDialect::Embedded { version: 300 })),
+        Err(GlError::Unsupported { .. })
+    ));
+    assert!(
+        !web.calls()[trace_len..]
+            .iter()
+            .any(|call| matches!(call, MockCall::CreateProgram(_)))
+    );
+
+    let mut desktop = MockGlFamilyApi::from_discovery(compute_storage_snapshot(false));
+    let (program, reflection) = desktop
+        .create_program(&compute_program(GlShaderDialect::Desktop { version: 430 }))
+        .expect("proved compute capability accepts the compute kind");
+    assert_eq!(
+        reflection,
+        GlProgramReflection {
+            vertex_inputs: vec![],
+            fragment_outputs: vec![],
+            assignments: vec![],
+        },
+        "compute reflection stays empty until the reflection wave"
+    );
+    assert_eq!(
+        desktop.calls().last(),
+        Some(&MockCall::CreateProgram(program))
+    );
 }
 
 #[test]
@@ -544,25 +1030,28 @@ fn mock_records_render_pass_pipeline_and_draw_domains() {
         .create_framebuffer(&GlFramebufferDescriptor {
             color_attachments: vec![view],
             depth_stencil_attachment: None,
+            draw_buffers: vec![],
         })
         .expect("framebuffer");
     let program = api
         .create_program(&GlProgramDescriptor {
-            vertex: GlShaderSource {
-                stage: GlShaderStage::Vertex,
-                dialect: GlShaderDialect::Embedded { version: 300 },
-                entry_point: "main".into(),
-                source_hash: ShaderSourceHash([1; 32]),
-                text: "v".into(),
-                debug_name: None,
-            },
-            fragment: GlShaderSource {
-                stage: GlShaderStage::Fragment,
-                dialect: GlShaderDialect::Embedded { version: 300 },
-                entry_point: "main".into(),
-                source_hash: ShaderSourceHash([2; 32]),
-                text: "f".into(),
-                debug_name: None,
+            kind: GlProgramKind::Raster {
+                vertex: GlShaderSource {
+                    stage: GlShaderStage::Vertex,
+                    dialect: GlShaderDialect::Embedded { version: 300 },
+                    entry_point: "main".into(),
+                    source_hash: ShaderSourceHash([1; 32]),
+                    text: "v".into(),
+                    debug_name: None,
+                },
+                fragment: GlShaderSource {
+                    stage: GlShaderStage::Fragment,
+                    dialect: GlShaderDialect::Embedded { version: 300 },
+                    entry_point: "main".into(),
+                    source_hash: ShaderSourceHash([2; 32]),
+                    text: "f".into(),
+                    debug_name: None,
+                },
             },
             layout: GlPipelineLayout { bindings: vec![] },
             debug_name: None,
@@ -777,6 +1266,7 @@ fn mock_render_pass_must_match_the_stored_framebuffer_descriptor() {
         .create_framebuffer(&GlFramebufferDescriptor {
             color_attachments: vec![view],
             depth_stencil_attachment: None,
+            draw_buffers: vec![],
         })
         .expect("framebuffer");
     let mut mismatched = view;

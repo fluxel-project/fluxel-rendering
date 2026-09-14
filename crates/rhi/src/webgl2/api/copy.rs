@@ -234,6 +234,10 @@ pub(crate) trait GlCopyDomainApi: GlFamilyApi {
         source: GlTextureRegion,
         destination: GlTextureRegion,
     ) -> Result<(), GlError>;
+    /// Uploads exactly `range.size` bytes at `range.offset` in one live buffer.
+    fn upload_buffer(&mut self, destination: GlBufferRange, bytes: &[u8]) -> Result<(), GlError>;
+    /// Reads back exactly `range.size` bytes from one live buffer.
+    fn read_buffer(&mut self, source: GlBufferRange) -> Result<Vec<u8>, GlError>;
     fn upload_texture(
         &mut self,
         destination: GlTextureRegion,

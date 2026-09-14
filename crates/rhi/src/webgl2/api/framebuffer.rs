@@ -69,6 +69,11 @@ pub(crate) struct GlDepthStencilAttachment {
 pub(crate) struct GlFramebufferDescriptor {
     pub color_attachments: Vec<GlTextureView>,
     pub depth_stencil_attachment: Option<GlTextureView>,
+    /// Explicit `glDrawBuffers` selection over color-attachment indices.
+    ///
+    /// Empty keeps the driver's default mapping; a nonempty selection must be
+    /// in bounds, within the discovered draw-buffer count, and duplicate free.
+    pub draw_buffers: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -76,6 +81,41 @@ pub(crate) struct GlRenderPassDescriptor {
     pub framebuffer: FramebufferId,
     pub color_attachments: Vec<GlColorAttachment>,
     pub depth_stencil_attachment: Option<GlDepthStencilAttachment>,
+}
+
+/// One source/destination rectangle pair for a framebuffer blit.
+///
+/// Origins are nonnegative so an out-of-framebuffer rectangle is a plain
+/// bounds failure instead of a signed-coordinate edge case.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GlBlitRegion {
+    pub src_offset: [u32; 2],
+    pub src_extent: [u32; 2],
+    pub dst_offset: [u32; 2],
+    pub dst_extent: [u32; 2],
+}
+
+impl GlBlitRegion {
+    pub(crate) fn validate(&self) -> Result<(), GlFramebufferValidationError> {
+        if self.src_extent.contains(&0) || self.dst_extent.contains(&0) {
+            return Err(GlFramebufferValidationError::InvalidBlitRegion);
+        }
+        Ok(())
+    }
+}
+
+/// The planes selected by one blit. At least one plane is required.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GlBlitMask {
+    pub color: bool,
+    pub depth: bool,
+    pub stencil: bool,
+}
+
+impl GlBlitMask {
+    pub(crate) const fn is_empty(self) -> bool {
+        !self.color && !self.depth && !self.stencil
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +131,13 @@ pub(crate) enum GlFramebufferValidationError {
     InvalidDepthStencilFormat,
     InvalidResolve,
     DiscardWithoutResolve,
+    TooManyDrawBuffers,
+    DrawBufferIndexOutOfBounds,
+    DuplicateDrawBuffer,
+    InvalidBlitRegion,
+    EmptyBlitMask,
+    BlitFilterIncompatible,
+    IdenticalBlitTargets,
 }
 
 impl GlAttachmentTarget {
@@ -120,6 +167,7 @@ impl GlFramebufferDescriptor {
     pub(crate) fn validate(
         &self,
         max_colors: u32,
+        max_draw_buffers: u32,
         current: super::ContextStamp,
     ) -> Result<(), GlFramebufferValidationError> {
         if self.color_attachments.is_empty() && self.depth_stencil_attachment.is_none() {
@@ -127,6 +175,17 @@ impl GlFramebufferDescriptor {
         }
         if self.color_attachments.len() > max_colors as usize {
             return Err(GlFramebufferValidationError::TooManyColorAttachments);
+        }
+        if self.draw_buffers.len() > max_draw_buffers as usize {
+            return Err(GlFramebufferValidationError::TooManyDrawBuffers);
+        }
+        for (position, index) in self.draw_buffers.iter().enumerate() {
+            if *index as usize >= self.color_attachments.len() {
+                return Err(GlFramebufferValidationError::DrawBufferIndexOutOfBounds);
+            }
+            if self.draw_buffers[..position].contains(index) {
+                return Err(GlFramebufferValidationError::DuplicateDrawBuffer);
+            }
         }
         let mut all = self.color_attachments.clone();
         if let Some(depth) = self.depth_stencil_attachment {
@@ -168,9 +227,10 @@ impl GlRenderPassDescriptor {
         &self,
         framebuffer: &GlFramebufferDescriptor,
         max_colors: u32,
+        max_draw_buffers: u32,
         current: super::ContextStamp,
     ) -> Result<(), GlFramebufferValidationError> {
-        framebuffer.validate(max_colors, current)?;
+        framebuffer.validate(max_colors, max_draw_buffers, current)?;
         if self.framebuffer.context != current {
             return Err(GlFramebufferValidationError::ForeignContext);
         }
@@ -212,13 +272,27 @@ pub(crate) trait GlFramebufferApi: GlFamilyApi {
     fn destroy_framebuffer(&mut self, framebuffer: FramebufferId) -> Result<(), GlError>;
     fn begin_render_pass(&mut self, descriptor: &GlRenderPassDescriptor) -> Result<(), GlError>;
     fn end_render_pass(&mut self) -> Result<(), GlError>;
+    /// Copies selected planes from one framebuffer into another.
+    ///
+    /// This is also the MSAA resolve word: resolving is a blit whose source
+    /// is multisampled, so no separate resolve command exists in this contract.
+    /// Multisampled targets only accept nearest filtering; providers reject
+    /// the clearly incompatible combinations before touching GL state.
+    fn blit_framebuffer(
+        &mut self,
+        source: FramebufferId,
+        destination: FramebufferId,
+        region: GlBlitRegion,
+        filter: super::GlFilterMode,
+        masks: GlBlitMask,
+    ) -> Result<(), GlError>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        GlColorClearValue, GlFramebufferDescriptor, GlFramebufferValidationError, GlLoadOp,
-        GlStoreOp,
+        GlBlitMask, GlBlitRegion, GlColorClearValue, GlFramebufferDescriptor,
+        GlFramebufferValidationError, GlLoadOp, GlStoreOp,
     };
     #[test]
     fn clear_value_retains_float_bits() {
@@ -237,14 +311,76 @@ mod tests {
         let descriptor = GlFramebufferDescriptor {
             color_attachments: vec![],
             depth_stencil_attachment: None,
+            draw_buffers: vec![],
         };
         let stamp = super::super::ContextStamp::new(
             super::super::DeviceIdentity::new(1).unwrap(),
             super::super::ContextEpoch::INITIAL,
         );
         assert_eq!(
-            descriptor.validate(1, stamp),
+            descriptor.validate(1, 1, stamp),
             Err(GlFramebufferValidationError::NoAttachments)
         );
+    }
+    #[test]
+    fn draw_buffers_selection_is_bounded_unique_and_in_range() {
+        let descriptor = |draw_buffers: Vec<u32>| GlFramebufferDescriptor {
+            color_attachments: vec![],
+            depth_stencil_attachment: Some(empty_view()),
+            draw_buffers,
+        };
+        let stamp = super::super::ContextStamp::new(
+            super::super::DeviceIdentity::new(1).unwrap(),
+            super::super::ContextEpoch::INITIAL,
+        );
+        assert_eq!(
+            descriptor(vec![0]).validate(4, 4, stamp),
+            Err(GlFramebufferValidationError::DrawBufferIndexOutOfBounds)
+        );
+        assert_eq!(descriptor(vec![]).validate(4, 4, stamp), Ok(()));
+    }
+    #[test]
+    fn blit_regions_and_masks_fail_closed_before_gl() {
+        let region = GlBlitRegion {
+            src_offset: [0; 2],
+            src_extent: [4, 4],
+            dst_offset: [0; 2],
+            dst_extent: [4, 4],
+        };
+        assert_eq!(region.validate(), Ok(()));
+        assert_eq!(
+            GlBlitRegion {
+                dst_extent: [0, 4],
+                ..region
+            }
+            .validate(),
+            Err(GlFramebufferValidationError::InvalidBlitRegion)
+        );
+        assert!(
+            GlBlitMask {
+                color: false,
+                depth: false,
+                stencil: false
+            }
+            .is_empty()
+        );
+    }
+    fn empty_view() -> super::GlTextureView {
+        super::GlTextureView {
+            target: super::GlAttachmentTarget::Texture(super::TextureId::new(
+                super::super::ContextStamp::new(
+                    super::super::DeviceIdentity::new(1).unwrap(),
+                    super::super::ContextEpoch::INITIAL,
+                ),
+                0,
+                0,
+            )),
+            format: super::GlFormat::Depth32Float,
+            mip_level: 0,
+            array_layer: 0,
+            width: 1,
+            height: 1,
+            sample_count: 1,
+        }
     }
 }

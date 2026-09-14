@@ -102,6 +102,8 @@ pub(crate) enum GlVertexValidationError {
     BindingSlotMissing,
     DuplicateBindingSlot,
     ForeignBuffer,
+    /// The caller supplied no allocation facts for a bound buffer at all.
+    BindingMetadataMissing,
     BindingOffsetExceedsBuffer,
     IndexOffsetMisaligned,
     IndexOffsetExceedsBuffer,
@@ -190,7 +192,7 @@ impl GlVertexLayout {
                 return Err(GlVertexValidationError::ForeignBuffer);
             }
             let Some(facts) = metadata.iter().find(|facts| facts.buffer == binding.buffer) else {
-                return Err(GlVertexValidationError::BindingOffsetExceedsBuffer);
+                return Err(GlVertexValidationError::BindingMetadataMissing);
             };
             if binding.offset > facts.byte_length {
                 return Err(GlVertexValidationError::BindingOffsetExceedsBuffer);
@@ -272,6 +274,48 @@ mod tests {
         assert_eq!(
             layout.validate(),
             Err(GlVertexValidationError::DuplicateBufferSlot)
+        );
+    }
+    #[test]
+    fn missing_binding_metadata_is_distinct_from_an_exceeded_offset() {
+        let stamp = super::super::ContextStamp::new(
+            super::super::DeviceIdentity::new(1).unwrap(),
+            super::super::ContextEpoch::INITIAL,
+        );
+        let buffer = BufferId::new(stamp, 0, 0);
+        let layout = GlVertexLayout {
+            buffers: vec![GlVertexBufferLayout {
+                slot: 0,
+                stride: 12,
+                step_mode: GlVertexStepMode::Vertex,
+            }],
+            attributes: vec![],
+        };
+        let binding = GlVertexBufferBinding {
+            slot: 0,
+            buffer,
+            offset: 0,
+        };
+        assert_eq!(
+            layout.validate_bindings(&[binding], None, &[], stamp),
+            Err(GlVertexValidationError::BindingMetadataMissing)
+        );
+        let beyond = GlVertexBufferBinding {
+            slot: 0,
+            buffer,
+            offset: 8,
+        };
+        assert_eq!(
+            layout.validate_bindings(
+                &[beyond],
+                None,
+                &[GlVertexBufferMetadata {
+                    buffer,
+                    byte_length: 4,
+                }],
+                stamp,
+            ),
+            Err(GlVertexValidationError::BindingOffsetExceedsBuffer)
         );
     }
 }

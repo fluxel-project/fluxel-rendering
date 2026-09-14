@@ -176,6 +176,7 @@ pub(crate) enum GlRasterValidationError {
     InvalidDepthRange,
     ScissorOutOfBounds,
     InvalidWriteMask,
+    TooManyColorTargets,
     ZeroSampleCount,
     SampleCountExceedsLimit,
     AlphaToCoverageWithoutMultisample,
@@ -196,7 +197,7 @@ impl GlRasterState {
         info: GlRasterValidationInfo,
     ) -> Result<(), GlRasterValidationError> {
         if self.color_targets.len() > info.max_color_targets as usize {
-            return Err(GlRasterValidationError::InvalidWriteMask);
+            return Err(GlRasterValidationError::TooManyColorTargets);
         }
         if self
             .color_targets
@@ -330,5 +331,49 @@ mod tests {
             }),
             Err(GlRasterValidationError::MissingAdvancedCapability)
         );
+    }
+    #[test]
+    fn excess_color_targets_are_not_write_mask_failures() {
+        fn state_with_targets(count: usize) -> GlRasterState {
+            GlRasterState {
+                topology: GlPrimitiveTopology::Triangles,
+                cull_mode: GlCullMode::None,
+                front_face: GlFrontFace::CounterClockwise,
+                depth_stencil: None,
+                color_targets: vec![
+                    GlColorTargetState {
+                        write_mask: 0xf,
+                        blend: None,
+                    };
+                    count
+                ],
+                multisample: GlMultisampleState {
+                    sample_count: 1,
+                    alpha_to_coverage_enabled: false,
+                    sample_mask: u32::MAX,
+                },
+                viewport: GlViewport {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                    min_depth: 0.0f32.to_bits(),
+                    max_depth: 1.0f32.to_bits(),
+                },
+                scissor: None,
+                blend_constant: [0; 4],
+            }
+        }
+        let info = GlRasterValidationInfo {
+            width: 1,
+            height: 1,
+            max_samples: 4,
+            max_color_targets: 1,
+        };
+        assert_eq!(
+            state_with_targets(2).validate(info),
+            Err(GlRasterValidationError::TooManyColorTargets)
+        );
+        assert_eq!(state_with_targets(1).validate(info), Ok(()));
     }
 }

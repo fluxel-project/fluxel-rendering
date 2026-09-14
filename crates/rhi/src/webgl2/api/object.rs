@@ -121,6 +121,11 @@ impl GlObjectKind for VertexArrayObject {}
 pub struct FramebufferObject;
 impl GlObjectKind for FramebufferObject {}
 
+/// Renderbuffer-object marker.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RenderbufferObject;
+impl GlObjectKind for RenderbufferObject {}
+
 /// Sync-object marker.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SyncObject;
@@ -184,6 +189,8 @@ pub type ShaderId = ObjectIdentity<ShaderObject>;
 pub type VertexArrayId = ObjectIdentity<VertexArrayObject>;
 /// Typed framebuffer identity.
 pub type FramebufferId = ObjectIdentity<FramebufferObject>;
+/// Typed renderbuffer identity.
+pub type RenderbufferId = ObjectIdentity<RenderbufferObject>;
 /// Typed sync identity.
 pub type SyncId = ObjectIdentity<SyncObject>;
 /// Typed presentation surface-image identity.

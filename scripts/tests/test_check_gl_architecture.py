@@ -71,6 +71,26 @@ class CheckGlArchitectureTests(unittest.TestCase):
             self.write(root, "compat/mod.rs", "use crate::webgl2::{api::GlFamilyApi, state::State};\n")
             self.assertEqual(CHECKER.check(root), [])
 
+    def test_native_context_providers_reach_glow_but_not_state_or_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(
+                root,
+                "api/egl.rs",
+                "use glow::Context;\nuse khronos_egl::Display;\n"
+                "fn bind() { crate::webgl2::state::State::new(); }\n",
+            )
+            self.write(
+                root,
+                "api/wgl/mod.rs",
+                "use glow::Context;\nfn surface() { let _ = web_sys::Window; }\n",
+            )
+            observed = {(item.layer, item.dependency) for item in CHECKER.check(root)}
+            self.assertEqual(observed, {
+                ("api/egl-provider", "state"),
+                ("api/wgl-provider", "web_sys"),
+            })
+
     def test_comments_and_literals_do_not_create_violations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
