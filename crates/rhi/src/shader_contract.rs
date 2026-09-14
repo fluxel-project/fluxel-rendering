@@ -30,6 +30,10 @@ pub(crate) enum GlslDialect {
 
 /// The backend family selecting a shader route.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "The private preparation seam is specified before its first compat consumer exists."
+)]
 pub(crate) enum ShaderBackendFamily {
     Wgpu,
     Dx12,
@@ -44,6 +48,10 @@ pub(crate) enum ShaderBackendFamily {
 
 /// The source route selected before backend creation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "The private preparation seam is specified before its first compat consumer exists."
+)]
 pub(crate) enum ShaderRoute {
     /// The backend accepts this source representation directly.
     Native,
@@ -95,7 +103,14 @@ impl ShaderModuleSource {
     ///
     /// GL receives `Native` only for its exact selected dialect; a desktop
     /// GLSL string is not legal WebGL2 source merely because it is labelled
-    /// GLSL.
+    /// GLSL. Every `Translatable` answer names a combination that Naga can
+    /// actually lower (frontend -> backend); combinations with no such pair —
+    /// notably anything non-native on DX12, because Naga has no HLSL output —
+    /// are `Unsupported` instead of a silent translation promise.
+    #[allow(
+        dead_code,
+        reason = "The private preparation seam is specified before its first compat consumer exists."
+    )]
     pub(crate) fn route_for(&self, target: ShaderBackendFamily) -> ShaderRoute {
         match (target, self) {
             (ShaderBackendFamily::Wgpu, Self::Wgsl { .. })
@@ -115,7 +130,17 @@ impl ShaderModuleSource {
                     dialect: source, ..
                 },
             ) if *source == target => ShaderRoute::Native,
-            (_, Self::Hlsl { .. } | Self::Dxil { .. }) => ShaderRoute::Unsupported,
+            // HLSL/DXIL payloads have no Naga frontend, so their only route is
+            // the DX12 native passthrough above; DX12 in turn accepts no other
+            // source representation at all.
+            (ShaderBackendFamily::Dx12, _) | (_, Self::Hlsl { .. } | Self::Dxil { .. }) => {
+                ShaderRoute::Unsupported
+            }
+            // WGSL/GLSL/SPIR-V crosses, each backed by a real Naga
+            // frontend/backend pair (e.g. wgsl-in + glsl-out for
+            // WebGl2 + Wgsl). Executing a `Translatable` route additionally
+            // requires the matching naga features to be enabled when the
+            // translation bridge is implemented.
             _ => ShaderRoute::Translatable,
         }
     }
@@ -226,6 +251,58 @@ mod tests {
         assert_eq!(
             source.route_for(ShaderBackendFamily::WebGl2),
             ShaderRoute::Unsupported
+        );
+    }
+
+    #[test]
+    fn dx12_rejects_sources_without_an_hlsl_output_path() {
+        // Naga has no HLSL backend, so DX12 cannot lower anything except its
+        // native HLSL/DXIL passthrough routes.
+        let spirv = ShaderModuleSource::SpirV {
+            stage: ShaderStage::Vertex,
+            words: vec![1],
+            entry_point: "main".into(),
+        };
+        assert_eq!(
+            spirv.route_for(ShaderBackendFamily::Dx12),
+            ShaderRoute::Unsupported
+        );
+        assert_eq!(
+            source().route_for(ShaderBackendFamily::Dx12),
+            ShaderRoute::Unsupported
+        );
+    }
+
+    #[test]
+    fn translatable_answers_name_real_naga_routes() {
+        // spirv-in + wgsl-out, wgsl-in + spirv-out, spirv-in + glsl-out,
+        // and glsl-in + wgsl-out are all existing Naga frontend/backend pairs.
+        let spirv = ShaderModuleSource::SpirV {
+            stage: ShaderStage::Vertex,
+            words: vec![1],
+            entry_point: "main".into(),
+        };
+        assert_eq!(
+            spirv.route_for(ShaderBackendFamily::Wgpu),
+            ShaderRoute::Translatable
+        );
+        assert_eq!(
+            source().route_for(ShaderBackendFamily::Vulkan),
+            ShaderRoute::Translatable
+        );
+        assert_eq!(
+            spirv.route_for(ShaderBackendFamily::WebGl2),
+            ShaderRoute::Translatable
+        );
+        let glsl = ShaderModuleSource::Glsl {
+            stage: ShaderStage::Vertex,
+            dialect: GlslDialect::Desktop { version: 460 },
+            source: "void main() {}".into(),
+            entry_point: "main".into(),
+        };
+        assert_eq!(
+            glsl.route_for(ShaderBackendFamily::Wgpu),
+            ShaderRoute::Translatable
         );
     }
 }
