@@ -60,6 +60,9 @@ web-sys = { version = "0.3.77", optional = true, features = [
     "WebGlFramebuffer", "WebGlSampler", "WebGlTexture",
     "WebGlProgram", "WebGlShader", "WebGlSync", "WebGlUniformLocation",
     "WebGlVertexArrayObject", "WebGlContextEvent", "console",
+    # Typed surfaces for the Layer 1 browser command domains: query objects
+    # (occlusion), active-resource reflection, and context-attribute evidence.
+    "WebGlQuery", "WebGlActiveInfo", "WebGlContextAttributes",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

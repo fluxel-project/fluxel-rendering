@@ -13,16 +13,20 @@ use web_sys::{HtmlCanvasElement, WebGl2RenderingContext, WebGlBuffer, WebGlSampl
 use super::super::{
     BufferId, ContextStamp, CoreOrExtension, GlBufferDesc, GlCapability, GlContextFlags,
     GlContextInfo, GlContextLifecycle, GlDiscoveryBuilder, GlDiscoveryError, GlDiscoverySnapshot,
-    GlError, GlExtensionSet, GlFamilyApi, GlFamilyProfile, GlFiniteF32, GlFormat,
-    GlFormatCapabilities, GlFormatEvidence, GlFormatResourceKind, GlFormatTable, GlKnownExtension,
-    GlLimits, GlOperationProbe, GlPixelStoreState, GlTextureDesc, OwnerThreadIdentity, TextureId,
+    GlError, GlExtensionSet, GlFamilyApi as _, GlFamilyProfile, GlFenceLeaseBook, GlFiniteF32,
+    GlFormat, GlFormatTable, GlKnownExtension, GlLimits, GlOperationProbe, GlPixelStoreState,
+    GlSurfaceLeaseBook, GlTextureDesc, OwnerThreadIdentity, TextureId,
+};
+use super::objects::{
+    ActivePass, ActiveRaster, BrowserFramebuffer, BrowserProgram, BrowserQuery, BrowserShader,
+    BrowserSync, BrowserVertexArray,
 };
 
-/// Immutable WebGL2 discovery evidence plus the callable `glow` facade.
+/// Immutable WebGL2 discovery evidence plus the callable browser context.
 ///
 /// RHI retains the Host-provided canvas and the context it created. `glow`
 /// receives a cloned JS context handle, while `raw` remains the RHI-owned
-/// browser API handle for discovery and later provider work.
+/// browser API handle for discovery and provider work.
 /// It is called only after the fallible WebGL2 version check below succeeds.
 /// The remaining assumptions made by glow are WebGL binding invariants (a real
 /// WebGL2 context returns a string `VERSION` and an array-or-null extension
@@ -38,9 +42,29 @@ pub(crate) struct WebGl2BrowserDiscovery {
     pub(super) buffers: BTreeMap<u32, BrowserBuffer>,
     pub(super) textures: BTreeMap<u32, BrowserTexture>,
     pub(super) samplers: BTreeMap<u32, BrowserSampler>,
+    pub(super) shaders: BTreeMap<u32, BrowserShader>,
+    pub(super) programs: BTreeMap<u32, BrowserProgram>,
+    pub(super) vertex_arrays: BTreeMap<u32, BrowserVertexArray>,
+    pub(super) framebuffers: BTreeMap<u32, BrowserFramebuffer>,
+    pub(super) queries: BTreeMap<u32, BrowserQuery>,
+    pub(super) syncs: BTreeMap<u32, BrowserSync>,
+    pub(super) fences: GlFenceLeaseBook,
+    pub(super) surface: GlSurfaceLeaseBook,
+    pub(super) surface_suspended: bool,
+    pub(super) pass: Option<ActivePass>,
+    pub(super) raster: Option<ActiveRaster>,
+    /// Slot of the query currently recording, if any.
+    pub(super) active_query: Option<u32>,
     pub(super) next_buffer_slot: u32,
     pub(super) next_texture_slot: u32,
     pub(super) next_sampler_slot: u32,
+    pub(super) next_shader_slot: u32,
+    pub(super) next_program_slot: u32,
+    pub(super) next_vertex_array_slot: u32,
+    pub(super) next_framebuffer_slot: u32,
+    pub(super) next_query_slot: u32,
+    pub(super) next_sync_slot: u32,
+    pub(super) next_surface_slot: u32,
     pub(super) pixel_store: GlPixelStoreState,
 }
 
@@ -120,16 +144,19 @@ impl WebGl2BrowserDiscovery {
             string_parameter(&raw, WebGl2RenderingContext::VENDOR, "VENDOR")?,
             string_parameter(&raw, WebGl2RenderingContext::RENDERER, "RENDERER")?,
             browser_identity()?,
-            GlContextFlags::default(),
+            discover_context_flags(&raw)?,
         );
         let limits = discover_limits(&raw, &extensions)?;
-        let formats = webgl2_baseline_formats(&extensions)?;
+        let formats = super::format_map::webgl2_baseline_formats(&extensions)?;
         let mut builder = GlDiscoveryBuilder::new(stamp, context, extensions, limits, formats)
             .map_err(discovery_error)?;
 
         // WebGL2 has no general compute, storage, or indirect mapping.  Timer
         // queries are the sole currently normalized browser extension domain;
-        // no command is issued while discovering it.
+        // no command is issued while discovering it. The typed timer-query
+        // entry points stay unacquired, so the domain remains fail-closed
+        // until `query_counter_bits` and the extension entry points are
+        // proved together (audit P1-5).
         builder.resolve(
             GlCapability::TimerQuery,
             CoreOrExtension {
@@ -153,9 +180,28 @@ impl WebGl2BrowserDiscovery {
             buffers: BTreeMap::new(),
             textures: BTreeMap::new(),
             samplers: BTreeMap::new(),
+            shaders: BTreeMap::new(),
+            programs: BTreeMap::new(),
+            vertex_arrays: BTreeMap::new(),
+            framebuffers: BTreeMap::new(),
+            queries: BTreeMap::new(),
+            syncs: BTreeMap::new(),
+            fences: GlFenceLeaseBook::default(),
+            surface: GlSurfaceLeaseBook::new(),
+            surface_suspended: false,
+            pass: None,
+            raster: None,
+            active_query: None,
             next_buffer_slot: 0,
             next_texture_slot: 0,
             next_sampler_slot: 0,
+            next_shader_slot: 0,
+            next_program_slot: 0,
+            next_vertex_array_slot: 0,
+            next_framebuffer_slot: 0,
+            next_query_slot: 0,
+            next_sync_slot: 0,
+            next_surface_slot: 0,
             pixel_store: GlPixelStoreState::DEFAULT,
         })
     }
@@ -255,6 +301,11 @@ impl WebGl2BrowserDiscovery {
                 "texture allocation is not live",
             )),
         }
+    }
+
+    /// Maps a JS exception from a catch-typed binding into a driver error.
+    pub(super) fn js_failure(operation: &'static str, value: JsValue) -> GlError {
+        js_error(operation, value)
     }
 }
 
@@ -478,176 +529,46 @@ fn anisotropy_limit(
         .map(Some)
 }
 
-fn webgl2_baseline_formats(extensions: &GlExtensionSet) -> Result<GlFormatTable, GlError> {
-    let mut formats = GlFormatTable::default();
-    for facts in [
-        GlFormatCapabilities {
-            format: GlFormat::Rgba8Unorm,
-            resource_kind: GlFormatResourceKind::Texture,
-            sample_count: 1,
-            evidence: GlFormatEvidence::CoreGuaranteed,
-            sampled: true,
-            filterable: true,
-            renderable: true,
-            blendable: true,
-            storage_read: false,
-            storage_write: false,
-            copy_source: true,
-            copy_destination: true,
-        },
-        GlFormatCapabilities {
-            format: GlFormat::Rgba8Srgb,
-            resource_kind: GlFormatResourceKind::Texture,
-            sample_count: 1,
-            evidence: GlFormatEvidence::CoreGuaranteed,
-            sampled: true,
-            filterable: true,
-            renderable: true,
-            blendable: true,
-            storage_read: false,
-            storage_write: false,
-            copy_source: true,
-            copy_destination: true,
-        },
-        GlFormatCapabilities {
-            format: GlFormat::Depth32Float,
-            resource_kind: GlFormatResourceKind::Texture,
-            sample_count: 1,
-            evidence: GlFormatEvidence::CoreGuaranteed,
-            sampled: true,
-            filterable: false,
-            renderable: true,
-            blendable: false,
-            storage_read: false,
-            storage_write: false,
-            // Do not claim a concrete copy operation from a static baseline.
-            copy_source: false,
-            copy_destination: false,
-        },
-    ] {
-        formats
-            .record(facts)
-            .map_err(|error| driver("record WebGL2 baseline format", &format!("{error:?}")))?;
-    }
-    for (extension, exact_formats) in compressed_extension_formats() {
-        if !extensions.is_acquired(extension) {
-            continue;
+/// Reads the live context-attribute answers back into the evidence record.
+///
+/// Every accepted attribute is recorded as an exact `name=value` entry so the
+/// snapshot proves what the browser actually granted, including attributes the
+/// requester set but the browser could not honor (audit P1-10).
+fn discover_context_flags(raw: &WebGl2RenderingContext) -> Result<GlContextFlags, GlError> {
+    let mut flags = GlContextFlags::default();
+    let Some(attributes) = raw.get_context_attributes() else {
+        // A `None` answer gets an explicit marker instead of pretending
+        // defaults were observed.
+        flags
+            .other
+            .insert("webgl.context-attributes-unavailable=true".into());
+        return Ok(flags);
+    };
+    let record = |flags: &mut GlContextFlags, name: &str, value: Option<bool>| {
+        if let Some(value) = value {
+            flags.other.insert(format!("webgl.{name}={value}"));
         }
-        for format in exact_formats {
-            formats
-                .record(GlFormatCapabilities {
-                    format,
-                    resource_kind: GlFormatResourceKind::Texture,
-                    sample_count: 1,
-                    evidence: GlFormatEvidence::ExtensionAcquired(extension),
-                    sampled: true,
-                    filterable: true,
-                    renderable: false,
-                    blendable: false,
-                    storage_read: false,
-                    storage_write: false,
-                    copy_source: false,
-                    copy_destination: false,
-                })
-                .map_err(|error| {
-                    driver(
-                        "record acquired compressed WebGL2 format",
-                        &format!("{error:?}"),
-                    )
-                })?;
-        }
-    }
-    Ok(formats)
-}
-
-fn compressed_extension_formats() -> Vec<(GlKnownExtension, Vec<GlFormat>)> {
-    use super::super::{GlAstcBlock as B, GlCompressedColorSpace as C};
-    vec![
-        (
-            GlKnownExtension::CompressedTextureS3tc,
-            vec![
-                GlFormat::Bc1RgbUnorm,
-                GlFormat::Bc1RgbaUnorm,
-                GlFormat::Bc2RgbaUnorm,
-                GlFormat::Bc3RgbaUnorm,
-            ],
-        ),
-        (
-            GlKnownExtension::CompressedTextureS3tcSrgb,
-            vec![
-                GlFormat::Bc1RgbSrgb,
-                GlFormat::Bc1RgbaSrgb,
-                GlFormat::Bc2RgbaSrgb,
-                GlFormat::Bc3RgbaSrgb,
-            ],
-        ),
-        (
-            GlKnownExtension::CompressedTextureRgtc,
-            vec![
-                GlFormat::Bc4RUnorm,
-                GlFormat::Bc4RSnorm,
-                GlFormat::Bc5RgUnorm,
-                GlFormat::Bc5RgSnorm,
-            ],
-        ),
-        (
-            GlKnownExtension::CompressedTextureBptc,
-            vec![
-                GlFormat::Bc6hRgbUfloat,
-                GlFormat::Bc6hRgbSfloat,
-                GlFormat::Bc7RgbaUnorm,
-                GlFormat::Bc7RgbaSrgb,
-            ],
-        ),
-        (
-            GlKnownExtension::CompressedTextureEtc,
-            vec![
-                GlFormat::Etc2Rgb8Unorm,
-                GlFormat::Etc2Rgb8Srgb,
-                GlFormat::Etc2Rgba8Unorm,
-                GlFormat::Etc2Rgba8Srgb,
-                GlFormat::Etc2Rgb8A1Unorm,
-                GlFormat::Etc2Rgb8A1Srgb,
-                GlFormat::EacR11Unorm,
-                GlFormat::EacRg11Unorm,
-                GlFormat::EacR11Snorm,
-                GlFormat::EacRg11Snorm,
-            ],
-        ),
-        (
-            GlKnownExtension::CompressedTextureAstc,
-            [
-                B::B4x4,
-                B::B5x4,
-                B::B5x5,
-                B::B6x5,
-                B::B6x6,
-                B::B8x5,
-                B::B8x6,
-                B::B8x8,
-                B::B10x5,
-                B::B10x6,
-                B::B10x8,
-                B::B10x10,
-                B::B12x10,
-                B::B12x12,
-            ]
-            .into_iter()
-            .flat_map(|block| {
-                [
-                    GlFormat::Astc {
-                        block,
-                        color_space: C::Linear,
-                    },
-                    GlFormat::Astc {
-                        block,
-                        color_space: C::Srgb,
-                    },
-                ]
-            })
-            .collect(),
-        ),
-    ]
+    };
+    record(&mut flags, "alpha", attributes.get_alpha());
+    record(&mut flags, "antialias", attributes.get_antialias());
+    record(&mut flags, "depth", attributes.get_depth());
+    record(&mut flags, "stencil", attributes.get_stencil());
+    record(
+        &mut flags,
+        "premultiplied-alpha",
+        attributes.get_premultiplied_alpha(),
+    );
+    record(
+        &mut flags,
+        "preserve-drawing-buffer",
+        attributes.get_preserve_drawing_buffer(),
+    );
+    record(
+        &mut flags,
+        "fail-if-major-performance-caveat",
+        attributes.get_fail_if_major_performance_caveat(),
+    );
+    Ok(flags)
 }
 
 fn string_parameter(
@@ -747,12 +668,17 @@ fn browser_identity() -> Result<String, GlError> {
     })
 }
 
+/// Accepts exactly the `WebGL 2.x` family and rejects look-alike strings.
+///
+/// The major component must be the single digit `2` followed by `.` or the
+/// end of the string, so `"WebGL 20"` and `"WebGL 2foo"` both fail (audit
+/// P2-9); minor and vendor text are retained verbatim elsewhere.
 fn require_webgl2_version(version: &str) -> Result<(), GlError> {
-    version
-        .strip_prefix("WebGL ")
-        .is_some_and(|remainder| remainder.starts_with('2'))
-        .then_some(())
-        .ok_or_else(|| driver("getParameter(VERSION)", "context did not report WebGL 2"))
+    let accepted = version.strip_prefix("WebGL ").and_then(|remainder| {
+        let (major, rest) = remainder.split_at(1.min(remainder.len()));
+        (major == "2" && (rest.is_empty() || rest.starts_with('.'))).then_some(())
+    });
+    accepted.ok_or_else(|| driver("getParameter(VERSION)", "context did not report WebGL 2"))
 }
 
 fn discovery_error(error: GlDiscoveryError) -> GlError {
@@ -767,5 +693,25 @@ fn driver(operation: &'static str, message: &str) -> GlError {
     GlError::Driver {
         operation,
         message: message.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_webgl2_version;
+
+    #[test]
+    fn accepts_exact_webgl2_family_strings() {
+        assert!(require_webgl2_version("WebGL 2.0 (OpenGL ES 3.0 Chromium)").is_ok());
+        assert!(require_webgl2_version("WebGL 2").is_ok());
+    }
+
+    #[test]
+    fn rejects_lookalike_major_versions() {
+        assert!(require_webgl2_version("WebGL 20").is_err());
+        assert!(require_webgl2_version("WebGL 2foo").is_err());
+        assert!(require_webgl2_version("WebGL 1.0").is_err());
+        assert!(require_webgl2_version("OpenGL ES 3.0").is_err());
+        assert!(require_webgl2_version("WebGLX 2.0").is_err());
     }
 }

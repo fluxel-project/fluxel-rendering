@@ -7,6 +7,15 @@
 #![cfg(target_arch = "wasm32")]
 
 mod discovery;
+mod exec_copy;
+mod exec_framebuffer;
+mod exec_present;
+mod exec_raster;
+mod exec_shader;
+mod exec_sync;
+mod exec_vertex;
+mod format_map;
+mod objects;
 mod provider;
 
 pub(crate) use discovery::WebGl2BrowserDiscovery;

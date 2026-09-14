@@ -87,6 +87,9 @@ pub enum MockCall {
     QueryResult(QueryId),
     BeginOcclusion(QueryId),
     EndOcclusion,
+    BeginElapsed(QueryId),
+    EndElapsed,
+    QueryTimestamp(QueryId),
     Dispatch(GlDispatchGroups),
     BindStorageBuffer {
         binding: u32,
@@ -129,6 +132,10 @@ pub struct MockGlFamilyApi {
     pixel_store: GlPixelStoreState,
     calls: Vec<MockCall>,
     next_error: Option<GlError>,
+    /// Deterministic oracle answers for query observations.
+    query_results: BTreeMap<QueryId, GlQueryResult>,
+    /// Deterministic reflection for the next `create_program` call.
+    next_reflection: Option<GlProgramReflection>,
 }
 impl MockGlFamilyApi {
     pub fn from_discovery(discovery: GlDiscoverySnapshot) -> Self {
@@ -159,6 +166,8 @@ impl MockGlFamilyApi {
             pixel_store: GlPixelStoreState::DEFAULT,
             calls: vec![],
             next_error: None,
+            query_results: BTreeMap::new(),
+            next_reflection: None,
         }
     }
     pub fn try_with_compute_storage(self) -> Result<MockComputeStorageApi, GlError> {
@@ -172,6 +181,14 @@ impl MockGlFamilyApi {
     }
     pub fn fail_next(&mut self, error: GlError) {
         self.next_error = Some(error)
+    }
+    /// Injects the deterministic answer one query observation returns.
+    pub fn inject_query_result(&mut self, query: QueryId, result: GlQueryResult) {
+        self.query_results.insert(query, result);
+    }
+    /// Injects the reflection the next `create_program` call returns.
+    pub fn set_next_program_reflection(&mut self, reflection: GlProgramReflection) {
+        self.next_reflection = Some(reflection);
     }
     fn owner(&self, op: &'static str) -> Result<(), GlError> {
         let actual = OwnerThreadIdentity::current();
@@ -306,6 +323,7 @@ impl MockGlFamilyApi {
         self.syncs.clear();
         self.fences.revoke_all();
         self.pass_active = false;
+        self.query_results.clear();
         let _ = self.surface.invalidate_generation();
     }
     fn frame_view(&mut self, op: &'static str, view: GlTextureView) -> Result<(), GlError> {
@@ -719,19 +737,31 @@ impl GlShaderApi for MockGlFamilyApi {
                 reason: "compute program requires proved compute capability",
             });
         }
-        let id = ProgramId::new(self.stamp, self.slot()?, 0);
-        self.programs.insert(id);
-        self.calls.push(MockCall::CreateProgram(id));
-        // True link reflection is a later wave; every program kind reflects as
-        // empty so compute never invents raster-stage vocabulary.
-        Ok((
-            id,
-            GlProgramReflection {
+        // An injected reflection must satisfy the same layout agreement a
+        // real provider validates, so differential tests exercise the same
+        // failure modes; without injection every program reflects as empty.
+        // The check runs before any identity is published so a mismatch
+        // leaves no half-initialized object behind.
+        let reflection = match self.next_reflection.take() {
+            Some(reflection) => {
+                reflection
+                    .validate_against(&d.layout)
+                    .map_err(|_| GlError::Validation {
+                        operation: "create-program",
+                        message: "injected reflection does not satisfy the layout".into(),
+                    })?;
+                reflection
+            }
+            None => GlProgramReflection {
                 vertex_inputs: vec![],
                 fragment_outputs: vec![],
                 assignments: vec![],
             },
-        ))
+        };
+        let id = ProgramId::new(self.stamp, self.slot()?, 0);
+        self.programs.insert(id);
+        self.calls.push(MockCall::CreateProgram(id));
+        Ok((id, reflection))
     }
     fn destroy_program(&mut self, id: ProgramId) -> Result<(), GlError> {
         self.ready("destroy-program")?;
@@ -1200,7 +1230,13 @@ impl GlQueryObjectsApi for MockGlFamilyApi {
         self.ready("query-result")?;
         self.live("query-result", id, |this| this.queries.contains(&id))?;
         self.calls.push(MockCall::QueryResult(id));
-        Ok(GlQueryResult::Pending)
+        // Injected answers model completion for differential tests; without
+        // injection the oracle stays honest about not knowing.
+        Ok(self
+            .query_results
+            .get(&id)
+            .copied()
+            .unwrap_or(GlQueryResult::Pending))
     }
 }
 impl GlOcclusionQueryApi for MockGlFamilyApi {
@@ -1215,6 +1251,27 @@ impl GlOcclusionQueryApi for MockGlFamilyApi {
     fn end_occlusion_query(&mut self) -> Result<(), GlError> {
         self.ready("end-occlusion-query")?;
         self.calls.push(MockCall::EndOcclusion);
+        Ok(())
+    }
+}
+impl GlElapsedQueryApi for MockGlFamilyApi {
+    fn begin_elapsed_query(&mut self, id: QueryId) -> Result<(), GlError> {
+        self.ready("begin-elapsed-query")?;
+        self.live("begin-elapsed-query", id, |this| this.queries.contains(&id))?;
+        self.calls.push(MockCall::BeginElapsed(id));
+        Ok(())
+    }
+    fn end_elapsed_query(&mut self) -> Result<(), GlError> {
+        self.ready("end-elapsed-query")?;
+        self.calls.push(MockCall::EndElapsed);
+        Ok(())
+    }
+}
+impl GlTimestampQueryApi for MockGlFamilyApi {
+    fn query_timestamp(&mut self, id: QueryId) -> Result<(), GlError> {
+        self.ready("query-timestamp")?;
+        self.live("query-timestamp", id, |this| this.queries.contains(&id))?;
+        self.calls.push(MockCall::QueryTimestamp(id));
         Ok(())
     }
 }
