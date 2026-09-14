@@ -26,6 +26,12 @@ pub mod fixed_artifacts {
 #[cfg(any(test, all(target_arch = "wasm32", feature = "webgpu")))]
 mod webgpu_state;
 
+// Browser-independent construction ownership for partially created resource
+// sets. Host tests inject creation/write failures to prove that a failed
+// recipe destroys exactly what it created and never half-updates a registry.
+#[cfg(any(test, all(target_arch = "wasm32", feature = "webgpu")))]
+mod resource_candidate;
+
 /// Closed browser WebGL2 execution for the retained Stage 1 unlit scene.
 ///
 /// This module exists only in the browser build.  It deliberately exposes no

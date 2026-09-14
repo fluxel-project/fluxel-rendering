@@ -72,10 +72,13 @@ transplanted.
 Changed content has a new `ContentGeneration`, so a stale generation cannot be
 selected as the replacement merely because its `AssetId` matches. A failed or
 accepted-unknown upload/submission is sticky for that exact residency attempt:
-it is not silently retried or republished. Explicitly retire that failed entry,
-then prepare again to create a new attempt. This preserves the existing
-accepted-unknown quarantine rule while keeping retry ownership visible to the
-caller.
+it is not silently retried or republished. Retrying follows one exact order:
+request retirement of the failed entry, then collect/poll until the retired
+entry can actually be removed, and only then prepare again to start a new
+attempt. Preparing immediately after the retirement request alone revives the
+original Failed/Quarantined entry instead of creating a new attempt. This
+preserves the existing accepted-unknown quarantine rule while keeping retry
+ownership visible to the caller.
 
 The initial image registry establishes the same identity/lifetime rules, but
 the retained legacy-unlit browser path does not claim that it samples resident

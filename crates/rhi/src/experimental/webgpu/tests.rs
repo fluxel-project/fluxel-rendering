@@ -1,6 +1,7 @@
 //! Unit contracts for the closed browser executor types.
 
-use js_sys::{Function, Promise};
+use js_sys::{Function, Object, Promise};
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
 use super::*;
@@ -29,8 +30,10 @@ async fn resident_assets_reuse_replace_and_recreate_by_device_generation() {
     assert!(session.resident_mesh_current(&mesh_again));
     assert!(session.resident_image_current(&image));
     session.replace_resident_asset(41);
-    // Replacement only removes future lookup. This acquired lease is still
-    // admissible for an accepted same-generation submission.
+    // Retirement removes future lookup ownership only. This acquired lease is
+    // not revoked: it stays admissible for an accepted same-generation
+    // submission, and its GPU memory becomes reclaimable only after such a
+    // submission completes.
     assert!(session.resident_mesh_current(&mesh));
     assert!(session.resident_image_current(&image));
     let replacement = session
@@ -547,5 +550,485 @@ async fn disposal_joins_a_deferred_adapter_rejection_without_poisoning() {
             .diagnostics()
             .iter()
             .all(|diagnostic| diagnostic.code != "recovery-request-failed")
+    );
+}
+
+/// Resolves the production browser device, then instruments its
+/// `createBuffer`, `createBindGroup`, and `queue.writeBuffer` calls with
+/// usage-kind counters so a test can observe exactly which resources each
+/// draw path creates. Counters are published on `globalThis.__fluxelDrawCounts`.
+struct CountingBrowserRequests;
+
+impl BrowserRequestProvider for CountingBrowserRequests {
+    fn request_adapter(&self, gpu: &JsValue) -> Result<Promise, JsValue> {
+        ProductionBrowserRequests.request_adapter(gpu)
+    }
+
+    fn request_device(&self, adapter: &JsValue) -> Result<Promise, JsValue> {
+        let native = ProductionBrowserRequests.request_device(adapter)?;
+        let instrument = js_sys::eval(INSTRUMENT_DEVICE_SOURCE)
+            .expect("browser test evals the instrumentor")
+            .dyn_into::<Function>()
+            .expect("instrumentor is a function");
+        let instrumented = instrument.call1(&JsValue::UNDEFINED, &native.into())?;
+        Ok(Promise::from(instrumented))
+    }
+}
+
+const INSTRUMENT_DEVICE_SOURCE: &str = r#"promise => promise.then(device => {
+    const counts = {
+        vertex: 0, index: 0, uniform: 0, bindGroups: 0,
+        writeVertex: 0, writeIndex: 0, writeUniform: 0,
+    };
+    const kindOf = usage => (usage & 0x40) !== 0 ? 'uniform'
+        : (usage & 0x10) !== 0 ? 'index'
+        : (usage & 0x20) !== 0 ? 'vertex' : 'other';
+    const realCreateBuffer = device.createBuffer.bind(device);
+    device.createBuffer = descriptor => {
+        const kind = kindOf(descriptor.usage);
+        if (kind !== 'other') {
+            counts[kind] += 1;
+        }
+        const buffer = realCreateBuffer(descriptor);
+        try { buffer.__fluxelKind = kind; } catch (_error) {}
+        return buffer;
+    };
+    const realCreateBindGroup = device.createBindGroup.bind(device);
+    device.createBindGroup = (...args) => {
+        counts.bindGroups += 1;
+        return realCreateBindGroup(...args);
+    };
+    const queue = device.queue;
+    const realWriteBuffer = queue.writeBuffer.bind(queue);
+    queue.writeBuffer = (buffer, ...rest) => {
+        const kind = buffer.__fluxelKind || 'other';
+        if (kind === 'vertex') {
+            counts.writeVertex += 1;
+        } else if (kind === 'index') {
+            counts.writeIndex += 1;
+        } else if (kind === 'uniform') {
+            counts.writeUniform += 1;
+        }
+        return realWriteBuffer(buffer, ...rest);
+    };
+    globalThis.__fluxelDrawCounts = counts;
+    return device;
+})"#;
+
+fn draw_counter(name: &str) -> u32 {
+    let counts = js_sys::Reflect::get(&js_sys::global(), &"__fluxelDrawCounts".into())
+        .expect("instrumented session publishes draw counters")
+        .dyn_into::<Object>()
+        .expect("draw counters are an object");
+    js_sys::Reflect::get(&counts, &JsValue::from_str(name))
+        .expect("counter exists")
+        .as_f64()
+        .expect("counter is numeric") as u32
+}
+
+fn sized_canvas() -> JsValue {
+    js_sys::eval(
+        "(() => { const canvas = document.createElement('canvas');
+           canvas.width = 8; canvas.height = 8; return canvas; })()",
+    )
+    .expect("browser test creates a sized canvas")
+}
+
+/// Compiles the fixed one-draw resident graph for the counting test.
+fn resident_graph(
+    format: WebGpuCanvasFormat,
+    extent: [u32; 2],
+) -> fluxel_rendergraph::CompiledGraph<()> {
+    use fluxel_rendergraph::{
+        AttachmentOps, BufferCapabilities, BufferDesc, BufferRange, BufferReadUse,
+        ColorAttachmentDesc, DeviceCapabilities, DeviceLimits, Extent3d, ExternalOwnership,
+        ImportBufferContract, InitialContents, LoadOp, PresentContract, QueueCapabilities,
+        QueueDescriptor, QueueId, RecordingCapabilities, RecordingModel, RenderGraph,
+        ResourceAccessState, StoreOp, SurfaceCapabilities, SurfaceTextureContract,
+        SynchronizationCapabilities, TextureDesc, TextureDimension, TextureFormat,
+        TextureFormatCapabilities, TextureRange, TimestampCapabilities,
+        TransientResourceCapabilities, TransitionCapabilities, WriteCoverage,
+    };
+    let texture_format = match format {
+        WebGpuCanvasFormat::Rgba8Unorm => TextureFormat::Rgba8Unorm,
+        WebGpuCanvasFormat::Bgra8Unorm => TextureFormat::Bgra8Unorm,
+    };
+    let imported = |size: u64| ImportBufferContract {
+        descriptor: BufferDesc { size },
+        initial_state: ResourceAccessState::CopyDestination,
+        ownership: ExternalOwnership::Caller,
+        initial_contents: InitialContents::Defined,
+    };
+    let mut graph = RenderGraph::new();
+    let positions = graph.import_buffer_slot("counting-positions", imported(36));
+    let indices = graph.import_buffer_slot("counting-indices", imported(12));
+    let uniform = graph.import_buffer_slot("counting-uniform", imported(256));
+    let surface = graph.import_surface_texture_slot(
+        "counting-presentable",
+        SurfaceTextureContract {
+            descriptor: TextureDesc {
+                dimension: TextureDimension::D2,
+                extent: Extent3d {
+                    width: extent[0],
+                    height: extent[1],
+                    depth: 1,
+                },
+                mip_levels: 1,
+                array_layers: 1,
+                sample_count: 1,
+                format: texture_format,
+            },
+        },
+    );
+    let pass = graph.add_raster_pass(
+        "counting-resident-unlit",
+        |pass| {
+            let output = pass.color_attachment(
+                surface.version,
+                ColorAttachmentDesc {
+                    index: 0,
+                    range: TextureRange::Whole,
+                    operations: AttachmentOps {
+                        load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                        store: StoreOp::Store,
+                        write_coverage: WriteCoverage::Full,
+                    },
+                },
+            );
+            let _ = pass.read_buffer(
+                &positions.version,
+                BufferReadUse::Vertex,
+                BufferRange::Whole,
+            );
+            let _ = pass.read_buffer(&indices.version, BufferReadUse::Index, BufferRange::Whole);
+            let _ = pass.read_buffer(&uniform.version, BufferReadUse::Uniform, BufferRange::Whole);
+            (output, ())
+        },
+        |_commands, _resolver, _data, _frame| Ok(()),
+    );
+    graph.present(pass.output, PresentContract::new());
+    let presentable = TextureFormatCapabilities::builder(texture_format)
+        .sampled(true, true)
+        .storage(false, false)
+        .attachments(true, false, vec![1])
+        .copies(true, true)
+        .build();
+    let capabilities = DeviceCapabilities::builder()
+        .queue(QueueDescriptor::new(
+            QueueId::new(0),
+            QueueCapabilities::new(true, false, true, true),
+        ))
+        .recording(RecordingCapabilities::new(
+            RecordingModel::ImmediateContext,
+            false,
+        ))
+        .transitions(TransitionCapabilities::BackendManaged)
+        .synchronization(SynchronizationCapabilities::SingleQueueOrdering)
+        .timestamps(TimestampCapabilities::Unsupported)
+        .transient_resources(TransientResourceCapabilities::new(true, false, false))
+        .limits(DeviceLimits::new(4, 256))
+        .buffers(BufferCapabilities::new(false, false, false))
+        .texture_format(presentable)
+        .surface(SurfaceCapabilities::new(vec![texture_format], true, false))
+        .build();
+    graph.compile(&capabilities).expect("counting graph").graph
+}
+
+/// Resident draws bind registry-owned mesh buffers, so repeated resident
+/// drawing must grow only the per-frame uniform pair. Vertex/index buffers
+/// and their uploads are created exactly once by the initial upload. This is
+/// the regression contract for the removed per-draw dead transient buffers.
+#[wasm_bindgen_test(async)]
+async fn resident_draws_reuse_mesh_buffers_and_only_grow_per_frame_uniforms() {
+    let mut session =
+        WebGpuSession::new_with_requests(sized_canvas(), Rc::new(CountingBrowserRequests))
+            .await
+            .expect("instrumented WebGPU session");
+    let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+    let indices = [0, 1, 2];
+    let mesh = session
+        .resident_mesh(WebGpuAssetKey::new(7, 1), &positions, &indices)
+        .expect("upload resident mesh");
+    assert_eq!(
+        draw_counter("vertex"),
+        1,
+        "upload creates one vertex buffer"
+    );
+    assert_eq!(draw_counter("index"), 1, "upload creates one index buffer");
+    assert_eq!(draw_counter("uniform"), 0);
+    assert_eq!(draw_counter("writeVertex"), 1);
+    assert_eq!(draw_counter("writeIndex"), 1);
+
+    let extent = [8, 8];
+    let compiled = resident_graph(session.format(), extent);
+    let contract = FixedUnlitGraph::new(&compiled, 1, extent, session.format());
+    let draws = [FixedResidentUnlitDraw {
+        mesh: &mesh,
+        pvm_and_color: [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+            0.5, 0.25, 1.0,
+        ],
+        insertion_index: 0,
+    }];
+
+    let target_draws = 6;
+    let mut submitted = 0;
+    let mut turns = 0;
+    while submitted < target_draws {
+        match session.render_resident(&contract, &draws) {
+            Ok(WebGpuRenderOutcome::Submitted(_)) => submitted += 1,
+            Ok(WebGpuRenderOutcome::Backpressure) => {
+                turn().await;
+                turns += 1;
+                assert!(turns < 100, "resident completions stalled");
+            }
+            other => panic!("unexpected resident outcome: {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        draw_counter("vertex"),
+        1,
+        "resident draws must not create vertex buffers"
+    );
+    assert_eq!(
+        draw_counter("index"),
+        1,
+        "resident draws must not create index buffers"
+    );
+    assert_eq!(
+        draw_counter("writeVertex"),
+        1,
+        "positions are never re-uploaded"
+    );
+    assert_eq!(
+        draw_counter("writeIndex"),
+        1,
+        "indices are never re-uploaded"
+    );
+    assert_eq!(
+        draw_counter("uniform"),
+        target_draws,
+        "only per-frame uniforms grow"
+    );
+    assert_eq!(draw_counter("bindGroups"), target_draws);
+    assert_eq!(draw_counter("writeUniform"), target_draws);
+    dispose(&mut session).await;
+}
+
+/// Builds a no-GPU fake device for registry recipes. `fail_creation` and
+/// `fail_write` are 1-based step numbers (zero disables injection); the fake
+/// counts creations, writes, and destroys so tests can prove that a failed
+/// recipe destroys exactly what it created.
+fn fake_resident_device(fail_creation: u32, fail_write: u32) -> JsValue {
+    js_sys::eval(&format!(
+        r#"(() => {{
+            const state = {{ creations: 0, writes: 0, destroys: 0 }};
+            const inject = (count, limit) => {{
+                if (limit > 0 && count === limit) {{
+                    throw new Error("injected failure");
+                }}
+            }};
+            const owned = () => ({{
+                destroy: () => {{ state.destroys += 1; }},
+            }});
+            const device = {{
+                createBuffer() {{
+                    state.creations += 1;
+                    inject(state.creations, {fail_creation});
+                    return owned();
+                }},
+                createTexture() {{
+                    state.creations += 1;
+                    inject(state.creations, {fail_creation});
+                    return owned();
+                }},
+                createBindGroup() {{
+                    return {{}};
+                }},
+                queue: {{
+                    writeBuffer() {{
+                        state.writes += 1;
+                        inject(state.writes, {fail_write});
+                    }},
+                    writeTexture() {{
+                        state.writes += 1;
+                        inject(state.writes, {fail_write});
+                    }},
+                }},
+            }};
+            device.__state = state;
+            return device;
+        }})()"#
+    ))
+    .expect("browser test evals the fake resident device")
+}
+
+fn fake_state(device: &JsValue) -> Object {
+    let object = device
+        .dyn_ref::<Object>()
+        .expect("fake device is an object");
+    js_sys::Reflect::get(object, &"__state".into())
+        .expect("fake device exposes state")
+        .dyn_into()
+        .expect("state is an object")
+}
+
+fn fake_number(state: &Object, name: &str) -> u32 {
+    js_sys::Reflect::get(state, &JsValue::from_str(name))
+        .expect("state field exists")
+        .as_f64()
+        .expect("state field is numeric") as u32
+}
+
+fn fake_queue(device: &JsValue) -> JsValue {
+    let object = device
+        .dyn_ref::<Object>()
+        .expect("fake device is an object");
+    js_sys::Reflect::get(object, &"queue".into()).expect("fake device exposes queue")
+}
+
+/// Injected creation/write failures must destroy every created object and
+/// never leave a half-updated registry entry: a healthy retry after any
+/// injected failure creates a fresh complete set instead of observing a
+/// partial entry.
+#[wasm_bindgen_test]
+fn injected_resident_failures_destroy_created_objects_without_half_updates() {
+    let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+    let indices = [0, 1, 2];
+    let mesh_key = WebGpuAssetKey::new(3, 1);
+    let image_key = WebGpuAssetKey::new(4, 1);
+
+    for fail_creation in [1, 2] {
+        let device = fake_resident_device(fail_creation, 0);
+        let queue = fake_queue(&device);
+        let mut registry = ResidentRegistry::default();
+        assert!(
+            registry
+                .mesh(&device, &queue, mesh_key, &positions, &indices)
+                .is_err(),
+            "injected creation failure {fail_creation} must reject the upload"
+        );
+        let state = fake_state(&device);
+        assert_eq!(
+            fake_number(&state, "destroys"),
+            fail_creation - 1,
+            "exactly the objects created before the failure are destroyed"
+        );
+        // The failed attempt installed nothing: a healthy retry performs the
+        // full recipe instead of observing a half-updated entry.
+        let good = fake_resident_device(0, 0);
+        assert!(
+            registry
+                .mesh(&good, &fake_queue(&good), mesh_key, &positions, &indices)
+                .is_ok()
+        );
+        assert_eq!(fake_number(&fake_state(&good), "creations"), 2);
+    }
+
+    for fail_write in [1, 2] {
+        let device = fake_resident_device(0, fail_write);
+        let queue = fake_queue(&device);
+        let mut registry = ResidentRegistry::default();
+        assert!(
+            registry
+                .mesh(&device, &queue, mesh_key, &positions, &indices)
+                .is_err(),
+            "injected write failure {fail_write} must reject the upload"
+        );
+        assert_eq!(
+            fake_number(&fake_state(&device), "destroys"),
+            2,
+            "both buffers created before the write failure are destroyed"
+        );
+        let good = fake_resident_device(0, 0);
+        assert!(
+            registry
+                .mesh(&good, &fake_queue(&good), mesh_key, &positions, &indices)
+                .is_ok()
+        );
+        assert_eq!(fake_number(&fake_state(&good), "creations"), 2);
+    }
+
+    // A rejected image upload destroys its texture; a healthy retry creates a
+    // fresh complete recipe.
+    let device = fake_resident_device(0, 1);
+    let queue = fake_queue(&device);
+    let mut registry = ResidentRegistry::default();
+    assert!(
+        registry
+            .image(&device, &queue, image_key, [1, 1], &[1, 2, 3, 4])
+            .is_err()
+    );
+    assert_eq!(fake_number(&fake_state(&device), "destroys"), 1);
+    let good = fake_resident_device(0, 0);
+    assert!(
+        registry
+            .image(&good, &fake_queue(&good), image_key, [1, 1], &[1, 2, 3, 4])
+            .is_ok()
+    );
+    assert_eq!(fake_number(&fake_state(&good), "creations"), 1);
+    assert_eq!(fake_number(&fake_state(&good), "destroys"), 0);
+}
+
+/// Without injection the registry recipes install exactly once and then reuse
+/// the physical set for every later request of the same key.
+#[wasm_bindgen_test]
+fn resident_registry_installs_once_and_reuses_without_destroying() {
+    let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+    let indices = [0, 1, 2];
+    let device = fake_resident_device(0, 0);
+    let queue = fake_queue(&device);
+    let mut registry = ResidentRegistry::default();
+    let mesh = registry
+        .mesh(
+            &device,
+            &queue,
+            WebGpuAssetKey::new(5, 1),
+            &positions,
+            &indices,
+        )
+        .expect("first upload succeeds");
+    let reused = registry
+        .mesh(
+            &device,
+            &queue,
+            WebGpuAssetKey::new(5, 1),
+            &positions,
+            &indices,
+        )
+        .expect("reuse succeeds");
+    let image = registry
+        .image(
+            &device,
+            &queue,
+            WebGpuAssetKey::new(5, 1),
+            [2, 1],
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+        )
+        .expect("image upload succeeds");
+    let reused_image = registry
+        .image(
+            &device,
+            &queue,
+            WebGpuAssetKey::new(5, 1),
+            [2, 1],
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+        )
+        .expect("image reuse succeeds");
+    assert_eq!(fake_number(&fake_state(&device), "creations"), 3);
+    assert_eq!(fake_number(&fake_state(&device), "writes"), 3);
+    assert_eq!(fake_number(&fake_state(&device), "destroys"), 0);
+    assert!(mesh.mesh().is_some());
+    assert!(reused.mesh().is_some());
+    registry.retire(WebGpuAssetKey::new(5, 1));
+    drop(mesh);
+    drop(reused);
+    drop(image);
+    drop(reused_image);
+    assert_eq!(
+        fake_number(&fake_state(&device), "destroys"),
+        3,
+        "retirement drops the last lease references, destroying both mesh buffers and the image"
     );
 }

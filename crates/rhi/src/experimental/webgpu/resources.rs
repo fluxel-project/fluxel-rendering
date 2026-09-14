@@ -10,12 +10,33 @@ use wasm_bindgen::JsValue;
 
 use super::js::{call0, call1, call2, call3, call4, set_js, set_raw};
 use super::{Objects, WebGpuAssetKey, WebGpuCanvasFormat};
+use crate::experimental::resource_candidate::CreationCandidate;
 
-pub(super) struct FrameDrawResources {
+/// Full per-draw transient resources for one unretained draw. This path
+/// re-uploads positions and indices on every draw, so it owns all three
+/// buffers plus its bind group.
+pub(super) struct TransientDrawResources {
     pub(super) position: JsValue,
     pub(super) index: JsValue,
     pub(super) uniform: JsValue,
     pub(super) bind_group: JsValue,
+}
+
+/// Per-frame uniform pair for one resident draw. Positions and indices live
+/// in the resident lease, so only this pair may be created per draw per frame.
+pub(super) struct UniformAndBinding {
+    pub(super) uniform: JsValue,
+    pub(super) bind_group: JsValue,
+}
+
+/// Ticket-owned browser resources of one accepted draw. The variants make the
+/// per-draw allocation policy explicit: a resident draw must never create
+/// position or index buffers again.
+pub(super) enum FrameDrawResources {
+    /// One transient draw's full per-draw resource set.
+    Transient(TransientDrawResources),
+    /// One resident draw's per-frame uniform pair.
+    ResidentUniform(UniformAndBinding),
 }
 
 /// Completion-safe ownership of a closed resident asset. Browser objects never
@@ -60,26 +81,22 @@ impl ResidentRegistry {
         if let Some(value) = self.meshes.get(&key) {
             return Ok(value.clone());
         }
+        // Every created object enters the candidate immediately; any failed
+        // creation or write below destroys exactly what was created and never
+        // half-updates this registry.
+        let mut candidate = CreationCandidate::new(destroy_js_object);
         let position = buffer(device, bytes_rounded(positions.len() * 3 * 4), 0x20 | 0x8)?;
-        let index = match buffer(device, bytes_rounded(indices.len() * 4), 0x10 | 0x8) {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = call0(&position, "destroy");
-                return Err(error);
-            }
-        };
+        candidate.keep(&position);
+        let index = buffer(device, bytes_rounded(indices.len() * 4), 0x10 | 0x8)?;
+        candidate.keep(&index);
         let values: Vec<f32> = positions.iter().flatten().copied().collect();
         write_buffer(
             queue,
             &position,
             &js_sys::Float32Array::from(values.as_slice()).into(),
         )?;
-        if let Err(error) = write_buffer(queue, &index, &js_sys::Uint32Array::from(indices).into())
-        {
-            let _ = call0(&position, "destroy");
-            let _ = call0(&index, "destroy");
-            return Err(error);
-        }
+        write_buffer(queue, &index, &js_sys::Uint32Array::from(indices).into())?;
+        candidate.commit();
         let value = ResidentLease(Rc::new(ResidentPhysical {
             position: Some(position),
             index: Some(index),
@@ -109,6 +126,10 @@ impl ResidentRegistry {
         set_raw(&descriptor, "format", "rgba8unorm")?;
         set_raw(&descriptor, "usage", 0x04_u32 | 0x02_u32)?;
         let image = call1(device, "createTexture", &descriptor)?;
+        // From the successful creation onward the candidate owns the texture,
+        // so every descriptor or upload failure destroys it.
+        let mut candidate = CreationCandidate::new(destroy_js_object);
+        candidate.keep(&image);
         let destination = Object::new();
         set_js(&destination, "texture", &image)?;
         let row_bytes = usize::try_from(extent[0])
@@ -132,17 +153,15 @@ impl ResidentRegistry {
         set_raw(&copy_extent, "width", extent[0])?;
         set_raw(&copy_extent, "height", extent[1])?;
         set_raw(&copy_extent, "depthOrArrayLayers", 1_u32)?;
-        if let Err(error) = call4(
+        call4(
             queue,
             "writeTexture",
             &destination,
             &Uint8Array::from(padded.as_slice()).into(),
             &layout,
             &copy_extent,
-        ) {
-            let _ = call0(&image, "destroy");
-            return Err(error);
-        }
+        )?;
+        candidate.commit();
         let value = ResidentLease(Rc::new(ResidentPhysical {
             position: None,
             index: None,
@@ -188,35 +207,37 @@ pub(super) fn create_frame_resources(
     layout: &JsValue,
     position_bytes: usize,
     index_bytes: usize,
-) -> Result<FrameDrawResources, JsValue> {
+) -> Result<TransientDrawResources, JsValue> {
+    let mut candidate = CreationCandidate::new(destroy_js_object);
     let position = buffer(device, bytes_rounded(position_bytes * 4), 0x20 | 0x8)?;
-    let index = match buffer(device, bytes_rounded(index_bytes * 4), 0x10 | 0x8) {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = call0(&position, "destroy");
-            return Err(error);
-        }
-    };
-    let uniform = match buffer(device, 256, 0x40 | 0x8) {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = call0(&position, "destroy");
-            let _ = call0(&index, "destroy");
-            return Err(error);
-        }
-    };
-    let bind_group = match frame_bind_group(device, layout, &uniform) {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = call0(&position, "destroy");
-            let _ = call0(&index, "destroy");
-            let _ = call0(&uniform, "destroy");
-            return Err(error);
-        }
-    };
-    Ok(FrameDrawResources {
+    candidate.keep(&position);
+    let index = buffer(device, bytes_rounded(index_bytes * 4), 0x10 | 0x8)?;
+    candidate.keep(&index);
+    let uniform = buffer(device, 256, 0x40 | 0x8)?;
+    candidate.keep(&uniform);
+    let bind_group = frame_bind_group(device, layout, &uniform)?;
+    candidate.commit();
+    Ok(TransientDrawResources {
         position,
         index,
+        uniform,
+        bind_group,
+    })
+}
+
+/// Creates only the resources a resident draw needs per frame: the uniform
+/// buffer and its bind group. Resident positions and indices come from the
+/// draw's lease, so this recipe creates no vertex or index buffer at all.
+pub(super) fn create_uniform_and_binding(
+    device: &JsValue,
+    layout: &JsValue,
+) -> Result<UniformAndBinding, JsValue> {
+    let mut candidate = CreationCandidate::new(destroy_js_object);
+    let uniform = buffer(device, 256, 0x40 | 0x8)?;
+    candidate.keep(&uniform);
+    let bind_group = frame_bind_group(device, layout, &uniform)?;
+    candidate.commit();
+    Ok(UniformAndBinding {
         uniform,
         bind_group,
     })
@@ -240,13 +261,29 @@ fn frame_bind_group(
     call1(device, "createBindGroup", &descriptor)
 }
 
+/// Destroys ticket-owned frame resources. A bind group owns no destroyable
+/// GPU memory, so releasing it to the collector is its whole cleanup.
 pub(super) fn destroy_frame_resources(resources: Vec<FrameDrawResources>) {
     for resource in resources {
-        let _ = call0(&resource.position, "destroy");
-        let _ = call0(&resource.index, "destroy");
-        let _ = call0(&resource.uniform, "destroy");
-        drop(resource.bind_group);
+        match resource {
+            FrameDrawResources::Transient(set) => {
+                let _ = call0(&set.position, "destroy");
+                let _ = call0(&set.index, "destroy");
+                let _ = call0(&set.uniform, "destroy");
+                drop(set.bind_group);
+            }
+            FrameDrawResources::ResidentUniform(pair) => {
+                let _ = call0(&pair.uniform, "destroy");
+                drop(pair.bind_group);
+            }
+        }
     }
+}
+
+/// The candidate disposer for every destroyable browser object these recipes
+/// create. The failed destroy of an already-lost object stays non-fatal.
+fn destroy_js_object(value: &JsValue) {
+    let _ = call0(value, "destroy");
 }
 
 pub(super) fn unregister_uncaptured_error(objects: &Objects) {

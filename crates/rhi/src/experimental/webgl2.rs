@@ -773,30 +773,34 @@ impl WebGl2Session {
                     return Err(self.fail("resident-mesh", "createBuffer returned null"));
                 }
             };
-            self.gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&position));
+            // The physical guard owns both buffers before any upload can fail:
+            // a rejected upload or error check then drops this candidate and
+            // deletes exactly these never-submitted objects, leaving the
+            // registry without a half-updated entry.
+            let physical = Rc::new(ResidentMeshPhysical {
+                gl: self.gl.clone(),
+                live_generation: Rc::clone(&self.live_resident_generation),
+                generation: self.generation,
+                position,
+                index,
+            });
+            self.gl
+                .bind_buffer(Gl::ARRAY_BUFFER, Some(&physical.position));
             let values: Vec<f32> = positions.iter().flatten().copied().collect();
             self.gl.buffer_data_with_array_buffer_view(
                 Gl::ARRAY_BUFFER,
                 &Float32Array::from(values.as_slice()),
                 Gl::STATIC_DRAW,
             );
-            self.gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&index));
+            self.gl
+                .bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&physical.index));
             self.gl.buffer_data_with_array_buffer_view(
                 Gl::ELEMENT_ARRAY_BUFFER,
                 &Uint32Array::from(indices),
                 Gl::STATIC_DRAW,
             );
             self.check_error("resident-mesh-upload")?;
-            self.resident_meshes.insert(
-                key,
-                Rc::new(ResidentMeshPhysical {
-                    gl: self.gl.clone(),
-                    live_generation: Rc::clone(&self.live_resident_generation),
-                    generation: self.generation,
-                    position,
-                    index,
-                }),
-            );
+            self.resident_meshes.insert(key, Rc::clone(&physical));
         }
         let Some(physical) = self.resident_meshes.get(&key) else {
             unreachable!("mesh was inserted")
@@ -834,7 +838,17 @@ impl WebGl2Session {
                 .gl
                 .create_texture()
                 .ok_or_else(|| self.fail("resident-image", "createTexture returned null"))?;
-            self.gl.bind_texture(Gl::TEXTURE_2D, Some(&image));
+            // The physical guard owns the texture before any upload step can
+            // fail: a rejected upload or error check then drops this candidate
+            // and deletes this never-sampled texture, leaving the registry
+            // without a half-updated entry.
+            let physical = Rc::new(ResidentImagePhysical {
+                gl: self.gl.clone(),
+                live_generation: Rc::clone(&self.live_resident_generation),
+                generation: self.generation,
+                image,
+            });
+            self.gl.bind_texture(Gl::TEXTURE_2D, Some(&physical.image));
             self.gl
                 .tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::NEAREST as i32);
             self.gl
@@ -860,15 +874,7 @@ impl WebGl2Session {
                     )
                 })?;
             self.check_error("resident-image-upload")?;
-            self.resident_images.insert(
-                key,
-                Rc::new(ResidentImagePhysical {
-                    gl: self.gl.clone(),
-                    live_generation: Rc::clone(&self.live_resident_generation),
-                    generation: self.generation,
-                    image,
-                }),
-            );
+            self.resident_images.insert(key, Rc::clone(&physical));
         }
         let Some(physical) = self.resident_images.get(&key) else {
             unreachable!("image was inserted")

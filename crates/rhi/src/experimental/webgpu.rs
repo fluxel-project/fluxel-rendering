@@ -38,7 +38,8 @@ use js::{
 };
 use resources::{
     FrameDrawResources, ResidentLease, ResidentRegistry, create_frame_resources,
-    destroy_frame_resources, pipeline, unregister_uncaptured_error, write_buffer,
+    create_uniform_and_binding, destroy_frame_resources, pipeline, unregister_uncaptured_error,
+    write_buffer,
 };
 
 use resource_floor::{
@@ -572,8 +573,11 @@ impl WebGpuSession {
     }
 
     /// Uploads or reuses one exact indexed-mesh revision for this device
-    /// generation. The returned token is opaque and invalidated by replacement,
-    /// retirement, or device recovery.
+    /// generation. The returned token is opaque. Retirement or replacement of
+    /// its key removes future lookup ownership only: an already acquired token
+    /// keeps its lease and may still complete a same-generation submission.
+    /// Only a device identity mismatch, the end of its device generation, or a
+    /// terminal session state forbids further submission.
     pub fn resident_mesh(
         &mut self,
         key: WebGpuAssetKey,
@@ -642,8 +646,13 @@ impl WebGpuSession {
         })
     }
 
-    /// Retires one exact content revision from future lookup. Existing tokens
-    /// become unusable, while submitted tickets keep physical resources alive.
+    /// Retires one exact content revision. Three facts stay distinguishable:
+    /// retirement removes future lookup ownership, so the next upload of this
+    /// key creates fresh physical resources; it does not revoke leases a
+    /// caller already acquired, which may still complete and submit within
+    /// their device generation; and the GPU memory becomes reclaimable only
+    /// after that completion. Device identity mismatch, generation end, or a
+    /// terminal state is what forbids submission.
     pub fn retire_resident_asset(&mut self, key: WebGpuAssetKey) {
         self.collect();
         self.resident_registry.borrow_mut().retire(key);
@@ -805,11 +814,11 @@ impl WebGpuSession {
                 Ok(())
             })();
             if let Err(error) = result {
-                destroy_frame_resources(vec![resource]);
+                destroy_frame_resources(vec![FrameDrawResources::Transient(resource)]);
                 destroy_frame_resources(resources);
                 return Err(error);
             }
-            resources.push(resource);
+            resources.push(FrameDrawResources::Transient(resource));
         }
         if let Err(error) = call0(&pass, "end") {
             return Err(self.abort_frame(resources, "end-pass", error));
@@ -896,7 +905,10 @@ impl WebGpuSession {
         let mut resources = Vec::with_capacity(draws.len());
         let mut leases = Vec::with_capacity(draws.len());
         for draw in draws {
-            let resource = create_frame_resources(&objects.device, &objects.layout, 1, 1)
+            // Only the per-frame uniform pair is created here. Creating the
+            // transient position/index set would allocate and destroy two dead
+            // buffers on every resident draw.
+            let resource = create_uniform_and_binding(&objects.device, &objects.layout)
                 .map_err(|e| self.fail("create-frame-uniform", e))?;
             let (position, index) = draw
                 .mesh
@@ -928,10 +940,10 @@ impl WebGpuSession {
             })();
             if let Err(error) = recorded {
                 destroy_frame_resources(resources);
-                destroy_frame_resources(vec![resource]);
+                destroy_frame_resources(vec![FrameDrawResources::ResidentUniform(resource)]);
                 return Err(error);
             }
-            resources.push(resource);
+            resources.push(FrameDrawResources::ResidentUniform(resource));
             leases.push(draw.mesh.lease.clone());
         }
         if let Err(error) = call0(&pass, "end") {
