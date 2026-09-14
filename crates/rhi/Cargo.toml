@@ -10,15 +10,27 @@ readme = "README.md"
 
 [dependencies]
 fluxel-rendergraph = { path = "../rendergraph", version = "0.14.0" }
+glow = { version = "=0.18.0", optional = true }
 raw-window-handle = "0.6.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+khronos-egl = { version = "=6.0.0", features = ["dynamic"], optional = true }
 
 [features]
 default = ["dx12", "vulkan"]
 dx12 = ["wgpu-hal/dx12", "dep:windows"]
 vulkan = ["wgpu-hal/vulkan", "dep:ash"]
+# Platform-neutral GL-family API/state contracts. Provider-specific features
+# will add only their own Layer 1 dependencies; this feature owns no window or
+# event loop.
+gl-family = []
+# Native provider slices consume Host-supplied raw handles; they do not create
+# a window or own an event loop.
+native-gl-wgl = ["gl-family", "dep:glow", "dep:glutin_wgl_sys"]
+native-gles-egl = ["gl-family", "dep:glow", "dep:khronos-egl"]
 # The browser executor is deliberately separate from the Windows HAL path.
 # It is meaningful only for wasm32 and keeps WebGL objects private to RHI.
-webgl2 = ["dep:js-sys", "dep:web-sys"]
+webgl2 = ["gl-family", "dep:glow", "dep:js-sys", "dep:web-sys"]
 # The WebGPU executor is a wasm-only, closed browser seam.  It intentionally
 # uses the browser WebGPU bindings rather than introducing wgpu as a second
 # public RHI. Browser objects are kept behind the private wasm executor.
@@ -32,6 +44,7 @@ wgpu-hal = { version = "=30.0.1", default-features = false }
 wgpu-types = { version = "=30.0.0", default-features = false, features = ["std"] }
 windows = { version = "=0.62.2", optional = true, features = ["Win32_Graphics_Direct3D12"] }
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
+glutin_wgl_sys = { version = "=0.6.1", optional = true }
 log = "0.4"
 naga = { version = "=30.0.1", features = ["wgsl-in"] }
 # wgpu-hal 30 permits ordered-float 5.x, but 5.5 raised its MSRV to 1.90.

@@ -22,6 +22,12 @@
 //! ```compile_fail
 //! use fluxel_rhi::RasterKernel;
 //! ```
+//!
+//! The GL-family command and state layers are private implementation details:
+//!
+//! ```compile_fail
+//! use fluxel_rhi::webgl2::api::GlFamilyApi;
+//! ```
 
 #![deny(missing_docs)]
 
@@ -37,6 +43,8 @@ mod execution;
 /// encode the renderer's current fixed recipes rather than a general pipeline
 /// contract. They may change or be removed in a future minor release.
 mod experimental;
+#[cfg(any(test, feature = "gl-family"))]
+mod webgl2;
 
 /// Closed adapter-facing contracts used by Fluxel's retained rendering slice.
 ///
@@ -62,6 +70,9 @@ pub mod adapter {
 #[cfg(all(windows, any(feature = "dx12", feature = "vulkan")))]
 pub mod presentation;
 mod resource;
+// The future shader preparation boundary is private until a common RHI
+// artifact contract has ecosystem evidence. It is intentionally not reexported.
+mod shader_contract;
 
 pub use execution::{
     ComputeBackend, ComputeObjectProvider, CopyBackend, CopyCommandBuffer, CopyEncoder,

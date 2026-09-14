@@ -12,8 +12,8 @@
 __pycache__/
 *.py[cod]
 
-# Local Codex project instructions
+# Local Codex/Claude project instructions
 /AGENTS.md
-
-# Local planning drafts
-/documents/draft/
+/CLAUDE.md
+/.claude
+/.codex

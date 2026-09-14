@@ -11,6 +11,7 @@ later be marked `Superseded by: ADR-NNNN`.
 
 ## Index
 
+- [ADR-0011: Build the GL family through three private layers](0011-gl-family-three-layer-boundary.md)
 - [ADR-0010: Keep fixed-asset residency renderer-private](0010-renderer-private-fixed-asset-residency.md)
 - [ADR-0009: Keep the resource floor closed and reuse stateful](0009-resource-floor-and-reuse-safety.md)
 - [ADR-0008: Execute platform-specific test paths natively](0008-native-platform-test-gates.md)
