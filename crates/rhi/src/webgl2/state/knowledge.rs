@@ -45,14 +45,20 @@ pub(crate) enum StateDomain {
     /// Generic and indexed buffer bindings, including uniform and storage
     /// ranges, plus the pixel-store parameters an upload depends on.
     Buffers,
-    /// Active texture unit, per-unit texture and sampler bindings, and storage
-    /// image units.
+    /// Active texture unit, per-unit texture and sampler bindings.
+    ///
+    /// Storage image units are deliberately *not* here even though a driver
+    /// exposes them through the same unit index space: binding one needs
+    /// `GlStorageImageApi`, which no domain bounded on `GlStateBackend` can
+    /// reach, and a domain that claimed a value it had no trait to set would be
+    /// a mirror nobody could ever make agree with the driver.
     Textures,
     /// Common bind-group slots as logical identities plus their dynamic
     /// offsets, before they expand into the buffer and texture domains.
     Groups,
-    /// Compute program identity, storage bindings, and pending memory
-    /// visibility for profiles with the optional command domains.
+    /// Compute program identity, storage-buffer and storage-image bindings, and
+    /// pending memory visibility, for profiles with the optional command
+    /// domains.
     Compute,
     /// Active queries, sync objects, timer-query disjointness, and the bounded
     /// in-flight submission queue.
