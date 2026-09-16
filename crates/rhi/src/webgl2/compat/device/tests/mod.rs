@@ -17,8 +17,8 @@
 
 use fluxel_rendergraph::{
     BufferDesc, BufferUsage, BufferUsageKind, CompletionFailure, CompletionStatus,
-    ExecutionBackend, Extent3d, QueueId, TextureDesc, TextureDimension, TextureFormat,
-    TextureUsage, TextureUsageKind,
+    ExecutionBackend, Extent3d, FrameExecutor, QueueId, TextureDesc, TextureDimension,
+    TextureFormat, TextureUsage, TextureUsageKind,
 };
 
 use super::super::capabilities::capabilities;
@@ -35,6 +35,27 @@ use crate::webgl2::api::{
 
 /// The adapter under test, over the WebGL2 snapshot.
 type Adapter = GlCompatibilityDevice<MockGlFamilyApi>;
+
+/// The peer check F1 owed F2: the boundary's own consumer accepts this adapter.
+///
+/// F1's record deferred it in as many words -- "the 'consumer that names the
+/// adapter as `B: ExecutionBackend`' check moves to F2 with it" -- and it is why
+/// the associated types are F2's first act rather than something that could be
+/// fixed later.  What it proves is narrow and worth stating precisely: the eleven
+/// types are a *set* `FrameExecutor` accepts through its generic, with no `dyn
+/// ExecutionBackend` and no adapter-side shim between them.
+///
+/// It is a compile-time check and not a run.  A frame's first real act is
+/// `emit_transitions`, which this adapter refuses until its copy slice lands, so
+/// running one would assert the refusal rather than the acceptance -- and the
+/// acceptance is the question that was open.
+#[allow(
+    dead_code,
+    reason = "the check is that this type-checks, not that it runs"
+)]
+fn the_executor_accepts_the_adapter(adapter: Adapter) -> FrameExecutor<Adapter> {
+    FrameExecutor::new(adapter)
+}
 
 fn adapter() -> Adapter {
     GlCompatibilityDevice::new(MockGlFamilyApi::from_discovery(snapshot(
