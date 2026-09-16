@@ -1,6 +1,6 @@
 //! Platform-neutral vertex-input and index-input vocabulary.
 
-use super::{BufferId, GlError, GlFamilyApi, VertexArrayId};
+use super::{BufferId, GlBufferUsage, GlError, GlFamilyApi, VertexArrayId};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -91,6 +91,11 @@ pub(crate) struct GlVertexBufferBinding {
 pub(crate) struct GlVertexBufferMetadata {
     pub buffer: BufferId,
     pub byte_length: u64,
+    /// The roles the buffer was created for.
+    ///
+    /// The provider reads this from its own allocation table, so a caller
+    /// cannot claim a role the buffer does not have.
+    pub usage: GlBufferUsage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,8 +110,14 @@ pub(crate) enum GlVertexValidationError {
     /// The caller supplied no allocation facts for a bound buffer at all.
     BindingMetadataMissing,
     BindingOffsetExceedsBuffer,
+    /// The bound buffer was not created for the vertex role.
+    BindingBufferRoleMissing,
+    /// The caller supplied no allocation facts for the index buffer.
+    IndexMetadataMissing,
     IndexOffsetMisaligned,
     IndexOffsetExceedsBuffer,
+    /// The index buffer was not created for the index role.
+    IndexBufferRoleMissing,
 }
 
 impl GlVertexFormat {
@@ -197,6 +208,12 @@ impl GlVertexLayout {
             if binding.offset > facts.byte_length {
                 return Err(GlVertexValidationError::BindingOffsetExceedsBuffer);
             }
+            // Checking the role last keeps the more specific bounds and
+            // identity failures in front of it, and matches the order the
+            // layer validates everything else in.
+            if !facts.usage.contains(GlBufferUsage::VERTEX) {
+                return Err(GlVertexValidationError::BindingBufferRoleMissing);
+            }
         }
         if self
             .buffers
@@ -216,12 +233,17 @@ impl GlVertexLayout {
             if index.buffer.context != current {
                 return Err(GlVertexValidationError::ForeignBuffer);
             }
-            if metadata
-                .iter()
-                .find(|facts| facts.buffer == index.buffer)
-                .is_none_or(|facts| index.offset > facts.byte_length)
-            {
+            // The index buffer is bound through its own binding point, so it
+            // need not appear among the attribute bindings above; its facts
+            // are looked up in the same table either way.
+            let Some(facts) = metadata.iter().find(|facts| facts.buffer == index.buffer) else {
+                return Err(GlVertexValidationError::IndexMetadataMissing);
+            };
+            if index.offset > facts.byte_length {
                 return Err(GlVertexValidationError::IndexOffsetExceedsBuffer);
+            }
+            if !facts.usage.contains(GlBufferUsage::INDEX) {
+                return Err(GlVertexValidationError::IndexBufferRoleMissing);
             }
         }
         Ok(())
@@ -312,10 +334,83 @@ mod tests {
                 &[GlVertexBufferMetadata {
                     buffer,
                     byte_length: 4,
+                    usage: GlBufferUsage::VERTEX,
                 }],
                 stamp,
             ),
             Err(GlVertexValidationError::BindingOffsetExceedsBuffer)
+        );
+    }
+
+    #[test]
+    fn a_buffer_must_declare_the_role_it_is_bound_for() {
+        let layout = GlVertexLayout {
+            buffers: vec![super::super::GlVertexBufferLayout {
+                slot: 0,
+                stride: 4,
+                step_mode: GlVertexStepMode::Vertex,
+            }],
+            attributes: vec![],
+        };
+        let stamp = super::super::ContextStamp::new(
+            super::super::DeviceIdentity::new(1).unwrap(),
+            super::super::ContextEpoch::INITIAL,
+        );
+        let buffer = BufferId::new(stamp, 0, 0);
+        let binding = GlVertexBufferBinding {
+            slot: 0,
+            buffer,
+            offset: 0,
+        };
+        // Created for the copy roles only: legal as storage, wrong as an
+        // attribute source.
+        let metadata = [GlVertexBufferMetadata {
+            buffer,
+            byte_length: 4,
+            usage: GlBufferUsage::COPY_SOURCE,
+        }];
+        assert_eq!(
+            layout.validate_bindings(&[binding], None, &metadata, stamp),
+            Err(GlVertexValidationError::BindingBufferRoleMissing)
+        );
+
+        // The index buffer is bound through its own point and is checked
+        // against its own role, including when it is not an attribute buffer.
+        let index_buffer = BufferId::new(stamp, 1, 0);
+        let index = super::super::GlIndexBinding {
+            buffer: index_buffer,
+            format: GlIndexFormat::Uint16,
+            offset: 0,
+        };
+        let index_only = [
+            GlVertexBufferMetadata {
+                buffer,
+                byte_length: 4,
+                usage: GlBufferUsage::VERTEX,
+            },
+            GlVertexBufferMetadata {
+                buffer: index_buffer,
+                byte_length: 4,
+                usage: GlBufferUsage::COPY_DESTINATION,
+            },
+        ];
+        assert_eq!(
+            layout.validate_bindings(&[binding], Some(index), &index_only, stamp),
+            Err(GlVertexValidationError::IndexBufferRoleMissing)
+        );
+
+        let mut index_facts = index_only;
+        index_facts[1].usage = GlBufferUsage::INDEX | GlBufferUsage::COPY_SOURCE;
+        assert_eq!(
+            layout.validate_bindings(&[binding], Some(index), &index_facts, stamp),
+            Ok(())
+        );
+
+        // No facts at all for the index buffer is its own failure, not a
+        // bounds failure.
+        assert_eq!(
+            layout.validate_bindings(&[binding], Some(index), &index_only[..1], stamp),
+            Err(GlVertexValidationError::IndexMetadataMissing)
         );
     }
 }

@@ -562,9 +562,9 @@ impl GlFamilyApi for MockGlFamilyApi {
 impl GlResourceApi for MockGlFamilyApi {
     fn create_buffer_resource(&mut self, desc: GlBufferDesc) -> Result<BufferId, GlError> {
         self.ready("create-buffer")?;
-        desc.validate().map_err(|_| GlError::Validation {
+        desc.validate().map_err(|error| GlError::Validation {
             operation: "create-buffer",
-            message: "invalid buffer descriptor".into(),
+            message: error.message(),
         })?;
         self.validate_buffer_allocation(desc)?;
         let id = BufferId::new(self.stamp, self.slot()?, 0);

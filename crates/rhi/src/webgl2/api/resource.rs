@@ -3,7 +3,7 @@
 use super::{BufferId, GlFormat, RenderbufferId, TextureId};
 
 /// Buffer operations permitted for a resource.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct GlBufferUsage(u32);
 
 impl GlBufferUsage {
@@ -33,6 +33,142 @@ impl core::ops::BitOr for GlBufferUsage {
     }
 }
 
+/// One binding role a buffer can be created for.
+///
+/// The roles are named after what the GPU does with the bytes. They exist so a
+/// descriptor can be rejected *before* any driver object is created, and so the
+/// rejection can say which two roles collided instead of reporting a generic
+/// invalid descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GlBufferRole {
+    /// Attribute source.
+    Vertex,
+    /// Element source.
+    Index,
+    /// Uniform block source.
+    Uniform,
+    /// Shader storage block source, where the profile has one.
+    Storage,
+    /// Draw/dispatch parameter source, where the profile has one.
+    Indirect,
+    /// Source of a buffer-to-buffer or buffer-to-texture copy.
+    CopySource,
+    /// Destination of a buffer-to-buffer or texture-to-buffer copy.
+    CopyDestination,
+    /// CPU read mapping: a readback staging buffer.
+    MapRead,
+    /// CPU write mapping: an upload staging buffer.
+    MapWrite,
+}
+
+impl GlBufferRole {
+    /// Every role, in a fixed order so a rejection is deterministic.
+    pub(crate) const ALL: [Self; 9] = [
+        Self::MapRead,
+        Self::MapWrite,
+        Self::Vertex,
+        Self::Index,
+        Self::Uniform,
+        Self::Storage,
+        Self::Indirect,
+        Self::CopySource,
+        Self::CopyDestination,
+    ];
+
+    pub(crate) const fn usage(self) -> GlBufferUsage {
+        match self {
+            Self::Vertex => GlBufferUsage::VERTEX,
+            Self::Index => GlBufferUsage::INDEX,
+            Self::Uniform => GlBufferUsage::UNIFORM,
+            Self::Storage => GlBufferUsage::STORAGE,
+            Self::Indirect => GlBufferUsage::INDIRECT,
+            Self::CopySource => GlBufferUsage::COPY_SOURCE,
+            Self::CopyDestination => GlBufferUsage::COPY_DESTINATION,
+            Self::MapRead => GlBufferUsage::MAP_READ,
+            Self::MapWrite => GlBufferUsage::MAP_WRITE,
+        }
+    }
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Vertex => "vertex",
+            Self::Index => "index",
+            Self::Uniform => "uniform",
+            Self::Storage => "storage",
+            Self::Indirect => "indirect",
+            Self::CopySource => "copy-source",
+            Self::CopyDestination => "copy-destination",
+            Self::MapRead => "map-read",
+            Self::MapWrite => "map-write",
+        }
+    }
+
+    /// Whether the role describes a CPU mapping rather than a GPU use.
+    const fn is_mapping(self) -> bool {
+        matches!(self, Self::MapRead | Self::MapWrite)
+    }
+
+    /// Whether the GPU reads the buffer through a binding point as a resource.
+    const fn is_gpu_resource(self) -> bool {
+        matches!(
+            self,
+            Self::Vertex | Self::Index | Self::Uniform | Self::Storage | Self::Indirect
+        )
+    }
+}
+
+/// Whether two roles cannot be declared on one buffer.
+///
+/// GL stores an untyped byte range, so one buffer legitimately serves several
+/// consumption roles at once: vertex, index, uniform, copy-source, and
+/// copy-destination may be combined freely, and storage and indirect join them
+/// wherever the profile has those domains. Rejecting those pairings here would
+/// invent a restriction neither the GL family nor the WebGPU-aligned model has;
+/// they are validated where they are used instead, by requiring the descriptor
+/// to declare the role being bound.
+///
+/// Mapping is the exception, and the only reason this table exists. A mapped
+/// buffer is a staging buffer: its contents are well defined only while the CPU
+/// holds the mapping, and the GL family gives no coherence between a mapping
+/// and a concurrent GPU read of the same bytes. So a mapping role conflicts
+/// with the other mapping role and with every role that lets the GPU consume
+/// the buffer as a resource. Copy roles stay legal next to a mapping -- that is
+/// exactly the upload and readback staging pattern.
+const fn roles_conflict(first: GlBufferRole, second: GlBufferRole) -> bool {
+    if first.is_mapping() {
+        second.is_mapping() || second.is_gpu_resource()
+    } else if second.is_mapping() {
+        first.is_gpu_resource()
+    } else {
+        false
+    }
+}
+
+impl GlBufferUsage {
+    /// The first conflicting role pair this usage set declares, if any.
+    ///
+    /// Roles are examined in [`GlBufferRole::ALL`] order, so the same usage set
+    /// always reports the same pair.
+    pub(crate) const fn conflicting_roles(self) -> Option<(GlBufferRole, GlBufferRole)> {
+        let mut i = 0;
+        while i < GlBufferRole::ALL.len() {
+            let first = GlBufferRole::ALL[i];
+            if self.contains(first.usage()) {
+                let mut j = i + 1;
+                while j < GlBufferRole::ALL.len() {
+                    let second = GlBufferRole::ALL[j];
+                    if self.contains(second.usage()) && roles_conflict(first, second) {
+                        return Some((first, second));
+                    }
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+}
+
 /// Immutable creation facts for a buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GlBufferDesc {
@@ -47,6 +183,9 @@ impl GlBufferDesc {
         }
         if self.usage.is_empty() {
             return Err(GlResourceValidationError::EmptyBufferUsage);
+        }
+        if let Some((first, second)) = self.usage.conflicting_roles() {
+            return Err(GlResourceValidationError::ConflictingBufferRoles { first, second });
         }
         Ok(())
     }
@@ -345,6 +484,11 @@ pub(crate) fn validate_texture_copy(
 pub(crate) enum GlResourceValidationError {
     ZeroBufferSize,
     EmptyBufferUsage,
+    /// Two usage roles that cannot share one buffer; see [`roles_conflict`].
+    ConflictingBufferRoles {
+        first: GlBufferRole,
+        second: GlBufferRole,
+    },
     ZeroRangeSize,
     BufferRangeOutOfBounds,
     ZeroTextureExtent,
@@ -370,6 +514,26 @@ pub(crate) enum GlResourceValidationError {
     IncompatibleCopyExtent,
 }
 
+impl GlResourceValidationError {
+    /// A description for the provider's structured error, naming the actual
+    /// cause.
+    ///
+    /// Providers report validation through `GlError::Validation { message }`.
+    /// Deriving that message here keeps the offending roles visible to the
+    /// caller instead of collapsing every descriptor failure into one generic
+    /// string.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::ConflictingBufferRoles { first, second } => format!(
+                "buffer usage combines conflicting roles `{}` and `{}`",
+                first.name(),
+                second.name()
+            ),
+            other => format!("{other:?}"),
+        }
+    }
+}
+
 /// Resource allocation and destruction domain.
 pub(crate) trait GlResourceApi: super::GlFamilyApi {
     fn create_buffer_resource(&mut self, desc: GlBufferDesc) -> Result<BufferId, super::GlError>;
@@ -390,6 +554,103 @@ pub(crate) trait GlResourceApi: super::GlFamilyApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn buffer(usage: GlBufferUsage) -> GlBufferDesc {
+        GlBufferDesc { size: 64, usage }
+    }
+
+    #[test]
+    fn consumption_roles_combine_because_the_gl_family_stores_untyped_bytes() {
+        // Vertex, index, uniform, copy-source, and copy-destination share one
+        // buffer legally; the layer validates the declared role at each bind
+        // site instead of forbidding the combination here.
+        let usage = GlBufferUsage::VERTEX
+            | GlBufferUsage::INDEX
+            | GlBufferUsage::UNIFORM
+            | GlBufferUsage::COPY_SOURCE
+            | GlBufferUsage::COPY_DESTINATION;
+        assert_eq!(buffer(usage).validate(), Ok(()));
+        assert_eq!(usage.conflicting_roles(), None);
+    }
+
+    #[test]
+    fn staging_roles_stay_legal_next_to_a_mapping() {
+        // Upload staging and readback staging are the two patterns that need a
+        // mapping beside a copy role.
+        assert_eq!(
+            buffer(GlBufferUsage::MAP_WRITE | GlBufferUsage::COPY_SOURCE).validate(),
+            Ok(())
+        );
+        assert_eq!(
+            buffer(GlBufferUsage::MAP_READ | GlBufferUsage::COPY_DESTINATION).validate(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn mapping_roles_are_rejected_beside_each_other_and_beside_gpu_use() {
+        let read_write = GlBufferUsage::MAP_READ | GlBufferUsage::MAP_WRITE;
+        assert_eq!(
+            buffer(read_write).validate(),
+            Err(GlResourceValidationError::ConflictingBufferRoles {
+                first: GlBufferRole::MapRead,
+                second: GlBufferRole::MapWrite,
+            })
+        );
+        for role in [
+            GlBufferRole::Vertex,
+            GlBufferRole::Index,
+            GlBufferRole::Uniform,
+            GlBufferRole::Storage,
+            GlBufferRole::Indirect,
+        ] {
+            for mapping in [GlBufferRole::MapRead, GlBufferRole::MapWrite] {
+                let usage = mapping.usage() | role.usage();
+                assert_eq!(
+                    buffer(usage).validate(),
+                    Err(GlResourceValidationError::ConflictingBufferRoles {
+                        first: mapping,
+                        second: role,
+                    }),
+                    "{mapping:?} beside {role:?} must be rejected"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_reported_conflict_pair_is_deterministic_and_named() {
+        // `ALL` order decides which pair is reported when several conflicts
+        // exist, so the same descriptor always produces the same error.
+        let error =
+            buffer(GlBufferUsage::VERTEX | GlBufferUsage::MAP_WRITE | GlBufferUsage::MAP_READ)
+                .validate()
+                .expect_err("three-way conflict is rejected");
+        assert_eq!(
+            error,
+            GlResourceValidationError::ConflictingBufferRoles {
+                first: GlBufferRole::MapRead,
+                second: GlBufferRole::MapWrite,
+            }
+        );
+        assert_eq!(
+            error.message(),
+            "buffer usage combines conflicting roles `map-read` and `map-write`"
+        );
+    }
+
+    #[test]
+    fn every_role_reports_a_distinct_usage_bit() {
+        let mut seen = GlBufferUsage::EMPTY;
+        for role in GlBufferRole::ALL {
+            assert!(
+                !seen.contains(role.usage()),
+                "{role:?} reuses another role's usage bit"
+            );
+            seen = seen | role.usage();
+        }
+    }
+
     #[test]
     fn rejects_overflowing_buffer_ranges_before_use() {
         let d = GlBufferDesc {

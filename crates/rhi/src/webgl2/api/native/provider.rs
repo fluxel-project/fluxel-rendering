@@ -419,8 +419,10 @@ impl super::super::GlResourceApi for NativeGlProvider<'_> {
     fn create_buffer_resource(&mut self, desc: GlBufferDesc) -> Result<BufferId, GlError> {
         use glow::HasContext as _;
         self.assert_ready("create-buffer")?;
-        desc.validate()
-            .map_err(|_| Self::validation("create-buffer", "invalid buffer descriptor"))?;
+        desc.validate().map_err(|error| GlError::Validation {
+            operation: "create-buffer",
+            message: error.message(),
+        })?;
         let size = i32::try_from(desc.size)
             .map_err(|_| Self::validation("create-buffer", "buffer exceeds GLsizei"))?;
         // SAFETY: current-context contract; all validation completed before GL mutation.

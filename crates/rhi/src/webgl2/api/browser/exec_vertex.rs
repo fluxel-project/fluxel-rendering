@@ -131,16 +131,25 @@ impl GlVertexApi for WebGl2BrowserDiscovery {
         self.vertex_array(OP, vertex_array)?;
         // Allocation facts come from this provider's own table, so callers
         // never forge byte lengths.
-        let mut metadata: Vec<GlVertexBufferMetadata> = Vec::with_capacity(buffers.len());
+        let mut metadata: Vec<GlVertexBufferMetadata> = Vec::with_capacity(buffers.len() + 1);
         for binding in buffers {
             let entry = self.buffer(OP, binding.buffer)?;
             metadata.push(GlVertexBufferMetadata {
                 buffer: binding.buffer,
                 byte_length: entry.desc.size,
+                usage: entry.desc.usage,
             });
         }
         if let Some(index) = index {
-            self.buffer(OP, index.buffer)?;
+            let entry = self.buffer(OP, index.buffer)?;
+            // The index buffer reaches validation through the same table as
+            // the attribute buffers, so its size and roles are checked there
+            // rather than re-derived here.
+            metadata.push(GlVertexBufferMetadata {
+                buffer: index.buffer,
+                byte_length: entry.desc.size,
+                usage: entry.desc.usage,
+            });
         }
         let layout = {
             let entry = self.vertex_arrays.get(&vertex_array.slot);

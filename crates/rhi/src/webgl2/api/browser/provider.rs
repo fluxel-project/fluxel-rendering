@@ -83,8 +83,10 @@ impl GlResourceApi for WebGl2BrowserDiscovery {
     fn create_buffer_resource(&mut self, desc: GlBufferDesc) -> Result<BufferId, GlError> {
         const OP: &str = "create-buffer";
         self.assert_provider_ready(OP)?;
-        desc.validate()
-            .map_err(|_| Self::validation(OP, "invalid buffer descriptor"))?;
+        desc.validate().map_err(|error| GlError::Validation {
+            operation: OP,
+            message: error.message(),
+        })?;
         if desc.size > 9_007_199_254_740_991 {
             return Err(Self::validation(
                 OP,
