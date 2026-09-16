@@ -136,6 +136,15 @@ pub enum MockCall {
     EndElapsed,
     QueryTimestamp(QueryId),
     SetComputeProgram(ProgramId),
+    /// One selection of the driver's single current program.
+    ///
+    /// Recorded separately from the verb that asked for it because the two are
+    /// not the same event: a pipeline install, a compute install, and the
+    /// re-assertion a draw or dispatch performs when the slot was taken since
+    /// all write this one piece of driver state.  A trace that named only the
+    /// verbs could not show the re-assertion, which is the call a provider has
+    /// to make for a dispatch to run the program the caller installed.
+    SelectProgram(ProgramId),
     Dispatch(GlDispatchGroups),
     BindStorageBuffer {
         binding: u32,
@@ -177,6 +186,22 @@ pub struct MockGlFamilyApi {
     pass_active: bool,
     /// The compute program installed for dispatch work, if any.
     installed_compute_program: Option<ProgramId>,
+    /// The program the modelled driver holds, or `None` when none is selected.
+    ///
+    /// GL has one current program and the recorder has to model that, not the
+    /// intent of each verb: a pipeline install and a compute install write the
+    /// same slot, and a link clears it because its reflection scope ends with no
+    /// program selected.  A draw or dispatch that needs a program selects it
+    /// again, which is why the trace can show a `SelectProgram` the caller never
+    /// asked for -- that is the driver call the real provider makes.
+    current_program: Option<ProgramId>,
+    /// The raster program the active pass installed, if any.
+    ///
+    /// The recorder models the pipeline install as a program plus the vertex
+    /// array it bound, and only the program half is needed to answer whether a
+    /// draw has anything to draw with.  A pass end clears it, as the executable
+    /// backends do.
+    installed_raster_program: Option<ProgramId>,
     /// The optional draw offsets this recorder treats as proved.
     ///
     /// A provider learns these from its own context queries, which the
@@ -226,6 +251,8 @@ impl MockGlFamilyApi {
             surface_suspended: false,
             pass_active: false,
             installed_compute_program: None,
+            current_program: None,
+            installed_raster_program: None,
             advanced_raster: GlAdvancedRasterCapabilities {
                 base_vertex: false,
                 first_instance: false,
@@ -300,6 +327,18 @@ impl MockGlFamilyApi {
                 expected: self.owner,
                 actual,
             })
+    }
+    /// Makes `program` the modelled driver's current program, if it is not.
+    ///
+    /// One writer for the one slot, so the recorder cannot hold two beliefs about
+    /// which program is current.  It records nothing when the slot already holds
+    /// this program, which is what makes a redundant re-assertion invisible in
+    /// the trace exactly as the real provider's comparison makes it free.
+    fn select_program(&mut self, program: ProgramId) {
+        if self.current_program != Some(program) {
+            self.current_program = Some(program);
+            self.calls.push(MockCall::SelectProgram(program));
+        }
     }
     fn ready(&mut self, op: &'static str) -> Result<(), GlError> {
         self.owner(op)?;
@@ -425,6 +464,8 @@ impl MockGlFamilyApi {
         self.fences.revoke_all();
         self.pass_active = false;
         self.installed_compute_program = None;
+        self.current_program = None;
+        self.installed_raster_program = None;
         // The new epoch has to requery every optional fact, and the recorder
         // cannot requery anything: keeping the previous context's answers would
         // let a restored context accept an offset it never proved.

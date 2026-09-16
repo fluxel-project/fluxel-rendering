@@ -68,16 +68,23 @@ impl GlComputeDispatchApi for MockComputeStorageApi {
             this.programs.contains(&program)
         })?;
         self.inner.installed_compute_program = Some(program);
+        // The verb installs as well as records, so the modelled driver's current
+        // program moves here too.  A recorder that only recorded the intent would
+        // accept a dispatch the real provider cannot perform.
+        self.inner.select_program(program);
         self.inner.calls.push(MockCall::SetComputeProgram(program));
         Ok(())
     }
     fn dispatch(&mut self, g: GlDispatchGroups) -> Result<(), GlError> {
         self.inner.ready("dispatch")?;
-        if self.inner.installed_compute_program.is_none() {
+        let Some(program) = self.inner.installed_compute_program else {
             return self
                 .inner
                 .invalid("dispatch", "no compute program is installed");
-        }
+        };
+        // A raster install since the compute install took the current-program
+        // slot, so the selection is re-asserted, exactly as the provider does.
+        self.inner.select_program(program);
         g.validate(GlComputeLimits {
             max_group_count: self.inner.discovery.limits().max_compute_work_group_count,
             max_group_size: self.inner.discovery.limits().max_compute_work_group_size,
@@ -117,6 +124,7 @@ impl GlDispatchIndirectApi for MockComputeStorageApi {
             return self.inner.error_result(error);
         }
         self.inner.indirect_buffer(OP, command.range)?;
+        self.inner.select_program(program);
         self.inner.calls.push(MockCall::DispatchIndirect(command));
         Ok(())
     }

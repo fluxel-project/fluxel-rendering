@@ -45,6 +45,21 @@
 //! reported in [`PipelineEffects`] for the machine to apply to that domain --
 //! the same arrangement, in the other direction, as the session's report.
 //!
+//! # The one driver fact this domain shares and does not own alone
+//!
+//! The install also selects the pipeline's program, and GL has exactly one
+//! current program.  A compute program install selects the same slot, so the
+//! driver can stop holding the program this domain installed without this
+//! domain having seen anything -- and that is deliberate rather than a hole: the
+//! claim this mirror makes is that the pipeline's *effect* is present, and a
+//! compute install leaves the two halves of that effect it does not touch (the
+//! bound vertex array and the applied rasterization values) exactly as they were.
+//! Layer 1 re-asserts the program at the top of every draw, so a skip this mirror
+//! grants stays correct even when another domain's verb moved the raw selection
+//! in between.  The alternative -- a second mirror of "which program is current"
+//! here, kept in step by a cross-domain effect -- would be two owners of one
+//! driver fact, which is the drift this layer's grouping exists to prevent.
+//!
 //! # What a pass end costs
 //!
 //! Nothing is emitted at the pass end itself, because there is no verb for

@@ -19,6 +19,7 @@
 mod command;
 mod multiview;
 mod oracle;
+mod program_selection;
 
 pub(crate) use crate::webgl2::api::tests::{
     batch, compute, context, desktop_limits, formats, limits, multiview, stamp,
@@ -396,5 +397,73 @@ fn compute_program() -> GlProgramDescriptor {
         },
         layout: GlPipelineLayout { bindings: vec![] },
         debug_name: None,
+    }
+}
+
+/// A raster program descriptor: the other kind that selects a program, and the
+/// one a pass installs.
+///
+/// It exists so a test about *which* program the driver holds does not have to
+/// restate a whole raster link, and its dialect matches [`compute_program`]'s so
+/// that the two differ in nothing but their kind.
+fn raster_program() -> GlProgramDescriptor {
+    let stage = |stage: GlShaderStage, hash: u8, text: &str| GlShaderSource {
+        stage,
+        dialect: GlShaderDialect::Desktop { version: 430 },
+        entry_point: "main".into(),
+        source_hash: ShaderSourceHash([hash; 32]),
+        text: text.into(),
+        debug_name: None,
+    };
+    GlProgramDescriptor {
+        kind: GlProgramKind::Raster {
+            vertex: stage(GlShaderStage::Vertex, 1, "void main() {}"),
+            fragment: stage(GlShaderStage::Fragment, 2, "void main() {}"),
+        },
+        layout: GlPipelineLayout { bindings: vec![] },
+        debug_name: None,
+    }
+}
+
+/// A raster pipeline naming `program` and `vertex_array`, with the smallest
+/// state a pass accepts.
+///
+/// The recorder validates the descriptor and the objects but not the state, so
+/// this is deliberately one fixed state: a test whose subject is a program
+/// selection must not be able to pass or fail on a rasterization value.
+fn pipeline(program: ProgramId, vertex_array: VertexArrayId) -> GlRasterPipeline {
+    GlRasterPipeline {
+        program,
+        vertex_array,
+        state: GlRasterState {
+            topology: GlPrimitiveTopology::Triangles,
+            cull_mode: GlCullMode::None,
+            front_face: GlFrontFace::CounterClockwise,
+            depth_stencil: None,
+            color_targets: vec![],
+            multisample: GlMultisampleState {
+                sample_count: 1,
+                alpha_to_coverage_enabled: false,
+                sample_mask: u32::MAX,
+            },
+            viewport: GlViewport {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                min_depth: 0.0f32.to_bits(),
+                max_depth: 1.0f32.to_bits(),
+            },
+            scissor: None,
+            blend_constant: [0; 4],
+        },
+    }
+}
+
+/// The empty vertex layout, which is all a pipeline install needs bound.
+fn empty_vertex_layout() -> GlVertexLayout {
+    GlVertexLayout {
+        buffers: vec![],
+        attributes: vec![],
     }
 }

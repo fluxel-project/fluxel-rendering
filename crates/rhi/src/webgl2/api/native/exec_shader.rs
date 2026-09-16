@@ -206,10 +206,9 @@ impl NativeGlProvider<'_> {
     }
 
     /// Attaches, links, reflects, and validates one program inside an
-    /// explicit `useProgram` scope that leaves no program selected (Layer 2
-    /// owns the applied-program mirror).
+    /// explicit `useProgram` scope that leaves no program selected.
     fn link_and_reflect(
-        &self,
+        &mut self,
         op: &'static str,
         descriptor: &GlProgramDescriptor,
         shaders: &[glow::NativeShader],
@@ -244,10 +243,15 @@ impl NativeGlProvider<'_> {
             }
             // Sampler-unit assignment needs the program current: `uniform1i`
             // targets the bound program, so reflection runs inside an explicit
-            // bind scope and leaves no program selected afterwards.
+            // bind scope and leaves no program selected afterwards.  The
+            // provider's record of the driver's current program has to follow it
+            // out of the scope -- a pipeline installed before this link is no
+            // longer the driver's current program, and a record that still named
+            // it would skip the selection a draw needs.
             self.gl.use_program(Some(program));
             let reflection = self.reflect_and_assign(op, program, descriptor);
             self.gl.use_program(None);
+            self.current_program = None;
             match reflection {
                 Ok(reflection) => match self.driver_error(op) {
                     Ok(()) => Ok((program, reflection)),

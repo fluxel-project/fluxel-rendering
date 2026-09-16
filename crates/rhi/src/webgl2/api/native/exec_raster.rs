@@ -87,7 +87,9 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
             .pass
             .as_ref()
             .ok_or_else(|| Self::validation(OP, "no active render pass"))?;
-        let program_raw = self.program(OP, pipeline.program)?.raw;
+        // The program is resolved first even though it is selected last, so that
+        // a dead program is reported before anything about the state is.
+        self.program(OP, pipeline.program)?;
         let vertex_array_raw = self.vertex_array(OP, pipeline.vertex_array)?.raw;
         pipeline
             .state
@@ -104,10 +106,13 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
                 "pipeline sample count does not match the active framebuffer",
             ));
         }
+        // The program selection goes through the one owner of that fact, so a
+        // compute install that ran in between cannot leave this pipeline's
+        // program unselected without this verb noticing.
+        self.ensure_program(OP, pipeline.program)?;
         // SAFETY: current-context contract; the full validated state is
         // applied in one fixed order and a failure clears the installation.
         let applied = unsafe {
-            self.gl.use_program(Some(program_raw));
             self.gl.bind_vertex_array(Some(vertex_array_raw));
             self.apply_raster_state(OP, &pipeline.state)
         };
@@ -116,6 +121,7 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
             return Err(error);
         }
         self.raster = Some(ActiveRaster {
+            program: pipeline.program,
             vertex_array: pipeline.vertex_array,
             topology: pipeline.state.topology,
         });
@@ -129,12 +135,21 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
         if self.pass.is_none() {
             return Err(Self::validation(OP, "no active render pass"));
         }
-        let raster = self
-            .raster
-            .as_ref()
-            .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
-        let mode = topology_mode(raster.topology);
-        let vertex_array = self.vertex_array(OP, raster.vertex_array)?;
+        let (program, vertex_array, topology) = {
+            let raster = self
+                .raster
+                .as_ref()
+                .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
+            (raster.program, raster.vertex_array, raster.topology)
+        };
+        // A compute install or a link may have left another program current since
+        // this pipeline was installed.  The vertex array and the rasterization
+        // values are still in the driver -- neither verb touches them -- so
+        // re-asserting the program is what makes this draw the one the caller
+        // asked for rather than the one that happens to be selected.
+        self.ensure_program(OP, program)?;
+        let mode = topology_mode(topology);
+        let vertex_array = self.vertex_array(OP, vertex_array)?;
         let index = vertex_array.index;
         // SAFETY: current-context contract; counts, instances, and index spans
         // are checked against the recorded allocations before any draw call.

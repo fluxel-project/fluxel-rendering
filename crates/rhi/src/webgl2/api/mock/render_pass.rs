@@ -118,6 +118,11 @@ impl GlFramebufferApi for MockGlFamilyApi {
             return self.invalid("end-render-pass", "no active render pass");
         }
         self.pass_active = false;
+        // The pass end forgets the installed pipeline, exactly as the executable
+        // backends do, so a draw outside a pass is refused rather than recorded
+        // as a draw the driver would reject.  The current program is *not*
+        // cleared: nothing in a pass end changes it.
+        self.installed_raster_program = None;
         self.calls.push(MockCall::EndRenderPass);
         Ok(())
     }
@@ -246,6 +251,8 @@ impl GlRasterCommandApi for MockGlFamilyApi {
         self.live("set-raster-pipeline", p.vertex_array, |this| {
             this.vaos.contains(&p.vertex_array)
         })?;
+        self.select_program(p.program);
+        self.installed_raster_program = Some(p.program);
         self.calls.push(MockCall::SetRasterPipeline {
             program: p.program,
             vertex_array: p.vertex_array,
@@ -259,6 +266,15 @@ impl GlRasterCommandApi for MockGlFamilyApi {
         }
         if draw_is_empty(d) {
             return self.invalid("draw-raster", "draw count and instances must be nonzero");
+        }
+        // The recorder models no installed pipeline for the draw domains -- a
+        // provider's "no pipeline is installed" refusal has its own tests against
+        // the provider -- but where a pipeline *was* installed this models the one
+        // thing a draw has to restore: a compute install or a link may have taken
+        // the current-program slot since, and the vertex array and rasterization
+        // values are untouched by either.
+        if let Some(program) = self.installed_raster_program {
+            self.select_program(program);
         }
         self.calls.push(MockCall::DrawRaster(d));
         Ok(())

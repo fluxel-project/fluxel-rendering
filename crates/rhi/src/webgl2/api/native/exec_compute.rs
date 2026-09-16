@@ -37,6 +37,13 @@ impl GlComputeDispatchApi for NativeGlProvider<'_> {
                 "compute dispatch requires a compute program",
             ));
         }
+        // The verb's name and its whole contract say it installs, so it selects
+        // the program as well as recording the choice.  Without this the record
+        // would be an intention no driver call implements, and a dispatch -- which
+        // GL answers with whatever program is *current* -- would run the raster
+        // program a preceding pass installed, or, after any link, no program at
+        // all.
+        self.ensure_program(OP, program)?;
         self.active_compute_program = Some(program);
         Ok(())
     }
@@ -58,7 +65,9 @@ impl GlComputeDispatchApi for NativeGlProvider<'_> {
         let Some(program) = self.active_compute_program else {
             return Err(Self::validation(OP, "no compute program is installed"));
         };
-        self.program(OP, program)?;
+        // A raster install since the compute install left that pipeline's program
+        // current, so the selection is re-asserted here rather than trusted.
+        self.ensure_program(OP, program)?;
         let limits = self.discovery.limits();
         if groups
             .validate(GlComputeLimits {
@@ -280,14 +289,21 @@ impl GlDrawIndirectApi for NativeGlProvider<'_> {
             });
         }
         command.validate(OP)?;
-        let raster = self
-            .raster
-            .as_ref()
-            .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
-        let vertex_array = self.vertex_array(OP, raster.vertex_array)?;
+        let (program, vertex_array, topology) = {
+            let raster = self
+                .raster
+                .as_ref()
+                .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
+            (raster.program, raster.vertex_array, raster.topology)
+        };
+        // This is a raster verb that lives beside the compute ones, so the
+        // program the compute path may have selected since the pipeline was
+        // installed is re-asserted here exactly as `draw_raster` does it.
+        self.ensure_program(OP, program)?;
+        let vertex_array = self.vertex_array(OP, vertex_array)?;
         let name = self.indirect_command_buffer(OP, command.range)?;
         let offset = draw_indirect_offset(command.range, command.command_offset)?;
-        let mode = super::exec_raster::topology_mode(raster.topology);
+        let mode = super::exec_raster::topology_mode(topology);
         // SAFETY: current-context contract; the ABI, range, usage, and active
         // pipeline state were validated before any binding changed.
         unsafe {
@@ -334,7 +350,7 @@ impl GlDispatchIndirectApi for NativeGlProvider<'_> {
         let Some(program) = self.active_compute_program else {
             return Err(Self::validation(OP, "no compute program is installed"));
         };
-        self.program(OP, program)?;
+        self.ensure_program(OP, program)?;
         // The record layout and its in-range position are the module's
         // contract, so the whole check happens before the binding changes.
         command.validate(OP)?;

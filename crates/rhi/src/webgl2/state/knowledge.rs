@@ -75,10 +75,17 @@ pub(crate) enum StateDomain {
     /// the optional command domains.
     ///
     /// The plan's state model also names the compute program identity.  It is
-    /// not claimed here until Layer 1's `set_compute_program` installs what its
-    /// own documentation says it installs — the plan records that as P1-16 — and
-    /// the storage-buffer half of that model belongs to [`Self::Buffers`], whose
-    /// storage role is the one binding point the storage bind verb addresses.
+    /// deliberately not claimed here, and the reason is not the recording one it
+    /// used to be: Layer 1's `set_compute_program` now installs what its own
+    /// documentation says it installs, so there *is* a driver fact to mirror.  The
+    /// reason is that GL has **one** current program, shared with the raster
+    /// pipeline domain, so a compute install moves a fact the pipeline domain
+    /// already claims and a raster install moves this one -- and neither domain
+    /// can hold a mirror it has no way to see invalidated.  Nothing needs one:
+    /// Layer 1 re-asserts the program a verb is about to use, so the skip this
+    /// mirror would buy is already free.  The storage-buffer half of that model
+    /// belongs to [`Self::Buffers`], whose storage role is the one binding point
+    /// the storage bind verb addresses.
     Compute,
     /// Active queries, sync objects, timer-query disjointness, and the bounded
     /// in-flight submission queue.

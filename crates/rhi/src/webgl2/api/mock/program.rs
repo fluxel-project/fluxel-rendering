@@ -143,6 +143,11 @@ impl GlShaderApi for MockGlFamilyApi {
         };
         let id = ProgramId::new(self.stamp, self.slot()?, 0);
         self.programs.insert(id);
+        // A link reflects through a bind scope that ends with no program
+        // selected, so whatever the slot held before is gone.  The recorder
+        // models that as the fact it is rather than as a call, because the scope
+        // is internal to the link and the caller asked for the link.
+        self.current_program = None;
         self.calls.push(MockCall::CreateProgram(id));
         Ok((id, reflection))
     }

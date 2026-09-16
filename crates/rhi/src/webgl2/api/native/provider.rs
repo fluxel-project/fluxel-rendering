@@ -46,9 +46,24 @@ pub(crate) struct NativeGlProvider<'a> {
     pub(super) surface_extent: Option<GlSurfaceSize>,
     pub(super) pass: Option<ActivePass>,
     pub(super) raster: Option<ActiveRaster>,
+    /// The program the driver is known to hold, or `None` when no program is
+    /// selected.
+    ///
+    /// `None` is a fact and not a default: a freshly created context selects no
+    /// program, and a link clears the selection when its reflection scope ends,
+    /// so both are recorded here rather than assumed.  This is the one place the
+    /// provider answers "which program is current", and
+    /// [`Self::ensure_program`] is the only writer.
+    pub(super) current_program: Option<ProgramId>,
     /// The query currently recording a measurement, if any.
     pub(super) active_query: Option<QueryId>,
-    /// The compute program installed for dispatch work, if any.
+    /// The compute program the caller selected for dispatch work, if any.
+    ///
+    /// This is the caller's choice, not a claim about the driver: which program
+    /// the driver actually holds is [`Self::current_program`]'s to say, because a
+    /// raster pipeline install writes that same slot.  A dispatch resolves this
+    /// record and re-asserts it through [`Self::ensure_program`], which is why
+    /// the two are separate fields rather than one.
     pub(super) active_compute_program: Option<ProgramId>,
     pub(super) pixel_store: GlPixelStoreState,
 }
@@ -102,6 +117,12 @@ pub(super) struct ActivePass {
 
 /// The raster pipeline installed for the active pass.
 pub(super) struct ActiveRaster {
+    /// The program this pipeline installed.
+    ///
+    /// Recorded rather than assumed: a compute install or a link can leave
+    /// another program current, so a draw has to be able to re-assert this one
+    /// through [`NativeGlProvider::ensure_program`].
+    pub(super) program: ProgramId,
     pub(super) vertex_array: VertexArrayId,
     pub(super) topology: GlPrimitiveTopology,
 }
@@ -162,6 +183,7 @@ impl<'a> NativeGlProvider<'a> {
             surface_extent: None,
             pass: None,
             raster: None,
+            current_program: None,
             active_query: None,
             active_compute_program: None,
             pixel_store: GlPixelStoreState::DEFAULT,
@@ -286,6 +308,42 @@ impl<'a> NativeGlProvider<'a> {
             .ok_or_else(|| Self::validation(operation, "program is not live"))
     }
 
+    /// Makes `program` the driver's current program, if it is not already.
+    ///
+    /// GL has exactly one current program, and three verbs can change it: a
+    /// link (which runs its reflection inside a bind scope and clears the
+    /// selection when it ends), a raster pipeline install, and a compute program
+    /// install.  [`Self::current_program`] records which one the driver holds,
+    /// and this is the only function that writes both it and the driver, which is
+    /// what makes "the driver holds this program" a fact rather than an
+    /// assumption.
+    ///
+    /// It is called by every verb that *uses* a program rather than by every verb
+    /// that selects one, because the two selections are not additive: a compute
+    /// install between a raster install and a draw leaves the compute program
+    /// current, and a raster install between a compute install and a dispatch
+    /// leaves the raster one.  Re-asserting at the point of use is what makes each
+    /// verb correct without either having to know that the other ran, and the
+    /// comparison makes it free when nothing did.
+    pub(super) fn ensure_program(
+        &mut self,
+        operation: &'static str,
+        program: ProgramId,
+    ) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        let raw = self.program(operation, program)?.raw;
+        if self.current_program == Some(program) {
+            return Ok(());
+        }
+        // SAFETY: current-context contract; the record was resolved live above,
+        // so the name handed to GL belongs to this context.
+        unsafe {
+            self.gl.use_program(Some(raw));
+        }
+        self.current_program = Some(program);
+        Ok(())
+    }
+
     pub(super) fn vertex_array(
         &self,
         operation: &'static str,
@@ -339,6 +397,7 @@ impl<'a> NativeGlProvider<'a> {
         self.fences.revoke_all();
         self.pass = None;
         self.raster = None;
+        self.current_program = None;
         self.active_query = None;
         self.active_compute_program = None;
         let _ = self.surface.invalidate_generation();

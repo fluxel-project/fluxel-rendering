@@ -109,6 +109,11 @@ fn mock_records_render_pass_pipeline_and_draw_domains() {
     api.end_render_pass().expect("end pass");
     assert!(api.calls().ends_with(&[
         MockCall::BeginRenderPass(framebuffer),
+        // The pipeline install selects the program and binds the vertex array,
+        // and the trace names both because they are two driver facts: a draw or
+        // dispatch that follows restores only the selection, so a trace that
+        // folded them into one entry could not show which half was re-asserted.
+        MockCall::SelectProgram(program),
         MockCall::SetRasterPipeline {
             program,
             vertex_array: vao
