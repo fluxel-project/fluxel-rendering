@@ -1,0 +1,245 @@
+//! The bounded ledger that makes a completion query total without polling.
+//!
+//! The common contract asks two different questions about a submission, and the
+//! GL family can only answer one of them from the fence.  `retire` and
+//! `collect_retired` are `&mut self` and may poll; `completion_status` is
+//! `&self` and may not -- Layer 1's `poll_fence` takes `&mut self`, because
+//! polling a fence is an owning-thread driver call like every other verb.  So a
+//! backend that answered `completion_status` by polling would not compile, and
+//! one that answered it some other way would be inventing an answer.
+//!
+//! What it does instead is *record* the answers it already obtained.  Every
+//! outcome this adapter ever learns is learned at a poll, and is kept here until
+//! someone asks for it.  `completion_status` then reads the record, and where
+//! there is no record it answers [`CompletionStatus::Unknown`] -- the
+//! contract's own fail-closed answer, documented as "deliberately distinct from
+//! a terminal failure" with the instruction that callers "must retain every
+//! lease and must not recycle any physical resource while the status is
+//! unknown".  Not knowing is a thing this contract can say; guessing is not.
+//!
+//! # Why the key is the whole lease
+//!
+//! The record is keyed on the `GlFenceLease` and not on its `SyncId`, because a
+//! `SyncId` is a slot in Layer 1's allocation table and a slot is reused: a
+//! destroyed fence's slot can be handed out again for a new fence, and a record
+//! keyed on the slot would report the old outcome for the new work.  The lease
+//! carries a private monotonically increasing serial that is never reused
+//! (`api/sync.rs`), and its `PartialEq` compares it, so two leases compare equal
+//! exactly when they are the same issuance.
+//!
+//! # The two lists, and the bound on each
+//!
+//! `live` holds submissions with no terminal outcome yet.  It is bounded by
+//! construction rather than by a window: only a submission that reached
+//! `create_fence` gets an entry, and a context that cannot accept work cannot
+//! add one.
+//!
+//! `retired` holds outcomes that *were* terminal, and it is the list that needs
+//! a bound, because it grows on every completed submission whether or not anyone
+//! asks about it.  When it is full the oldest outcome is dropped, which
+//! eventually makes some very old completion answer `Unknown` again.  That is
+//! the fail-closed direction and it is why the window can be a plain count: an
+//! evicted outcome costs its holder a quarantine, never a premature release.
+//!
+//! `live` is deliberately not trimmed the same way.  A submission that never
+//! becomes terminal -- because the context was lost, or because nothing ever
+//! retires it -- keeps its leases, and dropping the entry to stay under a count
+//! would release objects that submitted GPU work may still reference.
+
+use std::collections::VecDeque;
+
+use fluxel_rendergraph::{CompletionFailure, CompletionStatus};
+
+use crate::webgl2::api::{GlContextLifecycle, GlFenceLease};
+
+use super::retention::GlRetentionLease;
+
+/// How many terminal outcomes are remembered past the submission that made them.
+///
+/// Sixty-four is a window and not a promise.  It is chosen against the one
+/// consumer that polls late: the executor's transient pool asks about a
+/// submission on the frame after it completes, and the pool itself is bounded,
+/// so a window an order of magnitude above the pool's own depth cannot evict an
+/// outcome before its slot is reclaimed.
+pub(super) const RETIRED_OUTCOME_WINDOW: usize = 64;
+
+/// One submission this adapter made and has not seen reach a terminal outcome.
+struct Submission {
+    fence: GlFenceLease,
+    status: CompletionStatus,
+    /// Leases that were handed over for retirement and are waiting with it.
+    leases: Vec<GlRetentionLease>,
+}
+
+/// What a retirement found, and so what its caller must do with the leases.
+///
+/// The leases are given back rather than dropped here so that the release lands
+/// at a call site that can say why it is happening.  Dropping a retention lease
+/// is not silent: it records the object in the release queue, and the adapter
+/// destroys it at its next entry point.
+#[derive(Debug)]
+pub(super) enum Retirement {
+    /// The submission has not reached a terminal outcome.  The leases are held
+    /// here and released by whichever poll settles it.
+    Held,
+    /// Nothing here will ever release these leases, so the caller must.  Either
+    /// the submission already reached a terminal outcome -- the common case, a
+    /// caller that polls its own submission and then drops it never retires it
+    /// at all -- or this adapter never issued the completion, in which case the
+    /// leases name no work of ours to wait for.  Holding them forever in that
+    /// second case would turn a caller's mistake into an unbounded leak, and
+    /// releasing an object no submission of ours references cannot be unsafe.
+    Release(Vec<GlRetentionLease>),
+}
+
+/// Every submission this adapter has made, and the outcomes it observed.
+#[derive(Default)]
+pub(super) struct SubmissionLedger {
+    live: Vec<Submission>,
+    retired: VecDeque<(GlFenceLease, CompletionStatus)>,
+}
+
+/// Whether an outcome ends a submission's life.
+///
+/// `Pending` and `Unknown` do not.  `Unknown` is the one worth naming: the
+/// contract calls it out as "deliberately distinct from a terminal failure", so
+/// a record that happens to read `Unknown` keeps its leases exactly like one
+/// that reads `Pending`.
+pub(super) const fn is_terminal(status: CompletionStatus) -> bool {
+    matches!(status, CompletionStatus::Complete | CompletionStatus::Failed(_))
+}
+
+impl SubmissionLedger {
+    /// Records one freshly submitted fence.
+    pub(super) fn record(&mut self, fence: GlFenceLease) {
+        self.live.push(Submission {
+            fence,
+            status: CompletionStatus::Pending,
+            leases: Vec::new(),
+        });
+    }
+
+    /// The outcome recorded for `fence`, or `Unknown` where none is recorded.
+    pub(super) fn outcome(&self, fence: &GlFenceLease) -> CompletionStatus {
+        if let Some(submission) = self.live.iter().find(|pending| pending.fence == *fence) {
+            return submission.status;
+        }
+        if let Some((_, status)) = self.retired.iter().find(|(known, _)| known == fence) {
+            return *status;
+        }
+        CompletionStatus::Unknown
+    }
+
+    /// Every submission that has not reached a terminal outcome, with its fence.
+    ///
+    /// Returned as pairs rather than as indices because the caller polls these
+    /// while holding a borrow of the backend, and the answers come back by fence
+    /// -- an index would be invalidated by the very call that settles one.
+    pub(super) fn unsettled(&self) -> impl Iterator<Item = GlFenceLease> + '_ {
+        self.live
+            .iter()
+            .filter(|pending| !is_terminal(pending.status))
+            .map(|pending| pending.fence)
+    }
+
+    /// Applies the outcomes one poll observed and hands back what they settle.
+    ///
+    /// A submission whose outcome is terminal is moved out of `live` into the
+    /// bounded outcome window.  Two things come back to the caller, because it is
+    /// the only party that can act on either: the leases the submission was
+    /// holding, whose objects it must destroy, and the fence itself, which is a
+    /// driver object that nothing will ask about again -- the outcome window is
+    /// compared against, never polled, so the object behind a key may go as soon
+    /// as the key stops being the only answer.
+    ///
+    /// Submissions absent from `observed` keep the outcome they already had,
+    /// which is how a poll that failed leaves a submission quarantined.
+    pub(super) fn settle(
+        &mut self,
+        observed: &[(GlFenceLease, CompletionStatus)],
+    ) -> (Vec<GlRetentionLease>, Vec<GlFenceLease>) {
+        let live = core::mem::take(&mut self.live);
+        let mut kept = Vec::with_capacity(live.len());
+        let mut released = Vec::new();
+        let mut finished = Vec::new();
+        for mut submission in live {
+            if let Some((_, status)) = observed
+                .iter()
+                .find(|(fence, _)| *fence == submission.fence)
+            {
+                submission.status = *status;
+            }
+            if is_terminal(submission.status) {
+                released.append(&mut submission.leases);
+                finished.push((submission.fence, submission.status));
+            } else {
+                kept.push(submission);
+            }
+        }
+        self.live = kept;
+        let mut settled = Vec::with_capacity(finished.len());
+        for (fence, status) in finished {
+            self.remember(fence, status);
+            settled.push(fence);
+        }
+        (released, settled)
+    }
+
+    /// Hands `leases` to the submission `fence` names, if it is still live.
+    pub(super) fn retire(
+        &mut self,
+        fence: GlFenceLease,
+        leases: Vec<GlRetentionLease>,
+    ) -> Retirement {
+        match self.live.iter_mut().find(|pending| pending.fence == fence) {
+            Some(pending) => {
+                pending.leases.extend(leases);
+                Retirement::Held
+            }
+            None => Retirement::Release(leases),
+        }
+    }
+
+    /// Drops every record without acting on it.
+    ///
+    /// What a context-generation change calls.  Every fence of the previous
+    /// epoch was invalidated by the provider before it reported `Active` again,
+    /// so there is no outcome left to learn and no lease left worth holding --
+    /// and the leases go back to the caller to release, which is safe for the
+    /// same reason [`ReleaseQueue::forget`](super::retention::ReleaseQueue::forget)
+    /// is: the objects are already gone.
+    pub(super) fn purge(&mut self) -> Vec<GlRetentionLease> {
+        self.retired.clear();
+        let mut released = Vec::new();
+        for mut pending in core::mem::take(&mut self.live) {
+            released.append(&mut pending.leases);
+        }
+        released
+    }
+
+    /// Adds one outcome to the window, evicting the oldest when it is full.
+    fn remember(&mut self, fence: GlFenceLease, status: CompletionStatus) {
+        if self.retired.len() == RETIRED_OUTCOME_WINDOW {
+            self.retired.pop_front();
+        }
+        self.retired.push_back((fence, status));
+    }
+}
+
+/// The common contract's failure for a fence the GL family reports as failed.
+///
+/// Layer 1's `GlFenceStatus::Failed` says a fence failed and nothing more, while
+/// the contract asks which of two failures it was; that is a fact about the
+/// context, and the lifecycle is where the context keeps it.  A context still
+/// reporting `Active` while one of its own fences fails is a submission that
+/// failed, and any other lifecycle is a device the caller can no longer use --
+/// which is the distinction `DeviceLost` exists to carry.  The two states that
+/// are neither (`Inactive`, `Suspended`) cannot have a fence reported against
+/// them at all: submitting requires `Active`, and `GlSyncApi`'s preflight
+/// refuses every sync verb outside it.
+pub(super) fn failure(lifecycle: GlContextLifecycle) -> CompletionFailure {
+    match lifecycle {
+        GlContextLifecycle::Active => CompletionFailure::ExecutionFailed,
+        _ => CompletionFailure::DeviceLost,
+    }
+}

@@ -78,3 +78,4 @@ pub(crate) use counters::{
 pub(crate) use error::{PartialApplication, StateError};
 pub(crate) use event::{ScopedRawAccess, StateEvent};
 pub(crate) use knowledge::{DirtyDomains, DriverKnowledge, ExecutionMode, StateDomain};
+pub(crate) use machine::GlStateMachine;

@@ -158,7 +158,7 @@ fn texture_format_entries(snapshot: &GlDiscoverySnapshot) -> Vec<TextureFormatCa
 /// Four of the contract's five formats have a GL counterpart here; `Bgra8Unorm`
 /// does not, because no GL-family profile this contract models has a BGRA texture
 /// format in its table.  Returning `None` is the lowering's whole answer for it.
-fn common_format(format: GlFormat) -> Option<TextureFormat> {
+pub(super) fn common_format(format: GlFormat) -> Option<TextureFormat> {
     match format {
         GlFormat::Rgba8Unorm => Some(TextureFormat::Rgba8Unorm),
         GlFormat::Rgba8Srgb => Some(TextureFormat::Rgba8UnormSrgb),
@@ -178,7 +178,7 @@ fn common_format(format: GlFormat) -> Option<TextureFormat> {
 /// deliberate for the same reason it is there: this list is the accepted
 /// profiles' depth-format set, and a fourth entry would be a profile change
 /// rather than a lowering change.
-fn is_depth_stencil(format: GlFormat) -> bool {
+pub(super) fn is_depth_stencil(format: GlFormat) -> bool {
     matches!(
         format,
         GlFormat::Depth16Unorm | GlFormat::Depth24PlusStencil8 | GlFormat::Depth32Float

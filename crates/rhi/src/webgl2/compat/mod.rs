@@ -20,16 +20,23 @@
 //! `dyn ExecutionBackend` anywhere) and that Metal and WebGPU have no `Backend`
 //! variant either.
 //!
-//! What exists here so far are the two readings every later slice depends on and
-//! none of them can supply afterwards: the mapping from a GL-family context
-//! generation onto the common device identity, and the lowering of a discovery
-//! snapshot onto the common capability contract.  Both are per-context facts the
-//! graph validates against before any command is lowered, and neither is
-//! reachable from the lowering itself -- a lowering cannot report a capability
-//! it was already assumed to have.  The command-lowering slices follow, and the
-//! contract's associated types are deliberately left to the first of them: they
-//! are fixed by what the lowering needs, so choosing them before that exists
-//! would be choosing them from imagination.
+//! The three modules here are the two readings every later slice depends on and
+//! none of them can supply afterwards, plus the type that carries them:
+//!
+//! - [`identity`] maps a GL-family context generation onto the common device
+//!   identity.
+//! - [`capabilities`] lowers a discovery snapshot onto the common capability
+//!   contract.
+//! - [`device`] is the adapter itself, and owns the contract's associated types.
+//!
+//! Both readings are per-context facts the graph validates against before any
+//! command is lowered, and neither is reachable from the lowering itself -- a
+//! lowering cannot report a capability it was already assumed to have.  Which is
+//! why the adapter declares what it can do rather than deriving it: the executor
+//! compares the graph's fingerprint against `capabilities()` before it records
+//! anything, so a device whose description were computed during recording would
+//! be describing itself too late.
 
 mod capabilities;
+mod device;
 mod identity;
