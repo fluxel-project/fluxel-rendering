@@ -16,7 +16,8 @@ use crate::{
 };
 
 use super::cache::{
-    PrepareFailure, PrepareStatus, ResidencyBackend, StartError, Table, UploadPoll,
+    ImageStartError, MeshStartError, PrepareFailure, PrepareStatus, ResidencyBackend, StartError,
+    Table, UploadPoll,
 };
 use super::{ImageAsset, MeshAsset};
 
@@ -398,12 +399,12 @@ fn recreate_locked(
     for mesh in &meshes {
         replacement
             .seed_mesh(mesh.clone())
-            .map_err(map_start_error)?;
+            .map_err(map_mesh_start_error)?;
     }
     for image in &images {
         replacement
             .seed_image(image.clone())
-            .map_err(map_start_error)?;
+            .map_err(map_image_start_error)?;
     }
     for mesh in &meshes {
         old.request_mesh_generation_retire(mesh.id(), mesh.generation());
@@ -425,5 +426,27 @@ fn map_start_error(
         StartError::Image(error) => AssetResidencyError::ImageStart(error),
         StartError::StaleMesh => AssetResidencyError::StaleMeshGeneration,
         StartError::StaleImage => AssetResidencyError::StaleImageGeneration,
+    }
+}
+
+/// Narrows a mesh-only start failure to the error this facade reports.
+///
+/// [`Table::seed_mesh`] answers for one half, so it has no image error to
+/// name; the pair-level [`map_start_error`] would make the caller read a match
+/// arm that this path cannot reach.
+fn map_mesh_start_error(error: MeshStartError<IndexedMeshUploadStartError>) -> AssetResidencyError {
+    match error {
+        MeshStartError::Upload(error) => AssetResidencyError::MeshStart(error),
+        MeshStartError::Stale => AssetResidencyError::StaleMeshGeneration,
+    }
+}
+
+/// Narrows an image-only start failure to the error this facade reports.
+fn map_image_start_error(
+    error: ImageStartError<BaseColorTextureUploadStartError>,
+) -> AssetResidencyError {
+    match error {
+        ImageStartError::Upload(error) => AssetResidencyError::ImageStart(error),
+        ImageStartError::Stale => AssetResidencyError::StaleImageGeneration,
     }
 }

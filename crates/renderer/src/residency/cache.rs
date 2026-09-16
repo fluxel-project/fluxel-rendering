@@ -100,7 +100,25 @@ impl<K: fluxel_assets::AssetKind> Hash for AssetKey<K> {
     }
 }
 
-/// Result of starting an upload.
+/// Result of starting one mesh upload.
+#[derive(Debug)]
+pub(super) enum MeshStartError<ME> {
+    Upload(ME),
+    /// A caller tried to realize an older CPU generation than the table's
+    /// current source for this logical mesh.
+    Stale,
+}
+
+/// Result of starting one image upload.
+#[derive(Debug)]
+pub(super) enum ImageStartError<IE> {
+    Upload(IE),
+    /// A caller tried to realize an older CPU generation than the table's
+    /// current source for this logical image.
+    Stale,
+}
+
+/// Result of starting the mesh/image pair required by one draw.
 #[derive(Debug)]
 pub(super) enum StartError<ME, IE> {
     Mesh(ME),
@@ -129,6 +147,22 @@ pub(super) enum PrepareStatus<MR, IR, MF, IF> {
         image: IR,
     },
     Failed(PrepareFailure<MF, IF>),
+}
+
+/// What [`Table::prepare_mesh`] answers: the mesh half's own status, or the
+/// reason the caller's snapshot could not be accepted at all.
+#[cfg(any(test, all(target_arch = "wasm32", feature = "webgl2-residency")))]
+type MeshPreparation<B> = Result<
+    MeshStatus<<B as ResidencyBackend>::MeshResident, <B as ResidencyBackend>::MeshFailure>,
+    MeshStartError<<B as ResidencyBackend>::MeshStartError>,
+>;
+
+/// Result of preparing one mesh realization on its own.
+#[cfg(any(test, all(target_arch = "wasm32", feature = "webgl2-residency")))]
+pub(super) enum MeshStatus<R, F> {
+    Pending,
+    Ready(R),
+    Failed(F),
 }
 
 enum EntryState<P, R, F> {
@@ -232,8 +266,16 @@ impl<B: ResidencyBackend> Table<B> {
         let device = self.backend.device();
         let mesh_key = AssetKey::new(mesh.id(), mesh.generation(), device);
         let image_key = AssetKey::new(image.id(), image.generation(), device);
-        self.accept_mesh(mesh, mesh_key)?;
-        self.accept_image(image, image_key)?;
+        self.accept_mesh(mesh, mesh_key)
+            .map_err(|error| match error {
+                MeshStartError::Upload(error) => StartError::Mesh(error),
+                MeshStartError::Stale => StartError::StaleMesh,
+            })?;
+        self.accept_image(image, image_key)
+            .map_err(|error| match error {
+                ImageStartError::Upload(error) => StartError::Image(error),
+                ImageStartError::Stale => StartError::StaleImage,
+            })?;
 
         let mesh = self.advance_mesh(mesh_key);
         let image = self.advance_image(image_key);
@@ -249,6 +291,31 @@ impl<B: ResidencyBackend> Table<B> {
             }
             _ => Ok(PrepareStatus::Pending),
         }
+    }
+
+    /// Prepares one mesh realization for a path that samples no image.
+    ///
+    /// [`Table::prepare`] exists because a textured draw needs both halves at
+    /// once and must not observe one before the other is committed.  A pipeline
+    /// that samples nothing has no such pair, and requiring it to name an image
+    /// would make the caller invent one -- so the mesh half is reachable alone,
+    /// under the same accept/advance/retire rules and the same key.
+    ///
+    /// The browser backend is the path that needs this today, which is why the
+    /// method and its status type are compiled only where that backend is -- or
+    /// where tests can reach them.  A host build has no caller for either.
+    #[cfg(any(test, all(target_arch = "wasm32", feature = "webgl2-residency")))]
+    pub(super) fn prepare_mesh(
+        &mut self,
+        mesh: AssetSnapshot<MeshAsset, Geometry>,
+    ) -> MeshPreparation<B> {
+        let key = AssetKey::new(mesh.id(), mesh.generation(), self.backend.device());
+        self.accept_mesh(mesh, key)?;
+        Ok(match self.advance_mesh(key) {
+            ResourceState::Pending => MeshStatus::Pending,
+            ResourceState::Committed(resident) => MeshStatus::Ready(resident),
+            ResourceState::Failed(failure) => MeshStatus::Failed(failure),
+        })
     }
 
     pub(super) fn request_mesh_retire(&mut self, id: AssetId<MeshAsset>) {
@@ -305,7 +372,7 @@ impl<B: ResidencyBackend> Table<B> {
     pub(super) fn seed_mesh(
         &mut self,
         mesh: AssetSnapshot<MeshAsset, Geometry>,
-    ) -> Result<(), StartError<B::MeshStartError, B::ImageStartError>> {
+    ) -> Result<(), MeshStartError<B::MeshStartError>> {
         let key = AssetKey::new(mesh.id(), mesh.generation(), self.backend.device());
         self.accept_mesh(mesh, key)
     }
@@ -314,7 +381,7 @@ impl<B: ResidencyBackend> Table<B> {
     pub(super) fn seed_image(
         &mut self,
         image: AssetSnapshot<ImageAsset, Rgba8Image>,
-    ) -> Result<(), StartError<B::MeshStartError, B::ImageStartError>> {
+    ) -> Result<(), ImageStartError<B::ImageStartError>> {
         let key = AssetKey::new(image.id(), image.generation(), self.backend.device());
         self.accept_image(image, key)
     }
@@ -339,9 +406,9 @@ impl<B: ResidencyBackend> Table<B> {
         &mut self,
         snapshot: AssetSnapshot<MeshAsset, Geometry>,
         key: AssetKey<MeshAsset>,
-    ) -> Result<(), StartError<B::MeshStartError, B::ImageStartError>> {
+    ) -> Result<(), MeshStartError<B::MeshStartError>> {
         if is_stale(&self.latest_meshes, &snapshot) {
-            return Err(StartError::StaleMesh);
+            return Err(MeshStartError::Stale);
         }
         if let Some(entry) = self.mesh_entries.remove(&key) {
             self.latest_meshes.insert(snapshot.id(), snapshot);
@@ -356,7 +423,7 @@ impl<B: ResidencyBackend> Table<B> {
         let pending = self
             .backend
             .begin_mesh(snapshot.value())
-            .map_err(StartError::Mesh)?;
+            .map_err(MeshStartError::Upload)?;
         // Do not disturb the old source or realization until the replacement
         // has been accepted by the backend.
         self.latest_meshes.insert(snapshot.id(), snapshot);
@@ -374,9 +441,9 @@ impl<B: ResidencyBackend> Table<B> {
         &mut self,
         snapshot: AssetSnapshot<ImageAsset, Rgba8Image>,
         key: AssetKey<ImageAsset>,
-    ) -> Result<(), StartError<B::MeshStartError, B::ImageStartError>> {
+    ) -> Result<(), ImageStartError<B::ImageStartError>> {
         if is_stale(&self.latest_images, &snapshot) {
-            return Err(StartError::StaleImage);
+            return Err(ImageStartError::Stale);
         }
         if let Some(entry) = self.image_entries.remove(&key) {
             self.latest_images.insert(snapshot.id(), snapshot);
@@ -391,7 +458,7 @@ impl<B: ResidencyBackend> Table<B> {
         let pending = self
             .backend
             .begin_image(snapshot.value())
-            .map_err(StartError::Image)?;
+            .map_err(ImageStartError::Upload)?;
         self.latest_images.insert(snapshot.id(), snapshot);
         retire_replaced(&mut self.image_entries, key);
         self.image_entries.insert(

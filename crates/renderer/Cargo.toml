@@ -19,6 +19,11 @@ gpu-upload = ["dep:fluxel-rendergraph", "dep:fluxel-rhi", "dep:slot-graph"]
 # default headless domain model and the lower-level upload slice remain usable
 # without the cross-repository asset dependency.
 gpu-residency = ["gpu-upload", "dep:fluxel-assets"]
+# Renderer-owned residency over the RHI's explicit WebGL2 executor. Compiled
+# only on wasm32, because a browser context is the only thing the facade can
+# name; enabling it elsewhere adds the RHI's browser feature and nothing that
+# can be used, so it stays separate from `gpu-residency` rather than implied.
+webgl2-residency = ["gpu-residency", "fluxel-rhi/webgl2"]
 
 [dependencies]
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "22c4eb0e199575aa71b59f3abc6ec3f72d934b9a", version = "=0.13.4", optional = true }

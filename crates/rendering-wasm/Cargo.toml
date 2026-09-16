@@ -11,7 +11,10 @@ description = "Narrow wasm-bindgen bindings for Fluxel's retained browser scene"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-fluxel-renderer = { path = "../renderer", features = ["gpu-upload"] }
+# The browser bridge owns the AssetStore the renderer's residency keys on, so it
+# takes the same pinned asset revision the renderer's `gpu-residency` does.
+fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "22c4eb0e199575aa71b59f3abc6ec3f72d934b9a", version = "=0.13.4" }
+fluxel-renderer = { path = "../renderer", features = ["gpu-upload", "gpu-residency", "webgl2-residency"] }
 fluxel-rhi = { path = "../rhi", default-features = false, features = ["webgl2", "webgpu"] }
 js-sys = "0.3.77"
 wasm-bindgen = "0.2.100"

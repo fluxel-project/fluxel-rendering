@@ -4,6 +4,8 @@
 //! and opaque ready assets. The residency table, physical identities, upload
 //! operations, and RenderGraph imports remain renderer-private.
 
+#[cfg(all(target_arch = "wasm32", feature = "webgl2-residency"))]
+mod browser;
 mod cache;
 mod native;
 
@@ -12,6 +14,9 @@ pub use native::{
     ResidentAssetStatus,
 };
 pub(crate) use native::{NativeResidency, new_native_residency};
+
+#[cfg(all(target_arch = "wasm32", feature = "webgl2-residency"))]
+pub use browser::{WebGl2AssetResidency, WebGl2ResidencyError};
 
 #[cfg(test)]
 mod tests {

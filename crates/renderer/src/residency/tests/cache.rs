@@ -4,7 +4,8 @@ use fluxel_rendergraph::DeviceIdentity;
 use crate::{Geometry, Rgba8Image};
 
 use super::super::cache::{
-    PrepareFailure, PrepareStatus, ResidencyBackend, StartError, Table, UploadPoll,
+    MeshStartError, MeshStatus, PrepareFailure, PrepareStatus, ResidencyBackend, StartError, Table,
+    UploadPoll,
 };
 use super::super::{ImageAsset, MeshAsset};
 
@@ -443,7 +444,7 @@ fn stale_generation_cannot_replace_latest_source_or_retire_newer_entry() {
     recreated.seed_mesh(meshes.remove(0)).unwrap();
     assert!(matches!(
         recreated.seed_mesh(first),
-        Err(StartError::StaleMesh)
+        Err(MeshStartError::Stale)
     ));
 }
 
@@ -496,5 +497,66 @@ fn start_errors_are_typed() {
     assert!(matches!(
         table.prepare(mesh, image),
         Err(StartError::Mesh("mesh start"))
+    ));
+}
+
+#[test]
+fn mesh_only_prepare_reaches_ready_without_ever_naming_an_image() {
+    let (_, mesh, _) = sources();
+    let mut table = Table::new(FakeBackend::new(1));
+    assert!(matches!(
+        table.prepare_mesh(mesh.clone()),
+        Ok(MeshStatus::Pending)
+    ));
+    assert!(matches!(
+        table.prepare_mesh(mesh.clone()),
+        Ok(MeshStatus::Ready(_))
+    ));
+    // One begin across three calls: the repeated prepares reuse the entry the
+    // first one accepted rather than starting a second upload.
+    assert!(matches!(table.prepare_mesh(mesh), Ok(MeshStatus::Ready(_))));
+    assert_eq!(table.backend().mesh_begins, 1);
+    assert_eq!(table.backend().image_begins, 0);
+    // The mesh half is still a full member of the table: it has a recreation
+    // source, and a retiring device can carry it across.
+    let (meshes, images) = table.recreate_sources();
+    assert_eq!(meshes.len(), 1);
+    assert!(images.is_empty());
+}
+
+#[test]
+fn mesh_only_prepare_refuses_a_superseded_generation() {
+    let (store, first, _) = sources();
+    let second = replacement(&store, &first);
+    let mut table = Table::new(FakeBackend::new(1));
+    let _ = table.prepare_mesh(second.clone());
+    assert!(matches!(
+        table.prepare_mesh(second.clone()),
+        Ok(MeshStatus::Ready(_))
+    ));
+    assert!(matches!(
+        table.prepare_mesh(first),
+        Err(MeshStartError::Stale)
+    ));
+    let (meshes, _) = table.recreate_sources();
+    assert_eq!(meshes.len(), 1);
+    assert_eq!(meshes[0].generation(), second.generation());
+}
+
+#[test]
+fn mesh_only_prepare_surfaces_its_own_start_and_poll_failures() {
+    let (_, mesh, _) = sources();
+    let mut table = Table::new(FakeBackend::new(1));
+    table.backend_mut().mesh_start_fail = true;
+    assert!(matches!(
+        table.prepare_mesh(mesh.clone()),
+        Err(MeshStartError::Upload("mesh start"))
+    ));
+    table.backend_mut().mesh_start_fail = false;
+    table.backend_mut().mesh_fail = true;
+    let _ = table.prepare_mesh(mesh.clone());
+    assert!(matches!(
+        table.prepare_mesh(mesh),
+        Ok(MeshStatus::Failed("mesh failure"))
     ));
 }

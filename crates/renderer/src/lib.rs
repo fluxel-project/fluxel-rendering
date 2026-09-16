@@ -98,6 +98,18 @@ pub mod adapter {
         PreparedBasicDraw, PreparedBasicGraph, PreparedBasicGraphError, PreparedBasicScene,
         PreparedBasicSceneError, PresentableFormat, PresentationProfile,
     };
+
+    /// Browser execution adapter surface.
+    ///
+    /// Compiled only for wasm32 and only when the browser residency feature is
+    /// on, because a browser context is the one thing these types name. The
+    /// logical markers, the table rules, and the physical buffers they key stay
+    /// where they already are; this module only exposes the facade a browser
+    /// bridge constructs once per explicit canvas.
+    #[cfg(all(target_arch = "wasm32", feature = "webgl2-residency"))]
+    pub mod browser {
+        pub use crate::residency::{WebGl2AssetResidency, WebGl2ResidencyError};
+    }
 }
 
 /// A camera described by view and projection matrices.
