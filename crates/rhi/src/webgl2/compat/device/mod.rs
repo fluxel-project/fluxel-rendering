@@ -12,6 +12,8 @@
 //!   copy verbs take.
 //! - [`retention`] is what keeps a transient alive until its last handle drops,
 //!   and where its death is recorded.
+//! - [`upload`] is how host bytes reach a buffer this device created, which is
+//!   the one half of a caller-owned resource the contract has no verb for.
 //! - [`submission`] is the record that makes a completion query total without
 //!   polling.
 //!
@@ -158,6 +160,7 @@ mod retention;
 mod submission;
 mod surface;
 mod transient;
+mod upload;
 
 #[cfg(test)]
 mod tests;
