@@ -568,10 +568,6 @@ impl MockGlFamilyApi {
                     view.sample_count,
                 )
             }
-            GlAttachmentTarget::SurfaceImage(_) => self.error_result(GlError::Unsupported {
-                operation: op,
-                reason: "surface-image attachments are not part of this framebuffer slice",
-            }),
         }
     }
 

@@ -489,10 +489,6 @@ impl NativeGlProvider<'_> {
                 }
                 Ok(())
             }
-            GlAttachmentTarget::SurfaceImage(_) => Err(GlError::Unsupported {
-                operation: op,
-                reason: "surface-image attachments are not part of this framebuffer slice",
-            }),
         }
     }
 
@@ -594,10 +590,6 @@ impl NativeGlProvider<'_> {
                 }
                 Ok(())
             }
-            GlAttachmentTarget::SurfaceImage(_) => Err(GlError::Unsupported {
-                operation: op,
-                reason: "surface-image attachments are not part of this framebuffer slice",
-            }),
         }
     }
 }

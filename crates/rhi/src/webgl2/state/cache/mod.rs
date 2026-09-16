@@ -62,8 +62,8 @@
 use std::collections::HashMap;
 
 use crate::webgl2::api::{
-    BufferId, FramebufferId, ProgramId, QueryId, RenderbufferId, SamplerId, ShaderId,
-    SurfaceImageId, SyncId, TextureId, VertexArrayId,
+    BufferId, FramebufferId, ProgramId, QueryId, RenderbufferId, SamplerId, ShaderId, SyncId,
+    TextureId, VertexArrayId,
 };
 
 use super::counters::CacheCounters;
@@ -139,8 +139,6 @@ pub(crate) enum ResourceRef {
     Query(QueryId),
     /// A sync object.
     Sync(SyncId),
-    /// A presentation surface image.
-    SurfaceImage(SurfaceImageId),
 }
 
 /// The resources one entry depends on, kept ordered for deterministic reports.

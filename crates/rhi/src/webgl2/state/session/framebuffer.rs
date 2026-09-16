@@ -28,10 +28,13 @@
 //! # What this module does not do
 //!
 //! It does not decide when a pass begins or ends, and it does not know about
-//! the drawable.  Whether a pass may render to the default framebuffer at all
-//! is an open question in the series plan: Layer 1's descriptor validation
-//! rejects an attachment-less framebuffer, so there is no id for the drawable
-//! for this cache to key on.
+//! the drawable -- not as an omission but because there is nothing here for it
+//! to name.  Layer 1's attachment vocabulary has exactly two storage classes, a
+//! texture and a renderbuffer (`GlAttachmentTarget`), and the window system's
+//! drawable is neither: a graph reaches the screen by rendering into the
+//! texture its present root names and publishing that texture afterwards, which
+//! is `GlSurfacePresentationApi`'s half and not this cache's.  Every entry this
+//! cache can hold therefore names storage it can also destroy.
 
 use crate::webgl2::api::{
     FramebufferId, GlAttachmentTarget, GlFramebufferDescriptor, GlTextureView,
@@ -72,9 +75,6 @@ fn dependencies_of(descriptor: &GlFramebufferDescriptor) -> DependencySet {
             }
             GlAttachmentTarget::Renderbuffer(renderbuffer) => {
                 dependencies.insert(ResourceRef::Renderbuffer(renderbuffer));
-            }
-            GlAttachmentTarget::SurfaceImage(image) => {
-                dependencies.insert(ResourceRef::SurfaceImage(image));
             }
         }
     }

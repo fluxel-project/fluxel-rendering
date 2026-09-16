@@ -13,17 +13,28 @@
 //! allocation with neither, so its only addressable view is level 0, layer 0,
 //! of exactly one layer -- the rule that would otherwise be misread as a
 //! layered attachment.
+//!
+//! There is deliberately **no third class for the window system's drawable**,
+//! and the absence is a decision rather than a gap.  A surface image is not an
+//! attachment here because it is not an attachment anywhere else in this
+//! contract: the common RHI's present root is a *texture resource* a graph
+//! renders into and a backend then presents, so the drawable is reached by
+//! publishing a texture to it, not by naming it as a pass's render target.
+//! Layer 1's attachment vocabulary carried a variant for it once
+//! (`GlAttachmentTarget::SurfaceImage`) while every provider that could execute
+//! one refused it with the same sentence, and Layer 2 tracked it as a
+//! dependency no cache ever invalidated; both were removed for the reason the
+//! common contract gives.  What this means for a reader is that a pass
+//! describes only storage this layer can allocate, and "render to the screen"
+//! is a step *after* the pass rather than inside it.
 
-use super::{
-    FramebufferId, GlError, GlFamilyApi, GlFormat, RenderbufferId, SurfaceImageId, TextureId,
-};
+use super::{FramebufferId, GlError, GlFamilyApi, GlFormat, RenderbufferId, TextureId};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum GlAttachmentTarget {
     Texture(TextureId),
     /// A renderbuffer allocation, which has no mip chain and no layers.
     Renderbuffer(RenderbufferId),
-    SurfaceImage(SurfaceImageId),
 }
 
 /// One view of one attachment's storage.
@@ -183,7 +194,6 @@ impl GlAttachmentTarget {
         match self {
             Self::Texture(texture) => texture.context,
             Self::Renderbuffer(renderbuffer) => renderbuffer.context,
-            Self::SurfaceImage(image) => image.context,
         }
     }
 }
