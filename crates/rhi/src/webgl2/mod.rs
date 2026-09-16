@@ -9,3 +9,9 @@
     reason = "Layer 1 declarations intentionally land before their Layer 2/3 consumers"
 )]
 pub(super) mod api;
+
+#[allow(
+    dead_code,
+    reason = "Layer 2 declarations intentionally land before the state domains that consume them"
+)]
+pub(super) mod state;
