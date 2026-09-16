@@ -11,9 +11,9 @@ use super::super::GlFamilyApi as _;
 use super::super::{
     BufferId, ContextStamp, FramebufferId, GlBufferDesc, GlContextLifecycle, GlDiscoverySnapshot,
     GlError, GlFenceLeaseBook, GlIndexBinding, GlPixelStoreState, GlPrimitiveTopology,
-    GlProgramDescriptor, GlRenderBufferDesc, GlSurfaceLeaseBook, GlTextureDesc, GlVertexLayout,
-    OwnerThreadIdentity, ProgramId, QueryId, RenderbufferId, SamplerId, ShaderId, SyncId,
-    TextureId, VertexArrayId,
+    GlProgramDescriptor, GlRenderBufferDesc, GlSurfaceLeaseBook, GlSurfaceSize, GlTextureDesc,
+    GlVertexLayout, OwnerThreadIdentity, ProgramId, QueryId, RenderbufferId, SamplerId, ShaderId,
+    SyncId, TextureId, VertexArrayId,
 };
 use super::discovery::{NativeDiscoveryError, discover_current_glow};
 
@@ -38,6 +38,12 @@ pub(crate) struct NativeGlProvider<'a> {
     pub(super) fences: GlFenceLeaseBook,
     pub(super) surface: GlSurfaceLeaseBook,
     pub(super) surface_suspended: bool,
+    /// The Host-reported extent of the drawable, absent until reported.
+    ///
+    /// Not a default: this family has no core query for the default
+    /// framebuffer's size, so an unreported extent is an unknown one, and the
+    /// presentation domain answers it with suspension instead of a lease.
+    pub(super) surface_extent: Option<GlSurfaceSize>,
     pub(super) pass: Option<ActivePass>,
     pub(super) raster: Option<ActiveRaster>,
     /// The query currently recording a measurement, if any.
@@ -150,6 +156,10 @@ impl<'a> NativeGlProvider<'a> {
             fences: GlFenceLeaseBook::default(),
             surface: GlSurfaceLeaseBook::new(),
             surface_suspended: false,
+            // The Host has reported no extent yet, so the executor starts with
+            // none: a provider that guessed a size here would hand out a lease
+            // for a drawable it has never been told about.
+            surface_extent: None,
             pass: None,
             raster: None,
             active_query: None,
@@ -332,6 +342,11 @@ impl<'a> NativeGlProvider<'a> {
         self.active_query = None;
         self.active_compute_program = None;
         let _ = self.surface.invalidate_generation();
+        // The recorded extent dies with the context generation it was observed
+        // under: a replacement context may serve a differently sized drawable,
+        // and a lease carrying the old extent would be a wrong size that nothing
+        // reports. The Host re-reports the extent through `resize_surface`.
+        self.surface_extent = None;
     }
 }
 
@@ -449,53 +464,69 @@ impl super::super::GlResourceApi for NativeGlProvider<'_> {
     }
     fn create_texture_resource(&mut self, desc: GlTextureDesc) -> Result<TextureId, GlError> {
         use glow::HasContext as _;
-        self.assert_ready("create-texture")?;
+        const OP: &str = "create-texture";
+        self.assert_ready(OP)?;
         desc.validate()
-            .map_err(|_| Self::validation("create-texture", "invalid texture descriptor"))?;
+            .map_err(|_| Self::validation(OP, "invalid texture descriptor"))?;
         let internal = native_texture_format(desc.format).ok_or(GlError::Unsupported {
-            operation: "create-texture",
+            operation: OP,
             reason: "format has no proven native texture storage mapping",
         })?;
-        if desc.dimension != super::super::GlTextureDimension::D2 || desc.sample_count != 1 {
-            return Err(GlError::Unsupported {
-                operation: "create-texture",
-                reason: "multisample texture allocation stays with renderbuffer storage",
-            });
-        }
-        if self
-            .discovery
-            .formats()
-            .get_for(super::super::GlFormatResourceKind::Texture, desc.format, 1)
-            .is_none()
-        {
-            return Err(GlError::Unsupported {
-                operation: "create-texture",
-                reason: "format lacks discovery evidence",
-            });
-        }
+        let class = texture_storage_class(
+            self.discovery.context().profile(),
+            &self.discovery.limits(),
+            self.discovery.formats(),
+            desc,
+        )
+        .map_err(|reason| GlError::Unsupported {
+            operation: OP,
+            reason,
+        })?;
         let width = i32::try_from(desc.extent.width)
-            .map_err(|_| Self::validation("create-texture", "width exceeds GLsizei"))?;
+            .map_err(|_| Self::validation(OP, "width exceeds GLsizei"))?;
         let height = i32::try_from(desc.extent.height)
-            .map_err(|_| Self::validation("create-texture", "height exceeds GLsizei"))?;
+            .map_err(|_| Self::validation(OP, "height exceeds GLsizei"))?;
         let levels = i32::try_from(desc.mip_level_count)
-            .map_err(|_| Self::validation("create-texture", "mip count exceeds GLsizei"))?;
+            .map_err(|_| Self::validation(OP, "mip count exceeds GLsizei"))?;
+        let samples = i32::try_from(desc.sample_count)
+            .map_err(|_| Self::validation(OP, "sample count exceeds GLsizei"))?;
         // SAFETY: current-context contract; all profile/format/size validation preceded mutation.
         let name = unsafe { self.gl.create_texture() }.map_err(|message| GlError::Driver {
-            operation: "create-texture",
+            operation: OP,
             message,
         })?;
         unsafe {
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(name));
-            if desc.format.compressed_info().is_none() {
-                self.gl
-                    .tex_storage_2d(glow::TEXTURE_2D, levels, internal, width, height);
+            match class {
+                TextureStorageClass::SingleSample => {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(name));
+                    if desc.format.compressed_info().is_none() {
+                        self.gl
+                            .tex_storage_2d(glow::TEXTURE_2D, levels, internal, width, height);
+                    }
+                }
+                TextureStorageClass::Multisample => {
+                    // Sample locations are fixed: a resolve reads every texel's
+                    // samples as one block, and the per-texel locations that the
+                    // alternative would expose are not expressible in this
+                    // layer's vocabulary.
+                    self.gl
+                        .bind_texture(glow::TEXTURE_2D_MULTISAMPLE, Some(name));
+                    self.gl.tex_storage_2d_multisample(
+                        glow::TEXTURE_2D_MULTISAMPLE,
+                        samples,
+                        internal,
+                        width,
+                        height,
+                        true,
+                    );
+                }
             }
         }
-        if let Err(error) = self.driver_error("create-texture") {
+        if let Err(error) = self.driver_error(OP) {
             unsafe { self.gl.delete_texture(name) };
             return Err(error);
         }
-        let id = TextureId::new(self.context_stamp(), self.slot("create-texture")?, 0);
+        let id = TextureId::new(self.context_stamp(), self.slot(OP)?, 0);
         self.textures.insert(id, (name, desc));
         Ok(id)
     }
@@ -667,6 +698,106 @@ impl super::super::GlSamplerApi for NativeGlProvider<'_> {
         self.samplers.remove(&id);
         Ok(())
     }
+}
+
+/// The storage class one texture allocation must be created through.
+///
+/// The two classes are distinct GL targets with distinct lifetime rules, not
+/// two settings of one target: multisample storage has a single level, cannot
+/// be sampled, and cannot be allocated immutably through the single-sample
+/// entry point.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TextureStorageClass {
+    /// Immutable single-sample storage, mip chain included.
+    SingleSample,
+    /// Immutable multisample storage: one level, no sampler access.
+    Multisample,
+}
+
+/// Decides how one texture descriptor may be allocated on this context.
+///
+/// The decision is one function rather than a check inside each allocation
+/// branch because the same recorded facts decide both branches: whether an
+/// exact fact exists at the descriptor's own sample count, and whether the
+/// descriptor's declared usage is one the fact actually supports. Keeping the
+/// usage check here is also what keeps this provider from accepting storage the
+/// recorder already refuses -- a descriptor that asks for sampled usage on
+/// storage no sampler can read is rejected before an object exists, instead of
+/// at the first bind with a GL error that names a different operation.
+///
+/// The failure is a reason string rather than a `GlError` so the same decision
+/// can be exercised without a live context; the caller attaches the operation.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) fn texture_storage_class(
+    profile: super::super::GlFamilyProfile,
+    limits: &super::super::GlLimits,
+    formats: &super::super::GlFormatTable,
+    desc: GlTextureDesc,
+) -> Result<TextureStorageClass, &'static str> {
+    // This provider allocates only the two-dimensional target, so the shape
+    // gate is here rather than in each branch: a layered or three-dimensional
+    // descriptor has no target to bind, and the fact table has no per-dimension
+    // row that could stand in for one.
+    if desc.dimension != super::super::GlTextureDimension::D2 {
+        return Err("native texture storage covers the two-dimensional target only");
+    }
+    let facts = formats
+        .get_for(
+            super::super::GlFormatResourceKind::Texture,
+            desc.format,
+            desc.sample_count,
+        )
+        .ok_or("format has no discovery evidence at this sample count")?;
+    if desc.usage.contains(super::super::GlTextureUsage::SAMPLED) && !facts.sampled {
+        return Err("format is not sampled at this sample count");
+    }
+    if desc
+        .usage
+        .contains(super::super::GlTextureUsage::RENDER_ATTACHMENT)
+        && !facts.renderable
+    {
+        return Err("format is not renderable at this sample count");
+    }
+    if desc
+        .usage
+        .contains(super::super::GlTextureUsage::COPY_SOURCE)
+        && !facts.copy_source
+    {
+        return Err("format is not a copy source at this sample count");
+    }
+    if desc
+        .usage
+        .contains(super::super::GlTextureUsage::COPY_DESTINATION)
+        && !facts.copy_destination
+    {
+        return Err("format is not a copy destination at this sample count");
+    }
+    if desc
+        .usage
+        .contains(super::super::GlTextureUsage::STORAGE_BINDING)
+        && !facts.storage_read
+        && !facts.storage_write
+    {
+        return Err("format has no discovered image access at this sample count");
+    }
+    if desc.sample_count <= 1 {
+        return Ok(TextureStorageClass::SingleSample);
+    }
+    if !super::discovery::supports_multisample_texture_storage(profile) {
+        return Err("this context has no multisample texture storage");
+    }
+    // The per-class ceiling is not re-applied here: it is what bounded the fact
+    // this decision just required, and a snapshot whose fact table exceeded its
+    // own recorded ceilings is already rejected when the snapshot is built, so
+    // repeating the comparison could never change the outcome. The multisample
+    // ceiling is a different bound and is checked: it governs every multisample
+    // allocation regardless of format class, and the fact table does not
+    // constrain a texture fact by it.
+    if desc.sample_count > limits.max_samples {
+        return Err("sample count exceeds the recorded multisample ceiling");
+    }
+    Ok(TextureStorageClass::Multisample)
 }
 
 /// Allocation usage applied to every native buffer (audit P2-11).

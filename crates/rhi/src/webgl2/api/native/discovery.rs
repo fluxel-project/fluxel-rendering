@@ -6,6 +6,7 @@
 //! snapshot is data only and remains bound to the caller supplied stamp.
 
 use core::ffi::c_void;
+use std::collections::BTreeSet;
 
 use super::super::{
     ContextStamp, CoreOrExtension, GlCapability, GlContextFlags, GlContextInfo, GlDiscoveryBuilder,
@@ -52,6 +53,30 @@ pub(super) trait NativeGlQuery {
     fn indexed_string(&self, name: u32, index: u32) -> Option<String>;
 }
 
+/// The driver identity recorded when no platform layer supplied one.
+///
+/// A recorded absence rather than a stand-in. The GL version string is already
+/// recorded as `version`, and copying it here is exactly what made the previous
+/// record claim a driver identity nobody had observed (audit P2-6): a report
+/// that reads `4.6.0 NVIDIA` as the driver cannot tell an observed platform
+/// string from a repeated GL one. The marker follows the
+/// `gl.context-flags-unavailable` style so an absence stays greppable.
+pub(crate) const DRIVER_IDENTITY_UNAVAILABLE: &str = "gl.driver-identity-unavailable=true";
+
+/// Normalizes a platform-supplied driver identity.
+///
+/// The platform layer is the only place a WGL or EGL driver string exists, so it
+/// supplies one or supplies nothing. A blank string is nothing: recording it
+/// verbatim would show an empty driver where the truth is that none was read.
+pub(super) fn normalized_driver_identity(supplied: &str) -> String {
+    let supplied = supplied.trim();
+    if supplied.is_empty() {
+        DRIVER_IDENTITY_UNAVAILABLE.to_owned()
+    } else {
+        supplied.to_owned()
+    }
+}
+
 /// Discovers native facts using an already-current `glow` context.
 ///
 /// Uses the same Host loader that built `glow` for the one registry query glow
@@ -85,6 +110,31 @@ pub(crate) unsafe fn discover_current_glow_with_loader(
     context: &glow::Context,
     stamp: ContextStamp,
     proc_loader: impl Fn(&str) -> *const c_void,
+) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
+    // SAFETY: forwarded from this function's documented caller contract.
+    unsafe {
+        discover_current_glow_identified(context, stamp, proc_loader, DRIVER_IDENTITY_UNAVAILABLE)
+    }
+}
+
+/// [`discover_current_glow_with_loader`] plus the platform driver identity.
+///
+/// The driver identity is the one fact discovery cannot read from GL: on this
+/// family it belongs to the platform layer (the ICD behind WGL, the EGL driver
+/// behind an EGL display), so the provider that owns that layer supplies it.
+/// Leaving the string empty records [`DRIVER_IDENTITY_UNAVAILABLE`] instead, so
+/// a context whose platform layer did not report an identity is visible as an
+/// absence rather than as whatever GL happened to answer.
+///
+/// # Safety contract
+///
+/// Same as [`discover_current_glow_with_loader`].
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(crate) unsafe fn discover_current_glow_identified(
+    context: &glow::Context,
+    stamp: ContextStamp,
+    proc_loader: impl Fn(&str) -> *const c_void,
+    driver_identity: &str,
 ) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
     use glow::HasContext as _;
 
@@ -143,14 +193,23 @@ pub(crate) unsafe fn discover_current_glow_with_loader(
     let probes = GlowProbes::new(context, get_query_iv);
     let query = GlowQuery(context);
     // Both wrappers read the same current context and never run concurrently.
-    discover_with_query_pair(&query, &probes, stamp)
+    discover_with_query_pair(&query, &probes, stamp, driver_identity)
 }
 
 pub(super) fn discover_with_query(
     query: &(impl NativeGlQuery + NativeGlProbes),
     stamp: ContextStamp,
 ) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
-    discover_with_query_pair(&NativeOnly(query), query, stamp)
+    discover_with_query_identified(query, stamp, DRIVER_IDENTITY_UNAVAILABLE)
+}
+
+/// [`discover_with_query`] with a platform driver identity supplied.
+pub(super) fn discover_with_query_identified(
+    query: &(impl NativeGlQuery + NativeGlProbes),
+    stamp: ContextStamp,
+    driver_identity: &str,
+) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
+    discover_with_query_pair(&NativeOnly(query), query, stamp, driver_identity)
 }
 
 /// Adapts a combined test fake to the query half only.
@@ -183,6 +242,7 @@ fn discover_with_query_pair(
     query: &impl NativeGlQuery,
     probes: &impl NativeGlProbes,
     stamp: ContextStamp,
+    driver_identity: &str,
 ) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
     if query.take_error() {
         return Err(NativeDiscoveryError::PreExistingGlError);
@@ -205,7 +265,21 @@ fn discover_with_query_pair(
     // acquisition, and `is_acquired` covers `Probed`, so neither can regress.
     record_extension_probes(profile, &report, &mut extensions);
     let limits = limits(query, profile, &extensions, &report)?;
-    let formats = native_formats(profile, &extensions, limits.max_samples, &report)?;
+    let formats = native_formats(profile, &extensions, &limits, &report)?;
+    let mut flags = context_flags(query, profile)?;
+    // The drawable's observed format rides the context-flags record, which is
+    // the snapshot's only durable free-form fact set. It is an observation about
+    // the surface rather than about the context, and it is recorded at all
+    // because FBO 0 has no `GlFormatTable` row that could carry it.
+    flags.other.extend(surface_facts(query));
+    // The desktop requirement is recorded next to the observed facts so a report
+    // that shows a 4.2 context can see, in the same record, that this family
+    // requires 4.3 (audit P2-12). It is stamped only where it applies: the
+    // embedded profile has no such floor, and inventing one there would make the
+    // marker describe a requirement that does not exist.
+    if matches!(profile, GlFamilyProfile::Desktop { .. }) {
+        flags.other.insert(desktop_context_floor_marker());
+    }
     let mut builder = GlDiscoveryBuilder::new(
         stamp,
         GlContextInfo::new(
@@ -214,8 +288,11 @@ fn discover_with_query_pair(
             glsl,
             vendor,
             renderer,
-            version.clone(),
-            context_flags(query, profile)?,
+            // The driver identity is the platform layer's, never a copy of the
+            // GL version: the version is already its own field, and a duplicate
+            // here reads as an observed driver string to every later report.
+            normalized_driver_identity(driver_identity),
+            flags,
         ),
         extensions,
         limits,
@@ -379,6 +456,72 @@ fn context_flags(
     Ok(flags)
 }
 
+/// Records the default framebuffer's observed format, or says explicitly why it
+/// could not be observed.
+///
+/// FBO 0 is not a `GlFormatTable` row, so the surface the platform flips is the
+/// one piece of format evidence that no other record carries, and a presenter
+/// needs it to know what it is presenting. The queries used here are the
+/// drawable's own component widths and sample counts, which every accepted
+/// profile answers about the *bound* draw framebuffer -- hence the binding check
+/// first: with an application framebuffer bound, those same queries describe
+/// that framebuffer, and recording them as the surface format would be recording
+/// a different object's format under the surface's name. Every path that cannot
+/// observe the drawable records a reason instead of a value, so a missing
+/// surface format is never mistaken for an observed one.
+///
+/// The color encoding of the drawable is deliberately not recorded: no accepted
+/// profile exposes a portable query for the default framebuffer's encoding, and
+/// a guess between linear and sRGB is a double-gamma error rather than a missing
+/// fact. It is recorded as unavailable instead.
+fn surface_facts(query: &impl NativeGlQuery) -> BTreeSet<String> {
+    let mut facts = BTreeSet::new();
+    let Some(binding) = query.integer(glow_const::DRAW_FRAMEBUFFER_BINDING) else {
+        facts.insert("gl.surface-facts-unavailable=unqueried".into());
+        return facts;
+    };
+    if binding != 0 {
+        facts.insert("gl.surface-facts-unavailable=draw-framebuffer-bound".into());
+        return facts;
+    }
+    // The whole set is required together: a partial surface format cannot decide
+    // anything a presenter would ask it, so a failed component leaves the record
+    // saying "not observed" rather than half a format.
+    let [
+        Some(red),
+        Some(green),
+        Some(blue),
+        Some(alpha),
+        Some(depth),
+        Some(stencil),
+        Some(sample_buffers),
+        Some(samples),
+    ] = [
+        glow_const::RED_BITS,
+        glow_const::GREEN_BITS,
+        glow_const::BLUE_BITS,
+        glow_const::ALPHA_BITS,
+        glow_const::DEPTH_BITS,
+        glow_const::STENCIL_BITS,
+        glow_const::SAMPLE_BUFFERS,
+        glow_const::SAMPLES,
+    ]
+    .map(|token| query.integer(token))
+    else {
+        facts.insert("gl.surface-facts-unavailable=query-failed".into());
+        return facts;
+    };
+    facts.insert(format!(
+        "gl.surface-color-bits={red},{green},{blue},{alpha}"
+    ));
+    facts.insert(format!("gl.surface-depth-bits={depth}"));
+    facts.insert(format!("gl.surface-stencil-bits={stencil}"));
+    facts.insert(format!("gl.surface-sample-buffers={sample_buffers}"));
+    facts.insert(format!("gl.surface-samples={samples}"));
+    facts.insert("gl.surface-srgb=unavailable".into());
+    facts
+}
+
 pub(super) fn required_string(
     query: &impl NativeGlQuery,
     token: u32,
@@ -430,6 +573,104 @@ fn extensions(
     Ok(result)
 }
 
+/// The desktop GL core version this native family requires, and why.
+///
+/// This is a recorded decision rather than a discovered fact (audit P2-12). The
+/// native desktop provider requests a 4.3 core context and rejects an actual
+/// context below 4.3, so the floor is a requirement Fluxel imposes on the
+/// platform; the profile parser, by contrast, deliberately accepts any 4.x,
+/// because a lower context must still be *discoverable* for the per-domain
+/// floors to answer it honestly instead of the family refusing to describe what
+/// it is running on.
+///
+/// Relaxing the floor requires all of the following, none of which is true
+/// today:
+///
+/// 1. A recorded route for every domain whose desktop core floor is 4.3 and
+///    which has no extension alternative -- indirect dispatch and normalized
+///    multi-draw-indirect, both of which resolve with `extension: None`, so on a
+///    4.2 context they have no route at all and would stay permanently dormant
+///    rather than degraded.
+/// 2. An extension-or-core route plus a real operation probe for the 4.2-relevant
+///    domains (`ArbComputeShader`, `ArbShaderStorageBufferObject`,
+///    `ArbShaderImageLoadStore`), including the format facts each one gates.
+/// 3. Something other than an absent dispatch table for multisample
+///    two-dimensional texture storage: below 4.3 the loader resolves no entry
+///    point for it, and the `glow` adapter calls a missing entry point through a
+///    null pointer instead of reporting a GL error, so the floor cannot be
+///    relaxed by probing.
+/// 4. Evidence on the target hardware: a 4.2 (or 4.2 + extensions) context in
+///    the conformance matrix showing that every remaining domain still answers
+///    from recorded facts. Until that exists, lowering the number here trades a
+///    rejected context for dormant capabilities that no test would report.
+///
+/// The number coincides with the multisample storage floor below for a different
+/// reason: that one is where the GL entry point appears, this one is where the
+/// platform requirement is set.
+pub(crate) const REQUIRED_DESKTOP_VERSION: GlVersion = GlVersion::new(4, 3);
+
+/// The recorded marker for [`REQUIRED_DESKTOP_VERSION`].
+///
+/// It rides the context-flags record so that observed facts travel with the
+/// requirement they are read against: a report showing a 4.2 context can see in
+/// the same record that the family requires 4.3, instead of the two being
+/// discovered in different places.
+pub(super) fn desktop_context_floor_marker() -> String {
+    format!(
+        "gl.desktop-context-floor={}.{}",
+        REQUIRED_DESKTOP_VERSION.major, REQUIRED_DESKTOP_VERSION.minor
+    )
+}
+
+/// Whether this profile can allocate multisample texture storage at all.
+///
+/// Two-dimensional multisample texture storage is a 4.3 / 3.1 core feature.
+/// Below that floor the sample-count queries still answer, because they are
+/// renderbuffer facts there, so a recorded ceiling is not by itself proof that
+/// the allocation exists. The floor is recorded rather than discovered by
+/// trying because there is nothing to try: the loader never resolves the entry
+/// point below the floor, and the dispatch table calls it through a null
+/// pointer, which is not a GL error any caller can be handed.
+pub(super) const fn supports_multisample_texture_storage(profile: GlFamilyProfile) -> bool {
+    profile.meets(Some(GlVersion::new(4, 3)), Some(GlVersion::new(3, 1)))
+}
+
+/// The sample-count class one texture format belongs to.
+///
+/// GL bounds a multisample texture's sample count by a ceiling chosen from the
+/// format's class rather than by one global number, so the class is what turns
+/// a recorded limit into the bound that actually applies. `GlFormat` has no
+/// integer format, so the integer arm is unreachable today; it is modelled
+/// instead of folded into the color arm because folding it would silently
+/// accept an integer format at the color ceiling the day one is added.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TextureSampleClass {
+    Color,
+    DepthStencil,
+    Integer,
+}
+
+/// The sample class of one format. Both the record and the allocation gate read
+/// this one mapping, so a fact can never be written under one ceiling and
+/// checked against another.
+pub(super) const fn texture_sample_class(format: GlFormat) -> TextureSampleClass {
+    match format {
+        GlFormat::Depth16Unorm | GlFormat::Depth24PlusStencil8 | GlFormat::Depth32Float => {
+            TextureSampleClass::DepthStencil
+        }
+        _ => TextureSampleClass::Color,
+    }
+}
+
+/// The recorded ceiling that governs one sample class.
+pub(super) const fn texture_sample_ceiling(class: TextureSampleClass, limits: &GlLimits) -> u32 {
+    match class {
+        TextureSampleClass::Color => limits.max_color_texture_samples,
+        TextureSampleClass::DepthStencil => limits.max_depth_texture_samples,
+        TextureSampleClass::Integer => limits.max_integer_samples,
+    }
+}
+
 fn limits(
     query: &impl NativeGlQuery,
     profile: GlFamilyProfile,
@@ -446,8 +687,10 @@ fn limits(
         || extensions.is_acquired(GlKnownExtension::ArbShaderStorageBufferObject);
     let image = profile.meets(Some(GlVersion::new(4, 2)), Some(GlVersion::new(3, 1)))
         || extensions.is_acquired(GlKnownExtension::ArbShaderImageLoadStore);
-    let texture_multisample = matches!(profile, GlFamilyProfile::Desktop { .. })
-        || profile.meets(None, Some(GlVersion::new(3, 1)));
+    // A ceiling is recorded only where the allocation it bounds exists: below
+    // the storage floor the value stays at its one-sample fail-closed floor
+    // instead of advertising a multisample texture the context cannot make.
+    let texture_multisample = supports_multisample_texture_storage(profile);
     let optional = |enabled, token, name| if enabled { u(token, name) } else { Ok(0) };
     let indexed = |enabled, token, index, name| {
         if enabled {
@@ -662,10 +905,14 @@ fn limits(
 /// `EXT_color_buffer_float` and desktop depends on the exact version), and the
 /// same holds for float depth rendering, so all of them are recorded only with
 /// `OperationProbed` evidence from real framebuffer-completeness probes.
+///
+/// Every sample count recorded here is bounded by the limit that governs its
+/// class, so a caller can read the presence of a fact as the proof that the
+/// context both accepts that count and can allocate it.
 pub(super) fn native_formats(
     profile: GlFamilyProfile,
     extensions: &GlExtensionSet,
-    max_samples: u32,
+    limits: &GlLimits,
     report: &ProbeReport,
 ) -> Result<GlFormatTable, NativeDiscoveryError> {
     let mut table = GlFormatTable::default();
@@ -705,7 +952,7 @@ pub(super) fn native_formats(
     // RGBA8 renderbuffer facts: color-renderable storage for every accepted
     // profile, at single sample and at the portable multisample counts.
     for sample_count in [1, 4, 8] {
-        if sample_count > max_samples {
+        if sample_count > limits.max_samples {
             continue;
         }
         for format in [GlFormat::Rgba8Unorm, GlFormat::Rgba8Srgb] {
@@ -723,6 +970,46 @@ pub(super) fn native_formats(
                 copy_source: false,
                 copy_destination: false,
             })?;
+        }
+    }
+    // Multisample texture facts: the same color and depth formats that are
+    // guaranteed renderable single-sample storage, recorded up to the ceiling
+    // GL records for their class. A count above that ceiling, or a format
+    // outside the three, gets no fact at all, which is what makes an
+    // unsupported request fail closed at allocation instead of reaching the
+    // driver as a plausible-looking allocation that the driver then refuses.
+    if supports_multisample_texture_storage(profile) {
+        for (format, class) in [
+            (GlFormat::Rgba8Unorm, TextureSampleClass::Color),
+            (GlFormat::Rgba8Srgb, TextureSampleClass::Color),
+            (GlFormat::Depth32Float, TextureSampleClass::DepthStencil),
+        ] {
+            let ceiling = texture_sample_ceiling(class, limits);
+            for sample_count in [2, 4, 8, 16] {
+                if sample_count > ceiling {
+                    continue;
+                }
+                record(GlFormatCapabilities {
+                    format,
+                    resource_kind: GlFormatResourceKind::Texture,
+                    sample_count,
+                    evidence: GlFormatEvidence::CoreGuaranteed,
+                    // Multisample storage is never read by a sampler and never
+                    // filtered: it is read by a resolve, which is a framebuffer
+                    // blit between whole attachments. The copy fields stay false
+                    // for the same reason -- the shared copy word is
+                    // single-sample, and claiming it here would describe an
+                    // operation that no path in this layer performs.
+                    sampled: false,
+                    filterable: false,
+                    renderable: true,
+                    blendable: class == TextureSampleClass::Color,
+                    storage_read: false,
+                    storage_write: false,
+                    copy_source: false,
+                    copy_destination: false,
+                })?;
+            }
         }
     }
     // Float depth facts come only from real attachment probes; without probe
@@ -950,4 +1237,15 @@ pub(super) mod glow_const {
     pub const MAX_COMPUTE_WORK_GROUP_SIZE: u32 = 0x91BF;
     pub const MAX_COMPUTE_WORK_GROUP_INVOCATIONS: u32 = 0x90EB;
     pub const MAX_TEXTURE_MAX_ANISOTROPY_EXT: u32 = 0x84FF;
+    /// The framebuffer bound for drawing, which tells the drawable queries
+    /// below whether they would answer about the surface at all.
+    pub const DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+    pub const SAMPLE_BUFFERS: u32 = 0x80A8;
+    pub const SAMPLES: u32 = 0x80A9;
+    pub const RED_BITS: u32 = 0x0D52;
+    pub const GREEN_BITS: u32 = 0x0D53;
+    pub const BLUE_BITS: u32 = 0x0D54;
+    pub const ALPHA_BITS: u32 = 0x0D55;
+    pub const DEPTH_BITS: u32 = 0x0D56;
+    pub const STENCIL_BITS: u32 = 0x0D57;
 }

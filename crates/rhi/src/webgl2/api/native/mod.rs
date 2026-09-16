@@ -8,6 +8,7 @@
 mod discovery;
 mod probes;
 mod provider;
+mod surface;
 #[cfg(test)]
 mod tests;
 
@@ -20,7 +21,7 @@ mod exec_sync;
 mod exec_vertex;
 
 pub(crate) use discovery::{
-    NativeDiscoveryError, discover_current_glow, discover_current_glow_with_loader,
-    parse_native_profile,
+    DRIVER_IDENTITY_UNAVAILABLE, NativeDiscoveryError, discover_current_glow,
+    discover_current_glow_identified, discover_current_glow_with_loader, parse_native_profile,
 };
 pub(crate) use provider::NativeGlProvider;

@@ -400,6 +400,20 @@ impl GlFramebufferApi for NativeGlProvider<'_> {
     }
 }
 
+/// The GL attachment target of one live texture allocation.
+///
+/// A multisample texture is a different GL object class with its own target and
+/// its own attachment entry point, so the target has to come from the
+/// allocation's sample count rather than from the attachment descriptor, which
+/// describes a view and not the storage behind it.
+pub(super) const fn attachment_target(sample_count: u32) -> u32 {
+    if sample_count > 1 {
+        glow::TEXTURE_2D_MULTISAMPLE
+    } else {
+        glow::TEXTURE_2D
+    }
+}
+
 /// `glInvalidateFramebuffer` is core ES 3.x and desktop 4.3+.
 fn supports_framebuffer_invalidate(profile: super::super::GlFamilyProfile) -> bool {
     match profile {
@@ -422,11 +436,11 @@ impl NativeGlProvider<'_> {
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(raw));
             for (index, view) in descriptor.color_attachments.iter().enumerate() {
-                let texture = self.attachment_raw(op, *view)?;
+                let (texture, target) = self.attachment_raw(op, *view)?;
                 self.gl.framebuffer_texture_2d(
                     glow::FRAMEBUFFER,
                     draw_buffer_constant(index as u32),
-                    glow::TEXTURE_2D,
+                    target,
                     Some(texture),
                     view.mip_level as i32,
                 );
@@ -435,11 +449,11 @@ impl NativeGlProvider<'_> {
                 let point = depth_attachment_point(view.format).ok_or_else(|| {
                     Self::validation(op, "depth attachment format has no attachment point")
                 })?;
-                let texture = self.attachment_raw(op, view)?;
+                let (texture, target) = self.attachment_raw(op, view)?;
                 self.gl.framebuffer_texture_2d(
                     glow::FRAMEBUFFER,
                     point,
-                    glow::TEXTURE_2D,
+                    target,
                     Some(texture),
                     view.mip_level as i32,
                 );
@@ -448,18 +462,26 @@ impl NativeGlProvider<'_> {
         Ok(())
     }
 
+    /// Returns one attachment's raw name together with the target it must be
+    /// attached through.
+    ///
+    /// The target is a property of the allocation, not of the descriptor: a
+    /// multisample texture is attached through its own target, and attaching it
+    /// through the single-sample one would be an error the driver reports only
+    /// after the framebuffer had already been half-populated.
     fn attachment_raw(
         &self,
         op: &'static str,
         view: GlTextureView,
-    ) -> Result<glow::NativeTexture, GlError> {
+    ) -> Result<(glow::NativeTexture, u32), GlError> {
         let GlAttachmentTarget::Texture(texture) = view.target else {
             return Err(GlError::Unsupported {
                 operation: op,
                 reason: "surface-image attachments are not part of this framebuffer slice",
             });
         };
-        Ok(self.texture(op, texture)?.0)
+        let (raw, desc) = self.texture(op, texture)?;
+        Ok((raw, attachment_target(desc.sample_count)))
     }
 
     /// Validates one attachment view against the live allocation it names.
@@ -501,7 +523,7 @@ impl NativeGlProvider<'_> {
         let facts = self.discovery.formats().get_for(
             super::super::GlFormatResourceKind::Texture,
             view.format,
-            1,
+            view.sample_count,
         );
         if facts.is_none_or(|facts| !facts.renderable) {
             return Err(GlError::Unsupported {

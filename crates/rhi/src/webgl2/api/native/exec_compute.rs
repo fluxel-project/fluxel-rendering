@@ -259,8 +259,7 @@ impl GlDrawIndirectApi for NativeGlProvider<'_> {
         if !desc.usage.contains(GlBufferUsage::INDIRECT) {
             return Err(Self::validation(OP, "command buffer lacks indirect usage"));
         }
-        let offset = i32::try_from(command.command_offset)
-            .map_err(|_| Self::validation(OP, "command offset exceeds i32"))?;
+        let offset = draw_indirect_offset(command.range, command.command_offset)?;
         let mode = super::exec_raster::topology_mode(raster.topology);
         // SAFETY: current-context contract; the ABI, range, usage, and active
         // pipeline state were validated before any binding changed.
@@ -316,13 +315,7 @@ impl GlDispatchIndirectApi for NativeGlProvider<'_> {
         if !desc.usage.contains(GlBufferUsage::INDIRECT) {
             return Err(Self::validation(OP, "command buffer lacks indirect usage"));
         }
-        let buffer_offset = command
-            .range
-            .offset
-            .checked_add(command.command_offset)
-            .ok_or_else(|| Self::validation(OP, "indirect dispatch offset overflows"))?;
-        let offset =
-            i32::try_from(buffer_offset).map_err(|_| Self::validation(OP, "offset exceeds i32"))?;
+        let offset = dispatch_indirect_offset(command.range, command.command_offset)?;
         // SAFETY: current-context contract; the range, usage, and program were
         // validated before the binding changed.
         unsafe {
@@ -332,6 +325,55 @@ impl GlDispatchIndirectApi for NativeGlProvider<'_> {
         }
         self.driver_error(OP)
     }
+}
+
+/// Resolves the buffer offset GL reads one indirect record from.
+///
+/// The contract places `command_offset` relative to `range.size`, while GL
+/// reads the record at an offset that is absolute into whatever is bound to the
+/// matching `*_INDIRECT_BUFFER`. The record's buffer address is therefore the
+/// range offset plus the record position, and both indirect verbs must produce
+/// exactly that. They share this one expression because a verb that drops
+/// `range.offset` still draws -- it just reads somebody else's arguments, which
+/// no driver reports and no caller can see, so the divergence has to be made
+/// impossible rather than found.
+fn resolve_indirect_offset(
+    operation: &'static str,
+    range: GlBufferRange,
+    command_offset: u64,
+) -> Result<i32, GlError> {
+    let absolute = range
+        .offset
+        .checked_add(command_offset)
+        .ok_or(GlError::Validation {
+            operation,
+            message: "indirect record offset overflows the buffer address space".into(),
+        })?;
+    i32::try_from(absolute).map_err(|_| GlError::Validation {
+        operation,
+        message: "indirect record offset exceeds GLintptr".into(),
+    })
+}
+
+/// The offset the raster indirect-draw verb hands to GL.
+///
+/// This exists as its own function, rather than as a call to
+/// `resolve_indirect_offset` at the call site, so that a test can pin the
+/// raster verb's convention without a live context. The two verbs are the pair
+/// that drifted apart, and the drift was only visible by comparing them.
+pub(super) fn draw_indirect_offset(
+    range: GlBufferRange,
+    command_offset: u64,
+) -> Result<i32, GlError> {
+    resolve_indirect_offset("draw-indirect", range, command_offset)
+}
+
+/// The offset the indirect-dispatch verb hands to GL.
+pub(super) fn dispatch_indirect_offset(
+    range: GlBufferRange,
+    command_offset: u64,
+) -> Result<i32, GlError> {
+    resolve_indirect_offset("dispatch-indirect", range, command_offset)
 }
 
 /// Translates the contract's barrier classes into GL memory-barrier bits.
