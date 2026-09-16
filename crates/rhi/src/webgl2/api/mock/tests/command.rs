@@ -215,13 +215,15 @@ fn a_counted_batch_whose_count_word_is_out_of_range_is_rejected() {
     let error = api
         .multi_draw_indirect_count(command_range(buffer, 16, 1), count)
         .expect_err("the count word does not fit its range");
-    // The count range's validator owns this error and names its own operation,
-    // so the recorder reports the module's spelling rather than this call's.
-    // That is exactly what a provider propagates, and rewriting it here would
-    // make the recorder's trace disagree with the provider it mirrors.
+    // The name is the *caller's*, which is the fact this assertion is here for:
+    // the validator used to hardcode its own spelling, and because that spelling
+    // was written with underscores while every operation name in this family is
+    // hyphenated, the same verb reached an operator under two names.  Asserting
+    // the verb's own spelling and not merely "some validation failure" is what
+    // would catch a return of that.
     assert!(matches!(
         &error,
-        GlError::Validation { operation, .. } if *operation == "multi_draw_indirect_count"
+        GlError::Validation { operation, .. } if *operation == "multi-draw-indirect-count"
     ));
     assert_rejected(api.calls());
 }

@@ -172,8 +172,18 @@ pub(crate) struct GlIndirectCountRange {
     pub max_draw_count: u32,
 }
 impl GlIndirectCountRange {
-    pub(crate) fn validate(self) -> Result<(), GlError> {
-        validate_indirect_range(self.range, "multi_draw_indirect_count")?;
+    /// Rejects a count word that is misaligned, absent, or not wholly in range.
+    ///
+    /// The operation name is the *caller's*, on [`GlDispatchIndirectCommand::validate`]'s
+    /// terms and for the same reason: an error that names a verb the frame never
+    /// issued is a worse diagnostic than no name at all, and the caller is the
+    /// only layer that still knows which verb it was.  This one used to hardcode
+    /// its own name, and the cost was two spellings of the same verb reaching an
+    /// operator -- `multi_draw_indirect_count` from here and
+    /// `multi-draw-indirect-count` from the recorder that called it -- because a
+    /// hardcoded name is a second place the spelling is written down.
+    pub(crate) fn validate(self, operation: &'static str) -> Result<(), GlError> {
+        validate_indirect_range(self.range, operation)?;
         if self.max_draw_count == 0
             || self.count_offset % 4 != 0
             || self
@@ -182,7 +192,7 @@ impl GlIndirectCountRange {
                 .is_none_or(|v| v > self.range.size)
         {
             return Err(GlError::Validation {
-                operation: "multi_draw_indirect_count",
+                operation,
                 message: "count range is not a 4-byte in-range value".into(),
             });
         }

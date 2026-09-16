@@ -174,11 +174,11 @@ impl GlMultiDrawCountApi for MockGlFamilyApi {
         if let Err(error) = commands.validate(OP) {
             return self.error_result(error);
         }
-        // The count range's validator hardcodes its own operation name, so a
-        // failure reports the module's spelling rather than this call's.  That
-        // is the error a provider returns as well, and rewriting it here would
-        // make the recorder's trace disagree with the provider it mirrors.
-        if let Err(error) = count.validate() {
+        // The count range's own name is this call's, which is why the validator
+        // takes one: the two refusals below are the only place this verb reports
+        // an operation at all, so a hardcoded name here would be the *only*
+        // spelling an operator ever saw from this path.
+        if let Err(error) = count.validate(OP) {
             return self.error_result(error);
         }
         self.require_indirect_pass(OP)?;
