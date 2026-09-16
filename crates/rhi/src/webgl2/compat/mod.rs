@@ -20,14 +20,17 @@
 //! `dyn ExecutionBackend` anywhere) and that Metal and WebGPU have no `Backend`
 //! variant either.
 //!
-//! The three modules here are the two readings every later slice depends on and
-//! none of them can supply afterwards, plus the type that carries them:
+//! The four modules here are the two readings every later slice depends on and
+//! none of them can supply afterwards, the type that carries them, and the one
+//! lowering that has to exist before the adapter can record anything:
 //!
 //! - [`identity`] maps a GL-family context generation onto the common device
 //!   identity.
 //! - [`capabilities`] lowers a discovery snapshot onto the common capability
 //!   contract.
 //! - [`device`] is the adapter itself, and owns the contract's associated types.
+//! - [`shader`] lowers the retained path's fixed raster artifacts onto Layer 1's
+//!   shader contract, which is what the device's raster objects are built from.
 //!
 //! Both readings are per-context facts the graph validates against before any
 //! command is lowered, and neither is reachable from the lowering itself -- a
@@ -40,3 +43,4 @@
 mod capabilities;
 mod device;
 mod identity;
+mod shader;
