@@ -1,27 +1,103 @@
-//! Minimal native executable owner for the resource, sampler, and buffer-copy
-//! slices. The Host owns the platform context; this type only borrows its
-//! already-current `glow` dispatch table.
+//! Native executable owner for every GL-family command domain.
+//!
+//! The Host owns the platform context; this type borrows its already-current
+//! `glow` dispatch table and owns only Fluxel object tables, pass/raster
+//! records, and the pixel-store snapshot. Raw GL names live inside these
+//! records and never participate in identity comparisons.
 
-#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
-use super::super::GlFamilyApi as _;
-use super::super::{ContextStamp, GlDiscoverySnapshot};
-use super::discovery::{NativeDiscoveryError, discover_current_glow};
 use std::collections::BTreeMap;
 
-/// Minimal native executable owner for the resource, sampler, and buffer-copy
-/// slices. The Host owns the platform context; this type only borrows its
-/// already-current `glow` dispatch table.
+use super::super::GlFamilyApi as _;
+use super::super::{
+    BufferId, ContextStamp, FramebufferId, GlBufferDesc, GlContextLifecycle, GlDiscoverySnapshot,
+    GlError, GlFenceLeaseBook, GlIndexBinding, GlPixelStoreState, GlPrimitiveTopology,
+    GlProgramDescriptor, GlRenderBufferDesc, GlSurfaceLeaseBook, GlTextureDesc, GlVertexLayout,
+    OwnerThreadIdentity, ProgramId, QueryId, RenderbufferId, SamplerId, ShaderId, SyncId,
+    TextureId, VertexArrayId,
+};
+use super::discovery::{NativeDiscoveryError, discover_current_glow};
+
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
 pub(crate) struct NativeGlProvider<'a> {
-    gl: &'a glow::Context,
-    discovery: GlDiscoverySnapshot,
-    lifecycle: super::super::GlContextLifecycle,
-    owner: super::super::OwnerThreadIdentity,
-    next_slot: u32,
-    buffers: BTreeMap<super::super::BufferId, (glow::NativeBuffer, super::super::GlBufferDesc)>,
-    textures: BTreeMap<super::super::TextureId, (glow::NativeTexture, super::super::GlTextureDesc)>,
-    samplers: BTreeMap<super::super::SamplerId, glow::NativeSampler>,
-    pixel_store: super::super::GlPixelStoreState,
+    pub(super) gl: &'a glow::Context,
+    pub(super) discovery: GlDiscoverySnapshot,
+    pub(super) lifecycle: GlContextLifecycle,
+    pub(super) owner: OwnerThreadIdentity,
+    pub(super) next_slot: u32,
+    pub(super) buffers: BTreeMap<BufferId, (glow::NativeBuffer, GlBufferDesc)>,
+    pub(super) textures: BTreeMap<TextureId, (glow::NativeTexture, GlTextureDesc)>,
+    pub(super) renderbuffers:
+        BTreeMap<RenderbufferId, (glow::NativeRenderbuffer, GlRenderBufferDesc)>,
+    pub(super) samplers: BTreeMap<SamplerId, glow::NativeSampler>,
+    pub(super) shaders: BTreeMap<ShaderId, glow::NativeShader>,
+    pub(super) programs: BTreeMap<ProgramId, NativeProgram>,
+    pub(super) vertex_arrays: BTreeMap<VertexArrayId, NativeVertexArray>,
+    pub(super) framebuffers: BTreeMap<FramebufferId, NativeFramebuffer>,
+    pub(super) queries: BTreeMap<QueryId, NativeQuery>,
+    pub(super) syncs: BTreeMap<SyncId, glow::NativeFence>,
+    pub(super) fences: GlFenceLeaseBook,
+    pub(super) surface: GlSurfaceLeaseBook,
+    pub(super) surface_suspended: bool,
+    pub(super) pass: Option<ActivePass>,
+    pub(super) raster: Option<ActiveRaster>,
+    /// The query currently recording a measurement, if any.
+    pub(super) active_query: Option<QueryId>,
+    /// The compute program installed for dispatch work, if any.
+    pub(super) active_compute_program: Option<ProgramId>,
+    pub(super) pixel_store: GlPixelStoreState,
+}
+
+/// A linked raster or compute program record with its validated descriptor.
+pub(super) struct NativeProgram {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeProgram,
+    pub(super) descriptor: GlProgramDescriptor,
+}
+
+/// A created VAO with its structural layout and last recorded index binding.
+pub(super) struct NativeVertexArray {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeVertexArray,
+    pub(super) layout: GlVertexLayout,
+    pub(super) index: Option<GlIndexBinding>,
+}
+
+/// A created framebuffer with its validated descriptor.
+pub(super) struct NativeFramebuffer {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeFramebuffer,
+    pub(super) descriptor: super::super::GlFramebufferDescriptor,
+}
+
+/// The target a query object last recorded a measurement for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum QueryTarget {
+    SamplesPassed,
+    TimeElapsed,
+    Timestamp,
+}
+
+pub(super) struct NativeQuery {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeQuery,
+    pub(super) target: Option<QueryTarget>,
+}
+
+/// Facts of the render pass currently recording on this context.
+pub(super) struct ActivePass {
+    pub(super) framebuffer: FramebufferId,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) samples: u32,
+    /// Per color attachment; `true` when `end_render_pass` must invalidate.
+    pub(super) discard_color: Vec<bool>,
+    pub(super) discard_depth_stencil: Option<bool>,
+}
+
+/// The raster pipeline installed for the active pass.
+pub(super) struct ActiveRaster {
+    pub(super) vertex_array: VertexArrayId,
+    pub(super) topology: GlPrimitiveTopology,
 }
 
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
@@ -36,84 +112,242 @@ impl<'a> NativeGlProvider<'a> {
     ) -> Result<Self, NativeDiscoveryError> {
         // SAFETY: forwarded from this constructor's current-context contract.
         let discovery = unsafe { discover_current_glow(gl, stamp) }?;
-        Ok(Self {
+        Ok(Self::assemble(gl, discovery))
+    }
+
+    /// Assembles the provider over an already-collected discovery snapshot.
+    ///
+    /// The caller must guarantee `gl` is the exact context that produced
+    /// `discovery` and that it is current on the calling thread.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`Self::from_current`].
+    pub(crate) unsafe fn from_discovered(
+        gl: &'a glow::Context,
+        discovery: GlDiscoverySnapshot,
+    ) -> Self {
+        Self::assemble(gl, discovery)
+    }
+
+    fn assemble(gl: &'a glow::Context, discovery: GlDiscoverySnapshot) -> Self {
+        Self {
             gl,
             discovery,
-            lifecycle: super::super::GlContextLifecycle::Active,
-            owner: super::super::OwnerThreadIdentity::current(),
+            lifecycle: GlContextLifecycle::Active,
+            owner: OwnerThreadIdentity::current(),
             next_slot: 0,
             buffers: BTreeMap::new(),
             textures: BTreeMap::new(),
+            renderbuffers: BTreeMap::new(),
             samplers: BTreeMap::new(),
-            pixel_store: super::super::GlPixelStoreState::DEFAULT,
-        })
+            shaders: BTreeMap::new(),
+            programs: BTreeMap::new(),
+            vertex_arrays: BTreeMap::new(),
+            framebuffers: BTreeMap::new(),
+            queries: BTreeMap::new(),
+            syncs: BTreeMap::new(),
+            fences: GlFenceLeaseBook::default(),
+            surface: GlSurfaceLeaseBook::new(),
+            surface_suspended: false,
+            pass: None,
+            raster: None,
+            active_query: None,
+            active_compute_program: None,
+            pixel_store: GlPixelStoreState::DEFAULT,
+        }
     }
 
-    fn slot(&mut self, operation: &'static str) -> Result<u32, super::super::GlError> {
+    /// Allocates one monotonically increasing slot.
+    ///
+    /// Slots are never reused within one context generation, so the `0`
+    /// object generation stays sound; any future slot-reuse design must
+    /// introduce per-slot generations first.
+    pub(super) fn slot(&mut self, operation: &'static str) -> Result<u32, GlError> {
         let slot = self.next_slot;
         self.next_slot = self
             .next_slot
             .checked_add(1)
-            .ok_or(super::super::GlError::OutOfMemory { operation })?;
+            .ok_or(GlError::OutOfMemory { operation })?;
         Ok(slot)
     }
 
-    fn driver_error(&self, operation: &'static str) -> Result<(), super::super::GlError> {
+    pub(super) fn validation(operation: &'static str, message: &'static str) -> GlError {
+        GlError::Validation {
+            operation,
+            message: message.into(),
+        }
+    }
+
+    pub(super) fn driver_error(&self, operation: &'static str) -> Result<(), GlError> {
         use glow::HasContext as _;
         // SAFETY: upheld by NativeGlProvider::from_current.
         let error = unsafe { self.gl.get_error() };
         (error == glow::NO_ERROR)
             .then_some(())
-            .ok_or_else(|| super::super::GlError::Driver {
+            .ok_or_else(|| GlError::Driver {
                 operation,
                 message: format!("GL error 0x{error:04x}"),
             })
     }
 
-    fn buffer(
+    /// Shared framebuffer-completeness observation for copy and pass work.
+    pub(super) fn require_complete(&self, operation: &'static str) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        // SAFETY: current-context contract.
+        let status = unsafe { self.gl.check_framebuffer_status(glow::FRAMEBUFFER) };
+        if status == glow::FRAMEBUFFER_COMPLETE {
+            Ok(())
+        } else {
+            Err(GlError::IncompleteFramebuffer { operation, status })
+        }
+    }
+
+    pub(super) fn buffer(
         &self,
         operation: &'static str,
-        id: super::super::BufferId,
-    ) -> Result<(glow::NativeBuffer, super::super::GlBufferDesc), super::super::GlError> {
+        id: BufferId,
+    ) -> Result<(glow::NativeBuffer, GlBufferDesc), GlError> {
         self.validate_object_context(operation, id.context)?;
         self.buffers
             .get(&id)
             .copied()
-            .ok_or_else(|| super::super::GlError::Validation {
-                operation,
-                message: "buffer is not live".into(),
-            })
+            .ok_or_else(|| Self::validation(operation, "buffer is not live"))
     }
 
-    fn texture(
+    pub(super) fn texture(
         &self,
         operation: &'static str,
-        id: super::super::TextureId,
-    ) -> Result<(glow::NativeTexture, super::super::GlTextureDesc), super::super::GlError> {
+        id: TextureId,
+    ) -> Result<(glow::NativeTexture, GlTextureDesc), GlError> {
         self.validate_object_context(operation, id.context)?;
         self.textures
             .get(&id)
             .copied()
-            .ok_or_else(|| super::super::GlError::Validation {
-                operation,
-                message: "texture is not live".into(),
-            })
+            .ok_or_else(|| Self::validation(operation, "texture is not live"))
+    }
+
+    pub(super) fn renderbuffer(
+        &self,
+        operation: &'static str,
+        id: RenderbufferId,
+    ) -> Result<(glow::NativeRenderbuffer, GlRenderBufferDesc), GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.renderbuffers
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "renderbuffer is not live"))
+    }
+
+    pub(super) fn sampler(
+        &self,
+        operation: &'static str,
+        id: SamplerId,
+    ) -> Result<glow::NativeSampler, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        // Map keys are full identities, so a hit implies the same generation.
+        self.samplers
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "sampler is not live"))
+    }
+
+    pub(super) fn shader(
+        &self,
+        operation: &'static str,
+        id: ShaderId,
+    ) -> Result<glow::NativeShader, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.shaders
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "shader is not live"))
+    }
+
+    pub(super) fn program(
+        &self,
+        operation: &'static str,
+        id: ProgramId,
+    ) -> Result<&NativeProgram, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.programs
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "program is not live"))
+    }
+
+    pub(super) fn vertex_array(
+        &self,
+        operation: &'static str,
+        id: VertexArrayId,
+    ) -> Result<&NativeVertexArray, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.vertex_arrays
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "vertex array is not live"))
+    }
+
+    pub(super) fn framebuffer(
+        &self,
+        operation: &'static str,
+        id: FramebufferId,
+    ) -> Result<&NativeFramebuffer, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.framebuffers
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "framebuffer is not live"))
+    }
+
+    pub(super) fn query(
+        &self,
+        operation: &'static str,
+        id: QueryId,
+    ) -> Result<&NativeQuery, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.queries
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "query is not live"))
+    }
+
+    /// Clears every executable table. Context loss makes every borrowed GL
+    /// name invalid; only Fluxel-owned state is reset, and no driver call is
+    /// made against a possibly-dead object.
+    pub(super) fn reset_executable_state(&mut self) {
+        self.buffers.clear();
+        self.textures.clear();
+        self.renderbuffers.clear();
+        self.samplers.clear();
+        self.shaders.clear();
+        self.programs.clear();
+        self.vertex_arrays.clear();
+        self.framebuffers.clear();
+        self.queries.clear();
+        self.syncs.clear();
+        self.fences.revoke_all();
+        self.pass = None;
+        self.raster = None;
+        self.active_query = None;
+        self.active_compute_program = None;
+        let _ = self.surface.invalidate_generation();
     }
 }
 
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
 impl super::super::GlFamilyApi for NativeGlProvider<'_> {
-    fn lifecycle(&self) -> super::super::GlContextLifecycle {
+    fn lifecycle(&self) -> GlContextLifecycle {
         self.lifecycle
     }
-    fn owner_thread(&self) -> super::super::OwnerThreadIdentity {
+    fn owner_thread(&self) -> OwnerThreadIdentity {
         self.owner
     }
-    fn assert_owner_thread(&self, operation: &'static str) -> Result<(), super::super::GlError> {
-        let actual = super::super::OwnerThreadIdentity::current();
+    fn assert_owner_thread(&self, operation: &'static str) -> Result<(), GlError> {
+        let actual = OwnerThreadIdentity::current();
         (actual == self.owner)
             .then_some(())
-            .ok_or(super::super::GlError::WrongThread {
+            .ok_or(GlError::WrongThread {
                 operation,
                 expected: self.owner,
                 actual,
@@ -122,80 +356,105 @@ impl super::super::GlFamilyApi for NativeGlProvider<'_> {
     fn discovery(&self) -> &GlDiscoverySnapshot {
         &self.discovery
     }
-    fn context_lost(&mut self) -> Result<(), super::super::GlError> {
+    fn context_lost(&mut self) -> Result<(), GlError> {
         self.assert_ready("context-lost")?;
-        self.lifecycle = super::super::GlContextLifecycle::Lost;
-        self.buffers.clear();
-        self.textures.clear();
-        self.samplers.clear();
+        self.lifecycle = GlContextLifecycle::Lost;
+        self.reset_executable_state();
         Ok(())
     }
-    fn context_restored(&mut self) -> Result<ContextStamp, super::super::GlError> {
-        Err(super::super::GlError::Unsupported {
+    /// Completes restoration over the replacement context.
+    ///
+    /// The Host must have created a new native context and made it current on
+    /// the owner thread before calling. WGL and EGL entry points dispatch to
+    /// the *current* context, so the borrowed `glow` table remains valid for
+    /// the replacement context and rediscovery observes the new generation
+    /// (audit P1-9). Epoch strictly increases and every object table, lease
+    /// book, and derived record is invalidated before `Active` is restored.
+    fn context_restored(&mut self) -> Result<ContextStamp, GlError> {
+        self.assert_owner_thread("context-restored")?;
+        if self.lifecycle != GlContextLifecycle::Lost {
+            return Err(Self::validation("context-restored", "context is not lost"));
+        }
+        let stamp = self.discovery.context_stamp();
+        let epoch = stamp.epoch.checked_next().ok_or_else(|| GlError::Driver {
             operation: "context-restored",
-            reason: "Host must supply a newly current context and rediscover",
-        })
+            message: "context epoch exhausted".into(),
+        })?;
+        let new_stamp = ContextStamp::new(stamp.device, epoch);
+        // SAFETY: the caller contract guarantees the replacement context is
+        // current on this thread for the whole rediscovery call.
+        let discovery = unsafe { discover_current_glow(self.gl, new_stamp) }.map_err(|error| {
+            GlError::Driver {
+                operation: "context-restored",
+                message: format!("native GL rediscovery failed: {error:?}"),
+            }
+        })?;
+        self.discovery = discovery;
+        self.lifecycle = GlContextLifecycle::Active;
+        self.reset_executable_state();
+        self.pixel_store = GlPixelStoreState::DEFAULT;
+        Ok(new_stamp)
+    }
+}
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+impl<'a> NativeGlProvider<'a> {
+    /// Restores over a freshly created `glow` table after context loss.
+    ///
+    /// Use this when the Host rebuilt the context through a new loader
+    /// instance; the borrowed reference type stays `'a`, so the Host must
+    /// keep the new `glow` context alive for the provider's lifetime.
+    ///
+    /// # Safety
+    ///
+    /// `gl` must be current on the owner thread and must be the context that
+    /// will serve every later provider call.
+    pub(crate) unsafe fn restore_with_current(&mut self, gl: &'a glow::Context) {
+        self.gl = gl;
     }
 }
 
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
 impl super::super::GlResourceApi for NativeGlProvider<'_> {
-    fn create_buffer_resource(
-        &mut self,
-        desc: super::super::GlBufferDesc,
-    ) -> Result<super::super::BufferId, super::super::GlError> {
+    fn create_buffer_resource(&mut self, desc: GlBufferDesc) -> Result<BufferId, GlError> {
         use glow::HasContext as _;
         self.assert_ready("create-buffer")?;
         desc.validate()
-            .map_err(|_| super::super::GlError::Validation {
-                operation: "create-buffer",
-                message: "invalid buffer descriptor".into(),
-            })?;
-        let size = i32::try_from(desc.size).map_err(|_| super::super::GlError::Validation {
-            operation: "create-buffer",
-            message: "buffer exceeds GLsizei".into(),
-        })?;
+            .map_err(|_| Self::validation("create-buffer", "invalid buffer descriptor"))?;
+        let size = i32::try_from(desc.size)
+            .map_err(|_| Self::validation("create-buffer", "buffer exceeds GLsizei"))?;
         // SAFETY: current-context contract; all validation completed before GL mutation.
-        let name = unsafe { self.gl.create_buffer() }.map_err(|message| {
-            super::super::GlError::Driver {
-                operation: "create-buffer",
-                message,
-            }
+        let name = unsafe { self.gl.create_buffer() }.map_err(|message| GlError::Driver {
+            operation: "create-buffer",
+            message,
         })?;
         // SAFETY: see above.
         unsafe {
             self.gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(name));
             self.gl
-                .buffer_data_size(glow::COPY_WRITE_BUFFER, size, glow::STATIC_DRAW);
+                .buffer_data_size(glow::COPY_WRITE_BUFFER, size, BUFFER_ALLOCATION_USAGE);
         }
         if let Err(error) = self.driver_error("create-buffer") {
             unsafe { self.gl.delete_buffer(name) };
             return Err(error);
         }
-        let id = super::super::BufferId::new(self.context_stamp(), self.slot("create-buffer")?, 0);
+        let id = BufferId::new(self.context_stamp(), self.slot("create-buffer")?, 0);
         self.buffers.insert(id, (name, desc));
         Ok(id)
     }
-    fn create_texture_resource(
-        &mut self,
-        desc: super::super::GlTextureDesc,
-    ) -> Result<super::super::TextureId, super::super::GlError> {
+    fn create_texture_resource(&mut self, desc: GlTextureDesc) -> Result<TextureId, GlError> {
         use glow::HasContext as _;
         self.assert_ready("create-texture")?;
         desc.validate()
-            .map_err(|_| super::super::GlError::Validation {
-                operation: "create-texture",
-                message: "invalid texture descriptor".into(),
-            })?;
-        let internal =
-            native_texture_format(desc.format).ok_or(super::super::GlError::Unsupported {
-                operation: "create-texture",
-                reason: "format is not in the native texture slice",
-            })?;
+            .map_err(|_| Self::validation("create-texture", "invalid texture descriptor"))?;
+        let internal = native_texture_format(desc.format).ok_or(GlError::Unsupported {
+            operation: "create-texture",
+            reason: "format has no proven native texture storage mapping",
+        })?;
         if desc.dimension != super::super::GlTextureDimension::D2 || desc.sample_count != 1 {
-            return Err(super::super::GlError::Unsupported {
+            return Err(GlError::Unsupported {
                 operation: "create-texture",
-                reason: "only single-sample 2D textures are in the native slice",
+                reason: "multisample texture allocation stays with renderbuffer storage",
             });
         }
         if self
@@ -204,32 +463,21 @@ impl super::super::GlResourceApi for NativeGlProvider<'_> {
             .get_for(super::super::GlFormatResourceKind::Texture, desc.format, 1)
             .is_none()
         {
-            return Err(super::super::GlError::Unsupported {
+            return Err(GlError::Unsupported {
                 operation: "create-texture",
                 reason: "format lacks discovery evidence",
             });
         }
-        let width =
-            i32::try_from(desc.extent.width).map_err(|_| super::super::GlError::Validation {
-                operation: "create-texture",
-                message: "width exceeds GLsizei".into(),
-            })?;
-        let height =
-            i32::try_from(desc.extent.height).map_err(|_| super::super::GlError::Validation {
-                operation: "create-texture",
-                message: "height exceeds GLsizei".into(),
-            })?;
-        let levels =
-            i32::try_from(desc.mip_level_count).map_err(|_| super::super::GlError::Validation {
-                operation: "create-texture",
-                message: "mip count exceeds GLsizei".into(),
-            })?;
+        let width = i32::try_from(desc.extent.width)
+            .map_err(|_| Self::validation("create-texture", "width exceeds GLsizei"))?;
+        let height = i32::try_from(desc.extent.height)
+            .map_err(|_| Self::validation("create-texture", "height exceeds GLsizei"))?;
+        let levels = i32::try_from(desc.mip_level_count)
+            .map_err(|_| Self::validation("create-texture", "mip count exceeds GLsizei"))?;
         // SAFETY: current-context contract; all profile/format/size validation preceded mutation.
-        let name = unsafe { self.gl.create_texture() }.map_err(|message| {
-            super::super::GlError::Driver {
-                operation: "create-texture",
-                message,
-            }
+        let name = unsafe { self.gl.create_texture() }.map_err(|message| GlError::Driver {
+            operation: "create-texture",
+            message,
         })?;
         unsafe {
             self.gl.bind_texture(glow::TEXTURE_2D, Some(name));
@@ -242,15 +490,87 @@ impl super::super::GlResourceApi for NativeGlProvider<'_> {
             unsafe { self.gl.delete_texture(name) };
             return Err(error);
         }
-        let id =
-            super::super::TextureId::new(self.context_stamp(), self.slot("create-texture")?, 0);
+        let id = TextureId::new(self.context_stamp(), self.slot("create-texture")?, 0);
         self.textures.insert(id, (name, desc));
         Ok(id)
     }
-    fn destroy_buffer_resource(
+    fn create_render_buffer(
         &mut self,
-        id: super::super::BufferId,
-    ) -> Result<(), super::super::GlError> {
+        desc: GlRenderBufferDesc,
+    ) -> Result<RenderbufferId, GlError> {
+        use glow::HasContext as _;
+        const OP: &str = "create-render-buffer";
+        self.assert_ready(OP)?;
+        desc.validate()
+            .map_err(|_| Self::validation(OP, "invalid renderbuffer descriptor"))?;
+        let limits = self.discovery.limits();
+        if desc.width > limits.max_renderbuffer_size || desc.height > limits.max_renderbuffer_size {
+            return Err(Self::validation(
+                OP,
+                "renderbuffer extent exceeds the discovered limit",
+            ));
+        }
+        if desc.samples > limits.max_samples {
+            return Err(Self::validation(
+                OP,
+                "renderbuffer sample count exceeds the discovered limit",
+            ));
+        }
+        let facts = self
+            .discovery
+            .formats()
+            .get_for(
+                super::super::GlFormatResourceKind::Renderbuffer,
+                desc.format,
+                desc.samples,
+            )
+            .ok_or(GlError::Unsupported {
+                operation: OP,
+                reason: "no exact renderbuffer format fact for this context",
+            })?;
+        if !facts.renderable {
+            return Err(GlError::Unsupported {
+                operation: OP,
+                reason: "format lacks renderable evidence at this sample count",
+            });
+        }
+        let internal = native_texture_format(desc.format).ok_or(GlError::Unsupported {
+            operation: OP,
+            reason: "format has no proven native renderbuffer mapping",
+        })?;
+        let width =
+            i32::try_from(desc.width).map_err(|_| Self::validation(OP, "width exceeds GLsizei"))?;
+        let height = i32::try_from(desc.height)
+            .map_err(|_| Self::validation(OP, "height exceeds GLsizei"))?;
+        // SAFETY: current-context contract; limits and facts were checked first.
+        let name = unsafe { self.gl.create_renderbuffer() }.map_err(|message| GlError::Driver {
+            operation: OP,
+            message,
+        })?;
+        unsafe {
+            self.gl.bind_renderbuffer(glow::RENDERBUFFER, Some(name));
+            if desc.samples > 1 {
+                self.gl.renderbuffer_storage_multisample(
+                    glow::RENDERBUFFER,
+                    desc.samples as i32,
+                    internal,
+                    width,
+                    height,
+                );
+            } else {
+                self.gl
+                    .renderbuffer_storage(glow::RENDERBUFFER, internal, width, height);
+            }
+        }
+        if let Err(error) = self.driver_error(OP) {
+            unsafe { self.gl.delete_renderbuffer(name) };
+            return Err(error);
+        }
+        let id = RenderbufferId::new(self.context_stamp(), self.slot(OP)?, 0);
+        self.renderbuffers.insert(id, (name, desc));
+        Ok(id)
+    }
+    fn destroy_buffer_resource(&mut self, id: BufferId) -> Result<(), GlError> {
         use glow::HasContext as _;
         self.assert_ready("destroy-buffer")?;
         let (name, _) = self.buffer("destroy-buffer", id)?;
@@ -260,10 +580,7 @@ impl super::super::GlResourceApi for NativeGlProvider<'_> {
         self.buffers.remove(&id);
         Ok(())
     }
-    fn destroy_texture_resource(
-        &mut self,
-        id: super::super::TextureId,
-    ) -> Result<(), super::super::GlError> {
+    fn destroy_texture_resource(&mut self, id: TextureId) -> Result<(), GlError> {
         use glow::HasContext as _;
         self.assert_ready("destroy-texture")?;
         let (name, _) = self.texture("destroy-texture", id)?;
@@ -273,45 +590,30 @@ impl super::super::GlResourceApi for NativeGlProvider<'_> {
         self.textures.remove(&id);
         Ok(())
     }
-    fn create_render_buffer(
-        &mut self,
-        _: super::super::GlRenderBufferDesc,
-    ) -> Result<super::super::RenderbufferId, super::super::GlError> {
-        Err(super::super::GlError::Unsupported {
-            operation: "create-render-buffer",
-            reason: "renderbuffer executor not yet profile-lowered",
-        })
-    }
-    fn destroy_render_buffer(
-        &mut self,
-        _: super::super::RenderbufferId,
-    ) -> Result<(), super::super::GlError> {
-        Err(super::super::GlError::Unsupported {
-            operation: "destroy-render-buffer",
-            reason: "renderbuffer executor not yet profile-lowered",
-        })
+    fn destroy_render_buffer(&mut self, id: RenderbufferId) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        const OP: &str = "destroy-render-buffer";
+        self.assert_ready(OP)?;
+        let (name, _) = self.renderbuffer(OP, id)?;
+        // SAFETY: current-context contract; liveness was checked before mutation.
+        unsafe { self.gl.delete_renderbuffer(name) };
+        self.driver_error(OP)?;
+        self.renderbuffers.remove(&id);
+        Ok(())
     }
 }
 
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
 impl super::super::GlSamplerApi for NativeGlProvider<'_> {
-    fn create_sampler(
-        &mut self,
-        desc: super::super::GlSamplerDesc,
-    ) -> Result<super::super::SamplerId, super::super::GlError> {
+    fn create_sampler(&mut self, desc: super::super::GlSamplerDesc) -> Result<SamplerId, GlError> {
         use glow::HasContext as _;
         self.assert_ready("create-sampler")?;
         desc.validate_for(&self.discovery)
-            .map_err(|_| super::super::GlError::Validation {
-                operation: "create-sampler",
-                message: "invalid sampler descriptor".into(),
-            })?;
+            .map_err(|_| Self::validation("create-sampler", "invalid sampler descriptor"))?;
         // SAFETY: current-context contract; descriptor was fully preflighted.
-        let name = unsafe { self.gl.create_sampler() }.map_err(|message| {
-            super::super::GlError::Driver {
-                operation: "create-sampler",
-                message,
-            }
+        let name = unsafe { self.gl.create_sampler() }.map_err(|message| GlError::Driver {
+            operation: "create-sampler",
+            message,
         })?;
         // SAFETY: see above. Every parameter comes from a validated closed enum/value.
         unsafe {
@@ -346,26 +648,14 @@ impl super::super::GlSamplerApi for NativeGlProvider<'_> {
             unsafe { self.gl.delete_sampler(name) };
             return Err(error);
         }
-        let id =
-            super::super::SamplerId::new(self.context_stamp(), self.slot("create-sampler")?, 0);
+        let id = SamplerId::new(self.context_stamp(), self.slot("create-sampler")?, 0);
         self.samplers.insert(id, name);
         Ok(id)
     }
-    fn destroy_sampler(
-        &mut self,
-        id: super::super::SamplerId,
-    ) -> Result<(), super::super::GlError> {
+    fn destroy_sampler(&mut self, id: SamplerId) -> Result<(), GlError> {
         use glow::HasContext as _;
         self.assert_ready("destroy-sampler")?;
-        self.validate_object_context("destroy-sampler", id.context)?;
-        let name =
-            self.samplers
-                .get(&id)
-                .copied()
-                .ok_or_else(|| super::super::GlError::Validation {
-                    operation: "destroy-sampler",
-                    message: "sampler is not live".into(),
-                })?;
+        let name = self.sampler("destroy-sampler", id)?;
         // SAFETY: current-context contract; liveness was checked before mutation.
         unsafe { self.gl.delete_sampler(name) };
         self.driver_error("destroy-sampler")?;
@@ -374,275 +664,16 @@ impl super::super::GlSamplerApi for NativeGlProvider<'_> {
     }
 }
 
+/// Allocation usage applied to every native buffer (audit P2-11).
+///
+/// The policy is one explicit, auditable constant per family: `STATIC_DRAW`
+/// matches the native desktop residency model where the 0.14 cache re-uploads
+/// through `bufferSubData` while the driver is free to place the store in
+/// device-local memory. A `DYNAMIC_DRAW` fast path may only be introduced
+/// after profiling attributes a benefit (plan "Private: upload-ring/orphaning
+/// strategy").
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
-impl super::super::GlCopyDomainApi for NativeGlProvider<'_> {
-    fn copy_buffer_range(
-        &mut self,
-        source: super::super::GlBufferRange,
-        destination: super::super::GlBufferRange,
-    ) -> Result<(), super::super::GlError> {
-        use glow::HasContext as _;
-        self.assert_ready("copy-buffer")?;
-        let (source_name, source_desc) = self.buffer("copy-buffer", source.buffer)?;
-        let (destination_name, destination_desc) =
-            self.buffer("copy-buffer", destination.buffer)?;
-        source
-            .validate_for(source_desc)
-            .and_then(|_| destination.validate_for(destination_desc))
-            .map_err(|_| super::super::GlError::Validation {
-                operation: "copy-buffer",
-                message: "invalid buffer range".into(),
-            })?;
-        if source.size != destination.size {
-            return Err(super::super::GlError::Validation {
-                operation: "copy-buffer",
-                message: "copy sizes differ".into(),
-            });
-        }
-        let read_offset =
-            i32::try_from(source.offset).map_err(|_| super::super::GlError::Validation {
-                operation: "copy-buffer",
-                message: "source offset exceeds GLintptr".into(),
-            })?;
-        let write_offset =
-            i32::try_from(destination.offset).map_err(|_| super::super::GlError::Validation {
-                operation: "copy-buffer",
-                message: "destination offset exceeds GLintptr".into(),
-            })?;
-        let size = i32::try_from(source.size).map_err(|_| super::super::GlError::Validation {
-            operation: "copy-buffer",
-            message: "copy size exceeds GLsizeiptr".into(),
-        })?;
-        // SAFETY: current-context contract; both live resources and all ranges
-        // were validated before bindings or the copy command are changed.
-        unsafe {
-            self.gl
-                .bind_buffer(glow::COPY_READ_BUFFER, Some(source_name));
-            self.gl
-                .bind_buffer(glow::COPY_WRITE_BUFFER, Some(destination_name));
-            self.gl.copy_buffer_sub_data(
-                glow::COPY_READ_BUFFER,
-                glow::COPY_WRITE_BUFFER,
-                read_offset,
-                write_offset,
-                size,
-            );
-        }
-        self.driver_error("copy-buffer")
-    }
-    fn copy_texture_region(
-        &mut self,
-        _: super::super::GlTextureRegion,
-        _: super::super::GlTextureRegion,
-    ) -> Result<(), super::super::GlError> {
-        Err(super::super::GlError::Unsupported {
-            operation: "copy-texture",
-            reason: "texture executor not yet profile-lowered",
-        })
-    }
-    fn upload_buffer(
-        &mut self,
-        _: super::super::GlBufferRange,
-        _: &[u8],
-    ) -> Result<(), super::super::GlError> {
-        Err(super::super::GlError::Unsupported {
-            operation: "upload-buffer",
-            reason: "buffer upload executor not yet profile-lowered",
-        })
-    }
-    fn read_buffer(
-        &mut self,
-        _: super::super::GlBufferRange,
-    ) -> Result<Vec<u8>, super::super::GlError> {
-        Err(super::super::GlError::Unsupported {
-            operation: "read-buffer",
-            reason: "buffer readback executor not yet profile-lowered",
-        })
-    }
-    fn upload_texture(
-        &mut self,
-        destination: super::super::GlTextureRegion,
-        layout: super::super::GlPixelLayout,
-        bytes: &[u8],
-    ) -> Result<(), super::super::GlError> {
-        use glow::HasContext as _;
-        self.assert_ready("upload-texture")?;
-        let (name, desc) = self.texture("upload-texture", destination.subresource.texture)?;
-        destination
-            .validate_for(desc)
-            .map_err(|_| super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "invalid texture region".into(),
-            })?;
-        if let Some(info) = desc.format.compressed_info() {
-            if desc.dimension != super::super::GlTextureDimension::D2
-                || destination.subresource.base_layer != 0
-                || destination.subresource.layer_count != 1
-                || destination.extent.depth_or_layers != 1
-                || destination.origin != [0; 3]
-                || destination.extent
-                    != desc.mip_extent(destination.subresource.mip_level).ok_or(
-                        super::super::GlError::Validation {
-                            operation: "upload-texture",
-                            message: "invalid compressed mip".into(),
-                        },
-                    )?
-            {
-                return Err(super::super::GlError::Unsupported {
-                    operation: "upload-texture",
-                    reason: "compressed upload must define one complete 2D mip",
-                });
-            }
-            let exact = info
-                .checked_encoded_size(destination.extent.width, destination.extent.height)
-                .map_err(|_| super::super::GlError::Validation {
-                    operation: "upload-texture",
-                    message: "compressed encoded size overflow".into(),
-                })?;
-            if u64::try_from(bytes.len()).ok() != Some(exact) {
-                return Err(super::super::GlError::Validation {
-                    operation: "upload-texture",
-                    message: "compressed bytes do not match exact block layout".into(),
-                });
-            }
-            let level = i32::try_from(destination.subresource.mip_level).map_err(|_| {
-                super::super::GlError::Validation {
-                    operation: "upload-texture",
-                    message: "mip level exceeds GLint".into(),
-                }
-            })?;
-            let width = i32::try_from(destination.extent.width).map_err(|_| {
-                super::super::GlError::Validation {
-                    operation: "upload-texture",
-                    message: "width exceeds GLsizei".into(),
-                }
-            })?;
-            let height = i32::try_from(destination.extent.height).map_err(|_| {
-                super::super::GlError::Validation {
-                    operation: "upload-texture",
-                    message: "height exceeds GLsizei".into(),
-                }
-            })?;
-            let size = i32::try_from(exact).map_err(|_| super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "compressed upload exceeds GLsizei".into(),
-            })?;
-            let internal =
-                native_texture_format(desc.format).expect("proven compressed format is mapped");
-            // SAFETY: current-context contract; complete mip and exact block bytes were validated.
-            unsafe {
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(name));
-                self.gl.compressed_tex_image_2d(
-                    glow::TEXTURE_2D,
-                    level,
-                    internal as i32,
-                    width,
-                    height,
-                    0,
-                    size,
-                    bytes,
-                );
-            }
-            return self.driver_error("upload-texture");
-        }
-        let needed =
-            layout
-                .required_bytes(destination)
-                .map_err(|_| super::super::GlError::Validation {
-                    operation: "upload-texture",
-                    message: "invalid pixel layout".into(),
-                })?;
-        if u64::try_from(bytes.len()).ok() != Some(needed) {
-            return Err(super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "upload source length differs from layout".into(),
-            });
-        }
-        if desc.dimension != super::super::GlTextureDimension::D2
-            || destination.subresource.base_layer != 0
-            || destination.subresource.layer_count != 1
-            || destination.extent.depth_or_layers != 1
-            || layout.format != super::super::GlPixelFormat::Rgba8
-            || layout.offset != 0
-            || layout.bytes_per_row != destination.extent.width.saturating_mul(4)
-            || layout.rows_per_image != destination.extent.height
-        {
-            return Err(super::super::GlError::Unsupported {
-                operation: "upload-texture",
-                reason: "only tightly packed RGBA8 2D upload is in the native slice",
-            });
-        }
-        let level = i32::try_from(destination.subresource.mip_level).map_err(|_| {
-            super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "mip level exceeds GLint".into(),
-            }
-        })?;
-        let x = i32::try_from(destination.origin[0]).map_err(|_| {
-            super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "x exceeds GLint".into(),
-            }
-        })?;
-        let y = i32::try_from(destination.origin[1]).map_err(|_| {
-            super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "y exceeds GLint".into(),
-            }
-        })?;
-        let width = i32::try_from(destination.extent.width).map_err(|_| {
-            super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "width exceeds GLsizei".into(),
-            }
-        })?;
-        let height = i32::try_from(destination.extent.height).map_err(|_| {
-            super::super::GlError::Validation {
-                operation: "upload-texture",
-                message: "height exceeds GLsizei".into(),
-            }
-        })?;
-        let saved = self.pixel_store;
-        // SAFETY: current-context contract; every checked input is now representable.
-        unsafe {
-            self.gl
-                .pixel_store_i32(glow::UNPACK_ALIGNMENT, i32::from(layout.alignment));
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(name));
-            self.gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                level,
-                x,
-                y,
-                width,
-                height,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(bytes)),
-            );
-        }
-        let result = self.driver_error("upload-texture");
-        // SAFETY: exact tracked state restoration happens on both success and error paths.
-        unsafe {
-            self.gl
-                .pixel_store_i32(glow::UNPACK_ALIGNMENT, i32::from(saved.unpack_alignment));
-        }
-        self.pixel_store = saved;
-        result
-    }
-    fn read_texture(
-        &mut self,
-        _: super::super::GlTextureRegion,
-        _: super::super::GlPixelLayout,
-    ) -> Result<super::super::GlReadback, super::super::GlError> {
-        Err(super::super::GlError::Unsupported {
-            operation: "read-texture",
-            reason: "texture executor not yet profile-lowered",
-        })
-    }
-    fn pixel_store(&self) -> super::super::GlPixelStoreState {
-        self.pixel_store
-    }
-}
+pub(super) const BUFFER_ALLOCATION_USAGE: u32 = glow::STATIC_DRAW;
 
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
 const fn native_wrap(mode: super::super::GlAddressMode) -> i32 {
@@ -682,11 +713,20 @@ const fn native_compare(compare: super::super::GlCompareFunction) -> i32 {
     }
 }
 
+/// The native internal/storage format constant of one discovered `GlFormat`.
+///
+/// Only formats with a settled mapping are listed; every other format fails
+/// closed at its domain's evidence gate even if it maps here.
 #[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
-const fn native_texture_format(format: super::super::GlFormat) -> Option<u32> {
+pub(super) const fn native_texture_format(format: super::super::GlFormat) -> Option<u32> {
     match format {
-        super::super::GlFormat::Rgba8Unorm => Some(0x8058),
-        super::super::GlFormat::Rgba8Srgb => Some(0x8C43),
+        super::super::GlFormat::Rgba8Unorm => Some(glow::RGBA8),
+        super::super::GlFormat::Rgba8Srgb => Some(glow::SRGB8_ALPHA8),
+        super::super::GlFormat::Rgba16Float => Some(glow::RGBA16F),
+        super::super::GlFormat::Rgba32Float => Some(glow::RGBA32F),
+        super::super::GlFormat::Depth32Float => Some(glow::DEPTH_COMPONENT32F),
+        super::super::GlFormat::Depth16Unorm => Some(glow::DEPTH_COMPONENT16),
+        super::super::GlFormat::Depth24PlusStencil8 => Some(glow::DEPTH24_STENCIL8),
         super::super::GlFormat::Etc2Rgb8Unorm => Some(0x9274),
         super::super::GlFormat::Etc2Rgb8Srgb => Some(0x9275),
         super::super::GlFormat::Etc2Rgb8A1Unorm => Some(0x9276),
@@ -699,4 +739,22 @@ const fn native_texture_format(format: super::super::GlFormat) -> Option<u32> {
         super::super::GlFormat::EacRg11Snorm => Some(0x9273),
         _ => None,
     }
+}
+
+/// The framebuffer attachment point for a depth/stencil view format.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) const fn depth_attachment_point(format: super::super::GlFormat) -> Option<u32> {
+    match format {
+        super::super::GlFormat::Depth16Unorm | super::super::GlFormat::Depth32Float => {
+            Some(glow::DEPTH_ATTACHMENT)
+        }
+        super::super::GlFormat::Depth24PlusStencil8 => Some(glow::DEPTH_STENCIL_ATTACHMENT),
+        _ => None,
+    }
+}
+
+/// Whether a depth/stencil format carries a stencil plane.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) const fn has_stencil_plane(format: super::super::GlFormat) -> bool {
+    matches!(format, super::super::GlFormat::Depth24PlusStencil8)
 }

@@ -6,9 +6,21 @@
 //! snapshot is data only and remains bound to the caller supplied stamp.
 
 mod discovery;
+mod probes;
 mod provider;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use discovery::{NativeDiscoveryError, discover_current_glow, parse_native_profile};
+mod exec_compute;
+mod exec_copy;
+mod exec_framebuffer;
+mod exec_raster;
+mod exec_shader;
+mod exec_sync;
+mod exec_vertex;
+
+pub(crate) use discovery::{
+    NativeDiscoveryError, discover_current_glow, discover_current_glow_with_loader,
+    parse_native_profile,
+};
 pub(crate) use provider::NativeGlProvider;

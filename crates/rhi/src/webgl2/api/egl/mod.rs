@@ -21,7 +21,12 @@ use std::rc::{Rc, Weak};
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
-use super::{GlContextLifecycle, GlError, GlFamilyProfile, OwnerThreadIdentity};
+mod presentation;
+
+use super::{
+    ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyProfile,
+    GlSurfaceLeaseBook, GlSurfaceSize, OwnerThreadIdentity,
+};
 
 type Egl = khronos_egl::DynamicInstance<khronos_egl::EGL1_4>;
 
@@ -130,6 +135,24 @@ impl From<GlError> for EglProviderError {
     }
 }
 
+impl EglProviderError {
+    /// Flattens back into the stable GL error vocabulary the presentation
+    /// domain reports, keeping provider diagnostics in the message.
+    fn into_gl_error(self) -> GlError {
+        match self {
+            Self::Gl(error) => error,
+            Self::Egl { operation, error } => GlError::Driver {
+                operation,
+                message: format!("EGL error: {error:?}"),
+            },
+            other => GlError::Driver {
+                operation: "egl-provider",
+                message: format!("EGL provider error: {other:?}"),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum EglSurfaceKind {
     Window { native_window: *mut c_void },
@@ -164,6 +187,10 @@ pub(crate) struct EglGlesContext {
     surface: Option<khronos_egl::Surface>,
     kind: EglSurfaceKind,
     version: EglGlesVersion,
+    stamp: ContextStamp,
+    snapshot: GlDiscoverySnapshot,
+    surface_leases: GlSurfaceLeaseBook,
+    present_slot: u64,
     owner: OwnerThreadIdentity,
     lifecycle: GlContextLifecycle,
     _not_send_sync: core::marker::PhantomData<*mut ()>,
@@ -178,6 +205,7 @@ impl EglGlesContext {
     /// from the calling thread.  The Host retains ownership of those objects;
     /// this method owns only EGL objects created from them.
     pub(crate) unsafe fn new_window(
+        stamp: ContextStamp,
         display: RawDisplayHandle,
         window: RawWindowHandle,
         version: EglGlesVersion,
@@ -187,6 +215,7 @@ impl EglGlesContext {
         // caller upholds its native lifetime/platform contract.
         unsafe {
             Self::new_inner(
+                stamp,
                 native_display,
                 EglSurfaceKind::Window { native_window },
                 version,
@@ -199,16 +228,25 @@ impl EglGlesContext {
     /// The default EGL display is intentionally used; this does not fabricate a
     /// host window and cannot present to one.
     pub(crate) fn new_pbuffer(
+        stamp: ContextStamp,
         size: EglPbufferSize,
         version: EglGlesVersion,
     ) -> Result<Self, EglProviderError> {
         size.checked()?;
         // SAFETY: EGL_DEFAULT_DISPLAY is the specified null native-display
         // sentinel, and this provider owns all EGL objects subsequently made.
-        unsafe { Self::new_inner(ptr::null_mut(), EglSurfaceKind::Pbuffer(size), version) }
+        unsafe {
+            Self::new_inner(
+                stamp,
+                ptr::null_mut(),
+                EglSurfaceKind::Pbuffer(size),
+                version,
+            )
+        }
     }
 
     unsafe fn new_inner(
+        stamp: ContextStamp,
         native_display: *mut c_void,
         kind: EglSurfaceKind,
         version: EglGlesVersion,
@@ -300,6 +338,38 @@ impl EglGlesContext {
                 error,
             });
         }
+        // Verification and discovery observe the exact current context before
+        // construction completes; any failure drops the transactional result
+        // and rolls the EGL objects back.
+        let egl_loader = |name: &str| {
+            lease
+                .egl
+                .get_proc_address(name)
+                .map_or(ptr::null(), |function| {
+                    function as *const () as *const c_void
+                })
+        };
+        // SAFETY: make_current above established this exact EGL context on the
+        // owner thread and EGL owns the loader for the glow context's use.
+        let glow = unsafe { glow::Context::from_loader_function(egl_loader) };
+        use glow::HasContext as _;
+        // SAFETY: as above; this queries only the current GLES context.
+        let observed = unsafe { glow.get_parameter_string(glow::VERSION) };
+        if parse_gles_version(&observed) != Some(version) {
+            return Err(EglProviderError::UnexpectedProfile {
+                requested: version,
+                observed,
+            });
+        }
+        // SAFETY: the current context serves every discovery query and probe.
+        let snapshot =
+            unsafe { super::native::discover_current_glow_with_loader(&glow, stamp, egl_loader) }
+                .map_err(|error| {
+                EglProviderError::Gl(GlError::Driver {
+                    operation: "discover EGL context",
+                    message: format!("native GL discovery failed: {error:?}"),
+                })
+            })?;
         let result = Self {
             lease,
             config,
@@ -307,14 +377,14 @@ impl EglGlesContext {
             surface: Some(surface),
             kind,
             version,
+            stamp,
+            snapshot,
+            surface_leases: GlSurfaceLeaseBook::new(),
+            present_slot: 0,
             owner: OwnerThreadIdentity::current(),
             lifecycle: GlContextLifecycle::Active,
             _not_send_sync: core::marker::PhantomData,
         };
-        if let Err(error) = result.verify_profile() {
-            drop(result);
-            return Err(error);
-        }
         Ok(result)
     }
 
@@ -538,29 +608,37 @@ impl EglGlesContext {
         Ok(())
     }
 
-    fn verify_profile(&self) -> Result<(), EglProviderError> {
-        // SAFETY: construction made this context current on its owner thread.
-        let glow = unsafe {
-            glow::Context::from_loader_function(|name| {
-                self.lease
-                    .egl
-                    .get_proc_address(name)
-                    .map_or(ptr::null(), |function| {
-                        function as *const () as *const c_void
-                    })
-            })
-        };
-        use glow::HasContext as _;
-        // SAFETY: as above; this queries only the current GLES context.
-        let observed = unsafe { glow.get_parameter_string(glow::VERSION) };
-        if parse_gles_version(&observed) == Some(self.version) {
-            Ok(())
-        } else {
-            Err(EglProviderError::UnexpectedProfile {
-                requested: self.version,
-                observed,
-            })
-        }
+    /// Queries the live EGL surface size; this is the presentation fact the
+    /// acquire path reports, exactly as the browser backend reports the
+    /// drawing-buffer size.
+    fn query_surface_size(&self) -> Result<GlSurfaceSize, EglProviderError> {
+        const EGL_WIDTH: i32 = 0x3057;
+        const EGL_HEIGHT: i32 = 0x3056;
+        let surface = self.surface.ok_or(GlError::InvalidLifecycle {
+            operation: "query-surface-size",
+            lifecycle: self.lifecycle,
+        })?;
+        let width = self
+            .lease
+            .egl
+            .query_surface(self.lease.display, surface, EGL_WIDTH)
+            .map_err(|error| EglProviderError::Egl {
+                operation: "eglQuerySurface",
+                error,
+            })?;
+        let height = self
+            .lease
+            .egl
+            .query_surface(self.lease.display, surface, EGL_HEIGHT)
+            .map_err(|error| EglProviderError::Egl {
+                operation: "eglQuerySurface",
+                error,
+            })?;
+        let to_u32 = |value: i32| u32::try_from(value).unwrap_or(0);
+        Ok(GlSurfaceSize {
+            width: to_u32(width),
+            height: to_u32(height),
+        })
     }
 }
 

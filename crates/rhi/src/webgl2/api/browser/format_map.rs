@@ -6,6 +6,8 @@
 
 use web_sys::WebGl2RenderingContext as Gl;
 
+use super::super::GlFormatTableError;
+
 use super::super::{
     GlAddressMode, GlAstcBlock as B, GlCompareFunction, GlCompressedColorSpace as C,
     GlExtensionSet, GlFilterMode, GlFormat, GlFormatCapabilities, GlFormatEvidence,
@@ -218,65 +220,108 @@ pub(super) fn configure_sampler(raw: &Gl, sampler: &web_sys::WebGlSampler, desc:
     }
 }
 
-/// Baseline RGBA8/depth facts every WebGL 2.0 core context guarantees.
+/// Baseline RGBA8 facts every WebGL 2.0 core context guarantees, plus float
+/// facts answered by real framebuffer-completeness probes (audit P1-6).
 ///
-/// Copy facts are recorded only where the FBO-backed copy route below can
-/// honestly execute: the depth format deliberately records no copy evidence.
+/// `DEPTH_COMPONENT32F`, `RGBA16F`, and `RGBA32F` rendering are **not**
+/// core-guaranteed in WebGL2; `EXT_color_buffer_float` supplies them. The
+/// facts below therefore come only from attachment probes on this exact
+/// context: an incomplete FBO records `renderable: false`, and a probe that
+/// could not run leaves the conservative core record instead of an optimistic
+/// claim.
 pub(super) fn webgl2_baseline_formats(
+    raw: &Gl,
     extensions: &GlExtensionSet,
 ) -> Result<GlFormatTable, super::super::GlError> {
+    const RGBA16F: u32 = 0x881A;
+    const RGBA32F: u32 = 0x8814;
+    const HALF_FLOAT: u32 = 0x140B;
     let mut formats = GlFormatTable::default();
-    for facts in [
-        GlFormatCapabilities {
-            format: GlFormat::Rgba8Unorm,
-            resource_kind: GlFormatResourceKind::Texture,
-            sample_count: 1,
-            evidence: GlFormatEvidence::CoreGuaranteed,
-            sampled: true,
-            filterable: true,
-            renderable: true,
-            blendable: true,
-            storage_read: false,
-            storage_write: false,
-            copy_source: true,
-            copy_destination: true,
-        },
-        GlFormatCapabilities {
-            format: GlFormat::Rgba8Srgb,
-            resource_kind: GlFormatResourceKind::Texture,
-            sample_count: 1,
-            evidence: GlFormatEvidence::CoreGuaranteed,
-            sampled: true,
-            filterable: true,
-            renderable: true,
-            blendable: true,
-            storage_read: false,
-            storage_write: false,
-            copy_source: true,
-            copy_destination: true,
-        },
-        GlFormatCapabilities {
+    for (format, copy) in [(GlFormat::Rgba8Unorm, true), (GlFormat::Rgba8Srgb, true)] {
+        formats
+            .record(GlFormatCapabilities {
+                format,
+                resource_kind: GlFormatResourceKind::Texture,
+                sample_count: 1,
+                evidence: GlFormatEvidence::CoreGuaranteed,
+                sampled: true,
+                filterable: true,
+                renderable: true,
+                blendable: true,
+                storage_read: false,
+                storage_write: false,
+                copy_source: copy,
+                copy_destination: copy,
+            })
+            .map_err(|error| record_error("record WebGL2 baseline format", error))?;
+    }
+    // Float depth: renderability is decided by the depth-attachment probe.
+    let depth = attachment_completes(
+        raw,
+        Gl::DEPTH_COMPONENT32F,
+        Gl::DEPTH_COMPONENT,
+        Gl::FLOAT,
+        Gl::DEPTH_ATTACHMENT,
+    );
+    formats
+        .record(GlFormatCapabilities {
             format: GlFormat::Depth32Float,
             resource_kind: GlFormatResourceKind::Texture,
             sample_count: 1,
-            evidence: GlFormatEvidence::CoreGuaranteed,
+            evidence: match depth {
+                Some(_) => GlFormatEvidence::OperationProbed,
+                None => GlFormatEvidence::CoreGuaranteed,
+            },
             sampled: true,
             filterable: false,
-            renderable: true,
+            renderable: depth.unwrap_or(false),
             blendable: false,
             storage_read: false,
             storage_write: false,
             // Do not claim a concrete copy operation from a static baseline.
             copy_source: false,
             copy_destination: false,
-        },
+        })
+        .map_err(|error| record_error("record WebGL2 depth fact", error))?;
+    // Float color: renderability is decided per format by the color-attachment
+    // probe; filtering of 32F additionally requires `OES_texture_float_linear`,
+    // and blending of 32F additionally requires `EXT_float_blend`.
+    let float_linear = extensions.is_acquired(GlKnownExtension::OesTextureFloatLinear);
+    let float_blend = extensions.is_acquired(GlKnownExtension::ExtFloatBlend);
+    for (format, internal_format, upload_type, filterable, blend_ext) in [
+        (GlFormat::Rgba16Float, RGBA16F, HALF_FLOAT, true, false),
+        (
+            GlFormat::Rgba32Float,
+            RGBA32F,
+            Gl::FLOAT,
+            float_linear,
+            true,
+        ),
     ] {
+        let renderable = attachment_completes(
+            raw,
+            internal_format,
+            Gl::RGBA,
+            upload_type,
+            Gl::COLOR_ATTACHMENT0,
+        );
+        let renderable = renderable.unwrap_or(false);
         formats
-            .record(facts)
-            .map_err(|error| super::super::GlError::Driver {
-                operation: "record WebGL2 baseline format",
-                message: format!("{error:?}"),
-            })?;
+            .record(GlFormatCapabilities {
+                format,
+                resource_kind: GlFormatResourceKind::Texture,
+                sample_count: 1,
+                evidence: GlFormatEvidence::OperationProbed,
+                sampled: true,
+                filterable,
+                renderable,
+                blendable: renderable && blendable_rule(blend_ext, float_blend),
+                storage_read: false,
+                storage_write: false,
+                copy_source: renderable,
+                copy_destination: renderable,
+            })
+            .map_err(|error| record_error("record WebGL2 float fact", error))?;
     }
     for (extension, exact_formats) in compressed_extension_formats() {
         if !extensions.is_acquired(extension) {
@@ -298,13 +343,71 @@ pub(super) fn webgl2_baseline_formats(
                     copy_source: false,
                     copy_destination: false,
                 })
-                .map_err(|error| super::super::GlError::Driver {
-                    operation: "record acquired compressed WebGL2 format",
-                    message: format!("{error:?}"),
-                })?;
+                .map_err(|error| record_error("record acquired compressed WebGL2 format", error))?;
         }
     }
     Ok(formats)
+}
+
+fn blendable_rule(needs_ext: bool, ext_acquired: bool) -> bool {
+    !needs_ext || ext_acquired
+}
+
+fn record_error(operation: &'static str, error: GlFormatTableError) -> super::super::GlError {
+    super::super::GlError::Driver {
+        operation,
+        message: format!("{error:?}"),
+    }
+}
+
+/// Attaches one freshly stored 4x4 texture to a scratch framebuffer and
+/// reports completeness. Scratch objects are unbound and deleted on every
+/// path; `None` means the probe could not run (browser exception or driver
+/// error), never that rendering is supported.
+fn attachment_completes(
+    raw: &Gl,
+    internal_format: u32,
+    upload_format: u32,
+    upload_type: u32,
+    attachment: u32,
+) -> Option<bool> {
+    let texture = raw.create_texture()?;
+    raw.bind_texture(Gl::TEXTURE_2D, Some(&texture));
+    let stored = raw.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+        Gl::TEXTURE_2D,
+        0,
+        internal_format as i32,
+        4,
+        4,
+        0,
+        upload_format,
+        upload_type,
+        None,
+    );
+    let answer = stored.ok().and_then(|()| {
+        let framebuffer = raw.create_framebuffer()?;
+        raw.bind_framebuffer(Gl::FRAMEBUFFER, Some(&framebuffer));
+        raw.framebuffer_texture_2d(
+            Gl::FRAMEBUFFER,
+            attachment,
+            Gl::TEXTURE_2D,
+            Some(&texture),
+            0,
+        );
+        let status = raw.check_framebuffer_status(Gl::FRAMEBUFFER);
+        let errored = raw.get_error() != Gl::NO_ERROR;
+        raw.bind_framebuffer(Gl::FRAMEBUFFER, None);
+        raw.delete_framebuffer(Some(&framebuffer));
+        if errored {
+            None
+        } else {
+            Some(status == Gl::FRAMEBUFFER_COMPLETE)
+        }
+    });
+    raw.bind_texture(Gl::TEXTURE_2D, None);
+    raw.delete_texture(Some(&texture));
+    let _ = raw.get_error();
+    answer
 }
 
 fn compressed_extension_formats() -> Vec<(GlKnownExtension, Vec<GlFormat>)> {

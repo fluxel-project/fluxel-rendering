@@ -147,7 +147,10 @@ impl WebGl2BrowserDiscovery {
             discover_context_flags(&raw)?,
         );
         let limits = discover_limits(&raw, &extensions)?;
-        let formats = super::format_map::webgl2_baseline_formats(&extensions)?;
+        // Float and depth format facts are answered by real framebuffer
+        // completeness probes on this exact context (audit P1-6); the probes
+        // use scratch objects and leave no state behind.
+        let formats = super::format_map::webgl2_baseline_formats(&raw, &extensions)?;
         let mut builder = GlDiscoveryBuilder::new(stamp, context, extensions, limits, formats)
             .map_err(discovery_error)?;
 

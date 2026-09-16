@@ -1,6 +1,6 @@
 //! Compute dispatch dimensions and explicit memory visibility barriers.
 
-use super::{GlError, GlFamilyApi};
+use super::{GlError, GlFamilyApi, ProgramId};
 
 /// Immutable per-context compute limits required to validate dispatch groups.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,6 +52,12 @@ impl GlMemoryBarrier {
 
 /// Compute-only domain; WebGL2 providers do not implement it.
 pub(crate) trait GlComputeDispatchApi: GlFamilyApi {
+    /// Installs the linked compute program dispatch work executes.
+    ///
+    /// This is the fixed compute pipeline's selection word: a provider only
+    /// accepts a program whose discovery snapshot proved the compute
+    /// capability, and dispatch rejects while no program is installed.
+    fn set_compute_program(&mut self, program: ProgramId) -> Result<(), GlError>;
     fn dispatch(&mut self, groups: GlDispatchGroups) -> Result<(), GlError>;
     fn memory_barrier(&mut self, barriers: GlMemoryBarrier) -> Result<(), GlError>;
 }

@@ -1,4 +1,9 @@
 //! Deterministic Layer 1 recorder.  It models Fluxel-owned identities, never GL names.
+//!
+//! The optional compute/storage wrapper lives in `compute_storage` so the
+//! common recorder stays a single, small, test-only contract.
+
+mod compute_storage;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -90,6 +95,7 @@ pub enum MockCall {
     BeginElapsed(QueryId),
     EndElapsed,
     QueryTimestamp(QueryId),
+    SetComputeProgram(ProgramId),
     Dispatch(GlDispatchGroups),
     BindStorageBuffer {
         binding: u32,
@@ -129,6 +135,8 @@ pub struct MockGlFamilyApi {
     surface_size: GlSurfaceSize,
     surface_suspended: bool,
     pass_active: bool,
+    /// The compute program installed for dispatch work, if any.
+    installed_compute_program: Option<ProgramId>,
     pixel_store: GlPixelStoreState,
     calls: Vec<MockCall>,
     next_error: Option<GlError>,
@@ -163,6 +171,7 @@ impl MockGlFamilyApi {
             },
             surface_suspended: false,
             pass_active: false,
+            installed_compute_program: None,
             pixel_store: GlPixelStoreState::DEFAULT,
             calls: vec![],
             next_error: None,
@@ -323,17 +332,55 @@ impl MockGlFamilyApi {
         self.syncs.clear();
         self.fences.revoke_all();
         self.pass_active = false;
+        self.installed_compute_program = None;
         self.query_results.clear();
         let _ = self.surface.invalidate_generation();
     }
-    fn frame_view(&mut self, op: &'static str, view: GlTextureView) -> Result<(), GlError> {
-        match view.target {
-            GlAttachmentTarget::Texture(id) => {
-                self.texture(op, id)?;
-                Ok(())
-            }
-            GlAttachmentTarget::SurfaceImage(id) => self.stamp(op, id.context),
+    /// Validates one attachment view exactly as the executable backends do:
+    /// the named allocation must be live, the view's format, extent, mip
+    /// level, layer selection, and sample count must match it, and the format
+    /// must carry renderable evidence on this context (Phase C oracle parity).
+    fn validate_attachment(
+        &mut self,
+        op: &'static str,
+        view: GlTextureView,
+    ) -> Result<(), GlError> {
+        let GlAttachmentTarget::Texture(texture) = view.target else {
+            return self.error_result(GlError::Unsupported {
+                operation: op,
+                reason: "surface-image attachments are not part of this framebuffer slice",
+            });
+        };
+        let desc = self.texture(op, texture)?;
+        if desc.format != view.format {
+            return self.invalid(op, "attachment view format does not match the allocation");
         }
+        let Some(mip) = desc.mip_extent(view.mip_level) else {
+            return self.invalid(op, "attachment mip level is invalid");
+        };
+        if view.width != mip.width || view.height != mip.height {
+            return self.invalid(op, "attachment view extent does not match the mip extent");
+        }
+        if view.array_layer != 0 || desc.dimension != GlTextureDimension::D2 {
+            return self.error_result(GlError::Unsupported {
+                operation: op,
+                reason: "layered attachments are not part of this framebuffer slice",
+            });
+        }
+        if desc.sample_count != view.sample_count {
+            return self.invalid(op, "attachment sample count does not match the allocation");
+        }
+        let facts = self
+            .discovery
+            .formats()
+            .get_for(GlFormatResourceKind::Texture, view.format, 1);
+        if facts.is_none_or(|facts| !facts.renderable) {
+            return self.error_result(GlError::Unsupported {
+                operation: op,
+                reason: "attachment format lacks renderable evidence on this context",
+            });
+        }
+        Ok(())
     }
     fn format_facts(
         &mut self,
@@ -820,7 +867,7 @@ impl GlFramebufferApi for MockGlFamilyApi {
             .copied()
             .chain(d.depth_stencil_attachment)
         {
-            self.frame_view("create-framebuffer", v)?;
+            self.validate_attachment("create-framebuffer", v)?;
         }
         d.validate(
             self.discovery.limits().max_color_attachments,
@@ -868,9 +915,9 @@ impl GlFramebufferApi for MockGlFamilyApi {
             message: "render pass does not match its framebuffer descriptor".into(),
         })?;
         for a in &d.color_attachments {
-            self.frame_view("begin-render-pass", a.view)?;
+            self.validate_attachment("begin-render-pass", a.view)?;
             if let Some(v) = a.resolve_target {
-                self.frame_view("begin-render-pass", v)?;
+                self.validate_attachment("begin-render-pass", v)?;
             }
         }
         self.pass_active = true;
@@ -930,8 +977,44 @@ impl GlFramebufferApi for MockGlFamilyApi {
                 })
                 .unwrap_or(1)
         };
-        // Both descriptors were proven live above; sample counts come from the
-        // recorded attachment views exactly as a real completeness check would.
+        let shape = |descriptor: &GlFramebufferDescriptor| {
+            descriptor
+                .color_attachments
+                .first()
+                .copied()
+                .or(descriptor.depth_stencil_attachment)
+                .map(|view| (view.width, view.height))
+                .unwrap_or((0, 0))
+        };
+        // Both descriptors were proven live above; sample counts and extents
+        // come from the recorded attachment views exactly as a real
+        // completeness check would.
+        let (source_shape, destination_shape) = {
+            let source_shape = self.framebuffers.get(&source).map(shape).unwrap_or((0, 0));
+            let destination_shape = self
+                .framebuffers
+                .get(&destination)
+                .map(shape)
+                .unwrap_or((0, 0));
+            (source_shape, destination_shape)
+        };
+        let within = |offset: [u32; 2], extent: [u32; 2], shape: (u32, u32)| {
+            offset[0]
+                .checked_add(extent[0])
+                .is_some_and(|end| end <= shape.0)
+                && offset[1]
+                    .checked_add(extent[1])
+                    .is_some_and(|end| end <= shape.1)
+        };
+        if !within(region.src_offset, region.src_extent, source_shape) {
+            return self.invalid("blit-framebuffer", "blit source leaves its framebuffer");
+        }
+        if !within(region.dst_offset, region.dst_extent, destination_shape) {
+            return self.invalid(
+                "blit-framebuffer",
+                "blit destination leaves its framebuffer",
+            );
+        }
         if filter != GlFilterMode::Nearest {
             let multisampled = |id: FramebufferId| {
                 self.framebuffers
@@ -946,6 +1029,15 @@ impl GlFramebufferApi for MockGlFamilyApi {
                     "multisampled blit targets only accept nearest filtering",
                 );
             }
+        }
+        // Depth/stencil planes never scale and never filter.
+        if (masks.depth || masks.stencil)
+            && (filter != GlFilterMode::Nearest || region.src_extent != region.dst_extent)
+        {
+            return self.invalid(
+                "blit-framebuffer",
+                "depth/stencil blits require nearest filtering and identical extents",
+            );
         }
         self.calls.push(MockCall::BlitFramebuffer {
             source,
@@ -1063,12 +1155,34 @@ impl GlCopyDomainApi for MockGlFamilyApi {
             operation: "copy-texture",
             message: "invalid texture copy".into(),
         })?;
-        let source_facts = self.format_facts("copy-texture", sd)?;
-        let destination_facts = self.format_facts("copy-texture", dd)?;
+        if s.subresource.texture == d.subresource.texture
+            && s.subresource.mip_level == d.subresource.mip_level
+        {
+            // Same rule as the executable backends: reading and writing one
+            // mip is a driver-dependent feedback loop.
+            return self.invalid(
+                "copy-texture",
+                "copy source and destination name the same mip",
+            );
+        }
+        if sd.sample_count != 1 || dd.sample_count != 1 {
+            // Multisample transfer belongs to the resolve word.
+            return self.invalid("copy-texture", "copy operates on single-sample textures");
+        }
+        // The executable backends resolve copy facts at sample count one.
+        let facts = self.discovery.formats();
+        let source_copy = facts
+            .get_for(GlFormatResourceKind::Texture, sd.format, 1)
+            .map(|fact| fact.copy_source)
+            .unwrap_or(false);
+        let destination_copy = facts
+            .get_for(GlFormatResourceKind::Texture, dd.format, 1)
+            .map(|fact| fact.copy_destination)
+            .unwrap_or(false);
         if !sd.usage.contains(GlTextureUsage::COPY_SOURCE)
             || !dd.usage.contains(GlTextureUsage::COPY_DESTINATION)
-            || !source_facts.copy_source
-            || !destination_facts.copy_destination
+            || !source_copy
+            || !destination_copy
         {
             return self.invalid(
                 "copy-texture",
@@ -1093,6 +1207,33 @@ impl GlCopyDomainApi for MockGlFamilyApi {
             operation: "upload-texture",
             message: "invalid texture upload".into(),
         })?;
+        // Same encoding rules as the executable backends: depth storage and
+        // unmapped formats accept no CPU pixels, and only the RGBA8 client
+        // encoding transfers.
+        if desc.format.compressed_info().is_none()
+            && !matches!(desc.format, GlFormat::Rgba8Unorm | GlFormat::Rgba8Srgb)
+        {
+            return self.error_result(GlError::Unsupported {
+                operation: "upload-texture",
+                reason: "format accepts no CPU pixel upload in this shared semantic",
+            });
+        }
+        if !matches!(l.format, GlPixelFormat::Rgba8) {
+            return self.error_result(GlError::Unsupported {
+                operation: "upload-texture",
+                reason: "pixel encoding has no transfer route",
+            });
+        }
+        if d.subresource.base_layer != 0
+            || d.subresource.layer_count != 1
+            || d.origin[2] != 0
+            || d.extent.depth_or_layers != 1
+        {
+            return self.error_result(GlError::Unsupported {
+                operation: "upload-texture",
+                reason: "this copy slice transfers one 2D rectangle only",
+            });
+        }
         let n = l.required_bytes(d).map_err(|_| GlError::Validation {
             operation: "upload-texture",
             message: "invalid texture upload".into(),
@@ -1115,10 +1256,36 @@ impl GlCopyDomainApi for MockGlFamilyApi {
             operation: "read-texture",
             message: "invalid read region".into(),
         })?;
+        if !matches!(desc.format, GlFormat::Rgba8Unorm | GlFormat::Rgba8Srgb) {
+            return self.error_result(GlError::Unsupported {
+                operation: "read-texture",
+                reason: "format has no readback encoding",
+            });
+        }
+        if !matches!(l.format, GlPixelFormat::Rgba8) {
+            return self.error_result(GlError::Unsupported {
+                operation: "read-texture",
+                reason: "pixel encoding has no readback route",
+            });
+        }
+        if s.subresource.base_layer != 0
+            || s.subresource.layer_count != 1
+            || s.origin[2] != 0
+            || s.extent.depth_or_layers != 1
+        {
+            return self.error_result(GlError::Unsupported {
+                operation: "read-texture",
+                reason: "this copy slice transfers one 2D rectangle only",
+            });
+        }
         let n = l.required_bytes(s).map_err(|_| GlError::Validation {
             operation: "read-texture",
             message: "invalid layout".into(),
         })?;
+        // The layout offset is a client-side placement; it must leave a body.
+        if l.offset >= n {
+            return self.invalid("read-texture", "layout offset leaves no readback body");
+        }
         let bytes = vec![
             0;
             usize::try_from(n).map_err(|_| GlError::OutOfMemory {
@@ -1276,132 +1443,4 @@ impl GlTimestampQueryApi for MockGlFamilyApi {
     }
 }
 
-/// Explicit opt-in domains, available only after their snapshot proved both capabilities.
-#[derive(Debug)]
-pub struct MockComputeStorageApi {
-    inner: MockGlFamilyApi,
-}
-impl MockComputeStorageApi {
-    pub fn new(inner: MockGlFamilyApi) -> Result<Self, GlError> {
-        let caps = inner.discovery().capabilities();
-        if caps.supports(GlCapability::Compute) && caps.supports(GlCapability::StorageBuffer) {
-            Ok(Self { inner })
-        } else {
-            Err(GlError::Unsupported {
-                operation: "mock-compute-storage",
-                reason: "discovery did not prove compute and storage-buffer support",
-            })
-        }
-    }
-    pub fn calls(&self) -> &[MockCall] {
-        self.inner.calls()
-    }
-    pub fn into_inner(self) -> MockGlFamilyApi {
-        self.inner
-    }
-}
-impl GlFamilyApi for MockComputeStorageApi {
-    fn profile(&self) -> GlFamilyProfile {
-        self.inner.profile()
-    }
-    fn context_stamp(&self) -> ContextStamp {
-        self.inner.context_stamp()
-    }
-    fn lifecycle(&self) -> GlContextLifecycle {
-        self.inner.lifecycle()
-    }
-    fn owner_thread(&self) -> OwnerThreadIdentity {
-        self.inner.owner_thread()
-    }
-    fn assert_owner_thread(&self, op: &'static str) -> Result<(), GlError> {
-        self.inner.assert_owner_thread(op)
-    }
-    fn discovery(&self) -> &GlDiscoverySnapshot {
-        self.inner.discovery()
-    }
-    fn context_lost(&mut self) -> Result<(), GlError> {
-        self.inner.context_lost()
-    }
-    fn context_restored(&mut self) -> Result<ContextStamp, GlError> {
-        self.inner.context_restored()
-    }
-}
-impl GlComputeDispatchApi for MockComputeStorageApi {
-    fn dispatch(&mut self, g: GlDispatchGroups) -> Result<(), GlError> {
-        self.inner.ready("dispatch")?;
-        g.validate(GlComputeLimits {
-            max_group_count: self.inner.discovery.limits().max_compute_work_group_count,
-            max_group_size: self.inner.discovery.limits().max_compute_work_group_size,
-            max_group_invocations: self
-                .inner
-                .discovery
-                .limits()
-                .max_compute_work_group_invocations,
-        })?;
-        self.inner.calls.push(MockCall::Dispatch(g));
-        Ok(())
-    }
-    fn memory_barrier(&mut self, b: GlMemoryBarrier) -> Result<(), GlError> {
-        self.inner.ready("memory-barrier")?;
-        b.validate_nonempty()
-    }
-}
-impl GlStorageBufferApi for MockComputeStorageApi {
-    fn bind_storage_buffer(
-        &mut self,
-        binding: u32,
-        r: GlStorageBufferRange,
-    ) -> Result<(), GlError> {
-        self.inner.ready("bind-storage-buffer")?;
-        let desc = self.inner.buffer("bind-storage-buffer", r.buffer)?;
-        r.validate(
-            binding,
-            GlStorageBufferLimits {
-                max_bindings: self.inner.discovery.limits().max_storage_buffer_bindings,
-                max_block_size: self.inner.discovery.limits().max_storage_block_size,
-                offset_alignment: self
-                    .inner
-                    .discovery
-                    .limits()
-                    .storage_buffer_offset_alignment,
-            },
-        )?;
-        GlBufferRange {
-            buffer: r.buffer,
-            offset: r.offset,
-            size: r.size,
-        }
-        .validate_for(desc)
-        .map_err(|_| GlError::Validation {
-            operation: "bind-storage-buffer",
-            message: "storage buffer range is outside the allocation".into(),
-        })?;
-        if !desc.usage.contains(GlBufferUsage::STORAGE) {
-            return self
-                .inner
-                .invalid("bind-storage-buffer", "buffer lacks storage usage");
-        }
-        self.inner.calls.push(MockCall::BindStorageBuffer {
-            binding,
-            buffer: r.buffer,
-            offset: r.offset,
-            size: r.size,
-        });
-        Ok(())
-    }
-}
-impl GlStorageImageApi for MockComputeStorageApi {
-    fn bind_storage_image(
-        &mut self,
-        binding: u32,
-        i: GlStorageImageBinding,
-    ) -> Result<(), GlError> {
-        self.inner.ready("bind-storage-image")?;
-        self.inner.validate_storage_image_binding(binding, i)?;
-        self.inner.calls.push(MockCall::BindStorageImage {
-            binding,
-            texture: i.texture,
-        });
-        Ok(())
-    }
-}
+pub(crate) use compute_storage::MockComputeStorageApi;

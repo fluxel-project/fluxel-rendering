@@ -5,12 +5,15 @@
 //! context current on its owning thread for the entire call.  The resulting
 //! snapshot is data only and remains bound to the caller supplied stamp.
 
+use core::ffi::c_void;
+
 use super::super::{
     ContextStamp, CoreOrExtension, GlCapability, GlContextFlags, GlContextInfo, GlDiscoveryBuilder,
     GlDiscoveryError, GlDiscoverySnapshot, GlExtensionSet, GlFamilyProfile, GlFiniteF32, GlFormat,
     GlFormatCapabilities, GlFormatEvidence, GlFormatResourceKind, GlFormatTable, GlKnownExtension,
     GlLimits, GlOperationProbe, GlVersion,
 };
+use super::probes::{GlowProbes, NativeGlProbes, ProbeAnswer, ProbeReport, run_operation_probes};
 
 /// Failure to obtain a complete native discovery record.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,6 +51,9 @@ pub(super) trait NativeGlQuery {
 
 /// Discovers native facts using an already-current `glow` context.
 ///
+/// Uses the same Host loader that built `glow` for the one registry query glow
+/// 0.18 does not bind (`glGetQueryiv`).
+///
 /// # Safety contract
 ///
 /// The Host/RHI provider must have made `context` current on its owner thread,
@@ -58,6 +64,24 @@ pub(super) trait NativeGlQuery {
 pub(crate) unsafe fn discover_current_glow(
     context: &glow::Context,
     stamp: ContextStamp,
+) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
+    // SAFETY: the absent loader only keeps `glGetQueryiv` probes closed; no
+    // probe calls an entry point the context did not promise.
+    unsafe { discover_current_glow_with_loader(context, stamp, |_| core::ptr::null()) }
+}
+
+/// [`discover_current_glow`] plus the Host proc loader, used only to resolve
+/// `glGetQueryiv` for the timer-query counter width.
+///
+/// # Safety contract
+///
+/// Same as [`discover_current_glow`]. The loader must return valid entry
+/// points for the currently bound context or null.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(crate) unsafe fn discover_current_glow_with_loader(
+    context: &glow::Context,
+    stamp: ContextStamp,
+    proc_loader: impl Fn(&str) -> *const c_void,
 ) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
     use glow::HasContext as _;
 
@@ -105,12 +129,56 @@ pub(crate) unsafe fn discover_current_glow(
         }
     }
 
+    let raw_get_query_iv = proc_loader("glGetQueryiv");
+    // SAFETY: `glGetQueryiv` has this exact ABI; the null-pointer case only
+    // disables the timer-query counter probe.
+    let get_query_iv = (!raw_get_query_iv.is_null()).then(|| unsafe {
+        core::mem::transmute::<*const c_void, super::probes::GetQueryivFn>(raw_get_query_iv)
+    });
+
     // SAFETY: forwarded from this function's documented caller contract.
-    discover_with_query(&GlowQuery(context), stamp)
+    let probes = GlowProbes::new(context, get_query_iv);
+    let query = GlowQuery(context);
+    // Both wrappers read the same current context and never run concurrently.
+    discover_with_query_pair(&query, &probes, stamp)
 }
 
 pub(super) fn discover_with_query(
+    query: &(impl NativeGlQuery + NativeGlProbes),
+    stamp: ContextStamp,
+) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
+    discover_with_query_pair(&NativeOnly(query), query, stamp)
+}
+
+/// Adapts a combined test fake to the query half only.
+struct NativeOnly<'a, Q: NativeGlQuery + NativeGlProbes>(&'a Q);
+impl<Q: NativeGlQuery + NativeGlProbes> NativeGlQuery for NativeOnly<'_, Q> {
+    fn take_error(&self) -> bool {
+        self.0.take_error()
+    }
+    fn string(&self, name: u32) -> Option<String> {
+        self.0.string(name)
+    }
+    fn integer(&self, name: u32) -> Option<i64> {
+        self.0.integer(name)
+    }
+    fn integer_pair(&self, name: u32) -> Option<[i64; 2]> {
+        self.0.integer_pair(name)
+    }
+    fn indexed_integer(&self, name: u32, index: u32) -> Option<i64> {
+        self.0.indexed_integer(name, index)
+    }
+    fn float(&self, name: u32) -> Option<f32> {
+        self.0.float(name)
+    }
+    fn indexed_string(&self, name: u32, index: u32) -> Option<String> {
+        self.0.indexed_string(name, index)
+    }
+}
+
+fn discover_with_query_pair(
     query: &impl NativeGlQuery,
+    probes: &impl NativeGlProbes,
     stamp: ContextStamp,
 ) -> Result<GlDiscoverySnapshot, NativeDiscoveryError> {
     if query.take_error() {
@@ -127,8 +195,9 @@ pub(super) fn discover_with_query(
     let vendor = required_string(query, glow_const::VENDOR, "GL_VENDOR")?;
     let renderer = required_string(query, glow_const::RENDERER, "GL_RENDERER")?;
     let extensions = extensions(query, profile)?;
-    let limits = limits(query, profile, &extensions)?;
-    let formats = baseline_formats(profile)?;
+    let report = run_operation_probes(probes, profile, &extensions);
+    let limits = limits(query, profile, &extensions, &report)?;
+    let formats = native_formats(profile, &extensions, limits.max_samples, &report)?;
     let mut builder = GlDiscoveryBuilder::new(
         stamp,
         GlContextInfo::new(
@@ -138,7 +207,7 @@ pub(super) fn discover_with_query(
             vendor,
             renderer,
             version.clone(),
-            GlContextFlags::default(),
+            context_flags(query, profile)?,
         ),
         extensions,
         limits,
@@ -146,9 +215,9 @@ pub(super) fn discover_with_query(
     )
     .map_err(NativeDiscoveryError::Snapshot)?;
 
-    // Version and limit reads are evidence only, not executable operation
-    // probes.  Keep every optional command domain disabled until the provider
-    // performs a separately recorded compile/link/bind/dispatch probe.
+    // Capability enablement: a resolved core-or-extension route is necessary
+    // but never sufficient. Every optional command domain also records the
+    // outcome of its real operation probe from `run_operation_probes`.
     builder.resolve(
         GlCapability::Compute,
         CoreOrExtension {
@@ -157,7 +226,7 @@ pub(super) fn discover_with_query(
             extension: Some(GlKnownExtension::ArbComputeShader),
             extension_requires_probe: true,
         },
-        GlOperationProbe::NotRun,
+        report.compute.to_operation_probe(),
     );
     builder.resolve(
         GlCapability::StorageBuffer,
@@ -167,7 +236,7 @@ pub(super) fn discover_with_query(
             extension: Some(GlKnownExtension::ArbShaderStorageBufferObject),
             extension_requires_probe: true,
         },
-        GlOperationProbe::NotRun,
+        report.storage_buffer.to_operation_probe(),
     );
     builder.resolve(
         GlCapability::StorageImage,
@@ -177,7 +246,7 @@ pub(super) fn discover_with_query(
             extension: Some(GlKnownExtension::ArbShaderImageLoadStore),
             extension_requires_probe: true,
         },
-        GlOperationProbe::NotRun,
+        report.storage_image.to_operation_probe(),
     );
     builder.resolve(
         GlCapability::IndirectDraw,
@@ -187,7 +256,7 @@ pub(super) fn discover_with_query(
             extension: None,
             extension_requires_probe: false,
         },
-        GlOperationProbe::NotRun,
+        report.indirect_draw.to_operation_probe(),
     );
     builder.resolve(
         GlCapability::IndirectDispatch,
@@ -197,8 +266,10 @@ pub(super) fn discover_with_query(
             extension: None,
             extension_requires_probe: false,
         },
-        GlOperationProbe::NotRun,
+        report.indirect_dispatch.to_operation_probe(),
     );
+    // No probe (and no glow entry point) exists for multi-draw-indirect, so
+    // the fact stays `NotRun` and the capability can never silently enable.
     builder.resolve(
         GlCapability::MultiDrawIndirect,
         CoreOrExtension {
@@ -207,7 +278,7 @@ pub(super) fn discover_with_query(
             extension: None,
             extension_requires_probe: false,
         },
-        GlOperationProbe::NotRun,
+        report.multi_draw_indirect.to_operation_probe(),
     );
     builder.resolve(
         GlCapability::TimerQuery,
@@ -217,9 +288,56 @@ pub(super) fn discover_with_query(
             extension: None,
             extension_requires_probe: false,
         },
+        // The counter-width observation is a limit read, not a command probe;
+        // `limits.query_counter_bits` carries the real `glGetQueryiv` answer.
         GlOperationProbe::NotRequired,
     );
     Ok(builder.build())
+}
+
+/// Records the actual `GL_CONTEXT_FLAGS`/profile mask as evidence context
+/// flags, falling back to explicit "unavailable" markers instead of defaults.
+fn context_flags(
+    query: &impl NativeGlQuery,
+    profile: GlFamilyProfile,
+) -> Result<GlContextFlags, NativeDiscoveryError> {
+    let mut flags = GlContextFlags::default();
+    const CONTEXT_FLAGS: u32 = 0x821E;
+    const CONTEXT_PROFILE_MASK: u32 = 0x9126;
+    const CONTEXT_CORE_PROFILE_BIT: i64 = 0x0000_0001;
+    const CONTEXT_COMPATIBILITY_PROFILE_BIT: i64 = 0x0000_0002;
+    const CONTEXT_ROBUST_ACCESS: u32 = 0x90F3;
+    match profile {
+        GlFamilyProfile::Desktop { .. } => {
+            if let Some(bits) = query.integer(CONTEXT_FLAGS) {
+                flags.other.insert(format!("gl.context-flags=0x{bits:08x}"));
+                flags.debug = bits & 0x0000_0002 != 0;
+                flags.forward_compatible = bits & 0x0000_0001 != 0;
+                flags.no_error = bits & 0x0000_0008 != 0;
+            } else {
+                flags
+                    .other
+                    .insert("gl.context-flags-unavailable=true".into());
+            }
+            if let Some(mask) = query.integer(CONTEXT_PROFILE_MASK) {
+                if mask & CONTEXT_CORE_PROFILE_BIT != 0 {
+                    flags.other.insert("gl.profile=core".into());
+                } else if mask & CONTEXT_COMPATIBILITY_PROFILE_BIT != 0 {
+                    flags.other.insert("gl.profile=compatibility".into());
+                }
+            }
+            if let Some(robust) = query.integer(CONTEXT_ROBUST_ACCESS) {
+                flags.robust_access = robust != 0;
+            }
+        }
+        GlFamilyProfile::Embedded { .. } | GlFamilyProfile::WebGl2 => {
+            // ES and WebGL2 expose no context-flags query to discovery, and
+            // robustness context creation is Host-owned; record the absence
+            // explicitly instead of pretending defaults were observed.
+            flags.other.insert("gl.context-flags=unavailable".into());
+        }
+    }
+    Ok(flags)
 }
 
 pub(super) fn required_string(
@@ -249,14 +367,14 @@ fn extensions(
         result.report_raw(name);
     }
     // Native GL entry points are loaded by the provider before it constructs
-    // glow.  Record that acquisition only for typed, legal names; command
-    // probes are intentionally left absent and therefore cannot enable an
-    // extension-only capability.
+    // glow. Record acquisition only for typed, legal names; the operation
+    // probes in `run_operation_probes` remain the real enablement evidence.
     for known in [
         GlKnownExtension::ArbComputeShader,
         GlKnownExtension::ArbShaderStorageBufferObject,
         GlKnownExtension::ArbShaderImageLoadStore,
         GlKnownExtension::ExtTextureFilterAnisotropic,
+        GlKnownExtension::OesTextureFloatLinear,
         GlKnownExtension::KhrRobustness,
         GlKnownExtension::KhrDebug,
     ] {
@@ -271,6 +389,7 @@ fn limits(
     query: &impl NativeGlQuery,
     profile: GlFamilyProfile,
     extensions: &GlExtensionSet,
+    report: &ProbeReport,
 ) -> Result<GlLimits, NativeDiscoveryError> {
     let u = |token, name| nonnegative(query.integer(token), name);
     let pair = query
@@ -473,47 +592,131 @@ fn limits(
             glow_const::MAX_COMPUTE_WORK_GROUP_INVOCATIONS,
             "GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS",
         )?,
+        // No GL family exposes a portable multi-draw-indirect count limit
+        // query; the honest fact stays `None` (unbounded/unqueried), and
+        // enablement is governed by route evidence plus the operation probe.
         max_multi_draw_indirect_count: None,
-        // GL_QUERY_COUNTER_BITS is queried with glGetQueryiv(target, pname),
-        // not glGetIntegerv. The small discovery trait intentionally has no
-        // query-object API, so preserve it as unavailable instead of issuing
-        // an invalid query or inferring timer support from a version string.
-        query_counter_bits: 0,
+        query_counter_bits: report.query_counter_bits.unwrap_or(0),
         max_texture_anisotropy: anisotropy,
     })
 }
 
-pub(super) fn baseline_formats(
+/// Builds the complete native format table: core baselines plus every fact the
+/// operation probes actually observed.
+///
+/// Float facts are probe facts. Neither RGBA16F nor RGBA32F renderability is
+/// core-guaranteed on every accepted native profile (ES 3.x requires
+/// `EXT_color_buffer_float` and desktop depends on the exact version), and the
+/// same holds for float depth rendering, so all of them are recorded only with
+/// `OperationProbed` evidence from real framebuffer-completeness probes.
+pub(super) fn native_formats(
     profile: GlFamilyProfile,
+    extensions: &GlExtensionSet,
+    max_samples: u32,
+    report: &ProbeReport,
 ) -> Result<GlFormatTable, NativeDiscoveryError> {
     let mut table = GlFormatTable::default();
-    for format in [
-        GlFormat::Rgba8Unorm,
-        GlFormat::Rgba8Srgb,
-        GlFormat::Depth32Float,
-    ] {
-        table
-            .record(GlFormatCapabilities {
+    let mut record = |facts: GlFormatCapabilities| {
+        table.record(facts).map_err(|error| {
+            NativeDiscoveryError::Snapshot(GlDiscoveryError::InvalidFormats(error))
+        })
+    };
+    // RGBA8 sRGB baseline is an unconditional guarantee of every accepted
+    // profile. `Rgba8Unorm` is recorded below together with its probed
+    // storage-image facts so the table never sees two conflicting records.
+    record(GlFormatCapabilities {
+        format: GlFormat::Rgba8Srgb,
+        resource_kind: GlFormatResourceKind::Texture,
+        sample_count: 1,
+        evidence: GlFormatEvidence::CoreGuaranteed,
+        sampled: true,
+        filterable: true,
+        renderable: true,
+        blendable: true,
+        storage_read: false,
+        storage_write: false,
+        copy_source: true,
+        copy_destination: true,
+    })?;
+    // RGBA8 storage-image facts: recorded when the image load/store probe ran,
+    // regardless of outcome, so a failed probe is distinguishable from absent
+    // evidence and can never silently enable the capability.
+    let rgba8_storage = report.rgba8_storage == ProbeAnswer::Passed;
+    let mut rgba8_unorm = rgba8_texture_facts();
+    if report.rgba8_storage.ran() {
+        rgba8_unorm.evidence = GlFormatEvidence::OperationProbed;
+        rgba8_unorm.storage_read = rgba8_storage;
+        rgba8_unorm.storage_write = rgba8_storage;
+    }
+    record(rgba8_unorm)?;
+    // RGBA8 renderbuffer facts: color-renderable storage for every accepted
+    // profile, at single sample and at the portable multisample counts.
+    for sample_count in [1, 4, 8] {
+        if sample_count > max_samples {
+            continue;
+        }
+        for format in [GlFormat::Rgba8Unorm, GlFormat::Rgba8Srgb] {
+            record(GlFormatCapabilities {
                 format,
-                resource_kind: GlFormatResourceKind::Texture,
-                sample_count: 1,
-                // These are the unconditional profile baseline, not driver
-                // operation probes.  Optional formats stay absent until a
-                // provider records a real operation probe.
+                resource_kind: GlFormatResourceKind::Renderbuffer,
+                sample_count,
                 evidence: GlFormatEvidence::CoreGuaranteed,
-                sampled: true,
-                filterable: format != GlFormat::Depth32Float,
+                sampled: false,
+                filterable: false,
                 renderable: true,
-                blendable: format != GlFormat::Depth32Float,
+                blendable: true,
                 storage_read: false,
                 storage_write: false,
-                copy_source: format != GlFormat::Depth32Float,
-                copy_destination: format != GlFormat::Depth32Float,
-            })
-            .map_err(|error| {
-                NativeDiscoveryError::Snapshot(GlDiscoveryError::InvalidFormats(error))
+                copy_source: false,
+                copy_destination: false,
             })?;
+        }
     }
+    // Float depth facts come only from real attachment probes; without probe
+    // evidence renderability stays false instead of an optimistic core claim.
+    record(depth_fact(
+        GlFormatResourceKind::Texture,
+        report.depth_texture_attachment,
+    )?)?;
+    if report.depth_renderbuffer_attachment.ran() {
+        record(depth_fact(
+            GlFormatResourceKind::Renderbuffer,
+            report.depth_renderbuffer_attachment,
+        )?)?;
+    }
+    // RGBA8 storage-image facts: (recorded above with the unorm baseline)
+    // Float color facts are recorded only when their attachment probe ran:
+    // a failed probe records `renderable: false` with operation evidence, and
+    // an absent probe backend leaves the format out of the table entirely
+    // (the contract rejects an unsupported core guarantee for float formats).
+    let float32_filterable = match profile {
+        // Desktop GL 4.x core lists both float formats as texture-filterable.
+        GlFamilyProfile::Desktop { .. } => true,
+        // ES 3.x requires OES_texture_float_linear for 32F filtering.
+        _ => extensions.is_acquired(GlKnownExtension::OesTextureFloatLinear),
+    };
+    if report.rgba16f_attachment.ran() {
+        record(float_fact(
+            GlFormat::Rgba16Float,
+            // Half-float textures are texture-filterable in every accepted core.
+            true,
+            report.rgba16f_attachment,
+            // ES forbids blending with float attachments until EXT_float_blend;
+            // desktop core permits 16F blending wherever rendering is legal.
+            matches!(profile, GlFamilyProfile::Desktop { .. }),
+        )?)?;
+    }
+    if report.rgba32f_attachment.ran() {
+        record(float_fact(
+            GlFormat::Rgba32Float,
+            float32_filterable,
+            report.rgba32f_attachment,
+            // 32F blending additionally requires EXT_float_blend, whose typed
+            // route exists only for the browser profile; native ES stays false.
+            matches!(profile, GlFamilyProfile::Desktop { .. }),
+        )?)?;
+    }
+    // Core compressed guarantees are unchanged.
     for format in [
         GlFormat::Etc2Rgb8Unorm,
         GlFormat::Etc2Rgb8Srgb,
@@ -527,27 +730,98 @@ pub(super) fn baseline_formats(
         GlFormat::EacRg11Snorm,
     ] {
         if format.is_core_compressed_for(profile) {
-            table
-                .record(GlFormatCapabilities {
-                    format,
-                    resource_kind: GlFormatResourceKind::Texture,
-                    sample_count: 1,
-                    evidence: GlFormatEvidence::CoreGuaranteed,
-                    sampled: true,
-                    filterable: false,
-                    renderable: false,
-                    blendable: false,
-                    storage_read: false,
-                    storage_write: false,
-                    copy_source: false,
-                    copy_destination: false,
-                })
-                .map_err(|error| {
-                    NativeDiscoveryError::Snapshot(GlDiscoveryError::InvalidFormats(error))
-                })?;
+            record(GlFormatCapabilities {
+                format,
+                resource_kind: GlFormatResourceKind::Texture,
+                sample_count: 1,
+                evidence: GlFormatEvidence::CoreGuaranteed,
+                sampled: true,
+                filterable: false,
+                renderable: false,
+                blendable: false,
+                storage_read: false,
+                storage_write: false,
+                copy_source: false,
+                copy_destination: false,
+            })?;
         }
     }
     Ok(table)
+}
+
+fn rgba8_texture_facts() -> GlFormatCapabilities {
+    GlFormatCapabilities {
+        format: GlFormat::Rgba8Unorm,
+        resource_kind: GlFormatResourceKind::Texture,
+        sample_count: 1,
+        evidence: GlFormatEvidence::CoreGuaranteed,
+        sampled: true,
+        filterable: true,
+        renderable: true,
+        blendable: true,
+        storage_read: false,
+        storage_write: false,
+        copy_source: true,
+        copy_destination: true,
+    }
+}
+
+/// Builds the `Depth32Float` fact for one resource kind from its probe.
+///
+/// The common contract requires a single-sample depth fact in every snapshot;
+/// when no probe evidence exists the record stays conservative (`renderable`
+/// false) instead of claiming the profile guarantees float depth rendering.
+fn depth_fact(
+    resource_kind: GlFormatResourceKind,
+    probe: ProbeAnswer,
+) -> Result<GlFormatCapabilities, NativeDiscoveryError> {
+    let renderable = probe == ProbeAnswer::Passed;
+    let evidence = if probe.ran() {
+        GlFormatEvidence::OperationProbed
+    } else {
+        GlFormatEvidence::CoreGuaranteed
+    };
+    Ok(GlFormatCapabilities {
+        format: GlFormat::Depth32Float,
+        resource_kind,
+        sample_count: 1,
+        evidence,
+        sampled: resource_kind == GlFormatResourceKind::Texture,
+        filterable: false,
+        renderable,
+        blendable: false,
+        storage_read: false,
+        storage_write: false,
+        copy_source: false,
+        copy_destination: false,
+    })
+}
+
+/// Builds one float color format fact from its attachment probe. Callers only
+/// invoke this when the probe ran, so the evidence is always operation based.
+fn float_fact(
+    format: GlFormat,
+    filterable: bool,
+    probe: ProbeAnswer,
+    blend_when_renderable: bool,
+) -> Result<GlFormatCapabilities, NativeDiscoveryError> {
+    let renderable = probe == ProbeAnswer::Passed;
+    Ok(GlFormatCapabilities {
+        format,
+        resource_kind: GlFormatResourceKind::Texture,
+        sample_count: 1,
+        // Float textures are samplable on every accepted core; the record's
+        // evidence marks the concrete attachment probe that proved rendering.
+        evidence: GlFormatEvidence::OperationProbed,
+        sampled: true,
+        filterable,
+        renderable,
+        blendable: renderable && blend_when_renderable,
+        storage_read: false,
+        storage_write: false,
+        copy_source: renderable,
+        copy_destination: renderable,
+    })
 }
 
 fn nonnegative(value: Option<i64>, name: &'static str) -> Result<u32, NativeDiscoveryError> {

@@ -15,8 +15,8 @@ use std::rc::Rc;
 use raw_window_handle::{DisplayHandle, RawDisplayHandle, RawWindowHandle, WindowHandle};
 
 use super::{
-    ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyProfile,
-    OwnerThreadIdentity,
+    ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyApi as _,
+    GlFamilyProfile, GlSurfaceLeaseBook, OwnerThreadIdentity,
 };
 
 use glutin_wgl_sys::{wgl, wgl_extra};
@@ -175,6 +175,8 @@ pub(crate) enum WglContextError {
     /// The requested context was created but did not report desktop GL 4.3+
     /// core-profile facts when queried from the actual current context.
     ActualContext { version: String, profile_mask: i32 },
+    /// The context was usable but discovery could not gather complete facts.
+    Discovery(String),
     /// A provider call was issued from another Rust thread.
     WrongThread {
         expected: OwnerThreadIdentity,
@@ -232,9 +234,13 @@ pub(crate) struct WglContextSurface {
     hdc: Hdc,
     hglrc: wgl::types::HGLRC,
     glow: glow::Context,
+    snapshot: GlDiscoverySnapshot,
+    surface: GlSurfaceLeaseBook,
     owner_thread: OwnerThreadIdentity,
     lifecycle: Cell<GlContextLifecycle>,
     extent: Cell<[u32; 2]>,
+    /// Provider-local slot counter for back-buffer image identities.
+    present_slot: Cell<u32>,
     _not_send_sync: PhantomData<Rc<()>>,
 }
 
@@ -319,12 +325,31 @@ impl WglContextSurface {
         // stores function pointers; command use remains behind `with_current`.
         let glow = unsafe { glow::Context::from_loader_function(load_wgl_symbol) };
         verify_actual_desktop_core_context(&glow)?;
+        // Discovery (including the capability operation probes) observes the
+        // exact current context before construction completes; a failure here
+        // keeps the transaction roll-backed by `cleanup`.
+        let snapshot = unsafe {
+            super::native::discover_current_glow_with_loader(&glow, stamp, load_wgl_symbol)
+        }
+        .map_err(|error| {
+            WglContextError::Discovery(format!("native GL discovery failed: {error:?}"))
+        })?;
+        match snapshot.context().profile() {
+            GlFamilyProfile::Desktop { major: 4, minor } if minor >= 3 => {}
+            profile => {
+                return Err(WglContextError::Discovery(format!(
+                    "WGL context did not report desktop core GL 4.3+: {profile:?}"
+                )));
+            }
+        }
         let result = Self {
             stamp,
             hwnd,
             hdc,
             hglrc: core,
             glow,
+            snapshot,
+            surface: GlSurfaceLeaseBook::new(),
             owner_thread: OwnerThreadIdentity::current(),
             lifecycle: Cell::new(if extent.contains(&0) {
                 GlContextLifecycle::Suspended
@@ -332,6 +357,7 @@ impl WglContextSurface {
                 GlContextLifecycle::Active
             }),
             extent: Cell::new(extent),
+            present_slot: Cell::new(0),
             _not_send_sync: PhantomData,
         };
         // Only transfer final-context destruction after its actual driver
@@ -351,27 +377,13 @@ impl WglContextSurface {
         callback(&self.glow)
     }
 
-    /// Discovers immutable native evidence after checking the actual WGL
-    /// context, rather than treating the requested attributes as authority.
-    pub(crate) fn discover(&self) -> Result<GlDiscoverySnapshot, GlError> {
-        self.with_current("discover WGL context", |glow| {
-            // SAFETY: `with_current` just bound this exact RHI-owned context
-            // on its owner thread and keeps access serialized for the closure.
-            let snapshot = unsafe { super::native::discover_current_glow(glow, self.stamp) }
-                .map_err(|error| GlError::Driver {
-                    operation: "discover WGL context",
-                    message: format!("native GL discovery failed: {error:?}"),
-                })?;
-            match snapshot.context().profile() {
-                GlFamilyProfile::Desktop { major: 4, minor } if minor >= 3 => Ok(snapshot),
-                profile => Err(GlError::Driver {
-                    operation: "discover WGL context",
-                    message: format!(
-                        "WGL context did not report desktop core GL 4.3+: {profile:?}"
-                    ),
-                }),
-            }
-        })
+    /// Returns the discovery evidence gathered when this context opened.
+    ///
+    /// Discovery ran once against the exact current context during
+    /// construction, so it needs no repeat currentness and never re-queries.
+    pub(crate) fn discover(&self) -> Result<&GlDiscoverySnapshot, GlError> {
+        self.bind_current("discover WGL context")?;
+        Ok(&self.snapshot)
     }
 
     /// Presents the RHI-owned back buffer to the Host-owned live window.
@@ -436,6 +448,20 @@ impl WglContextSurface {
             Ok(())
         } else {
             Err(WglContextError::Lifecycle(self.lifecycle.get()).as_gl_error("WGL suspend"))
+        }
+    }
+
+    /// Reattaches a suspended context after the Host window became available.
+    pub(crate) fn resume(&self) -> Result<(), GlError> {
+        self.assert_owner("WGL resume")
+            .map_err(|error| error.as_gl_error("WGL resume"))?;
+        match self.lifecycle.get() {
+            GlContextLifecycle::Suspended => {
+                self.lifecycle.set(GlContextLifecycle::Active);
+                Ok(())
+            }
+            GlContextLifecycle::Active => Ok(()),
+            lifecycle => Err(WglContextError::Lifecycle(lifecycle).as_gl_error("WGL resume")),
         }
     }
 
@@ -679,6 +705,130 @@ fn is_desktop_gl_43_or_newer(version: &str) -> bool {
 
 fn last_os_error() -> String {
     std::io::Error::last_os_error().to_string()
+}
+
+/// Family-owner facet of the WGL surface provider.
+///
+/// The provider owns the context and the surface, so it also answers the
+/// owner/lifecycle questions the presentation domain preflights. GL object
+/// domains stay with the borrowed-context executor (`NativeGlProvider`),
+/// which the caller assembles over `glow` while this provider is current.
+impl super::GlFamilyApi for WglContextSurface {
+    fn lifecycle(&self) -> GlContextLifecycle {
+        self.lifecycle.get()
+    }
+
+    fn owner_thread(&self) -> OwnerThreadIdentity {
+        self.owner_thread
+    }
+
+    fn assert_owner_thread(&self, operation: &'static str) -> Result<(), GlError> {
+        self.assert_owner(operation)
+            .map_err(|error| error.as_gl_error(operation))
+    }
+
+    fn discovery(&self) -> &GlDiscoverySnapshot {
+        &self.snapshot
+    }
+
+    /// Records loss durably. The native context is Host-owned, so this only
+    /// freezes the surface state; every acquire lease is invalidated.
+    fn context_lost(&mut self) -> Result<(), GlError> {
+        self.assert_owner("context-lost")
+            .map_err(|error| error.as_gl_error("context-lost"))?;
+        self.lifecycle.set(GlContextLifecycle::Lost);
+        let _ = self.surface.invalidate_generation();
+        Ok(())
+    }
+
+    /// A WGL surface cannot resurrect its own context: the Host recreates it
+    /// through [`WglContextSurface::open`], which re-runs discovery under a
+    /// new stamp instead of pretending the old generation came back.
+    fn context_restored(&mut self) -> Result<ContextStamp, GlError> {
+        Err(GlError::Unsupported {
+            operation: "context-restored",
+            reason: "re-open the WGL provider with a newly created context instead",
+        })
+    }
+}
+
+/// Surface presentation over the RHI-owned WGL back buffer.
+///
+/// The Host owns the window and its size events; this domain records the
+/// drawable extent, invalidates acquire leases on every transition, and hands
+/// the actual flip to `SwapBuffers`. It never schedules frames or touches the
+/// event loop.
+impl super::GlSurfacePresentationApi for WglContextSurface {
+    fn acquire_surface_image(&mut self) -> Result<super::GlSurfaceAcquire, GlError> {
+        const OP: &str = "acquire-surface-image";
+        self.assert_owner(OP)
+            .map_err(|error| error.as_gl_error(OP))?;
+        if self.lifecycle.get() != GlContextLifecycle::Active {
+            // A suspended or lost drawable cannot present; report suspension
+            // instead of handing out an unbacked lease.
+            return Ok(super::GlSurfaceAcquire::Suspended);
+        }
+        let [width, height] = self.extent.get();
+        if width == 0 || height == 0 {
+            return Ok(super::GlSurfaceAcquire::Suspended);
+        }
+        let size = super::GlSurfaceSize { width, height };
+        // Surface-image identities come from a provider-local counter because
+        // the WGL back buffer is a single implicit allocation.
+        self.present_slot
+            .set(self.present_slot.get().wrapping_add(1));
+        let image = super::SurfaceImageId::new(self.context_stamp(), self.present_slot.get(), 0);
+        let lease = self.surface.acquire(image, size)?;
+        Ok(super::GlSurfaceAcquire::Lease(lease))
+    }
+
+    fn resize_surface(&mut self, size: super::GlSurfaceSize) -> Result<(), GlError> {
+        const OP: &str = "resize-surface";
+        self.assert_owner(OP)
+            .map_err(|error| error.as_gl_error(OP))?;
+        // Resize always invalidates outstanding acquire leases first. The
+        // Host owns the actual Win32 window size; this records the drawable
+        // fact the presentation domain must match.
+        self.surface.invalidate_generation()?;
+        match self.lifecycle.get() {
+            GlContextLifecycle::Active | GlContextLifecycle::Suspended => {
+                self.extent.set([size.width, size.height]);
+                self.lifecycle.set(if size.is_zero() {
+                    GlContextLifecycle::Suspended
+                } else {
+                    GlContextLifecycle::Active
+                });
+                Ok(())
+            }
+            lifecycle => Err(WglContextError::Lifecycle(lifecycle).as_gl_error(OP)),
+        }
+    }
+
+    fn suspend_surface(&mut self) -> Result<(), GlError> {
+        const OP: &str = "suspend-surface";
+        self.assert_owner(OP)
+            .map_err(|error| error.as_gl_error(OP))?;
+        self.surface.invalidate_generation()?;
+        self.suspend()
+    }
+
+    fn resume_surface(&mut self) -> Result<(), GlError> {
+        const OP: &str = "resume-surface";
+        self.assert_owner(OP)
+            .map_err(|error| error.as_gl_error(OP))?;
+        self.surface.invalidate_generation()?;
+        self.resume()
+    }
+
+    fn present_surface(&mut self, lease: super::GlSurfaceLease) -> Result<(), GlError> {
+        const OP: &str = "present-surface";
+        self.validate_object_context(OP, lease.image.context)?;
+        self.surface.consume(lease)?;
+        // The flip happens after the lease is consumed: a rejected swap must
+        // not resurrect a consumed lease, and the caller retries with a new
+        // acquisition.
+        self.present()
+    }
 }
 
 #[cfg(test)]
