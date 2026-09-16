@@ -9,7 +9,9 @@ use super::super::{
     ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyApi, GlSurfaceAcquire,
     GlSurfaceLease, GlSurfacePresentationApi, GlSurfaceSize, OwnerThreadIdentity, SurfaceImageId,
 };
-use super::{EglGlesContext, EglPbufferSize, EglProviderError, EglSurfaceKind};
+use super::{
+    EglGlesContext, EglPbufferSize, EglProviderError, EglSurfaceKind, check_drawable_extent,
+};
 
 /// Family-owner facet of the EGL surface provider.
 ///
@@ -60,6 +62,31 @@ impl GlFamilyApi for EglGlesContext {
 /// honestly non-presentable. The Host owns window resize events, so a window
 /// resize only records the observable surface size; pbuffers recreate their
 /// owned EGL surface exactly like `resize` always did.
+///
+/// # What this domain deliberately does not do (audit P1-11, residue)
+///
+/// It does not apply the observed [`GlSurfaceSize`] to the GL viewport. That is
+/// not an omission a later call here would fix:
+///
+/// 1. The GL viewport is a single piece of context-global state with no
+///    association to a drawable, and this provider does not own the
+///    draw-framebuffer binding. A viewport written from an acquisition or a
+///    resize would land on whichever framebuffer happened to be bound, and the
+///    next pass's own `GlRasterDescriptor` viewport would overwrite it, so the
+///    write would be both unordered and ineffective.
+/// 2. No Layer-1 pass can target the default framebuffer at all:
+///    `GlFramebufferDescriptor::validate` rejects an attachment-less
+///    framebuffer, so the window system's own surface has no Layer-1 pass to
+///    render through yet. Which viewport a default-framebuffer pass renders
+///    with is therefore a Layer 2/3 decision, not a provider decision.
+///
+/// What this domain does enforce is the fact it owns: the extent EGL reports
+/// for the live surface (or the pbuffer extent it was constructed with) is
+/// bounded by the context's recorded maximum viewport dimensions, and an
+/// extent the context could not map is rejected fail-closed before any lease
+/// changes state. Applying a viewport needs a default-framebuffer pass contract
+/// that does not exist in this layer; the viewport residue is NOT CLOSED here
+/// and is recorded as such.
 impl GlSurfacePresentationApi for EglGlesContext {
     fn acquire_surface_image(&mut self) -> Result<GlSurfaceAcquire, GlError> {
         const OP: &str = "acquire-surface-image";
@@ -75,6 +102,14 @@ impl GlSurfacePresentationApi for EglGlesContext {
         if size.is_zero() {
             return Ok(GlSurfaceAcquire::Suspended);
         }
+        // The observed extent is bounded before a lease is handed out, so a
+        // surface this context cannot map never becomes a leased presentation
+        // target.
+        check_drawable_extent(
+            self.snapshot.limits().max_viewport_dimensions,
+            [size.width, size.height],
+        )
+        .map_err(EglProviderError::into_gl_error)?;
         self.present_slot = self.present_slot.wrapping_add(1);
         let image = SurfaceImageId::new(self.stamp, self.present_slot as u32, 0);
         let lease = self.surface_leases.acquire(image, size)?;
@@ -84,6 +119,14 @@ impl GlSurfacePresentationApi for EglGlesContext {
     fn resize_surface(&mut self, size: GlSurfaceSize) -> Result<(), GlError> {
         const OP: &str = "resize-surface";
         self.assert_owner(OP)?;
+        // Bounded before the lease invalidation, which is a side effect: an
+        // extent this context cannot map must not cost the caller its
+        // outstanding leases.
+        check_drawable_extent(
+            self.snapshot.limits().max_viewport_dimensions,
+            [size.width, size.height],
+        )
+        .map_err(EglProviderError::into_gl_error)?;
         // Resize always invalidates outstanding acquire leases first.
         self.surface_leases.invalidate_generation()?;
         match self.kind {

@@ -12,6 +12,15 @@
 //! XCB, GBM, DRM, or Android handles here would require guessing extension ABI
 //! calls. Such handles fail closed and this module makes no portable Android
 //! support claim.
+//!
+//! It does not own Fluxel's GL object tables, the render pass, or the viewport
+//! a pass renders with, and it never resizes the Host's window. The drawable
+//! extent it observes is bounded by the context's recorded viewport limit; see
+//! `presentation.rs` for why applying a viewport is not this layer's job.
+//!
+//! `presentation.rs` holds the family-owner and surface-presentation facets and
+//! `tests/mod.rs` holds the pure-logic tests; this file is context and surface
+//! construction, discovery wiring, and teardown.
 
 use core::ffi::c_void;
 use core::ptr;
@@ -22,6 +31,8 @@ use std::rc::{Rc, Weak};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 mod presentation;
+#[cfg(test)]
+mod tests;
 
 use super::{
     ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyProfile,
@@ -125,6 +136,17 @@ pub(crate) enum EglProviderError {
         requested: EglGlesVersion,
         observed: String,
     },
+    /// A surface extent this context cannot map to a viewport was observed.
+    ///
+    /// The extent is a real observation here -- EGL answers the live surface's
+    /// dimensions, unlike WGL where the Host's window size is the only source.
+    /// The maximum viewport dimensions that bound it come from the same
+    /// discovery snapshot, and a surface above them could only be rejected later
+    /// by an unrelated pass.
+    DrawableExtentExceedsViewportLimit {
+        requested: [u32; 2],
+        limit: [u32; 2],
+    },
     /// The provider was used from a thread other than its owner.
     Gl(GlError),
 }
@@ -144,6 +166,15 @@ impl EglProviderError {
             Self::Egl { operation, error } => GlError::Driver {
                 operation,
                 message: format!("EGL error: {error:?}"),
+            },
+            // Several presentation entry points observe an extent, and this
+            // flattening point is below all of them, so the label names the
+            // fact that failed rather than guessing which caller found it.
+            Self::DrawableExtentExceedsViewportLimit { requested, limit } => GlError::Validation {
+                operation: "drawable-extent",
+                message: format!(
+                    "drawable extent {requested:?} exceeds the maximum viewport dimensions {limit:?}"
+                ),
             },
             other => GlError::Driver {
                 operation: "egl-provider",
@@ -361,15 +392,34 @@ impl EglGlesContext {
                 observed,
             });
         }
+        // The EGL display's own identity strings exist only here, so they are
+        // read while this display is initialized and this exact context is
+        // current (audit P2-6).
+        let driver_identity = egl_driver_identity(&lease.egl, lease.display);
         // SAFETY: the current context serves every discovery query and probe.
-        let snapshot =
-            unsafe { super::native::discover_current_glow_with_loader(&glow, stamp, egl_loader) }
-                .map_err(|error| {
-                EglProviderError::Gl(GlError::Driver {
-                    operation: "discover EGL context",
-                    message: format!("native GL discovery failed: {error:?}"),
-                })
-            })?;
+        let snapshot = unsafe {
+            super::native::discover_current_glow_identified(
+                &glow,
+                stamp,
+                egl_loader,
+                &driver_identity,
+            )
+        }
+        .map_err(|error| {
+            EglProviderError::Gl(GlError::Driver {
+                operation: "discover EGL context",
+                message: format!("native GL discovery failed: {error:?}"),
+            })
+        })?;
+        // A pbuffer's extent is fixed by this construction, so it is bounded
+        // before the context is handed back; window surfaces report their live
+        // extent from EGL at each acquisition and are bounded there.
+        if let EglSurfaceKind::Pbuffer(size) = kind {
+            check_drawable_extent(
+                snapshot.limits().max_viewport_dimensions,
+                [size.width, size.height],
+            )?;
+        }
         let result = Self {
             lease,
             config,
@@ -457,12 +507,20 @@ impl EglGlesContext {
 
     /// Recreates an owned pbuffer at `size`; native window surfaces resize with
     /// the Host window and therefore require no EGL-side resize operation.
+    ///
+    /// The new extent is bounded before EGL is touched at all, so a size this
+    /// context cannot map leaves the existing surface intact rather than
+    /// destroying it and then failing.
     pub(crate) fn resize(&mut self, size: EglPbufferSize) -> Result<(), EglProviderError> {
         self.assert_owner("eglResize")?;
         let EglSurfaceKind::Pbuffer(_) = self.kind else {
             return Ok(());
         };
         size.checked()?;
+        check_drawable_extent(
+            self.snapshot.limits().max_viewport_dimensions,
+            [size.width, size.height],
+        )?;
         self.make_current()?;
         self.suspend()?;
         let old = self.surface.expect("suspend retains the EGL surface");
@@ -795,6 +853,69 @@ fn has_extension(extensions: &str, extension: &str) -> bool {
         .any(|item| item == extension)
 }
 
+/// The EGL display's own vendor and version strings.
+///
+/// The driver identity is the one fact discovery cannot read from GL: on this
+/// family it belongs to the platform layer that owns the display, and EGL is
+/// the only layer that publishes it (audit P2-6).  The GL vendor/renderer pair
+/// is already recorded as its own field, and the GL version string is recorded
+/// as `version`, so repeating either here would reproduce exactly the defect
+/// this wiring closes; what is read is the EGL implementation's own two
+/// strings, queried from the display this provider initialized.
+///
+/// A failed query or a blank answer yields an empty string, which discovery
+/// records as an unavailable identity instead of as a driver nobody observed.
+fn egl_driver_identity(egl: &Egl, display: khronos_egl::Display) -> String {
+    let read = |name: khronos_egl::Int| {
+        egl.query_string(Some(display), name)
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    compose_egl_driver_identity(&read(khronos_egl::VENDOR), &read(khronos_egl::VERSION))
+}
+
+/// Composes the platform identity from the EGL implementation's two strings.
+///
+/// `EGL` names the layer the version belongs to, so the recorded identity
+/// cannot read as a GL version even when the numbers coincide.
+fn compose_egl_driver_identity(vendor: &str, version: &str) -> String {
+    match (vendor.trim(), version.trim()) {
+        ("", "") => String::new(),
+        ("", version) => version.to_owned(),
+        (vendor, "") => vendor.to_owned(),
+        (vendor, version) => format!("{vendor} EGL {version}"),
+    }
+}
+
+/// Whether an observed surface extent can be a viewport on this context.
+///
+/// The extent is a real EGL observation (`eglQuerySurface` for the live
+/// surface), and the maximum viewport dimensions that bound it are a recorded
+/// discovery fact; recording a size above them is what would otherwise surface
+/// as an unrelated driver error in the first pass that draws into the surface.
+///
+/// A zero-area extent is not a rejection: it is how a minimized or
+/// not-yet-shown surface reports itself and becomes suspension instead.  A
+/// limit of zero means the context reported none, so nothing can be measured
+/// against it and the check cannot fail closed on a fact that was never read.
+fn within_viewport_limit(limit: [u32; 2], extent: [u32; 2]) -> bool {
+    if extent.contains(&0) || limit.contains(&0) {
+        return true;
+    }
+    extent[0] <= limit[0] && extent[1] <= limit[1]
+}
+
+/// Resolves an observed surface extent against the context's viewport limit.
+fn check_drawable_extent(limit: [u32; 2], extent: [u32; 2]) -> Result<(), EglProviderError> {
+    if within_viewport_limit(limit, extent) {
+        return Ok(());
+    }
+    Err(EglProviderError::DrawableExtentExceedsViewportLimit {
+        requested: extent,
+        limit,
+    })
+}
+
 fn display_name(handle: RawDisplayHandle) -> &'static str {
     match handle {
         RawDisplayHandle::Xlib(_) => "Xlib",
@@ -818,113 +939,5 @@ fn window_name(handle: RawWindowHandle) -> &'static str {
         RawWindowHandle::Win32(_) => "Win32",
         RawWindowHandle::AndroidNdk(_) => "AndroidNdk",
         _ => "other",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        EglGlesVersion, EglPbufferSize, current_binding_is_self, exact_context_attributes,
-        has_extension, native_window_pair, parse_gles_version, pbuffer_attributes,
-    };
-    use raw_window_handle::{
-        RawDisplayHandle, RawWindowHandle, XlibDisplayHandle, XlibWindowHandle,
-    };
-
-    #[test]
-    fn exact_gles_attributes_preserve_minor_version() {
-        assert_eq!(
-            exact_context_attributes(EglGlesVersion::V3_0),
-            [0x3098, 3, 0x3038]
-        );
-        assert_eq!(
-            exact_context_attributes(EglGlesVersion::V3_1),
-            [0x3098, 3, 0x30FB, 1, 0x3038]
-        );
-        assert_eq!(
-            exact_context_attributes(EglGlesVersion::V3_2),
-            [0x3098, 3, 0x30FB, 2, 0x3038]
-        );
-    }
-
-    #[test]
-    fn extension_match_is_token_not_substring() {
-        assert!(has_extension(
-            "EGL_KHR_create_context EGL_EXT_x",
-            "EGL_KHR_create_context"
-        ));
-        assert!(!has_extension(
-            "EGL_KHR_create_context_extra",
-            "EGL_KHR_create_context"
-        ));
-    }
-
-    #[test]
-    fn pbuffer_dimensions_are_checked_before_egl() {
-        assert_eq!(
-            pbuffer_attributes(EglPbufferSize {
-                width: 3,
-                height: 5
-            })
-            .unwrap(),
-            [0x3057, 3, 0x3056, 5, 0x3038]
-        );
-        assert!(
-            pbuffer_attributes(EglPbufferSize {
-                width: 0,
-                height: 5
-            })
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn profile_verification_parses_the_complete_reported_version() {
-        assert_eq!(
-            parse_gles_version("OpenGL ES 3.2 Mesa 25"),
-            Some(EglGlesVersion::V3_2)
-        );
-        assert_eq!(
-            parse_gles_version("OpenGL ES 3.1"),
-            Some(EglGlesVersion::V3_1)
-        );
-        assert_eq!(parse_gles_version("OpenGL ES 3.20"), None);
-        assert_eq!(parse_gles_version("4.6"), None);
-    }
-
-    #[test]
-    fn a_context_never_detaches_a_sibling_current_binding() {
-        assert!(current_binding_is_self(
-            Some("ours"),
-            Some("display"),
-            "ours",
-            "display"
-        ));
-        assert!(!current_binding_is_self(
-            Some("sibling"),
-            Some("display"),
-            "ours",
-            "display"
-        ));
-        assert!(!current_binding_is_self(
-            Some("ours"),
-            Some("other-display"),
-            "ours",
-            "display"
-        ));
-        assert!(!current_binding_is_self::<&str, &str>(
-            None, None, "ours", "display"
-        ));
-    }
-
-    #[test]
-    fn incomplete_xlib_handles_fail_before_the_unsafe_egl_boundary() {
-        let display = RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0));
-        let valid_window = RawWindowHandle::Xlib(XlibWindowHandle::new(1));
-        assert!(native_window_pair(display, valid_window).is_err());
-
-        let display = RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0));
-        let empty_window = RawWindowHandle::Xlib(XlibWindowHandle::new(0));
-        assert!(native_window_pair(display, empty_window).is_err());
     }
 }

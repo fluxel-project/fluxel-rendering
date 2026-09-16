@@ -3,6 +3,12 @@
 //! The Host owns the Win32 window and keeps its borrowed raw handle alive.
 //! RHI owns the device context lease, pixel format, WGL contexts, currentness,
 //! and presentation.  This module deliberately has no event-loop dependency.
+//!
+//! This module does not own Fluxel's GL object tables, the render pass, or the
+//! viewport any pass renders with, and it never resizes the Host's window.
+//!
+//! `gdi` below is the private Win32 ABI boundary this provider calls through;
+//! it holds no provider state. Tests live in this module's own `tests/mod.rs`.
 
 #![cfg(all(windows, feature = "native-gl-wgl"))]
 
@@ -15,11 +21,15 @@ use std::rc::Rc;
 use raw_window_handle::{DisplayHandle, RawDisplayHandle, RawWindowHandle, WindowHandle};
 
 use super::{
-    ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyApi as _,
-    GlFamilyProfile, GlSurfaceLeaseBook, OwnerThreadIdentity,
+    ContextStamp, GlContextFlags, GlContextLifecycle, GlDiscoverySnapshot, GlError,
+    GlFamilyApi as _, GlSurfaceLeaseBook, GlVersion, OwnerThreadIdentity,
 };
 
 use glutin_wgl_sys::{wgl, wgl_extra};
+
+mod gdi;
+#[cfg(test)]
+mod tests;
 
 type Hwnd = *mut c_void;
 type Hdc = *const c_void;
@@ -51,101 +61,24 @@ thread_local! {
     static RHI_CURRENT_WGL: CurrentBindingArbiter = CurrentBindingArbiter::default();
 }
 
-const PFD_DOUBLEBUFFER: u32 = 0x0000_0001;
-const PFD_DRAW_TO_WINDOW: u32 = 0x0000_0004;
-const PFD_SUPPORT_OPENGL: u32 = 0x0000_0020;
-const PFD_TYPE_RGBA: u8 = 0;
-const PFD_MAIN_PLANE: i8 = 0;
-
-/// The ABI layout used by the small GDI surface boundary below.
+/// The desktop core version this provider asks a WGL driver for.
 ///
-/// `glutin_wgl_sys` deliberately binds WGL rather than GDI's pixel-format and
-/// swap functions.  Keeping this exact private ABI here avoids pulling a
-/// windowing framework (or a second Win32 binding crate) into the provider.
-#[repr(C)]
-struct PixelFormatDescriptor {
-    size: u16,
-    version: u16,
-    flags: u32,
-    pixel_type: u8,
-    color_bits: u8,
-    red_bits: u8,
-    red_shift: u8,
-    green_bits: u8,
-    green_shift: u8,
-    blue_bits: u8,
-    blue_shift: u8,
-    alpha_bits: u8,
-    alpha_shift: u8,
-    accum_bits: u8,
-    accum_red_bits: u8,
-    accum_green_bits: u8,
-    accum_blue_bits: u8,
-    accum_alpha_bits: u8,
-    depth_bits: u8,
-    stencil_bits: u8,
-    aux_buffers: u8,
-    layer_type: i8,
-    reserved: u8,
-    layer_mask: u32,
-    visible_mask: u32,
-    damage_mask: u32,
-}
+/// The request below, the early check on the actual version string, and the
+/// check on the discovered profile all read this one constant, so the three
+/// cannot ask for, enforce, or accept different things (audit P2-12).
+///
+/// `native::discovery` owns the same decision as its `REQUIRED_DESKTOP_VERSION`
+/// and stamps it into every desktop snapshot as a recorded marker (audit
+/// P2-12/`gl.desktop-context-floor`).  That module is private to `native` and
+/// re-exports neither the constant nor the marker builder, so this file cannot
+/// name them; `verify_recorded_desktop_floor` therefore re-reads the *recorded*
+/// marker and fails this provider's `open` if the two copies ever disagree,
+/// which turns a silent divergence into a loud one at the only place that can
+/// see both.
+const REQUIRED_DESKTOP_CONTEXT: GlVersion = GlVersion::new(4, 3);
 
-impl PixelFormatDescriptor {
-    fn window_rgba() -> Self {
-        Self {
-            size: core::mem::size_of::<Self>() as u16,
-            version: 1,
-            flags: PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
-            pixel_type: PFD_TYPE_RGBA,
-            color_bits: 24,
-            red_bits: 0,
-            red_shift: 0,
-            green_bits: 0,
-            green_shift: 0,
-            blue_bits: 0,
-            blue_shift: 0,
-            alpha_bits: 8,
-            alpha_shift: 0,
-            accum_bits: 0,
-            accum_red_bits: 0,
-            accum_green_bits: 0,
-            accum_blue_bits: 0,
-            accum_alpha_bits: 0,
-            depth_bits: 24,
-            stencil_bits: 8,
-            aux_buffers: 0,
-            layer_type: PFD_MAIN_PLANE,
-            reserved: 0,
-            layer_mask: 0,
-            visible_mask: 0,
-            damage_mask: 0,
-        }
-    }
-}
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn GetDC(hwnd: Hwnd) -> Hdc;
-    fn ReleaseDC(hwnd: Hwnd, hdc: Hdc) -> c_int;
-}
-
-#[link(name = "gdi32")]
-unsafe extern "system" {
-    fn ChoosePixelFormat(hdc: Hdc, format: *const PixelFormatDescriptor) -> c_int;
-    fn GetPixelFormat(hdc: Hdc) -> c_int;
-    fn SetPixelFormat(hdc: Hdc, pixel_format: c_int, format: *const PixelFormatDescriptor)
-    -> c_int;
-    fn SwapBuffers(hdc: Hdc) -> c_int;
-}
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetModuleHandleA(module_name: *const c_char) -> *mut c_void;
-    #[link_name = "GetProcAddress"]
-    fn win32_get_proc_address(module: *mut c_void, name: *const c_char) -> *const c_void;
-}
+/// The prefix of the recorded desktop-floor marker in the discovery snapshot.
+const RECORDED_DESKTOP_FLOOR: &str = "gl.desktop-context-floor=";
 
 /// Failure while RHI owns a WGL context or its window surface.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,9 +105,20 @@ pub(crate) enum WglContextError {
     CreateCoreContext(String),
     /// The final desktop core context could not be made current.
     MakeCoreCurrent(String),
-    /// The requested context was created but did not report desktop GL 4.3+
-    /// core-profile facts when queried from the actual current context.
+    /// The requested context was created but did not report the required
+    /// desktop core version and profile when queried from the actual current
+    /// context.
     ActualContext { version: String, profile_mask: i32 },
+    /// The Host reported a drawable extent this context cannot map to a viewport.
+    ///
+    /// Native GL has no query for the default framebuffer's extent, so the size
+    /// is the Host's fact; the maximum viewport dimensions that bound it are a
+    /// fact this provider did read, and a size above them could only be rejected
+    /// later by an unrelated pass.
+    DrawableExtentExceedsViewportLimit {
+        requested: [u32; 2],
+        limit: [u32; 2],
+    },
     /// The context was usable but discovery could not gather complete facts.
     Discovery(String),
     /// A provider call was issued from another Rust thread.
@@ -213,6 +157,12 @@ impl WglContextError {
             Self::Driver { message, .. } => GlError::Driver {
                 operation,
                 message: message.clone(),
+            },
+            Self::DrawableExtentExceedsViewportLimit { requested, limit } => GlError::Validation {
+                operation,
+                message: format!(
+                    "drawable extent {requested:?} exceeds the maximum viewport dimensions {limit:?}"
+                ),
             },
             other => GlError::Driver {
                 operation,
@@ -260,27 +210,27 @@ impl WglContextSurface {
         let hwnd = host_hwnd(window, display)?;
         // SAFETY: `hwnd` came from a borrowed, live `Win32WindowHandle`; the
         // caller's Host-lifetime contract keeps it valid until our Drop.
-        let hdc = unsafe { GetDC(hwnd) };
+        let hdc = unsafe { gdi::get_dc(hwnd) };
         if hdc.is_null() {
             return Err(WglContextError::AcquireDeviceContext(last_os_error()));
         }
 
         let mut cleanup = OpenCleanup::new(hwnd, hdc);
-        let format = PixelFormatDescriptor::window_rgba();
+        let format = gdi::PixelFormatDescriptor::window_rgba();
         // SAFETY: HDC is leased above and `format` is a valid C-layout PFD for
         // the duration of this call.
-        let installed = unsafe { GetPixelFormat(hdc) };
+        let installed = unsafe { gdi::get_pixel_format(hdc) };
         if installed != 0 {
             return Err(WglContextError::PixelFormatAlreadyConfigured);
         }
         // SAFETY: same HDC/PFD validity as above; this only queries GDI.
-        let pixel_format = unsafe { ChoosePixelFormat(hdc, &format) };
+        let pixel_format = unsafe { gdi::choose_pixel_format(hdc, &format) };
         if pixel_format == 0 {
             return Err(WglContextError::ChoosePixelFormat(last_os_error()));
         }
         // SAFETY: SetPixelFormat is called once for this newly configured
         // window HDC, using the format returned from ChoosePixelFormat.
-        if unsafe { SetPixelFormat(hdc, pixel_format, &format) } == 0 {
+        if unsafe { gdi::set_pixel_format(hdc, pixel_format, &format) } == 0 {
             return Err(WglContextError::SetPixelFormat(last_os_error()));
         }
 
@@ -325,23 +275,38 @@ impl WglContextSurface {
         // stores function pointers; command use remains behind `with_current`.
         let glow = unsafe { glow::Context::from_loader_function(load_wgl_symbol) };
         verify_actual_desktop_core_context(&glow)?;
+        // The driver identity is the platform layer's string and exists only
+        // here, so it is read while this exact context is current (audit P2-6).
+        let driver_identity = wgl_driver_identity(&glow);
         // Discovery (including the capability operation probes) observes the
         // exact current context before construction completes; a failure here
         // keeps the transaction roll-backed by `cleanup`.
         let snapshot = unsafe {
-            super::native::discover_current_glow_with_loader(&glow, stamp, load_wgl_symbol)
+            super::native::discover_current_glow_identified(
+                &glow,
+                stamp,
+                load_wgl_symbol,
+                &driver_identity,
+            )
         }
         .map_err(|error| {
             WglContextError::Discovery(format!("native GL discovery failed: {error:?}"))
         })?;
-        match snapshot.context().profile() {
-            GlFamilyProfile::Desktop { major: 4, minor } if minor >= 3 => {}
-            profile => {
-                return Err(WglContextError::Discovery(format!(
-                    "WGL context did not report desktop core GL 4.3+: {profile:?}"
-                )));
-            }
+        if !snapshot
+            .context()
+            .profile()
+            .meets(Some(REQUIRED_DESKTOP_CONTEXT), None)
+        {
+            return Err(WglContextError::Discovery(format!(
+                "WGL context did not report the required desktop core version {:?}",
+                REQUIRED_DESKTOP_CONTEXT
+            )));
         }
+        verify_recorded_desktop_floor(snapshot.context().flags())?;
+        // The Host's initial drawable size is bounded at the same point as every
+        // later resize, so a provider is never handed back for a drawable whose
+        // viewport could not exist.
+        check_drawable_extent(snapshot.limits().max_viewport_dimensions, extent)?;
         let result = Self {
             stamp,
             hwnd,
@@ -391,7 +356,7 @@ impl WglContextSurface {
         self.with_current("WGL SwapBuffers", |_| {
             // SAFETY: with_current made this provider's HDC current and it
             // remains owned for the complete call.
-            if unsafe { SwapBuffers(self.hdc) } == 0 {
+            if unsafe { gdi::swap_buffers(self.hdc) } == 0 {
                 Err(WglContextError::driver("WGL SwapBuffers").as_gl_error("WGL SwapBuffers"))
             } else {
                 Ok(())
@@ -422,9 +387,16 @@ impl WglContextSurface {
     }
 
     /// Records the Host window's new drawable size; no WGL swapchain exists to resize.
+    ///
+    /// The size is validated against the context's recorded viewport bound
+    /// before any state changes, so a window the driver could not address is
+    /// rejected instead of being recorded as a usable drawable.
     pub(crate) fn resize(&self, extent: [u32; 2]) -> Result<(), GlError> {
-        self.assert_owner("WGL resize")
-            .map_err(|error| error.as_gl_error("WGL resize"))?;
+        const OP: &str = "WGL resize";
+        self.assert_owner(OP)
+            .map_err(|error| error.as_gl_error(OP))?;
+        check_drawable_extent(self.snapshot.limits().max_viewport_dimensions, extent)
+            .map_err(|error| error.as_gl_error(OP))?;
         match self.lifecycle.get() {
             GlContextLifecycle::Active | GlContextLifecycle::Suspended => {
                 self.extent.set(extent);
@@ -435,7 +407,7 @@ impl WglContextSurface {
                 });
                 Ok(())
             }
-            lifecycle => Err(WglContextError::Lifecycle(lifecycle).as_gl_error("WGL resize")),
+            lifecycle => Err(WglContextError::Lifecycle(lifecycle).as_gl_error(OP)),
         }
     }
 
@@ -537,7 +509,7 @@ impl Drop for WglContextSurface {
                 return;
             }
             RHI_CURRENT_WGL.with(|arbiter| arbiter.clear_if(self.hglrc));
-            let _ = ReleaseDC(self.hwnd, self.hdc);
+            gdi::release_dc(self.hwnd, self.hdc);
         }
     }
 }
@@ -594,7 +566,7 @@ impl Drop for OpenCleanup {
                     return;
                 }
             }
-            let _ = ReleaseDC(self.hwnd, self.hdc);
+            gdi::release_dc(self.hwnd, self.hdc);
         }
     }
 }
@@ -615,13 +587,112 @@ fn host_hwnd(
 fn core_context_attributes() -> [c_int; 7] {
     [
         wgl_extra::CONTEXT_MAJOR_VERSION_ARB as c_int,
-        4,
+        c_int::from(REQUIRED_DESKTOP_CONTEXT.major),
         wgl_extra::CONTEXT_MINOR_VERSION_ARB as c_int,
-        3,
+        c_int::from(REQUIRED_DESKTOP_CONTEXT.minor),
         wgl_extra::CONTEXT_PROFILE_MASK_ARB as c_int,
         wgl_extra::CONTEXT_CORE_PROFILE_BIT_ARB as c_int,
         0,
     ]
+}
+
+/// The exact string [`REQUIRED_DESKTOP_CONTEXT`] is recorded as.
+///
+/// Built here rather than read from the discovery module, because that module's
+/// marker builder is not visible outside `native`; `verify_recorded_desktop_floor`
+/// is what makes the duplication safe.
+fn recorded_desktop_floor() -> String {
+    format!(
+        "{RECORDED_DESKTOP_FLOOR}{}.{}",
+        REQUIRED_DESKTOP_CONTEXT.major, REQUIRED_DESKTOP_CONTEXT.minor
+    )
+}
+
+/// Requires the floor this provider asked for to be the one discovery recorded.
+///
+/// A desktop snapshot always carries the marker, so a missing or different one
+/// means this file and `native::discovery` disagree about what the family
+/// requires -- the two can no longer drift apart silently (audit P2-12).
+///
+/// It reads the recorded flags rather than the whole snapshot so the agreement
+/// it enforces is expressible as a pure check with no context in hand.
+fn verify_recorded_desktop_floor(flags: &GlContextFlags) -> Result<(), WglContextError> {
+    let expected = recorded_desktop_floor();
+    if flags.other.contains(&expected) {
+        Ok(())
+    } else {
+        Err(WglContextError::Discovery(format!(
+            "WGL provider requires {expected}, but the discovery record does not carry it"
+        )))
+    }
+}
+
+/// The Windows platform layer's driver identity for the current context.
+///
+/// Unlike an EGL display, Windows' WGL layer answers no query that names the
+/// driver it dispatched to, and the version string is already its own field in
+/// the discovery record -- repeating it here is exactly the P2-6 defect.  The
+/// installable client driver is the layer that runs these commands, and its
+/// vendor and renderer pair is the only identity it publishes, so the pair is
+/// what this provider supplies as the platform's driver identity.
+///
+/// Both reads are this function's own queries, so the error they may raise is
+/// consumed here rather than left pending for discovery to misread as a failure
+/// of the context it is about to describe.  A blank answer returns an empty
+/// string, which discovery records as an unavailable identity instead of as a
+/// driver name nobody observed.
+fn wgl_driver_identity(glow: &glow::Context) -> String {
+    use glow::HasContext as _;
+
+    // SAFETY: the caller made this exact context current on this thread and
+    // keeps it current for the whole call; both queries only read.
+    let vendor = unsafe { glow.get_parameter_string(glow::VENDOR) };
+    // SAFETY: same current-context invariant as the preceding query.
+    let renderer = unsafe { glow.get_parameter_string(glow::RENDERER) };
+    // SAFETY: same current-context invariant; this only consumes the error the
+    // two queries above may have produced.
+    let _ = unsafe { glow.get_error() };
+    driver_identity_from(&vendor, &renderer)
+}
+
+/// Composes the platform driver identity from the driver's own two strings.
+fn driver_identity_from(vendor: &str, renderer: &str) -> String {
+    match (vendor.trim(), renderer.trim()) {
+        ("", "") => String::new(),
+        ("", renderer) => renderer.to_owned(),
+        (vendor, "") => vendor.to_owned(),
+        (vendor, renderer) => format!("{vendor} {renderer}"),
+    }
+}
+
+/// Whether a Host-reported drawable extent can be a viewport on this context.
+///
+/// The drawable's size is the Host's fact on this family, and the viewport any
+/// pass must map into it is bounded by the driver's queried maximum viewport
+/// dimensions.  Recording a size the context cannot map is what would otherwise
+/// surface as an unrelated driver error in the first pass that draws into the
+/// drawable, so the bound is checked where the size is recorded.
+///
+/// A zero-area extent is not a rejection: it is how a Host reports a minimized
+/// or not-yet-shown window and becomes suspension instead.  A limit of zero
+/// means the context reported none, so nothing can be measured against it and
+/// the check cannot fail closed on a fact that was never read.
+fn within_viewport_limit(limit: [u32; 2], extent: [u32; 2]) -> bool {
+    if extent.contains(&0) || limit.contains(&0) {
+        return true;
+    }
+    extent[0] <= limit[0] && extent[1] <= limit[1]
+}
+
+/// Resolves a drawable extent against the context's recorded viewport limit.
+fn check_drawable_extent(limit: [u32; 2], extent: [u32; 2]) -> Result<(), WglContextError> {
+    if within_viewport_limit(limit, extent) {
+        return Ok(());
+    }
+    Err(WglContextError::DrawableExtentExceedsViewportLimit {
+        requested: extent,
+        limit,
+    })
 }
 
 fn load_wgl_symbol(symbol: &str) -> *const c_void {
@@ -640,13 +711,13 @@ fn load_wgl_symbol(symbol: &str) -> *const c_void {
     // from the already-linked system OpenGL module.
     // SAFETY: both byte strings are NUL terminated. `opengl32` is linked by
     // `glutin_wgl_sys`; no module ownership is acquired or released here.
-    let module = unsafe { GetModuleHandleA(c"opengl32.dll".as_ptr()) };
+    let module = unsafe { gdi::opengl32_module() };
     if module.is_null() {
         return core::ptr::null();
     }
     // SAFETY: `module` is a live borrowed module handle and `name` remains
     // alive until the OS has finished copying/reading the symbol string.
-    unsafe { win32_get_proc_address(module, name.as_ptr()) }
+    unsafe { gdi::module_proc_address(module, name.as_ptr()) }
 }
 
 fn usable_wgl_proc(proc: *const c_void) -> bool {
@@ -673,7 +744,7 @@ fn verify_actual_desktop_core_context(glow: &glow::Context) -> Result<(), WglCon
     // SAFETY: consumes the error produced by precisely the preceding query.
     if unsafe { glow.get_error() } != glow::NO_ERROR
         || (profile_mask & 0x0000_0001) == 0
-        || !is_desktop_gl_43_or_newer(&version)
+        || !meets_required_desktop_context(&version)
     {
         return Err(WglContextError::ActualContext {
             version,
@@ -683,24 +754,27 @@ fn verify_actual_desktop_core_context(glow: &glow::Context) -> Result<(), WglCon
     Ok(())
 }
 
-fn is_desktop_gl_43_or_newer(version: &str) -> bool {
-    let Some(prefix) = version.split_whitespace().next() else {
-        return false;
-    };
+/// Whether an actual version string meets [`REQUIRED_DESKTOP_CONTEXT`].
+///
+/// The requirement is a floor, not a spelling: it compares parsed components
+/// against the same constant the context was requested with, so a relaxation
+/// cannot move the request without moving the check (audit P2-12).  Which
+/// desktop majors this family accepts at all stays where it belongs -- in the
+/// profile parser, which answers it for every domain at once.
+fn meets_required_desktop_context(version: &str) -> bool {
+    parse_version(version).is_some_and(|actual| REQUIRED_DESKTOP_CONTEXT.is_met_by(actual))
+}
+
+fn parse_version(version: &str) -> Option<GlVersion> {
+    let prefix = version.split_whitespace().next()?;
     let mut components = prefix.split('.');
-    let Some(major) = components
+    let major = components
         .next()
-        .and_then(|component| component.parse::<u8>().ok())
-    else {
-        return false;
-    };
-    let Some(minor) = components
+        .and_then(|component| component.parse::<u8>().ok())?;
+    let minor = components
         .next()
-        .and_then(|component| component.parse::<u8>().ok())
-    else {
-        return false;
-    };
-    major == 4 && minor >= 3
+        .and_then(|component| component.parse::<u8>().ok())?;
+    Some(GlVersion::new(major, minor))
 }
 
 fn last_os_error() -> String {
@@ -758,6 +832,30 @@ impl super::GlFamilyApi for WglContextSurface {
 /// drawable extent, invalidates acquire leases on every transition, and hands
 /// the actual flip to `SwapBuffers`. It never schedules frames or touches the
 /// event loop.
+///
+/// # What this domain deliberately does not do (audit P1-11, residue)
+///
+/// It does not apply the recorded [`super::GlSurfaceSize`] to the GL viewport.
+/// That is not an omission that a later call here would fix:
+///
+/// 1. The GL viewport is a single piece of context-global state with no
+///    association to a drawable, and this provider does not own the
+///    draw-framebuffer binding. Writing a viewport from a resize would land on
+///    whichever framebuffer happened to be bound and would then be overwritten
+///    by the next pass's own `GlRasterDescriptor` viewport, so the write would
+///    be both unordered and ineffective.
+/// 2. No Layer-1 pass can target the default framebuffer at all:
+///    `GlFramebufferDescriptor::validate` rejects an attachment-less
+///    framebuffer, so the swapchain has no Layer-1 pass to render through yet.
+///    Which viewport a default-framebuffer pass renders with is therefore a
+///    Layer 2/3 decision, not a provider decision.
+///
+/// What the provider does enforce is the fact it *can* own: the drawable extent
+/// is bounded by the context's recorded maximum viewport dimensions, and an
+/// extent the context could not address is rejected fail-closed before any
+/// lease or lifecycle state changes. Applying a viewport needs a
+/// default-framebuffer pass contract that does not exist in this layer; the
+/// viewport residue is NOT CLOSED here and is recorded as such.
 impl super::GlSurfacePresentationApi for WglContextSurface {
     fn acquire_surface_image(&mut self) -> Result<super::GlSurfaceAcquire, GlError> {
         const OP: &str = "acquire-surface-image";
@@ -786,6 +884,14 @@ impl super::GlSurfacePresentationApi for WglContextSurface {
         const OP: &str = "resize-surface";
         self.assert_owner(OP)
             .map_err(|error| error.as_gl_error(OP))?;
+        // Bounded before the lease invalidation, which is a side effect: an
+        // unaddressable drawable must not be recorded as a usable one and must
+        // not cost the caller its outstanding leases.
+        check_drawable_extent(
+            self.snapshot.limits().max_viewport_dimensions,
+            [size.width, size.height],
+        )
+        .map_err(|error| error.as_gl_error(OP))?;
         // Resize always invalidates outstanding acquire leases first. The
         // Host owns the actual Win32 window size; this records the drawable
         // fact the presentation domain must match.
@@ -828,49 +934,5 @@ impl super::GlSurfacePresentationApi for WglContextSurface {
         // not resurrect a consumed lease, and the caller retries with a new
         // acquisition.
         self.present()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        CurrentBindingArbiter, core_context_attributes, is_desktop_gl_43_or_newer, usable_wgl_proc,
-    };
-
-    #[test]
-    fn requests_exact_desktop_core_43_context() {
-        let attributes = core_context_attributes();
-        assert_eq!(attributes[1], 4);
-        assert_eq!(attributes[3], 3);
-        assert_eq!(attributes.last(), Some(&0));
-    }
-
-    #[test]
-    fn rejects_wgl_documented_invalid_proc_sentinels() {
-        for value in [0_isize, 1, 2, 3, -1] {
-            assert!(!usable_wgl_proc(value as *const core::ffi::c_void));
-        }
-        assert!(usable_wgl_proc(4_isize as *const core::ffi::c_void));
-    }
-
-    #[test]
-    fn arbiter_records_each_context_switch() {
-        let arbiter = CurrentBindingArbiter::default();
-        arbiter.record(11_usize as *const core::ffi::c_void);
-        assert_eq!(arbiter.current(), Some(11));
-        arbiter.record(12_usize as *const core::ffi::c_void);
-        assert_eq!(arbiter.current(), Some(12));
-        arbiter.clear_if(11_usize as *const core::ffi::c_void);
-        assert_eq!(arbiter.current(), Some(12));
-        arbiter.clear_if(12_usize as *const core::ffi::c_void);
-        assert_eq!(arbiter.current(), None);
-    }
-
-    #[test]
-    fn actual_profile_check_requires_desktop_gl_43() {
-        assert!(is_desktop_gl_43_or_newer("4.3.0 Vendor"));
-        assert!(is_desktop_gl_43_or_newer("4.6 Core Profile"));
-        assert!(!is_desktop_gl_43_or_newer("4.2.0 Vendor"));
-        assert!(!is_desktop_gl_43_or_newer("OpenGL ES 3.2"));
     }
 }
