@@ -97,6 +97,8 @@ impl GlResourceApi for WebGl2BrowserDiscovery {
             .raw
             .create_buffer()
             .ok_or(GlError::OutOfMemory { operation: OP })?;
+        // ARRAY_BUFFER is Layer 1-private scratch: bound immediately before the
+        // allocation, not restored on return (`GlCopyDomainApi` documents why).
         self.raw
             .bind_buffer(WebGl2RenderingContext::ARRAY_BUFFER, Some(&raw));
         self.raw.buffer_data_with_f64(

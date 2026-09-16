@@ -41,6 +41,8 @@ impl GlCopyDomainApi for NativeGlProvider<'_> {
             .map_err(|_| Self::validation(OP, "destination offset exceeds GLintptr"))?;
         let size = i32::try_from(source.size)
             .map_err(|_| Self::validation(OP, "copy size exceeds GLsizeiptr"))?;
+        // The copy targets are Layer 1-private scratch: bind immediately before
+        // use, no restore on return (`GlCopyDomainApi` documents why).
         // SAFETY: current-context contract; both live resources and all ranges
         // were validated before bindings or the copy command are changed.
         unsafe {
@@ -144,7 +146,9 @@ impl GlCopyDomainApi for NativeGlProvider<'_> {
         let offset = i32::try_from(destination.offset)
             .map_err(|_| Self::validation(OP, "offset exceeds GLintptr"))?;
         // COPY_WRITE_BUFFER keeps ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER
-        // vertex-state bindings untouched by transfer work.
+        // vertex-state bindings untouched by transfer work.  The copy targets
+        // themselves are Layer 1-private scratch: bound immediately before use,
+        // not restored on return (`GlCopyDomainApi` documents why).
         // SAFETY: current-context contract; the exact byte slice was validated.
         unsafe {
             self.gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(name));

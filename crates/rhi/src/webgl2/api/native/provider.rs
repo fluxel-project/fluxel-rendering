@@ -430,6 +430,9 @@ impl super::super::GlResourceApi for NativeGlProvider<'_> {
             operation: "create-buffer",
             message,
         })?;
+        // COPY_WRITE_BUFFER is Layer 1-private scratch: bound immediately before
+        // the allocation, not restored on return (`GlCopyDomainApi` documents
+        // why).
         // SAFETY: see above.
         unsafe {
             self.gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(name));

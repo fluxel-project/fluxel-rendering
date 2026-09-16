@@ -4,8 +4,10 @@
 The checker deliberately has no Rust parser dependency.  It examines ``use``
 and ``extern crate`` declarations after removing Rust comments and literals, so
 architecture names mentioned in documentation, comments, and test strings do
-not become false violations.  A missing ``crates/rhi/src/webgl2`` tree is a
-successful no-op: the check is intended to land before every planned layer.
+not become false violations.  It additionally confines the Layer 1-private
+scratch binding targets to provider execution bodies.  A missing
+``crates/rhi/src/webgl2`` tree is a successful no-op: the check is intended to
+land before every planned layer.
 """
 
 from __future__ import annotations
@@ -26,6 +28,10 @@ EXTERN_CRATE = re.compile(r"\bextern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\
 QUALIFIED_PATH = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+")
 FORBIDDEN_PROVIDER_DEPENDENCY = re.compile(
     r'^\s*(?P<name>winit|glutin|glutin-winit|angle)\s*=\s*', re.MULTILINE
+)
+SCRATCH_BINDING = re.compile(
+    r"\b(?:ARRAY_BUFFER|COPY_READ_BUFFER|COPY_WRITE_BUFFER"
+    r"|PIXEL_PACK_BUFFER|PIXEL_UNPACK_BUFFER)\b"
 )
 LEGACY_GL_API = (
     "GlDraw",
@@ -194,6 +200,26 @@ def rules_for(relative: Path) -> tuple[str, tuple[str, ...]] | None:
     return None
 
 
+def scratch_binding_allowed(relative: Path) -> bool:
+    """Whether this file may name a Layer 1-private scratch binding target.
+
+    ``ARRAY_BUFFER`` (a global binding point that is not VAO state),
+    ``COPY_READ_BUFFER``/``COPY_WRITE_BUFFER`` and the pixel pack/unpack buffer
+    targets are private to Layer 1's own implementation: a provider binds one
+    immediately before each use and deliberately leaves it bound, because no
+    Layer 1 verb accepts a caller-supplied target and Layer 2 cannot name
+    ``glow`` at all, so it cannot mirror a binding point it cannot name.  That
+    argument only holds while the constants stay inside a provider module --
+    never in the shared contract (``api/*.rs``), never in the mock recorder,
+    which models Fluxel identities rather than GL targets, and never in
+    ``state/``.  ``ELEMENT_ARRAY_BUFFER`` is deliberately not listed: it is VAO
+    state, written as part of a ``bind_vertex_array`` request, and therefore a
+    binding point Layer 2 does mirror.
+    """
+    parts = relative.parts
+    return len(parts) >= 2 and parts[0] == "api" and parts[1] in ("native", "browser")
+
+
 def check(root: Path) -> list[Violation]:
     webgl_root = root / WEBGL_RELATIVE_ROOT
     violations: list[Violation] = []
@@ -220,11 +246,19 @@ def check(root: Path) -> list[Violation]:
     for path in sorted(webgl_root.rglob("*.rs")):
         relative = path.relative_to(webgl_root)
         rule = rules_for(relative)
+        source = path.read_text(encoding="utf-8", errors="replace")
+        code = strip_rust_non_code(source)
+        if not scratch_binding_allowed(relative):
+            for match in SCRATCH_BINDING.finditer(code):
+                report(
+                    path,
+                    code.count("\n", 0, match.start()) + 1,
+                    "scratch-binding",
+                    match.group(0),
+                )
         if rule is None:
             continue
         layer, forbidden = rule
-        source = path.read_text(encoding="utf-8", errors="replace")
-        code = strip_rust_non_code(source)
         for symbol in LEGACY_GL_API:
             for match in re.finditer(rf"\b{re.escape(symbol)}\b", code):
                 report(path, code.count("\n", 0, match.start()) + 1, "legacy-api", symbol)

@@ -44,6 +44,8 @@ impl GlCopyDomainApi for WebGl2BrowserDiscovery {
         if source.size != destination.size {
             return Err(validation(OP, "copy ranges have different sizes"));
         }
+        // The copy targets are Layer 1-private scratch: bind immediately before
+        // use, no restore on return (`GlCopyDomainApi` documents why).
         self.raw
             .bind_buffer(Gl::COPY_READ_BUFFER, Some(&source_raw));
         self.raw

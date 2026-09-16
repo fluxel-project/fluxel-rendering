@@ -223,6 +223,17 @@ pub(crate) enum GlCopyValidationError {
 
 /// Copy operations. Pixel-store changes are scoped: implementations snapshot `pixel_store`,
 /// apply a transfer layout, and restore the exact snapshot before every return path.
+///
+/// Buffer binding points are deliberately *not* scoped. `COPY_READ_BUFFER` and
+/// `COPY_WRITE_BUFFER` are private to the transfer implementation: a provider
+/// binds the buffer it is about to use immediately before the command and
+/// leaves the target bound on return. Nothing needs restoring because no verb
+/// in this layer accepts a caller-supplied target, so neither the Layer 2 state
+/// mirror nor a caller can hold an opinion about these targets — the mirror
+/// covers only binding points some verb can name. Adding a restore here would
+/// imply the opposite contract; adding a target-taking verb would break it.
+/// `scripts/check_gl_architecture.py` confines the constants to provider
+/// execution bodies so the two cannot drift apart.
 pub(crate) trait GlCopyDomainApi: GlFamilyApi {
     fn copy_buffer_range(
         &mut self,
