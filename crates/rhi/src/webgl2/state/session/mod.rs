@@ -35,13 +35,15 @@
 
 use crate::webgl2::api::{FramebufferId, GlFramebufferDescriptor, GlRenderPassDescriptor};
 
+pub(super) mod framebuffer;
+
 use super::GlStateBackend;
-use super::cache::framebuffer::FramebufferCache;
 use super::cache::{CacheBudget, CacheMode};
 use super::counters::StateCounters;
 use super::error::{PartialApplication, StateError};
 use super::event::StateEvent;
 use super::knowledge::StateDomain;
+use framebuffer::FramebufferCache;
 
 /// What changed about the pass boundary when a reconcile ran.
 ///

@@ -47,14 +47,13 @@
 //!
 //! This module holds the machinery and nothing else: budgets, the entry table,
 //! eviction, leasing, and reverse-dependency invalidation.  Each domain's cache
-//! is a sibling module named after that domain, because a cache's key, value and
+//! lives inside that domain's own module, because a cache's key, value and
 //! per-entry cost are that domain's knowledge: a key that omitted one of the
 //! domain's inputs is a defect only the domain can notice, and a cost estimate
 //! that is wrong in the direction of "too small" is what turns a bounded cache
-//! into unbounded memory.  Keeping them here rather than inside the domain
-//! module leaves one place to read every budget the layer spends.
-
-pub(super) mod framebuffer;
+//! into unbounded memory.  A domain owns its directory end to end, which is what
+//! lets its cache, its tests and its mirror be reviewed without reading the
+//! layer's other domains.
 
 use std::collections::HashMap;
 

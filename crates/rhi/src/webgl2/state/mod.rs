@@ -52,13 +52,20 @@
 )]
 
 pub(super) mod backend;
+pub(super) mod buffers;
 pub(super) mod cache;
+pub(super) mod compute;
 pub(super) mod counters;
 pub(super) mod error;
 pub(super) mod event;
+pub(super) mod geometry;
+pub(super) mod groups;
 pub(super) mod knowledge;
 pub(super) mod machine;
+pub(super) mod pipeline;
 pub(super) mod session;
+pub(super) mod sync;
+pub(super) mod textures;
 
 pub(crate) use backend::{GlOptionalComputeBackend, GlOptionalIndirectBackend, GlStateBackend};
 pub(crate) use cache::{

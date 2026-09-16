@@ -38,11 +38,11 @@ use crate::webgl2::api::{
 };
 
 use super::super::GlStateBackend;
+use super::super::cache::{CacheBudget, CacheMode, DependencySet, ResourceRef, StructuralCache};
 use super::super::counters::StateCounters;
 use super::super::error::{PartialApplication, StateError};
 use super::super::event::StateEvent;
 use super::super::knowledge::StateDomain;
-use super::{CacheBudget, CacheMode, DependencySet, ResourceRef, StructuralCache};
 
 /// The estimated retained cost of one framebuffer record.
 ///
