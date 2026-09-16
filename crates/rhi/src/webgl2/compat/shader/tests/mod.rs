@@ -207,7 +207,14 @@ fn the_layout_claims_exactly_the_bindings_the_identity_records() {
                 GlShaderResourceKind::CombinedTextureSampler => fragment
                     .text
                     .contains(&format!("uniform sampler2D {};", binding.name)),
-                GlShaderResourceKind::Sampler | GlShaderResourceKind::Texture => false,
+                // The two storage kinds are a compute program's, and no raster
+                // recipe declares one, so a raster layout naming either would be
+                // exactly the drift this loop exists to catch: `false` fails the
+                // assertion below naming the kernel and the binding.
+                GlShaderResourceKind::Sampler
+                | GlShaderResourceKind::Texture
+                | GlShaderResourceKind::StorageBuffer
+                | GlShaderResourceKind::StorageImage => false,
             };
             assert!(
                 declared,

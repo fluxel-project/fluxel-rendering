@@ -51,6 +51,18 @@ pub(crate) enum GlShaderResourceKind {
     Sampler,
     Texture,
     CombinedTextureSampler,
+    /// A shader storage buffer, read or written by a compute stage.
+    ///
+    /// The two storage kinds are the only ones a raster program can never
+    /// declare, and that is a fact about a shading language rather than about
+    /// this crate: the WebGL2 profile's GLSL ES 300 has no storage qualifier at
+    /// all.  Nothing here judges which profile admits them, for the same reason
+    /// nothing here judges compute capability -- that is the provider's call,
+    /// made against the linked program, and the two providers answer it
+    /// differently.
+    StorageBuffer,
+    /// A shader storage image, read or written by a compute stage.
+    StorageImage,
 }
 /// A logical RHI resource declaration, independent of program-link results.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -65,6 +77,19 @@ pub(crate) struct GlLogicalBinding {
 pub(crate) enum GlExecutableBindingLocation {
     UniformBlock(u32),
     TextureUnit(u32),
+    /// The linked program's own index for a shader storage block.
+    ///
+    /// An index rather than a binding point, for [`Self::UniformBlock`]'s
+    /// reason: what a logical binding names and where the driver binds it are
+    /// two facts, and this is the first of them.
+    StorageBlock(u32),
+    /// An image unit, assigned by the provider that reflected it.
+    ///
+    /// [`Self::TextureUnit`]'s counterpart for the storage domain.  The two are
+    /// separate variants rather than one unit type because they are separate
+    /// namespaces: an image unit is not a texture unit, and numbering starts
+    /// again for it.
+    ImageUnit(u32),
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct GlExecutableBindingAssignment {

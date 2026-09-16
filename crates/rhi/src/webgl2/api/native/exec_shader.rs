@@ -352,6 +352,10 @@ impl NativeGlProvider<'_> {
             let mut assignments = Vec::new();
             let mut next_unit = 0u32;
             let max_units = self.discovery.limits().max_combined_texture_image_units;
+            // Image units are their own namespace, so this counter starts at
+            // zero independently of the sampler one above.
+            let mut next_image_unit = 0u32;
+            let max_image_units = self.discovery.limits().max_image_units;
             for binding in &descriptor.layout.bindings {
                 match binding.kind {
                     GlShaderResourceKind::UniformBuffer => {
@@ -429,6 +433,84 @@ impl NativeGlProvider<'_> {
                             ));
                         };
                         samplers.remove(position);
+                    }
+                    // Both storage kinds refuse an array, and the reason is the
+                    // same for both: no recipe lowers one, so the array path
+                    // would be code that no context has ever run.  The uniform
+                    // block and sampler arms above support arrays because a
+                    // raster recipe samples one; this arm will when a compute
+                    // recipe declares one, and not before.
+                    GlShaderResourceKind::StorageBuffer => {
+                        if binding.array_count != 1 {
+                            return Err(Self::validation(
+                                op,
+                                "a storage block array is not lowered by any recipe",
+                            ));
+                        }
+                        // Resolved by name rather than by walking the program,
+                        // which is where this arm and the uniform block arm
+                        // above part company.  The linked program's storage
+                        // blocks cannot be enumerated through this GL
+                        // abstraction -- there is no counterpart to the active
+                        // uniform block count -- and none is needed: the name is
+                        // the lowering's own, so the question is only whether
+                        // the program has a block by that name.  The abstraction
+                        // answers `None` for the driver's invalid index, so that
+                        // check is the `let else` rather than a comparison.
+                        //
+                        // What that costs is stated rather than implied: the
+                        // "linked program declares a block absent from the
+                        // layout" check below has no storage counterpart, so a
+                        // compute shader declaring a storage block the layout
+                        // does not mention is not caught here.
+                        let Some(index) = self
+                            .gl
+                            .get_shader_storage_block_index(program, &binding.name)
+                        else {
+                            return Err(Self::validation(
+                                op,
+                                "declared storage block is missing from the linked program",
+                            ));
+                        };
+                        assignments.push(GlExecutableBindingAssignment {
+                            logical: binding.location,
+                            executable: GlExecutableBindingLocation::StorageBlock(index),
+                        });
+                    }
+                    GlShaderResourceKind::StorageImage => {
+                        if binding.array_count != 1 {
+                            return Err(Self::validation(
+                                op,
+                                "a storage image array is not lowered by any recipe",
+                            ));
+                        }
+                        // The image's unit is the value of its own uniform,
+                        // exactly as a sampler's is, so it is assigned and
+                        // written here rather than left to the binding path --
+                        // and that is also what keeps the shader and the
+                        // adapter agreeing on a unit no declaration fixes.
+                        let unit = next_image_unit;
+                        next_image_unit = unit
+                            .checked_add(1)
+                            .ok_or(GlError::OutOfMemory { operation: op })?;
+                        if next_image_unit > max_image_units {
+                            return Err(Self::validation(
+                                op,
+                                "storage image assignments exceed the discovered image unit count",
+                            ));
+                        }
+                        let Some(location) = self.gl.get_uniform_location(program, &binding.name)
+                        else {
+                            return Err(GlError::Driver {
+                                operation: op,
+                                message: "storage image uniform has no location".into(),
+                            });
+                        };
+                        self.gl.uniform_1_i32(Some(&location), unit as i32);
+                        assignments.push(GlExecutableBindingAssignment {
+                            logical: binding.location,
+                            executable: GlExecutableBindingLocation::ImageUnit(unit),
+                        });
                     }
                 }
             }
