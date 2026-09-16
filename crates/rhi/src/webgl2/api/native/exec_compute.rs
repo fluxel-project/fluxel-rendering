@@ -11,6 +11,7 @@ use super::super::{
     GlFamilyApi as _, GlIndirectAbi, GlIndirectCommandRange, GlMemoryBarrier, GlProgramKind,
     GlStorageBufferApi, GlStorageBufferLimits, GlStorageBufferRange, GlStorageImageAccess,
     GlStorageImageApi, GlStorageImageBinding, GlStorageImageLimits, GlTextureUsage,
+    validate_indirect_allocation,
 };
 use super::provider::NativeGlProvider;
 
@@ -234,6 +235,35 @@ impl GlStorageImageApi for NativeGlProvider<'_> {
     }
 }
 
+impl NativeGlProvider<'_> {
+    /// Resolves the live indirect command buffer one indirect range names.
+    ///
+    /// Two facts make an allocation usable as a command buffer, and both are
+    /// proved here so neither indirect verb can forget one. The usage role is
+    /// what lets the driver read the bytes as records instead of as caller data.
+    /// The allocation bound is the one only this provider can supply: the range
+    /// is a window the caller describes, so a window wider than its buffer makes
+    /// the driver read an argument list that was never allocated, which no
+    /// driver reports and no caller can observe. Both verbs resolve their buffer
+    /// through this one function, so the rule and its error have exactly one
+    /// spelling here rather than one per verb.
+    fn indirect_command_buffer(
+        &self,
+        operation: &'static str,
+        range: GlBufferRange,
+    ) -> Result<glow::NativeBuffer, GlError> {
+        let (name, desc) = self.buffer(operation, range.buffer)?;
+        if !desc.usage.contains(GlBufferUsage::INDIRECT) {
+            return Err(Self::validation(
+                operation,
+                "command buffer lacks indirect usage",
+            ));
+        }
+        validate_indirect_allocation(operation, range, desc)?;
+        Ok(name)
+    }
+}
+
 impl GlDrawIndirectApi for NativeGlProvider<'_> {
     fn draw_indirect(&mut self, command: GlIndirectCommandRange) -> Result<(), GlError> {
         use glow::HasContext as _;
@@ -255,10 +285,7 @@ impl GlDrawIndirectApi for NativeGlProvider<'_> {
             .as_ref()
             .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
         let vertex_array = self.vertex_array(OP, raster.vertex_array)?;
-        let (name, desc) = self.buffer(OP, command.range.buffer)?;
-        if !desc.usage.contains(GlBufferUsage::INDIRECT) {
-            return Err(Self::validation(OP, "command buffer lacks indirect usage"));
-        }
+        let name = self.indirect_command_buffer(OP, command.range)?;
         let offset = draw_indirect_offset(command.range, command.command_offset)?;
         let mode = super::exec_raster::topology_mode(raster.topology);
         // SAFETY: current-context contract; the ABI, range, usage, and active
@@ -311,10 +338,7 @@ impl GlDispatchIndirectApi for NativeGlProvider<'_> {
         // The record layout and its in-range position are the module's
         // contract, so the whole check happens before the binding changes.
         command.validate(OP)?;
-        let (name, desc) = self.buffer(OP, command.range.buffer)?;
-        if !desc.usage.contains(GlBufferUsage::INDIRECT) {
-            return Err(Self::validation(OP, "command buffer lacks indirect usage"));
-        }
+        let name = self.indirect_command_buffer(OP, command.range)?;
         let offset = dispatch_indirect_offset(command.range, command.command_offset)?;
         // SAFETY: current-context contract; the range, usage, and program were
         // validated before the binding changed.

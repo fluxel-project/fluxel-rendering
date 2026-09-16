@@ -1,4 +1,53 @@
 //! Platform-neutral resource descriptions and validation.
+//!
+//! This module owns the descriptors for buffers, textures, texture views and
+//! renderbuffers, the rules a descriptor must satisfy before any provider
+//! allocates storage for it, and the range and subresource arithmetic those
+//! rules are expressed in. It does not own allocation or object lifetime (that
+//! is the provider) and it does not own the context facts a rule is checked
+//! against: a provider supplies its discovered limits and format evidence, and
+//! this module states the rule and the structured reason a violated one
+//! produces.
+//!
+//! # Compressed mip chains
+//!
+//! A recorded contract decision, written here because the rule this module does
+//! *not* enforce has to be a statement rather than silence.
+//!
+//! What is enforced: a compressed upload must define exactly one complete 2D
+//! mip, and the byte count it supplies must equal that mip's exact encoded size
+//! (`GlCompressedFormatInfo::checked_encoded_size`) rather than anything the
+//! client asserts. Compressed storage stays undefined until something defines
+//! it, so that rule is what makes a compressed upload mean anything; it lives
+//! with the recorder's upload path and it is closed.
+//!
+//! What is deliberately not enforced: nothing requires every mip of a
+//! `mip_level_count > 1` chain to be defined. A descriptor may therefore
+//! allocate a whole chain while the caller fills in only some of its levels, and
+//! no layer rejects that -- not `GlTextureDesc::validate`, which checks that the
+//! requested count is legal for the extent and the format but never that the
+//! chain is complete, and not any upload, which sees one subresource and cannot
+//! see the chain it belongs to. A chain can stay permanently partial without the
+//! descriptor ever being rejected.
+//!
+//! Why a partial chain is the caller's problem at this layer: completeness is a
+//! distribution-of-uploads fact about an allocation's history, not a property of
+//! any single command, so enforcing it needs per-texture defined-mip state.
+//! Nothing needs that state yet -- reading a texture is a Layer 2/3 concern, and
+//! this layer's contract is the command vocabulary plus per-command validation.
+//! The tracking could not live in this module in any case: a descriptor here is
+//! a value that is copied, compared and hashed, not a record of what has
+//! happened to an allocation since it was created. Adding lifetime-scoped state
+//! now would be an API built for a future need rather than for a current one.
+//!
+//! What would have to change to revisit it: a real consumer that needs a
+//! complete chain before a read -- a Layer 2/3 path that samples a texture whose
+//! levels the caller may only partly have uploaded. Chain completeness would
+//! then be tracked where the lifetime already lives (the provider's object
+//! store, keyed by texture identity and invalidated with the context epoch),
+//! no descriptor field would change, and the rejection would belong at the first
+//! command that reads the texture rather than at allocation, because allocation
+//! is not the point at which a partial chain becomes wrong.
 
 use super::{BufferId, GlFormat, RenderbufferId, TextureId};
 

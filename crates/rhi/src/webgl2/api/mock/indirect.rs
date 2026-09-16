@@ -3,7 +3,8 @@
 //! The record layouts, their ABI, and the capability rows live in
 //! `api/indirect.rs`; this module only mirrors what a provider does with one
 //! record: prove its row, prove the record sits where it claims to, prove the
-//! pass, then prove the command buffer's role.  The order is the providers'
+//! pass, then prove the command buffer's role and that the range lies inside
+//! the allocation it names.  The order is the providers'
 //! order, so a trace that shows an accepted command also shows which of those
 //! facts it needed, and a trace that shows only an error proves the guard ran
 //! before the binding changed.
@@ -59,20 +60,30 @@ impl MockGlFamilyApi {
 
     /// Rejects a range that does not name a live indirect command buffer.
     ///
-    /// The usage role is what lets a provider read the bytes as records instead
-    /// of as caller data, so both providers check it and neither accepts an
-    /// unroled allocation.
+    /// Two facts make an allocation usable as a command buffer, and both are
+    /// proved here so no indirect verb can forget one: the usage role is what
+    /// lets a provider read the bytes as records instead of as caller data, and
+    /// the range must lie wholly inside the allocation, because a range past the
+    /// end of the buffer makes the driver read records that were never
+    /// allocated. The bound comes from the shared rule in `api/indirect.rs`
+    /// rather than from a check restated here, so the recorder and the
+    /// providers cannot disagree about which ranges are legal.
     pub(super) fn indirect_buffer(
         &mut self,
         op: &'static str,
         range: GlBufferRange,
     ) -> Result<(), GlError> {
         let desc = self.buffer(op, range.buffer)?;
-        if desc.usage.contains(GlBufferUsage::INDIRECT) {
-            Ok(())
-        } else {
-            self.invalid(op, "command buffer lacks indirect usage")
+        if !desc.usage.contains(GlBufferUsage::INDIRECT) {
+            return self.invalid(op, "command buffer lacks indirect usage");
         }
+        // Recorded rather than returned: every other rejection in this file
+        // leaves a trace entry, and a bound that only propagated would be
+        // invisible to the differential test that reads the trace.
+        if let Err(error) = validate_indirect_allocation(op, range, desc) {
+            return self.error_result(error);
+        }
+        Ok(())
     }
 
     /// Rejects a batch that asks to read more draws than the context ever claimed.

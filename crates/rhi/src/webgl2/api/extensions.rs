@@ -65,6 +65,57 @@
 //!
 //! Provenance is not capability: recording a name here never enables a
 //! capability on its own.
+//!
+//! # Deferred typed homes for recorded platform facts
+//!
+//! Two platform observations reach this contract as free-form keys on
+//! `GlContextFlags.other`, and both were handed forward as wanting a typed home.
+//! Neither typed home is built here, for the same reason in both cases: no
+//! consumer reads the fact, so a type would be an API with no reader, and a fact
+//! nothing consumes is better carried by the free-form set that already exists
+//! than by a struct that has to be maintained, versioned and answered. This
+//! section is the decision; each entry names the typed home and the trigger that
+//! would make it real.
+//!
+//! - **Driver identity beyond the context's own answers.** Some contexts expose
+//!   an optional debug route that answers the real vendor and renderer strings
+//!   instead of the aliases the platform chose. The browser provider reads that
+//!   route and records exactly one of three shapes under `webgl.unmasked-vendor=`,
+//!   `webgl.unmasked-renderer=`, or `webgl.unmasked-identity=unavailable`, so a
+//!   later reader can tell an answered route from one never asked. It is
+//!   deliberately neither a capability nor a parsed identity: a vendor string
+//!   describes a driver rather than promising anything about it. The typed home
+//!   is a registry variant in this module, which is where a route's provenance,
+//!   its legality per profile, and its acquisition are already decided; the
+//!   literal spelling of the route stays in `browser/driver_identity.rs`, so no
+//!   registry name reaches a public or crate-public identifier, a doc comment,
+//!   or an error message. The trigger is a consumer that needs the identity as a
+//!   *value* rather than as a recorded observation -- a hardware-evidence record
+//!   that has to select or compare a driver, which would read a field instead of
+//!   matching a prefix.
+//!
+//! - **Native surface facts.** The default framebuffer's color, depth and
+//!   stencil component widths and its sample count are recorded by the native
+//!   provider as `gl.surface-*` keys -- the one piece of format evidence no
+//!   `GlFormatTable` row carries, because the flipped surface is not a resource
+//!   this layer allocated. Its color encoding is recorded as unavailable rather
+//!   than guessed, since no accepted profile answers that query and a wrong
+//!   guess between linear and sRGB is a double-gamma error. Every path that
+//!   cannot observe the surface records a reason instead of a value: one of
+//!   `unqueried`, `query-failed`, or `draw-framebuffer-bound` after
+//!   `gl.surface-facts-unavailable=`, so "not asked", "asked and refused", and
+//!   "asked while a framebuffer was bound" never collapse into one answer. The
+//!   typed home is a `GlSurfaceFacts` value on `GlDiscoverySnapshot`, owned by
+//!   `discovery.rs`; the trigger is a consumer that acts on the facts rather
+//!   than reporting them -- presentation, which needs the drawable's component
+//!   widths and sample count as numbers to size what it presents, and which a
+//!   typed answer spares from parsing a formatted marker and from branching on
+//!   a failure shape it cannot act on.
+//!
+//! The shape of both changes is the same: the string keys stay until a consumer
+//! arrives, and the typed home is then added beside them rather than
+//! reinterpreted from them, because a key/value pair a reader already depends on
+//! cannot become a struct field without breaking that reader.
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 

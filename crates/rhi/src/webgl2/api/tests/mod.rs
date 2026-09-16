@@ -298,6 +298,7 @@ mod binding;
 mod discovery;
 mod formats;
 mod framebuffer;
+mod indirect;
 mod multi_draw;
 mod multiview;
 mod query;

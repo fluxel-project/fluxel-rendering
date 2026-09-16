@@ -1,6 +1,7 @@
 //! Contract tests for the framebuffer domain: the resolve word,
-//! renderbuffer kind facts, draw-buffer selection, and the agreement
-//! between a render pass and the framebuffer descriptor it targets.
+//! renderbuffer kind facts, the renderbuffer attachment arm, draw-buffer
+//! selection, and the agreement between a render pass and the framebuffer
+//! descriptor it targets.
 
 use super::*;
 
@@ -152,6 +153,153 @@ fn mock_renderbuffer_allocation_uses_renderbuffer_kind_facts() {
         !without_facts.calls()[trace_len..]
             .iter()
             .any(|call| matches!(call, MockCall::CreateRenderBuffer(_)))
+    );
+}
+
+/// A renderbuffer is a first-class attachment, held to the same rule sequence
+/// as a texture.
+///
+/// The gap this closes is a missing *route*, not a missing rule: both providers
+/// can allocate a renderbuffer after the 0.15 allocation work, so before the
+/// renderbuffer variant existed a caller could allocate one and then find it had
+/// nowhere to attach. The rule sequence is the texture arm's, restated in
+/// renderbuffer terms -- a renderbuffer addresses no mip level and no layer, so
+/// its only legal view is level 0, layer 0, exactly one layer, at the
+/// allocation's own extent and sample count -- and the test walks each rule in
+/// the arm's order so an arm that reordered or dropped one fails here.
+///
+/// The last rule both arms end with, renderable evidence for the view's
+/// storage class, runs through one shared helper on the accepting path as well:
+/// the fixture records exactly one renderbuffer row, at the allocation's own
+/// sample count, so an arm looking the row up under any other key finds nothing
+/// and the accepted case below fails.
+#[test]
+fn mock_renderbuffer_attaches_through_the_same_rule_sequence_as_a_texture() {
+    let mut api =
+        MockGlFamilyApi::from_discovery(snapshot_with_fact(GlFormatResourceKind::Renderbuffer, 4));
+    let renderbuffer = api
+        .create_render_buffer(GlRenderBufferDesc {
+            format: GlFormat::Rgba8Unorm,
+            width: 8,
+            height: 8,
+            samples: 4,
+        })
+        .expect("renderbuffer");
+    let view = GlTextureView {
+        target: GlAttachmentTarget::Renderbuffer(renderbuffer),
+        format: GlFormat::Rgba8Unorm,
+        mip_level: 0,
+        array_layer: 0,
+        layer_count: 1,
+        width: 8,
+        height: 8,
+        sample_count: 4,
+    };
+    let descriptor = |view| GlFramebufferDescriptor {
+        color_attachments: vec![view],
+        depth_stencil_attachment: None,
+        draw_buffers: vec![],
+    };
+
+    let framebuffer = api
+        .create_framebuffer(&descriptor(view))
+        .expect("a renderbuffer attaches");
+    assert!(matches!(
+        api.calls().last(),
+        Some(MockCall::CreateFramebuffer(created)) if *created == framebuffer
+    ));
+
+    let validation = |message: &'static str| GlError::Validation {
+        operation: "create-framebuffer",
+        message: message.into(),
+    };
+    let rejected: [(GlTextureView, GlError); 6] = [
+        (
+            GlTextureView {
+                format: GlFormat::Rgba8Srgb,
+                ..view
+            },
+            validation("attachment view format does not match the allocation"),
+        ),
+        (
+            GlTextureView {
+                mip_level: 1,
+                ..view
+            },
+            validation("attachment mip level is invalid"),
+        ),
+        (
+            GlTextureView { width: 4, ..view },
+            validation("attachment view extent does not match the allocation extent"),
+        ),
+        (
+            GlTextureView {
+                array_layer: 1,
+                ..view
+            },
+            GlError::Unsupported {
+                operation: "create-framebuffer",
+                reason: "layered attachments are not part of this framebuffer slice",
+            },
+        ),
+        (
+            GlTextureView {
+                sample_count: 1,
+                ..view
+            },
+            validation("attachment sample count does not match the allocation"),
+        ),
+        // A second layer is refused as a view count this context never proved
+        // rather than as a layered attachment: the descriptor's multiview gate
+        // reads `layer_count` and runs before the per-view arms here. The arm's
+        // own layered rule covers the other coordinate -- `array_layer`, which
+        // the view-count gate never reads, and which is the case above.
+        (
+            GlTextureView {
+                layer_count: 2,
+                ..view
+            },
+            validation("multiview view count is not proved"),
+        ),
+    ];
+    for (malformed, expected) in rejected {
+        let trace_len = api.calls().len();
+        assert_eq!(
+            api.create_framebuffer(&descriptor(malformed)),
+            Err(expected),
+            "the renderbuffer arm rejects {malformed:?} as the texture arm would"
+        );
+        assert!(
+            !api.calls()[trace_len..]
+                .iter()
+                .any(|call| matches!(call, MockCall::CreateFramebuffer(_))),
+            "a rejected attachment never creates a framebuffer"
+        );
+    }
+
+    // The route is only closed if the pass can name the same view: a caller
+    // that could build a framebuffer but not draw into it would still have half
+    // a feature.
+    api.begin_render_pass(&GlRenderPassDescriptor {
+        framebuffer,
+        color_attachments: vec![GlColorAttachment {
+            view,
+            resolve_target: None,
+            load: GlLoadOp::Clear,
+            store: GlStoreOp::Store,
+            clear: GlColorClearValue {
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 0,
+            },
+        }],
+        depth_stencil_attachment: None,
+    })
+    .expect("a pass draws into a renderbuffer attachment");
+    assert_eq!(
+        api.calls().last(),
+        Some(&MockCall::BeginRenderPass(framebuffer))
     );
 }
 

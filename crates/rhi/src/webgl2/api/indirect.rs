@@ -7,8 +7,18 @@
 //! evidence; they are never interchangeable. This module owns the layouts and
 //! the range arithmetic only: issuing a command, binding its buffer, and
 //! checking the context's capability belong to the provider.
+//!
+//! A range is legal only when both of its bounds hold, and both live here. The
+//! record validators prove a record fits inside the range; the allocation bound
+//! proves the range fits inside the buffer the range names. Checking only the
+//! first lets a caller describe a window wider than its allocation, which makes
+//! the driver read an argument list that was never allocated -- a silent
+//! out-of-bounds read rather than a rejection. The two checks are therefore
+//! separate functions that every indirect entry point applies at the same point
+//! in the same order, so the native provider, the browser provider, and the
+//! recorder cannot diverge on either the rule or its error.
 
-use super::{GlBufferRange, GlError, GlFamilyApi};
+use super::{GlBufferDesc, GlBufferRange, GlError, GlFamilyApi};
 
 /// ABI of the non-indexed draw record: four u32 words.
 #[repr(C)]
@@ -55,6 +65,31 @@ fn validate_indirect_range(range: GlBufferRange, operation: &'static str) -> Res
     } else {
         Ok(())
     }
+}
+
+/// Rejects an indirect range that is not wholly inside the buffer it names.
+///
+/// The second half of a range's contract: `validate_indirect_range` proves the
+/// range is a usable window, and this proves the window is inside its
+/// allocation. A range past the end of the buffer makes the driver read records
+/// beyond the allocation, which no driver reports and no caller can observe, so
+/// the bound has to be rejected before the buffer is bound. Every indirect
+/// entry point calls this immediately after resolving the buffer descriptor,
+/// which is the earliest point the allocation's size is known and the last
+/// point before any binding changes.
+///
+/// Both providers and the recorder call this one function rather than restating
+/// the bound, so they cannot disagree about which ranges are legal or about the
+/// error a rejected one produces.
+pub(crate) fn validate_indirect_allocation(
+    operation: &'static str,
+    range: GlBufferRange,
+    desc: GlBufferDesc,
+) -> Result<(), GlError> {
+    range.validate_for(desc).map_err(|_| GlError::Validation {
+        operation,
+        message: "indirect buffer range is outside the allocation".into(),
+    })
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GlIndirectAbi {

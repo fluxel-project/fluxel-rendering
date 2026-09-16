@@ -29,8 +29,10 @@ const UNMASKED_RENDERER: u32 = 0x9246;
 /// The registry spelling of that route.
 ///
 /// It is a literal because the typed extension registry (`api/extensions.rs`)
-/// has no variant for it and that file is outside this package's file scope; a
-/// typed variant is the change that would let this constant disappear.
+/// has no variant for it. That absence is a recorded decision rather than an
+/// omission: the identity stays a free-form platform fact until a consumer needs
+/// it as a value, and the registry section names that trigger. A typed variant
+/// is the change that would let this constant disappear.
 const IDENTITY_ROUTE: &str = "WEBGL_debug_renderer_info";
 
 /// Reads the unmasked vendor/renderer pair, if the context really exposes it.

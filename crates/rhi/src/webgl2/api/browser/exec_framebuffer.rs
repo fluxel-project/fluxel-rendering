@@ -403,92 +403,167 @@ impl WebGl2BrowserDiscovery {
     ) -> Result<(), GlError> {
         self.raw.bind_framebuffer(Gl::FRAMEBUFFER, Some(raw));
         for (index, view) in descriptor.color_attachments.iter().enumerate() {
-            let texture = self.attachment_raw(op, *view)?;
-            self.raw.framebuffer_texture_2d(
-                Gl::FRAMEBUFFER,
-                draw_buffer_constant(index as u32),
-                Gl::TEXTURE_2D,
-                Some(&texture),
-                view.mip_level as i32,
-            );
+            self.attach_one(op, draw_buffer_constant(index as u32), *view)?;
         }
         if let Some(view) = descriptor.depth_stencil_attachment {
             let point = format_map::depth_attachment_point(view.format).ok_or_else(|| {
                 Self::validation(op, "depth attachment format has no attachment point")
             })?;
-            let texture = self.attachment_raw(op, view)?;
-            self.raw.framebuffer_texture_2d(
-                Gl::FRAMEBUFFER,
-                point,
-                Gl::TEXTURE_2D,
-                Some(&texture),
-                view.mip_level as i32,
-            );
+            self.attach_one(op, point, view)?;
         }
         Ok(())
     }
 
-    fn attachment_raw(
-        &self,
-        op: &'static str,
-        view: GlTextureView,
-    ) -> Result<web_sys::WebGlTexture, GlError> {
-        let GlAttachmentTarget::Texture(texture) = view.target else {
-            return Err(GlError::Unsupported {
+    /// Attaches one validated view at one attachment point of the bound FBO.
+    ///
+    /// The attach entry point is a property of the allocation, not of the
+    /// descriptor. A texture is attached through the texture entry point and a
+    /// renderbuffer through the renderbuffer one, because they are different
+    /// browser object classes; attaching either through the other's entry point
+    /// is an error the context reports only after the framebuffer has already
+    /// been half-populated, so the choice has to follow the storage.
+    fn attach_one(&self, op: &'static str, point: u32, view: GlTextureView) -> Result<(), GlError> {
+        match view.target {
+            GlAttachmentTarget::Texture(texture) => {
+                let texture = self.texture(op, texture)?.raw.clone();
+                self.raw.framebuffer_texture_2d(
+                    Gl::FRAMEBUFFER,
+                    point,
+                    Gl::TEXTURE_2D,
+                    Some(&texture),
+                    view.mip_level as i32,
+                );
+                Ok(())
+            }
+            GlAttachmentTarget::Renderbuffer(renderbuffer) => {
+                let entry = self.renderbuffer(op, renderbuffer)?;
+                self.raw.framebuffer_renderbuffer(
+                    Gl::FRAMEBUFFER,
+                    point,
+                    Gl::RENDERBUFFER,
+                    Some(&entry.raw),
+                );
+                Ok(())
+            }
+            GlAttachmentTarget::SurfaceImage(_) => Err(GlError::Unsupported {
                 operation: op,
                 reason: "surface-image attachments are not part of this framebuffer slice",
-            });
-        };
-        Ok(self.texture(op, texture)?.raw.clone())
+            }),
+        }
     }
 
     /// Validates one attachment view against the live allocation it names.
+    ///
+    /// Both storage classes run the same rule sequence, so a descriptor is
+    /// rejected for the same reason whichever one backs it: the view must name
+    /// a live allocation of the same context, agree with it on format and
+    /// sample count, address storage that exists, and be renderable here. The
+    /// two arms differ only in what "storage that exists" means. A texture
+    /// addresses a mip level and may span layers; a renderbuffer has neither,
+    /// so its only addressable view is level 0, layer 0, of exactly one layer,
+    /// and any other coordinate is rejected as a layered attachment rather than
+    /// silently attaching level 0 and rendering into storage the caller did not
+    /// name.
     fn validate_attachment(&self, op: &'static str, view: GlTextureView) -> Result<(), GlError> {
-        let GlAttachmentTarget::Texture(texture) = view.target else {
-            return Err(GlError::Unsupported {
+        match view.target {
+            GlAttachmentTarget::Texture(texture) => {
+                let desc = self.texture(op, texture)?.desc;
+                if desc.format != view.format {
+                    return Err(Self::validation(
+                        op,
+                        "attachment view format does not match the allocation",
+                    ));
+                }
+                let Some(mip) = desc.mip_extent(view.mip_level) else {
+                    return Err(Self::validation(op, "attachment mip level is invalid"));
+                };
+                if view.width != mip.width || view.height != mip.height {
+                    return Err(Self::validation(
+                        op,
+                        "attachment view extent does not match the allocation extent",
+                    ));
+                }
+                if view.array_layer != 0 || desc.dimension != GlTextureDimension::D2 {
+                    return Err(GlError::Unsupported {
+                        operation: op,
+                        reason: "layered attachments are not part of this framebuffer slice",
+                    });
+                }
+                if desc.sample_count != view.sample_count {
+                    return Err(Self::validation(
+                        op,
+                        "attachment sample count does not match the allocation",
+                    ));
+                }
+                // The same key the executable native backend and the shared
+                // recorder use. This backend records `Texture` rows only at
+                // sample count 1 (`format_map.rs`) and cannot create a
+                // multisample texture, so the value is 1 in every reachable
+                // case; naming the view's count rather than the literal keeps
+                // the rule identical in all three and fails closed if that
+                // invariant ever stops holding.
+                let facts = self.snapshot.formats().get_for(
+                    super::super::GlFormatResourceKind::Texture,
+                    view.format,
+                    view.sample_count,
+                );
+                if facts.is_none_or(|facts| !facts.renderable) {
+                    return Err(GlError::Unsupported {
+                        operation: op,
+                        reason: "attachment format lacks renderable evidence on this context",
+                    });
+                }
+                Ok(())
+            }
+            GlAttachmentTarget::Renderbuffer(renderbuffer) => {
+                let desc = self.renderbuffer(op, renderbuffer)?.desc;
+                if desc.format != view.format {
+                    return Err(Self::validation(
+                        op,
+                        "attachment view format does not match the allocation",
+                    ));
+                }
+                if view.mip_level != 0 {
+                    return Err(Self::validation(op, "attachment mip level is invalid"));
+                }
+                if view.width != desc.width || view.height != desc.height {
+                    return Err(Self::validation(
+                        op,
+                        "attachment view extent does not match the allocation extent",
+                    ));
+                }
+                if view.array_layer != 0 || view.layer_count != 1 {
+                    return Err(GlError::Unsupported {
+                        operation: op,
+                        reason: "layered attachments are not part of this framebuffer slice",
+                    });
+                }
+                if desc.samples != view.sample_count {
+                    return Err(Self::validation(
+                        op,
+                        "attachment sample count does not match the allocation",
+                    ));
+                }
+                // The renderbuffer fact is recorded against the allocation's own
+                // sample count, so the view's count -- proven equal above -- is
+                // the key the table was written with.
+                let facts = self.snapshot.formats().get_for(
+                    super::super::GlFormatResourceKind::Renderbuffer,
+                    view.format,
+                    view.sample_count,
+                );
+                if facts.is_none_or(|facts| !facts.renderable) {
+                    return Err(GlError::Unsupported {
+                        operation: op,
+                        reason: "attachment format lacks renderable evidence on this context",
+                    });
+                }
+                Ok(())
+            }
+            GlAttachmentTarget::SurfaceImage(_) => Err(GlError::Unsupported {
                 operation: op,
                 reason: "surface-image attachments are not part of this framebuffer slice",
-            });
-        };
-        let desc = self.texture(op, texture)?.desc;
-        if desc.format != view.format {
-            return Err(Self::validation(
-                op,
-                "attachment view format does not match the allocation",
-            ));
+            }),
         }
-        let Some(mip) = desc.mip_extent(view.mip_level) else {
-            return Err(Self::validation(op, "attachment mip level is invalid"));
-        };
-        if view.width != mip.width || view.height != mip.height {
-            return Err(Self::validation(
-                op,
-                "attachment view extent does not match the mip extent",
-            ));
-        }
-        if view.array_layer != 0 || desc.dimension != GlTextureDimension::D2 {
-            return Err(GlError::Unsupported {
-                operation: op,
-                reason: "layered attachments are not part of this framebuffer slice",
-            });
-        }
-        if desc.sample_count != view.sample_count {
-            return Err(Self::validation(
-                op,
-                "attachment sample count does not match the allocation",
-            ));
-        }
-        let facts = self.snapshot.formats().get_for(
-            super::super::GlFormatResourceKind::Texture,
-            view.format,
-            1,
-        );
-        if facts.is_none_or(|facts| !facts.renderable) {
-            return Err(GlError::Unsupported {
-                operation: op,
-                reason: "attachment format lacks renderable evidence on this context",
-            });
-        }
-        Ok(())
     }
 }

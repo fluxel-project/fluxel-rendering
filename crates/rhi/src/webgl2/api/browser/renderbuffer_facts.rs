@@ -2,10 +2,10 @@
 //!
 //! A renderbuffer fact is recorded only from a real allocation: the probe
 //! creates a scratch renderbuffer, gives it storage, binds it as a scratch
-//! framebuffer attachment and reads completeness back. That attachment read is
-//! also the only place this backend binds a renderbuffer as an attachment
-//! today, because the shared framebuffer contract has no renderbuffer
-//! attachment target, so a render pass still draws into textures only.
+//! framebuffer attachment and reads completeness back. That scratch bind is
+//! this module's own probe and says nothing about the contract: the shared
+//! framebuffer contract does carry a renderbuffer attachment target, so a
+//! render pass may attach one exactly as it attaches a texture.
 //!
 //! What enters the table is what the driver answered: a completed probe records
 //! its answer, a refused one records `renderable: false` so a later reader can

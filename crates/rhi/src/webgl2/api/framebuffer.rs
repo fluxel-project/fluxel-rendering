@@ -1,13 +1,38 @@
 //! Platform-neutral attachment, framebuffer, and render-pass vocabulary.
+//!
+//! This module owns the attachment-view description, the framebuffer and
+//! render-pass descriptors built from it, and the validation both descriptors
+//! run before a provider touches GL state. It does not own object lifetime
+//! (that is the provider) and does not decide whether a context proved a
+//! capability: it states the rule and the structured reason, and the provider
+//! supplies the discovered facts the rule is checked against.
+//!
+//! Two storage classes can back an attachment, and both go through the same
+//! view type, the same rule sequence, and the same multiview gate. A texture
+//! contributes a mip chain and a layer dimension; a renderbuffer is a single
+//! allocation with neither, so its only addressable view is level 0, layer 0,
+//! of exactly one layer -- the rule that would otherwise be misread as a
+//! layered attachment.
 
-use super::{FramebufferId, GlError, GlFamilyApi, GlFormat, SurfaceImageId, TextureId};
+use super::{
+    FramebufferId, GlError, GlFamilyApi, GlFormat, RenderbufferId, SurfaceImageId, TextureId,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum GlAttachmentTarget {
     Texture(TextureId),
+    /// A renderbuffer allocation, which has no mip chain and no layers.
+    Renderbuffer(RenderbufferId),
     SurfaceImage(SurfaceImageId),
 }
 
+/// One view of one attachment's storage.
+///
+/// The name stays texture-first because it is the common case, but the fields
+/// are the view of whichever storage class `target` names: `mip_level`,
+/// `array_layer`, and `layer_count` describe a coordinate into the allocation,
+/// and a renderbuffer is the degenerate coordinate (level 0, layer 0, one
+/// layer) that its own validation arm enforces.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct GlTextureView {
     pub target: GlAttachmentTarget,
@@ -157,6 +182,7 @@ impl GlAttachmentTarget {
     const fn context(self) -> super::ContextStamp {
         match self {
             Self::Texture(texture) => texture.context,
+            Self::Renderbuffer(renderbuffer) => renderbuffer.context,
             Self::SurfaceImage(image) => image.context,
         }
     }
