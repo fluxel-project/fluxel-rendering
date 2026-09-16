@@ -8,6 +8,7 @@ use super::super::{
     GlTextureDesc, GlTextureDimension, OwnerThreadIdentity, RenderbufferId, SamplerId, TextureId,
 };
 use super::discovery::{BrowserBuffer, BrowserSampler, BrowserTexture, WebGl2BrowserDiscovery};
+use super::objects::BrowserRenderbuffer;
 
 /// Allocation usage applied to every WebGL2 buffer (audit P2-11).
 ///
@@ -44,8 +45,10 @@ impl GlFamilyApi for WebGl2BrowserDiscovery {
         self.buffers.clear();
         self.textures.clear();
         self.samplers.clear();
-        // The retained batch commands belong to the dead context.
+        self.renderbuffers.clear();
+        // The retained batch and timer commands belong to the dead context.
         self.multi_draw = None;
+        self.timer = None;
         self.clear_executable_state();
         Ok(())
     }
@@ -73,11 +76,14 @@ impl GlFamilyApi for WebGl2BrowserDiscovery {
         self.owner_thread = replacement.owner_thread;
         self.lifecycle = replacement.lifecycle;
         // The recreated context re-acquired its own extension objects, so the
-        // retained batch commands are the replacement's, never the old ones.
+        // retained batch and timer commands are the replacement's, never the
+        // old ones, and the replacement may have acquired a different set.
         self.multi_draw = replacement.multi_draw;
+        self.timer = replacement.timer;
         self.buffers.clear();
         self.textures.clear();
         self.samplers.clear();
+        self.renderbuffers.clear();
         self.clear_executable_state();
         self.pixel_store = GlPixelStoreState::DEFAULT;
         Ok(stamp)
@@ -210,19 +216,77 @@ impl GlResourceApi for WebGl2BrowserDiscovery {
 
     fn create_render_buffer(
         &mut self,
-        _desc: GlRenderBufferDesc,
+        desc: GlRenderBufferDesc,
     ) -> Result<RenderbufferId, GlError> {
-        Err(GlError::Unsupported {
-            operation: "create-render-buffer",
-            reason: "WebGL2 renderbuffer allocation slice is not installed",
-        })
+        const OP: &str = "create-render-buffer";
+        self.assert_provider_ready(OP)?;
+        desc.validate()
+            .map_err(|_| Self::validation(OP, "invalid renderbuffer descriptor"))?;
+        // Admission reads recorded facts only, so an allocation this context has
+        // no evidence for is rejected here instead of being attempted and hoped
+        // for; the same rule is what the recorded sample-count ceiling came from.
+        let internal = super::renderbuffer_facts::admit(
+            &self.snapshot.limits(),
+            self.snapshot.formats(),
+            desc,
+        )
+        .map_err(|rejection| rejection.error(OP))?;
+        let width = i32::try_from(desc.width)
+            .map_err(|_| Self::validation(OP, "width exceeds the browser integer range"))?;
+        let height = i32::try_from(desc.height)
+            .map_err(|_| Self::validation(OP, "height exceeds the browser integer range"))?;
+        let raw = self
+            .raw
+            .create_renderbuffer()
+            .ok_or(GlError::OutOfMemory { operation: OP })?;
+        // RENDERBUFFER is Layer 1-private scratch: bound immediately before the
+        // allocation it describes, exactly like the buffer and texture paths.
+        self.raw
+            .bind_renderbuffer(WebGl2RenderingContext::RENDERBUFFER, Some(&raw));
+        if desc.samples > 1 {
+            self.raw.renderbuffer_storage_multisample(
+                WebGl2RenderingContext::RENDERBUFFER,
+                i32::try_from(desc.samples).map_err(|_| {
+                    Self::validation(OP, "sample count exceeds the browser integer range")
+                })?,
+                internal,
+                width,
+                height,
+            );
+        } else {
+            self.raw.renderbuffer_storage(
+                WebGl2RenderingContext::RENDERBUFFER,
+                internal,
+                width,
+                height,
+            );
+        }
+        if let Err(error) = self.driver_error(OP) {
+            self.raw.delete_renderbuffer(Some(&raw));
+            return Err(error);
+        }
+        let slot = Self::allocate_slot(&mut self.next_renderbuffer_slot, OP)?;
+        let id = RenderbufferId::new(self.context_stamp(), slot, 0);
+        self.renderbuffers.insert(
+            slot,
+            BrowserRenderbuffer {
+                generation: id.generation,
+                raw,
+                desc,
+            },
+        );
+        Ok(id)
     }
 
-    fn destroy_render_buffer(&mut self, _id: RenderbufferId) -> Result<(), GlError> {
-        Err(GlError::Unsupported {
-            operation: "destroy-render-buffer",
-            reason: "WebGL2 renderbuffer allocation slice is not installed",
-        })
+    fn destroy_render_buffer(&mut self, id: RenderbufferId) -> Result<(), GlError> {
+        const OP: &str = "destroy-render-buffer";
+        self.renderbuffer(OP, id)?;
+        let entry = self
+            .renderbuffers
+            .remove(&id.slot)
+            .ok_or_else(|| Self::validation(OP, "renderbuffer allocation disappeared"))?;
+        self.raw.delete_renderbuffer(Some(&entry.raw));
+        self.driver_error(OP)
     }
 }
 

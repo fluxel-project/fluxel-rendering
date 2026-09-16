@@ -18,9 +18,10 @@ use super::super::{
     GlSurfaceLeaseBook, GlTextureDesc, OwnerThreadIdentity, TextureId,
 };
 use super::exec_multidraw::BrowserMultiDraw;
+use super::exec_timer::{self, BrowserTimerQuery};
 use super::objects::{
-    ActivePass, ActiveRaster, BrowserFramebuffer, BrowserProgram, BrowserQuery, BrowserShader,
-    BrowserSync, BrowserVertexArray,
+    ActivePass, ActiveRaster, BrowserFramebuffer, BrowserProgram, BrowserQuery,
+    BrowserRenderbuffer, BrowserShader, BrowserSync, BrowserVertexArray,
 };
 
 /// Immutable WebGL2 discovery evidence plus the callable browser context.
@@ -43,6 +44,7 @@ pub(crate) struct WebGl2BrowserDiscovery {
     pub(super) buffers: BTreeMap<u32, BrowserBuffer>,
     pub(super) textures: BTreeMap<u32, BrowserTexture>,
     pub(super) samplers: BTreeMap<u32, BrowserSampler>,
+    pub(super) renderbuffers: BTreeMap<u32, BrowserRenderbuffer>,
     pub(super) shaders: BTreeMap<u32, BrowserShader>,
     pub(super) programs: BTreeMap<u32, BrowserProgram>,
     pub(super) vertex_arrays: BTreeMap<u32, BrowserVertexArray>,
@@ -61,11 +63,19 @@ pub(crate) struct WebGl2BrowserDiscovery {
     /// P1-8). Dropped with the rest of the executable state on loss, because the
     /// object belongs to the dead context.
     pub(super) multi_draw: Option<BrowserMultiDraw>,
+    /// The timer commands retained from the acquired timer-query object.
+    ///
+    /// `Some` exactly when that object exposed every command the timer domain
+    /// issues, so it is also exactly when the timer capability could resolve
+    /// (audit P1-5). Dropped with the rest of the executable state on loss,
+    /// because the object belongs to the dead context.
+    pub(super) timer: Option<BrowserTimerQuery>,
     /// Slot of the query currently recording, if any.
     pub(super) active_query: Option<u32>,
     pub(super) next_buffer_slot: u32,
     pub(super) next_texture_slot: u32,
     pub(super) next_sampler_slot: u32,
+    pub(super) next_renderbuffer_slot: u32,
     pub(super) next_shader_slot: u32,
     pub(super) next_program_slot: u32,
     pub(super) next_vertex_array_slot: u32,
@@ -140,7 +150,16 @@ impl WebGl2BrowserDiscovery {
         // not use glow for discovery: its browser constructor panics on JS
         // binding invariant violations instead of returning `Result`.
         let glow = glow::Context::from_webgl2_context(raw.clone());
-        let (extensions, multi_draw) = discover_extensions(&raw)?;
+        let (extensions, commands) = discover_extensions(&raw)?;
+        // The masked vendor/renderer strings above are the context's own answers
+        // and stay verbatim; the unmasked pair, when the context exposes the
+        // optional debug route, is recorded beside them as flag markers (audit
+        // P2-6) rather than replacing an answer the browser chose to give.
+        let mut context_flags = discover_context_flags(&raw)?;
+        super::driver_identity::record_markers(
+            &mut context_flags,
+            super::driver_identity::unmasked_identity(&raw),
+        );
         let context = GlContextInfo::new(
             GlFamilyProfile::WebGl2,
             version,
@@ -152,22 +171,28 @@ impl WebGl2BrowserDiscovery {
             string_parameter(&raw, WebGl2RenderingContext::VENDOR, "VENDOR")?,
             string_parameter(&raw, WebGl2RenderingContext::RENDERER, "RENDERER")?,
             browser_identity()?,
-            discover_context_flags(&raw)?,
+            context_flags,
         );
-        let limits = discover_limits(&raw, &extensions)?;
+        // The timer counter width is not a context limit: it is answered by the
+        // acquired timer object, and it is zero whenever that object is absent
+        // or does not answer both timer targets.
+        let limits = discover_limits(&raw, &extensions, commands.timer.as_ref())?;
         // Float and depth format facts are answered by real framebuffer
         // completeness probes on this exact context (audit P1-6); the probes
         // use scratch objects and leave no state behind.
-        let formats = super::format_map::webgl2_baseline_formats(&raw, &extensions)?;
+        let mut formats = super::format_map::webgl2_baseline_formats(&raw, &extensions)?;
+        // Renderbuffer facts are answered the same way, by allocating scratch
+        // storage and reading attachment completeness back, so a renderbuffer
+        // allocation is admitted only from an observation on this context.
+        super::renderbuffer_facts::record_facts(&raw, &limits, &mut formats)?;
         let mut builder = GlDiscoveryBuilder::new(stamp, context, extensions, limits, formats)
             .map_err(discovery_error)?;
 
-        // WebGL2 has no general compute, storage, or indirect mapping.  Timer
-        // queries are the sole currently normalized browser extension domain;
-        // no command is issued while discovering it. The typed timer-query
-        // entry points stay unacquired, so the domain remains fail-closed
-        // until `query_counter_bits` and the extension entry points are
-        // proved together (audit P1-5).
+        // Timer queries are the sole currently normalized browser extension
+        // domain, and their oracle is the complete, callable entry-point set
+        // acquired below together with a nonzero counter width read from the
+        // same object: the extension alone would prove nothing about whether a
+        // measurement can ever be reported (audit P1-5).
         builder.resolve(
             GlCapability::TimerQuery,
             CoreOrExtension {
@@ -224,6 +249,7 @@ impl WebGl2BrowserDiscovery {
             buffers: BTreeMap::new(),
             textures: BTreeMap::new(),
             samplers: BTreeMap::new(),
+            renderbuffers: BTreeMap::new(),
             shaders: BTreeMap::new(),
             programs: BTreeMap::new(),
             vertex_arrays: BTreeMap::new(),
@@ -235,11 +261,13 @@ impl WebGl2BrowserDiscovery {
             surface_suspended: false,
             pass: None,
             raster: None,
-            multi_draw,
+            multi_draw: commands.multi_draw,
+            timer: commands.timer,
             active_query: None,
             next_buffer_slot: 0,
             next_texture_slot: 0,
             next_sampler_slot: 0,
+            next_renderbuffer_slot: 0,
             next_shader_slot: 0,
             next_program_slot: 0,
             next_vertex_array_slot: 0,
@@ -363,14 +391,23 @@ fn ensure_context_live(
         .ok_or(GlError::ContextLost { operation })
 }
 
+/// The extension objects whose commands must be retained for later calls.
+///
+/// Both are `Some` exactly when their object exposed every command its domain
+/// issues, which is also exactly when that domain's capability could resolve.
+struct RetainedCommands {
+    multi_draw: Option<BrowserMultiDraw>,
+    timer: Option<BrowserTimerQuery>,
+}
+
 /// Records evidence for every reported extension this contract models.
 ///
-/// Returns the ledger together with the one acquired object whose commands must
-/// be retained: the batch extension defines its commands on the object itself,
-/// so no context method can reach them later.
+/// Returns the ledger together with the acquired objects whose commands must be
+/// retained: those extensions define their commands on the object itself, so no
+/// context method can reach them later.
 fn discover_extensions(
     raw: &WebGl2RenderingContext,
-) -> Result<(GlExtensionSet, Option<BrowserMultiDraw>), GlError> {
+) -> Result<(GlExtensionSet, RetainedCommands), GlError> {
     let listed = raw.get_supported_extensions().ok_or_else(|| {
         driver(
             "getSupportedExtensions",
@@ -388,7 +425,10 @@ fn discover_extensions(
         extensions.report_raw(name);
     }
 
-    let mut multi_draw = None;
+    let mut commands = RetainedCommands {
+        multi_draw: None,
+        timer: None,
+    };
     for known in [
         GlKnownExtension::ExtDisjointTimerQueryWebgl2,
         GlKnownExtension::ExtColorBufferFloat,
@@ -422,9 +462,25 @@ fn discover_extensions(
             // object that does not expose all of them fails the acquisition and
             // leaves the batch domain on its single-draw route (audit P1-8).
             match BrowserMultiDraw::acquire(&object) {
-                Some(commands) => {
+                Some(batch) => {
                     extensions.acquire(known);
-                    multi_draw = Some(commands);
+                    commands.multi_draw = Some(batch);
+                }
+                None => {
+                    extensions.fail(known);
+                }
+            }
+            continue;
+        }
+        if known == GlKnownExtension::ExtDisjointTimerQueryWebgl2 {
+            // Same oracle shape as the batch domain: the timer commands are
+            // defined on the object, so a reported name without all five of them
+            // fails the acquisition and leaves every timer operation rejected
+            // (audit P1-5).
+            match BrowserTimerQuery::acquire(&object) {
+                Some(timer) => {
+                    extensions.acquire(known);
+                    commands.timer = Some(timer);
                 }
                 None => {
                     extensions.fail(known);
@@ -434,7 +490,7 @@ fn discover_extensions(
         }
         extensions.acquire(known);
     }
-    Ok((extensions, multi_draw))
+    Ok((extensions, commands))
 }
 
 fn acquisition_name(known: GlKnownExtension, extensions: &GlExtensionSet) -> &'static str {
@@ -458,6 +514,7 @@ fn acquisition_name(known: GlKnownExtension, extensions: &GlExtensionSet) -> &'s
 fn discover_limits(
     raw: &WebGl2RenderingContext,
     extensions: &GlExtensionSet,
+    timer: Option<&BrowserTimerQuery>,
 ) -> Result<GlLimits, GlError> {
     let max_samples = u32_parameter(raw, WebGl2RenderingContext::MAX_SAMPLES, "MAX_SAMPLES")?;
     Ok(GlLimits {
@@ -568,8 +625,11 @@ fn discover_limits(
         max_compute_work_group_size: [0; 3],
         max_compute_work_group_invocations: 0,
         max_multi_draw_indirect_count: None,
-        max_multiview_view_count: multiview_view_limit(raw, extensions)?,
-        query_counter_bits: 0,
+        max_multiview_view_count: multiview_view_limit(raw, extensions),
+        // Zero here is the capability row's limit half: it means at least one
+        // timer target did not answer a usable width, so the row stays disabled
+        // while the ledger keeps recording what the entry-point oracle saw.
+        query_counter_bits: exec_timer::recorded_counter_width(raw, timer),
         max_texture_anisotropy: anisotropy_limit(raw, extensions)?,
     })
 }
@@ -580,15 +640,26 @@ fn discover_limits(
 /// an extension object has been acquired, so a context without it records 0 and
 /// can never satisfy the multiview floor. One view is the plain single-view
 /// attachment every WebGL2 context already has and is not a multiview proof.
-fn multiview_view_limit(
-    raw: &WebGl2RenderingContext,
-    extensions: &GlExtensionSet,
-) -> Result<u32, GlError> {
+///
+/// An acquired object that does not answer the token with a number also records
+/// 0 rather than failing discovery: Chrome on an ANGLE/SwiftShader context
+/// lists and returns the object while answering the token with `null`, and
+/// turning that into a discovery error makes the whole provider unopenable for
+/// a capability that is disabled either way (observed while adding the browser
+/// tests, not a hypothesis).
+fn multiview_view_limit(raw: &WebGl2RenderingContext, extensions: &GlExtensionSet) -> u32 {
     const MAX_VIEWS_OVR: u32 = 0x9632;
     if !extensions.is_acquired(GlKnownExtension::OvrMultiview2) {
-        return Ok(0);
+        return 0;
     }
     u32_parameter(raw, MAX_VIEWS_OVR, "MAX_VIEWS_OVR")
+        // An unanswered token may also be answered with a driver error; that
+        // error belongs to this question and must not surface as the failure of
+        // the next unrelated provider call.
+        .inspect_err(|_| {
+            let _ = raw.get_error();
+        })
+        .unwrap_or(0)
 }
 
 fn anisotropy_limit(
@@ -760,7 +831,7 @@ fn browser_identity() -> Result<String, GlError> {
 /// The major component must be the single digit `2` followed by `.` or the
 /// end of the string, so `"WebGL 20"` and `"WebGL 2foo"` both fail (audit
 /// P2-9); minor and vendor text are retained verbatim elsewhere.
-fn require_webgl2_version(version: &str) -> Result<(), GlError> {
+pub(super) fn require_webgl2_version(version: &str) -> Result<(), GlError> {
     let accepted = version.strip_prefix("WebGL ").and_then(|remainder| {
         let (major, rest) = remainder.split_at(1.min(remainder.len()));
         (major == "2" && (rest.is_empty() || rest.starts_with('.'))).then_some(())
@@ -780,25 +851,5 @@ fn driver(operation: &'static str, message: &str) -> GlError {
     GlError::Driver {
         operation,
         message: message.to_owned(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::require_webgl2_version;
-
-    #[test]
-    fn accepts_exact_webgl2_family_strings() {
-        assert!(require_webgl2_version("WebGL 2.0 (OpenGL ES 3.0 Chromium)").is_ok());
-        assert!(require_webgl2_version("WebGL 2").is_ok());
-    }
-
-    #[test]
-    fn rejects_lookalike_major_versions() {
-        assert!(require_webgl2_version("WebGL 20").is_err());
-        assert!(require_webgl2_version("WebGL 2foo").is_err());
-        assert!(require_webgl2_version("WebGL 1.0").is_err());
-        assert!(require_webgl2_version("OpenGL ES 3.0").is_err());
-        assert!(require_webgl2_version("WebGLX 2.0").is_err());
     }
 }

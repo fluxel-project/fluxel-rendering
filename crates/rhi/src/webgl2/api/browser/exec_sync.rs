@@ -1,16 +1,19 @@
-//! Browser fence and query execution.
+//! Browser fence and query object execution.
 //!
 //! Fence observations are accepted-unknown: a parameter answer that is not a
-//! usable number reports `Unknown` instead of guessing, so leases stay live
-//! and completion-safe release keeps waiting. Timer queries remain fail-closed
-//! because this discovery never proves `EXT_disjoint_timer_query_webgl2`
-//! entry points together with a nonzero counter width (audit P1-5).
+//! usable number reports `Unknown` instead of guessing, so leases stay live and
+//! completion-safe release keeps waiting.
+//!
+//! This module owns query object lifetime and the occlusion domain. Timer
+//! measurements are classified by `exec_timer.rs`, which reads them through the
+//! acquired timer commands and withholds a disrupted interval; the result path
+//! here only decides which of the two domains owns a recorded target.
 
 use web_sys::WebGl2RenderingContext as Gl;
 
 use super::super::{
-    GlElapsedQueryApi, GlError, GlFamilyApi as _, GlFenceLease, GlFenceStatus, GlOcclusionQueryApi,
-    GlQueryObjectsApi, GlQueryResult, GlSyncApi, GlTimestampQueryApi, GlWaitBound, QueryId, SyncId,
+    GlError, GlFamilyApi as _, GlFenceLease, GlFenceStatus, GlOcclusionQueryApi, GlQueryObjectsApi,
+    GlQueryResult, GlSyncApi, GlWaitBound, QueryId, SyncId,
 };
 use super::discovery::WebGl2BrowserDiscovery;
 
@@ -105,6 +108,15 @@ impl GlSyncApi for WebGl2BrowserDiscovery {
     }
 }
 
+/// One measurement answer, if it is an exact non-negative integer count.
+///
+/// Every query domain shares this reading, so a counter that is fractional,
+/// negative, non-finite, or absent is reported as no answer rather than being
+/// coerced into a count that was never measured.
+pub(super) fn measured_value(value: f64) -> Option<u64> {
+    (value.is_finite() && value >= 0.0 && value.fract() == 0.0).then_some(value as u64)
+}
+
 impl WebGl2BrowserDiscovery {
     /// Reads one fence status with accepted-unknown semantics.
     fn sync_status(&self, raw: &web_sys::WebGlSync) -> GlFenceStatus {
@@ -170,6 +182,11 @@ impl GlQueryObjectsApi for WebGl2BrowserDiscovery {
         if active {
             return Ok(GlQueryResult::Pending);
         }
+        // A timer target is read through the extension's own accessors, which
+        // also decide whether the interval may be reported at all.
+        if target.is_some_and(super::exec_timer::is_timer_target) {
+            return self.timer_result(OP, &raw);
+        }
         let available = self
             .raw
             .get_query_parameter(&raw, Gl::QUERY_RESULT_AVAILABLE)
@@ -184,12 +201,10 @@ impl GlQueryObjectsApi for WebGl2BrowserDiscovery {
             .raw
             .get_query_parameter(&raw, Gl::QUERY_RESULT)
             .as_f64();
-        match value {
-            Some(value) if value.is_finite() && value >= 0.0 && value.fract() == 0.0 => {
-                Ok(GlQueryResult::Available(value as u64))
-            }
-            _ => Ok(GlQueryResult::Unknown),
-        }
+        Ok(match value.and_then(measured_value) {
+            Some(value) => GlQueryResult::Available(value),
+            None => GlQueryResult::Unknown,
+        })
     }
 }
 
@@ -224,39 +239,5 @@ impl GlOcclusionQueryApi for WebGl2BrowserDiscovery {
         }
         self.raw.end_query(super::format_map::SAMPLES_PASSED);
         self.driver_error(OP)
-    }
-}
-
-impl GlElapsedQueryApi for WebGl2BrowserDiscovery {
-    fn begin_elapsed_query(&mut self, _query: QueryId) -> Result<(), GlError> {
-        const OP: &str = "begin-elapsed-query";
-        // Fail closed before any browser side effect: the timer-query
-        // capability requires proved extension entry points and a nonzero
-        // counter width, neither of which this discovery records.
-        self.assert_provider_ready(OP)?;
-        Err(GlError::Unsupported {
-            operation: OP,
-            reason: "EXT_disjoint_timer_query_webgl2 is not a proved capability in this discovery",
-        })
-    }
-
-    fn end_elapsed_query(&mut self) -> Result<(), GlError> {
-        const OP: &str = "end-elapsed-query";
-        self.assert_provider_ready(OP)?;
-        Err(GlError::Unsupported {
-            operation: OP,
-            reason: "EXT_disjoint_timer_query_webgl2 is not a proved capability in this discovery",
-        })
-    }
-}
-
-impl GlTimestampQueryApi for WebGl2BrowserDiscovery {
-    fn query_timestamp(&mut self, _query: QueryId) -> Result<(), GlError> {
-        const OP: &str = "query-timestamp";
-        self.assert_provider_ready(OP)?;
-        Err(GlError::Unsupported {
-            operation: OP,
-            reason: "EXT_disjoint_timer_query_webgl2 is not a proved capability in this discovery",
-        })
     }
 }

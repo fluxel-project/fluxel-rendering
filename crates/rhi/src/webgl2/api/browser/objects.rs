@@ -4,13 +4,15 @@
 //! inside these records and never participate in identity comparisons.
 
 use web_sys::{
-    WebGlFramebuffer, WebGlProgram, WebGlQuery, WebGlShader, WebGlSync, WebGlVertexArrayObject,
+    WebGlFramebuffer, WebGlProgram, WebGlQuery, WebGlRenderbuffer, WebGlShader, WebGlSync,
+    WebGlVertexArrayObject,
 };
 
 use super::super::GlFamilyApi as _;
 use super::super::{
     FramebufferId, GlError, GlFramebufferDescriptor, GlIndexBinding, GlPrimitiveTopology,
-    GlProgramDescriptor, GlVertexLayout, ProgramId, QueryId, ShaderId, SyncId, VertexArrayId,
+    GlProgramDescriptor, GlRenderBufferDesc, GlVertexLayout, ProgramId, QueryId, RenderbufferId,
+    ShaderId, SyncId, VertexArrayId,
 };
 use super::discovery::WebGl2BrowserDiscovery;
 
@@ -34,6 +36,12 @@ pub(super) struct BrowserFramebuffer {
     pub(super) raw: WebGlFramebuffer,
     /// Creation facts, retained for pass validation and blit bounds.
     pub(super) descriptor: GlFramebufferDescriptor,
+}
+pub(super) struct BrowserRenderbuffer {
+    pub(super) generation: u32,
+    pub(super) raw: WebGlRenderbuffer,
+    /// Creation facts, retained because nothing else records what was allocated.
+    pub(super) desc: GlRenderBufferDesc,
 }
 pub(super) struct BrowserQuery {
     pub(super) generation: u32,
@@ -110,6 +118,21 @@ impl WebGl2BrowserDiscovery {
         match self.framebuffers.get(&id.slot) {
             Some(entry) if entry.generation == id.generation => Ok(entry),
             _ => Err(Self::validation(operation, "framebuffer is not live")),
+        }
+    }
+
+    pub(super) fn renderbuffer(
+        &self,
+        operation: &'static str,
+        id: RenderbufferId,
+    ) -> Result<&BrowserRenderbuffer, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        match self.renderbuffers.get(&id.slot) {
+            Some(entry) if entry.generation == id.generation => Ok(entry),
+            _ => Err(Self::validation(
+                operation,
+                "renderbuffer allocation is not live",
+            )),
         }
     }
 
