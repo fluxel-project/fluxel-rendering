@@ -39,6 +39,12 @@
 //! value here is not known", while a storage binding always names a buffer and
 //! has no unbind form at all.
 //!
+//! The machinery that holds both maps is [`super::binding`]'s, shared with the
+//! compute domain's storage-image role because the two are the same problem:
+//! what belongs to this module is *which* index spaces exist, which verb settles
+//! each one, what an invalidation forgets, and which domain the settle is
+//! accounted against.
+//!
 //! # What the mirror holds, and what makes two requests the same one
 //!
 //! An entry holds everything the verb carried.  For the uniform role that is the
@@ -94,15 +100,14 @@
 //! worse than a failure.  Re-applying is therefore always the answer, and it is
 //! the answer the session domain gives to a context loss, for the same reason.
 
-use std::collections::BTreeMap;
-
-use crate::webgl2::api::{BufferId, GlError, GlStorageBufferApi, GlStorageBufferRange};
+use crate::webgl2::api::{BufferId, GlStorageBufferApi, GlStorageBufferRange};
 
 use super::GlStateBackend;
+use super::binding::BindingPoints;
 use super::counters::StateCounters;
-use super::error::{PartialApplication, StateError};
+use super::error::StateError;
 use super::event::StateEvent;
-use super::knowledge::{DirtyDomains, DriverKnowledge, ExecutionMode, StateDomain};
+use super::knowledge::{DirtyDomains, ExecutionMode, StateDomain};
 
 /// One indexed uniform binding point: everything `bind_uniform_buffer` carried.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,199 +126,13 @@ struct UniformBinding {
     size: u32,
 }
 
-/// The one question an invalidation asks of an entry.
-///
-/// The roles hold different entry types, so the question is a trait rather than
-/// a field access.  A role that could not answer it would be a binding point the
-/// mirror could not clear on a deletion, which is the defect this layer exists
-/// to prevent.
-trait BindingEntry {
-    /// Whether this entry names `buffer`.
-    fn names(&self, buffer: BufferId) -> bool;
-}
-
-impl BindingEntry for UniformBinding {
-    fn names(&self, buffer: BufferId) -> bool {
-        self.buffer == Some(buffer)
-    }
-}
-
-impl BindingEntry for GlStorageBufferRange {
-    fn names(&self, buffer: BufferId) -> bool {
-        self.buffer == buffer
-    }
-}
-
-/// One binding role's mirror: what the caller asked for, and what the driver was
-/// last told.
-///
-/// A slot with no entry in `applied` is [`DriverKnowledge::Unknown`], which is
-/// the state a slot starts in and the state an invalidation returns it to.  The
-/// emit path inserts the entry it is about to establish, so "never asked about"
-/// and "asked and then forgotten" need no second representation.
-#[derive(Debug)]
-struct Role<T> {
-    /// What the caller last asked each slot to hold.
-    desired: BTreeMap<u32, T>,
-    /// What the driver is known to hold, per slot.
-    applied: BTreeMap<u32, DriverKnowledge<T>>,
-}
-
-impl<T> Default for Role<T> {
-    fn default() -> Self {
-        // Written out rather than derived: a derived `Default` would carry a
-        // `T: Default` bound that neither entry type has, and the empty maps are
-        // the only value either role is ever defaulted to.
-        Self {
-            desired: BTreeMap::new(),
-            applied: BTreeMap::new(),
-        }
-    }
-}
-
-impl<T: Copy + PartialEq> Role<T> {
-    /// Records that the caller wants `slot` to hold `value`.
-    ///
-    /// Nothing is emitted here.  The next [`Role::settle`] decides whether a call
-    /// is needed, which is what keeps the redundancy check in one place instead
-    /// of once per entry point.
-    fn record(&mut self, slot: u32, value: T, counters: &mut StateCounters) {
-        if self.desired.insert(slot, value).is_none() {
-            // The map node a slot costs the first time it is named.  Counted
-            // here rather than in the settle pass because this is where it is
-            // allocated: the counter reports heap traffic, not one phase.
-            counters.allocated();
-        }
-    }
-
-    /// Whether the driver is known to hold exactly `value` at `slot`.
-    ///
-    /// This is the whole redundancy rule.  An unknown slot never agrees, so the
-    /// first request for a slot always emits and the mirror never has to assume
-    /// a default the driver may not have.
-    fn agrees(&self, slot: u32, value: &T) -> bool {
-        self.applied
-            .get(&slot)
-            .is_some_and(|known| known.agrees(value))
-    }
-
-    /// How many driver calls settling this role would take.
-    fn pending(&self) -> u32 {
-        self.desired
-            .iter()
-            .filter(|(slot, value)| !self.agrees(**slot, value))
-            .count() as u32
-    }
-
-    /// Makes the driver's slots agree with the caller's, through `emit`.
-    ///
-    /// Slots settle in ascending index order, which is the order a `BTreeMap`
-    /// iterates in: a trace whose call order depended on a hash would make a
-    /// differential comparison against the oracle meaningless.
-    ///
-    /// One request is counted for the reconcile, and then one emit or one skip
-    /// per slot decision.  The two tallies are not required to be equal, because
-    /// one request can settle several slots; what they do say is what this layer
-    /// exists to report, which is how many driver calls a transition cost and
-    /// how many of them it proved redundant.
-    fn settle<E>(
-        &mut self,
-        operation: &'static str,
-        mode: ExecutionMode,
-        counters: &mut StateCounters,
-        mut emit: E,
-    ) -> Result<(), StateError>
-    where
-        E: FnMut(u32, &T) -> Result<(), GlError>,
-    {
-        counters.domain(StateDomain::Buffers).request();
-
-        if self.desired.is_empty() {
-            // Nothing has been asked for, so no slot can be settled and no call
-            // can be proved redundant -- but the caller did ask this domain to
-            // settle, and it settled without a driver call.  That is what the
-            // skip tally counts, and it is the accounting the session domain
-            // uses for a boundary that never changed.
-            counters.domain(StateDomain::Buffers).skip();
-            return Ok(());
-        }
-
-        // Taken before anything is emitted, because a failure reports how much
-        // of the group had been intended rather than how much of it is left.
-        let expected = self.pending();
-        let mut emitted = 0_u32;
-        for (slot, value) in &self.desired {
-            let known = self.applied.get(slot);
-            let redundant = known.is_some_and(|known| known.agrees(value));
-            if BuffersState::skippable(mode, redundant) {
-                counters.domain(StateDomain::Buffers).skip();
-                continue;
-            }
-            // The slot was never established, or a deletion or an invalidation
-            // took the belief away: this call recovers state rather than changing
-            // a value the mirror was sure of.
-            let recovering = !known.is_some_and(DriverKnowledge::is_known);
-            if let Err(source) = emit(*slot, value) {
-                // The domain contract's failure rule: this domain's applied state
-                // is left *unknown* rather than unchanged.  A provider may refuse
-                // a call after the driver has already seen part of its effect,
-                // and a mirror that kept believing the previous value here is
-                // exactly the stale belief a later skip would be built on.
-                self.applied.clear();
-                counters.lifecycle.driver_errors += 1;
-                return Err(StateError::backend(
-                    StateDomain::Buffers,
-                    operation,
-                    PartialApplication::new(emitted, expected),
-                    source,
-                ));
-            }
-            if self
-                .applied
-                .insert(*slot, DriverKnowledge::Known(*value))
-                .is_none()
-            {
-                counters.allocated();
-            }
-            if recovering {
-                // Counted only after the call succeeded: a refused call recovered
-                // nothing, and reporting it as a recovery would make the tally
-                // claim progress the driver never made.
-                counters.domain(StateDomain::Buffers).recover();
-            }
-            counters.domain(StateDomain::Buffers).emit();
-            emitted += 1;
-        }
-        Ok(())
-    }
-}
-
-impl<T: BindingEntry> Role<T> {
-    /// Forgets what the driver holds for every slot naming `buffer`.
-    ///
-    /// The desired entries stay: see the module doc's invalidation section for
-    /// why re-applying a want is always better than silently dropping it.
-    fn forget_buffer(&mut self, buffer: BufferId) {
-        self.applied
-            .retain(|_, known| !known.get().is_some_and(|value| value.names(buffer)));
-    }
-
-    /// Forgets what the driver holds everywhere, keeping the caller's wants.
-    fn forget_applied(&mut self) {
-        // Clearing rather than marking every entry unknown: the two say the same
-        // thing about the driver, and clearing also gives the map back, which a
-        // lost context makes worthless anyway.
-        self.applied.clear();
-    }
-}
-
 /// The indexed buffer binding points, one mirror per role.
 #[derive(Debug)]
 pub(crate) struct BuffersState {
     /// The required role: the indexed uniform binding points.
-    uniform: Role<UniformBinding>,
+    uniform: BindingPoints<UniformBinding>,
     /// The optional role: the indexed storage binding points.
-    storage: Role<GlStorageBufferRange>,
+    storage: BindingPoints<GlStorageBufferRange>,
     mode: ExecutionMode,
 }
 
@@ -327,8 +146,8 @@ impl BuffersState {
     /// point it never set.
     pub(crate) fn new(mode: ExecutionMode) -> Self {
         Self {
-            uniform: Role::default(),
-            storage: Role::default(),
+            uniform: BindingPoints::default(),
+            storage: BindingPoints::default(),
             mode,
         }
     }
@@ -342,20 +161,6 @@ impl BuffersState {
     /// comparison meaningless.
     pub(crate) const fn mode(&self) -> ExecutionMode {
         self.mode
-    }
-
-    /// Whether the mirror proves this request redundant under this mode.
-    ///
-    /// The two halves are one decision.  An oracle machine runs the same domains
-    /// with skipping disabled, so a domain that skipped in oracle mode would emit
-    /// a trace no mirror-free machine could have produced.
-    ///
-    /// This is an associated function rather than a method because the loop that
-    /// decides per slot lives on the private `Role<T>`, which does not hold the
-    /// mode; a method here would need a `Role` to call it from and a second copy
-    /// there would be a second definition of the same predicate.
-    fn skippable(mode: ExecutionMode, agrees: bool) -> bool {
-        mode.may_skip() && agrees
     }
 
     /// Records that the caller wants `index` to hold `buffer`'s byte range.
@@ -410,6 +215,7 @@ impl BuffersState {
         counters: &mut StateCounters,
     ) -> Result<(), StateError> {
         self.uniform.settle(
+            StateDomain::Buffers,
             "bind-uniform-buffer",
             self.mode,
             counters,
@@ -437,6 +243,7 @@ impl BuffersState {
         counters: &mut StateCounters,
     ) -> Result<(), StateError> {
         self.storage.settle(
+            StateDomain::Buffers,
             "bind-storage-buffer",
             self.mode,
             counters,
@@ -462,9 +269,12 @@ impl BuffersState {
                 // Both roles, before the caller asks the backend to delete the
                 // name: a slot that still named the buffer must stop claiming to
                 // know what the driver holds before that name can belong to
-                // something else.
-                self.uniform.forget_buffer(*buffer);
-                self.storage.forget_buffer(*buffer);
+                // something else.  The two predicates differ because the two
+                // entry types carry the buffer differently -- one as a field that
+                // may be the unbind form, one as a plain identity.
+                self.uniform
+                    .forget_where(|binding| binding.buffer == Some(*buffer));
+                self.storage.forget_where(|range| range.buffer == *buffer);
             }
             // A group that failed partway is already unknown -- the emit that
             // failed cleared this domain's applied state before it returned -- so

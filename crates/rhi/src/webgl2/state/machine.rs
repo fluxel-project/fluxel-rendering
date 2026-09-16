@@ -70,14 +70,15 @@
 use crate::webgl2::api::{
     BufferId, FramebufferId, GlBufferRange, GlFramebufferDescriptor, GlIndexBinding,
     GlProgramDescriptor, GlProgramReflection, GlRasterPipeline, GlRenderPassDescriptor,
-    GlStorageBufferApi, GlStorageBufferRange, GlTextureTarget, GlVertexBufferBinding,
-    GlVertexLayout, ProgramId, SamplerId, TextureId, VertexArrayId,
+    GlStorageBufferApi, GlStorageBufferRange, GlStorageImageBinding, GlTextureTarget,
+    GlVertexBufferBinding, GlVertexLayout, ProgramId, SamplerId, TextureId, VertexArrayId,
 };
 
 use super::GlStateBackend;
 use super::backend::GlOptionalComputeBackend;
 use super::buffers::BuffersState;
 use super::cache::DEFAULT_BUDGET;
+use super::compute::ComputeState;
 use super::counters::StateCounters;
 use super::error::StateError;
 use super::event::StateEvent;
@@ -98,6 +99,7 @@ pub(crate) struct GlStateMachine<B: GlStateBackend> {
     geometry: GeometryState,
     textures: TexturesState,
     buffers: BuffersState,
+    compute: ComputeState,
 }
 
 impl<B: GlStateBackend> GlStateMachine<B> {
@@ -139,6 +141,7 @@ impl<B: GlStateBackend> GlStateMachine<B> {
             geometry: GeometryState::new(DEFAULT_BUDGET, mode),
             textures: TexturesState::new(mode),
             buffers: BuffersState::new(mode),
+            compute: ComputeState::new(mode),
         }
     }
 
@@ -402,6 +405,36 @@ impl<B: GlStateBackend> GlStateMachine<B> {
             .reconcile_storage(&mut self.backend, &mut self.counters)
     }
 
+    /// Records that the caller wants `binding` to hold `image`.
+    ///
+    /// Gated on the optional bound for the reason the domain exists at all: the
+    /// verb it mirrors is not in the required profile, so a machine over a
+    /// profile without it must not be able to record a want it could never
+    /// settle.  There is deliberately no unbounded `compute()` accessor beside
+    /// the other domains' -- an accessor that handed the domain out would hand
+    /// its unbounded entry point out with it, and the bound is the whole reason
+    /// the group is optional.
+    pub(crate) fn bind_storage_image(&mut self, binding: u32, image: GlStorageImageBinding)
+    where
+        B: GlOptionalComputeBackend,
+    {
+        self.compute
+            .bind_storage_image(binding, image, &mut self.counters);
+    }
+
+    /// Applies the desired image-unit bindings, on a profile that has them.
+    ///
+    /// Bounded on the same terms as [`GlStateMachine::apply_storage_buffers`]: a
+    /// machine over a backend without the optional command domains has no way to
+    /// call this, and none of its callers can forget to check.
+    pub(crate) fn apply_storage_images(&mut self) -> Result<(), StateError>
+    where
+        B: GlOptionalComputeBackend,
+    {
+        self.compute
+            .reconcile(&mut self.backend, &mut self.counters)
+    }
+
     /// Dispatches an invalidation to every domain.
     ///
     /// A deletion must be dispatched *before* the backend is asked to delete:
@@ -430,6 +463,8 @@ impl<B: GlStateBackend> GlStateMachine<B> {
         self.textures
             .invalidate(&mut self.backend, &event, &mut self.counters);
         self.buffers
+            .invalidate(&mut self.backend, &event, &mut self.counters);
+        self.compute
             .invalidate(&mut self.backend, &event, &mut self.counters);
     }
 

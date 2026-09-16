@@ -148,7 +148,7 @@ fn a_whole_mirror_event_keeps_the_want_and_forgets_the_belief() {
         "there is no context left to emit into"
     );
     assert_eq!(counters.lifecycle.domain_invalidations, 1);
-    assert_eq!(state.uniform.desired.len(), 1, "the caller still wants it");
+    assert_eq!(state.uniform.desired_len(), 1, "the caller still wants it");
 
     state
         .reconcile(&mut backend, &mut counters)

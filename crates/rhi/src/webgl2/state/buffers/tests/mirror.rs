@@ -238,8 +238,8 @@ fn the_two_roles_do_not_share_one_mirror_entry() {
 
     // Each role recorded its own want, and each reconcile counted its own
     // request: nothing was skipped, because nothing was already settled.
-    assert_eq!(state.uniform.desired.len(), 1);
-    assert_eq!(state.storage.desired.len(), 1);
+    assert_eq!(state.uniform.desired_len(), 1);
+    assert_eq!(state.storage.desired_len(), 1);
     assert_eq!(
         counters_for(&counters),
         DomainCounters {

@@ -17,11 +17,12 @@
 //! file restates a fixture another file could drift from.
 
 use super::super::counters::DomainCounters;
+use super::super::error::PartialApplication;
 use super::*;
 use crate::webgl2::api::tests::{compute_storage_snapshot, snapshot};
 use crate::webgl2::api::{
-    GlBufferDesc, GlBufferUsage, GlFamilyProfile, GlResourceApi, GlStorageBufferUsage, MockCall,
-    MockComputeStorageApi, MockGlFamilyApi,
+    GlBufferDesc, GlBufferUsage, GlError, GlFamilyProfile, GlResourceApi, GlStorageBufferUsage,
+    MockCall, MockComputeStorageApi, MockGlFamilyApi,
 };
 
 mod failure;

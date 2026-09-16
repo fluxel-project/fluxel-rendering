@@ -12,8 +12,8 @@
 //!
 //! | Event | Domains that must act |
 //! |---|---|
-//! | [`StateEvent::BufferDeleted`] | buffers, geometry, groups, compute, sync |
-//! | [`StateEvent::TextureDeleted`] | textures, session, groups |
+//! | [`StateEvent::BufferDeleted`] | buffers, geometry, groups, sync |
+//! | [`StateEvent::TextureDeleted`] | textures, session, groups, compute |
 //! | [`StateEvent::SamplerDeleted`] | textures, groups |
 //! | [`StateEvent::ShaderDeleted`] | pipeline |
 //! | [`StateEvent::ProgramDeleted`] | pipeline, groups |
@@ -28,6 +28,13 @@
 //! | [`StateEvent::ContextLost`] | every domain |
 //! | [`StateEvent::ContextRestored`] | every domain, plus every cache |
 //! | [`StateEvent::DeviceReplaced`] | every domain, plus every cache |
+//!
+//! A domain appears on a deletion row when it *mirrors a binding that named the
+//! deleted object*, not when the deleted object belongs to some group.  That is
+//! why the compute row is the texture one: the image units a dispatch fills are
+//! filled with textures, and the storage-buffer half of the same dispatch is the
+//! buffer domain's storage role, so a deleted buffer reaches compute through no
+//! entry of its own.
 //!
 //! A deletion is dispatched to the mirror *before* the backend is asked to
 //! delete, because a name reused after deletion must not be able to hit a

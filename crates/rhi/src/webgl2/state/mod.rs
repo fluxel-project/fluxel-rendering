@@ -52,6 +52,7 @@
 )]
 
 pub(super) mod backend;
+pub(super) mod binding;
 pub(super) mod buffers;
 pub(super) mod cache;
 pub(super) mod compute;

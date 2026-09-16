@@ -57,7 +57,9 @@ pub(crate) enum StateDomain {
     /// exposes them through the same unit index space: binding one needs
     /// `GlStorageImageApi`, which no domain bounded on `GlStateBackend` can
     /// reach, and a domain that claimed a value it had no trait to set would be
-    /// a mirror nobody could ever make agree with the driver.
+    /// a mirror nobody could ever make agree with the driver.  What owns them is
+    /// [`Self::Compute`], whose entry points carry the bound that reaches that
+    /// trait.
     Textures,
     /// Common bind-group slots as logical identities plus their dynamic
     /// offsets, before they expand into the buffer and texture domains.
@@ -71,8 +73,18 @@ pub(crate) enum StateDomain {
     /// it, and because whether the short-circuit is worth its cost is
     /// Checkpoint G's measurement rather than this module's assumption.
     Groups,
-    /// Storage-image bindings and pending memory visibility, for profiles with
-    /// the optional command domains.
+    /// Storage-image bindings, for profiles with the optional command domains.
+    ///
+    /// The storage-image half is implemented: the state is
+    /// [`super::compute::ComputeState`], the index space is the image-unit space
+    /// rather than the storage-buffer binding count or a texture unit, and the
+    /// request is the whole binding, because the declared access is a fact about
+    /// what the shader will do with the image rather than about the image.  The
+    /// plan's state model also names pending memory visibility here, and that is
+    /// deliberately not mirrored: a barrier orders writes that have already
+    /// happened, so a request has no driver value to compare against and nothing
+    /// this layer could prove redundant — skipping one would be dropping the
+    /// ordering the caller asked for, not an optimization.
     ///
     /// The plan's state model also names the compute program identity.  It is
     /// deliberately not claimed here, and the reason is not the recording one it
