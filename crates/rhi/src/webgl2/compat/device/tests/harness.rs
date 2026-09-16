@@ -24,8 +24,8 @@
 //! was true would be asserting the wrong thing about the boundary.
 
 use fluxel_rendergraph::{
-    AttachmentOps, BindingResourceSemantic, BufferRange, BufferReadUse, Extent3d, FrameExecutor,
-    LoadOp, RasterColorAttachment, RasterDepthStencilAttachment, ResolvedBindingResource, StoreOp,
+    AttachmentOps, BindingResourceSemantic, BufferRange, BufferReadUse, Extent3d, LoadOp,
+    RasterColorAttachment, RasterDepthStencilAttachment, ResolvedBindingResource, StoreOp,
     TextureDesc, TextureDimension, TextureFormat, TextureRange, TextureReadUse, TextureUsage,
     TextureUsageKind, WriteCoverage,
 };
@@ -39,31 +39,6 @@ use crate::webgl2::api::{
 
 /// The adapter under test, over the WebGL2 snapshot.
 pub(super) type Adapter = GlCompatibilityDevice<MockGlFamilyApi>;
-
-/// The peer check F1 owed F2: the boundary's own consumer accepts this adapter.
-///
-/// F1's record deferred it in as many words -- "the 'consumer that names the
-/// adapter as `B: ExecutionBackend`' check moves to F2 with it" -- and it is why
-/// the associated types are F2's first act rather than something that could be
-/// fixed later.  What it proves is narrow and worth stating precisely: the eleven
-/// types are a *set* `FrameExecutor` accepts through its generic, with no `dyn
-/// ExecutionBackend` and no adapter-side shim between them.
-///
-/// It is a compile-time check and not a run, and the reason it was deferred with
-/// is no longer the reason it is still one: the copy slice has landed, so this
-/// adapter accepts transitions rather than refusing them, and what a run would
-/// need is a *fixture* -- a graph compiled against this device's own capability
-/// fingerprint, plus the two provider values `execute` takes -- which none of the
-/// suites here build.  Running the verbs directly is what F3(c) does instead, and
-/// the frame-level run stays an open item rather than being claimed by the
-/// acceptance above.
-#[allow(
-    dead_code,
-    reason = "the check is that this type-checks, not that it runs"
-)]
-pub(super) fn the_executor_accepts_the_adapter(adapter: Adapter) -> FrameExecutor<Adapter> {
-    FrameExecutor::new(adapter)
-}
 
 pub(super) fn adapter() -> Adapter {
     GlCompatibilityDevice::new(MockGlFamilyApi::from_discovery(snapshot(

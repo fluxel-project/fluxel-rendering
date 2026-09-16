@@ -17,6 +17,7 @@
 //! outcome the test names is as much an observation as one a driver produced.
 
 mod commands;
+mod frame;
 mod harness;
 mod objects;
 mod raster;
