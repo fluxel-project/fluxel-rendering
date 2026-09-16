@@ -16,6 +16,13 @@
 
 use super::*;
 
+// The names the lowering's own contract does not carry, imported here rather
+// than reached through [`super`]: the parent composes the two families and no
+// longer names a raster kernel or a pipeline layout itself, so a glob over it
+// stopped being a source for these when the families were split out.
+use crate::resource::{RasterKernel, RasterVertexLayout};
+use crate::webgl2::api::{GlPipelineLayout, GlProgramKind, GlShaderResourceKind};
+
 /// The ten closed recipes, in the order the artifact module declares them.
 ///
 /// A new variant does not fail this list -- it fails `bodies()`, which is a
