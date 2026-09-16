@@ -87,11 +87,24 @@ pub(crate) enum GlCapability {
     IndirectDraw,
     IndirectDispatch,
     MultiDrawIndirect,
+    /// One command issuing many draws from per-draw parameter slices.
+    MultiDraw,
+    /// One attachment serving several array layers in a single pass.
+    Multiview,
     TimerQuery,
 }
 impl GlCapability {
     const fn requires_probe(self) -> bool {
-        !matches!(self, Self::TimerQuery)
+        match self {
+            Self::TimerQuery => false,
+            // A per-draw parameter batch is proved by its acquired, complete
+            // and callable command set: the domain has no queryable limit and
+            // discovery never installs the pipeline a scratch draw would need,
+            // so the entry-point oracle is the strongest evidence available
+            // before the first real draw.
+            Self::MultiDraw => false,
+            _ => true,
+        }
     }
     fn limits_satisfied(self, l: &GlLimits, formats: &GlFormatTable) -> bool {
         match self {
@@ -100,6 +113,11 @@ impl GlCapability {
             Self::StorageImage => l.supports_storage_images() && formats.has_storage_read_write(),
             Self::IndirectDraw | Self::IndirectDispatch => l.supports_single_indirect(),
             Self::MultiDrawIndirect => l.supports_multi_draw_indirect(),
+            // Every draw of a batch is validated exactly like the single-draw
+            // path, so this domain adds no numeric requirement of its own and
+            // an unconditionally satisfied limit half is the honest fact.
+            Self::MultiDraw => true,
+            Self::Multiview => l.supports_multiview(),
             Self::TimerQuery => l.query_counter_bits != 0,
         }
     }
@@ -240,6 +258,21 @@ impl GlDiscoverySnapshot {
     /// Returns normalized capability evidence.
     pub(crate) fn capabilities(&self) -> &GlCapabilitySet {
         &self.capabilities
+    }
+
+    /// Returns how many views one attachment of a pass may serve here.
+    ///
+    /// A context that did not prove multiview reports the single view that
+    /// every pass already uses, which is the WebGPU default for
+    /// `maxMultiviewViewCount`; a queried view count is never reported for a
+    /// capability that did not enable, so a permissive number can never leak
+    /// past a failed capability fact.
+    pub(crate) fn max_multiview_view_count(&self) -> u32 {
+        if self.capabilities.supports(GlCapability::Multiview) {
+            self.limits.max_multiview_view_count
+        } else {
+            1
+        }
     }
 
     /// Rebinds immutable observations for deterministic context-restore tests.

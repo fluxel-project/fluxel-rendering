@@ -44,6 +44,8 @@ impl GlFamilyApi for WebGl2BrowserDiscovery {
         self.buffers.clear();
         self.textures.clear();
         self.samplers.clear();
+        // The retained batch commands belong to the dead context.
+        self.multi_draw = None;
         self.clear_executable_state();
         Ok(())
     }
@@ -70,6 +72,9 @@ impl GlFamilyApi for WebGl2BrowserDiscovery {
         self.snapshot = replacement.snapshot;
         self.owner_thread = replacement.owner_thread;
         self.lifecycle = replacement.lifecycle;
+        // The recreated context re-acquired its own extension objects, so the
+        // retained batch commands are the replacement's, never the old ones.
+        self.multi_draw = replacement.multi_draw;
         self.buffers.clear();
         self.textures.clear();
         self.samplers.clear();

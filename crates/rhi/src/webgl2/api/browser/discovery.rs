@@ -17,6 +17,7 @@ use super::super::{
     GlFormat, GlFormatTable, GlKnownExtension, GlLimits, GlOperationProbe, GlPixelStoreState,
     GlSurfaceLeaseBook, GlTextureDesc, OwnerThreadIdentity, TextureId,
 };
+use super::exec_multidraw::BrowserMultiDraw;
 use super::objects::{
     ActivePass, ActiveRaster, BrowserFramebuffer, BrowserProgram, BrowserQuery, BrowserShader,
     BrowserSync, BrowserVertexArray,
@@ -53,6 +54,13 @@ pub(crate) struct WebGl2BrowserDiscovery {
     pub(super) surface_suspended: bool,
     pub(super) pass: Option<ActivePass>,
     pub(super) raster: Option<ActiveRaster>,
+    /// The batch commands retained from the acquired batch extension object.
+    ///
+    /// `Some` exactly when that object exposed every command the batch domain
+    /// issues, so it is also exactly when the batch capability resolved (audit
+    /// P1-8). Dropped with the rest of the executable state on loss, because the
+    /// object belongs to the dead context.
+    pub(super) multi_draw: Option<BrowserMultiDraw>,
     /// Slot of the query currently recording, if any.
     pub(super) active_query: Option<u32>,
     pub(super) next_buffer_slot: u32,
@@ -132,7 +140,7 @@ impl WebGl2BrowserDiscovery {
         // not use glow for discovery: its browser constructor panics on JS
         // binding invariant violations instead of returning `Result`.
         let glow = glow::Context::from_webgl2_context(raw.clone());
-        let extensions = discover_extensions(&raw)?;
+        let (extensions, multi_draw) = discover_extensions(&raw)?;
         let context = GlContextInfo::new(
             GlFamilyProfile::WebGl2,
             version,
@@ -170,6 +178,39 @@ impl WebGl2BrowserDiscovery {
             },
             GlOperationProbe::NotRequired,
         );
+        // OVR_multiview2 is acquired when the browser exposes the extension
+        // object, but no multiview attachment probe exists yet: the pass state
+        // that would have to carry a view count is not modelled, so a pass that
+        // claims several views would attach a single layer and render the wrong
+        // picture. The row therefore records the real evidence and stays
+        // permanently disabled until the probe and the multiview attach path
+        // land together (audit P1-7).
+        builder.resolve(
+            GlCapability::Multiview,
+            CoreOrExtension {
+                desktop_core: None,
+                embedded_core: None,
+                extension: Some(GlKnownExtension::OvrMultiview2),
+                extension_requires_probe: true,
+            },
+            GlOperationProbe::NotRun,
+        );
+        // WEBGL_multi_draw is the browser's only per-draw parameter batch. Its
+        // oracle is the complete, callable entry-point set acquired below
+        // together with the per-draw validation each draw already goes through;
+        // a batch therefore enables here once the extension object proves its
+        // commands, and `multi_draw` falls back to single draws when it does not
+        // (audit P1-8).
+        builder.resolve(
+            GlCapability::MultiDraw,
+            CoreOrExtension {
+                desktop_core: None,
+                embedded_core: None,
+                extension: Some(GlKnownExtension::WebglMultiDraw),
+                extension_requires_probe: false,
+            },
+            GlOperationProbe::NotRequired,
+        );
         // A context may be lost between any two browser calls. Do not publish
         // a discovery snapshot across that boundary.
         ensure_context_live(&raw, "finish WebGL2 discovery")?;
@@ -194,6 +235,7 @@ impl WebGl2BrowserDiscovery {
             surface_suspended: false,
             pass: None,
             raster: None,
+            multi_draw,
             active_query: None,
             next_buffer_slot: 0,
             next_texture_slot: 0,
@@ -321,7 +363,14 @@ fn ensure_context_live(
         .ok_or(GlError::ContextLost { operation })
 }
 
-fn discover_extensions(raw: &WebGl2RenderingContext) -> Result<GlExtensionSet, GlError> {
+/// Records evidence for every reported extension this contract models.
+///
+/// Returns the ledger together with the one acquired object whose commands must
+/// be retained: the batch extension defines its commands on the object itself,
+/// so no context method can reach them later.
+fn discover_extensions(
+    raw: &WebGl2RenderingContext,
+) -> Result<(GlExtensionSet, Option<BrowserMultiDraw>), GlError> {
     let listed = raw.get_supported_extensions().ok_or_else(|| {
         driver(
             "getSupportedExtensions",
@@ -339,6 +388,7 @@ fn discover_extensions(raw: &WebGl2RenderingContext) -> Result<GlExtensionSet, G
         extensions.report_raw(name);
     }
 
+    let mut multi_draw = None;
     for known in [
         GlKnownExtension::ExtDisjointTimerQueryWebgl2,
         GlKnownExtension::ExtColorBufferFloat,
@@ -355,20 +405,36 @@ fn discover_extensions(raw: &WebGl2RenderingContext) -> Result<GlExtensionSet, G
         GlKnownExtension::CompressedTextureAstc,
         GlKnownExtension::CompressedTextureEtc,
     ] {
-        if extensions.provenance(known).is_some() {
-            match raw.get_extension(acquisition_name(known, &extensions)) {
-                Ok(Some(_)) => {
+        if extensions.provenance(known).is_none() {
+            continue;
+        }
+        let object = match raw.get_extension(acquisition_name(known, &extensions)) {
+            Ok(Some(object)) => object,
+            Ok(None) | Err(_) => {
+                // A reported name without a usable extension object is
+                // explicitly failed and can never enable a capability.
+                extensions.fail(known);
+                continue;
+            }
+        };
+        if known == GlKnownExtension::WebglMultiDraw {
+            // Its commands live on the object, so the object is the oracle: an
+            // object that does not expose all of them fails the acquisition and
+            // leaves the batch domain on its single-draw route (audit P1-8).
+            match BrowserMultiDraw::acquire(&object) {
+                Some(commands) => {
                     extensions.acquire(known);
+                    multi_draw = Some(commands);
                 }
-                Ok(None) | Err(_) => {
-                    // A reported name without a usable extension object is
-                    // explicitly failed and can never enable a capability.
+                None => {
                     extensions.fail(known);
                 }
             }
+            continue;
         }
+        extensions.acquire(known);
     }
-    Ok(extensions)
+    Ok((extensions, multi_draw))
 }
 
 fn acquisition_name(known: GlKnownExtension, extensions: &GlExtensionSet) -> &'static str {
@@ -502,9 +568,27 @@ fn discover_limits(
         max_compute_work_group_size: [0; 3],
         max_compute_work_group_invocations: 0,
         max_multi_draw_indirect_count: None,
+        max_multiview_view_count: multiview_view_limit(raw, extensions)?,
         query_counter_bits: 0,
         max_texture_anisotropy: anisotropy_limit(raw, extensions)?,
     })
+}
+
+/// The number of views one attachment may serve in one pass.
+///
+/// The token is defined by the multiview extension family and is invalid until
+/// an extension object has been acquired, so a context without it records 0 and
+/// can never satisfy the multiview floor. One view is the plain single-view
+/// attachment every WebGL2 context already has and is not a multiview proof.
+fn multiview_view_limit(
+    raw: &WebGl2RenderingContext,
+    extensions: &GlExtensionSet,
+) -> Result<u32, GlError> {
+    const MAX_VIEWS_OVR: u32 = 0x9632;
+    if !extensions.is_acquired(GlKnownExtension::OvrMultiview2) {
+        return Ok(0);
+    }
+    u32_parameter(raw, MAX_VIEWS_OVR, "MAX_VIEWS_OVR")
 }
 
 fn anisotropy_limit(

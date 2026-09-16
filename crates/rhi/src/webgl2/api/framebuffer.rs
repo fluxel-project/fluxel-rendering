@@ -14,6 +14,15 @@ pub(crate) struct GlTextureView {
     pub format: GlFormat,
     pub mip_level: u32,
     pub array_layer: u32,
+    /// Array layers this view serves in one pass; `1` is a plain attachment.
+    ///
+    /// A view with more than one layer is a multiview attachment: the pass then
+    /// renders that many views, and every attachment of the framebuffer must
+    /// agree on the count. The field is view vocabulary, not a context
+    /// property; whether the context can serve the count is decided against the
+    /// discovered view-count limit, so an unsupported count is rejected before
+    /// the first pass rather than at the first draw.
+    pub layer_count: u32,
     pub width: u32,
     pub height: u32,
     pub sample_count: u32,
@@ -125,7 +134,9 @@ pub(crate) enum GlFramebufferValidationError {
     ForeignContext,
     DuplicateAttachment,
     InvalidExtent,
+    InvalidLayerCount,
     MismatchedExtent,
+    MismatchedLayerCount,
     MismatchedSampleCount,
     InvalidColorFormat,
     InvalidDepthStencilFormat,
@@ -134,6 +145,8 @@ pub(crate) enum GlFramebufferValidationError {
     TooManyDrawBuffers,
     DrawBufferIndexOutOfBounds,
     DuplicateDrawBuffer,
+    MultiviewNotSupported,
+    MultiviewViewCountExceedsLimit,
     InvalidBlitRegion,
     EmptyBlitMask,
     BlitFilterIncompatible,
@@ -157,12 +170,38 @@ impl GlTextureView {
     }
     fn validate_shape(self) -> Result<(), GlFramebufferValidationError> {
         if self.width == 0 || self.height == 0 || self.sample_count == 0 {
-            Err(GlFramebufferValidationError::InvalidExtent)
-        } else {
-            Ok(())
+            return Err(GlFramebufferValidationError::InvalidExtent);
         }
+        if self.layer_count == 0 {
+            return Err(GlFramebufferValidationError::InvalidLayerCount);
+        }
+        Ok(())
     }
 }
+
+/// Rejects an attachment view count this context cannot serve.
+///
+/// One view is the count every pass already uses and is always legal. More than
+/// one view is a multiview pass, which needs both the multiview capability and
+/// a view count within the discovered limit; a context that proved neither
+/// rejects here, before any pass state changes, instead of rendering the first
+/// layer and silently dropping the rest.
+fn validate_view_count(
+    view_count: u32,
+    max_views: u32,
+) -> Result<(), GlFramebufferValidationError> {
+    if view_count <= 1 {
+        return Ok(());
+    }
+    if max_views < 2 {
+        return Err(GlFramebufferValidationError::MultiviewNotSupported);
+    }
+    if view_count > max_views {
+        return Err(GlFramebufferValidationError::MultiviewViewCountExceedsLimit);
+    }
+    Ok(())
+}
+
 impl GlFramebufferDescriptor {
     pub(crate) fn validate(
         &self,
@@ -199,6 +238,13 @@ impl GlFramebufferDescriptor {
             if view.target.context() != current {
                 return Err(GlFramebufferValidationError::ForeignContext);
             }
+            // A pass renders one view count: attachments that disagree would
+            // need per-attachment view loops the contract does not define. The
+            // count is a shape fact like the extent, so it is compared with the
+            // other shape rules, before the extent is.
+            if view.layer_count != first.layer_count {
+                return Err(GlFramebufferValidationError::MismatchedLayerCount);
+            }
             if view.width != first.width || view.height != first.height {
                 return Err(GlFramebufferValidationError::MismatchedExtent);
             }
@@ -220,6 +266,25 @@ impl GlFramebufferDescriptor {
             return Err(GlFramebufferValidationError::InvalidDepthStencilFormat);
         }
         Ok(())
+    }
+
+    /// Returns the view count every attachment of this framebuffer agrees on.
+    ///
+    /// `validate` has already rejected disagreement, so the first attachment's
+    /// count is the whole framebuffer's count; no attachments means no views.
+    pub(crate) fn view_count(&self) -> u32 {
+        self.color_attachments
+            .first()
+            .or(self.depth_stencil_attachment.as_ref())
+            .map_or(0, |view| view.layer_count)
+    }
+
+    /// Rejects a multiview view count this context cannot serve.
+    pub(crate) fn validate_multiview(
+        &self,
+        max_views: u32,
+    ) -> Result<(), GlFramebufferValidationError> {
+        validate_view_count(self.view_count(), max_views)
     }
 }
 impl GlRenderPassDescriptor {
@@ -246,10 +311,14 @@ impl GlRenderPassDescriptor {
                 return Err(GlFramebufferValidationError::DuplicateAttachment);
             }
             if let Some(resolve) = attachment.resolve_target {
+                // A resolve stays a single-layer blit destination: resolving a
+                // multiview attachment is one view per command, never one
+                // command for every view.
                 if resolve.target.context() != current
                     || resolve.format != view.format
                     || resolve.width != view.width
                     || resolve.height != view.height
+                    || resolve.layer_count != 1
                     || view.sample_count <= 1
                     || resolve.sample_count != 1
                 {
@@ -261,6 +330,29 @@ impl GlRenderPassDescriptor {
             }
         }
         Ok(())
+    }
+
+    /// Returns the view count this pass renders, taken from its attachments.
+    pub(crate) fn view_count(&self) -> u32 {
+        self.color_attachments
+            .first()
+            .map(|attachment| attachment.view.layer_count)
+            .or_else(|| {
+                self.depth_stencil_attachment
+                    .map(|attachment| attachment.view.layer_count)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Rejects a multiview view count this context cannot serve.
+    ///
+    /// `validate` has already proved every attachment matches its framebuffer
+    /// view, so the pass agrees on one view count by construction.
+    pub(crate) fn validate_multiview(
+        &self,
+        max_views: u32,
+    ) -> Result<(), GlFramebufferValidationError> {
+        validate_view_count(self.view_count(), max_views)
     }
 }
 
@@ -378,9 +470,156 @@ mod tests {
             format: super::GlFormat::Depth32Float,
             mip_level: 0,
             array_layer: 0,
+            layer_count: 1,
             width: 1,
             height: 1,
             sample_count: 1,
         }
+    }
+
+    fn stamp() -> super::super::ContextStamp {
+        super::super::ContextStamp::new(
+            super::super::DeviceIdentity::new(1).unwrap(),
+            super::super::ContextEpoch::INITIAL,
+        )
+    }
+
+    /// A color-renderable view of `layer_count` layers on a fresh allocation.
+    fn color_view(slot: u32, layer_count: u32) -> super::GlTextureView {
+        super::GlTextureView {
+            target: super::GlAttachmentTarget::Texture(super::TextureId::new(stamp(), slot, 0)),
+            format: super::GlFormat::Rgba8Unorm,
+            mip_level: 0,
+            array_layer: 0,
+            layer_count,
+            width: 4,
+            height: 4,
+            sample_count: 1,
+        }
+    }
+
+    #[test]
+    fn attachment_views_must_agree_on_their_layer_count() {
+        let color = color_view(0, 2);
+        // The depth view matches the color view in every shape rule but the
+        // layer count, so the case can only fail on that rule.
+        let depth = super::GlTextureView {
+            layer_count: 1,
+            width: color.width,
+            height: color.height,
+            ..empty_view()
+        };
+        let descriptor = GlFramebufferDescriptor {
+            color_attachments: vec![color],
+            depth_stencil_attachment: Some(depth),
+            draw_buffers: vec![],
+        };
+        assert_eq!(
+            descriptor.validate(4, 4, stamp()),
+            Err(GlFramebufferValidationError::MismatchedLayerCount)
+        );
+        let agreed = GlFramebufferDescriptor {
+            depth_stencil_attachment: Some(super::GlTextureView {
+                format: super::GlFormat::Depth32Float,
+                layer_count: 2,
+                ..depth
+            }),
+            ..descriptor
+        };
+        assert_eq!(agreed.validate(4, 4, stamp()), Ok(()));
+        assert_eq!(agreed.view_count(), 2);
+    }
+
+    #[test]
+    fn a_view_serving_no_layer_is_not_a_view() {
+        let descriptor = GlFramebufferDescriptor {
+            color_attachments: vec![color_view(0, 0)],
+            depth_stencil_attachment: None,
+            draw_buffers: vec![],
+        };
+        assert_eq!(
+            descriptor.validate(4, 4, stamp()),
+            Err(GlFramebufferValidationError::InvalidLayerCount)
+        );
+    }
+
+    /// A multiview view count is refused outright on a context that did not
+    /// prove multiview, and refused above the proved count otherwise.
+    #[test]
+    fn multiview_view_count_is_gated_by_the_proved_limit() {
+        let descriptor = GlFramebufferDescriptor {
+            color_attachments: vec![color_view(0, 2)],
+            depth_stencil_attachment: None,
+            draw_buffers: vec![],
+        };
+        assert_eq!(
+            descriptor.validate_multiview(1),
+            Err(GlFramebufferValidationError::MultiviewNotSupported)
+        );
+        assert_eq!(descriptor.validate_multiview(2), Ok(()));
+
+        let three = GlFramebufferDescriptor {
+            color_attachments: vec![color_view(0, 3)],
+            ..descriptor
+        };
+        assert_eq!(
+            three.validate_multiview(2),
+            Err(GlFramebufferValidationError::MultiviewViewCountExceedsLimit)
+        );
+        assert_eq!(three.validate_multiview(3), Ok(()));
+    }
+
+    #[test]
+    fn single_view_passes_never_need_the_multiview_limit() {
+        let descriptor = GlFramebufferDescriptor {
+            color_attachments: vec![],
+            depth_stencil_attachment: Some(empty_view()),
+            draw_buffers: vec![],
+        };
+        assert_eq!(descriptor.view_count(), 1);
+        assert_eq!(descriptor.validate_multiview(1), Ok(()));
+    }
+
+    /// A pass may not resolve into a multiview attachment: a resolve is a
+    /// single-view blit, so a multilayer destination has no defined result.
+    #[test]
+    fn resolve_targets_are_single_layer() {
+        let view = color_view(0, 1);
+        let multisampled = super::GlTextureView {
+            sample_count: 4,
+            ..view
+        };
+        let pass = super::GlRenderPassDescriptor {
+            framebuffer: super::FramebufferId::new(stamp(), 0, 0),
+            color_attachments: vec![super::GlColorAttachment {
+                view: multisampled,
+                resolve_target: Some(super::GlTextureView {
+                    layer_count: 2,
+                    ..view
+                }),
+                load: GlLoadOp::Load,
+                store: GlStoreOp::Store,
+                clear: GlColorClearValue {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 0,
+                },
+            }],
+            depth_stencil_attachment: None,
+        };
+        let framebuffer = GlFramebufferDescriptor {
+            color_attachments: vec![multisampled],
+            depth_stencil_attachment: None,
+            draw_buffers: vec![],
+        };
+        assert_eq!(
+            pass.validate(&framebuffer, 4, 4, stamp()),
+            Err(GlFramebufferValidationError::InvalidResolve)
+        );
+        // The pass itself already agrees on one view count, so the multiview
+        // gate stays satisfied and only the resolve rule rejects.
+        assert_eq!(pass.view_count(), 1);
+        assert_eq!(pass.validate_multiview(1), Ok(()));
     }
 }

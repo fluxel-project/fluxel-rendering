@@ -77,6 +77,12 @@ impl GlFramebufferApi for NativeGlProvider<'_> {
                 self.context_stamp(),
             )
             .map_err(|_| Self::validation(OP, "invalid framebuffer descriptor"))?;
+        // A descriptor that asks for several views per attachment is refused
+        // here, before the framebuffer object exists, unless this context
+        // proved a view count that can serve it.
+        descriptor
+            .validate_multiview(self.discovery.max_multiview_view_count())
+            .map_err(|_| Self::validation(OP, "multiview view count is not proved"))?;
         // SAFETY: current-context contract; the framebuffer is deleted on
         // every error path before this function returns.
         let raw = unsafe { self.gl.create_framebuffer() }.map_err(|message| GlError::Driver {
@@ -154,6 +160,9 @@ impl GlFramebufferApi for NativeGlProvider<'_> {
             .map_err(|_| {
                 Self::validation(OP, "render pass does not match its framebuffer descriptor")
             })?;
+        descriptor
+            .validate_multiview(self.discovery.max_multiview_view_count())
+            .map_err(|_| Self::validation(OP, "multiview view count is not proved"))?;
         for attachment in &descriptor.color_attachments {
             self.validate_attachment(OP, attachment.view)?;
             if let Some(resolve) = attachment.resolve_target {

@@ -89,6 +89,12 @@ impl GlFramebufferApi for WebGl2BrowserDiscovery {
                 self.context_stamp(),
             )
             .map_err(|_| Self::validation(OP, "invalid framebuffer descriptor"))?;
+        // A descriptor that asks for several views per attachment is refused
+        // here, before the framebuffer object exists, unless this context
+        // proved a view count that can serve it.
+        descriptor
+            .validate_multiview(self.discovery().max_multiview_view_count())
+            .map_err(|_| Self::validation(OP, "multiview view count is not proved"))?;
         let raw = self
             .raw
             .create_framebuffer()
@@ -157,6 +163,9 @@ impl GlFramebufferApi for WebGl2BrowserDiscovery {
             .map_err(|_| {
                 Self::validation(OP, "render pass does not match its framebuffer descriptor")
             })?;
+        descriptor
+            .validate_multiview(self.discovery().max_multiview_view_count())
+            .map_err(|_| Self::validation(OP, "multiview view count is not proved"))?;
         for attachment in &descriptor.color_attachments {
             self.validate_attachment(OP, attachment.view)?;
             if let Some(resolve) = attachment.resolve_target {

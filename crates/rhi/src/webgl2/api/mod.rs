@@ -24,6 +24,7 @@ mod indirect;
 mod limits;
 #[cfg(test)]
 mod mock;
+mod multi_draw;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "native-gl-wgl", feature = "native-gles-egl")
@@ -65,6 +66,7 @@ pub(crate) use indirect::*;
 pub(crate) use limits::{GlFiniteF32, GlLimitViolation, GlLimits};
 #[cfg(test)]
 pub(crate) use mock::{MockCall, MockComputeStorageApi, MockGlFamilyApi};
+pub(crate) use multi_draw::*;
 #[allow(
     unused_imports,
     reason = "Layer 1 marker exports are consumed by later private layers."

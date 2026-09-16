@@ -16,7 +16,7 @@ use super::super::{
 use super::discovery::WebGl2BrowserDiscovery;
 use super::exec_vertex::{indexed_draw_offset, indexed_draw_span, indexed_draw_type};
 
-const fn topology_mode(topology: GlPrimitiveTopology) -> u32 {
+pub(super) const fn topology_mode(topology: GlPrimitiveTopology) -> u32 {
     match topology {
         GlPrimitiveTopology::Points => Gl::POINTS,
         GlPrimitiveTopology::Lines => Gl::LINES,
@@ -80,6 +80,29 @@ const fn blend_operation(operation: GlBlendOperation) -> u32 {
     }
 }
 
+/// One draw with every value a browser draw call needs already converted and
+/// every bound the single-draw path checks already checked.
+///
+/// A batch readies all of its draws into this form before it issues the first
+/// command, so the checks live in exactly one place and a batch cannot submit
+/// half of itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PreparedDraw {
+    /// `drawArrays`-shaped values.
+    NonIndexed {
+        first: i32,
+        count: i32,
+        instances: i32,
+    },
+    /// `drawElements`-shaped values; `offset` is a byte offset.
+    Indexed {
+        count: i32,
+        index_type: u32,
+        offset: i32,
+        instances: i32,
+    },
+}
+
 impl GlRasterCommandApi for WebGl2BrowserDiscovery {
     fn set_raster_pipeline(&mut self, pipeline: &GlRasterPipeline) -> Result<(), GlError> {
         const OP: &str = "set-raster-pipeline";
@@ -131,22 +154,12 @@ impl GlRasterCommandApi for WebGl2BrowserDiscovery {
             .as_ref()
             .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
         let mode = topology_mode(raster.topology);
-        let vertex_array = self.vertex_array(OP, raster.vertex_array)?;
-        let index = vertex_array.index;
-        match draw {
-            GlDrawCommand::NonIndexed(draw) => {
-                if draw.vertex_count == 0 || draw.instance_count == 0 {
-                    return Err(Self::validation(
-                        OP,
-                        "draw count and instances must be nonzero",
-                    ));
-                }
-                let first = i32::try_from(draw.first_vertex)
-                    .map_err(|_| Self::validation(OP, "first vertex exceeds i32"))?;
-                let count = i32::try_from(draw.vertex_count)
-                    .map_err(|_| Self::validation(OP, "vertex count exceeds i32"))?;
-                let instances = i32::try_from(draw.instance_count)
-                    .map_err(|_| Self::validation(OP, "instance count exceeds i32"))?;
+        match self.prepare_draw(OP, draw)? {
+            PreparedDraw::NonIndexed {
+                first,
+                count,
+                instances,
+            } => {
                 if instances == 1 {
                     self.raw.draw_arrays(mode, first, count);
                 } else {
@@ -154,49 +167,102 @@ impl GlRasterCommandApi for WebGl2BrowserDiscovery {
                         .draw_arrays_instanced(mode, first, count, instances);
                 }
             }
-            GlDrawCommand::Indexed(draw) => {
-                if draw.index_count == 0 || draw.instance_count == 0 {
-                    return Err(Self::validation(
-                        OP,
-                        "draw count and instances must be nonzero",
-                    ));
-                }
-                let Some(index) = index else {
-                    return Err(Self::validation(
-                        OP,
-                        "indexed draw requires a bound index buffer",
-                    ));
-                };
-                // Bound checks use the allocation table, so an out-of-range
-                // draw rejects before the browser can silently ignore it.
-                let byte_length = self.buffer(OP, index.buffer)?.desc.size;
-                let span = indexed_draw_span(index, draw.first_index, draw.index_count)
-                    .ok_or_else(|| Self::validation(OP, "indexed draw span overflows"))?;
-                if span > byte_length {
-                    return Err(Self::validation(OP, "indexed draw leaves the index buffer"));
-                }
-                let offset = indexed_draw_offset(index, draw.first_index)
-                    .and_then(|value| i32::try_from(value).ok())
-                    .ok_or_else(|| Self::validation(OP, "index offset exceeds i32"))?;
-                let count = i32::try_from(draw.index_count)
-                    .map_err(|_| Self::validation(OP, "index count exceeds i32"))?;
-                let instances = i32::try_from(draw.instance_count)
-                    .map_err(|_| Self::validation(OP, "instance count exceeds i32"))?;
+            PreparedDraw::Indexed {
+                count,
+                index_type,
+                offset,
+                instances,
+            } => {
                 if instances == 1 {
                     self.raw
-                        .draw_elements_with_i32(mode, count, indexed_draw_type(index), offset);
+                        .draw_elements_with_i32(mode, count, index_type, offset);
                 } else {
                     self.raw.draw_elements_instanced_with_i32(
-                        mode,
-                        count,
-                        indexed_draw_type(index),
-                        offset,
-                        instances,
+                        mode, count, index_type, offset, instances,
                     );
                 }
             }
         }
         self.driver_error(OP)
+    }
+}
+
+impl WebGl2BrowserDiscovery {
+    /// Validates one draw against the active pass, the installed pipeline, and
+    /// the index allocation it reads, returning the values the browser call
+    /// needs.
+    ///
+    /// It issues no GL command, so a batch can ready every draw before its
+    /// first submission. Bounds are checked against the allocation table, so an
+    /// out-of-range draw rejects before the browser can silently ignore it.
+    pub(super) fn prepare_draw(
+        &self,
+        operation: &'static str,
+        draw: GlDrawCommand,
+    ) -> Result<PreparedDraw, GlError> {
+        let raster = self
+            .raster
+            .as_ref()
+            .ok_or_else(|| Self::validation(operation, "no raster pipeline is installed"))?;
+        let vertex_array = self.vertex_array(operation, raster.vertex_array)?;
+        let index = vertex_array.index;
+        match draw {
+            GlDrawCommand::NonIndexed(draw) => {
+                if draw.vertex_count == 0 || draw.instance_count == 0 {
+                    return Err(Self::validation(
+                        operation,
+                        "draw count and instances must be nonzero",
+                    ));
+                }
+                let first = i32::try_from(draw.first_vertex)
+                    .map_err(|_| Self::validation(operation, "first vertex exceeds i32"))?;
+                let count = i32::try_from(draw.vertex_count)
+                    .map_err(|_| Self::validation(operation, "vertex count exceeds i32"))?;
+                let instances = i32::try_from(draw.instance_count)
+                    .map_err(|_| Self::validation(operation, "instance count exceeds i32"))?;
+                Ok(PreparedDraw::NonIndexed {
+                    first,
+                    count,
+                    instances,
+                })
+            }
+            GlDrawCommand::Indexed(draw) => {
+                if draw.index_count == 0 || draw.instance_count == 0 {
+                    return Err(Self::validation(
+                        operation,
+                        "draw count and instances must be nonzero",
+                    ));
+                }
+                let Some(index) = index else {
+                    return Err(Self::validation(
+                        operation,
+                        "indexed draw requires a bound index buffer",
+                    ));
+                };
+                let byte_length = self.buffer(operation, index.buffer)?.desc.size;
+                let span = indexed_draw_span(index, draw.first_index, draw.index_count)
+                    .ok_or_else(|| Self::validation(operation, "indexed draw span overflows"))?;
+                if span > byte_length {
+                    return Err(Self::validation(
+                        operation,
+                        "indexed draw leaves the index buffer",
+                    ));
+                }
+                let offset = indexed_draw_offset(index, draw.first_index)
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or_else(|| Self::validation(operation, "index offset exceeds i32"))?;
+                let count = i32::try_from(draw.index_count)
+                    .map_err(|_| Self::validation(operation, "index count exceeds i32"))?;
+                let instances = i32::try_from(draw.instance_count)
+                    .map_err(|_| Self::validation(operation, "instance count exceeds i32"))?;
+                Ok(PreparedDraw::Indexed {
+                    count,
+                    index_type: indexed_draw_type(index),
+                    offset,
+                    instances,
+                })
+            }
+        }
     }
 }
 

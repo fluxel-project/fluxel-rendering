@@ -9,6 +9,7 @@
 mod discovery;
 mod exec_copy;
 mod exec_framebuffer;
+mod exec_multidraw;
 mod exec_present;
 mod exec_raster;
 mod exec_shader;

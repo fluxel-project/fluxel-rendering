@@ -38,6 +38,10 @@ fn limits() -> GlLimits {
         max_compute_work_group_count: [65_535; 3],
         max_compute_work_group_size: [1_024, 1_024, 64],
         max_compute_work_group_invocations: 1_024,
+        // A context that answered the multiview query with two views: the
+        // numeric half is satisfiable while the capability still needs its
+        // route and probe evidence.
+        max_multiview_view_count: 2,
         max_multi_draw_indirect_count: Some(1),
         query_counter_bits: 32,
         max_texture_anisotropy: GlFiniteF32::new(16.0),
@@ -107,6 +111,49 @@ fn compute() -> CoreOrExtension {
         extension_requires_probe: true,
     }
 }
+/// The shipped batch requirement: one extension route whose oracle is the
+/// acquired, complete command set of the extension object (audit P1-8).
+fn batch() -> CoreOrExtension {
+    CoreOrExtension {
+        desktop_core: None,
+        embedded_core: None,
+        extension: Some(GlKnownExtension::WebglMultiDraw),
+        extension_requires_probe: false,
+    }
+}
+/// The shipped multiview requirement: the second-revision extension route,
+/// which needs a queried view count and a successful operation probe.
+fn multiview() -> CoreOrExtension {
+    CoreOrExtension {
+        desktop_core: None,
+        embedded_core: None,
+        extension: Some(GlKnownExtension::OvrMultiview2),
+        extension_requires_probe: true,
+    }
+}
+/// A ledger that has reported exactly these raw runtime names.
+fn ledger(names: &[&str]) -> GlExtensionSet {
+    let mut extensions = GlExtensionSet::default();
+    for name in names {
+        extensions.report_raw(*name);
+    }
+    extensions
+}
+/// A builder bound to one profile and one extension ledger.
+fn builder(
+    profile: GlFamilyProfile,
+    extensions: GlExtensionSet,
+    limits: GlLimits,
+) -> GlDiscoveryBuilder {
+    GlDiscoveryBuilder::new(
+        stamp(ContextEpoch::INITIAL),
+        context(profile),
+        extensions,
+        limits,
+        formats(false),
+    )
+    .expect("test discovery")
+}
 
 #[test]
 fn builder_binds_core_evidence_to_its_own_context() {
@@ -147,6 +194,192 @@ fn webgl_cannot_receive_desktop_core_evidence() {
         None
     );
     assert!(!snapshot.capabilities().supports(GlCapability::Compute));
+}
+
+/// A reported batch extension is not an acquired one: the domain enables only
+/// from a command set whose entry points were all proved callable, and every
+/// other context keeps the deterministic single-draw route.
+#[test]
+fn batch_domain_enables_only_from_an_acquired_command_set() {
+    let mut reported = builder(
+        GlFamilyProfile::WebGl2,
+        ledger(&["WEBGL_multi_draw"]),
+        limits(),
+    );
+    reported.resolve(
+        GlCapability::MultiDraw,
+        batch(),
+        GlOperationProbe::NotRequired,
+    );
+    let snapshot = reported.build();
+    assert_eq!(
+        snapshot
+            .capabilities()
+            .fact(GlCapability::MultiDraw)
+            .expect("fact")
+            .evidence,
+        None
+    );
+    assert!(!snapshot.capabilities().supports(GlCapability::MultiDraw));
+
+    let mut extensions = ledger(&["WEBGL_multi_draw"]);
+    assert!(extensions.acquire(GlKnownExtension::WebglMultiDraw));
+    let mut acquired = builder(GlFamilyProfile::WebGl2, extensions, limits());
+    acquired.resolve(
+        GlCapability::MultiDraw,
+        batch(),
+        GlOperationProbe::NotRequired,
+    );
+    let snapshot = acquired.build();
+    assert_eq!(
+        snapshot
+            .capabilities()
+            .fact(GlCapability::MultiDraw)
+            .expect("fact")
+            .evidence,
+        Some(CapabilityEvidence::Extension(
+            GlKnownExtension::WebglMultiDraw
+        ))
+    );
+    assert!(snapshot.capabilities().supports(GlCapability::MultiDraw));
+}
+
+/// No native profile has a batch route in this contract, so the row stays
+/// closed for both families even when a ledger claims the extension.
+#[test]
+fn batch_domain_stays_closed_on_every_profile_without_a_route() {
+    for profile in [
+        GlFamilyProfile::Desktop { major: 4, minor: 3 },
+        GlFamilyProfile::Embedded { major: 3, minor: 1 },
+    ] {
+        let mut extensions = ledger(&["WEBGL_multi_draw"]);
+        assert!(extensions.acquire(GlKnownExtension::WebglMultiDraw));
+        let mut builder = builder(profile, extensions, desktop_limits());
+        builder.resolve(
+            GlCapability::MultiDraw,
+            batch(),
+            GlOperationProbe::NotRequired,
+        );
+        let snapshot = builder.build();
+        assert_eq!(
+            snapshot
+                .capabilities()
+                .fact(GlCapability::MultiDraw)
+                .expect("fact")
+                .evidence,
+            None,
+            "{profile:?}"
+        );
+        assert!(!snapshot.capabilities().supports(GlCapability::MultiDraw));
+    }
+}
+
+/// The multiview row is gated by its operation probe specifically: the
+/// extension is acquired and the context answers a two-view limit, and the
+/// capability still does not enable. An extension route that still owes a probe
+/// contributes no evidence at all, so the fact cannot even be half-satisfied,
+/// and no view count beyond the single view every pass already uses is
+/// reported.
+#[test]
+fn multiview_stays_closed_while_its_attach_path_is_unproved() {
+    let mut extensions = ledger(&["OVR_multiview2"]);
+    assert!(extensions.acquire(GlKnownExtension::OvrMultiview2));
+    let mut builder = builder(GlFamilyProfile::WebGl2, extensions, limits());
+    builder.resolve(
+        GlCapability::Multiview,
+        multiview(),
+        GlOperationProbe::NotRun,
+    );
+    let snapshot = builder.build();
+    assert_eq!(
+        snapshot
+            .capabilities()
+            .fact(GlCapability::Multiview)
+            .expect("fact")
+            .evidence,
+        None
+    );
+    assert!(!snapshot.capabilities().supports(GlCapability::Multiview));
+    // The queried number is a real observation and stays in the limits, while
+    // the pass-facing view count falls back to the WebGPU default of one.
+    assert_eq!(snapshot.limits().max_multiview_view_count, 2);
+    assert_eq!(snapshot.max_multiview_view_count(), 1);
+}
+
+/// The other two halves of the multiview fact are already satisfied in this
+/// fixture, so the probe is the one remaining gate; a successful probe is what
+/// releases the queried view count.
+#[test]
+fn a_probed_attach_path_reports_the_queried_view_count() {
+    let mut extensions = ledger(&["OVR_multiview2"]);
+    assert!(extensions.acquire(GlKnownExtension::OvrMultiview2));
+    assert!(extensions.probe(GlKnownExtension::OvrMultiview2));
+    let mut builder = builder(GlFamilyProfile::WebGl2, extensions, limits());
+    builder.resolve(
+        GlCapability::Multiview,
+        multiview(),
+        GlOperationProbe::Passed,
+    );
+    let snapshot = builder.build();
+    assert!(snapshot.capabilities().supports(GlCapability::Multiview));
+    assert_eq!(snapshot.max_multiview_view_count(), 2);
+}
+
+/// The desktop core profile has no multiview route in this contract, so no
+/// ledger can open the row there: the evidence stays absent even for a ledger
+/// that claims a successful probe.
+#[test]
+fn multiview_has_no_route_on_the_desktop_core_profile() {
+    let mut extensions = ledger(&["OVR_multiview2", "GL_OVR_multiview2"]);
+    assert!(extensions.acquire(GlKnownExtension::OvrMultiview2));
+    assert!(extensions.probe(GlKnownExtension::OvrMultiview2));
+    let mut builder = builder(
+        GlFamilyProfile::Desktop { major: 4, minor: 3 },
+        extensions,
+        desktop_limits(),
+    );
+    builder.resolve(
+        GlCapability::Multiview,
+        multiview(),
+        GlOperationProbe::Passed,
+    );
+    let snapshot = builder.build();
+    assert_eq!(
+        snapshot
+            .capabilities()
+            .fact(GlCapability::Multiview)
+            .expect("fact")
+            .evidence,
+        None
+    );
+    assert!(!snapshot.capabilities().supports(GlCapability::Multiview));
+    assert_eq!(snapshot.max_multiview_view_count(), 1);
+}
+
+/// The shipped native row hands every native profile `NotRun`, so a native
+/// context with the extension acquired keeps the capability closed and reports
+/// the single-view count whatever its limits say.
+#[test]
+fn every_native_profile_stays_closed_on_the_shipped_unprobed_row() {
+    for profile in [
+        GlFamilyProfile::Desktop { major: 4, minor: 3 },
+        GlFamilyProfile::Embedded { major: 3, minor: 1 },
+    ] {
+        let mut extensions = ledger(&["OVR_multiview2", "GL_OVR_multiview2"]);
+        assert!(extensions.acquire(GlKnownExtension::OvrMultiview2));
+        let mut builder = builder(profile, extensions, desktop_limits());
+        builder.resolve(
+            GlCapability::Multiview,
+            multiview(),
+            GlOperationProbe::NotRun,
+        );
+        let snapshot = builder.build();
+        assert!(
+            !snapshot.capabilities().supports(GlCapability::Multiview),
+            "{profile:?}"
+        );
+        assert_eq!(snapshot.max_multiview_view_count(), 1, "{profile:?}");
+    }
 }
 #[test]
 fn snapshot_carries_epoch_and_old_epoch_is_not_equal() {
@@ -535,6 +768,7 @@ fn texture_view(texture: TextureId, sample_count: u32) -> GlTextureView {
         format: GlFormat::Rgba8Unorm,
         mip_level: 0,
         array_layer: 0,
+        layer_count: 1,
         width: 1,
         height: 1,
         sample_count,
@@ -1022,6 +1256,7 @@ fn mock_records_render_pass_pipeline_and_draw_domains() {
         format: GlFormat::Rgba8Unorm,
         mip_level: 0,
         array_layer: 0,
+        layer_count: 1,
         width: 1,
         height: 1,
         sample_count: 1,
@@ -1258,6 +1493,7 @@ fn mock_render_pass_must_match_the_stored_framebuffer_descriptor() {
         format: GlFormat::Rgba8Unorm,
         mip_level: 0,
         array_layer: 0,
+        layer_count: 1,
         width: 1,
         height: 1,
         sample_count: 1,

@@ -65,6 +65,14 @@ pub(crate) struct GlLimits {
     pub max_compute_work_group_count: [u32; 3],
     pub max_compute_work_group_size: [u32; 3],
     pub max_compute_work_group_invocations: u32,
+    /// Views one attachment may serve in a single pass; 0 means not queried.
+    ///
+    /// This is the numeric half of the multiview capability. WebGPU's
+    /// `maxMultiviewViewCount` defaults to one view, which is the plain
+    /// single-view attachment every profile already supports; a context that
+    /// never answered the query records 0 here and therefore satisfies no
+    /// multiview floor at all.
+    pub max_multiview_view_count: u32,
     /// Only count/multi-draw has a count limit; single indirect commands do not.
     pub max_multi_draw_indirect_count: Option<u32>,
     /// Query and anisotropy facts.
@@ -112,6 +120,7 @@ impl GlLimits {
             max_compute_work_group_count: [0; 3],
             max_compute_work_group_size: [0; 3],
             max_compute_work_group_invocations: 0,
+            max_multiview_view_count: 0,
             max_multi_draw_indirect_count: None,
             query_counter_bits: 0,
             max_texture_anisotropy: None,
@@ -161,6 +170,13 @@ impl GlLimits {
     /// Multi-draw/count needs a specifically queried count limit.
     pub(crate) const fn supports_multi_draw_indirect(&self) -> bool {
         matches!(self.max_multi_draw_indirect_count, Some(value) if value != 0)
+    }
+    /// Multiview needs a queried view count of at least two views.
+    ///
+    /// One view is the plain single-view attachment every profile has without
+    /// multiview, so a queried 1 or an unqueried 0 both fail here.
+    pub(crate) const fn supports_multiview(&self) -> bool {
+        self.max_multiview_view_count >= 2
     }
 }
 

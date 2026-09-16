@@ -7,9 +7,9 @@
 
 use super::super::{
     GlBlendFactor, GlBlendOperation, GlCullMode, GlDepthCompareFunction, GlDepthStencilState,
-    GlDrawCommand, GlError, GlFamilyApi as _, GlFrontFace, GlPrimitiveTopology, GlRasterCommandApi,
-    GlRasterPipeline, GlRasterState, GlRasterValidationInfo, GlStencilFaceState,
-    GlStencilOperation,
+    GlDrawCommand, GlError, GlFamilyApi as _, GlFrontFace, GlMultiDraw, GlMultiDrawApi,
+    GlPrimitiveTopology, GlRasterCommandApi, GlRasterPipeline, GlRasterState,
+    GlRasterValidationInfo, GlStencilFaceState, GlStencilOperation, issue_single_draws,
 };
 use super::exec_vertex::{indexed_draw_offset, indexed_draw_span, indexed_draw_type};
 use super::provider::{ActiveRaster, NativeGlProvider};
@@ -203,6 +203,19 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
             }
         }
         self.driver_error(OP)
+    }
+}
+
+/// A batch always takes the single-draw route on the native families.
+///
+/// The native contract proves no combined batch command, so rather than
+/// branching on a capability the provider decomposes every batch into the
+/// validated single-draw path.
+impl GlMultiDrawApi for NativeGlProvider<'_> {
+    fn multi_draw(&mut self, command: &GlMultiDraw) -> Result<(), GlError> {
+        const OP: &str = "multi-draw";
+        self.assert_ready(OP)?;
+        issue_single_draws(self, command)
     }
 }
 

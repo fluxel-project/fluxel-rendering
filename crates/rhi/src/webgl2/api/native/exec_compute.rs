@@ -7,10 +7,10 @@
 
 use super::super::{
     GlBufferRange, GlBufferUsage, GlCapability, GlComputeDispatchApi, GlComputeLimits,
-    GlDispatchGroups, GlDispatchIndirectApi, GlDrawIndirectApi, GlError, GlFamilyApi as _,
-    GlIndirectAbi, GlIndirectCommandRange, GlMemoryBarrier, GlProgramKind, GlStorageBufferApi,
-    GlStorageBufferLimits, GlStorageBufferRange, GlStorageImageAccess, GlStorageImageApi,
-    GlStorageImageBinding, GlStorageImageLimits, GlTextureUsage,
+    GlDispatchGroups, GlDispatchIndirectApi, GlDispatchIndirectCommand, GlDrawIndirectApi, GlError,
+    GlFamilyApi as _, GlIndirectAbi, GlIndirectCommandRange, GlMemoryBarrier, GlProgramKind,
+    GlStorageBufferApi, GlStorageBufferLimits, GlStorageBufferRange, GlStorageImageAccess,
+    GlStorageImageApi, GlStorageImageBinding, GlStorageImageLimits, GlTextureUsage,
 };
 use super::provider::NativeGlProvider;
 
@@ -291,7 +291,7 @@ impl GlDrawIndirectApi for NativeGlProvider<'_> {
 }
 
 impl GlDispatchIndirectApi for NativeGlProvider<'_> {
-    fn dispatch_indirect(&mut self, command: GlBufferRange, offset: u64) -> Result<(), GlError> {
+    fn dispatch_indirect(&mut self, command: GlDispatchIndirectCommand) -> Result<(), GlError> {
         use glow::HasContext as _;
         const OP: &str = "dispatch-indirect";
         self.assert_ready(OP)?;
@@ -309,25 +309,17 @@ impl GlDispatchIndirectApi for NativeGlProvider<'_> {
             return Err(Self::validation(OP, "no compute program is installed"));
         };
         self.program(OP, program)?;
-        let (name, desc) = self.buffer(OP, command.buffer)?;
+        // The record layout and its in-range position are the module's
+        // contract, so the whole check happens before the binding changes.
+        command.validate(OP)?;
+        let (name, desc) = self.buffer(OP, command.range.buffer)?;
         if !desc.usage.contains(GlBufferUsage::INDIRECT) {
             return Err(Self::validation(OP, "command buffer lacks indirect usage"));
         }
-        // One dispatch record is three u32 work-group counts.
-        let record_bytes = 12u64;
-        if offset % 4 != 0
-            || offset
-                .checked_add(record_bytes)
-                .is_none_or(|end| end > command.size)
-        {
-            return Err(Self::validation(
-                OP,
-                "indirect dispatch offset leaves the buffer range",
-            ));
-        }
         let buffer_offset = command
+            .range
             .offset
-            .checked_add(offset)
+            .checked_add(command.command_offset)
             .ok_or_else(|| Self::validation(OP, "indirect dispatch offset overflows"))?;
         let offset =
             i32::try_from(buffer_offset).map_err(|_| Self::validation(OP, "offset exceeds i32"))?;

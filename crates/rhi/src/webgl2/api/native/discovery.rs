@@ -280,6 +280,37 @@ fn discover_with_query_pair(
         },
         report.multi_draw_indirect.to_operation_probe(),
     );
+    // The normalized batch domain has no native route in this contract: no
+    // accepted core version supplies a combined per-draw batch command here,
+    // and the browser extension that does is WebGL2-only. The row is resolved
+    // explicitly so a native context records the absence as a fact instead of
+    // leaving it unasked, and every native batch therefore takes the
+    // provider's single-draw path (audit P1-8).
+    builder.resolve(
+        GlCapability::MultiDraw,
+        CoreOrExtension {
+            desktop_core: None,
+            embedded_core: None,
+            extension: Some(GlKnownExtension::WebglMultiDraw),
+            extension_requires_probe: false,
+        },
+        GlOperationProbe::NotRun,
+    );
+    // Multiview has no core route on any accepted profile: the desktop core
+    // profile it would need does not exist, and the embedded route is the OVR
+    // extension, which is additionally gated on its acquisition. No multiview
+    // attachment probe exists, so the fact stays `NotRun` and every profile
+    // rejects a multiview pass (audit P1-7).
+    builder.resolve(
+        GlCapability::Multiview,
+        CoreOrExtension {
+            desktop_core: None,
+            embedded_core: None,
+            extension: Some(GlKnownExtension::OvrMultiview2),
+            extension_requires_probe: true,
+        },
+        GlOperationProbe::NotRun,
+    );
     builder.resolve(
         GlCapability::TimerQuery,
         CoreOrExtension {
@@ -369,6 +400,12 @@ fn extensions(
     // Native GL entry points are loaded by the provider before it constructs
     // glow. Record acquisition only for typed, legal names; the operation
     // probes in `run_operation_probes` remain the real enablement evidence.
+    //
+    // The multiview extension is deliberately absent from this list: the
+    // native boundary binds no multiview attachment entry point, so acquisition
+    // cannot be proved here and the name stays `Reported`. It is still typed
+    // and still recorded, which is what keeps a driver that reports it visible
+    // in evidence without letting the reported name enable anything.
     for known in [
         GlKnownExtension::ArbComputeShader,
         GlKnownExtension::ArbShaderStorageBufferObject,
@@ -596,6 +633,14 @@ fn limits(
         // query; the honest fact stays `None` (unbounded/unqueried), and
         // enablement is governed by route evidence plus the operation probe.
         max_multi_draw_indirect_count: None,
+        // The view count is only queryable on a context that acquired the
+        // multiview extension; without it the fact is 0 and the multiview floor
+        // cannot be met by any route.
+        max_multiview_view_count: optional(
+            extensions.is_acquired(GlKnownExtension::OvrMultiview2),
+            glow_const::MAX_MULTIVIEW_VIEWS,
+            "GL_MAX_VIEWS_OVR",
+        )?,
         query_counter_bits: report.query_counter_bits.unwrap_or(0),
         max_texture_anisotropy: anisotropy,
     })
@@ -890,6 +935,9 @@ pub(super) mod glow_const {
     pub const MAX_COLOR_TEXTURE_SAMPLES: u32 = 0x910E;
     pub const MAX_DEPTH_TEXTURE_SAMPLES: u32 = 0x910F;
     pub const MAX_INTEGER_SAMPLES: u32 = 0x9110;
+    /// Views one attachment may serve in one pass, as defined by the multiview
+    /// extension family (the same registry value WebGL2 exposes).
+    pub const MAX_MULTIVIEW_VIEWS: u32 = 0x9632;
     pub const MAX_COMPUTE_WORK_GROUP_COUNT: u32 = 0x91BE;
     pub const MAX_COMPUTE_WORK_GROUP_SIZE: u32 = 0x91BF;
     pub const MAX_COMPUTE_WORK_GROUP_INVOCATIONS: u32 = 0x90EB;
