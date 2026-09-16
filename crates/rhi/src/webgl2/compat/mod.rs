@@ -20,11 +20,16 @@
 //! `dyn ExecutionBackend` anywhere) and that Metal and WebGPU have no `Backend`
 //! variant either.
 //!
-//! What exists here so far is the one part every later slice depends on and
+//! What exists here so far are the two readings every later slice depends on and
 //! none of them can supply afterwards: the mapping from a GL-family context
-//! generation onto the common device identity.  The command-lowering slices
-//! follow, and the contract's associated types are deliberately left to the
-//! first of them -- they are fixed by what the lowering needs, so choosing them
-//! before that exists would be choosing them from imagination.
+//! generation onto the common device identity, and the lowering of a discovery
+//! snapshot onto the common capability contract.  Both are per-context facts the
+//! graph validates against before any command is lowered, and neither is
+//! reachable from the lowering itself -- a lowering cannot report a capability
+//! it was already assumed to have.  The command-lowering slices follow, and the
+//! contract's associated types are deliberately left to the first of them: they
+//! are fixed by what the lowering needs, so choosing them before that exists
+//! would be choosing them from imagination.
 
+mod capabilities;
 mod identity;

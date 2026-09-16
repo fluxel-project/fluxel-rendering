@@ -227,6 +227,25 @@ pub(crate) fn snapshot_with_fact(
     .build()
 }
 
+/// A WebGL2 snapshot over a caller-supplied format table.
+///
+/// The three snapshots above all start from the baseline table and add to it, so
+/// none of them can express a format that is *recorded and not renderable* --
+/// which is a reading the common contract distinguishes from an absent row. That
+/// case needs a table the caller composed, and building it here keeps the profile,
+/// the stamp and the limits from being restated at the call site.
+pub(crate) fn snapshot_with_formats(formats: GlFormatTable) -> GlDiscoverySnapshot {
+    GlDiscoveryBuilder::new(
+        stamp(ContextEpoch::INITIAL),
+        context(GlFamilyProfile::WebGl2),
+        GlExtensionSet::default(),
+        limits(),
+        formats,
+    )
+    .expect("test discovery")
+    .build()
+}
+
 pub(crate) fn compute_storage_snapshot(storage_image: bool) -> GlDiscoverySnapshot {
     let mut builder = GlDiscoveryBuilder::new(
         stamp(ContextEpoch::INITIAL),
