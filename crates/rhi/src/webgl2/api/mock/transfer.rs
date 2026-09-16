@@ -130,12 +130,49 @@ impl GlCopyDomainApi for MockGlFamilyApi {
             operation: "upload-texture",
             message: "invalid texture upload".into(),
         })?;
+        // A compressed upload leaves the pixel-layout route entirely. Both
+        // executable backends branch here too, and the reason is the same one
+        // that makes the check below wrong for compressed data: the client
+        // encoding describes an RGBA8 rectangle, so a block-compressed format
+        // has no `GlPixelFormat` at all. Whatever the recorder demanded from
+        // the layout here would be a rule neither provider enforces.
+        if let Some(info) = desc.format.compressed_info() {
+            // Mirrors both providers' whole-mip route: compressed storage is
+            // undefined until something defines it, so exactly one complete 2D
+            // mip is accepted, and its byte count must be the format's exact
+            // encoded size rather than anything the client asserts.
+            if desc.dimension != GlTextureDimension::D2
+                || d.subresource.base_layer != 0
+                || d.subresource.layer_count != 1
+                || d.origin != [0; 3]
+                || d.extent.depth_or_layers != 1
+                || desc.mip_extent(d.subresource.mip_level) != Some(d.extent)
+            {
+                return self.error_result(GlError::Unsupported {
+                    operation: "upload-texture",
+                    reason: "compressed upload must define one complete 2D mip",
+                });
+            }
+            let exact = info
+                .checked_encoded_size(d.extent.width, d.extent.height)
+                .map_err(|_| GlError::Validation {
+                    operation: "upload-texture",
+                    message: "compressed encoded size overflow".into(),
+                })?;
+            if u64::try_from(bytes.len()).ok() != Some(exact) {
+                return self.invalid(
+                    "upload-texture",
+                    "compressed bytes do not match exact block layout",
+                );
+            }
+            self.calls
+                .push(MockCall::UploadTexture(d.subresource.texture));
+            return Ok(());
+        }
         // Same encoding rules as the executable backends: depth storage and
-        // unmapped formats accept no CPU pixels, and only the RGBA8 client
+        // unmapped formats accept no CPU pixel upload, and only the RGBA8 client
         // encoding transfers.
-        if desc.format.compressed_info().is_none()
-            && !matches!(desc.format, GlFormat::Rgba8Unorm | GlFormat::Rgba8Srgb)
-        {
+        if !matches!(desc.format, GlFormat::Rgba8Unorm | GlFormat::Rgba8Srgb) {
             return self.error_result(GlError::Unsupported {
                 operation: "upload-texture",
                 reason: "format accepts no CPU pixel upload in this shared semantic",

@@ -110,6 +110,153 @@ fn recorder() -> MockGlFamilyApi {
     MockGlFamilyApi::from_discovery(snapshot)
 }
 
+/// A recorder whose WebGL2 ledger acquired S3TC and whose format table
+/// therefore carries one exact compressed fact.
+fn compressed_recorder() -> MockGlFamilyApi {
+    let extension = GlKnownExtension::CompressedTextureS3tc;
+    let mut extensions = GlExtensionSet::default();
+    extensions.report_raw("WEBGL_compressed_texture_s3tc");
+    assert!(extensions.acquire(extension), "the ledger acquires S3TC");
+    let mut table = formats();
+    table
+        .record(GlFormatCapabilities {
+            format: GlFormat::Bc1RgbaUnorm,
+            resource_kind: GlFormatResourceKind::Texture,
+            sample_count: 1,
+            evidence: GlFormatEvidence::ExtensionAcquired(extension),
+            sampled: true,
+            filterable: true,
+            renderable: false,
+            blendable: false,
+            storage_read: false,
+            storage_write: false,
+            copy_source: false,
+            copy_destination: false,
+        })
+        .expect("exact compressed fact");
+    let stamp = ContextStamp::new(
+        DeviceIdentity::new(7).expect("identity"),
+        ContextEpoch::INITIAL,
+    );
+    MockGlFamilyApi::from_discovery(
+        GlDiscoveryBuilder::new(
+            stamp,
+            GlContextInfo::new(
+                GlFamilyProfile::WebGl2,
+                "version",
+                "glsl",
+                "vendor",
+                "renderer",
+                "driver",
+                GlContextFlags::default(),
+            ),
+            extensions,
+            limits(),
+            table,
+        )
+        .expect("test discovery")
+        .build(),
+    )
+}
+
+/// The client layout a compressed upload is *not* measured by.
+fn rgba8_layout() -> GlPixelLayout {
+    GlPixelLayout {
+        format: GlPixelFormat::Rgba8,
+        bytes_per_row: 64,
+        rows_per_image: 4,
+        offset: 0,
+        alignment: 4,
+        repack: GlRepackPolicy::Disallow,
+    }
+}
+
+#[test]
+fn a_compressed_upload_must_be_one_complete_mip_of_the_exact_encoded_size() {
+    let mut api = compressed_recorder();
+    let texture = api
+        .create_texture_resource(GlTextureDesc {
+            dimension: GlTextureDimension::D2,
+            extent: GlExtent3d {
+                width: 4,
+                height: 4,
+                depth_or_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            format: GlFormat::Bc1RgbaUnorm,
+            usage: GlTextureUsage::SAMPLED,
+        })
+        .expect("compressed texture");
+    let region = |origin: [u32; 3], extent: GlExtent3d| GlTextureRegion {
+        subresource: GlTextureSubresource {
+            texture,
+            aspect: GlTextureAspect::Color,
+            mip_level: 0,
+            base_layer: 0,
+            layer_count: 1,
+        },
+        origin,
+        extent,
+    };
+    let full = GlExtent3d {
+        width: 4,
+        height: 4,
+        depth_or_layers: 1,
+    };
+    // One 4x4 BC1 block encodes to exactly 8 bytes, and that is the only
+    // accepted length. Measuring the slice with the client pixel layout would
+    // have demanded 64 bytes from the same region and 16 from a 2x2 one.
+    assert_eq!(
+        api.upload_texture(region([0; 3], full), rgba8_layout(), &[0; 8]),
+        Ok(())
+    );
+    api.clear_calls();
+    assert!(
+        api.upload_texture(region([0; 3], full), rgba8_layout(), &[0; 64])
+            .is_err(),
+        "an RGBA8-sized slice is not one encoded BC1 mip"
+    );
+    assert!(
+        api.upload_texture(region([0; 3], full), rgba8_layout(), &[0; 7])
+            .is_err(),
+        "a truncated block is rejected rather than padded"
+    );
+    // A region that does not cover its mip is rejected before any size check:
+    // compressed storage is undefined until a whole mip defines it, which is
+    // exactly what both executable backends enforce.
+    assert!(
+        api.upload_texture(
+            region([0; 3], GlExtent3d {
+                width: 2,
+                height: 2,
+                depth_or_layers: 1,
+            }),
+            rgba8_layout(),
+            &[0; 8]
+        )
+        .is_err(),
+        "a compressed sub-rectangle is not a complete mip"
+    );
+    // Each rejection reached the trace as an error and none of them recorded an
+    // upload, so the guard provably precedes the side effect rather than being
+    // reported after one.
+    assert!(
+        api.calls()
+            .iter()
+            .all(|call| !matches!(call, MockCall::UploadTexture(_))),
+        "a rejected compressed upload must not be recorded as an upload"
+    );
+    assert_eq!(
+        api.calls()
+            .iter()
+            .filter(|call| matches!(call, MockCall::Error(_)))
+            .count(),
+        3,
+        "each rejection is recorded once as an error"
+    );
+}
+
 #[test]
 fn an_uninjected_fence_never_reports_completion() {
     let mut api = recorder();
