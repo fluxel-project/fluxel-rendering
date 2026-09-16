@@ -36,10 +36,13 @@
 //!   queue reports `present: false`.
 //!
 //! What is deliberately *not* claimed is `transient_resources`.  Those three rows
-//! describe the lowering the compiler may assume for graph transients, and this
-//! adapter has no transient-creation path until the raster slice exists; asserting
-//! reuse before there is anything to reuse would be asserting a property of code
-//! that does not exist.
+//! are reuse facts -- pooling, in-frame reuse and aliasing -- and this adapter
+//! answers all three no: a graph transient is one Layer 1 object created for the
+//! request that asked for it (`create_transient_texture` /
+//! `create_transient_buffer`), retained until its last lease drops and destroyed
+//! then.  Nothing here pools an object across frames, hands back one a previous
+//! frame used, or lets two of them share an allocation, so every row keeps the
+//! value that rejects the lowering.
 
 use fluxel_rendergraph::{
     BufferCapabilities, DeviceCapabilities, DeviceLimits, QueueCapabilities, QueueDescriptor,
