@@ -35,6 +35,13 @@
 //! - [`backend`] is the contract itself: the `ExecutionBackend` impl, one method
 //!   per verb, in the trait's own declaration order.
 //!
+//! [`compute`] is the one module that is neither a lowering nor a recording, and
+//! it exists because this family's compute domain is *optional*: it holds the
+//! witness type that says whether a given adapter has one, and the two refusals a
+//! compute verb can give -- the backend has no such domain, or the context's
+//! discovery snapshot did not prove the capability.  Its own documentation argues
+//! why that is a type parameter and not a flag.
+//!
 //! The verbs are not split out of [`backend`] by family, and the reason is the
 //! language rather than the file size: a trait has one impl block per type
 //! (E0119), so the families a reader might expect as separate files -- resources
@@ -101,9 +108,19 @@
 //! [`GlCompatibilityDevice::commit`] for what that costs and why it is the
 //! correct order rather than a workaround.
 //!
-//! Everything that would record a *compute* command still refuses with
-//! `GlError::Unsupported`, naming itself and giving one reason: this adapter has
-//! no compute pipeline object for such a pass to select.
+//! A **compute pass and its dispatch** are real too, and only on an adapter whose
+//! witness says so -- one whose backend is a [`GlOptionalComputeBackend`], which
+//! the browser provider is not.  Layer 1 declares no pass boundary for compute in
+//! this family, so the brackets record nothing and the **dispatch is the commit
+//! point**, on the draw's terms and for the draw's reason.  See [`compute`].
+//!
+//! [`GlOptionalComputeBackend`]: crate::webgl2::state::GlOptionalComputeBackend
+//!
+//! A **presentation token** cannot exist here at all, and that is one of the two
+//! places where saying so with a type is stronger than saying it with a check:
+//! no acquisition can reach a token for an adapter whose capabilities report no
+//! surface, so the type is uninhabited and the executor's presentation list is
+//! empty by construction rather than by convention.
 //!
 //! The copy-pass brackets are not among those refusals, and they are not a stub:
 //! a copy in this family is a direct command with no scope around it, so
@@ -122,6 +139,7 @@
 //! avoid.
 
 mod backend;
+mod compute;
 mod encoder;
 mod failure;
 mod object;
@@ -136,29 +154,19 @@ mod transient;
 mod tests;
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use fluxel_rendergraph::DeviceCapabilities;
 
-use crate::webgl2::api::{ContextStamp, GlError, TextureId};
+use crate::webgl2::api::{BufferId, ContextStamp, GlError, TextureId};
 use crate::webgl2::state::{GlStateBackend, GlStateMachine, StateEvent};
 
 use super::identity::DeviceIdentityMap;
+use compute::{ComputeDomain, NoCompute};
 use registry::GlObjectRegistry;
 use retention::{ReleaseQueue, RetainedObject};
 use submission::SubmissionLedger;
-
-/// Uninhabited compute-pipeline placeholder for this adapter.
-///
-/// Still uninhabited, and now the only one of the three placeholders that is.
-/// Compute is F4's slice and has no recipes to lower, while the raster pipeline
-/// and the binding set are real objects with real lowered contents, so their
-/// placeholders are gone.  What is left is the case where the contract needs a
-/// name and this backend genuinely cannot have a value of it -- and uninhabited
-/// rather than a stub is still the point: a placeholder that *could* be
-/// constructed would let an implementation hand back a pipeline that selects
-/// nothing.
-pub(crate) enum UnsupportedComputePipeline {}
 
 /// Uninhabited presentation-token placeholder for this adapter.
 ///
@@ -169,18 +177,23 @@ pub(crate) enum UnsupportedComputePipeline {}
 /// construction rather than by convention.
 pub(crate) enum UnsupportedPresentationToken {}
 
-/// The reason the compute verbs refuse in this slice.
-///
-/// Narrowed from "every verb that would record a command": the raster pass and
-/// its draws are issued now, and what is left is compute -- the dispatch, the
-/// compute pipeline and the labels around them -- which is the next slice's
-/// subject rather than this one's.  The reason does not name a slice number,
-/// because it is a claim about the adapter and not about a schedule.
-const NO_COMMAND_VOCABULARY: &str =
-    "this adapter records no compute command yet, so the request cannot be made true in the driver";
-
 /// A GL-family state machine presented as a common execution backend.
-pub(crate) struct GlCompatibilityDevice<B: GlStateBackend> {
+///
+/// The second parameter is the *witness* for the optional compute domain, and it
+/// defaults to the one that refuses: a caller that names no witness gets the
+/// adapter whose compute verbs all refuse, which is the shape every provider
+/// without a compute command domain needs and the fail-closed one for a provider
+/// that has it.  [`compute`] argues why the choice is a type rather than a flag;
+/// the short version is that a method cannot be stricter than its impl's own
+/// bounds (E0276) and a trait has one impl per type (E0119), so the optional
+/// bound has nowhere else to live.
+///
+/// `C` occupies no storage, and the marker is `PhantomData<fn() -> C>` rather
+/// than `PhantomData<C>` on purpose: the adapter neither owns nor borrows a `C`,
+/// it only *calls* one, and `fn() -> C` is the marker that says exactly that --
+/// covariant in `C`, and carrying no drop-check or auto-trait obligation that a
+/// witness type should not be able to impose on the device.
+pub(crate) struct GlCompatibilityDevice<B: GlStateBackend, C: ComputeDomain<B> = NoCompute> {
     machine: GlStateMachine<B>,
     identity: DeviceIdentityMap,
     capabilities: DeviceCapabilities,
@@ -195,9 +208,21 @@ pub(crate) struct GlCompatibilityDevice<B: GlStateBackend> {
     /// dropped where the object is destroyed, so an identity reused after a
     /// deletion cannot resolve to its predecessor's shape.
     attachments: HashMap<TextureId, pass::Attachment>,
+    /// How many bytes each buffer this adapter created was created with.
+    ///
+    /// The same record as `attachments` for the same reason, and it exists for
+    /// one caller: a storage binding range that the graph authorized as *whole*
+    /// has to be lowered to a real size, because Layer 1 validates a storage
+    /// range against the allocation while an indexed uniform range spells "to
+    /// the end" as zero.  Kept and dropped beside `attachments`, so an identity
+    /// reused after a deletion cannot resolve to its predecessor's size.
+    buffers: HashMap<BufferId, u64>,
+    /// The compute witness, which carries the bound rather than a value.  See
+    /// the type's own documentation.
+    witness: PhantomData<fn() -> C>,
 }
 
-impl<B: GlStateBackend> GlCompatibilityDevice<B> {
+impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     /// The adapter over `backend`.
     ///
     /// The capability description and the context stamp are read from the
@@ -214,6 +239,8 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
             releases: ReleaseQueue::new(),
             submissions: SubmissionLedger::default(),
             attachments: HashMap::new(),
+            buffers: HashMap::new(),
+            witness: PhantomData,
         }
     }
 
@@ -242,11 +269,12 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
         self.releases.forget();
         self.capabilities = super::capabilities::capabilities(self.machine.backend().discovery());
         self.machine.invalidate(StateEvent::ContextRestored(stamp));
-        // The attachment records describe objects of the superseded generation,
-        // which the restored context has already invalidated: keeping them would
-        // let an identity minted by the new generation resolve to a shape that
-        // belonged to the old one.
+        // The attachment and allocation records describe objects of the
+        // superseded generation, which the restored context has already
+        // invalidated: keeping them would let an identity minted by the new
+        // generation resolve to a shape that belonged to the old one.
         self.attachments.clear();
+        self.buffers.clear();
     }
 
     /// Destroys every object the release queue has collected since the last call.
@@ -279,6 +307,11 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
                     self.machine.backend().destroy_texture_resource(texture)
                 }
                 RetainedObject::Buffer(buffer) => {
+                    // Dropped for the texture arm's reason, and here it matters
+                    // twice over: the record is what a storage binding is lowered
+                    // against, so a stale one would give a later binding of a
+                    // reused identity a size its predecessor had.
+                    self.buffers.remove(&buffer);
                     self.machine.invalidate(StateEvent::BufferDeleted(buffer));
                     self.machine.backend().destroy_buffer_resource(buffer)
                 }
@@ -317,7 +350,7 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
     /// A renderer rebuilds this whenever it re-reads capabilities, which is the
     /// same signal: a context whose generation changed is one whose registered
     /// objects were lowered for a context that no longer exists.
-    pub(crate) fn object_registry(&mut self) -> GlObjectRegistry<B> {
+    pub(crate) fn object_registry(&mut self) -> GlObjectRegistry<B, C> {
         GlObjectRegistry::new(
             self.identity.identity(),
             self.machine.backend().profile(),

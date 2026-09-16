@@ -2,7 +2,12 @@
 
 use super::{BufferId, GlError, GlFamilyApi, GlFormat, GlFormatTable, TextureId};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The access a program declares for a storage buffer it binds.
+///
+/// Ordered and hashed because [`GlShaderResourceKind`](super::GlShaderResourceKind)
+/// carries one and is both: a layout is compared and keyed on, so everything a
+/// layout is made of has to be as comparable as the layout.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum GlStorageBufferUsage {
     ReadOnly,
     ReadWrite,
@@ -41,7 +46,10 @@ impl GlStorageBufferRange {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The access a program declares for a storage image it binds.
+///
+/// The same derives and the same reason as [`GlStorageBufferUsage`].
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum GlStorageImageAccess {
     ReadOnly,
     WriteOnly,

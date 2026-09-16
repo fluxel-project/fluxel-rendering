@@ -57,6 +57,7 @@ use fluxel_rendergraph::{
     ResourceAccessState, StoreOp, TextureBindingId, TextureRange, WriteCoverage,
 };
 
+use super::super::object::Recipe;
 use super::super::retention::GlRetentionLease;
 use super::{Adapter, adapter, plain_texture};
 use crate::resource::RasterKernel;
@@ -173,7 +174,7 @@ fn a_whole_frame_of_this_adapter_runs_to_the_calls_the_verb_suite_pins() {
     objects
         .register_raster_pipeline(RasterPipelineId::new(1), RasterKernel::Triangle)
         .expect("WebGL2 writes a dialect for the triangle artifact");
-    objects.register_bindings(BindingSetId::new(0), RasterKernel::Triangle);
+    objects.register_bindings(BindingSetId::new(0), Recipe::Raster(RasterKernel::Triangle));
 
     let executor = FrameExecutor::new(device);
     let frame = executor

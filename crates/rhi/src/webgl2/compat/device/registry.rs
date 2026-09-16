@@ -2,15 +2,25 @@
 //!
 //! Responsibility: answer the contract's three `RenderObjectProvider` questions
 //! from what a renderer registered before the frame, and hold the two facts that
-//! answer them -- which raster recipe a [`RasterPipelineId`] is, and which recipe
-//! a [`BindingSetId`] belongs to.  It resolves nothing native: a pipeline is
-//! lowered at registration and a binding set is validated against the frame's
-//! own resources, so the only work a frame does here is a lookup and a check.
+//! answer them -- which recipe a [`RasterPipelineId`] or a [`ComputePipelineId`]
+//! is, and which recipe a [`BindingSetId`] belongs to.  It resolves nothing
+//! native: a pipeline is lowered at registration and a binding set is validated
+//! against the frame's own resources, so the only work a frame does here is a
+//! lookup and a check.
 //!
 //! Not owned here: the frame's resources (the executor's
 //! `FrameResourceProvider`), the machine that links and binds (that is
 //! [`super`]'s, at the verbs that install), and the graph's own validation that
 //! a pass declared every access it binds.
+//!
+//! # Why a binding set holds a recipe and not a pipeline
+//!
+//! A set id means *which bindings a layout declares*, and that arrangement is a
+//! property of the artifact -- so the registry holds the artifact's identity and
+//! not a lowered pipeline.  The arrangement itself is read from the lowering
+//! ([`super::super::shader::compute_layout`] for the compute family), because a
+//! second table here would be a third statement about the same kernel beside the
+//! body and the layout.
 //!
 //! # Why this is a value and not a field of the adapter
 //!
@@ -48,14 +58,15 @@ use fluxel_rendergraph::{
     RenderObjectProvider, ResolvedBindingResource,
 };
 
-use crate::resource::RasterKernel;
+use crate::resource::{ComputeKernel, RasterKernel};
 use crate::webgl2::api::{BufferId, GlError, GlFamilyProfile, TextureId};
 use crate::webgl2::state::GlStateBackend;
 
 use super::super::shader;
-use super::object::{Bindings, RasterPipeline};
+use super::GlCompatibilityDevice;
+use super::compute::{ComputeDomain, NoCompute};
+use super::object::{Bindings, ComputePipeline, RasterPipeline, Recipe};
 use super::retention::{GlRetentionLease, ReleaseQueue};
-use super::{GlCompatibilityDevice, UnsupportedComputePipeline};
 
 /// The objects one adapter's renderer has registered.
 ///
@@ -63,28 +74,39 @@ use super::{GlCompatibilityDevice, UnsupportedComputePipeline};
 /// read by frames recorded there, which is the same single-threaded reach the
 /// rest of this adapter has.
 ///
-/// # Why the backend is a type parameter
+/// # Why both of the adapter's parameters are here
 ///
 /// This type's only purpose is to implement a trait parameterized by the adapter
-/// it answers for, and the backend is not otherwise a fact it holds -- so without
-/// the parameter, `RenderObjectProvider<GlCompatibilityDevice<B>>` would leave
-/// `B` unconstrained at every call through a registry value, and a caller who
-/// already knows its backend (a test, or a renderer holding the registry beside
-/// its adapter) would have to name it by hand.  The parameter makes "which
-/// adapter this answers for" part of the registry's identity rather than a fact
-/// only its impl knows, and it is a `fn() -> B` phantom because nothing is ever
-/// built from it: the registry must not become a place a second adapter could be
-/// reached through.
-pub(crate) struct GlObjectRegistry<B: GlStateBackend> {
+/// it answers for, so "which adapter this answers for" is its identity and it
+/// carries all of that identity rather than part of it.  Both halves are needed,
+/// and the second is needed for a reason that is not visible in the trait bound:
+/// **none of the three answers mentions the witness in its return type.**  So a
+/// registry that left `C` free would leave it *undetermined at every call* --
+/// `objects.raster_pipeline(id)` has nothing to infer it from -- and a renderer
+/// holding the registry beside its adapter would have to name the adapter type at
+/// each question.  Carrying it makes the value's own type decide, which is what
+/// the caller already knows.
+///
+/// That is also why the register methods below are *inherent* and not gated on
+/// the witness: a compute pipeline can be registered for an adapter that will
+/// refuse to dispatch it, which is exactly what lets a frame be built once and
+/// run against a provider that turns out not to support it.  The refusal belongs
+/// at the verb that records the command, where the ledger can name it, and not at
+/// the call that described the artifact.
+///
+/// Both are `fn() -> _` phantoms because nothing is ever built from either: the
+/// registry must not become a place a second adapter could be reached through.
+pub(crate) struct GlObjectRegistry<B: GlStateBackend, C: ComputeDomain<B> = NoCompute> {
     device: DeviceIdentity,
     profile: GlFamilyProfile,
     releases: Rc<ReleaseQueue>,
     raster: HashMap<RasterPipelineId, RasterPipeline>,
-    bindings: HashMap<BindingSetId, RasterKernel>,
-    backend: PhantomData<fn() -> B>,
+    compute: HashMap<ComputePipelineId, ComputePipeline>,
+    bindings: HashMap<BindingSetId, Recipe>,
+    backend: PhantomData<fn() -> (B, C)>,
 }
 
-impl<B: GlStateBackend> GlObjectRegistry<B> {
+impl<B: GlStateBackend, C: ComputeDomain<B>> GlObjectRegistry<B, C> {
     /// A registry that lowers for `profile` and retains through `releases`.
     ///
     /// Both facts come from the adapter that minted it rather than from the
@@ -102,6 +124,7 @@ impl<B: GlStateBackend> GlObjectRegistry<B> {
             profile,
             releases,
             raster: HashMap::new(),
+            compute: HashMap::new(),
             bindings: HashMap::new(),
             backend: PhantomData,
         }
@@ -128,6 +151,30 @@ impl<B: GlStateBackend> GlObjectRegistry<B> {
         Ok(())
     }
 
+    /// Registers one compute recipe under an identity the graph names it by.
+    ///
+    /// On [`Self::register_raster_pipeline`]'s terms, with one difference that is
+    /// the whole of why the compute family needed its own unit error: the refusal
+    /// here is not "this profile has no dialect" but "this profile's shading
+    /// language has no compute stage", because the dialect rule answers for
+    /// profiles the compute lowering must still narrow away.  Registration
+    /// succeeds on an adapter whose witness has no compute domain -- see the
+    /// type's documentation for why that is deliberate rather than an oversight.
+    pub(crate) fn register_compute_pipeline(
+        &mut self,
+        id: ComputePipelineId,
+        kernel: ComputeKernel,
+    ) -> Result<(), GlError> {
+        let pipeline = ComputePipeline::new(kernel, self.profile).map_err(|_unsupported| {
+            GlError::Unsupported {
+                operation: "register-compute-pipeline",
+                reason: shader::UnsupportedComputeProfile::REASON,
+            }
+        })?;
+        self.compute.insert(id, pipeline);
+        Ok(())
+    }
+
     /// Records which artifact a binding set id belongs to.
     ///
     /// The recipe and not a resolved set: what a set id means is which bindings
@@ -135,8 +182,15 @@ impl<B: GlStateBackend> GlObjectRegistry<B> {
     /// with the frame.  A set that was never registered is what `bindings`
     /// refuses; an id registered twice keeps the last recipe, which is the same
     /// last-write-wins a re-registration of a pipeline has.
-    pub(crate) fn register_bindings(&mut self, id: BindingSetId, kernel: RasterKernel) {
-        self.bindings.insert(id, kernel);
+    ///
+    /// The kind is carried rather than inferred, and a set registered with the
+    /// wrong one is caught where the two meet: a compute set in a raster pass is
+    /// refused at `set_bindings`, and the reverse at the dispatch.  Inferring it
+    /// from the two maps here would be a check made against whichever pipeline
+    /// happened to be registered, which is not the pipeline the frame will
+    /// install.
+    pub(crate) fn register_bindings(&mut self, id: BindingSetId, recipe: Recipe) {
+        self.bindings.insert(id, recipe);
     }
 
     /// The lease a resolved object of this adapter is handed out with.
@@ -164,7 +218,9 @@ impl<B: GlStateBackend> GlObjectRegistry<B> {
     }
 }
 
-impl<B: GlStateBackend> RenderObjectProvider<GlCompatibilityDevice<B>> for GlObjectRegistry<B> {
+impl<B: GlStateBackend, C: ComputeDomain<B>> RenderObjectProvider<GlCompatibilityDevice<B, C>>
+    for GlObjectRegistry<B, C>
+{
     fn raster_pipeline(
         &self,
         id: RasterPipelineId,
@@ -181,17 +237,16 @@ impl<B: GlStateBackend> RenderObjectProvider<GlCompatibilityDevice<B>> for GlObj
 
     fn compute_pipeline(
         &self,
-        _id: ComputePipelineId,
-    ) -> Result<BoundComputePipeline<UnsupportedComputePipeline, GlRetentionLease>, RecordingError>
-    {
-        // Unreachable rather than unimplemented: this adapter's `ComputePipeline`
-        // is uninhabited, so no compute pipeline value can exist for a pass to
-        // select.  Returning the contract's error rather than panicking keeps
-        // that a refusal if it ever does become reachable, and naming the fact
-        // here is what makes the uninhabited type a claim instead of a comment.
-        Err(Self::recipe_error(
-            "this adapter has no compute pipeline object, so none can be registered",
-        ))
+        id: ComputePipelineId,
+    ) -> Result<BoundComputePipeline<ComputePipeline, GlRetentionLease>, RecordingError> {
+        let pipeline = self.compute.get(&id).cloned().ok_or_else(|| {
+            Self::recipe_error("no compute pipeline is registered for this identity")
+        })?;
+        Ok(BoundComputePipeline {
+            device: self.device,
+            physical: pipeline,
+            lease: self.retention(),
+        })
     }
 
     fn bindings(
@@ -200,21 +255,22 @@ impl<B: GlStateBackend> RenderObjectProvider<GlCompatibilityDevice<B>> for GlObj
         resources: &[ResolvedBindingResource<'_, TextureId, BufferId>],
         dynamic_offsets: &[u32],
     ) -> Result<BoundBindings<Bindings, GlRetentionLease>, RecordingError> {
-        let kernel = *self.bindings.get(&id).ok_or_else(|| {
+        let recipe = *self.bindings.get(&id).ok_or_else(|| {
             Self::recipe_error("no binding recipe is registered for this identity")
         })?;
-        // Dynamic offsets belong to storage and uniform *arrays*, which this
-        // family's fixed artifacts have none of: every logical binding is a
-        // single non-arrayed resource (`shader::layout` sets `array_count: 1`,
-        // and the lowering's suite holds that for all ten).  A frame that sent
-        // one is describing a recipe this adapter is not, and ignoring it
-        // silently would apply a caller's offset to nothing.
+        // Dynamic offsets belong to storage and uniform *arrays*, which both
+        // families' fixed artifacts have none of: every logical binding is a
+        // single non-arrayed resource (`shader::layout` and
+        // `shader::compute_layout` each set `array_count: 1`, and both suites
+        // hold that for every kernel of their family).  A frame that sent one is
+        // describing a recipe this adapter is not, and ignoring it silently would
+        // apply a caller's offset to nothing.
         if !dynamic_offsets.is_empty() {
             return Err(Self::recipe_error(
-                "the fixed raster bindings declare no arrays, so a dynamic offset has nothing to apply to",
+                "the fixed bindings declare no arrays, so a dynamic offset has nothing to apply to",
             ));
         }
-        let physical = Bindings::new(kernel, resources).map_err(Self::recipe_error)?;
+        let physical = Bindings::new(recipe, resources).map_err(Self::recipe_error)?;
         Ok(BoundBindings {
             device: self.device,
             physical,

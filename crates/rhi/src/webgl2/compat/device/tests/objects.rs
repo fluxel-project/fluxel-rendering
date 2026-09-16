@@ -24,7 +24,7 @@ use fluxel_rendergraph::{
     TextureUsageKind, TextureWriteUse,
 };
 
-use super::super::object::{BindingSlot, Bindings};
+use super::super::object::{BindingSlot, Bindings, Recipe};
 use super::super::registry::GlObjectRegistry;
 use super::super::retention::ReleaseQueue;
 use super::{
@@ -201,12 +201,16 @@ fn a_binding_set_is_validated_against_the_resources_the_frame_resolved_for_it() 
         let identity = kernel.portable_identity();
         let resources = resolved(kernel, &texture, &buffer);
         let id = BindingSetId::new(index as u64);
-        objects.register_bindings(id, kernel);
+        objects.register_bindings(id, Recipe::Raster(kernel));
         let bound = objects
             .bindings(id, &resources, &[])
             .unwrap_or_else(|error| panic!("{kernel:?}: {}", error.context.detail));
 
-        assert_eq!(bound.physical.kernel(), kernel, "the set kept its recipe");
+        assert_eq!(
+            bound.physical.recipe(),
+            Recipe::Raster(kernel),
+            "the set kept its recipe"
+        );
         // One slot per *logical* binding, which is one per WGSL binding minus the
         // sampler that a GLSL `sampler2D` folds into its texture.  Read off the
         // identity's own numbers rather than counted here, so the two facts are
@@ -221,6 +225,14 @@ fn a_binding_set_is_validated_against_the_resources_the_frame_resolved_for_it() 
             .map(|slot| match slot {
                 BindingSlot::Uniform { binding, .. } | BindingSlot::Texture { binding, .. } => {
                     *binding
+                }
+                // Unreachable for the ten raster artifacts: a storage binding is
+                // a compute binding, and `raster_slots` never produces one.  Named
+                // rather than absorbed by a wildcard, so that the day one appears
+                // in a raster set this suite says so instead of quietly comparing
+                // a shorter list.
+                BindingSlot::StorageBuffer { .. } | BindingSlot::StorageImage { .. } => {
+                    panic!("a raster recipe declares no storage binding")
                 }
             })
             .collect();
@@ -260,18 +272,21 @@ fn a_binding_set_that_disagrees_with_its_resolution_is_refused() {
     );
 
     let good = resolved(kernel, &texture, &buffer);
-    assert!(Bindings::new(kernel, &good).is_ok(), "the agreeing case");
+    assert!(
+        Bindings::new(Recipe::Raster(kernel), &good).is_ok(),
+        "the agreeing case"
+    );
 
     // One resource short: the count is the first thing that can disagree, and it
     // is what catches a set id registered against another artifact.
-    assert!(Bindings::new(kernel, &good[..good.len() - 1]).is_err());
+    assert!(Bindings::new(Recipe::Raster(kernel), &good[..good.len() - 1]).is_err());
 
     // The uniform's own number carrying a texture.  Built by hand rather than by
     // permuting `good`, so that the case is the one named in the assertion.
     let swapped: Vec<_> = (0..identity.binding_count)
         .map(|_| sampled(&texture))
         .collect();
-    assert!(Bindings::new(kernel, &swapped).is_err());
+    assert!(Bindings::new(Recipe::Raster(kernel), &swapped).is_err());
 
     // The right kinds at the right numbers and the wrong authorization: a
     // uniform block and a sampled texture are both read, so a resource the graph
@@ -295,7 +310,7 @@ fn a_binding_set_that_disagrees_with_its_resolution_is_refused() {
             }
         })
         .collect();
-    assert!(Bindings::new(kernel, &written).is_err());
+    assert!(Bindings::new(Recipe::Raster(kernel), &written).is_err());
 }
 
 #[test]
@@ -306,7 +321,7 @@ fn a_dynamic_offset_has_nothing_to_apply_to_in_a_fixed_binding_set() {
     let resources = resolved(kernel, &texture, &buffer);
     let mut objects = adapter.object_registry();
     let id = BindingSetId::new(0);
-    objects.register_bindings(id, kernel);
+    objects.register_bindings(id, Recipe::Raster(kernel));
 
     assert!(objects.bindings(id, &resources, &[]).is_ok());
     let error = objects
@@ -334,7 +349,7 @@ fn the_two_registered_objects_retain_nothing_so_releasing_them_destroys_nothing(
     objects
         .register_raster_pipeline(pipeline_id, kernel)
         .expect("an admitted profile");
-    objects.register_bindings(set_id, kernel);
+    objects.register_bindings(set_id, Recipe::Raster(kernel));
     let resources = resolved(kernel, &texture, &buffer);
 
     // The two resources were released when `matched_resources` dropped their

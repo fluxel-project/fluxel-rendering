@@ -51,7 +51,7 @@ use fluxel_rendergraph::{
     TextureRange, TextureReadUse, Viewport,
 };
 
-use super::super::object::{Bindings, RasterPipeline};
+use super::super::object::{Bindings, RasterPipeline, Recipe};
 use super::super::retention::GlRetentionLease;
 use super::{
     Adapter, adapter, attachment, calls, cleared, colour_usage, count, depth, invalid,
@@ -121,7 +121,7 @@ fn registered(
     objects
         .register_raster_pipeline(pipeline_id, kernel)
         .unwrap_or_else(|error| panic!("{kernel:?} is lowered on WebGL2: {error:?}"));
-    objects.register_bindings(set_id, kernel);
+    objects.register_bindings(set_id, Recipe::Raster(kernel));
     let pipeline = objects
         .raster_pipeline(pipeline_id)
         .unwrap_or_else(|error| panic!("{kernel:?} was registered: {}", error.context.detail));
@@ -780,7 +780,7 @@ fn a_textured_artifacts_bindings_arrive_one_at_a_time_in_the_recipes_own_order()
         (u64::from(u32::MAX) + 1, Some("an authorized offset beyond")),
     ] {
         let ranged = Bindings::new(
-            kernel,
+            Recipe::Raster(kernel),
             &[
                 ResolvedBindingResource::Buffer {
                     physical: &frame.physical,

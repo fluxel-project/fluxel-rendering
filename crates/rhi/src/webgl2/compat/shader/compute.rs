@@ -39,7 +39,7 @@
 use crate::resource::ComputeKernel;
 use crate::webgl2::api::{
     GlBindingLocation, GlFamilyProfile, GlLogicalBinding, GlPipelineLayout, GlProgramDescriptor,
-    GlProgramKind, GlShaderResourceKind, GlShaderStage,
+    GlProgramKind, GlShaderResourceKind, GlShaderStage, GlStorageBufferUsage, GlStorageImageAccess,
 };
 
 use super::text;
@@ -101,6 +101,13 @@ fn supports_compute(profile: GlFamilyProfile) -> Option<(super::GlShaderDialect,
 /// artifact also carries, which is where these numbers come from -- group 0,
 /// the sampler or image first, the storage buffer second -- and
 /// `the_layout_is_the_arrangement_the_wgsl_declares` is what holds them there.
+///
+/// Each storage kind carries the access its body declares, and the two
+/// arithmetic bodies declare none: a GLSL `buffer` block with no qualifier is
+/// read-write, which is what those kernels do with it.  The two image bodies are
+/// explicit (`writeonly` and `readonly`), and the access is stated here rather
+/// than parsed out of the text because the text is the lowering's output and
+/// this is its input.
 pub(in crate::webgl2::compat) fn layout(kernel: ComputeKernel) -> GlPipelineLayout {
     let binding = |name: &str, number: u32, kind: GlShaderResourceKind| GlLogicalBinding {
         name: name.to_owned(),
@@ -111,8 +118,16 @@ pub(in crate::webgl2::compat) fn layout(kernel: ComputeKernel) -> GlPipelineLayo
         kind,
         array_count: 1,
     };
-    let storage =
-        |name: &str, number: u32| binding(name, number, GlShaderResourceKind::StorageBuffer);
+    let storage = |name: &str, number: u32| {
+        binding(
+            name,
+            number,
+            GlShaderResourceKind::StorageBuffer(GlStorageBufferUsage::ReadWrite),
+        )
+    };
+    let image = |name: &str, number: u32, access: GlStorageImageAccess| {
+        binding(name, number, GlShaderResourceKind::StorageImage(access))
+    };
     let bindings = match kernel {
         ComputeKernel::WrappingAdd | ComputeKernel::WrappingMultiply => {
             vec![storage(text::COMPUTE_VALUES_BLOCK, 0)]
@@ -125,16 +140,16 @@ pub(in crate::webgl2::compat) fn layout(kernel: ComputeKernel) -> GlPipelineLayo
             ),
             storage(text::COMPUTE_DESTINATION_BLOCK, 1),
         ],
-        ComputeKernel::TextureStoreRgba8 => vec![binding(
+        ComputeKernel::TextureStoreRgba8 => vec![image(
             text::COMPUTE_OUTPUT_IMAGE,
             0,
-            GlShaderResourceKind::StorageImage,
+            GlStorageImageAccess::WriteOnly,
         )],
         ComputeKernel::TextureLoadRgba8 => vec![
-            binding(
+            image(
                 text::COMPUTE_SOURCE_IMAGE,
                 0,
-                GlShaderResourceKind::StorageImage,
+                GlStorageImageAccess::ReadOnly,
             ),
             storage(text::COMPUTE_DESTINATION_BLOCK, 1),
         ],

@@ -440,7 +440,7 @@ impl NativeGlProvider<'_> {
                     // block and sampler arms above support arrays because a
                     // raster recipe samples one; this arm will when a compute
                     // recipe declares one, and not before.
-                    GlShaderResourceKind::StorageBuffer => {
+                    GlShaderResourceKind::StorageBuffer(_) => {
                         if binding.array_count != 1 {
                             return Err(Self::validation(
                                 op,
@@ -477,7 +477,7 @@ impl NativeGlProvider<'_> {
                             executable: GlExecutableBindingLocation::StorageBlock(index),
                         });
                     }
-                    GlShaderResourceKind::StorageImage => {
+                    GlShaderResourceKind::StorageImage(_) => {
                         if binding.array_count != 1 {
                             return Err(Self::validation(
                                 op,

@@ -9,6 +9,16 @@
 //! each verb is for is documented next to it, and the decisions behind all of
 //! them are argued in [`super`].
 //!
+//! The impl carries the adapter's compute witness as a type parameter, and that
+//! is forced rather than chosen: a method cannot be stricter than its impl's own
+//! bounds (E0276), so the optional `where B: GlOptionalComputeBackend` that the
+//! compute verbs need has nowhere to go but a parameter of the type.  What the
+//! witness buys is that the four compute verbs delegate to methods that exist for
+//! every witness -- a refusal for [`NoCompute`](super::compute::NoCompute), the
+//! real command for [`WithCompute`](super::compute::WithCompute) -- so this file
+//! names no capability check of its own and each of those verbs is one line.  See
+//! [`super::compute`].
+//!
 //! What the verbs share lives next door: the adapter's lifecycle and the
 //! transition it accepts in [`super`], the recording machinery they drive in
 //! [`super::encoder`].  The two free helpers at the foot are the lowering two of
@@ -31,18 +41,16 @@ use crate::webgl2::api::{
 };
 use crate::webgl2::state::GlStateBackend;
 
-use super::encoder::{GlCommandBuffer, GlEncoder, OpenPass};
-use super::failure::{self, malformed, no_pass, pass_open, unsupported};
+use super::compute::ComputeDomain;
+use super::encoder::{GlCommandBuffer, GlEncoder, InstalledPipeline, OpenPass, PassShape};
+use super::failure::{self, malformed, pass_open, unsupported};
 use super::object;
 use super::pass;
 use super::region;
 use super::retention::{GlRetentionLease, RetainedObject};
 use super::submission::{Retirement, failure as submission_failure};
 use super::transient;
-use super::{
-    GlCompatibilityDevice, NO_COMMAND_VOCABULARY, UnsupportedComputePipeline,
-    UnsupportedPresentationToken,
-};
+use super::{GlCompatibilityDevice, UnsupportedPresentationToken};
 
 /// The instance count of a draw that asks for exactly one instance.
 ///
@@ -91,11 +99,11 @@ fn completion_status(status: GlFenceStatus, lifecycle: GlContextLifecycle) -> Co
     }
 }
 
-impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
+impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilityDevice<B, C> {
     type Texture = TextureId;
     type Buffer = BufferId;
     type RasterPipeline = object::RasterPipeline;
-    type ComputePipeline = UnsupportedComputePipeline;
+    type ComputePipeline = object::ComputePipeline;
     type Bindings = object::Bindings;
     type Encoder = GlEncoder;
     type CommandBuffer = GlCommandBuffer;
@@ -149,7 +157,14 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         self.refresh();
         self.release_pending()?;
         let lowered = transient::buffer_descriptor(descriptor, usage)?;
+        let allocated = lowered.size;
         let physical = self.machine.backend().create_buffer_resource(lowered)?;
+        // Recorded before anything else can name this identity, and for the same
+        // reason the texture path records its attachment here: a storage binding
+        // range authorized as *whole* has to be lowered to a real size, and the
+        // creation descriptor is the only place that size is a fact.  See
+        // [`GlCompatibilityDevice::storage_range`].
+        self.buffers.insert(physical, allocated);
         let lease = GlRetentionLease::new(
             [RetainedObject::Buffer(physical)],
             Rc::clone(&self.releases),
@@ -246,22 +261,17 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
             .framebuffer_for(&requested)
             .map_err(failure::into_gl_error)?;
 
-        let mut open = OpenPass {
-            target: facts,
-            pipeline: None,
-            bindings: None,
-            vertex: Vec::new(),
-            index: None,
-            // The attachment's own extent, so that a pass whose frame sets no
-            // viewport renders into the whole of what it attached rather than
-            // into whatever the previous pass left selected.
-            viewport: pass::whole_extent(facts),
-            scissor: None,
-            owned_framebuffers: Vec::new(),
-            owned_programs: Vec::new(),
-        };
+        let mut open = OpenPass::raster(facts);
         if owned {
-            open.owned_framebuffers.push(framebuffer);
+            // Narrowed by hand rather than through `OpenPass::raster`, which
+            // returns a `Result`: the pass was built as a raster pass one line
+            // above, so the narrowing cannot refuse, and this is the one place in
+            // this file where an error path would have to be invented rather than
+            // reported.  The framebuffer is already derived and has no second
+            // name, so a `?` here would leak it.
+            if let PassShape::Raster(shape) = &mut open.shape {
+                shape.owned_framebuffers.push(framebuffer);
+            }
         }
         encoder.pass = Some(open);
 
@@ -302,9 +312,7 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
     /// that never existed.
     fn end_raster(&mut self, encoder: &mut Self::Encoder) -> Result<(), Self::Error> {
         self.refresh();
-        let Some(pass) = encoder.pass.take() else {
-            return Err(no_pass("end-raster"));
-        };
+        let pass = encoder.take_raster("end-raster")?;
         let closed = self.machine.end_pass().map_err(failure::into_gl_error);
         // Destroyed whether or not the boundary closed: these objects are
         // unreachable either way, and a failure to end the pass is not a reason
@@ -321,22 +329,30 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         closed.and(released)
     }
 
+    /// Opens the compute pass a dispatch will be recorded in.
+    ///
+    /// The label is *ignored*, and that is the same choice `begin_raster` makes
+    /// about its descriptor's name and `begin_copy` about its own label: this
+    /// family's context has no debug-group annotation to attach one to, so the
+    /// name a frame gives a scope is a fact about the *plan* and not about any
+    /// command.  It is deliberately not refused: the executor passes the pass's
+    /// real name (`execution/recording/orchestration.rs`), so a refusal here would
+    /// reject every compute pass in every frame.
+    ///
+    /// Everything else is the witness's, which is why this verb is one line: a
+    /// witness with no compute domain refuses with the ledger's reason, and one
+    /// with a domain refuses when the discovery snapshot did not prove the
+    /// capability -- both before any side effect, and neither reachable from here.
     fn begin_compute(
         &mut self,
-        _encoder: &mut Self::Encoder,
+        encoder: &mut Self::Encoder,
         _label: &str,
     ) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "begin-compute",
-            reason: NO_COMMAND_VOCABULARY,
-        })
+        self.open_compute_pass(encoder, "begin-compute")
     }
 
-    fn end_compute(&mut self, _encoder: &mut Self::Encoder) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "end-compute",
-            reason: NO_COMMAND_VOCABULARY,
-        })
+    fn end_compute(&mut self, encoder: &mut Self::Encoder) -> Result<(), Self::Error> {
+        self.close_compute_pass(encoder, "end-compute")
     }
 
     fn begin_copy(
@@ -367,51 +383,62 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         pipeline: &Self::RasterPipeline,
     ) -> Result<(), Self::Error> {
         let pass = self.open_pass(encoder, "set-raster-pipeline")?;
+        // Refused when the open pass is a compute pass, which is what the
+        // narrowing here is for: the two kinds do not share a pipeline slot, and a
+        // raster recipe recorded in a compute pass would be installed by the next
+        // dispatch.
+        pass.raster_shape("set-raster-pipeline")?;
         // The recorded bindings are *kept*, and checked against this recipe
         // rather than dropped with the previous one: they are facts about what
         // the frame resolved, and a recipe that does not read them is a mistake
         // worth reporting at the bind that made it rather than a silent discard.
-        pass.pipeline = Some(pipeline.clone());
+        pass.pipeline = Some(InstalledPipeline::Raster(pipeline.clone()));
         Ok(())
     }
 
     fn set_compute_pipeline(
         &mut self,
-        _encoder: &mut Self::Encoder,
-        _pipeline: &Self::ComputePipeline,
+        encoder: &mut Self::Encoder,
+        pipeline: &Self::ComputePipeline,
     ) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "set-compute-pipeline",
-            reason: NO_COMMAND_VOCABULARY,
-        })
+        // The mirror of the verb above, and the compute half's own narrowing is
+        // [`GlEncoder::compute`]: recording a compute recipe into a raster pass
+        // would make the next draw install it.
+        self.record_compute_pipeline(encoder, "set-compute-pipeline", pipeline)
     }
 
-    /// Records the set this pass draws with.
+    /// Records the set this pass draws or dispatches with.
     ///
-    /// The recipe check is made here as well as at the draw, and the two are not
-    /// the same check: this one catches a set resolved for another artifact at
-    /// the call that got it wrong, while [`Self::commit`] catches a pipeline
-    /// installed *after* the set, which would otherwise bind resources at the
-    /// wrong numbers.
+    /// One verb for both families, because what a set is checked against is the
+    /// artifact it was resolved for and that is the same question either way --
+    /// while a set *resolved* for one family's artifact and installed in the
+    /// other's pass is a different recipe and is refused by name below.  Both
+    /// refusals name the operation, so a frame is told which verb asked.
+    ///
+    /// The check is made here as well as at the commit, and the two are not the
+    /// same check: this one catches a set resolved for another artifact at the
+    /// call that got it wrong, while the commit catches a pipeline installed
+    /// *after* the set, which would otherwise bind resources at the wrong
+    /// numbers.
     fn set_bindings(
         &mut self,
         encoder: &mut Self::Encoder,
         bindings: &Self::Bindings,
     ) -> Result<(), Self::Error> {
         let pass = self.open_pass(encoder, "set-bindings")?;
-        let pipeline = pass.pipeline.as_ref().ok_or_else(|| {
-            malformed(
+        let Some(installed) = pass.pipeline.as_ref().map(InstalledPipeline::recipe) else {
+            return Err(malformed(
                 "set-bindings",
-                "a binding set is resolved for the artifact that reads it, and no raster pipeline is installed in this pass",
-            )
-        })?;
-        if bindings.kernel() != pipeline.kernel() {
+                "a binding set is resolved for the artifact that reads it, and no pipeline is installed in this pass",
+            ));
+        };
+        if bindings.recipe() != installed {
             return Err(malformed(
                 "set-bindings",
                 "the binding set was resolved for a different artifact than the one installed in this pass",
             ));
         }
-        pass.bindings = Some((bindings.kernel(), bindings.slots().to_vec()));
+        pass.bindings = Some((installed, bindings.slots().to_vec()));
         Ok(())
     }
 
@@ -428,9 +455,9 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         buffer: &Self::Buffer,
         offset: u64,
     ) -> Result<(), Self::Error> {
-        let pass = self.open_pass(encoder, "set-vertex-buffer")?;
-        pass.vertex.retain(|bound| bound.slot != slot);
-        pass.vertex.push(GlVertexBufferBinding {
+        let shape = self.raster_pass(encoder, "set-vertex-buffer")?;
+        shape.vertex.retain(|bound| bound.slot != slot);
+        shape.vertex.push(GlVertexBufferBinding {
             slot,
             buffer: *buffer,
             offset,
@@ -445,8 +472,8 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         offset: u64,
         format: IndexFormat,
     ) -> Result<(), Self::Error> {
-        let pass = self.open_pass(encoder, "set-index-buffer")?;
-        pass.index = Some(GlIndexBinding {
+        let shape = self.raster_pass(encoder, "set-index-buffer")?;
+        shape.index = Some(GlIndexBinding {
             buffer: *buffer,
             format: pass::index_format(format),
             offset,
@@ -459,8 +486,8 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         encoder: &mut Self::Encoder,
         viewport: Viewport,
     ) -> Result<(), Self::Error> {
-        let pass = self.open_pass(encoder, "set-viewport")?;
-        pass.viewport = pass::viewport(viewport);
+        let shape = self.raster_pass(encoder, "set-viewport")?;
+        shape.viewport = pass::viewport(viewport);
         Ok(())
     }
 
@@ -469,8 +496,8 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         encoder: &mut Self::Encoder,
         scissor: ScissorRect,
     ) -> Result<(), Self::Error> {
-        let pass = self.open_pass(encoder, "set-scissor")?;
-        pass.scissor = Some(pass::scissor(scissor));
+        let shape = self.raster_pass(encoder, "set-scissor")?;
+        shape.scissor = Some(pass::scissor(scissor));
         Ok(())
     }
 
@@ -556,15 +583,28 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
             }))
     }
 
+    /// Dispatches the pass's artifact.
+    ///
+    /// This is the compute half's commit point, on `draw`'s terms exactly: every
+    /// check is made before the program is linked and the bindings applied, so a
+    /// dispatch refused after one would leave the backend holding state for a
+    /// command that never happened.
+    ///
+    /// A dispatch of no workgroups is refused one layer down rather than here,
+    /// unlike a draw of no vertices, and the difference is which layer owns the
+    /// rule.  A draw's vertex range is a fact this adapter is the only one to see
+    /// -- Layer 1's draw verb takes a count and validates nothing about it -- so
+    /// the empty case is refused above with a sentence that says what it means.
+    /// A group count is the opposite: `GlDispatchGroups::validate` owns both the
+    /// zero rule and the axis-limit rule, at the verb the dispatch reaches, so a
+    /// second check here would be a coarser copy of a rule already enforced --
+    /// and one that could disagree with it the first time an axis limit moved.
     fn dispatch(
         &mut self,
-        _encoder: &mut Self::Encoder,
-        _groups: [u32; 3],
+        encoder: &mut Self::Encoder,
+        groups: [u32; 3],
     ) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "dispatch",
-            reason: NO_COMMAND_VOCABULARY,
-        })
+        self.issue_dispatch(encoder, "dispatch", groups)
     }
 
     fn copy_texture(
@@ -639,13 +679,22 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
         // cleanup for a mistake already named and a second error would replace
         // the diagnosis with its consequence.  Whatever the pass came to own is
         // destroyed either way, since there is no later call that could name it.
+        //
+        // Only a raster pass has a boundary to unwind, and that is a fact of its
+        // shape rather than a policy: a compute pass opened nothing in Layer 1,
+        // because this family's pass boundary is a framebuffer's.  So the unwind
+        // is conditioned on the shape, and the *message* is not: an abandoned pass
+        // is the same mistake either way, and a frame reading it should not have
+        // to work out which kind it left open.
         let mut encoder = encoder;
         if let Some(abandoned) = encoder.pass.take() {
-            let _ = self.machine.end_pass();
+            if !abandoned.is_compute() {
+                let _ = self.machine.end_pass();
+            }
             let _ = self.destroy_owned(abandoned);
             return Err(malformed(
                 "finish-encoder",
-                "a raster pass was left open on this encoder, and a command buffer cannot be finished inside one",
+                "a pass was left open on this encoder, and a command buffer cannot be finished inside one",
             ));
         }
         Ok(GlCommandBuffer {

@@ -13,6 +13,7 @@ use super::super::text;
 use crate::resource::ComputeKernel;
 use crate::webgl2::api::{
     GlFamilyProfile, GlProgramKind, GlShaderDialect, GlShaderResourceKind, GlShaderStage,
+    GlStorageBufferUsage, GlStorageImageAccess,
 };
 
 /// The five closed recipes, in the order the artifact module declares them.
@@ -69,11 +70,26 @@ const REFUSED: [GlFamilyProfile; 4] = [
 ];
 
 /// The declaration each storage or sampling kind opens with in the bodies.
+///
+/// The storage arms include the access qualifier, which is what makes this the
+/// guard for the payload those two kinds carry: a layout that named the wrong
+/// access would look for a declaration the body does not contain, and the
+/// assertion fails naming the kernel and the binding.  Read-write is GLSL's
+/// unqualified form in both places -- a `buffer` block with no qualifier is
+/// read-write, and so is an `image2D` with neither `readonly` nor `writeonly` --
+/// so those are the two arms with nothing in front of the keyword.
 fn declaration_of(kind: GlShaderResourceKind) -> &'static str {
     match kind {
-        GlShaderResourceKind::StorageBuffer => "buffer ",
+        GlShaderResourceKind::StorageBuffer(GlStorageBufferUsage::ReadWrite) => "buffer ",
+        GlShaderResourceKind::StorageBuffer(GlStorageBufferUsage::ReadOnly) => "readonly buffer ",
         GlShaderResourceKind::CombinedTextureSampler => "uniform sampler2D ",
-        GlShaderResourceKind::StorageImage => "uniform image2D ",
+        GlShaderResourceKind::StorageImage(GlStorageImageAccess::ReadOnly) => {
+            "readonly uniform image2D "
+        }
+        GlShaderResourceKind::StorageImage(GlStorageImageAccess::WriteOnly) => {
+            "writeonly uniform image2D "
+        }
+        GlShaderResourceKind::StorageImage(GlStorageImageAccess::ReadWrite) => "uniform image2D ",
         // A compute layout declares none of these three, so a body reached with
         // one would be the drift this test exists to catch: the empty prefix
         // matches nothing and the assertion fails naming the binding.

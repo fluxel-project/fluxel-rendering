@@ -30,8 +30,9 @@ use crate::webgl2::api::{
 use crate::webgl2::state::GlStateBackend;
 
 use super::GlCompatibilityDevice;
-use super::failure::{self, malformed, no_pass, unsupported};
-use super::object::{self, BindingSlot};
+use super::compute::ComputeDomain;
+use super::failure::{self, malformed, no_compute_pass, no_pass, unsupported};
+use super::object::{self, BindingSlot, Recipe};
 use super::pass;
 
 /// One recording in progress.
@@ -60,24 +61,31 @@ pub(crate) struct GlEncoder {
     pub(super) pass: Option<OpenPass>,
 }
 
-/// What the frame has recorded inside the pass this encoder has open.
+/// What kind of pass this is, and the state only that kind has.
+///
+/// The raster state is a *variant* rather than a set of fields that happen to be
+/// empty for a compute pass, and that is the point: a compute pass has no
+/// attachment, no vertex buffers, no viewport and no framebuffer of its own, and
+/// a struct holding them anyway would make "which of these mean anything" a
+/// question every reader answers from the pass kind rather than from the type.
+pub(super) enum PassShape {
+    /// A raster pass, over the attachment it renders into.
+    Raster(RasterShape),
+    /// A compute pass, which renders into nothing: a dispatch's storage bindings
+    /// are its inputs and its outputs, and Layer 1 declares no pass boundary for
+    /// this family's compute commands at all.
+    Compute,
+}
+
+/// The per-pass state only a raster pass has.
 ///
 /// Every field is per-pass and cleared where the pass ends, which is the same
 /// lifetime Layer 1's own pass scope has: a binding recorded in one pass is not
 /// in force in the next, and neither is a viewport.
-pub(super) struct OpenPass {
+pub(super) struct RasterShape {
     /// The colour attachment's shape, which the viewport defaults to and the
     /// pipeline's sample count is taken from.
     pub(super) target: pass::Attachment,
-    /// The recipe the frame selected, if it has selected one.
-    pub(super) pipeline: Option<object::RasterPipeline>,
-    /// The binding set the frame resolved, with the artifact it was resolved
-    /// *for*: the kernel is kept beside the slots because the slots alone cannot
-    /// answer whether they belong to the recipe installed at the draw, and a
-    /// pipeline installed after a set is the one way the two can disagree.
-    /// Replaced rather than accumulated: a fixed artifact declares one set, so a
-    /// second one is a different recipe's.
-    pub(super) bindings: Option<(RasterKernel, Vec<BindingSlot>)>,
     /// The vertex buffers the frame bound, by slot.
     pub(super) vertex: Vec<GlVertexBufferBinding>,
     /// The index buffer the frame bound.
@@ -86,11 +94,134 @@ pub(super) struct OpenPass {
     pub(super) viewport: GlViewport,
     /// The scissor, absent until the frame sets one.
     pub(super) scissor: Option<GlScissorRect>,
-    /// Framebuffers and programs whose ownership Layer 2 handed to this encoder.
-    /// Destroyed when the pass ends, because a caller-owned object is one no
-    /// cache will ever free.
+    /// Framebuffers whose ownership Layer 2 handed to this pass.  Destroyed when
+    /// the pass ends, because a caller-owned object is one no cache will ever
+    /// free.  Programs are deliberately not here: both kinds of pass link one and
+    /// can come to own it, so they live on [`OpenPass`] instead.
     pub(super) owned_framebuffers: Vec<FramebufferId>,
+}
+
+impl RasterShape {
+    /// A fresh pass over `target`, with the two defaults a pass starts from.
+    pub(super) fn new(target: pass::Attachment) -> Self {
+        Self {
+            target,
+            vertex: Vec::new(),
+            index: None,
+            // The attachment's own extent, so that a pass whose frame sets no
+            // viewport renders into the whole of what it attached rather than
+            // into whatever the previous pass left selected.
+            viewport: pass::whole_extent(target),
+            scissor: None,
+            owned_framebuffers: Vec::new(),
+        }
+    }
+}
+
+/// What the frame has recorded inside the pass this encoder has open.
+pub(super) struct OpenPass {
+    /// Which kind of pass this is, with the state only that kind has.
+    pub(super) shape: PassShape,
+    /// The recipe the frame selected, if it has selected one.
+    ///
+    /// One slot holds whichever kind this pass is, so the variant says which
+    /// family installed it without a second field that would have to be kept in
+    /// step with [`Self::shape`].
+    pub(super) pipeline: Option<InstalledPipeline>,
+    /// The binding set the frame resolved, with the artifact it was resolved
+    /// *for*: the recipe is kept beside the slots because the slots alone cannot
+    /// answer whether they belong to the recipe installed at the commit, and a
+    /// pipeline installed after a set is the one way the two can disagree.
+    /// Replaced rather than accumulated: a fixed artifact declares one set, so a
+    /// second one is a different recipe's.
+    pub(super) bindings: Option<(Recipe, Vec<BindingSlot>)>,
+    /// Programs whose ownership Layer 2 handed to this pass.  Destroyed when the
+    /// pass ends, because a caller-owned object is one no cache will ever free.
+    /// Shared by both kinds because both link a program at their commit point.
     pub(super) owned_programs: Vec<ProgramId>,
+}
+
+impl OpenPass {
+    /// A pass that renders into `target`.
+    pub(super) fn raster(target: pass::Attachment) -> Self {
+        Self {
+            shape: PassShape::Raster(RasterShape::new(target)),
+            pipeline: None,
+            bindings: None,
+            owned_programs: Vec::new(),
+        }
+    }
+
+    /// A pass that dispatches and renders into nothing.
+    pub(super) fn compute() -> Self {
+        Self {
+            shape: PassShape::Compute,
+            pipeline: None,
+            bindings: None,
+            owned_programs: Vec::new(),
+        }
+    }
+
+    /// Whether this is a compute pass.
+    pub(super) fn is_compute(&self) -> bool {
+        matches!(self.shape, PassShape::Compute)
+    }
+
+    /// The raster half of this pass, or the refusal that it is not a raster pass.
+    ///
+    /// Every raster-only verb reads the pass through here, so that a verb reached
+    /// inside a compute pass reports the same mistake the same way.  It is a
+    /// refusal and not a silent no-op because a viewport recorded in a compute
+    /// pass is a frame that believes it is rendering: the state would be
+    /// recorded, nothing would read it, and the draw that later wanted it would
+    /// find whatever the compute pass left rather than what it set.
+    ///
+    /// Named for what it hands back rather than `raster`, because that name is the
+    /// pass *constructor* beside it: `OpenPass::raster(target)` and a narrowing
+    /// accessor cannot share a name, and the constructor is the one both families
+    /// read as a pair (`raster` and `compute`).
+    pub(super) fn raster_shape(
+        &mut self,
+        operation: &'static str,
+    ) -> Result<&mut RasterShape, GlError> {
+        match &mut self.shape {
+            PassShape::Raster(shape) => Ok(shape),
+            PassShape::Compute => Err(malformed(
+                operation,
+                "a compute pass is open on this encoder, and a compute pass records no rasterization state",
+            )),
+        }
+    }
+}
+
+/// The recipe a pass has installed, in whichever family it belongs to.
+///
+/// One enum rather than two optional fields, so that "a pass has one pipeline" is
+/// a fact of the type and a compute recipe cannot sit beside a raster one.  It is
+/// `Clone` because both commit points take it out before driving the machine: a
+/// link can invalidate the mirror's installed pipeline, so the recipe has to be
+/// held across calls that need the pass mutably.
+#[derive(Clone, Debug)]
+pub(super) enum InstalledPipeline {
+    /// One of the ten closed raster artifacts, lowered.
+    Raster(object::RasterPipeline),
+    /// One of the five closed compute artifacts, lowered.
+    Compute(object::ComputePipeline),
+}
+
+impl InstalledPipeline {
+    /// Which fixed artifact this is.
+    ///
+    /// The one question both kinds answer the same way, and the reason
+    /// `set_bindings` is a shared verb rather than one per family: what a binding
+    /// set is checked against is the artifact it was resolved for, and that is a
+    /// [`Recipe`] whichever family installed it.
+    pub(super) fn recipe(&self) -> Recipe {
+        match self {
+            Self::Raster(pipeline) => Recipe::Raster(pipeline.kernel()),
+            Self::Compute(pipeline) => Recipe::Compute(pipeline.kernel()),
+        }
+    }
 }
 
 impl GlEncoder {
@@ -100,16 +231,90 @@ impl GlEncoder {
     /// through the wrong verb of the pair -- a non-indexed draw of an indexed
     /// artifact, say -- is refused before anything is installed for it.
     pub(super) fn kernel(&self, operation: &'static str) -> Result<RasterKernel, GlError> {
-        self.pass
-            .as_ref()
-            .and_then(|pass| pass.pipeline.as_ref())
-            .map(object::RasterPipeline::kernel)
-            .ok_or_else(|| {
-                malformed(
+        match self.pass.as_ref().and_then(|pass| pass.pipeline.as_ref()) {
+            Some(InstalledPipeline::Raster(pipeline)) => Ok(pipeline.kernel()),
+            _ => Err(malformed(
+                operation,
+                "no raster pipeline is installed in this pass, so there is nothing to draw with",
+            )),
+        }
+    }
+
+    /// The pass an encoder has open, or the refusal that it has none.
+    ///
+    /// The shared verbs read it through here -- a binding set is recorded in
+    /// either kind of pass -- while the raster-only ones go through the device's
+    /// `raster_pass`, which narrows this to the kind they need.
+    pub(super) fn open(&mut self, operation: &'static str) -> Result<&mut OpenPass, GlError> {
+        self.pass.as_mut().ok_or_else(|| no_pass(operation))
+    }
+
+    /// The compute pass an encoder has open, or the refusal that it is not one.
+    ///
+    /// The two arms are separate sentences rather than one, because they are two
+    /// different mistakes: a frame that dispatched outside any pass and a frame
+    /// that dispatched inside a raster pass both need to be told what they did,
+    /// and "no compute pass is open" would be false about the second.
+    pub(super) fn compute(&mut self, operation: &'static str) -> Result<&mut OpenPass, GlError> {
+        match self.pass.as_mut() {
+            Some(pass) if pass.is_compute() => Ok(pass),
+            Some(_) => Err(malformed(
+                operation,
+                "a raster pass is open on this encoder, and a raster pass records no compute command",
+            )),
+            None => Err(malformed(
+                operation,
+                "no compute pass is open on this encoder, so a compute command has no pass to be recorded in",
+            )),
+        }
+    }
+
+    /// The compute pass an encoder has open, taken out for its close.
+    ///
+    /// `end_compute` reads the pass out rather than through [`Self::compute`],
+    /// because a refusal here has to put the pass *back*: a raster pass found at
+    /// this verb belongs to a frame that still has to close it with `end_raster`,
+    /// and taking it would leave that close with nothing to find.  So this is the
+    /// one reader that both narrows to the compute kind and restores what it
+    /// found, which is why the close does not repeat the check.
+    ///
+    /// The two refusals are separate sentences because they are two different
+    /// mistakes: a close with no pass open, and a close of the wrong kind.  The
+    /// latter names the verb that does close it, because the frame's next step is
+    /// the whole of what it needs to know.
+    pub(super) fn take_compute(&mut self, operation: &'static str) -> Result<OpenPass, GlError> {
+        match self.pass.take() {
+            Some(pass) if pass.is_compute() => Ok(pass),
+            Some(pass) => {
+                self.pass = Some(pass);
+                Err(malformed(
                     operation,
-                    "no raster pipeline is installed in this pass, so there is nothing to draw with",
-                )
-            })
+                    "a raster pass is open on this encoder, and a raster pass is closed by end-raster",
+                ))
+            }
+            None => Err(no_compute_pass(operation)),
+        }
+    }
+
+    /// The raster pass an encoder has open, taken out for its close.
+    ///
+    /// [`Self::take_compute`]'s mirror, on its terms and for its reason: the
+    /// close reads the pass out because a refusal has to put back what it found,
+    /// and a compute pass found at `end_raster` belongs to a frame that still has
+    /// to close it with `end_compute`.  The wrong-kind message names that verb,
+    /// because the frame's next step is the whole of what it needs to know.
+    pub(super) fn take_raster(&mut self, operation: &'static str) -> Result<OpenPass, GlError> {
+        match self.pass.take() {
+            Some(pass) if !pass.is_compute() => Ok(pass),
+            Some(pass) => {
+                self.pass = Some(pass);
+                Err(malformed(
+                    operation,
+                    "a compute pass is open on this encoder, and a compute pass is closed by end-compute",
+                ))
+            }
+            None => Err(no_pass(operation)),
+        }
     }
 }
 
@@ -118,7 +323,7 @@ pub(crate) struct GlCommandBuffer {
     pub(super) context: ContextStamp,
 }
 
-impl<B: GlStateBackend> GlCompatibilityDevice<B> {
+impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     /// The pass an encoder has open, or the refusal that it has none.
     ///
     /// Every verb that records into a pass reads it through here, so that the
@@ -129,7 +334,22 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
         encoder: &'e mut GlEncoder,
         operation: &'static str,
     ) -> Result<&'e mut OpenPass, GlError> {
-        encoder.pass.as_mut().ok_or_else(|| no_pass(operation))
+        encoder.open(operation)
+    }
+
+    /// The raster half of the pass an encoder has open.
+    ///
+    /// The raster-only verbs read through here, so that each of them is one line
+    /// and none of them decides for itself what to do when the open pass is a
+    /// compute pass.  A verb that recorded rasterization state into one would
+    /// record it where nothing reads it, and the draw that later wanted it would
+    /// find whatever the previous pass left.
+    pub(super) fn raster_pass<'e>(
+        &mut self,
+        encoder: &'e mut GlEncoder,
+        operation: &'static str,
+    ) -> Result<&'e mut RasterShape, GlError> {
+        encoder.open(operation)?.raster_shape(operation)
     }
 
     /// Drives Layer 2 so the backend holds everything the pass's draw needs.
@@ -166,25 +386,41 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
         let Some(pass) = encoder.pass.as_mut() else {
             return Err(no_pass(operation));
         };
-        let recipe = pass.pipeline.clone().ok_or_else(|| {
-            malformed(
-                operation,
-                "no raster pipeline is installed in this pass, so there is nothing to draw with",
-            )
-        })?;
+        let recipe = match pass.pipeline.clone() {
+            Some(InstalledPipeline::Raster(pipeline)) => pipeline,
+            _ => {
+                return Err(malformed(
+                    operation,
+                    "no raster pipeline is installed in this pass, so there is nothing to draw with",
+                ));
+            }
+        };
         if let Some((resolved_for, _)) = pass.bindings.as_ref() {
             // A pipeline installed *after* the set is the one way the two can
             // disagree: `set_bindings` checks the set against the pipeline that
             // was installed when it was called, and this is the check that holds
             // for the pipeline installed now.
-            if *resolved_for != recipe.kernel() {
+            if *resolved_for != Recipe::Raster(recipe.kernel()) {
                 return Err(malformed(
                     operation,
                     "the binding set in this pass was resolved for a different artifact than the one installed at the draw",
                 ));
             }
         }
-        let input = pass::vertex_input(&recipe, &pass.vertex, pass.index, operation)?;
+        // Everything the raster shape is asked for is read here, in one scope, so
+        // that the rest of the commit holds no borrow of the pass beyond the two
+        // fields it writes.  The three scalars are copied rather than borrowed
+        // because they are needed after the machine has been driven, and a borrow
+        // of a field cannot outlive a call that takes the pass mutably.
+        let (input, viewport, scissor, sample_count) = {
+            let shape = pass.raster_shape(operation)?;
+            (
+                pass::vertex_input(&recipe, &shape.vertex, shape.index, operation)?,
+                shape.viewport,
+                shape.scissor,
+                shape.target.sample_count(),
+            )
+        };
 
         let (program, _reflection, owned) = self
             .machine
@@ -213,12 +449,7 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
         self.machine.set_pipeline(&GlRasterPipeline {
             program,
             vertex_array,
-            state: pass::raster_state(
-                recipe.kernel(),
-                pass.viewport,
-                pass.scissor,
-                pass.target.sample_count(),
-            ),
+            state: pass::raster_state(recipe.kernel(), viewport, scissor, sample_count),
         });
         let _ = self
             .machine
@@ -252,6 +483,16 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
     /// of [`Self::commit`] gives: the texture domain's request is single-valued,
     /// so applying per binding is the only order in which a set of more than one
     /// arrives intact.
+    ///
+    /// One loop serves both families, and the two storage arms are why it can.
+    /// They lower their range through [`Self::storage_range`] and
+    /// [`Self::storage_image`], which read the device's own record of what it
+    /// created, and then reach the machine through the witness -- which is what
+    /// makes this method `C`-generic.  The alternative, a second loop beside this
+    /// one for compute sets, would have to repeat the texture arm and its three
+    /// calls, and the compute family really does use it: `TexturePackRgba8` reads
+    /// a sampled texture through exactly this path.  Two copies of that arm would
+    /// be two places for its refusal and its fold to drift.
     pub(super) fn bind_slots(
         &mut self,
         operation: &'static str,
@@ -298,6 +539,29 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
                         .apply_textures()
                         .map_err(failure::into_gl_error)?;
                 }
+                // The two storage arms keep the range and the access rather than
+                // lowering them here, because the lowering needs the device's
+                // record of the object and this loop is a method on the device
+                // but not the object.  Both refusals they can raise name the
+                // operation, so a frame is told which verb asked.
+                BindingSlot::StorageBuffer {
+                    binding,
+                    buffer,
+                    range,
+                    usage,
+                } => {
+                    let range = self.storage_range(operation, buffer, range, usage)?;
+                    C::bind_storage_buffer(&mut self.machine, operation, binding, range)?;
+                }
+                BindingSlot::StorageImage {
+                    binding,
+                    texture,
+                    range,
+                    access,
+                } => {
+                    let image = self.storage_image(operation, texture, range, access)?;
+                    C::bind_storage_image(&mut self.machine, operation, binding, image)?;
+                }
             }
         }
         Ok(())
@@ -313,9 +577,14 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
     /// cache.
     pub(super) fn destroy_owned(&mut self, pass: OpenPass) -> Result<(), GlError> {
         let mut first: Option<GlError> = None;
-        for framebuffer in pass.owned_framebuffers {
-            if let Err(error) = self.machine.backend().destroy_framebuffer(framebuffer) {
-                first.get_or_insert(error);
+        // A compute pass owns no framebuffer, which is a fact of its shape rather
+        // than a list that happens to be empty -- so the destructuring is where
+        // that is read, and there is no second field to keep in step.
+        if let PassShape::Raster(shape) = pass.shape {
+            for framebuffer in shape.owned_framebuffers {
+                if let Err(error) = self.machine.backend().destroy_framebuffer(framebuffer) {
+                    first.get_or_insert(error);
+                }
             }
         }
         for program in pass.owned_programs {

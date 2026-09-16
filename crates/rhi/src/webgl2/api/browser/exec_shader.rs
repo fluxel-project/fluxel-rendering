@@ -416,7 +416,7 @@ impl WebGl2BrowserDiscovery {
                 // produce, whatever the descriptor claims.  Refusing it here
                 // rather than resolving it is what keeps the descriptor from
                 // being the authority on what linked.
-                GlShaderResourceKind::StorageBuffer | GlShaderResourceKind::StorageImage => {
+                GlShaderResourceKind::StorageBuffer(_) | GlShaderResourceKind::StorageImage(_) => {
                     return Err(GlError::Unsupported {
                         operation: op,
                         reason: "a WebGL2 program declares no storage binding, so a layout naming one cannot be reflected",

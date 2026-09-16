@@ -31,6 +31,13 @@ impl MockComputeStorageApi {
     pub fn calls(&self) -> &[MockCall] {
         self.inner.calls()
     }
+    /// Forgets the trace so far, delegated beside [`Self::calls`] and for the
+    /// same reason: a suite that reads a trace from a later point needs both
+    /// halves of the pair, and a wrapper that exposed only the reader would
+    /// force every such suite to reach past it.
+    pub fn clear_calls(&mut self) {
+        self.inner.clear_calls();
+    }
     pub fn into_inner(self) -> MockGlFamilyApi {
         self.inner
     }

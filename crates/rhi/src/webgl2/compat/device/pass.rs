@@ -104,6 +104,37 @@ impl Attachment {
         self.sample_count
     }
 
+    /// The format this attachment was created with.
+    ///
+    /// Read by the storage-image lowering and by nothing else: an image unit
+    /// names its format where a framebuffer view reads it off the descriptor, and
+    /// Layer 1 validates the unit's format against the format table rather than
+    /// against the texture, so this is the one place the two are tied together.
+    pub(super) fn format(&self) -> GlFormat {
+        self.format
+    }
+
+    /// The number of layers this attachment's extent describes.
+    pub(super) fn layers(&self) -> u32 {
+        self.layers
+    }
+
+    /// Whether an image unit over this attachment can address its layers as one
+    /// set rather than one at a time.
+    ///
+    /// It is the dimension's answer and not the layer count's: a `D2Array` with a
+    /// single layer is still layered, because what the unit declares is which of
+    /// the two addressing forms it uses, and a driver takes the arrayed form for
+    /// an arrayed target even when it has one layer.  `D1` is absent with the
+    /// others that are not: a one-dimensional texture has no binding point here at
+    /// all, so it never reaches this question.
+    pub(super) fn layered(&self) -> bool {
+        matches!(
+            self.dimension,
+            GlTextureDimension::D3 | GlTextureDimension::Cube | GlTextureDimension::D2Array
+        )
+    }
+
     /// The texture target a bind of this attachment uses.
     ///
     /// Refused for a one-dimensional texture, which is the one dimension this

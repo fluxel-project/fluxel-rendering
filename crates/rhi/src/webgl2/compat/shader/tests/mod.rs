@@ -221,8 +221,8 @@ fn the_layout_claims_exactly_the_bindings_the_identity_records() {
                 // assertion below naming the kernel and the binding.
                 GlShaderResourceKind::Sampler
                 | GlShaderResourceKind::Texture
-                | GlShaderResourceKind::StorageBuffer
-                | GlShaderResourceKind::StorageImage => false,
+                | GlShaderResourceKind::StorageBuffer(_)
+                | GlShaderResourceKind::StorageImage(_) => false,
             };
             assert!(
                 declared,

@@ -5,7 +5,10 @@ use std::collections::BTreeSet;
 pub(crate) use crate::shader_contract::ShaderSourceHash;
 use crate::shader_contract::{GlslDialect, ShaderStage};
 
-use super::{GlError, GlFamilyApi, GlFamilyProfile, ProgramId, ShaderId};
+use super::{
+    GlError, GlFamilyApi, GlFamilyProfile, GlStorageBufferUsage, GlStorageImageAccess, ProgramId,
+    ShaderId,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum GlShaderStage {
@@ -60,9 +63,25 @@ pub(crate) enum GlShaderResourceKind {
     /// nothing here judges compute capability -- that is the provider's call,
     /// made against the linked program, and the two providers answer it
     /// differently.
-    StorageBuffer,
+    ///
+    /// # Why each storage kind carries its access
+    ///
+    /// The payload is the access the *declaration* states, and it is here
+    /// because a layout is what a caller reads to build a native bind: a storage
+    /// buffer bind has a usage and a storage image bind has an access, so a kind
+    /// that named neither would describe a binding nothing could bind.  It is a
+    /// fact about the shader rather than about the resource -- the same buffer
+    /// can be bound read-only to one program and read-write to another -- which
+    /// is why it belongs on the declaration and not on the object.
+    ///
+    /// Neither provider reads it, and that is not an oversight: the native
+    /// reflection resolves a block by name off the linked program and the
+    /// browser provider refuses both kinds outright, so each has a better source
+    /// than the descriptor for what it needs.  The consumer is the compatibility
+    /// adapter, which has only the descriptor.
+    StorageBuffer(GlStorageBufferUsage),
     /// A shader storage image, read or written by a compute stage.
-    StorageImage,
+    StorageImage(GlStorageImageAccess),
 }
 /// A logical RHI resource declaration, independent of program-link results.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

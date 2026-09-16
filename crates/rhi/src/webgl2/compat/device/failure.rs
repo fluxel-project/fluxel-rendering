@@ -59,20 +59,55 @@ pub(super) fn malformed(operation: &'static str, message: &str) -> GlError {
 /// A pass was asked to open while one was already open.
 ///
 /// Stated once because three verbs can report it -- a second `begin_raster`, a
-/// `draw` outside any pass, and a `finish_encoder` with one still open -- and
-/// they have to agree on what the mistake is.
+/// second `begin_compute`, and a `finish_encoder` with one still open -- and they
+/// have to agree on what the mistake is.
+///
+/// The sentence is deliberately kind-neutral.  It used to say "a raster pass",
+/// which was true while a raster pass was the only kind this adapter could open;
+/// now that a compute pass takes the same single slot, naming one kind would make
+/// the refusal wrong for exactly the caller that needs it.  What the mistake is is
+/// that a pass is open, and *which* pass is a fact the caller already has.
 pub(super) fn pass_open(operation: &'static str) -> GlError {
     malformed(
         operation,
-        "a raster pass is already open on this encoder, and this family's context runs one pass at a time",
+        "a pass is already open on this encoder, and this family's context runs one pass at a time",
     )
 }
 
 /// A verb that needs an open pass was called without one.
+///
+/// The sentence is deliberately kind-neutral, on [`pass_open`]'s terms and for the
+/// same reason.  It used to say "no raster pass is open ... and a draw has no
+/// framebuffer to render into", and both halves of that have since stopped being
+/// true of the callers that reach here:
+///
+/// - The *kind* is wrong for the shared verbs.  `set_bindings` records into either
+///   kind of pass and reads this encoder through `GlEncoder::open`, so a compute
+///   encoder reaching it was told about a raster pass that was never the subject.
+/// - The *second clause* was only ever true of one caller.  `draw` is one of four
+///   that land here -- the other three are the raster verbs, `set_bindings`, and
+///   `end_raster` -- and a close without a pass has no framebuffer to miss.
+///
+/// What the mistake is is that no pass is open, and which one the caller wanted is
+/// a fact the caller already has: it is the verb named in the error.
 pub(super) fn no_pass(operation: &'static str) -> GlError {
+    malformed(operation, "no pass is open on this encoder")
+}
+
+/// `end_compute` was called with no compute pass open.
+///
+/// A second function rather than [`no_pass`] with a different message, and the
+/// reason is narrower than it first looks: [`no_pass`] may not name a pass *kind*
+/// because a shared verb reaches it, while this one is reached by `end_compute`
+/// alone, so naming the kind here is a fact about the caller rather than a guess
+/// about it.  What it adds over [`no_pass`] is what the caller is missing -- a
+/// close does not want a pass to record into, it wants a boundary to close.  The
+/// executor brackets every pass it opens, so reaching this means a caller closed
+/// twice or never opened.
+pub(super) fn no_compute_pass(operation: &'static str) -> GlError {
     malformed(
         operation,
-        "no raster pass is open on this encoder, and a draw has no framebuffer to render into",
+        "no compute pass is open on this encoder, so there is no boundary to close",
     )
 }
 

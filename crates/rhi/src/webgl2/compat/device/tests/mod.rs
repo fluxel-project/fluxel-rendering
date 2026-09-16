@@ -17,6 +17,8 @@
 //! outcome the test names is as much an observation as one a driver produced.
 
 mod commands;
+mod compute;
+mod compute_storage;
 mod frame;
 mod harness;
 mod objects;
@@ -30,7 +32,6 @@ use fluxel_rendergraph::{
 };
 
 use super::super::capabilities::capabilities;
-use super::UnsupportedComputePipeline;
 use super::transient;
 use crate::webgl2::api::tests::snapshot;
 use crate::webgl2::api::{
@@ -64,22 +65,21 @@ fn the_one_object_type_this_adapter_still_cannot_produce_is_uninhabited() {
     // This only compiles while the type has no variant.  A value of an
     // uninhabited type cannot be written down anywhere, which is a stronger
     // statement than "no verb here returns one": no implementation in any crate
-    // could hand one back.  Implementing the compute slice adds a variant and
-    // breaks this build, rather than silently widening what the adapter claims to
-    // accept.
+    // could hand one back, and moving the boundary means adding a variant and
+    // breaking this build rather than silently widening what the adapter accepts.
     //
-    // It was three types until F3(b) landed, and this is where the other two
-    // went: a raster pipeline and a binding set are now objects the renderer
-    // registers and a frame resolves, so their associated types are inhabited and
-    // the raster half of this check has done its job and been consumed by the
-    // implementation it was holding back.  What is left is the slice that has no
-    // artifact at all -- this family has no compute pipeline object to register,
-    // and `GlObjectRegistry` answers for that by refusing every compute identity.
+    // It was three types when this test was written, and this is where the other
+    // two went: a raster pipeline and a binding set became objects the renderer
+    // registers and a frame resolves at F3(b), and `ComputePipeline` at F4(c), so
+    // each of those checks has done its job and been consumed by the
+    // implementation it was holding back.  What is left is the one slice with no
+    // object at all: this adapter reports no surface, so no acquisition can reach
+    // a presentation token, and F5 is where that boundary is kept or moved.
     #[allow(
         dead_code,
         reason = "the check is that this compiles, not that it runs"
     )]
-    fn no_compute_pipeline(value: UnsupportedComputePipeline) -> ! {
+    fn no_presentation_token(value: super::UnsupportedPresentationToken) -> ! {
         match value {}
     }
 }
@@ -114,12 +114,15 @@ fn every_compute_verb_refuses_and_names_itself() {
     let mut adapter = adapter();
     let mut encoder = adapter.begin_encoder(QueueId::new(0)).expect("an encoder");
 
-    // What is left of the fail-closed set after the raster slice landed.  These
-    // three are the whole of it: the compute scope and the one verb that would
-    // record into it, refused because this family has no compute vocabulary for
-    // this adapter to lower onto.  Unlike the raster verbs below they are not
-    // reachable-but-wrong -- they are not implemented, and `Unsupported` is the
-    // contract's word for that.
+    // What is left of the fail-closed set after the raster slice landed, and the
+    // shape of the refusal changed at F4(c) without changing the answer: these
+    // three are refused by the *witness*, not by a missing lowering.  The adapter
+    // built by `adapter()` is over the browser provider's snapshot and names no
+    // witness, so it is `NoCompute` and every verb of the domain refuses with the
+    // sentence that says this machine is over a backend with no compute command
+    // domain.  `Unsupported` is still the contract's word for it -- a caller
+    // could not fix it by opening a pass, which is exactly what the raster verbs
+    // below can be fixed by.
     assert_eq!(
         refused(adapter.begin_compute(&mut encoder, "unrecorded")),
         "begin-compute"
@@ -127,7 +130,8 @@ fn every_compute_verb_refuses_and_names_itself() {
     assert_eq!(refused(adapter.end_compute(&mut encoder)), "end-compute");
     assert_eq!(
         refused(adapter.dispatch(&mut encoder, [1, 1, 1])),
-        "dispatch"
+        "dispatch",
+        "the dispatch refuses before it can be told about the pass it has none of"
     );
 }
 

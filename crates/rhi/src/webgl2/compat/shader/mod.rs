@@ -19,16 +19,15 @@
 //! Nothing here links, creates, or records: a descriptor is data, and Layer 2's
 //! program cache is what makes a program out of it.
 //!
-//! # One family is re-exported here and the other is not yet
+//! # Both families are re-exported here now
 //!
 //! A family's entry points are reached by `compat` through a re-export, because
-//! its own module is private to this one.  Only [`raster`]'s are re-exported:
-//! `compat`'s raster object is what calls them, and a re-export no non-test code
-//! uses is an `unused_imports` warning, which this crate's `-D warnings` gate
-//! turns into a failure.  The compute lowering has no consumer until the compute
-//! object that lowers through it exists, so until then it is reached as
-//! `compute::compute_program` from inside this module and from its tests, and
-//! its re-export lands with its consumer rather than ahead of it.
+//! its own module is private to this one.  Only [`raster`]'s were, while the
+//! compute lowering stood alone: a re-export no non-test code uses is an
+//! `unused_imports` warning, which this crate's `-D warnings` gate turns into a
+//! failure, so the compute re-export waited for the compute object that
+//! consumes it.  That object is `compat::device::object::ComputePipeline`, and
+//! the re-export below landed with it rather than ahead of it.
 //!
 //! # Why the text is authored per family rather than translated
 //!
@@ -67,8 +66,13 @@ mod text;
 #[cfg(test)]
 mod tests;
 
-// The raster entry points, for the reason the module doc gives; the compute
-// one is deliberately absent until its consumer exists.
+// Each family's entry points, in the order `compat`'s two objects call them.
+// The compute layout is re-exported beside the lowering that produces it
+// because a binding set is validated against the *arrangement* and not against
+// the descriptor: the object that validates it has no profile to lower for, and
+// a second table there would be a third statement about the same kernel beside
+// the body and the layout.
+pub(super) use compute::{compute_program, layout as compute_layout};
 pub(super) use raster::{program, vertex_layout};
 
 use crate::webgl2::api::{
