@@ -5,9 +5,10 @@
 //! a dimension and a layer count lower to is not observable through the adapter
 //! -- Layer 1 stores the descriptor it was handed and reports only the identity.
 //! Every other test goes through `ExecutionBackend` on a real
-//! [`GlCompatibilityDevice`] over `MockGlFamilyApi`, because what those check is
-//! the contract: which calls the adapter makes, in which order, and what it
-//! answers when it is asked about a submission.
+//! [`GlCompatibilityDevice`](super::GlCompatibilityDevice) over
+//! [`MockGlFamilyApi`](crate::webgl2::api::MockGlFamilyApi), because what those
+//! check is the contract: which calls the adapter makes, in which order, and what
+//! it answers when it is asked about a submission.
 //!
 //! Fence completion cannot be simulated here -- the recorder has no submission
 //! queue, so nothing it recorded can finish -- and the tests therefore inject it,
@@ -16,148 +17,25 @@
 //! outcome the test names is as much an observation as one a driver produced.
 
 mod commands;
+mod harness;
+mod objects;
+mod raster;
+
+use harness::*;
 
 use fluxel_rendergraph::{
     BufferDesc, BufferUsage, BufferUsageKind, CompletionFailure, CompletionStatus,
-    ExecutionBackend, Extent3d, FrameExecutor, QueueId, TextureDesc, TextureDimension,
-    TextureFormat, TextureUsage, TextureUsageKind,
+    ExecutionBackend, QueueId, TextureDimension, TextureFormat, TextureUsage, TextureUsageKind,
 };
 
 use super::super::capabilities::capabilities;
+use super::UnsupportedComputePipeline;
 use super::transient;
-use super::{
-    GlCompatibilityDevice, UnsupportedBindings, UnsupportedComputePipeline,
-    UnsupportedRasterPipeline,
-};
-use crate::webgl2::api::tests::{compute_storage_snapshot, snapshot};
+use crate::webgl2::api::tests::snapshot;
 use crate::webgl2::api::{
-    GlBufferUsage, GlError, GlExtent3d, GlFamilyApi, GlFamilyProfile, GlFenceStatus, GlFormat,
-    GlTextureDimension, GlTextureUsage, MockCall, MockGlFamilyApi,
+    GlBufferUsage, GlExtent3d, GlFamilyApi, GlFamilyProfile, GlFenceStatus, GlFormat,
+    GlTextureDimension, GlTextureUsage, MockCall,
 };
-
-/// The adapter under test, over the WebGL2 snapshot.
-type Adapter = GlCompatibilityDevice<MockGlFamilyApi>;
-
-/// The peer check F1 owed F2: the boundary's own consumer accepts this adapter.
-///
-/// F1's record deferred it in as many words -- "the 'consumer that names the
-/// adapter as `B: ExecutionBackend`' check moves to F2 with it" -- and it is why
-/// the associated types are F2's first act rather than something that could be
-/// fixed later.  What it proves is narrow and worth stating precisely: the eleven
-/// types are a *set* `FrameExecutor` accepts through its generic, with no `dyn
-/// ExecutionBackend` and no adapter-side shim between them.
-///
-/// It is a compile-time check and not a run.  A frame's first real act is
-/// `emit_transitions`, which this adapter refuses until its copy slice lands, so
-/// running one would assert the refusal rather than the acceptance -- and the
-/// acceptance is the question that was open.
-#[allow(
-    dead_code,
-    reason = "the check is that this type-checks, not that it runs"
-)]
-fn the_executor_accepts_the_adapter(adapter: Adapter) -> FrameExecutor<Adapter> {
-    FrameExecutor::new(adapter)
-}
-
-fn adapter() -> Adapter {
-    GlCompatibilityDevice::new(MockGlFamilyApi::from_discovery(snapshot(
-        GlFamilyProfile::WebGl2,
-    )))
-}
-
-/// The adapter over the one snapshot that proved compute, storage and a storage
-/// image, which is the only one whose format table can carry a storage request.
-fn desktop() -> Adapter {
-    GlCompatibilityDevice::new(MockGlFamilyApi::from_discovery(compute_storage_snapshot(
-        true,
-    )))
-}
-
-/// A common texture description, with the two things this adapter decides
-/// together -- the dimension and the array-layer count -- left to the caller.
-fn texture(dimension: TextureDimension, array_layers: u32, depth: u32) -> TextureDesc {
-    TextureDesc {
-        dimension,
-        extent: Extent3d {
-            width: 4,
-            height: 4,
-            depth,
-        },
-        mip_levels: 1,
-        array_layers,
-        sample_count: 1,
-        format: TextureFormat::Rgba8Unorm,
-    }
-}
-
-/// The plain case: one two-dimensional layer.
-fn plain_texture() -> TextureDesc {
-    texture(TextureDimension::D2, 1, 1)
-}
-
-/// A usage set an attachment-shaped transient is compiled with.
-fn colour_usage() -> TextureUsage {
-    TextureUsage::from_kinds([
-        TextureUsageKind::ColorAttachment,
-        TextureUsageKind::CopySource,
-    ])
-}
-
-/// Every mock call the adapter made, in order.
-fn calls(adapter: &mut Adapter) -> Vec<MockCall> {
-    adapter.machine.backend().calls().to_vec()
-}
-
-/// How many of the mock calls so far satisfy `matched`.
-fn count(adapter: &mut Adapter, matched: fn(&MockCall) -> bool) -> usize {
-    calls(adapter).iter().filter(|call| matched(call)).count()
-}
-
-fn is_destroy_texture(call: &MockCall) -> bool {
-    matches!(call, MockCall::DestroyTexture(_))
-}
-
-fn is_destroy_buffer(call: &MockCall) -> bool {
-    matches!(call, MockCall::DestroyBuffer(_))
-}
-
-fn is_destroy_fence(call: &MockCall) -> bool {
-    matches!(call, MockCall::DestroyFence(_))
-}
-
-/// Forgets the trace so far, so a later count is about what follows.
-fn trace_from_here(adapter: &mut Adapter) {
-    adapter.machine.backend().clear_calls();
-}
-
-/// The operation name of the refusal `result` carries.
-///
-/// Every fail-closed verb in this slice refuses with `GlError::Unsupported` and
-/// names itself, so a test that only checked for an error would accept a
-/// validation failure or a context error as evidence that the verb refuses.  The
-/// name is checked because the name is what an operator reads.
-fn refused<T>(result: Result<T, GlError>) -> &'static str {
-    match result {
-        Ok(_) => panic!("the adapter was expected to refuse this"),
-        Err(GlError::Unsupported { operation, .. }) => operation,
-        Err(other) => panic!("expected a fail-closed refusal, got {other:?}"),
-    }
-}
-
-/// The operation name of the validation failure `result` carries.
-///
-/// The counterpart of [`refused`] for the verbs that *do* reach a provider: what
-/// a bad request gets back from there is a validation failure and not a
-/// fail-closed refusal, and a test that accepted either would not be able to
-/// tell "this adapter does not implement it" from "this adapter tried and the
-/// request was wrong".
-fn invalid<T>(result: Result<T, GlError>) -> &'static str {
-    match result {
-        Ok(_) => panic!("the adapter was expected to reject this"),
-        Err(GlError::Validation { operation, .. }) => operation,
-        Err(other) => panic!("expected a validation failure, got {other:?}"),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // What the adapter describes itself as.
@@ -181,32 +59,26 @@ fn the_adapter_reports_the_lowered_capabilities_of_its_own_context() {
 }
 
 #[test]
-fn the_three_object_types_this_adapter_cannot_produce_are_uninhabited() {
-    // Each of these only compiles while its type has no variant.  A value of an
+fn the_one_object_type_this_adapter_still_cannot_produce_is_uninhabited() {
+    // This only compiles while the type has no variant.  A value of an
     // uninhabited type cannot be written down anywhere, which is a stronger
     // statement than "no verb here returns one": no implementation in any crate
-    // could hand one back.  The first step of implementing the raster or compute
-    // slice adds a variant and breaks this build, rather than silently widening
-    // what the adapter claims to accept.
-    #[allow(
-        dead_code,
-        reason = "the check is that this compiles, not that it runs"
-    )]
-    fn no_raster_pipeline(value: UnsupportedRasterPipeline) -> ! {
-        match value {}
-    }
+    // could hand one back.  Implementing the compute slice adds a variant and
+    // breaks this build, rather than silently widening what the adapter claims to
+    // accept.
+    //
+    // It was three types until F3(b) landed, and this is where the other two
+    // went: a raster pipeline and a binding set are now objects the renderer
+    // registers and a frame resolves, so their associated types are inhabited and
+    // the raster half of this check has done its job and been consumed by the
+    // implementation it was holding back.  What is left is the slice that has no
+    // artifact at all -- this family has no compute pipeline object to register,
+    // and `GlObjectRegistry` answers for that by refusing every compute identity.
     #[allow(
         dead_code,
         reason = "the check is that this compiles, not that it runs"
     )]
     fn no_compute_pipeline(value: UnsupportedComputePipeline) -> ! {
-        match value {}
-    }
-    #[allow(
-        dead_code,
-        reason = "the check is that this compiles, not that it runs"
-    )]
-    fn no_bindings(value: UnsupportedBindings) -> ! {
         match value {}
     }
 }
@@ -237,7 +109,29 @@ fn the_encoder_opens_on_the_one_queue_and_refuses_any_other() {
 }
 
 #[test]
-fn every_raster_and_compute_verb_refuses_and_names_itself() {
+fn every_compute_verb_refuses_and_names_itself() {
+    let mut adapter = adapter();
+    let mut encoder = adapter.begin_encoder(QueueId::new(0)).expect("an encoder");
+
+    // What is left of the fail-closed set after the raster slice landed.  These
+    // three are the whole of it: the compute scope and the one verb that would
+    // record into it, refused because this family has no compute vocabulary for
+    // this adapter to lower onto.  Unlike the raster verbs below they are not
+    // reachable-but-wrong -- they are not implemented, and `Unsupported` is the
+    // contract's word for that.
+    assert_eq!(
+        refused(adapter.begin_compute(&mut encoder, "unrecorded")),
+        "begin-compute"
+    );
+    assert_eq!(refused(adapter.end_compute(&mut encoder)), "end-compute");
+    assert_eq!(
+        refused(adapter.dispatch(&mut encoder, [1, 1, 1])),
+        "dispatch"
+    );
+}
+
+#[test]
+fn the_raster_verbs_are_real_and_so_refuse_as_validation_outside_a_pass() {
     use fluxel_rendergraph::{IndexFormat, RasterPassDescriptor, ScissorRect, Viewport};
 
     let mut adapter = adapter();
@@ -251,37 +145,24 @@ fn every_raster_and_compute_verb_refuses_and_names_itself() {
         )
         .expect("a transient buffer");
     let mut encoder = adapter.begin_encoder(QueueId::new(0)).expect("an encoder");
-    let pass = RasterPassDescriptor {
-        label: "unrecorded",
-        colors: &[],
-        depth_stencil: None,
-    };
 
-    // What is left of the fail-closed set after the copy slice landed: the two
-    // scopes and the every command that would record into one.  `set-raster-
-    // pipeline` and its two siblings are absent rather than untested -- their
-    // argument types are uninhabited, so a call to one cannot be written down
-    // (`the_three_object_types_this_adapter_cannot_produce_are_uninhabited`).
+    // The distinction this test exists for.  These verbs are implemented now, so
+    // what they answer with is a *validation* failure naming the request that
+    // cannot be honoured rather than a fail-closed refusal saying the adapter has
+    // no vocabulary: a caller that opened a pass could make every one of these
+    // succeed, which is exactly what `Unsupported` would deny.  Checking the
+    // operation name is checking that the verb reports itself and not a
+    // neighbour.
     assert_eq!(
-        refused(adapter.begin_raster(&mut encoder, &pass)),
-        "begin-raster"
-    );
-    assert_eq!(refused(adapter.end_raster(&mut encoder)), "end-raster");
-    assert_eq!(
-        refused(adapter.begin_compute(&mut encoder, "unrecorded")),
-        "begin-compute"
-    );
-    assert_eq!(refused(adapter.end_compute(&mut encoder)), "end-compute");
-    assert_eq!(
-        refused(adapter.set_vertex_buffer(&mut encoder, 0, &buffer.physical, 0)),
+        invalid(adapter.set_vertex_buffer(&mut encoder, 0, &buffer.physical, 0)),
         "set-vertex-buffer"
     );
     assert_eq!(
-        refused(adapter.set_index_buffer(&mut encoder, &buffer.physical, 0, IndexFormat::Uint16)),
+        invalid(adapter.set_index_buffer(&mut encoder, &buffer.physical, 0, IndexFormat::Uint16)),
         "set-index-buffer"
     );
     assert_eq!(
-        refused(adapter.set_viewport(
+        invalid(adapter.set_viewport(
             &mut encoder,
             Viewport {
                 x: 0.0,
@@ -295,7 +176,7 @@ fn every_raster_and_compute_verb_refuses_and_names_itself() {
         "set-viewport"
     );
     assert_eq!(
-        refused(adapter.set_scissor(
+        invalid(adapter.set_scissor(
             &mut encoder,
             ScissorRect {
                 x: 0,
@@ -306,14 +187,26 @@ fn every_raster_and_compute_verb_refuses_and_names_itself() {
         )),
         "set-scissor"
     );
-    assert_eq!(refused(adapter.draw(&mut encoder, 0..3, 0..1)), "draw");
+    assert_eq!(invalid(adapter.draw(&mut encoder, 0..3, 0..1)), "draw");
     assert_eq!(
-        refused(adapter.draw_indexed(&mut encoder, 0..3, 0, 0..1)),
+        invalid(adapter.draw_indexed(&mut encoder, 0..3, 0, 0..1)),
         "draw-indexed"
     );
+    assert_eq!(invalid(adapter.end_raster(&mut encoder)), "end-raster");
+
+    // `begin-raster` is the exception, and correctly so: it is asked to open a
+    // pass this family has no pipeline for -- one with no colour attachment at
+    // all -- and that is a capability fact about the closed artifact set rather
+    // than a request that a different caller could fix.  So it refuses
+    // fail-closed and names itself, like the compute verbs.
+    let pass = RasterPassDescriptor {
+        label: "unrecorded",
+        colors: &[],
+        depth_stencil: None,
+    };
     assert_eq!(
-        refused(adapter.dispatch(&mut encoder, [1, 1, 1])),
-        "dispatch"
+        refused(adapter.begin_raster(&mut encoder, &pass)),
+        "begin-raster"
     );
 }
 

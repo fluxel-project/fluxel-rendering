@@ -276,7 +276,11 @@ impl<B: GlStateBackend> GlStateMachine<B> {
             .pipeline
             .reconcile(&mut self.backend, &mut self.counters)?;
         if effects.pipeline_installed {
-            self.geometry.vertex_input_unknown();
+            // Dropping the claim is a *release*: an array the cache could not
+            // retain is named by nothing but this claim, so forgetting it here
+            // would leak the object rather than merely forget where it is.
+            self.geometry
+                .vertex_input_unknown(&mut self.backend, &mut self.counters);
         }
         Ok(effects)
     }

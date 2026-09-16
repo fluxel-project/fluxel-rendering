@@ -214,7 +214,8 @@ impl GeometryState {
         self.desired.input.as_ref()
     }
 
-    /// Forgets which input the driver holds, keeping what the caller asked for.
+    /// Releases the claim on the driver's input, keeping what the caller asked
+    /// for.
     ///
     /// The machine calls this after a pipeline install, which is the one act
     /// outside this domain that can change the driver's vertex input: Layer 1
@@ -224,10 +225,19 @@ impl GeometryState {
     /// driver ends up holding the input the caller asked for; dropping the want
     /// instead would leave whatever the pipeline bound with no error anywhere.
     ///
-    /// Only the *claim* is dropped, never the derivation: the arrays this domain
-    /// created are still valid objects and still keyed by their layouts.
-    pub(crate) fn vertex_input_unknown(&mut self) {
-        self.applied.input.invalidate();
+    /// The claim is *released* rather than forgotten, and that is not the same
+    /// act: a claim can be the only name an array object has.  An array the cache
+    /// could not retain is one no record keys, so the claim is the last thing
+    /// holding it -- forgetting it there would leak the object silently, which is
+    /// the failure mode [`GeometryState::release_claim`] exists to prevent.
+    /// Nothing is lost by destroying it: the next reconcile derives an array for
+    /// this input again, and the array it derives is the one it binds.
+    pub(crate) fn vertex_input_unknown(
+        &mut self,
+        backend: &mut impl GlStateBackend,
+        counters: &mut StateCounters,
+    ) {
+        self.release_claim(backend, counters);
     }
 
     /// The input the backend is known to hold, if any.

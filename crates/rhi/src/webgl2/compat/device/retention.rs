@@ -24,6 +24,20 @@
 //! Nothing here counts, orders or interprets.  Whether an object *may* be
 //! released is the completion ledger's answer, and it answers by holding the
 //! lease rather than by telling this queue anything.
+//!
+//! # A lease can cover a group of zero, and that is not a placeholder
+//!
+//! The contract's raster and binding objects need a `Lease` like every other
+//! bound value, and this backend has nothing to retain for either of them: the
+//! resources a binding set names are already retained once each by the frame
+//! that resolved them, so a second lease over the same object would make the
+//! queue push a second record and [`crate::webgl2::compat::device`]'s
+//! `release_pending` would destroy it twice; and a raster pipeline's program and
+//! vertex array belong to Layer 2's caches, which destroy them at `shutdown` or
+//! on invalidation.  So those two objects are handed out with a lease whose
+//! group is empty, which is a statement rather than a stub -- it says this
+//! backend's retention for them is held elsewhere.  The group is a `Vec` for
+//! that reason and not because a multi-object lease is expected here.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -101,7 +115,7 @@ impl ReleaseQueue {
 #[derive(Clone, Debug)]
 pub(crate) struct GlRetentionLease(Rc<LeaseInner>);
 
-/// The shared half of a retention lease: the object, and where its death goes.
+/// The shared half of a retention lease: the objects, and where their deaths go.
 ///
 /// `Drop` is on this and not on [`GlRetentionLease`] because it must run once,
 /// at the last drop, and a `Drop` on the outer type would run at every clone's
@@ -109,19 +123,32 @@ pub(crate) struct GlRetentionLease(Rc<LeaseInner>);
 /// plain `Copy` handle.
 #[derive(Debug)]
 struct LeaseInner {
-    object: RetainedObject,
+    objects: Vec<RetainedObject>,
     releases: Rc<ReleaseQueue>,
 }
 
 impl Drop for LeaseInner {
     fn drop(&mut self) {
-        self.releases.push(self.object);
+        for object in &self.objects {
+            self.releases.push(*object);
+        }
     }
 }
 
 impl GlRetentionLease {
-    /// Retains `object` until the last clone of this lease is dropped.
-    pub(super) fn new(object: RetainedObject, releases: Rc<ReleaseQueue>) -> Self {
-        Self(Rc::new(LeaseInner { object, releases }))
+    /// Retains `objects` until the last clone of this lease is dropped.
+    ///
+    /// An empty group is a real answer and not a degenerate one: see the module
+    /// documentation for the two objects whose retention this backend holds
+    /// somewhere else.  Nothing special-cases it, which is the point -- a lease
+    /// over zero objects is a lease whose death has nothing to record.
+    pub(super) fn new(
+        objects: impl IntoIterator<Item = RetainedObject>,
+        releases: Rc<ReleaseQueue>,
+    ) -> Self {
+        Self(Rc::new(LeaseInner {
+            objects: objects.into_iter().collect(),
+            releases,
+        }))
     }
 }
