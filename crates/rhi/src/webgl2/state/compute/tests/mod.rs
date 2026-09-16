@@ -353,14 +353,45 @@ fn deleting_a_texture_forgets_every_unit_that_named_it() {
         counters.lifecycle.domain_invalidations, 0,
         "one texture is not a whole-domain invalidation"
     );
+    assert_eq!(
+        fixture.counters_for(&counters).emitted,
+        3,
+        "only the three earlier applications emitted"
+    );
 
+    // Nothing to re-apply: the two units that named the deleted texture are no
+    // longer wanted, and the unit naming the live one is still believed.  The
+    // rule is [`super::super::binding`]'s and this domain follows it rather than
+    // having one of its own -- re-emitting a binding to a deleted texture could
+    // only be refused, and the refusal would be reported as a failure of this
+    // reconcile rather than of any request the caller made.
+    let desired_before = state.images.desired_len();
     state
         .reconcile(&mut fixture.api, &mut counters)
-        .expect("the want is re-applied");
+        .expect("a deletion leaves nothing to re-apply");
+    assert!(
+        fixture.since(mark).is_empty(),
+        "a want that named the deleted texture is dropped, not re-emitted"
+    );
+    assert_eq!(
+        desired_before, 1,
+        "the two units that named the deleted texture lost their wants"
+    );
+
+    // A unit re-requested afterwards is a fresh want and emits, because the unit
+    // is unknown again rather than believed to hold the deleted texture.
+    state.bind_storage_image(
+        0,
+        image(fixture.second, GlStorageImageAccess::ReadWrite),
+        &mut counters,
+    );
+    state
+        .reconcile(&mut fixture.api, &mut counters)
+        .expect("the unit is unknown, so the new want emits");
     assert_eq!(
         fixture.since(mark),
-        vec![bound(0, fixture.first), bound(1, fixture.first),],
-        "only the units that named the deleted texture are re-applied"
+        vec![bound(0, fixture.second)],
+        "only the unit that was re-requested emits"
     );
 }
 

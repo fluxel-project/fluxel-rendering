@@ -64,15 +64,17 @@
 //!
 //! # Invalidations
 //!
-//! [`StateEvent::TextureDeleted`] forgets what the driver holds for every unit
-//! that names the texture, and emits nothing: a binding is not an object, so
-//! there is nothing to destroy.  [`StateEvent::DomainFailed`] naming this domain
-//! has nothing left to forget, because the emit that failed already cleared the
-//! applied state before it returned.  And a whole-mirror event -- or a raw scope
-//! that declared this domain -- forgets what the driver holds everywhere.
-//!
-//! None of them forgets what the caller asked for: [`super::binding`] documents
-//! why re-applying a want is better than silently dropping it.
+//! [`StateEvent::TextureDeleted`] forgets every unit that named the texture --
+//! both what the driver was believed to hold and what the caller asked for -- and
+//! emits nothing: a binding is not an object, so there is nothing to destroy.  The
+//! want goes because no call can satisfy it; keeping it would make this domain
+//! re-emit a request the caller never made and report Layer 1's refusal as a
+//! failure of the caller's transition.  [`StateEvent::DomainFailed`] naming this
+//! domain has nothing left to forget, because the emit that failed already cleared
+//! the applied state before it returned.  And a whole-mirror event -- or a raw
+//! scope that declared this domain -- forgets what the driver holds everywhere
+//! while keeping every want, because every object those name still exists.
+//! [`super::binding`] draws the line once for both binding domains.
 
 use crate::webgl2::api::{GlStorageImageApi, GlStorageImageBinding};
 
@@ -169,7 +171,11 @@ impl ComputeState {
                 // Before the caller asks the backend to delete the name: a unit
                 // that still named the texture must stop claiming to know what
                 // the driver holds before that name can belong to something else.
-                self.images.forget_where(|image| image.texture == *texture);
+                // The want goes with the belief -- no call can bind a deleted
+                // texture -- which is the rule [`super::binding`] states once for
+                // this domain and the buffer one.
+                self.images
+                    .forget_object_where(|image| image.texture == *texture);
             }
             // A group that failed partway is already unknown -- the emit that
             // failed cleared this domain's applied state before it returned --

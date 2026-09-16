@@ -35,29 +35,35 @@
 //! differential comparison against the oracle meaningless, so the order is part
 //! of this module's contract rather than an implementation detail.
 //!
-//! # The two maps, and what an invalidation may touch
+//! # The two maps, and which invalidation may touch which
 //!
 //! `desired` is what the caller asked for; `applied` is what the driver was last
-//! told.  An invalidation may only ever clear the second, and the asymmetry is
-//! the point.  Backing a want with a belief the mirror no longer has is wrong:
-//! the next settle re-emits it and Layer 1 refuses a deleted or stale-epoch
-//! object with a structured error, so the caller learns.  Dropping the want
-//! instead would leave the binding point holding whatever the driver last had,
-//! with no error anywhere and a wrong image as the only symptom -- the one
-//! outcome strictly worse than a failure.
+//! told.  Two kinds of invalidation reach them and they must not be conflated,
+//! because the difference is whether the want is still *satisfiable*.
 //!
-//! ⚠️ **That paragraph is the subject of an open finding, and the reader should
-//! not act on it as settled.** The plan's P1-17 disputes the last sentence: this
-//! module's own `forget_where` clears the applied entry too, so the slot is left
-//! honestly `Unknown` and the "wrong image as the only symptom" cannot occur --
-//! what keeping the want produces instead is a *doomed re-emit*, and with it a
-//! failure the caller never asked for, on every reconcile until it rebinds the
-//! slot. `textures` already drops the want for the object that died and states
-//! that reason. The two policies are expected to converge on `textures`', which
-//! moves this module's `forget_where` to filter `desired` by the same predicate;
-//! the split that remains is deletion (unsatisfiable, so the want goes) versus a
-//! whole-mirror event (still satisfiable, so it stays). Recorded here rather than
-//! only in the plan because this is the paragraph a domain author copies.
+//! [`BindingPoints::forget_object_where`] is the **object-scoped** one: an object
+//! a slot named is gone.  It forgets both maps for every slot whose entry matched,
+//! so the want goes with the belief.  That want can no longer be satisfied by any
+//! call, and keeping it does not surface anything to the caller -- the caller made
+//! no request -- it makes *this layer* re-emit a request of its own and then
+//! report Layer 1's refusal as a failure of the caller's transition, on every
+//! settle, until the caller happens to rebind that slot.  Dropping it costs
+//! nothing that the belief did not already cost: the slot is left `Unknown` in
+//! `applied`, so nothing believes the driver still holds the dead object, and a
+//! later request for the slot emits normally.
+//!
+//! [`BindingPoints::forget_applied`] is the **mirror-wide** one: the identities
+//! in the mirror belong to a context or an epoch the backend no longer accepts,
+//! or a raw scope declared this domain.  Every want here is still satisfiable --
+//! its object exists -- so every want stays, and the next settle re-establishes
+//! it.  This is the same rule the session domain gives a context loss.
+//!
+//! The rule that covers both: a want is dropped only when the object it names is
+//! gone, never because a belief was.  `textures` is the domain that states it in
+//! those terms (a request naming a deleted identity cannot be satisfied); P1-17 in
+//! the 0.15 plan is the finding that made this module's `forget_where` follow it,
+//! having previously kept the want and argued that re-applying it was always
+//! better than dropping it.
 
 use std::collections::BTreeMap;
 
@@ -111,8 +117,10 @@ impl<T: Copy + PartialEq> BindingPoints<T> {
 
     /// How many slots the caller has asked about.
     ///
-    /// An invalidation never reduces this: it clears beliefs about the driver,
-    /// not the wants those beliefs were established for.
+    /// A mirror-wide invalidation never reduces this -- it clears beliefs about
+    /// the driver, not the wants those beliefs were established for.  An
+    /// object-scoped one does, for exactly the slots whose object died, because
+    /// those wants are the unsatisfiable ones.
     pub(super) fn desired_len(&self) -> usize {
         self.desired.len()
     }
@@ -222,25 +230,38 @@ impl<T: Copy + PartialEq> BindingPoints<T> {
 }
 
 impl<T> BindingPoints<T> {
-    /// Forgets what the driver holds for every slot whose entry satisfies
-    /// `matches`.
+    /// Forgets every slot whose entry satisfies `matches`, in *both* maps.
+    ///
+    /// This is the object-scoped invalidation: the entry named an object that is
+    /// about to be deleted or has been retired, so the want is dropped with the
+    /// belief and the slot returns to the state it had before it was ever named.
+    /// The module doc gives the reason a want goes here and stays under
+    /// [`BindingPoints::forget_applied`], and the distinction is the whole reason
+    /// the two hooks exist rather than one.
     ///
     /// The predicate is supplied by the caller because only the caller knows
     /// which object an entry names -- a storage range names a buffer by field, a
     /// storage-image binding names a texture -- and a mirror that could not
     /// answer that question would be a binding point it could not clear on a
-    /// deletion, which is the defect this hook exists to prevent.
+    /// deletion at all.
     ///
-    /// The desired entries stay: see the module doc for why re-applying a want is
-    /// always better than silently dropping it -- and for the open finding that
-    /// disputes it, which is why this is the hook a fix would widen rather than a
-    /// second hook a caller would have to remember.
-    pub(super) fn forget_where(&mut self, matches: impl Fn(&T) -> bool) {
+    /// Removing a want frees a `desired` node but is not counted: the allocation
+    /// tally reports heap traffic the layer caused, and a freed node was already
+    /// counted when it was inserted.  A slot named again afterwards counts a new
+    /// allocation, which is honest -- it is a new node.
+    pub(super) fn forget_object_where(&mut self, matches: impl Fn(&T) -> bool) {
         self.applied
             .retain(|_, known| !known.get().is_some_and(&matches));
+        self.desired.retain(|_, value| !matches(value));
     }
 
-    /// Forgets what the driver holds everywhere, keeping the caller's wants.
+    /// Forgets what the driver holds everywhere, keeping every want.
+    ///
+    /// The mirror-wide invalidation: a context loss, a device replacement, or a
+    /// raw scope that declared this domain.  Every want survives because every
+    /// object it names still exists, so the next settle re-establishes what the
+    /// caller asked for instead of assuming the request went away with the
+    /// beliefs.
     pub(super) fn forget_applied(&mut self) {
         // Clearing rather than marking every entry unknown: the two say the same
         // thing about the driver, and clearing also gives the map back, which a

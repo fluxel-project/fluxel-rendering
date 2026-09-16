@@ -83,22 +83,24 @@
 //! # Invalidations
 //!
 //! Three of [`super::event`]'s rows reach this domain.
-//! [`StateEvent::BufferDeleted`] forgets what the driver holds for every slot
-//! that still names the buffer, in *both* roles, and emits nothing: a binding is
-//! not an object, so there is nothing to destroy.  [`StateEvent::DomainFailed`]
+//! [`StateEvent::BufferDeleted`] forgets the slots that still name the buffer in
+//! *both* roles -- the belief and the want -- and emits nothing: a binding is not
+//! an object, so there is nothing to destroy.  [`StateEvent::DomainFailed`]
 //! naming this domain has nothing left to forget, because the emit that failed
 //! already cleared the applied state before it returned.  And a whole-mirror
 //! event -- or a raw scope that declared this domain -- forgets what the driver
 //! holds everywhere.
 //!
-//! None of them forgets what the *caller* asked for, and the asymmetry is the
-//! point.  Backing a want with a belief the mirror no longer has is wrong: the
-//! next reconcile re-emits, Layer 1 refuses a deleted or stale-epoch buffer with
-//! a structured error, and the caller learns.  Dropping the want instead would
-//! leave the binding point holding whatever the driver last had, with no error
-//! anywhere and a wrong image as the only symptom -- the one outcome strictly
-//! worse than a failure.  Re-applying is therefore always the answer, and it is
-//! the answer the session domain gives to a context loss, for the same reason.
+//! The two forget *different amounts*, and the difference is whether the want is
+//! still satisfiable.  A deletion takes the want with the belief: no call can
+//! establish a binding to an object that is gone, so keeping the want would have
+//! this layer re-emit a request the caller never made and then report Layer 1's
+//! refusal as a failure of the caller's next transition -- repeatedly, until the
+//! caller happened to rebind that slot.  A whole-mirror event keeps every want:
+//! every object it names still exists, so the next settle re-establishes exactly
+//! what the caller asked for, which is the rule the session domain gives a
+//! context loss for the same reason.  [`super::binding`] states the rule once for
+//! both roles and every domain that shares them.
 
 use crate::webgl2::api::{BufferId, GlStorageBufferApi, GlStorageBufferRange};
 
@@ -269,12 +271,15 @@ impl BuffersState {
                 // Both roles, before the caller asks the backend to delete the
                 // name: a slot that still named the buffer must stop claiming to
                 // know what the driver holds before that name can belong to
-                // something else.  The two predicates differ because the two
-                // entry types carry the buffer differently -- one as a field that
-                // may be the unbind form, one as a plain identity.
+                // something else, and the want for it goes too, because no call
+                // can satisfy a want that names a deleted object.  The two
+                // predicates differ because the two entry types carry the buffer
+                // differently -- one as a field that may be the unbind form, one
+                // as a plain identity.
                 self.uniform
-                    .forget_where(|binding| binding.buffer == Some(*buffer));
-                self.storage.forget_where(|range| range.buffer == *buffer);
+                    .forget_object_where(|binding| binding.buffer == Some(*buffer));
+                self.storage
+                    .forget_object_where(|range| range.buffer == *buffer);
             }
             // A group that failed partway is already unknown -- the emit that
             // failed cleared this domain's applied state before it returned -- so

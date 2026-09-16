@@ -4,7 +4,7 @@
 //! buffer is forgotten by every role that still names it, before the backend is
 //! asked to delete the name.  The other two tests here pin the boundary of that
 //! obligation -- a scope that named a different domain must not disturb this one,
-//! and no invalidation may drop what the caller asked for.
+//! and a whole-mirror event must leave every want standing.
 
 use super::super::super::event::ScopedRawAccess;
 use super::*;
@@ -50,23 +50,49 @@ fn deleting_a_buffer_forgets_it_in_every_role() {
         counters.lifecycle.domain_invalidations, 0,
         "one buffer is not a whole-domain invalidation"
     );
+    assert_eq!(
+        state.uniform.desired_len(),
+        1,
+        "the want for the deleted buffer went with the belief, and the other stayed"
+    );
+    assert_eq!(state.storage.desired_len(), 1);
 
+    // Nothing to re-apply: the deleted buffer's slot is no longer wanted, and the
+    // slot that named the live buffer is still believed.  Re-emitting the dead
+    // want here is what P1-17 removed -- Layer 1 refuses a binding to a deleted
+    // buffer, so the call could only have failed, and it would have failed as a
+    // failure of this reconcile rather than of any request the caller made.
     state
         .reconcile(&mut fixture.uniform, &mut counters)
-        .expect("the uniform want is re-applied");
+        .expect("a deletion leaves nothing to re-apply");
     state
         .reconcile_storage(&mut fixture.storage, &mut counters)
-        .expect("the storage want is re-applied");
+        .expect("a deletion leaves nothing to re-apply");
+    assert!(
+        uniform_calls(&fixture.uniform).is_empty(),
+        "the dead want is not re-emitted"
+    );
+    assert_eq!(storage_mark(&fixture.storage), applied);
 
+    // A new request for the freed slot is a fresh want, and it emits, because the
+    // slot is unknown again rather than believed to hold the deleted buffer.
+    state.bind_uniform_buffer(0, Some(fixture.second), 0, 0, &mut counters);
+    state.bind_storage_buffer(0, range(fixture.second), &mut counters);
+    state
+        .reconcile(&mut fixture.uniform, &mut counters)
+        .expect("the slot is unknown, so the new want emits");
+    state
+        .reconcile_storage(&mut fixture.storage, &mut counters)
+        .expect("the slot is unknown, so the new want emits");
     assert_eq!(
         uniform_calls(&fixture.uniform),
-        vec![uniform(0, Some(fixture.first), 0, 0)],
-        "only the slot that named the deleted buffer is re-applied"
+        vec![uniform(0, Some(fixture.second), 0, 0)],
+        "only the slot that was re-requested emits"
     );
     assert_eq!(
         storage_calls_since(&fixture.storage, applied),
-        vec![storage(0, fixture.first, 0, 256)],
-        "the storage role forgot it too, and the other slot was left alone"
+        vec![storage(0, fixture.second, 0, 256)],
+        "and the storage role follows the same rule"
     );
 }
 

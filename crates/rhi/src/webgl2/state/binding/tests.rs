@@ -4,9 +4,10 @@
 //! Each domain's own collection runs this machinery through a real provider and
 //! a real verb, which is where its behaviour under Layer 1's validation and the
 //! mock's tracing is pinned.  What is pinned here is what only this module owns:
-//! the settle order, the exact tally one request produces, and the failure
-//! rule's whole-map clearing.  The closure below is the only "driver" involved,
-//! which is what makes those three visible without a provider in the way.
+//! the settle order, the exact tally one request produces, the failure rule's
+//! whole-map clearing, and which of the two invalidation hooks drops a want.  The
+//! closure below is the only "driver" involved, which is what makes those four
+//! visible without a provider in the way.
 
 use super::*;
 use crate::webgl2::api::GlError;
@@ -244,7 +245,7 @@ fn a_refused_emit_leaves_every_slot_unknown_rather_than_unchanged() {
 }
 
 #[test]
-fn forgetting_the_matching_entries_keeps_the_others_and_every_want() {
+fn forgetting_the_matching_entries_keeps_the_others_and_drops_their_wants() {
     let mut points = BindingPoints::default();
     let mut counters = StateCounters::default();
     for slot in 0..4 {
@@ -262,10 +263,16 @@ fn forgetting_the_matching_entries_keeps_the_others_and_every_want() {
         .expect("every slot is new");
     assert_eq!(emitted, vec![0, 1, 2, 3]);
 
-    // Only the even slots are forgotten, and only their *applied* half is: the
-    // wants survive, so what settles again is the same request rather than a
-    // default this module would have had to assume.
-    points.forget_where(|value| value % 2 == 0);
+    // The even slots name an object that died, so both of their halves go: the
+    // belief, because the driver's binding for a deleted object is not something
+    // this layer may claim, and the want, because no call can satisfy it.
+    points.forget_object_where(|value| value % 2 == 0);
+    assert_eq!(
+        points.desired_len(),
+        2,
+        "only the slots that named the dead object lost their wants"
+    );
+
     let mut re_emitted = Vec::new();
     points
         .settle(
@@ -278,13 +285,31 @@ fn forgetting_the_matching_entries_keeps_the_others_and_every_want() {
                 Ok(())
             },
         )
-        .expect("the forgotten slots are re-established");
+        .expect("nothing left to settle is not a failure");
 
-    assert_eq!(
-        re_emitted,
-        vec![(0, 0), (2, 2)],
-        "the odd slots were still known and the even ones carried their own value back"
+    // Nothing is emitted: the two survivors are still believed and the two
+    // forgotten slots are no longer wanted.  This is the difference P1-17 turned
+    // on -- the old policy re-emitted (0, 0) and (2, 2) here and would have had
+    // Layer 1 refuse both.
+    assert!(
+        re_emitted.is_empty(),
+        "a want that names a dead object is dropped rather than re-emitted"
     );
+
+    // A later request for the same slot is a fresh want and emits normally, which
+    // is what makes dropping it safe rather than lossy.
+    points.record(0, 99, &mut counters);
+    let mut emitted = Vec::new();
+    points
+        .settle(
+            StateDomain::Buffers,
+            "bind",
+            ExecutionMode::Optimized,
+            &mut counters,
+            recording(&mut emitted),
+        )
+        .expect("the slot is unknown again, so the new want emits");
+    assert_eq!(emitted, vec![0]);
 }
 
 #[test]
@@ -303,7 +328,12 @@ fn forgetting_everything_keeps_the_wants_and_clears_only_the_beliefs() {
         )
         .expect("the first request emits");
 
+    // The mirror-wide counterpart: nothing died here, so every want survives and
+    // the next settle re-establishes it.  Together with the test above this is the
+    // negative control for the object-scoped hook -- a fix that dropped wants on
+    // every invalidation would fail here.
     points.forget_applied();
+    assert_eq!(points.desired_len(), 1, "the caller still wants it");
     let mut re_emitted = Vec::new();
     points
         .settle(
