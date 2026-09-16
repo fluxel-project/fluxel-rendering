@@ -162,7 +162,7 @@ impl GlSurfacePresentationApi for EglGlesContext {
     fn present_surface(&mut self, lease: GlSurfaceLease) -> Result<(), GlError> {
         const OP: &str = "present-surface";
         self.validate_object_context(OP, lease.image.context)?;
-        self.surface_leases.consume(lease)?;
+        self.surface_leases.consume(OP, lease)?;
         // The flip happens after the lease is consumed: a rejected swap must
         // not resurrect a consumed lease, and the caller retries with a new
         // acquisition.

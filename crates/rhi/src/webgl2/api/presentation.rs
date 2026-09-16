@@ -59,16 +59,33 @@ impl GlSurfaceLeaseBook {
             size,
         })
     }
-    pub(crate) fn validate(&self, lease: GlSurfaceLease) -> Result<(), GlError> {
+    /// Checks a lease against the current generation and the live set.
+    ///
+    /// `operation` is the caller's, not this book's. The two ways a lease is
+    /// refused -- superseded by a generation change, or consumed already --
+    /// are answered from one place and share a message because a caller cannot
+    /// act differently on them, but the operation that failed is not shared:
+    /// the book refuses a present and a publish from the same lines, so it
+    /// names whichever of them the caller was performing rather than a fixed
+    /// verb.
+    pub(crate) fn validate(
+        &self,
+        operation: &'static str,
+        lease: GlSurfaceLease,
+    ) -> Result<(), GlError> {
         (lease.generation == self.generation && self.live.contains(&lease.serial.get()))
             .then_some(())
             .ok_or_else(|| GlError::Validation {
-                operation: "present_surface",
+                operation,
                 message: "surface acquire lease is stale or already consumed".into(),
             })
     }
-    pub(crate) fn consume(&mut self, lease: GlSurfaceLease) -> Result<(), GlError> {
-        self.validate(lease)?;
+    pub(crate) fn consume(
+        &mut self,
+        operation: &'static str,
+        lease: GlSurfaceLease,
+    ) -> Result<(), GlError> {
+        self.validate(operation, lease)?;
         self.live.remove(&lease.serial.get());
         Ok(())
     }
@@ -213,6 +230,32 @@ mod tests {
     const OP: &str = "publish-surface-image";
 
     #[test]
+    fn a_refused_lease_names_the_operation_that_was_attempted() {
+        let mut book = GlSurfaceLeaseBook::new();
+        let lease = book
+            .acquire(
+                SurfaceImageId::new(stamp(), 1, 1),
+                GlSurfaceSize {
+                    width: 1,
+                    height: 1,
+                },
+            )
+            .unwrap();
+        book.consume("present-surface", lease)
+            .expect("the first consume owns the lease");
+        // A present and a publish are refused from the same lines, so the
+        // second attempt is what the diagnostic has to name: reporting the
+        // book's own fixed verb would send a caller looking at the wrong call.
+        assert_eq!(
+            book.consume("publish-surface-image", lease),
+            Err(GlError::Validation {
+                operation: "publish-surface-image",
+                message: "surface acquire lease is stale or already consumed".into(),
+            })
+        );
+    }
+
+    #[test]
     fn resize_invalidates_an_old_acquire_lease() {
         let s = stamp();
         let mut b = GlSurfaceLeaseBook::new();
@@ -226,7 +269,7 @@ mod tests {
             )
             .unwrap();
         b.invalidate_generation().unwrap();
-        assert!(b.validate(lease).is_err());
+        assert!(b.validate("present-surface", lease).is_err());
     }
 
     #[test]

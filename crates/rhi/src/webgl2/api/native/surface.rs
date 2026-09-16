@@ -82,7 +82,7 @@ impl GlSurfacePresentationApi for NativeGlProvider<'_> {
         const OP: &str = "present-surface";
         self.assert_ready(OP)?;
         self.validate_object_context(OP, lease.image.context)?;
-        self.surface.consume(lease)?;
+        self.surface.consume(OP, lease)?;
         // SAFETY: current-context contract; the lease was consumed above, and
         // flushing is valid on any live context.
         unsafe { self.gl.flush() };
@@ -109,7 +109,7 @@ impl GlSurfacePresentationApi for NativeGlProvider<'_> {
         // enforce: the acquisition ends when its frame is published, so a
         // driver failure afterwards cannot leave a lease that would publish a
         // second frame into a drawable the platform is about to swap.
-        self.surface.consume(lease)?;
+        self.surface.consume(OP, lease)?;
         let (width, height) = (lease.size.width as i32, lease.size.height as i32);
         // SAFETY: current-context contract. The source texture is live and its
         // shape was validated against the acquired extent above. The read

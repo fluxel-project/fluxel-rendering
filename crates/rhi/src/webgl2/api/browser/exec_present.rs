@@ -89,7 +89,7 @@ impl GlSurfacePresentationApi for WebGl2BrowserDiscovery {
         const OP: &str = "present-surface";
         self.assert_provider_ready(OP)?;
         self.validate_object_context(OP, lease.image.context)?;
-        self.surface.consume(lease)?;
+        self.surface.consume(OP, lease)?;
         // The browser compositor presents the canvas after the frame; this
         // flush only guarantees accepted work reached the submission queue
         // before the lease is consumed. It never implies completion.
@@ -113,7 +113,7 @@ impl GlSurfacePresentationApi for WebGl2BrowserDiscovery {
         validate_publish_source(OP, descriptor, lease)?;
         // The acquisition ends when its frame is published, so this is the
         // consume, exactly as it is in `present_surface`.
-        self.surface.consume(lease)?;
+        self.surface.consume(OP, lease)?;
         let (width, height) = (lease.size.width as i32, lease.size.height as i32);
         let scratch = self
             .raw

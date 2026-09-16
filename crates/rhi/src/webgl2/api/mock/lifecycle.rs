@@ -87,7 +87,7 @@ impl GlSurfacePresentationApi for MockGlFamilyApi {
     fn present_surface(&mut self, l: GlSurfaceLease) -> Result<(), GlError> {
         self.ready("present-surface")?;
         self.stamp("present-surface", l.image.context)?;
-        self.surface.consume(l)?;
+        self.surface.consume("present-surface", l)?;
         self.calls.push(MockCall::PresentSurface(l));
         Ok(())
     }
@@ -102,7 +102,7 @@ impl GlSurfacePresentationApi for MockGlFamilyApi {
         // and the caller can still present the frame it already has.
         let descriptor = self.texture("publish-surface-image", source)?;
         validate_publish_source("publish-surface-image", descriptor, l)?;
-        self.surface.consume(l)?;
+        self.surface.consume("publish-surface-image", l)?;
         self.calls
             .push(MockCall::PublishSurface { lease: l, source });
         Ok(())
