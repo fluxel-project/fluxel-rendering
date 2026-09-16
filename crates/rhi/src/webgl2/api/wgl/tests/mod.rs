@@ -1,17 +1,17 @@
 //! Pure-logic tests for the WGL platform provider.
 //!
 //! Everything here is a test of a pure function or of this module's own
-//! bookkeeping: the request attributes built from the required version, the
-//! agreement between that constant and the marker discovery records, the
-//! platform identity composition, the drawable-extent bound, and the
-//! currentness arbiter's own records.
+//! bookkeeping: the request attributes built from the required version, that
+//! version against the marker discovery records for it, the platform identity
+//! composition, the drawable-extent bound, and the currentness arbiter's own
+//! records.
 //!
 //! None of it executes WGL. No test in this file opens a context, swaps a
 //! buffer, or observes a driver, so nothing here is evidence that a real WGL
 //! path works on hardware; that evidence belongs to the release-gate matrix.
 
 use super::{
-    CurrentBindingArbiter, RECORDED_DESKTOP_FLOOR, REQUIRED_DESKTOP_CONTEXT, check_drawable_extent,
+    CurrentBindingArbiter, REQUIRED_DESKTOP_CONTEXT, check_drawable_extent,
     core_context_attributes, driver_identity_from, meets_required_desktop_context,
     recorded_desktop_floor, usable_wgl_proc, verify_recorded_desktop_floor, within_viewport_limit,
 };
@@ -28,24 +28,31 @@ fn requests_exact_desktop_core_43_context() {
 
 /// Pure logic: the request above, the check on the actual version and the
 /// recorded marker must all name the same version.
+///
+/// The three now read one value, so this asserts the *value* they read rather
+/// than an agreement between copies of it: 4.3 is the decision, and lowering it
+/// is a deliberate act this test refuses to let happen quietly.
 #[test]
-fn one_constant_governs_request_check_and_recorded_marker() {
+fn one_version_governs_request_check_and_recorded_marker() {
     assert_eq!(REQUIRED_DESKTOP_CONTEXT, GlVersion::new(4, 3));
     assert_eq!(recorded_desktop_floor(), "gl.desktop-context-floor=4.3");
     assert_eq!(
         recorded_desktop_floor(),
         format!(
-            "{RECORDED_DESKTOP_FLOOR}{}.{}",
+            "gl.desktop-context-floor={}.{}",
             REQUIRED_DESKTOP_CONTEXT.major, REQUIRED_DESKTOP_CONTEXT.minor
         )
     );
 }
 
-/// Pure logic: the cross-check accepts the recorded floor and rejects a
-/// snapshot recorded against any other one, which is what keeps this module's
-/// copy from drifting away from `native::discovery`'s unnoticed.
+/// Pure logic: the check accepts a snapshot carrying the recorded floor and
+/// rejects one that does not carry it at all.
+///
+/// This no longer guards against two constants drifting apart -- there is one
+/// constant -- but it still guards the snapshot in hand: a profile whose
+/// discovery never stamped the marker must not open through this provider.
 #[test]
-fn recorded_floor_cross_check_rejects_a_different_marker() {
+fn recorded_floor_check_requires_the_snapshot_to_carry_the_marker() {
     let agreeing = GlContextFlags {
         other: BTreeSet::from([recorded_desktop_floor()]),
         ..GlContextFlags::default()
@@ -56,7 +63,7 @@ fn recorded_floor_cross_check_rejects_a_different_marker() {
     assert!(verify_recorded_desktop_floor(&absent).is_err());
 
     let diverging = GlContextFlags {
-        other: BTreeSet::from([format!("{RECORDED_DESKTOP_FLOOR}6.0")]),
+        other: BTreeSet::from([String::from("gl.desktop-context-floor=6.0")]),
         ..GlContextFlags::default()
     };
     assert!(verify_recorded_desktop_floor(&diverging).is_err());

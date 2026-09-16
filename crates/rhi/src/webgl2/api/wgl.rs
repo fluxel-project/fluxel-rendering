@@ -20,6 +20,7 @@ use std::rc::Rc;
 
 use raw_window_handle::{DisplayHandle, RawDisplayHandle, RawWindowHandle, WindowHandle};
 
+use super::native;
 use super::{
     ContextStamp, GlContextFlags, GlContextLifecycle, GlDiscoverySnapshot, GlError,
     GlFamilyApi as _, GlSurfaceLeaseBook, GlVersion, OwnerThreadIdentity,
@@ -63,22 +64,18 @@ thread_local! {
 
 /// The desktop core version this provider asks a WGL driver for.
 ///
-/// The request below, the early check on the actual version string, and the
-/// check on the discovered profile all read this one constant, so the three
-/// cannot ask for, enforce, or accept different things (audit P2-12).
+/// The request in [`core_context_attributes`], the early check on the actual
+/// version string in [`meets_required_desktop_context`], the check on the
+/// discovered profile in [`WglContext::open`], and the recorded marker all read
+/// this one value, so the four cannot ask for, enforce, accept, or record
+/// different things (audit P2-12).
 ///
-/// `native::discovery` owns the same decision as its `REQUIRED_DESKTOP_VERSION`
-/// and stamps it into every desktop snapshot as a recorded marker (audit
-/// P2-12/`gl.desktop-context-floor`).  That module is private to `native` and
-/// re-exports neither the constant nor the marker builder, so this file cannot
-/// name them; `verify_recorded_desktop_floor` therefore re-reads the *recorded*
-/// marker and fails this provider's `open` if the two copies ever disagree,
-/// which turns a silent divergence into a loud one at the only place that can
-/// see both.
-const REQUIRED_DESKTOP_CONTEXT: GlVersion = GlVersion::new(4, 3);
-
-/// The prefix of the recorded desktop-floor marker in the discovery snapshot.
-const RECORDED_DESKTOP_FLOOR: &str = "gl.desktop-context-floor=";
+/// This used to be a second constant declared here beside
+/// `native::discovery`'s, with a cross-check to keep the copies honest. The
+/// copies are gone instead: `native` re-exports the constant and the marker
+/// builder for exactly this reader, which is what the audit's residual asked
+/// for, and a single value cannot drift from itself.
+const REQUIRED_DESKTOP_CONTEXT: GlVersion = native::REQUIRED_DESKTOP_VERSION;
 
 /// Failure while RHI owns a WGL context or its window surface.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -598,24 +595,22 @@ fn core_context_attributes() -> [c_int; 7] {
 
 /// The exact string [`REQUIRED_DESKTOP_CONTEXT`] is recorded as.
 ///
-/// Built here rather than read from the discovery module, because that module's
-/// marker builder is not visible outside `native`; `verify_recorded_desktop_floor`
-/// is what makes the duplication safe.
+/// Built by the module that records it, so the marker this provider requires is
+/// the marker discovery stamps rather than a second spelling of it (audit
+/// P2-12).
 fn recorded_desktop_floor() -> String {
-    format!(
-        "{RECORDED_DESKTOP_FLOOR}{}.{}",
-        REQUIRED_DESKTOP_CONTEXT.major, REQUIRED_DESKTOP_CONTEXT.minor
-    )
+    native::desktop_context_floor_marker()
 }
 
 /// Requires the floor this provider asked for to be the one discovery recorded.
 ///
-/// A desktop snapshot always carries the marker, so a missing or different one
-/// means this file and `native::discovery` disagree about what the family
-/// requires -- the two can no longer drift apart silently (audit P2-12).
-///
-/// It reads the recorded flags rather than the whole snapshot so the agreement
-/// it enforces is expressible as a pure check with no context in hand.
+/// Both sides of the comparison now come from one source, so this can no longer
+/// fail because two constants drifted apart.  It is kept because it still
+/// proves something the constant cannot: that the snapshot this provider was
+/// handed actually carries the marker, rather than being a snapshot whose
+/// profile took a path that never stamped it.  That is a fact about the value
+/// in hand, and reading the recorded flags keeps the check pure and free of any
+/// context.
 fn verify_recorded_desktop_floor(flags: &GlContextFlags) -> Result<(), WglContextError> {
     let expected = recorded_desktop_floor();
     if flags.other.contains(&expected) {

@@ -615,7 +615,12 @@ pub(crate) const REQUIRED_DESKTOP_VERSION: GlVersion = GlVersion::new(4, 3);
 /// requirement they are read against: a report showing a 4.2 context can see in
 /// the same record that the family requires 4.3, instead of the two being
 /// discovered in different places.
-pub(super) fn desktop_context_floor_marker() -> String {
+///
+/// The marker builder and the version it is built from are read by the WGL
+/// provider too, which asks for this version, enforces it on the actual version
+/// string and then requires the snapshot to carry this exact marker.  All three
+/// read one value rather than three copies of it (audit P2-12).
+pub(crate) fn desktop_context_floor_marker() -> String {
     format!(
         "gl.desktop-context-floor={}.{}",
         REQUIRED_DESKTOP_VERSION.major, REQUIRED_DESKTOP_VERSION.minor
