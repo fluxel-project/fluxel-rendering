@@ -13,8 +13,16 @@
 //! Every assertion below compares one against the other rather than restating
 //! either, so a recipe whose bindings or streams changed would fail here instead
 //! of on a device.
+//!
+//! The same seam runs over the other five recipes in [`compute`], which is a
+//! module of its own because those tests name none of the raster vocabulary.
 
 use super::*;
+
+// The compute family's cross-checks, in a module of their own because they hold
+// the other half of the same seam -- the artifact's WGSL against the body --
+// over a set of recipes no raster test names.
+mod compute;
 
 // The names the lowering's own contract does not carry, imported here rather
 // than reached through [`super`]: the parent composes the two families and no

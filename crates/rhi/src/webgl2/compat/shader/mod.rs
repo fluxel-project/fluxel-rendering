@@ -7,25 +7,28 @@
 //! module, because a new raster recipe and a new compute kernel are changes that
 //! do not touch one another:
 //!
-//! - [`raster`] lowers one [`RasterKernel`](crate::resource::RasterKernel) and a
-//!   profile into the program descriptor the provider accepts, together with the
-//!   vertex input shape that descriptor is paired with.
-//!
-//! The second family -- the five [`ComputeKernel`](crate::resource::ComputeKernel)
-//! recipes -- is not a module
-//! here yet, and what is missing is a *name*, not the lowering: a compute recipe
-//! binds a shader storage buffer and (for three of the five) a storage image,
-//! and Layer 1's
-//! [`GlShaderResourceKind`](crate::webgl2::api::GlShaderResourceKind) names
-//! neither, nor does `GlExecutableBindingLocation` carry their executable
-//! forms.  Extending that vocabulary is the step that has to come first, and it
-//! is provider work rather than lowering work: it is the two reflection loops in
-//! `api/{native,browser}/exec_shader.rs` that have to answer for the new kinds,
-//! and the answer differs between them -- a WebGL2 program cannot have one at
-//! all, while the native providers can resolve both.
+//! - [`raster`] lowers one
+//!   [`RasterKernel`](crate::resource::RasterKernel) and a profile into the
+//!   program descriptor the provider accepts, together with the vertex input
+//!   shape that descriptor is paired with.
+//! - [`compute`] lowers one [`ComputeKernel`](crate::resource::ComputeKernel)
+//!   and a profile into the same descriptor shape with a single compute stage.
+//!   It narrows the dialect rule on the way, because two of the profiles that
+//!   rule admits have no compute stage to lower onto.
 //!
 //! Nothing here links, creates, or records: a descriptor is data, and Layer 2's
 //! program cache is what makes a program out of it.
+//!
+//! # One family is re-exported here and the other is not yet
+//!
+//! A family's entry points are reached by `compat` through a re-export, because
+//! its own module is private to this one.  Only [`raster`]'s are re-exported:
+//! `compat`'s raster object is what calls them, and a re-export no non-test code
+//! uses is an `unused_imports` warning, which this crate's `-D warnings` gate
+//! turns into a failure.  The compute lowering has no consumer until the compute
+//! object that lowers through it exists, so until then it is reached as
+//! `compute::compute_program` from inside this module and from its tests, and
+//! its re-export lands with its consumer rather than ahead of it.
 //!
 //! # Why the text is authored per family rather than translated
 //!
@@ -57,12 +60,15 @@
 //! evidence and belongs to the release gate's real-context runs.  A green suite
 //! here is not that evidence and must not be read as it.
 
+mod compute;
 mod raster;
 mod text;
 
 #[cfg(test)]
 mod tests;
 
+// The raster entry points, for the reason the module doc gives; the compute
+// one is deliberately absent until its consumer exists.
 pub(super) use raster::{program, vertex_layout};
 
 use crate::webgl2::api::{
@@ -175,4 +181,28 @@ pub(super) struct UnsupportedProfile;
 impl UnsupportedProfile {
     /// The reason an adapter reports for this refusal.
     pub(super) const REASON: &'static str = "the fixed raster artifacts are lowered only for the profiles this family's dialect rule admits";
+}
+
+/// The compute lowering was asked for a profile with no compute stage.
+///
+/// A unit error for [`UnsupportedProfile`]'s reason: it is a fact about the
+/// request and not about a context, and the caller names the operation it was
+/// serving when it reports this.
+///
+/// It is a second type rather than a second variant of the first because the
+/// two refusals are different facts -- a profile the dialect rule does not admit
+/// at all, and a profile it admits whose language has no compute stage -- and a
+/// caller that wants to say which one it hit should not have to inspect a
+/// payload to find out.  Both live here rather than in the family that raises
+/// them because the parent owns the dialect rule they are both about.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct UnsupportedComputeProfile;
+
+impl UnsupportedComputeProfile {
+    /// The reason an adapter reports for this refusal.
+    ///
+    /// It names the stage rather than a version list, because the list is
+    /// `compute::supports_compute`'s and a second copy of it here would be the
+    /// thing that goes stale.
+    pub(super) const REASON: &'static str = "the fixed compute artifacts are lowered only for profiles whose shading language has a compute stage";
 }
