@@ -25,6 +25,29 @@ impl GlFramebufferApi for MockGlFamilyApi {
         d: &GlFramebufferDescriptor,
     ) -> Result<FramebufferId, GlError> {
         self.ready("create-framebuffer")?;
+        // Attachments are proven *first*, which is this verb's order in both
+        // providers, and it is deliberately not the order the pass entry point
+        // below uses.  A pass is entered over a framebuffer whose views already
+        // passed this, so there the descriptor is compared against one that is
+        // known to name live storage; a creation is where that is established,
+        // and a per-view check of a view whose allocation is not yet resolved is
+        // the check that has nothing to say.
+        //
+        // This comment used to say the reverse -- "attachments are proven last,
+        // as both providers do" -- and the cost of the recorder disagreeing was
+        // the one thing a shared oracle must not do.  For a descriptor that is
+        // bad in two ways at once the providers report the view while the
+        // recorder reported the descriptor, so a differential test could not
+        // compare them, and the sentence claiming otherwise was what kept the
+        // divergence from looking like one.
+        for v in d
+            .color_attachments
+            .iter()
+            .copied()
+            .chain(d.depth_stencil_attachment)
+        {
+            self.validate_attachment("create-framebuffer", v)?;
+        }
         d.validate(
             self.discovery.limits().max_color_attachments,
             self.discovery.limits().max_draw_buffers,
@@ -44,18 +67,6 @@ impl GlFramebufferApi for MockGlFamilyApi {
             .is_err()
         {
             return self.invalid("create-framebuffer", "multiview view count is not proved");
-        }
-        // Attachments are proven last, as both providers do and as the pass
-        // entry point already does here: a descriptor that is wrong as a
-        // descriptor is reported as one, rather than as whichever of its views
-        // happened to fail a richer per-view check first.
-        for v in d
-            .color_attachments
-            .iter()
-            .copied()
-            .chain(d.depth_stencil_attachment)
-        {
-            self.validate_attachment("create-framebuffer", v)?;
         }
         let id = FramebufferId::new(self.stamp, self.slot()?, 0);
         self.framebuffers.insert(id, d.clone());

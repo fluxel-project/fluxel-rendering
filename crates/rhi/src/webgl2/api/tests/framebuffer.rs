@@ -249,17 +249,25 @@ fn mock_renderbuffer_attaches_through_the_same_rule_sequence_as_a_texture() {
             },
             validation("attachment sample count does not match the allocation"),
         ),
-        // A second layer is refused as a view count this context never proved
-        // rather than as a layered attachment: the descriptor's multiview gate
-        // reads `layer_count` and runs before the per-view arms here. The arm's
-        // own layered rule covers the other coordinate -- `array_layer`, which
-        // the view-count gate never reads, and which is the case above.
+        // This arm reads `layer_count` too, and it runs *before* the descriptor's
+        // multiview gate in both providers and here -- so a renderbuffer view
+        // with a second layer is refused as a layered attachment and never
+        // reaches the view-count rule at all.  The comment here used to claim
+        // the reverse, and this case is why the order had to be fixed rather
+        // than merely re-read: the recorder reported the multiview gate's
+        // sentence for an input a provider answers with the arm's.  The
+        // view-count rule's own fixture is on the texture arm
+        // (`a_second_layer_on_a_texture_is_refused_as_an_unproved_view_count`),
+        // which does not read `layer_count` and so leaves the gate reachable.
         (
             GlTextureView {
                 layer_count: 2,
                 ..view
             },
-            validation("multiview view count is not proved"),
+            GlError::Unsupported {
+                operation: "create-framebuffer",
+                reason: "layered attachments are not part of this framebuffer slice",
+            },
         ),
     ];
     for (malformed, expected) in rejected {
@@ -343,6 +351,82 @@ fn mock_framebuffer_draw_buffers_selection_is_validated_and_applied() {
         })
         .expect("default selection stays legal");
     assert_ne!(stored, mrt);
+}
+
+#[test]
+fn a_second_layer_on_a_texture_is_refused_as_an_unproved_view_count() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let texture = api
+        .create_texture_resource(texture_desc(1))
+        .expect("texture");
+    // The texture arm reads `array_layer` and the dimension, and deliberately not
+    // `layer_count`: a layer count above one is the multiview case and belongs to
+    // the view-count rule, which is the only gate that knows this context proved
+    // no second view.  So this is the one route into that gate, and it is why the
+    // renderbuffer arm's twin case reports something else -- see
+    // `mock_renderbuffer_attaches_through_the_same_rule_sequence_as_a_texture`.
+    assert_eq!(
+        api.create_framebuffer(&GlFramebufferDescriptor {
+            color_attachments: vec![GlTextureView {
+                layer_count: 2,
+                ..texture_view(texture, 1)
+            }],
+            depth_stencil_attachment: None,
+            draw_buffers: vec![],
+        }),
+        Err(GlError::Validation {
+            operation: "create-framebuffer",
+            message: "multiview view count is not proved".into(),
+        })
+    );
+}
+
+#[test]
+fn a_descriptor_bad_in_two_ways_reports_the_view_at_the_creation() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let texture = api
+        .create_texture_resource(texture_desc(1))
+        .expect("texture");
+    // Both faults are real and both are reachable, so the descriptor below is
+    // one the recorder can refuse twice over.  Which refusal an operator sees is
+    // therefore decided entirely by the order the three gates run in, and that
+    // order is what this test pins.
+    let bad_selection = vec![1];
+    let live_view = texture_view(texture, 1);
+    assert_eq!(
+        api.create_framebuffer(&GlFramebufferDescriptor {
+            color_attachments: vec![live_view],
+            depth_stencil_attachment: None,
+            draw_buffers: bad_selection.clone(),
+        }),
+        Err(GlError::Validation {
+            operation: "create-framebuffer",
+            message: "invalid framebuffer descriptor".into(),
+        }),
+        "the selection fault alone is the descriptor's"
+    );
+
+    api.destroy_texture_resource(texture).expect("destroyed");
+    let error = api
+        .create_framebuffer(&GlFramebufferDescriptor {
+            color_attachments: vec![live_view],
+            depth_stencil_attachment: None,
+            draw_buffers: bad_selection,
+        })
+        .expect_err("the attachment names a texture that is no longer live");
+    // The *view* is what both providers report here, and the recorder used to
+    // report the descriptor instead -- its attachment loop ran after the
+    // descriptor gate, under a comment claiming both providers prove attachments
+    // last, which they do not.  A differential test over this descriptor would
+    // have compared two different sentences, so the order is the assertion and
+    // not the message alone.
+    assert!(
+        matches!(
+            &error,
+            GlError::Validation { message, .. } if message.contains("not live")
+        ),
+        "a creation proves its views before it proves the descriptor's shape: {error:?}"
+    );
 }
 
 #[test]
