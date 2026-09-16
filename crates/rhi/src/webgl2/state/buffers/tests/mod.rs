@@ -51,17 +51,22 @@ fn range(buffer: BufferId) -> GlStorageBufferRange {
     }
 }
 
-/// The two recorders the two roles need, and two identities live in both.
+/// The two recorders the two roles are settled through, and two identities live
+/// in both.
 ///
-/// The domain keeps one mirror per role, but the storage role's verb lives on a
-/// trait the command-backend bound does not include, so no single mock
-/// implements both bounds: the uniform role runs against a command recorder and
-/// the storage role against the optional-domain wrapper.  Both recorders are
-/// built from the same snapshot, so the *n*th allocation in each carries the
-/// same identity -- which is what lets one domain object, the thing the machine
-/// really holds, be reconciled against both bounds with one `BufferId`, and is
-/// the only way to watch a single deletion reach both roles.  The coincidence is
-/// asserted at construction rather than assumed.
+/// The domain keeps one mirror per role, and the two roles are reconciled against
+/// two *separate* backend values -- the uniform role against a plain command
+/// recorder, the storage role against the optional-domain wrapper.  That is not
+/// forced any more: the wrapper is a whole provider since the plan's P1-18
+/// completed it, so one value could serve both.  It is kept because the two
+/// traces then stay independently readable, which is what lets these tests assert
+/// that the role a deletion should *not* have touched emitted nothing, rather
+/// than inferring it from a shared trace.  Both recorders are built from the same
+/// snapshot, so the *n*th allocation in each carries the same identity -- which is
+/// what lets one domain object, the thing the machine really holds, be reconciled
+/// against both bounds with one `BufferId`, and is the only way to watch a single
+/// deletion reach both roles.  The coincidence is asserted at construction rather
+/// than assumed.
 struct Fixture {
     uniform: MockGlFamilyApi,
     storage: MockComputeStorageApi,

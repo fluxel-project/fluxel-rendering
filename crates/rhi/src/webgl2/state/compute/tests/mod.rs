@@ -24,13 +24,14 @@ use crate::webgl2::state::event::ScopedRawAccess;
 
 /// The optional-domain recorder, an invalidation sink, and two storage images.
 ///
-/// The domain keeps one mirror, and the verb it mirrors lives on a trait the
-/// command-backend bound does not include, so the reconcile runs against the
-/// optional-domain wrapper while `invalidate` -- which never reaches a backend --
-/// takes the domain contract's uniform parameter.  A command recorder is built
-/// for that parameter from the same snapshot, and both recorders allocate in the
-/// same order, so the *n*th texture in each carries the same identity; the
-/// coincidence is asserted at construction rather than assumed.
+/// The verb this domain mirrors lives on a trait the command-backend bound does
+/// not include, so the reconcile runs against the optional-domain wrapper.  The
+/// sink is a second recorder rather than the same one, so that "forgetting a
+/// binding is not a driver call" is read off a recorder nothing else writes to
+/// instead of inferred from a shared trace.  Both are built from the same
+/// snapshot and allocate in the same order, so the *n*th texture in each carries
+/// the same identity; the coincidence is asserted at construction rather than
+/// assumed.
 struct Fixture {
     api: MockComputeStorageApi,
     sink: MockGlFamilyApi,
