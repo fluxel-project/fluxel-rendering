@@ -116,11 +116,15 @@
 //!
 //! [`GlOptionalComputeBackend`]: crate::webgl2::state::GlOptionalComputeBackend
 //!
-//! A **presentation token** cannot exist here at all, and that is one of the two
-//! places where saying so with a type is stronger than saying it with a check:
-//! no acquisition can reach a token for an adapter whose capabilities report no
-//! surface, so the type is uninhabited and the executor's presentation list is
-//! empty by construction rather than by convention.
+//! A **presentation token** now exists, and it is what the acquisition slice
+//! added.  It used to be an uninhabited type and that was stronger than a check;
+//! it cannot stay one, because a type that carries an acquisition to submission
+//! has to hold the acquisition, and the acquisition is a lease and a texture.
+//! What replaces the old guarantee is narrower and worth stating exactly: the
+//! acquisition verb refuses fail-closed while `DeviceCapabilities::surface` is
+//! `None`, so no caller can reach a token without the advertisement a graph
+//! compiler would have required first, and [`surface`] says why the two land in
+//! that order rather than together.
 //!
 //! The copy-pass brackets are not among those refusals, and they are not a stub:
 //! a copy in this family is a direct command with no scope around it, so
@@ -149,6 +153,7 @@ mod region;
 mod registry;
 mod retention;
 mod submission;
+mod surface;
 mod transient;
 
 #[cfg(test)]
@@ -168,15 +173,7 @@ use compute::{ComputeDomain, NoCompute};
 use registry::GlObjectRegistry;
 use retention::{ReleaseQueue, RetainedObject};
 use submission::SubmissionLedger;
-
-/// Uninhabited presentation-token placeholder for this adapter.
-///
-/// The contract's token is produced by acquiring an image, and this adapter
-/// reports no surface in its capabilities and `present: false` on its queue, so
-/// no acquisition can reach it.  Saying that with a type is stronger than
-/// saying it with a check: the executor's presentation list is empty by
-/// construction rather than by convention.
-pub(crate) enum UnsupportedPresentationToken {}
+use surface::GlSurfaceToken;
 
 /// A GL-family state machine presented as a common execution backend.
 ///

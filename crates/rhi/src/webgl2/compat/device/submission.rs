@@ -56,7 +56,7 @@ use crate::webgl2::state::GlStateBackend;
 use super::compute::ComputeDomain;
 use super::encoder::GlCommandBuffer;
 use super::retention::GlRetentionLease;
-use super::{GlCompatibilityDevice, UnsupportedPresentationToken};
+use super::{GlCompatibilityDevice, GlSurfaceToken};
 
 /// How many terminal outcomes are remembered past the submission that made them.
 ///
@@ -283,16 +283,23 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
         &mut self,
         queue: QueueId,
         command_buffer: GlCommandBuffer,
-        presentations: Vec<PresentationSubmission<UnsupportedPresentationToken>>,
+        presentations: Vec<PresentationSubmission<GlSurfaceToken>>,
     ) -> Result<GlFenceLease, GlError> {
         self.refresh();
         // The tokens are answered first, and by being dropped.  The contract
         // requires every token to be left unconsumed on `Err` so that its `Drop`
         // performs the cancellation, and returning here does exactly that.
+        //
+        // What refuses them is the advertisement rather than a missing path: the
+        // acquisition verb exists, and it refuses for this same reason, so a
+        // token cannot have been acquired in the first place.  Saying so here
+        // anyway is what keeps the two ends of that one fact from being able to
+        // disagree, and the step that reports a surface removes both refusals
+        // together.
         if !presentations.is_empty() {
             return Err(GlError::Unsupported {
                 operation: "submit",
-                reason: "this backend reports no surface and acquires no image, so it has no path that could present one",
+                reason: "this adapter advertises no surface, so no acquired image can reach a submission to be presented",
             });
         }
         if queue != QueueId::new(0) {

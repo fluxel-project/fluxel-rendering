@@ -59,7 +59,7 @@ use super::pass;
 use super::region;
 use super::retention::{GlRetentionLease, RetainedObject};
 use super::transient;
-use super::{GlCompatibilityDevice, UnsupportedPresentationToken};
+use super::{GlCompatibilityDevice, GlSurfaceToken};
 
 impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilityDevice<B, C> {
     type Texture = TextureId;
@@ -70,7 +70,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
     type Encoder = GlEncoder;
     type CommandBuffer = GlCommandBuffer;
     type Completion = GlFenceLease;
-    type PresentationToken = UnsupportedPresentationToken;
+    type PresentationToken = GlSurfaceToken;
     type Lease = GlRetentionLease;
     type Error = GlError;
 

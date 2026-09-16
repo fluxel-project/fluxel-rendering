@@ -28,15 +28,16 @@ use harness::*;
 
 use fluxel_rendergraph::{
     BufferDesc, BufferUsage, BufferUsageKind, CompletionFailure, CompletionStatus,
-    ExecutionBackend, QueueId, TextureDimension, TextureFormat, TextureUsage, TextureUsageKind,
+    ExecutionBackend, Extent3d, QueueId, TextureDesc, TextureDimension, TextureFormat,
+    TextureUsage, TextureUsageKind,
 };
 
 use super::super::capabilities::capabilities;
 use super::transient;
 use crate::webgl2::api::tests::snapshot;
 use crate::webgl2::api::{
-    GlBufferUsage, GlExtent3d, GlFamilyApi, GlFamilyProfile, GlFenceStatus, GlFormat,
-    GlTextureDimension, GlTextureUsage, MockCall,
+    GlBufferUsage, GlError, GlExtent3d, GlFamilyApi, GlFamilyProfile, GlFenceStatus, GlFormat,
+    GlSurfaceSize, GlTextureDimension, GlTextureUsage, MockCall,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,27 +62,42 @@ fn the_adapter_reports_the_lowered_capabilities_of_its_own_context() {
 }
 
 #[test]
-fn the_one_object_type_this_adapter_still_cannot_produce_is_uninhabited() {
-    // This only compiles while the type has no variant.  A value of an
-    // uninhabited type cannot be written down anywhere, which is a stronger
-    // statement than "no verb here returns one": no implementation in any crate
-    // could hand one back, and moving the boundary means adding a variant and
-    // breaking this build rather than silently widening what the adapter accepts.
+fn the_acquisition_verb_refuses_until_a_surface_is_advertised() {
+    // This is what replaced the check that the presentation token was
+    // uninhabited, and the replacement is narrower.  It was three types when
+    // that check was written and F5 moved the last of them: a raster pipeline and
+    // a binding set became objects the renderer registers at F3(b), and
+    // `ComputePipeline` at F4(c), so each of those was consumed by the
+    // implementation it held back.  The token cannot be consumed the same way,
+    // because a type that carries an acquisition to submission has to hold the
+    // acquisition -- so what stands in place of "no value of this type can be
+    // written down" is "no caller without an advertised surface can obtain one".
     //
-    // It was three types when this test was written, and this is where the other
-    // two went: a raster pipeline and a binding set became objects the renderer
-    // registers and a frame resolves at F3(b), and `ComputePipeline` at F4(c), so
-    // each of those checks has done its job and been consumed by the
-    // implementation it was holding back.  What is left is the one slice with no
-    // object at all: this adapter reports no surface, so no acquisition can reach
-    // a presentation token, and F5 is where that boundary is kept or moved.
-    #[allow(
-        dead_code,
-        reason = "the check is that this compiles, not that it runs"
-    )]
-    fn no_presentation_token(value: super::UnsupportedPresentationToken) -> ! {
-        match value {}
-    }
+    // The two are not equally strong, and the difference is the whole of what
+    // this test is for: the type-level guarantee could not be broken by any
+    // implementation in any crate, while this one is a refusal that the step
+    // reporting a surface removes.  It is checked at the verb that would produce
+    // a token *and* at the submission that would consume one, so the two ends of
+    // that single fact cannot come to disagree.
+    let mut adapter = adapter();
+    assert!(
+        adapter.capabilities().surface.is_none(),
+        "the advertisement every refusal below is derived from, stated once"
+    );
+    assert_eq!(
+        refused(adapter.acquire_surface_texture(plain_texture(), colour_usage())),
+        "acquire-surface-texture",
+        "the acquisition is the only door to a token, and it is shut"
+    );
+    assert!(
+        !adapter
+            .machine
+            .backend()
+            .calls()
+            .iter()
+            .any(is_create_texture),
+        "and it is shut before the driver: a refused request costs no acquisition and no object"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -267,10 +283,13 @@ fn a_copy_pass_opens_and_closes_over_a_copy_with_no_scope_of_its_own() {
         calls(&mut adapter)
     );
 
-    // No presentation token can exist either, so this adapter can only ever be
-    // handed an empty presentation list.  That is a fact about the type rather
-    // than a check, and it is the reason `submit` below never sees a token.
-    let presentations: Vec<PresentationSubmission<super::UnsupportedPresentationToken>> = vec![];
+    // The token exists as a type now, and this adapter still cannot hand one
+    // out: the acquisition verb refuses while no surface is advertised, so the
+    // only presentation list this adapter can ever be handed is the empty one.
+    // That is a refusal rather than a fact about the type -- see
+    // `the_acquisition_verb_refuses_until_a_surface_is_advertised` -- and the
+    // step reporting a surface is what ends it.
+    let presentations: Vec<PresentationSubmission<super::GlSurfaceToken>> = vec![];
     assert!(presentations.is_empty());
 }
 
@@ -788,6 +807,45 @@ fn the_common_identity_separates_slots_and_generations() {
         transient::resource_identity(1, 1),
         transient::resource_identity(1, 2),
         "and one slot reused is a new object, which the generation is there to say"
+    );
+}
+
+/// One acquisition's extent, which is what a declared surface texture has to
+/// match.
+///
+/// A `GlSurfaceSize` rather than the lease it came from, because a lease carries
+/// an acquisition identity that only Layer 1's lease book can mint -- and the
+/// rule under test is about the extent, which is a plain pair of numbers.
+fn acquired(width: u32, height: u32) -> GlSurfaceSize {
+    GlSurfaceSize { width, height }
+}
+
+#[test]
+fn a_declared_surface_texture_must_be_the_extent_that_was_acquired() {
+    // The rule is called directly, on the terms this section documents: while no
+    // surface is advertised the acquisition verb refuses before it reaches any
+    // check, so the shape it would accept is not observable through the adapter.
+    const OP: &str = "acquire-surface-texture";
+    assert!(
+        super::surface::validate_surface_extent(OP, plain_texture(), acquired(4, 4)).is_ok(),
+        "the descriptor the graph declares for its surface resource is what a frame hands over"
+    );
+
+    // The one field the acquisition has an opinion about, and the disagreement a
+    // driver would otherwise settle by its own choice of what to keep.
+    let wider = TextureDesc {
+        extent: Extent3d {
+            width: 8,
+            height: 4,
+            depth: 1,
+        },
+        ..plain_texture()
+    };
+    let refused = super::surface::validate_surface_extent(OP, wider, acquired(4, 4))
+        .expect_err("refused before any driver call");
+    assert!(
+        matches!(refused, GlError::Validation { operation, .. } if operation == OP),
+        "expected a validation refusal naming the verb, got {refused:?}"
     );
 }
 

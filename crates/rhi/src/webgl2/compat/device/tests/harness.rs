@@ -358,6 +358,10 @@ pub(super) fn is_destroy_texture(call: &MockCall) -> bool {
     matches!(call, MockCall::DestroyTexture(_))
 }
 
+pub(super) fn is_create_texture(call: &MockCall) -> bool {
+    matches!(call, MockCall::CreateTexture(_))
+}
+
 pub(super) fn is_destroy_buffer(call: &MockCall) -> bool {
     matches!(call, MockCall::DestroyBuffer(_))
 }
