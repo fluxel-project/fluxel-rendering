@@ -48,11 +48,15 @@
 
 use std::collections::VecDeque;
 
-use fluxel_rendergraph::{CompletionFailure, CompletionStatus};
+use fluxel_rendergraph::{CompletionFailure, CompletionStatus, PresentationSubmission, QueueId};
 
-use crate::webgl2::api::{GlContextLifecycle, GlFenceLease};
+use crate::webgl2::api::{GlContextLifecycle, GlError, GlFenceLease, GlFenceStatus};
+use crate::webgl2::state::GlStateBackend;
 
+use super::compute::ComputeDomain;
+use super::encoder::GlCommandBuffer;
 use super::retention::GlRetentionLease;
+use super::{GlCompatibilityDevice, UnsupportedPresentationToken};
 
 /// How many terminal outcomes are remembered past the submission that made them.
 ///
@@ -244,5 +248,143 @@ pub(super) fn failure(lifecycle: GlContextLifecycle) -> CompletionFailure {
     match lifecycle {
         GlContextLifecycle::Active => CompletionFailure::ExecutionFailed,
         _ => CompletionFailure::DeviceLost,
+    }
+}
+
+/// The common completion state one GL fence report stands for.
+///
+/// Exhaustive rather than wildcarded: `GlFenceStatus` is this crate's own type
+/// and is not `#[non_exhaustive]`, so a new variant is a change to the
+/// GL-family contract and should stop this lowering rather than fall into a
+/// default.  `Failed` is the one that needs a second fact: the GL family says a
+/// fence failed and nothing more, while the contract asks which of two failures
+/// it was, and the lifecycle is where the context keeps that.
+fn completion_status(status: GlFenceStatus, lifecycle: GlContextLifecycle) -> CompletionStatus {
+    match status {
+        GlFenceStatus::Pending => CompletionStatus::Pending,
+        // The report says the signal did not happen.  Reporting a failure would
+        // be inventing one, and the contract already has a name for not knowing.
+        GlFenceStatus::Unknown => CompletionStatus::Unknown,
+        GlFenceStatus::Complete => CompletionStatus::Complete,
+        GlFenceStatus::Failed => CompletionStatus::Failed(failure(lifecycle)),
+    }
+}
+
+/// The three verbs of [`super::backend`] that read or advance this ledger, and
+/// the submission that feeds it.
+///
+/// They live here for the reason the module documentation gives: this file is
+/// where the ledger's keying, its two lists and the bound on each are argued,
+/// and a verb that drives it is that argument's executable half.  What stays in
+/// [`super::backend`] is the trait's own declaration order.
+impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
+    /// The body of [`super::backend`]'s `submit`.
+    pub(super) fn submit_commands(
+        &mut self,
+        queue: QueueId,
+        command_buffer: GlCommandBuffer,
+        presentations: Vec<PresentationSubmission<UnsupportedPresentationToken>>,
+    ) -> Result<GlFenceLease, GlError> {
+        self.refresh();
+        // The tokens are answered first, and by being dropped.  The contract
+        // requires every token to be left unconsumed on `Err` so that its `Drop`
+        // performs the cancellation, and returning here does exactly that.
+        if !presentations.is_empty() {
+            return Err(GlError::Unsupported {
+                operation: "submit",
+                reason: "this backend reports no surface and acquires no image, so it has no path that could present one",
+            });
+        }
+        if queue != QueueId::new(0) {
+            return Err(GlError::Unsupported {
+                operation: "submit",
+                reason: "this backend has one ordered command path, which the common contract names as queue zero",
+            });
+        }
+        self.release_pending()?;
+        let backend = self.machine.backend();
+        backend.validate_object_context("submit", command_buffer.context)?;
+        // `flush` makes the commands issued before it visible to the device, and
+        // `create_fence` then inserts a fence they are ordered before.  Swapping
+        // the two would make the fence report the previous submission, which is
+        // the one mistake this pair can make.
+        backend.flush()?;
+        let fence = backend.create_fence()?;
+        self.submissions.record(fence);
+        Ok(fence)
+    }
+
+    /// The body of [`super::backend`]'s `retire`.
+    pub(super) fn retire_completion(
+        &mut self,
+        completion: GlFenceLease,
+        leases: Vec<GlRetentionLease>,
+    ) {
+        match self.submissions.retire(completion, leases) {
+            // The submission is still in flight: it holds them, and whichever
+            // poll settles it releases them.
+            Retirement::Held => {}
+            // This is where they are released, and it is a real act: dropping a
+            // retention lease records its object in the release queue, and the
+            // frame's own `collect_retired` destroys it -- the call the executor
+            // makes immediately after this one.
+            Retirement::Release(leases) => drop(leases),
+        }
+    }
+
+    /// The body of [`super::backend`]'s `collect_retired`.
+    pub(super) fn collect_terminal_outcomes(&mut self) -> Result<usize, GlError> {
+        self.refresh();
+        // Every unsettled fence is polled under one borrow of the backend, and
+        // the answers are applied outside it.  A fence the backend refuses to
+        // describe keeps whatever outcome it already had, which is how a failed
+        // poll leaves a submission quarantined instead of releasing work that
+        // may still be running; the first refusal is what this call reports.
+        let fences: Vec<GlFenceLease> = self.submissions.unsettled().collect();
+        let mut observed = Vec::with_capacity(fences.len());
+        let mut first_error = None;
+        for fence in fences {
+            match self.machine.backend().poll_fence(fence) {
+                Ok(status) => observed.push((
+                    fence,
+                    completion_status(status, self.machine.backend().lifecycle()),
+                )),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        let (released, finished) = self.submissions.settle(&observed);
+        // The count is the settlements and not the leases.  Every other backend
+        // in this workspace reports how many retirement entries the poll
+        // released, and one public number with two meanings is worse than a
+        // slightly loose name.  It is a superset of theirs by construction: this
+        // ledger tracks a submission from the moment it is issued, because
+        // `completion_status` has to be answerable before anyone retires
+        // anything, while a queue of retirements can only hold what was handed
+        // over.
+        let count = finished.len();
+        // Released here rather than at the next entry point, so the frame that
+        // learned the work is done is the frame that frees it.
+        drop(released);
+        for fence in finished {
+            // A fence is a driver object and not a token.  Everything this
+            // adapter can still be asked about a settled submission comes from
+            // the recorded outcome, and the record is only ever compared against
+            // -- never polled -- so the object goes as soon as it can be asked
+            // nothing, and the key it leaves behind stays valid for exactly as
+            // long as the record does.
+            if let Err(error) = self.machine.backend().destroy_fence(fence) {
+                first_error.get_or_insert(error);
+            }
+        }
+        // Run whatever the release queue collected even when a poll or a destroy
+        // failed: the objects in it are already unreachable, and deferring them
+        // would only postpone the same call to a frame that may not come.
+        let release_error = self.release_pending().err();
+        match first_error.or(release_error) {
+            Some(error) => Err(error),
+            None => Ok(count),
+        }
     }
 }

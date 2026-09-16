@@ -3,11 +3,26 @@
 //! This is the [`ExecutionBackend`] impl for [`GlCompatibilityDevice`], and it is
 //! one `impl` block rather than two: a trait is implemented for a type in one
 //! place (E0119), so the families a reader might expect as separate files --
-//! resources and transients, passes and draws, submission -- are one file, in the
-//! trait's own declaration order.  That order is not regrouped here, because a
-//! second ordering of the same methods would be a second thing to keep true; what
-//! each verb is for is documented next to it, and the decisions behind all of
-//! them are argued in [`super`].
+//! resources and transients, passes and draws, submission -- are one block, in
+//! the trait's own declaration order.  That order is not regrouped here, because
+//! a second ordering of the same methods would be a second thing to keep true;
+//! what each verb is for is documented next to it, and the decisions behind all
+//! of them are argued in [`super`].
+//!
+//! # What this file is, and is not
+//!
+//! E0119 forces *one impl block*; it does not force *one file of bodies*, and
+//! this file used to read the first as the second -- its own module doc argued
+//! that the families "are one file" for the trait's reason, while three of its
+//! verbs were already one-line delegations into [`super::compute`].  The
+//! substance of a family's verbs belongs with that family: the raster bracket,
+//! its recipe, its vertex input and its two draws are in [`super::raster`], the
+//! compute bracket and its dispatch in [`super::compute`], the submission verbs
+//! and the completion lowering in [`super::submission`], and a recording's
+//! teardown in [`super::encoder`].  What remains here is the trait's own surface
+//! -- the declaration order, the associated types, the verbs that are a
+//! coordination body and nothing more, and the delegations -- which is the one
+//! responsibility this file can state without a conjunction.
 //!
 //! The impl carries the adapter's compute witness as a type parameter, and that
 //! is forced rather than chosen: a method cannot be stricter than its impl's own
@@ -21,8 +36,7 @@
 //!
 //! What the verbs share lives next door: the adapter's lifecycle and the
 //! transition it accepts in [`super`], the recording machinery they drive in
-//! [`super::encoder`].  The two free helpers at the foot are the lowering two of
-//! the verbs do before they touch the machine.
+//! [`super::encoder`].
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -34,70 +48,18 @@ use fluxel_rendergraph::{
     TextureCopyRegion, TextureDesc, TextureRange, TextureUsage, Viewport,
 };
 
-use crate::webgl2::api::{
-    BufferId, GlContextLifecycle, GlDrawCommand, GlError, GlFenceLease, GlFenceStatus,
-    GlIndexBinding, GlIndexedDraw, GlNonIndexedDraw, GlRenderPassDescriptor, GlVertexBufferBinding,
-    TextureId,
-};
+use crate::webgl2::api::{BufferId, GlError, GlFenceLease, TextureId};
 use crate::webgl2::state::GlStateBackend;
 
 use super::compute::ComputeDomain;
-use super::encoder::{GlCommandBuffer, GlEncoder, InstalledPipeline, OpenPass, PassShape};
-use super::failure::{self, malformed, pass_open, unsupported};
+use super::encoder::{GlCommandBuffer, GlEncoder, InstalledPipeline};
+use super::failure::malformed;
 use super::object;
 use super::pass;
 use super::region;
 use super::retention::{GlRetentionLease, RetainedObject};
-use super::submission::{Retirement, failure as submission_failure};
 use super::transient;
 use super::{GlCompatibilityDevice, UnsupportedPresentationToken};
-
-/// The instance count of a draw that asks for exactly one instance.
-///
-/// This family's instanced draw is `draw_advanced_raster`, an optional verb with
-/// per-instance offsets this adapter has no lowering for, so a range naming more
-/// than one instance is refused by name rather than silently drawn once.
-///
-/// A range naming *none* is refused as well, and by this verb rather than by the
-/// backend.  Zero instances is a legal command that rasterizes nothing, so the
-/// check belongs last -- but "last" here means inside the provider, and a zero
-/// that reached it would be reported against `draw-raster`, an operation name
-/// the frame never issued.  So the refusal is made where the name is still the
-/// caller's.  It is also a request the executor cannot produce: it refuses an
-/// empty instance range before any backend sees one, which leaves a caller that
-/// bypassed the executor as the only way to arrive here.
-fn single_instance(operation: &'static str, instances: &Range<u32>) -> Result<u32, GlError> {
-    match instances.len() {
-        0 => Err(malformed(
-            operation,
-            "a draw that runs no instance has nothing to rasterize",
-        )),
-        1 => Ok(1),
-        _ => Err(unsupported(
-            operation,
-            "this family's instanced draw is an optional verb this adapter has no lowering for, so a draw asks for at most one instance",
-        )),
-    }
-}
-
-/// The common completion state one GL fence report stands for.
-///
-/// Exhaustive rather than wildcarded: `GlFenceStatus` is this crate's own type
-/// and is not `#[non_exhaustive]`, so a new variant is a change to the
-/// GL-family contract and should stop this lowering rather than fall into a
-/// default.  `Failed` is the one that needs a second fact: the GL family says a
-/// fence failed and nothing more, while the contract asks which of two failures
-/// it was, and the lifecycle is where the context keeps that.
-fn completion_status(status: GlFenceStatus, lifecycle: GlContextLifecycle) -> CompletionStatus {
-    match status {
-        GlFenceStatus::Pending => CompletionStatus::Pending,
-        // The report says the signal did not happen.  Reporting a failure would
-        // be inventing one, and the contract already has a name for not knowing.
-        GlFenceStatus::Unknown => CompletionStatus::Unknown,
-        GlFenceStatus::Complete => CompletionStatus::Complete,
-        GlFenceStatus::Failed => CompletionStatus::Failed(submission_failure(lifecycle)),
-    }
-}
 
 impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilityDevice<B, C> {
     type Texture = TextureId;
@@ -233,68 +195,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         encoder: &mut Self::Encoder,
         descriptor: &RasterPassDescriptor<'_, Self::Texture>,
     ) -> Result<(), Self::Error> {
-        self.refresh();
-        if encoder.pass.is_some() {
-            return Err(pass_open("begin-raster"));
-        }
-        self.machine
-            .backend()
-            .validate_object_context("begin-raster", encoder.context)?;
-        let attachment = pass::admit(descriptor.colors, descriptor.depth_stencil.as_ref())?;
-        // The adapter's own record of what it created.  A texture this device did
-        // not create has no shape to lower, and the refusal names that rather
-        // than reporting a missing attachment.
-        let facts = *self.attachments.get(attachment.texture).ok_or_else(|| {
-            malformed(
-                "begin-raster",
-                "the pass attaches a texture this device did not create",
-            )
-        })?;
-        self.machine
-            .backend()
-            .validate_object_context("begin-raster", attachment.texture.context)?;
-        let views = vec![pass::view(*attachment.texture, facts, attachment.range)];
-        let colors = pass::attachments(descriptor.colors, &views)?;
-        let requested = pass::framebuffer(views, None);
-        let (framebuffer, owned) = self
-            .machine
-            .framebuffer_for(&requested)
-            .map_err(failure::into_gl_error)?;
-
-        let mut open = OpenPass::raster(facts);
-        if owned {
-            // Narrowed by hand rather than through `OpenPass::raster`, which
-            // returns a `Result`: the pass was built as a raster pass one line
-            // above, so the narrowing cannot refuse, and this is the one place in
-            // this file where an error path would have to be invented rather than
-            // reported.  The framebuffer is already derived and has no second
-            // name, so a `?` here would leak it.
-            if let PassShape::Raster(shape) = &mut open.shape {
-                shape.owned_framebuffers.push(framebuffer);
-            }
-        }
-        encoder.pass = Some(open);
-
-        let render_pass = GlRenderPassDescriptor {
-            framebuffer,
-            color_attachments: colors,
-            depth_stencil_attachment: None,
-        };
-        if let Err(error) = self
-            .machine
-            .begin_pass(render_pass)
-            .map_err(failure::into_gl_error)
-        {
-            // A pass that never opened has no `end_raster` coming: the executor
-            // returns on this error rather than bracketing the callback, so
-            // whatever this encoder came to own is destroyed here instead of by
-            // a close that will not happen.
-            if let Some(abandoned) = encoder.pass.take() {
-                let _ = self.destroy_owned(abandoned);
-            }
-            return Err(error);
-        }
-        Ok(())
+        self.open_raster_pass(encoder, descriptor)
     }
 
     /// Closes the pass this encoder has open.
@@ -311,22 +212,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
     /// would let a frame that believes it rendered see a clean result for a pass
     /// that never existed.
     fn end_raster(&mut self, encoder: &mut Self::Encoder) -> Result<(), Self::Error> {
-        self.refresh();
-        let pass = encoder.take_raster("end-raster")?;
-        let closed = self.machine.end_pass().map_err(failure::into_gl_error);
-        // Destroyed whether or not the boundary closed: these objects are
-        // unreachable either way, and a failure to end the pass is not a reason
-        // to leak them as well.  Not destroyed, though, when the context was
-        // replaced while the pass was open -- their identities belong to an epoch
-        // the backend no longer accepts, the context's own teardown already
-        // released them, and asking would turn a context loss into a second,
-        // unrelated failure on the frame's error path.
-        let released = if encoder.context == self.machine.backend().context_stamp() {
-            self.destroy_owned(pass)
-        } else {
-            Ok(())
-        };
-        closed.and(released)
+        self.close_raster_pass(encoder)
     }
 
     /// Opens the compute pass a dispatch will be recorded in.
@@ -382,18 +268,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         encoder: &mut Self::Encoder,
         pipeline: &Self::RasterPipeline,
     ) -> Result<(), Self::Error> {
-        let pass = self.open_pass(encoder, "set-raster-pipeline")?;
-        // Refused when the open pass is a compute pass, which is what the
-        // narrowing here is for: the two kinds do not share a pipeline slot, and a
-        // raster recipe recorded in a compute pass would be installed by the next
-        // dispatch.
-        pass.raster_shape("set-raster-pipeline")?;
-        // The recorded bindings are *kept*, and checked against this recipe
-        // rather than dropped with the previous one: they are facts about what
-        // the frame resolved, and a recipe that does not read them is a mistake
-        // worth reporting at the bind that made it rather than a silent discard.
-        pass.pipeline = Some(InstalledPipeline::Raster(pipeline.clone()));
-        Ok(())
+        self.record_raster_pipeline(encoder, pipeline)
     }
 
     fn set_compute_pipeline(
@@ -455,14 +330,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         buffer: &Self::Buffer,
         offset: u64,
     ) -> Result<(), Self::Error> {
-        let shape = self.raster_pass(encoder, "set-vertex-buffer")?;
-        shape.vertex.retain(|bound| bound.slot != slot);
-        shape.vertex.push(GlVertexBufferBinding {
-            slot,
-            buffer: *buffer,
-            offset,
-        });
-        Ok(())
+        self.record_vertex_buffer(encoder, slot, buffer, offset)
     }
 
     fn set_index_buffer(
@@ -472,13 +340,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         offset: u64,
         format: IndexFormat,
     ) -> Result<(), Self::Error> {
-        let shape = self.raster_pass(encoder, "set-index-buffer")?;
-        shape.index = Some(GlIndexBinding {
-            buffer: *buffer,
-            format: pass::index_format(format),
-            offset,
-        });
-        Ok(())
+        self.record_index_buffer(encoder, buffer, offset, format)
     }
 
     fn set_viewport(
@@ -513,29 +375,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         vertices: Range<u32>,
         instances: Range<u32>,
     ) -> Result<(), Self::Error> {
-        self.refresh();
-        let kernel = encoder.kernel("draw")?;
-        if pass::indexed(kernel) {
-            return Err(malformed(
-                "draw",
-                "this artifact takes its vertices from an index buffer, so it is drawn with draw-indexed",
-            ));
-        }
-        let instance_count = single_instance("draw", &instances)?;
-        if vertices.is_empty() {
-            return Err(malformed(
-                "draw",
-                "a draw with no vertices has nothing to rasterize",
-            ));
-        }
-        self.commit("draw", encoder)?;
-        self.machine
-            .backend()
-            .draw_raster(GlDrawCommand::NonIndexed(GlNonIndexedDraw {
-                first_vertex: vertices.start,
-                vertex_count: vertices.len() as u32,
-                instance_count,
-            }))
+        self.issue_draw(encoder, vertices, instances)
     }
 
     /// Draws the pass's artifact from its index buffer.
@@ -552,35 +392,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         base_vertex: i32,
         instances: Range<u32>,
     ) -> Result<(), Self::Error> {
-        self.refresh();
-        let kernel = encoder.kernel("draw-indexed")?;
-        if !pass::indexed(kernel) {
-            return Err(malformed(
-                "draw-indexed",
-                "this artifact draws its vertices without an index buffer, so it is drawn with draw",
-            ));
-        }
-        let instance_count = single_instance("draw-indexed", &instances)?;
-        if indices.is_empty() {
-            return Err(malformed(
-                "draw-indexed",
-                "an indexed draw with no indices has nothing to rasterize",
-            ));
-        }
-        if base_vertex != 0 {
-            return Err(unsupported(
-                "draw-indexed",
-                "this family adds the base vertex to each index inside the shader pipeline, which is an optional verb this adapter has no lowering for",
-            ));
-        }
-        self.commit("draw-indexed", encoder)?;
-        self.machine
-            .backend()
-            .draw_raster(GlDrawCommand::Indexed(GlIndexedDraw {
-                first_index: indices.start,
-                index_count: indices.len() as u32,
-                instance_count,
-            }))
+        self.issue_indexed_draw(encoder, indices, base_vertex, instances)
     }
 
     /// Dispatches the pass's artifact.
@@ -657,49 +469,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         &mut self,
         encoder: Self::Encoder,
     ) -> Result<Self::CommandBuffer, Self::Error> {
-        // Recording in this family happens when the commands are issued, which
-        // for a raster pass is its draws, so there is no buffer to build.  The
-        // generation the encoder was opened against is carried forward so that
-        // submission can reject a command buffer whose context has since been
-        // replaced.
-        //
-        // A pass still open is refused rather than closed silently.  This
-        // family's context runs one pass at a time and the executor brackets
-        // every pass it opens, so an open one at this point means a frame
-        // abandoned it -- and a command buffer that reported success would be a
-        // frame claiming a completed render for a boundary it never crossed.
-        //
-        // The refusal is reported, and the *pass is still unwound*: this is the
-        // last call that can reach it, and a provider whose pass is still open
-        // refuses the next `begin-pass` ("render pass already active" on both
-        // executable providers and on the recorder), which would turn one
-        // abandoned pass into a context no later frame can render on.  So the
-        // boundary is closed for the backend's sake while the frame is told what
-        // went wrong; the close's own failure is not reported, because it is
-        // cleanup for a mistake already named and a second error would replace
-        // the diagnosis with its consequence.  Whatever the pass came to own is
-        // destroyed either way, since there is no later call that could name it.
-        //
-        // Only a raster pass has a boundary to unwind, and that is a fact of its
-        // shape rather than a policy: a compute pass opened nothing in Layer 1,
-        // because this family's pass boundary is a framebuffer's.  So the unwind
-        // is conditioned on the shape, and the *message* is not: an abandoned pass
-        // is the same mistake either way, and a frame reading it should not have
-        // to work out which kind it left open.
-        let mut encoder = encoder;
-        if let Some(abandoned) = encoder.pass.take() {
-            if !abandoned.is_compute() {
-                let _ = self.machine.end_pass();
-            }
-            let _ = self.destroy_owned(abandoned);
-            return Err(malformed(
-                "finish-encoder",
-                "a pass was left open on this encoder, and a command buffer cannot be finished inside one",
-            ));
-        }
-        Ok(GlCommandBuffer {
-            context: encoder.context,
-        })
+        self.finish_recording(encoder)
     }
 
     fn submit(
@@ -708,33 +478,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
         command_buffer: Self::CommandBuffer,
         presentations: Vec<PresentationSubmission<Self::PresentationToken>>,
     ) -> Result<Self::Completion, Self::Error> {
-        self.refresh();
-        // The tokens are answered first, and by being dropped.  The contract
-        // requires every token to be left unconsumed on `Err` so that its `Drop`
-        // performs the cancellation, and returning here does exactly that.
-        if !presentations.is_empty() {
-            return Err(GlError::Unsupported {
-                operation: "submit",
-                reason: "this backend reports no surface and acquires no image, so it has no path that could present one",
-            });
-        }
-        if queue != QueueId::new(0) {
-            return Err(GlError::Unsupported {
-                operation: "submit",
-                reason: "this backend has one ordered command path, which the common contract names as queue zero",
-            });
-        }
-        self.release_pending()?;
-        let backend = self.machine.backend();
-        backend.validate_object_context("submit", command_buffer.context)?;
-        // `flush` makes the commands issued before it visible to the device, and
-        // `create_fence` then inserts a fence they are ordered before.  Swapping
-        // the two would make the fence report the previous submission, which is
-        // the one mistake this pair can make.
-        backend.flush()?;
-        let fence = backend.create_fence()?;
-        self.submissions.record(fence);
-        Ok(fence)
+        self.submit_commands(queue, command_buffer, presentations)
     }
 
     fn completion_status(&self, completion: &Self::Completion) -> CompletionStatus {
@@ -742,70 +486,10 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> ExecutionBackend for GlCompatibilit
     }
 
     fn retire(&mut self, completion: Self::Completion, leases: Vec<Self::Lease>) {
-        match self.submissions.retire(completion, leases) {
-            // The submission is still in flight: it holds them, and whichever
-            // poll settles it releases them.
-            Retirement::Held => {}
-            // This is where they are released, and it is a real act: dropping a
-            // retention lease records its object in the release queue, and the
-            // frame's own `collect_retired` destroys it -- the call the executor
-            // makes immediately after this one.
-            Retirement::Release(leases) => drop(leases),
-        }
+        self.retire_completion(completion, leases);
     }
 
     fn collect_retired(&mut self) -> Result<usize, Self::Error> {
-        self.refresh();
-        // Every unsettled fence is polled under one borrow of the backend, and
-        // the answers are applied outside it.  A fence the backend refuses to
-        // describe keeps whatever outcome it already had, which is how a failed
-        // poll leaves a submission quarantined instead of releasing work that
-        // may still be running; the first refusal is what this call reports.
-        let fences: Vec<GlFenceLease> = self.submissions.unsettled().collect();
-        let mut observed = Vec::with_capacity(fences.len());
-        let mut first_error = None;
-        for fence in fences {
-            match self.machine.backend().poll_fence(fence) {
-                Ok(status) => observed.push((
-                    fence,
-                    completion_status(status, self.machine.backend().lifecycle()),
-                )),
-                Err(error) => {
-                    first_error.get_or_insert(error);
-                }
-            }
-        }
-        let (released, finished) = self.submissions.settle(&observed);
-        // The count is the settlements and not the leases.  Every other backend
-        // in this workspace reports how many retirement entries the poll
-        // released, and one public number with two meanings is worse than a
-        // slightly loose name.  It is a superset of theirs by construction: this
-        // ledger tracks a submission from the moment it is issued, because
-        // `completion_status` has to be answerable before anyone retires
-        // anything, while a queue of retirements can only hold what was handed
-        // over.
-        let count = finished.len();
-        // Released here rather than at the next entry point, so the frame that
-        // learned the work is done is the frame that frees it.
-        drop(released);
-        for fence in finished {
-            // A fence is a driver object and not a token.  Everything this
-            // adapter can still be asked about a settled submission comes from
-            // the recorded outcome, and the record is only ever compared against
-            // -- never polled -- so the object goes as soon as it can be asked
-            // nothing, and the key it leaves behind stays valid for exactly as
-            // long as the record does.
-            if let Err(error) = self.machine.backend().destroy_fence(fence) {
-                first_error.get_or_insert(error);
-            }
-        }
-        // Run whatever the release queue collected even when a poll or a destroy
-        // failed: the objects in it are already unreachable, and deferring them
-        // would only postpone the same call to a frame that may not come.
-        let release_error = self.release_pending().err();
-        match first_error.or(release_error) {
-            Some(error) => Err(error),
-            None => Ok(count),
-        }
+        self.collect_terminal_outcomes()
     }
 }

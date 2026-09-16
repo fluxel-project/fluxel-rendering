@@ -3,11 +3,17 @@
 //! [`GlEncoder`] is what a frame records into, [`OpenPass`] is what it has
 //! recorded inside the pass it has open, and [`GlCommandBuffer`] is what is left
 //! once the recording finishes.  The methods below are the device's half of that:
-//! admitting a pass and deriving its framebuffer, the commit point a draw
-//! reaches, applying a set one binding at a time, and destroying what a pass came
-//! to own.
+//! the commit point a draw reaches, applying a set one binding at a time,
+//! destroying what a pass came to own, and finishing the recording.
 //!
-//! The recording verbs themselves are one file over, in [`super::backend`],
+//! Admitting a pass and deriving its framebuffer are the *family's* verbs and not
+//! this module's, which is a correction this doc owes: it used to claim them, and
+//! no method here has ever done either.  They are [`super::raster`]'s
+//! (`open_raster_pass` builds the framebuffer and hands it to `raster_pass` below
+//! to be selected) and [`super::compute`]'s, because a family's bracket belongs
+//! with the family's other verbs -- see [`super::raster`].
+//!
+//! The recording verbs themselves are one block over, in [`super::backend`],
 //! because they are the common contract's methods and a trait has one impl block
 //! per type.  That is why the record's fields are `pub(super)`: the verbs that
 //! write them cannot live here, and a record only a reader inside this file could
@@ -596,6 +602,62 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+
+    /// The body of [`super::backend`]'s `finish_encoder`.
+    ///
+    /// It lives here and not beside the other delegated verbs because a
+    /// recording finishing is this module's own subject -- what is left once the
+    /// recording ends, and the one call that can still reach a pass the frame
+    /// abandoned -- and because the unwind it performs is [`Self::destroy_owned`],
+    /// which is six lines above it.
+    pub(super) fn finish_recording(
+        &mut self,
+        encoder: GlEncoder,
+    ) -> Result<GlCommandBuffer, GlError> {
+        // Recording in this family happens when the commands are issued, which
+        // for a raster pass is its draws, so there is no buffer to build.  The
+        // generation the encoder was opened against is carried forward so that
+        // submission can reject a command buffer whose context has since been
+        // replaced.
+        //
+        // A pass still open is refused rather than closed silently.  This
+        // family's context runs one pass at a time and the executor brackets
+        // every pass it opens, so an open one at this point means a frame
+        // abandoned it -- and a command buffer that reported success would be a
+        // frame claiming a completed render for a boundary it never crossed.
+        //
+        // The refusal is reported, and the *pass is still unwound*: this is the
+        // last call that can reach it, and a provider whose pass is still open
+        // refuses the next `begin-pass` ("render pass already active" on both
+        // executable providers and on the recorder), which would turn one
+        // abandoned pass into a context no later frame can render on.  So the
+        // boundary is closed for the backend's sake while the frame is told what
+        // went wrong; the close's own failure is not reported, because it is
+        // cleanup for a mistake already named and a second error would replace
+        // the diagnosis with its consequence.  Whatever the pass came to own is
+        // destroyed either way, since there is no later call that could name it.
+        //
+        // Only a raster pass has a boundary to unwind, and that is a fact of its
+        // shape rather than a policy: a compute pass opened nothing in Layer 1,
+        // because this family's pass boundary is a framebuffer's.  So the unwind
+        // is conditioned on the shape, and the *message* is not: an abandoned pass
+        // is the same mistake either way, and a frame reading it should not have
+        // to work out which kind it left open.
+        let mut encoder = encoder;
+        if let Some(abandoned) = encoder.pass.take() {
+            if !abandoned.is_compute() {
+                let _ = self.machine.end_pass();
+            }
+            let _ = self.destroy_owned(abandoned);
+            return Err(malformed(
+                "finish-encoder",
+                "a pass was left open on this encoder, and a command buffer cannot be finished inside one",
+            ));
+        }
+        Ok(GlCommandBuffer {
+            context: encoder.context,
+        })
     }
 }
 

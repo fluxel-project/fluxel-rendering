@@ -144,6 +144,7 @@ mod encoder;
 mod failure;
 mod object;
 mod pass;
+mod raster;
 mod region;
 mod registry;
 mod retention;
