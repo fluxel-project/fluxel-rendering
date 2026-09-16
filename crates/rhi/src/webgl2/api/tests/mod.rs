@@ -1,7 +1,7 @@
 //! Shared fixtures for the api contract suites, plus the suites themselves.
 //!
 //! This module owns only fixture construction: the limits literal, the context
-//! builder, the format table, the context stamp, the three `CoreOrExtension`
+//! builder, the format table, the context stamp, the six `CoreOrExtension`
 //! routes the shipped rows use, and the ledger/builder/snapshot helpers built on
 //! top of them. The files below are composition entries in the same sense: each
 //! covers one contract of the module under test and owns no fixture beyond what
@@ -152,6 +152,39 @@ pub(crate) fn multiview() -> CoreOrExtension {
     }
 }
 
+/// The shipped non-indexed/indexed indirect-draw requirement: core on desktop
+/// 4.0 and embedded 3.1, with no extension route and a probe that must pass.
+pub(crate) fn indirect_draw() -> CoreOrExtension {
+    CoreOrExtension {
+        desktop_core: Some(GlVersion::new(4, 0)),
+        embedded_core: Some(GlVersion::new(3, 1)),
+        extension: None,
+        extension_requires_probe: false,
+    }
+}
+
+/// The shipped indirect-dispatch requirement, which is core one desktop version
+/// later than the draw half.
+pub(crate) fn indirect_dispatch() -> CoreOrExtension {
+    CoreOrExtension {
+        desktop_core: Some(GlVersion::new(4, 3)),
+        embedded_core: Some(GlVersion::new(3, 1)),
+        extension: None,
+        extension_requires_probe: false,
+    }
+}
+
+/// The shipped multi-draw-indirect requirement: desktop-only, and a row whose
+/// probe no provider answers.
+pub(crate) fn multi_draw_indirect() -> CoreOrExtension {
+    CoreOrExtension {
+        desktop_core: Some(GlVersion::new(4, 3)),
+        embedded_core: None,
+        extension: None,
+        extension_requires_probe: false,
+    }
+}
+
 /// A ledger that has reported exactly these raw runtime names.
 pub(crate) fn ledger(names: &[&str]) -> GlExtensionSet {
     let mut extensions = GlExtensionSet::default();
@@ -278,6 +311,40 @@ pub(crate) fn compute_storage_snapshot(storage_image: bool) -> GlDiscoverySnapsh
             GlOperationProbe::Passed,
         );
     }
+    builder.build()
+}
+
+/// A desktop context that resolved exactly one indirect-command row.
+///
+/// The route is the shipped one, restated here for the reason the compute,
+/// batch and multiview routes above are: a fixture is representative only when
+/// it builds the ledger the shipped discovery would have built, and a row
+/// enabled by a route no provider resolves would prove a state the shipped path
+/// cannot reach.
+///
+/// The probe answer is the caller's, because it is the one half of a row's
+/// evidence the shipped path does not answer the same way for all three rows.
+/// A row is enabled by its evidence *and* its limits *and* a passed probe, so a
+/// caller that passes `NotRun` is asking for the fail-closed answer.
+pub(crate) fn indirect_snapshot(
+    capability: GlCapability,
+    operation_probe: GlOperationProbe,
+) -> GlDiscoverySnapshot {
+    let route = match capability {
+        GlCapability::IndirectDraw => indirect_draw(),
+        GlCapability::IndirectDispatch => indirect_dispatch(),
+        GlCapability::MultiDrawIndirect => multi_draw_indirect(),
+        other => panic!("{other:?} is not an indirect-command row"),
+    };
+    let mut builder = GlDiscoveryBuilder::new(
+        stamp(ContextEpoch::INITIAL),
+        context(GlFamilyProfile::Desktop { major: 4, minor: 3 }),
+        GlExtensionSet::default(),
+        desktop_limits(),
+        formats(false),
+    )
+    .expect("desktop discovery");
+    builder.resolve(capability, route, operation_probe);
     builder.build()
 }
 

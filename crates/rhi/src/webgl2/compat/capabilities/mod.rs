@@ -16,7 +16,7 @@
 //! compiler, so a capability description that could error would only move that
 //! sameness into a second place.
 //!
-//! Three fields are more than a copy, and each is a decision worth reading:
+//! Four fields are more than a copy, and each is a decision worth reading:
 //!
 //! - **The compute workgroup count is reported only where dispatch was proved.**
 //!   `GlLimits::max_compute_work_group_count` is queried on every accepted
@@ -34,6 +34,22 @@
 //!   adapter has none until the presentation slice attaches one.  Its absence is
 //!   a fact about this slice and not an omission, and it is the same reason the
 //!   queue reports `present: false`.
+//! - **The buffer row is two decisions rather than a copy, and the indirect half
+//!   of it has no consumer.**  The snapshot's one storage fact carries no
+//!   direction, so it is reported in both, and the indirect flag is the union of
+//!   three separate command-path rows.  What that union *authorizes* is the part
+//!   worth reading: `ExecutionBackend` declares no indirect verb and neither
+//!   command sink has one, so nothing in this adapter can issue an indirect draw
+//!   or dispatch, and the flag authorizes a pass's *declaration* that a buffer is
+//!   read as an indirect command source -- the resource role and the hazard --
+//!   rather than a command.  The refusal a caller meets is therefore the
+//!   compiler's, at `rendergraph/src/compile/validation/capabilities.rs`, and it
+//!   arrives exactly where this flag is false.  A context that proved indirect
+//!   really does permit the role, so answering false would misdescribe the
+//!   context to fix a gap in the layer above it; the ledger's indirect row has no
+//!   consumer in this contract, which is a statement about the contract.  Layer
+//!   2's `GlOptionalIndirectBackend` (`webgl2/state/backend.rs`) is the seam the
+//!   row is waiting for, and no entry point is bounded on it yet.
 //!
 //! What is deliberately *not* claimed is `transient_resources`.  Those three rows
 //! are reuse facts -- pooling, in-frame reuse and aliasing -- and this adapter
@@ -65,6 +81,18 @@ pub(crate) fn capabilities(snapshot: &GlDiscoverySnapshot) -> DeviceCapabilities
     // three indirect domains proves the buffer half.  They are separate
     // capabilities because they are separate command paths, not because they
     // read different buffers.
+    //
+    // The third term is unreachable through the shipped providers today, and is
+    // kept anyway.  `ProbeReport::multi_draw_indirect` is
+    // `ProbeAnswer::Unavailable` at its only construction site, with the reason
+    // recorded there -- glow 0.18 binds no entry point for it -- and
+    // `passed_probes_enable_core_proved_capabilities_on_desktop_46` asserts the
+    // row stays disabled even when every probe passes.  This union reads the
+    // *ledger*, and the ledger has the row, so a provider that one day answers
+    // it should not need this line changed as well.  No test asserts the term,
+    // because the state it would assert is one no provider can produce; the test
+    // that covers this function's live rows is
+    // `a_proved_indirect_command_row_reports_indirect_buffer_reads`.
     let indirect = proved.supports(GlCapability::IndirectDraw)
         || proved.supports(GlCapability::IndirectDispatch)
         || proved.supports(GlCapability::MultiDrawIndirect);

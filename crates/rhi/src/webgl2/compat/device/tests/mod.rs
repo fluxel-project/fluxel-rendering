@@ -722,6 +722,22 @@ fn the_derived_usage_is_wider_than_the_request_where_the_gl_set_is_coarser() {
     );
 }
 
+/// The indirect role is read back off the one bit that records it.
+///
+/// The other direction is already covered -- the totality test below lowers a
+/// request containing `Indirect` and asserts the bit it produced -- while this
+/// arm of `buffer_usage` had no assertion at all, so a derivation that dropped
+/// it would have left the round trip one-way without any test noticing.
+#[test]
+fn an_indirect_buffer_reports_the_role_its_bit_stands_for() {
+    let held = transient::buffer_usage(GlBufferUsage::INDIRECT);
+    assert_eq!(
+        held,
+        BufferUsage::from_kinds([BufferUsageKind::Indirect]),
+        "the bit is one role, and the object holds nothing beside it"
+    );
+}
+
 #[test]
 fn every_common_buffer_operation_has_a_gl_role() {
     // The buffer side of the lowering is total on the operation set.  This is

@@ -9,10 +9,12 @@
 
 use super::*;
 use crate::webgl2::api::tests::{
-    builder, compute_storage_snapshot, desktop_limits, formats, limits, snapshot,
-    snapshot_with_fact, snapshot_with_formats,
+    builder, compute_storage_snapshot, desktop_limits, formats, indirect_snapshot, limits,
+    snapshot, snapshot_with_fact, snapshot_with_formats,
 };
-use crate::webgl2::api::{GlExtensionSet, GlFamilyProfile, GlFormatEvidence, GlFormatResourceKind};
+use crate::webgl2::api::{
+    GlExtensionSet, GlFamilyProfile, GlFormatEvidence, GlFormatResourceKind, GlOperationProbe,
+};
 
 /// The one queue a GL-family context has.
 ///
@@ -87,6 +89,56 @@ fn a_context_that_proved_compute_and_storage_reports_both() {
         // other would describe a distinction nothing observed.
         BufferCapabilities::new(true, true, false),
         "storage buffers reported, indirect still not proved"
+    );
+}
+
+/// Both indirect rows the shipped providers can pass reach the buffer flag.
+///
+/// The flag is the *union* of three ledger rows and nothing in the suite would
+/// have noticed if it collapsed to one term or to `false`: before this test the
+/// field was asserted `false` twice and never `true`.  Two rows are exercised
+/// rather than one because they are the two a shipped provider can enable --
+/// the draw half is core one desktop version before the dispatch half, so a
+/// lowering wired to either row alone is a real possibility rather than a
+/// hypothetical one.
+#[test]
+fn a_proved_indirect_command_row_reports_indirect_buffer_reads() {
+    for (row, name) in [
+        (GlCapability::IndirectDraw, "draw"),
+        (GlCapability::IndirectDispatch, "dispatch"),
+    ] {
+        let capabilities = capabilities(&indirect_snapshot(row, GlOperationProbe::Passed));
+        assert!(
+            capabilities.buffers.indirect_read,
+            "a proved indirect {name} reads its parameters from a buffer"
+        );
+        assert!(
+            !capabilities.buffers.storage_read && !capabilities.buffers.storage_write,
+            "and proves nothing about the storage rows, which are different rows"
+        );
+    }
+}
+
+/// The fail-closed direction, on the one indirect row no provider can pass.
+///
+/// `ProbeReport::multi_draw_indirect` is `ProbeAnswer::Unavailable` at its only
+/// construction site (`api/native/probes/mod.rs`, with the reason recorded
+/// there: glow 0.18 binds no entry point for it), and
+/// `passed_probes_enable_core_proved_capabilities_on_desktop_46` asserts the row
+/// stays disabled even when every probe passes.  So this fixture is the row's
+/// reachable state, and the assertion is what the compiler reads from it: a
+/// graph may not declare an indirect buffer read here, because nothing in this
+/// release could honour one.
+#[test]
+fn an_indirect_row_without_a_passed_probe_reports_no_indirect_buffer_read() {
+    let capabilities = capabilities(&indirect_snapshot(
+        GlCapability::MultiDrawIndirect,
+        GlOperationProbe::NotRun,
+    ));
+    assert_eq!(
+        capabilities.buffers,
+        BufferCapabilities::new(false, false, false),
+        "the route and the count limit are both satisfied, and the row still does not enable"
     );
 }
 
