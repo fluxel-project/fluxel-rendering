@@ -15,3 +15,9 @@ pub(super) mod api;
     reason = "Layer 2 declarations intentionally land before the state domains that consume them"
 )]
 pub(super) mod state;
+
+#[allow(
+    dead_code,
+    reason = "Layer 3 declarations intentionally land before the adapter that consumes them"
+)]
+pub(super) mod compat;
