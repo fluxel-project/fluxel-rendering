@@ -104,27 +104,21 @@ pub(super) fn validate_surface_extent(
 pub(crate) struct GlSurfaceToken {
     /// The acquisition this token ends.
     ///
-    /// Read by the verb that presents, which does not exist yet: this landing is
-    /// the path an acquisition takes, and the capability that would let a graph
-    /// compile a present root is deliberately still absent.  See the module
-    /// documentation of [`super`] for why the two land in that order.
-    #[allow(
-        dead_code,
-        reason = "the consuming verb is the next step; the path lands before the capability that reaches it"
-    )]
-    lease: GlSurfaceLease,
+    /// Taken by the verb that presents: `publish_surface_image` consumes it
+    /// through Layer 1's lease book, which is what makes one acquisition one
+    /// present rather than a promise.
+    pub(super) lease: GlSurfaceLease,
     /// The texture created for that acquisition's image.
-    #[allow(
-        dead_code,
-        reason = "the consuming verb is the next step; the path lands before the capability that reaches it"
-    )]
-    texture: TextureId,
+    pub(super) texture: TextureId,
     /// This token's share of the texture's lifetime.
     ///
     /// Never read, and that is the whole of what it does: releasing the object
-    /// is the work its `Drop` performs. The leading underscore is how a field
-    /// that exists for its destructor is spelled, `dead_code` included.
-    _retention: GlRetentionLease,
+    /// is the work its `Drop` performs.  The submission hands it to the
+    /// submission ledger rather than dropping it here, so the source outlives
+    /// the frame that presented it -- see
+    /// [`submit_commands`](super::submission) for why that is the weaker of the
+    /// two orderings and the one the contract asks for.
+    pub(super) retention: GlRetentionLease,
 }
 
 impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
@@ -147,12 +141,14 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     ) -> Result<Option<BoundSurfaceTexture<TextureId, GlRetentionLease, GlSurfaceToken>>, GlError>
     {
         const OP: &str = "acquire-surface-texture";
-        // Fail-closed on the capability rather than on a state flag: the
-        // advertisement is what a graph compiler consults, so a caller that
-        // reached this verb without one could not have compiled a present root
-        // in the first place.  Keeping the check here is what lets this landing
-        // add the path without also widening what a graph may ask for, and the
-        // next step removes it in the same change that reports a surface.
+        // Fail-closed on the capability rather than on a state flag, and this
+        // check is the *other half* of the same fact rather than a placeholder:
+        // the advertisement is what a graph compiler consults, so a context whose
+        // drawable was never read has no surface, no graph can compile a present
+        // root against it, and there is no format this verb could describe the
+        // acquired image with.  A caller that reached this verb anyway is told so
+        // here instead of one frame later, at the present root, where the reason
+        // would blame the graph.
         if self.capabilities.surface.is_none() {
             return Err(GlError::Unsupported {
                 operation: OP,
@@ -205,7 +201,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
             presentation: GlSurfaceToken {
                 lease,
                 texture: physical,
-                _retention: retention,
+                retention,
             },
         }))
     }

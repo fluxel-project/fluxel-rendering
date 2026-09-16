@@ -15,7 +15,7 @@ use super::super::{
     GlContextInfo, GlContextLifecycle, GlDiscoveryBuilder, GlDiscoveryError, GlDiscoverySnapshot,
     GlError, GlExtensionSet, GlFamilyApi as _, GlFamilyProfile, GlFenceLeaseBook, GlFiniteF32,
     GlFormat, GlFormatTable, GlKnownExtension, GlLimits, GlOperationProbe, GlPixelStoreState,
-    GlSurfaceLeaseBook, GlTextureDesc, OwnerThreadIdentity, TextureId,
+    GlSurfaceFacts, GlSurfaceLeaseBook, GlTextureDesc, OwnerThreadIdentity, TextureId,
 };
 use super::exec_multidraw::BrowserMultiDraw;
 use super::exec_timer::{self, BrowserTimerQuery};
@@ -187,6 +187,15 @@ impl WebGl2BrowserDiscovery {
         super::renderbuffer_facts::record_facts(&raw, &limits, &mut formats)?;
         let mut builder = GlDiscoveryBuilder::new(stamp, context, extensions, limits, formats)
             .map_err(discovery_error)?;
+        // The drawing buffer is this family's FBO 0, and it is observed through
+        // the same drawing-buffer parameters the native path reads. The answers
+        // depend on the context attributes the canvas was created with, so they
+        // are read rather than assumed from the specification: a context with no
+        // alpha really does report a zero alpha width, and a presenter that
+        // assumed RGBA would claim a format this context does not have. A
+        // parameter that cannot be read leaves the facts unavailable, which is
+        // the answer that rejects work rather than the one that guesses.
+        builder.surface_facts(drawing_buffer_facts(&raw));
 
         // Timer queries are the sole currently normalized browser extension
         // domain, and their oracle is the complete, callable entry-point set
@@ -738,6 +747,39 @@ fn string_parameter(
         .map_err(|value| js_error("getParameter", value))?
         .as_string()
         .ok_or_else(|| driver("getParameter", &format!("{name} was not a string")))
+}
+
+/// Reads the drawing buffer's colour component widths.
+///
+/// One observation, and the typed half of what the native path reports as
+/// `gl.surface-color-bits`. The browser records none of the `gl.surface-*` keys:
+/// that channel exists on the native side to name *why* an observation failed,
+/// which is a distinction the typed value deliberately does not carry, and a
+/// second renderer with no reasons to report would be a reporting channel with
+/// nothing in it.
+///
+/// A parameter that cannot be read answers [`GlSurfaceFacts::Unavailable`] rather
+/// than failing discovery, which is the native path's rule for the same
+/// observation: a drawable a presenter cannot describe is a missing surface, not
+/// a context that failed to be discovered. The depth, stencil, sample-buffer and
+/// sample-count parameters the native path also reads are left to it, because
+/// they are read for keys this side does not write and for no field of the typed
+/// value.
+fn drawing_buffer_facts(raw: &WebGl2RenderingContext) -> GlSurfaceFacts {
+    const PARAMETERS: [(u32, &str); 4] = [
+        (WebGl2RenderingContext::RED_BITS, "RED_BITS"),
+        (WebGl2RenderingContext::GREEN_BITS, "GREEN_BITS"),
+        (WebGl2RenderingContext::BLUE_BITS, "BLUE_BITS"),
+        (WebGl2RenderingContext::ALPHA_BITS, "ALPHA_BITS"),
+    ];
+    let mut color_bits = [0u32; PARAMETERS.len()];
+    for (slot, (pname, name)) in color_bits.iter_mut().zip(PARAMETERS) {
+        match u32_parameter(raw, pname, name) {
+            Ok(value) => *slot = value,
+            Err(_) => return GlSurfaceFacts::Unavailable,
+        }
+    }
+    GlSurfaceFacts::Observed { color_bits }
 }
 
 fn u32_parameter(

@@ -48,9 +48,10 @@ use super::super::compute::WithCompute;
 use super::super::object::{Bindings, ComputePipeline, Recipe};
 use super::super::retention::GlRetentionLease;
 use crate::resource::{ComputeKernel, RasterKernel};
-use crate::webgl2::api::tests::{compute_storage_snapshot, snapshot};
+use crate::webgl2::api::tests::{compute_storage_snapshot, snapshot, snapshot_with_surface};
 use crate::webgl2::api::{
-    BufferId, GlError, GlFamilyProfile, MockCall, MockComputeStorageApi, MockGlFamilyApi, TextureId,
+    BufferId, GlError, GlFamilyProfile, GlSurfacePresentationApi as _, GlSurfaceSize, MockCall,
+    MockComputeStorageApi, MockGlFamilyApi, TextureId,
 };
 
 /// The adapter under test, over the WebGL2 snapshot.
@@ -69,6 +70,35 @@ pub(super) fn adapter() -> Adapter {
     GlCompatibilityDevice::new(MockGlFamilyApi::from_discovery(snapshot(
         GlFamilyProfile::WebGl2,
     )))
+}
+
+/// The adapter over a context whose drawable was read as four eight-bit channels.
+///
+/// The only fixture here whose device advertises a surface, and therefore the
+/// only one that can mint a presentation token at all: the acquisition verb
+/// refuses while the advertisement is absent, so every other suite in this
+/// module is describing a device that has no presentation path to test.
+///
+/// The mock's drawable starts one pixel square and the acquisition checks the
+/// declared extent against the acquired one, so it is resized to the extent the
+/// shared texture fixtures use.  That goes through the provider rather than
+/// through this adapter because a surface's extent is the Host's fact in the
+/// shipped arrangement -- the adapter consumes acquisitions, it does not size
+/// them.
+pub(super) fn surface_adapter() -> Adapter {
+    let mut adapter =
+        GlCompatibilityDevice::new(MockGlFamilyApi::from_discovery(snapshot_with_surface([
+            8, 8, 8, 8,
+        ])));
+    adapter
+        .machine
+        .backend()
+        .resize_surface(GlSurfaceSize {
+            width: 4,
+            height: 4,
+        })
+        .expect("the mock drawable is resized before any acquisition");
+    adapter
 }
 
 /// The compute-capable adapter, over the one snapshot that proved all three

@@ -159,6 +159,43 @@ impl GlCapabilitySet {
     }
 }
 
+/// The drawable behind this context, as the one fact a presenter acts on.
+///
+/// FBO 0 has no `GlFormatTable` row, so the surface the platform flips is the one
+/// piece of format evidence no other record carries, and a presenter needs it to
+/// know what it is presenting.  The `gl.surface-*` keys that report it are a
+/// formatted channel; this is the acting one, and it exists because the consumer
+/// that arrived -- presentation, which must name the formats a graph may compile
+/// a present root against -- needs component widths as numbers, and would
+/// otherwise be parsing a string it wrote itself.
+///
+/// The keys stay, and both renderings come from one observation rather than one
+/// being read back out of the other: a reader already depends on the keys, and a
+/// key/value pair cannot become a struct field without breaking that reader.  The
+/// *reason* an observation failed stays with the keys for the same reason -- this
+/// value answers "can a presenter claim a format here", and the answer is the
+/// same for every way it cannot.
+///
+/// It holds the component widths and nothing else, because they are what the
+/// claim is made of: the drawable's depth, stencil and sample counts are observed
+/// and stay in the keys, and no field of the common contract's surface row is
+/// derived from them.  A field nothing reads is not a fact this value carries, it
+/// is a fact this value would have to keep agreeing with the keys about.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum GlSurfaceFacts {
+    /// Widths read from the bound draw framebuffer, in RGBA order.
+    Observed {
+        /// Bits per colour component, in RGBA order.
+        color_bits: [u32; 4],
+    },
+    /// Nothing was observed, so no format may be claimed.
+    ///
+    /// The default, and deliberately so: a builder that was never told what the
+    /// drawable is reports no surface, which is the answer that rejects work.
+    #[default]
+    Unavailable,
+}
+
 /// The only construction path for a discovery snapshot.
 #[derive(Debug)]
 pub(crate) struct GlDiscoveryBuilder {
@@ -168,6 +205,7 @@ pub(crate) struct GlDiscoveryBuilder {
     limits: GlLimits,
     formats: GlFormatTable,
     capabilities: GlCapabilitySet,
+    surface_facts: GlSurfaceFacts,
 }
 impl GlDiscoveryBuilder {
     /// Binds all raw observations to one exact context generation before resolution.
@@ -195,7 +233,17 @@ impl GlDiscoveryBuilder {
             limits,
             formats,
             capabilities: GlCapabilitySet::default(),
+            surface_facts: GlSurfaceFacts::Unavailable,
         })
+    }
+    /// Binds what the provider observed about the drawable.
+    ///
+    /// Separate from [`Self::new`] because the drawable is not part of what makes
+    /// a builder constructible -- a context is discovered before anything asks
+    /// what its default framebuffer looks like -- and because leaving it unset
+    /// has to keep meaning what it means today: no surface is claimed.
+    pub(crate) fn surface_facts(&mut self, facts: GlSurfaceFacts) {
+        self.surface_facts = facts;
     }
     /// Resolves capability evidence exclusively from this builder's bound context and extensions.
     pub(crate) fn resolve(
@@ -220,6 +268,7 @@ impl GlDiscoveryBuilder {
             limits: self.limits,
             formats: self.formats,
             capabilities: self.capabilities,
+            surface_facts: self.surface_facts,
         }
     }
 }
@@ -233,6 +282,7 @@ pub(crate) struct GlDiscoverySnapshot {
     limits: GlLimits,
     formats: GlFormatTable,
     capabilities: GlCapabilitySet,
+    surface_facts: GlSurfaceFacts,
 }
 impl GlDiscoverySnapshot {
     /// Returns the exact context generation that authorized this snapshot.
@@ -258,6 +308,13 @@ impl GlDiscoverySnapshot {
     /// Returns normalized capability evidence.
     pub(crate) fn capabilities(&self) -> &GlCapabilitySet {
         &self.capabilities
+    }
+    /// Returns what the provider observed about the drawable.
+    ///
+    /// The typed reading of the `gl.surface-*` context flags, recorded from the
+    /// same observation.  See [`GlSurfaceFacts`] for why both exist.
+    pub(crate) fn surface_facts(&self) -> GlSurfaceFacts {
+        self.surface_facts
     }
 
     /// Returns how many views one attachment of a pass may serve here.

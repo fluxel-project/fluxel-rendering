@@ -50,7 +50,7 @@ pub(crate) use copy::*;
 
 pub(crate) use discovery::{
     GlCapability, GlCapabilityFact, GlCapabilitySet, GlContextFlags, GlContextInfo,
-    GlDiscoveryBuilder, GlDiscoveryError, GlDiscoverySnapshot, GlOperationProbe,
+    GlDiscoveryBuilder, GlDiscoveryError, GlDiscoverySnapshot, GlOperationProbe, GlSurfaceFacts,
 };
 pub(crate) use error::{GlContextLifecycle, GlError};
 pub(crate) use extensions::{

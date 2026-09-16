@@ -12,7 +12,7 @@ use super::super::{
     ContextStamp, CoreOrExtension, GlCapability, GlContextFlags, GlContextInfo, GlDiscoveryBuilder,
     GlDiscoveryError, GlDiscoverySnapshot, GlExtensionSet, GlFamilyProfile, GlFiniteF32, GlFormat,
     GlFormatCapabilities, GlFormatEvidence, GlFormatResourceKind, GlFormatTable, GlKnownExtension,
-    GlLimits, GlOperationProbe, GlVersion,
+    GlLimits, GlOperationProbe, GlSurfaceFacts, GlVersion,
 };
 use super::probes::{
     GlowProbes, NativeGlProbes, ProbeAnswer, ProbeReport, record_extension_probes,
@@ -271,7 +271,8 @@ fn discover_with_query_pair(
     // the snapshot's only durable free-form fact set. It is an observation about
     // the surface rather than about the context, and it is recorded at all
     // because FBO 0 has no `GlFormatTable` row that could carry it.
-    flags.other.extend(surface_facts(query));
+    let (surface, surface_strings) = surface_facts(query);
+    flags.other.extend(surface_strings);
     // The desktop requirement is recorded next to the observed facts so a report
     // that shows a 4.2 context can see, in the same record, that this family
     // requires 4.3 (audit P2-12). It is stamped only where it applies: the
@@ -299,6 +300,9 @@ fn discover_with_query_pair(
         formats,
     )
     .map_err(NativeDiscoveryError::Snapshot)?;
+    // The typed half of the observation above, recorded beside the strings it
+    // came out with rather than read back out of them.
+    builder.surface_facts(surface);
 
     // Capability enablement: a resolved core-or-extension route is necessary
     // but never sufficient. Every optional command domain also records the
@@ -474,15 +478,24 @@ fn context_flags(
 /// profile exposes a portable query for the default framebuffer's encoding, and
 /// a guess between linear and sRGB is a double-gamma error rather than a missing
 /// fact. It is recorded as unavailable instead.
-fn surface_facts(query: &impl NativeGlQuery) -> BTreeSet<String> {
+///
+/// Both renderings come out of this one function and one set of queries. The
+/// strings are the reporting channel and the [`GlSurfaceFacts`] value is the
+/// acting one; deriving either from the other would put a formatted marker back
+/// on the path a consumer acts on, which is what typing the value is for. The
+/// narrowing to the value's own widths is part of that: a negative answer cannot
+/// be a width, so it fails the observation the same way a missing component does,
+/// and neither rendering is written for it.
+fn surface_facts(query: &impl NativeGlQuery) -> (GlSurfaceFacts, BTreeSet<String>) {
     let mut facts = BTreeSet::new();
+    let unavailable = |facts: BTreeSet<String>| (GlSurfaceFacts::Unavailable, facts);
     let Some(binding) = query.integer(glow_const::DRAW_FRAMEBUFFER_BINDING) else {
         facts.insert("gl.surface-facts-unavailable=unqueried".into());
-        return facts;
+        return unavailable(facts);
     };
     if binding != 0 {
         facts.insert("gl.surface-facts-unavailable=draw-framebuffer-bound".into());
-        return facts;
+        return unavailable(facts);
     }
     // The whole set is required together: a partial surface format cannot decide
     // anything a presenter would ask it, so a failed component leaves the record
@@ -509,8 +522,27 @@ fn surface_facts(query: &impl NativeGlQuery) -> BTreeSet<String> {
     .map(|token| query.integer(token))
     else {
         facts.insert("gl.surface-facts-unavailable=query-failed".into());
-        return facts;
+        return unavailable(facts);
     };
+    // The typed value is unsigned by construction: a component width and a sample
+    // count are never negative, so a negative answer is the driver answering a
+    // different question than the one asked. It fails the whole observation for the
+    // same reason a missing component does -- narrowing it unchecked would wrap into
+    // a huge width, and a huge width is a format claim rather than a missing fact.
+    let mut widths = [0_u32; 7];
+    for (slot, value) in widths
+        .iter_mut()
+        .zip([red, green, blue, alpha, depth, stencil, samples])
+    {
+        match u32::try_from(value) {
+            Ok(width) => *slot = width,
+            Err(_) => {
+                facts.insert("gl.surface-facts-unavailable=query-failed".into());
+                return unavailable(facts);
+            }
+        }
+    }
+    let [red, green, blue, alpha, depth, stencil, samples] = widths;
     facts.insert(format!(
         "gl.surface-color-bits={red},{green},{blue},{alpha}"
     ));
@@ -519,7 +551,12 @@ fn surface_facts(query: &impl NativeGlQuery) -> BTreeSet<String> {
     facts.insert(format!("gl.surface-sample-buffers={sample_buffers}"));
     facts.insert(format!("gl.surface-samples={samples}"));
     facts.insert("gl.surface-srgb=unavailable".into());
-    facts
+    (
+        GlSurfaceFacts::Observed {
+            color_bits: [red, green, blue, alpha],
+        },
+        facts,
+    )
 }
 
 pub(super) fn required_string(

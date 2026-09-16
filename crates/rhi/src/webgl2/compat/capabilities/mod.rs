@@ -30,10 +30,17 @@
 //!   carried by `attachment_sample_counts`, the only field shaped for it.  The
 //!   fold does not need to prefer the single-sample entry: a multisample entry
 //!   records its own `sampled: false`, so an `any` fold is already honest.
-//! - **There is no surface.**  `DeviceCapabilities::surface` is `Option`, and this
-//!   adapter has none until the presentation slice attaches one.  Its absence is
-//!   a fact about this slice and not an omission, and it is the same reason the
-//!   queue reports `present: false`.
+//! - **There is a surface where the drawable was read, and no surface where it
+//!   was not.**  `DeviceCapabilities::surface` is `Option`, and the lowering
+//!   answers it from the typed half of the drawable observation.  The format list
+//!   has exactly one entry, the one the observed component widths name, and a
+//!   drawable whose widths name no format this contract has leaves the field
+//!   `None` -- which is not a partial answer, because the graph refuses a present
+//!   root without a format list and refuses every use of a surface resource
+//!   without the field (`compile/validation/roots.rs:134`,
+//!   `compile/validation/capabilities.rs:263`).  The queue's `present` row follows
+//!   the same fact rather than the other way round: a queue that presents frames
+//!   the device cannot describe would be a row no present root could ever reach.
 //! - **The buffer row is two decisions rather than a copy, and the indirect half
 //!   of it has no consumer.**  The snapshot's one storage fact carries no
 //!   direction, so it is reported in both, and the indirect flag is the union of
@@ -62,14 +69,14 @@
 
 use fluxel_rendergraph::{
     BufferCapabilities, DeviceCapabilities, DeviceLimits, QueueCapabilities, QueueDescriptor,
-    QueueId, RecordingCapabilities, RecordingModel, SynchronizationCapabilities, TextureFormat,
-    TextureFormatCapabilities, TimestampCapabilities, TransientResourceCapabilities,
-    TransitionCapabilities,
+    QueueId, RecordingCapabilities, RecordingModel, SurfaceCapabilities,
+    SynchronizationCapabilities, TextureFormat, TextureFormatCapabilities, TimestampCapabilities,
+    TransientResourceCapabilities, TransitionCapabilities,
 };
 
 use crate::webgl2::api::{
     GlCapability, GlDiscoverySnapshot, GlFormat, GlFormatCapabilities, GlFormatResourceKind,
-    GlLimits,
+    GlLimits, GlSurfaceFacts,
 };
 
 /// Lowers one discovery snapshot onto the common capability contract.
@@ -97,10 +104,12 @@ pub(crate) fn capabilities(snapshot: &GlDiscoverySnapshot) -> DeviceCapabilities
         || proved.supports(GlCapability::IndirectDispatch)
         || proved.supports(GlCapability::MultiDrawIndirect);
 
+    let surface = surface(snapshot.surface_facts());
+
     let mut builder = DeviceCapabilities::builder()
         .queue(QueueDescriptor::new(
             QueueId::new(0),
-            QueueCapabilities::new(true, compute, true, false),
+            QueueCapabilities::new(true, compute, true, surface.is_some()),
         ))
         // Set rather than inherited, even though both equal the builder's
         // default: the default is fail-closed by choice, and a value that happens
@@ -127,7 +136,57 @@ pub(crate) fn capabilities(snapshot: &GlDiscoverySnapshot) -> DeviceCapabilities
     for entry in texture_format_entries(snapshot) {
         builder = builder.texture_format(entry);
     }
-    builder.build()
+    match surface {
+        Some(surface) => builder.surface(surface).build(),
+        None => builder.build(),
+    }
+}
+
+/// The drawable's presentation facts, where the provider observed them.
+///
+/// `None` is the fail-closed answer, and it is what this returns unless the
+/// drawable was actually read.  A surface is a claim about the default
+/// framebuffer, and this contract's read of one is its format list; a device that
+/// reported a surface with an empty list would be a device whose every present
+/// root fails one check later, in the compiler, with a reason that blames the
+/// graph.
+///
+/// # Why one format, and why only this one
+///
+/// The widths are the whole of the evidence, so the claim is exactly the format
+/// they name: four eight-bit channels.  Nothing wider or narrower is claimed,
+/// because a drawable this contract has no name for is a drawable a graph cannot
+/// compile a present root against, and the outcome of claiming the nearest format
+/// instead would be an acquired image whose descriptor and whose pixels disagree
+/// -- the extent is the caller's and the format is the graph's, so a mismatch
+/// here is not a driver's to resolve.
+///
+/// `Rgba8UnormSrgb` is deliberately not claimed even though a browser drawable
+/// usually is sRGB: no accepted profile exposes the drawable's encoding, and a
+/// graph compiled against `sRGB` would be told to write encoded values into a
+/// texture the adapter creates without encoding.  That is a double-gamma error,
+/// and an unclaimed format is a refused present root -- the two mistakes are not
+/// the same size.  `Rgba16Float` is not claimed for the same class of reason:
+/// component widths alone do not separate a float component from a
+/// normalized-integer one, so a 16/16/16/16 drawable is not named by them.
+///
+/// The two operations are claimed together and unconditionally, because neither
+/// is a fact about the drawable: the acquired image is created through the same
+/// resource path as every other texture this adapter owns, in the same
+/// attachment table and with the same usage lowering
+/// (`compat/device/surface.rs::acquire_surface_texture`), so the two semantics
+/// the graph permits on a surface resource -- a colour attachment and a copy
+/// destination -- are served by machinery that was not built for the surface at
+/// all.
+fn surface(facts: GlSurfaceFacts) -> Option<SurfaceCapabilities> {
+    let GlSurfaceFacts::Observed { color_bits } = facts else {
+        return None;
+    };
+    let formats = match color_bits {
+        [8, 8, 8, 8] => vec![TextureFormat::Rgba8Unorm],
+        _ => return None,
+    };
+    Some(SurfaceCapabilities::new(formats, true, true))
 }
 
 /// The limits graph validation reads, lowered from the queried GL limits.

@@ -279,6 +279,24 @@ pub(crate) fn snapshot_with_formats(formats: GlFormatTable) -> GlDiscoverySnapsh
     .build()
 }
 
+/// A WebGL2 baseline snapshot whose drawable was observed at these widths.
+///
+/// The three snapshots above are all built by a provider that never asked what
+/// the drawable is, which is why they report no surface; this one is the same
+/// context with the one extra observation a presenter needs.
+pub(crate) fn snapshot_with_surface(color_bits: [u32; 4]) -> GlDiscoverySnapshot {
+    let mut builder = GlDiscoveryBuilder::new(
+        stamp(ContextEpoch::INITIAL),
+        context(GlFamilyProfile::WebGl2),
+        GlExtensionSet::default(),
+        limits(),
+        formats(false),
+    )
+    .expect("test discovery");
+    builder.surface_facts(GlSurfaceFacts::Observed { color_bits });
+    builder.build()
+}
+
 pub(crate) fn compute_storage_snapshot(storage_image: bool) -> GlDiscoverySnapshot {
     let mut builder = GlDiscoveryBuilder::new(
         stamp(ContextEpoch::INITIAL),

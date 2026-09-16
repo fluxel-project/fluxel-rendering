@@ -1,7 +1,7 @@
 use super::super::{
     BufferId, ContextEpoch, ContextStamp, DeviceIdentity, GlBufferRange, GlCapability, GlError,
-    GlExtent3d, GlFamilyProfile, GlFormat, GlFormatEvidence, GlFormatResourceKind, GlTextureDesc,
-    GlTextureDimension, GlTextureUsage, GlVersion,
+    GlExtent3d, GlFamilyProfile, GlFormat, GlFormatEvidence, GlFormatResourceKind, GlSurfaceFacts,
+    GlTextureDesc, GlTextureDimension, GlTextureUsage, GlVersion,
 };
 use super::discovery::{
     DRIVER_IDENTITY_UNAVAILABLE, NativeDiscoveryError, NativeGlQuery, REQUIRED_DESKTOP_VERSION,
@@ -819,6 +819,76 @@ fn surface_format_is_recorded_from_the_drawable_or_marked_unavailable() {
             "{flags:?}"
         );
     }
+}
+
+/// The typed surface facts answer the same question the recorded keys do.
+///
+/// One observation produces both renderings, and this asserts the property that
+/// makes the duplicate worth having: the value and the keys agree about what was
+/// observed, and a width the value cannot hold is a width the observation did not
+/// produce. The last case is the one that separates "narrow the number and carry
+/// on" from "the observation failed", and it has to be the second: a wrapped width
+/// is a format claim, and the record would then say a format was observed that the
+/// drawable never had.
+#[test]
+fn the_typed_surface_facts_agree_with_the_recorded_keys() {
+    let facts_of = |query: &SurfaceFactQuery| {
+        discover_with(query, &all_pass_plan())
+            .expect("complete mock discovery")
+            .surface_facts()
+    };
+    assert_eq!(
+        facts_of(&SurfaceFactQuery::observed()),
+        GlSurfaceFacts::Observed {
+            color_bits: [8, 8, 8, 8],
+        }
+    );
+    for (query, case) in [
+        (
+            SurfaceFactQuery {
+                binding: Some(2),
+                ..SurfaceFactQuery::observed()
+            },
+            "draw framebuffer bound",
+        ),
+        (
+            SurfaceFactQuery {
+                binding: None,
+                ..SurfaceFactQuery::observed()
+            },
+            "binding unqueried",
+        ),
+        (
+            SurfaceFactQuery {
+                bits: None,
+                ..SurfaceFactQuery::observed()
+            },
+            "components unqueried",
+        ),
+    ] {
+        assert_eq!(
+            facts_of(&query),
+            GlSurfaceFacts::Unavailable,
+            "{case} must claim no format"
+        );
+    }
+    let negative = SurfaceFactQuery {
+        bits: Some([8, 8, 8, -8, 24, 8, 1, 4]),
+        ..SurfaceFactQuery::observed()
+    };
+    let snapshot = discover_with(&negative, &all_pass_plan()).expect("complete mock discovery");
+    assert_eq!(snapshot.surface_facts(), GlSurfaceFacts::Unavailable);
+    let flags = snapshot.context().flags().other.clone();
+    assert!(
+        flags.contains("gl.surface-facts-unavailable=query-failed"),
+        "{flags:?}"
+    );
+    assert!(
+        !flags
+            .iter()
+            .any(|marker| marker.starts_with("gl.surface-") && !marker.contains("unavailable")),
+        "{flags:?}"
+    );
 }
 
 /// The executor answers the presentation domain, and a drawable extent it has

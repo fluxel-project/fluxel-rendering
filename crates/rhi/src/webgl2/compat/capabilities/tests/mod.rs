@@ -10,7 +10,7 @@
 use super::*;
 use crate::webgl2::api::tests::{
     builder, compute_storage_snapshot, desktop_limits, formats, indirect_snapshot, limits,
-    snapshot, snapshot_with_fact, snapshot_with_formats,
+    snapshot, snapshot_with_fact, snapshot_with_formats, snapshot_with_surface,
 };
 use crate::webgl2::api::{
     GlExtensionSet, GlFamilyProfile, GlFormatEvidence, GlFormatResourceKind, GlOperationProbe,
@@ -220,6 +220,55 @@ fn the_shape_of_the_context_is_reported_rather_than_inherited() {
         "a timer query's counter width is not a pass-boundary timestamp"
     );
     assert_eq!(capabilities.surface, None, "presentation is a later slice");
+}
+
+// ---------------------------------------------------------------------------
+// The surface: a claim made only where the drawable was read.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_drawable_read_as_four_eight_bit_channels_is_the_one_format_it_names() {
+    let capabilities = capabilities(&snapshot_with_surface([8, 8, 8, 8]));
+
+    assert_eq!(
+        capabilities.surface,
+        Some(SurfaceCapabilities::new(
+            vec![TextureFormat::Rgba8Unorm],
+            true,
+            true
+        )),
+        "the widths name one format, and both operations follow the resource path"
+    );
+    assert!(
+        queue(&capabilities).capabilities.present,
+        "a queue that cannot present frames the device can describe is the same fact told twice"
+    );
+}
+
+#[test]
+fn a_surface_is_reported_only_where_the_drawable_was_read() {
+    // Every one of these is a drawable this contract has no format for, and the
+    // answer to each is the fail-closed one: no surface, and a queue that does
+    // not present, which is what makes a present root fail in the compiler with
+    // a reason about the device rather than one about the graph.
+    for (case, facts) in [
+        ("never observed", snapshot(GlFamilyProfile::WebGl2)),
+        (
+            "sixteen-bit channels",
+            snapshot_with_surface([16, 16, 16, 16]),
+        ),
+        ("ten-bit channels", snapshot_with_surface([10, 10, 10, 2])),
+        // A context created without alpha really does report a zero width, and
+        // the claim has to follow the observation rather than the common shape.
+        ("no alpha channel", snapshot_with_surface([8, 8, 8, 0])),
+    ] {
+        let capabilities = capabilities(&facts);
+        assert_eq!(capabilities.surface, None, "{case} claims no surface");
+        assert!(
+            !queue(&capabilities).capabilities.present,
+            "{case} presents nothing"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

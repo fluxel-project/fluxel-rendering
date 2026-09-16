@@ -126,6 +126,19 @@ impl SubmissionLedger {
         });
     }
 
+    /// Makes one live submission terminal without waiting to learn anything.
+    ///
+    /// The one caller is a submission whose presentation failed after the point
+    /// where the contract stops allowing an `Err`: there is nothing left to poll
+    /// *for*, because the fence reports the commands and not the present, and
+    /// leaving the entry pending would make a frame that never reached the
+    /// drawable look exactly like a frame still in flight.
+    pub(super) fn fail(&mut self, fence: GlFenceLease, failure: CompletionFailure) {
+        if let Some(pending) = self.live.iter_mut().find(|pending| pending.fence == fence) {
+            pending.status = CompletionStatus::Failed(failure);
+        }
+    }
+
     /// The outcome recorded for `fence`, or `Unknown` where none is recorded.
     pub(super) fn outcome(&self, fence: &GlFenceLease) -> CompletionStatus {
         if let Some(submission) = self.live.iter().find(|pending| pending.fence == *fence) {
@@ -160,7 +173,11 @@ impl SubmissionLedger {
     /// as the key stops being the only answer.
     ///
     /// Submissions absent from `observed` keep the outcome they already had,
-    /// which is how a poll that failed leaves a submission quarantined.
+    /// which is how a poll that failed leaves a submission quarantined.  A
+    /// submission that is *already* terminal keeps its outcome for the same
+    /// reason and one more: [`Self::fail`] records a failure the fence cannot
+    /// report, and a poll that overwrote it would replace a known-missing frame
+    /// with a fence's own good news about the commands.
     pub(super) fn settle(
         &mut self,
         observed: &[(GlFenceLease, CompletionStatus)],
@@ -170,11 +187,13 @@ impl SubmissionLedger {
         let mut released = Vec::new();
         let mut finished = Vec::new();
         for mut submission in live {
-            if let Some((_, status)) = observed
-                .iter()
-                .find(|(fence, _)| *fence == submission.fence)
-            {
-                submission.status = *status;
+            if !is_terminal(submission.status) {
+                if let Some((_, status)) = observed
+                    .iter()
+                    .find(|(fence, _)| *fence == submission.fence)
+                {
+                    submission.status = *status;
+                }
             }
             if is_terminal(submission.status) {
                 released.append(&mut submission.leases);
@@ -279,38 +298,90 @@ fn completion_status(status: GlFenceStatus, lifecycle: GlContextLifecycle) -> Co
 /// [`super::backend`] is the trait's own declaration order.
 impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     /// The body of [`super::backend`]'s `submit`.
+    ///
+    /// The contract's verb carries, with each token, the presentation root that
+    /// token satisfies -- and this adapter never reads it.  It does not need to:
+    /// the pairing it acts on is already inside the token, which was minted for
+    /// exactly one acquisition and consumed by exactly one publish, so the two
+    /// could not disagree even if the list named a different root.  The tokens are
+    /// therefore taken out here, and the whole of the submission is
+    /// [`Self::submit_tokens`] -- which is also what makes the presenting half
+    /// reachable from a test, since a `PresentTarget` can only be minted by the
+    /// graph that declared the root.
     pub(super) fn submit_commands(
         &mut self,
         queue: QueueId,
         command_buffer: GlCommandBuffer,
         presentations: Vec<PresentationSubmission<GlSurfaceToken>>,
     ) -> Result<GlFenceLease, GlError> {
-        self.refresh();
-        // The tokens are answered first, and by being dropped.  The contract
-        // requires every token to be left unconsumed on `Err` so that its `Drop`
-        // performs the cancellation, and returning here does exactly that.
-        //
-        // What refuses them is the advertisement rather than a missing path: the
-        // acquisition verb exists, and it refuses for this same reason, so a
-        // token cannot have been acquired in the first place.  Saying so here
-        // anyway is what keeps the two ends of that one fact from being able to
-        // disagree, and the step that reports a surface removes both refusals
-        // together.
-        if !presentations.is_empty() {
-            return Err(GlError::Unsupported {
-                operation: "submit",
-                reason: "this adapter advertises no surface, so no acquired image can reach a submission to be presented",
-            });
-        }
+        let tokens = presentations
+            .into_iter()
+            .map(|presentation| presentation.token)
+            .collect();
+        self.submit_tokens(queue, command_buffer, tokens)
+    }
+
+    /// One submission and the acquisitions it presents.
+    ///
+    /// # Where a present sits between the contract's two guarantees
+    ///
+    /// The contract gives `submit` two rules that pull in opposite directions
+    /// (`rendergraph/src/backend/contract.rs`): an `Err` guarantees that no
+    /// presentation request reached a native queue, and after command acceptance
+    /// the answer must be `Ok` even if presentation fails.  For a backend that
+    /// presents by issuing commands on the same ordered path, the publishes *are*
+    /// part of the submission, so the boundary is drawn where the contract draws
+    /// it: everything that can refuse without touching the queue is answered
+    /// first, and from the first publish attempt onward the answer is the
+    /// completion -- with the failure recorded on it, which is the mechanism the
+    /// second rule names.  A publish that refuses before its own driver call is
+    /// answered the same way as one that fails inside it, because the two are one
+    /// `GlError` by the time they arrive here and reading which it was would mean
+    /// asking the provider a question its contract does not answer.
+    ///
+    /// The publishes come before `create_fence` so that the fence covers them --
+    /// a fence reports the commands issued before it, and a present issued after
+    /// one would be a present the completion says nothing about.  That is also
+    /// the weaker of the two orderings for the *error* path, which is why the
+    /// source texture is retained by the submission ledger rather than dropped
+    /// when the publish returns: the object outlives a fence that may have
+    /// signalled before the blit read it.
+    pub(super) fn submit_tokens(
+        &mut self,
+        queue: QueueId,
+        command_buffer: GlCommandBuffer,
+        tokens: Vec<GlSurfaceToken>,
+    ) -> Result<GlFenceLease, GlError> {
         if queue != QueueId::new(0) {
             return Err(GlError::Unsupported {
                 operation: "submit",
                 reason: "this backend has one ordered command path, which the common contract names as queue zero",
             });
         }
+        self.refresh();
         self.release_pending()?;
         let backend = self.machine.backend();
         backend.validate_object_context("submit", command_buffer.context)?;
+        // Every token is presented here, and a refusal stops the loop with the
+        // rest still unconsumed -- dropping a token is the cancellation the
+        // contract asks for, and a token that was never presented is a frame that
+        // never reached the drawable.
+        let mut presented = Vec::with_capacity(tokens.len());
+        let mut refused = false;
+        for token in tokens {
+            let GlSurfaceToken {
+                lease,
+                texture,
+                retention,
+            } = token;
+            match backend.publish_surface_image(lease, texture) {
+                Ok(()) => presented.push(retention),
+                Err(_) => {
+                    refused = true;
+                    break;
+                }
+            }
+        }
         // `flush` makes the commands issued before it visible to the device, and
         // `create_fence` then inserts a fence they are ordered before.  Swapping
         // the two would make the fence report the previous submission, which is
@@ -318,6 +389,29 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
         backend.flush()?;
         let fence = backend.create_fence()?;
         self.submissions.record(fence);
+        if !presented.is_empty() {
+            // Held until this submission settles rather than dropped here: the
+            // blit that reads the source is issued before the fence, and a fence
+            // is not a promise about commands issued after it.
+            let retirement = self.submissions.retire(fence, presented);
+            debug_assert!(
+                matches!(retirement, Retirement::Held),
+                "the submission was just recorded, so it is live"
+            );
+        }
+        // A present that failed after an earlier one succeeded cannot be an `Err`:
+        // a presentation request did reach a native queue, and the contract's
+        // answer for that is a completion the executor can retire against.  The
+        // submission is recorded as failed rather than left pending, so a frame
+        // that did not reach the drawable is not reported as one that arrives a
+        // poll later and looks fine.  The driver's own reason has nowhere to go --
+        // `CompletionFailure` is a two-case fact and the contract has no channel
+        // for a diagnostic -- and what the executor acts on is the terminal
+        // outcome, which is what this records.
+        if refused {
+            let context = self.machine.backend().lifecycle();
+            self.submissions.fail(fence, failure(context));
+        }
         Ok(fence)
     }
 

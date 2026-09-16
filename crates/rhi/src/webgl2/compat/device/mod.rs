@@ -116,15 +116,18 @@
 //!
 //! [`GlOptionalComputeBackend`]: crate::webgl2::state::GlOptionalComputeBackend
 //!
-//! A **presentation token** now exists, and it is what the acquisition slice
-//! added.  It used to be an uninhabited type and that was stronger than a check;
-//! it cannot stay one, because a type that carries an acquisition to submission
-//! has to hold the acquisition, and the acquisition is a lease and a texture.
-//! What replaces the old guarantee is narrower and worth stating exactly: the
-//! acquisition verb refuses fail-closed while `DeviceCapabilities::surface` is
-//! `None`, so no caller can reach a token without the advertisement a graph
-//! compiler would have required first, and [`surface`] says why the two land in
-//! that order rather than together.
+//! A **presentation token** exists, and the acquisition and presentation slices
+//! put it between them.  It used to be an uninhabited type and that was stronger
+//! than a check; it cannot stay one, because a type that carries an acquisition
+//! to submission has to hold the acquisition, and the acquisition is a lease and
+//! a texture.  What replaces the old guarantee is narrow and worth stating
+//! exactly: a token can only be minted by the acquisition verb, that verb refuses
+//! fail-closed while `DeviceCapabilities::surface` is `None`, and the
+//! advertisement is filled from the observed drawable rather than asserted -- so
+//! the reachable states are "no surface, no token" and "a surface, and a token
+//! whose lease came out of the drawable".  [`super::capabilities`] is where the
+//! advertisement is made from the observed drawable, and the answer it gives for
+//! a drawable it could not read is the `None` this verb refuses on.
 //!
 //! The copy-pass brackets are not among those refusals, and they are not a stub:
 //! a copy in this family is a direct command with no scope around it, so

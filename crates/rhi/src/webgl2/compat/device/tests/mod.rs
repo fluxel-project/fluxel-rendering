@@ -28,16 +28,17 @@ use harness::*;
 
 use fluxel_rendergraph::{
     BufferDesc, BufferUsage, BufferUsageKind, CompletionFailure, CompletionStatus,
-    ExecutionBackend, Extent3d, QueueId, TextureDesc, TextureDimension, TextureFormat,
-    TextureUsage, TextureUsageKind,
+    ExecutionBackend, Extent3d, PresentationSubmission, QueueId, TextureDesc, TextureDimension,
+    TextureFormat, TextureUsage, TextureUsageKind,
 };
 
 use super::super::capabilities::capabilities;
 use super::transient;
 use crate::webgl2::api::tests::snapshot;
 use crate::webgl2::api::{
-    GlBufferUsage, GlError, GlExtent3d, GlFamilyApi, GlFamilyProfile, GlFenceStatus, GlFormat,
-    GlSurfaceSize, GlTextureDimension, GlTextureUsage, MockCall,
+    GlBufferUsage, GlError, GlExtent3d, GlFamilyApi, GlFamilyProfile, GlFenceLease, GlFenceStatus,
+    GlFormat, GlSurfacePresentationApi as _, GlSurfaceSize, GlTextureDimension, GlTextureUsage,
+    MockCall, TextureId,
 };
 
 // ---------------------------------------------------------------------------
@@ -822,9 +823,9 @@ fn acquired(width: u32, height: u32) -> GlSurfaceSize {
 
 #[test]
 fn a_declared_surface_texture_must_be_the_extent_that_was_acquired() {
-    // The rule is called directly, on the terms this section documents: while no
-    // surface is advertised the acquisition verb refuses before it reaches any
-    // check, so the shape it would accept is not observable through the adapter.
+    // Called directly rather than through the verb, because the rule is about
+    // one comparison and the route to it is the subject of the two tests below:
+    // a rule reached through a path is tested there, and a rule tested here.
     const OP: &str = "acquire-surface-texture";
     assert!(
         super::surface::validate_surface_extent(OP, plain_texture(), acquired(4, 4)).is_ok(),
@@ -846,6 +847,123 @@ fn a_declared_surface_texture_must_be_the_extent_that_was_acquired() {
     assert!(
         matches!(refused, GlError::Validation { operation, .. } if operation == OP),
         "expected a validation refusal naming the verb, got {refused:?}"
+    );
+}
+
+/// Submits one empty command buffer through the presenting verb, and answers the
+/// completion.
+///
+/// The token is handed straight to `submit_tokens` rather than through the
+/// contract's `submit`, because a `PresentationSubmission` needs a
+/// `PresentTarget` and only the graph that declared the root can mint one.  The
+/// outer verb is a pass-through of exactly the list this call builds, and
+/// `the_contracts_submission_hands_its_tokens_to_the_presenting_verb` is what
+/// holds it to that.
+fn present_empty(adapter: &mut Adapter, tokens: Vec<super::GlSurfaceToken>) -> GlFenceLease {
+    let encoder = adapter.begin_encoder(QueueId::new(0)).expect("an encoder");
+    let command_buffer = adapter.finish_encoder(encoder).expect("a command buffer");
+    adapter
+        .submit_tokens(QueueId::new(0), command_buffer, tokens)
+        .expect("a submission")
+}
+
+/// Whether the drawable was published from this texture.
+fn presented_from(adapter: &mut Adapter, source: TextureId) -> bool {
+    adapter.machine.backend().calls().iter().any(
+        |call| matches!(call, MockCall::PublishSurface { source: named, .. } if *named == source),
+    )
+}
+
+#[test]
+fn an_advertised_surface_is_a_texture_a_frame_can_present() {
+    let mut adapter = surface_adapter();
+    assert!(
+        adapter.capabilities().surface.is_some(),
+        "the drawable was read, so the device describes one"
+    );
+
+    let bound = adapter
+        .acquire_surface_texture(plain_texture(), colour_usage())
+        .expect("an advertised surface is not a refusal")
+        .expect("the mock drawable is neither suspended nor zero-sized");
+    let source = bound.texture.physical;
+    assert!(
+        adapter.attachments.contains_key(&source),
+        "the acquired image is an attachment record like every other texture: {:?}",
+        adapter.attachments
+    );
+
+    let completion = present_empty(&mut adapter, vec![bound.presentation]);
+    assert!(
+        presented_from(&mut adapter, source),
+        "the acquisition reached the drawable: {:?}",
+        adapter.machine.backend().calls()
+    );
+    assert_eq!(
+        adapter.completion_status(&completion),
+        CompletionStatus::Pending,
+        "and a present that worked is not a failed submission"
+    );
+}
+
+#[test]
+fn a_present_that_fails_is_a_failed_completion_rather_than_a_refusal() {
+    let mut adapter = surface_adapter();
+    let bound = adapter
+        .acquire_surface_texture(plain_texture(), colour_usage())
+        .expect("an advertised surface is not a refusal")
+        .expect("an unsuspended drawable");
+    let source = bound.texture.physical;
+    // A resize is what invalidates an acquisition, so this token names a lease
+    // the lease book no longer holds -- a caller error, and one that arrives
+    // after the command buffer has been accepted.
+    adapter
+        .machine
+        .backend()
+        .resize_surface(acquired(4, 4))
+        .expect("the mock drawable resizes");
+
+    let completion = present_empty(&mut adapter, vec![bound.presentation]);
+    assert_eq!(
+        adapter.completion_status(&completion),
+        CompletionStatus::Failed(CompletionFailure::ExecutionFailed),
+        "the frame did not reach the drawable, and the completion is where that is said"
+    );
+    assert!(
+        !presented_from(&mut adapter, source),
+        "and nothing was presented: {:?}",
+        adapter.machine.backend().calls()
+    );
+    // The outcome survives the poll that would otherwise report the fence's own
+    // good news about the commands.
+    assert!(
+        adapter.collect_retired().is_ok(),
+        "a failed present is not a failed retirement"
+    );
+    assert_eq!(
+        adapter.completion_status(&completion),
+        CompletionStatus::Failed(CompletionFailure::ExecutionFailed),
+        "a terminal outcome this adapter recorded is not reopened by a poll"
+    );
+}
+
+#[test]
+fn the_contracts_submission_hands_its_tokens_to_the_presenting_verb() {
+    // The one thing the outer verb does that the fixture above cannot exercise:
+    // it unwraps the submission the contract hands it.  An empty list is the
+    // strongest statement available from here, and the presenting verb's own
+    // tests are `an_advertised_surface_is_a_texture_a_frame_can_present` and the
+    // refusal test above.
+    let mut adapter = surface_adapter();
+    let encoder = adapter.begin_encoder(QueueId::new(0)).expect("an encoder");
+    let command_buffer = adapter.finish_encoder(encoder).expect("a command buffer");
+    let presentations: Vec<PresentationSubmission<super::GlSurfaceToken>> = vec![];
+    let completion = adapter
+        .submit(QueueId::new(0), command_buffer, presentations)
+        .expect("a submission with nothing to present");
+    assert_eq!(
+        adapter.completion_status(&completion),
+        CompletionStatus::Pending
     );
 }
 
