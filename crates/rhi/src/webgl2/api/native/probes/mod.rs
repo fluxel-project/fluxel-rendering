@@ -337,6 +337,54 @@ pub(super) fn run_operation_probes(
     .with_trivial_link_guard(probes, trivial)
 }
 
+/// Advances the extension ledger with the extensions whose operation probe
+/// really ran on this context and answered success.
+///
+/// Every pairing below is an extension that exposes exactly the operation its
+/// probe performs, so `Probed` here means "the driver executed this operation
+/// and no error was raised" rather than "the version string promised it". Two
+/// gates keep that claim honest:
+///
+/// - The extension must already be acquired. A name that only appears in the
+///   extension string is not a route, so no probe result can promote it.
+/// - The probe must be `Passed`. `Unavailable` and `Failed` leave the entry at
+///   whatever acquisition reached: this deliberately does not call `fail()`,
+///   because "the probe did not run" is not "the extension was refused", and a
+///   missing probe must not erase a real acquisition.
+///
+/// A probe that ran through the core version rather than the extension route
+/// still proves the operation on this context, and resolution prefers the core
+/// route anyway, so the entry advances either way.
+///
+/// Extensions with no command probe are absent by construction: the anisotropic
+/// filter name is read as a limit, the timer-query route is proved by the
+/// counter-width observation rather than by a command, and the multiview and
+/// batch rows have no probe on this path at all.
+pub(super) fn record_extension_probes(
+    profile: GlFamilyProfile,
+    report: &ProbeReport,
+    extensions: &mut GlExtensionSet,
+) {
+    for (extension, answer) in [
+        (GlKnownExtension::ArbComputeShader, report.compute),
+        (
+            GlKnownExtension::ArbShaderStorageBufferObject,
+            report.storage_buffer,
+        ),
+        (
+            GlKnownExtension::ArbShaderImageLoadStore,
+            report.storage_image,
+        ),
+    ] {
+        if answer == ProbeAnswer::Passed
+            && extension.is_legal_for(profile)
+            && extensions.is_acquired(extension)
+        {
+            let _ = extensions.probe(extension);
+        }
+    }
+}
+
 /// glow-backed probe execution over the already-current context.
 pub(crate) struct GlowProbes<'a> {
     gl: &'a glow::Context,
@@ -786,3 +834,5 @@ impl GlowProbes<'_> {
         }
     }
 }
+#[cfg(test)]
+mod tests;

@@ -1,9 +1,23 @@
-//! Mock framebuffer and raster-command domains.
+//! Mock framebuffer, raster-command and batch-draw domains.
 //!
-//! Covers the pass lifetime (attachments, draw buffers, blit) and the
-//! pipeline/draw commands issued inside it.
+//! Covers the pass lifetime (attachments, draw buffers, blit) and the commands
+//! issued inside it, including the two optional raster words: the one carrying
+//! a base-vertex/base-instance offset, and the batch that may be issued as one
+//! combined command or as its single draws.
 
 use super::*;
+
+/// Reports whether a draw payload would read nothing or run no instance.
+///
+/// Every executable provider's draw path refuses that before it issues
+/// anything, and the plain, advanced and decomposed batch routes all funnel
+/// into it here, so the rule cannot drift between routes that must agree.
+fn draw_is_empty(draw: GlDrawCommand) -> bool {
+    match draw {
+        GlDrawCommand::NonIndexed(x) => x.vertex_count == 0 || x.instance_count == 0,
+        GlDrawCommand::Indexed(x) => x.index_count == 0 || x.instance_count == 0,
+    }
+}
 
 impl GlFramebufferApi for MockGlFamilyApi {
     fn create_framebuffer(
@@ -11,14 +25,6 @@ impl GlFramebufferApi for MockGlFamilyApi {
         d: &GlFramebufferDescriptor,
     ) -> Result<FramebufferId, GlError> {
         self.ready("create-framebuffer")?;
-        for v in d
-            .color_attachments
-            .iter()
-            .copied()
-            .chain(d.depth_stencil_attachment)
-        {
-            self.validate_attachment("create-framebuffer", v)?;
-        }
         d.validate(
             self.discovery.limits().max_color_attachments,
             self.discovery.limits().max_draw_buffers,
@@ -28,6 +34,29 @@ impl GlFramebufferApi for MockGlFamilyApi {
             operation: "create-framebuffer",
             message: "invalid framebuffer descriptor".into(),
         })?;
+        // A descriptor asking for several views per attachment is refused here,
+        // before the framebuffer identity exists, unless this context proved a
+        // view count that can serve it.  The gate reads the same
+        // `max_multiview_view_count` both providers read, at the same point in
+        // the order, so a differential test of the multiview rule has the same
+        // oracle on all three implementations.
+        if d.validate_multiview(self.discovery.max_multiview_view_count())
+            .is_err()
+        {
+            return self.invalid("create-framebuffer", "multiview view count is not proved");
+        }
+        // Attachments are proven last, as both providers do and as the pass
+        // entry point already does here: a descriptor that is wrong as a
+        // descriptor is reported as one, rather than as whichever of its views
+        // happened to fail a richer per-view check first.
+        for v in d
+            .color_attachments
+            .iter()
+            .copied()
+            .chain(d.depth_stencil_attachment)
+        {
+            self.validate_attachment("create-framebuffer", v)?;
+        }
         let id = FramebufferId::new(self.stamp, self.slot()?, 0);
         self.framebuffers.insert(id, d.clone());
         self.calls.push(MockCall::CreateFramebuffer(id));
@@ -64,6 +93,15 @@ impl GlFramebufferApi for MockGlFamilyApi {
             operation: "begin-render-pass",
             message: "render pass does not match its framebuffer descriptor".into(),
         })?;
+        // The framebuffer already passed this gate when it was created, but a
+        // pass is where the multiview rule is actually obeyed: both providers
+        // re-check it here, so a recorder that only checked at creation would
+        // accept a pass naming a view count this context never proved.
+        if d.validate_multiview(self.discovery.max_multiview_view_count())
+            .is_err()
+        {
+            return self.invalid("begin-render-pass", "multiview view count is not proved");
+        }
         for a in &d.color_attachments {
             self.validate_attachment("begin-render-pass", a.view)?;
             if let Some(v) = a.resolve_target {
@@ -219,14 +257,65 @@ impl GlRasterCommandApi for MockGlFamilyApi {
         if !self.pass_active {
             return self.invalid("draw-raster", "no active render pass");
         }
-        let zero = match d {
-            GlDrawCommand::NonIndexed(x) => x.vertex_count == 0 || x.instance_count == 0,
-            GlDrawCommand::Indexed(x) => x.index_count == 0 || x.instance_count == 0,
-        };
-        if zero {
+        if draw_is_empty(d) {
             return self.invalid("draw-raster", "draw count and instances must be nonzero");
         }
         self.calls.push(MockCall::DrawRaster(d));
         Ok(())
+    }
+}
+impl GlAdvancedRasterApi for MockGlFamilyApi {
+    fn draw_advanced_raster(&mut self, draw: GlAdvancedDrawCommand) -> Result<(), GlError> {
+        const OP: &str = "draw-advanced-raster";
+        self.ready(OP)?;
+        if !self.pass_active {
+            return self.invalid(OP, "no active render pass");
+        }
+        // Same rule as the plain raster word and checked in the same place: a
+        // payload that reads nothing or runs no instance is not a draw on any
+        // route, and reporting an offset failure first would name the wrong
+        // problem.
+        if draw_is_empty(draw.draw) {
+            return self.invalid(OP, "draw count and instances must be nonzero");
+        }
+        if draw.validate(self.advanced_raster).is_err() {
+            // An offset this context never proved is a capability fact, not a
+            // malformed command, so it is reported the way every other
+            // unproved-domain rejection is: the caller has to stop asking, not
+            // fix the arguments.
+            return self.error_result(GlError::Unsupported {
+                operation: OP,
+                reason: "this context did not prove the requested optional draw offset",
+            });
+        }
+        self.calls.push(MockCall::DrawAdvancedRaster(draw));
+        Ok(())
+    }
+}
+impl GlMultiDrawApi for MockGlFamilyApi {
+    fn multi_draw(&mut self, command: &GlMultiDraw) -> Result<(), GlError> {
+        const OP: &str = "multi-draw";
+        self.ready(OP)?;
+        if !self.pass_active {
+            return self.invalid(OP, "no active render pass");
+        }
+        // The trace reports the route this context proved, never the caller's
+        // intent: a context that proved the combined command records the batch
+        // as one command, every other context records the single draws the
+        // batch decomposes into.  Both providers choose between those same two
+        // shapes, so this is the one place a state-machine test can see which
+        // submission shape actually happened.  The browser provider additionally
+        // needs an installed pipeline on the combined route; the recorder does
+        // not model the pipeline installation, so it accepts on the pass alone
+        // rather than inventing a second condition it cannot observe.
+        if self
+            .discovery
+            .capabilities()
+            .supports(GlCapability::MultiDraw)
+        {
+            self.calls.push(MockCall::MultiDraw(command.clone()));
+            return Ok(());
+        }
+        issue_single_draws(self, command)
     }
 }

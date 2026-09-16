@@ -3,6 +3,11 @@
 //! The wrapper exists so ordinary compute-free fixtures cannot accidentally
 //! reach optional domains: constructing it fails unless the bound discovery
 //! snapshot proved both capabilities, mirroring the provider-side rule.
+//!
+//! Indirect dispatch lives here rather than with the other indirect domains
+//! because it is the one indirect command that is not a raster command: it needs
+//! the installed compute program, which only this wrapper carries, exactly as
+//! the native provider's single compute type carries it.
 
 use super::*;
 
@@ -88,6 +93,32 @@ impl GlComputeDispatchApi for MockComputeStorageApi {
     fn memory_barrier(&mut self, b: GlMemoryBarrier) -> Result<(), GlError> {
         self.inner.ready("memory-barrier")?;
         b.validate_nonempty()
+    }
+}
+impl GlDispatchIndirectApi for MockComputeStorageApi {
+    fn dispatch_indirect(&mut self, command: GlDispatchIndirectCommand) -> Result<(), GlError> {
+        const OP: &str = "dispatch-indirect";
+        self.inner.ready(OP)?;
+        self.inner.require_indirect_capability(
+            OP,
+            GlCapability::IndirectDispatch,
+            "this context did not prove the indirect-dispatch capability",
+        )?;
+        // The installed program is what makes the record's work-group triple
+        // meaningful, so the provider checks it after the capability row and
+        // before the record layout: a context that never proved dispatch must
+        // not be told to install a program first.
+        let Some(program) = self.inner.installed_compute_program else {
+            return self.inner.invalid(OP, "no compute program is installed");
+        };
+        self.inner
+            .live(OP, program, |this| this.programs.contains(&program))?;
+        if let Err(error) = command.validate(OP) {
+            return self.inner.error_result(error);
+        }
+        self.inner.indirect_buffer(OP, command.range)?;
+        self.inner.calls.push(MockCall::DispatchIndirect(command));
+        Ok(())
     }
 }
 impl GlStorageBufferApi for MockComputeStorageApi {

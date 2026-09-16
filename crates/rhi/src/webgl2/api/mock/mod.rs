@@ -4,10 +4,21 @@
 //! `GlFamilyApi` lifetime domain.  Each remaining domain lives in its own
 //! submodule so a change to one cannot silently invalidate another: objects
 //! in `resource`, programs and their inputs in `program`, the pass in
-//! `render_pass`, copies in `transfer`, and observation in `lifecycle`.  The
-//! optional compute/storage wrapper lives in `compute_storage`.
+//! `render_pass`, indirect command buffers in `indirect`, copies in
+//! `transfer`, and observation in `lifecycle`.  The optional compute/storage
+//! wrapper lives in `compute_storage`.
+//!
+//! Every domain here mirrors the executable providers rather than an
+//! idealized contract, so a differential test can trust the trace: it checks
+//! what a provider checks, at the point the provider checks it, and it never
+//! rejects something a provider accepts.  Where a provider's check needs state
+//! the recorder deliberately does not model -- the installed raster pipeline,
+//! a VAO's index binding, GL's signed scalar widths -- the recorder checks the
+//! strongest condition its own state supports and says so at the call site
+//! rather than inventing a rule.
 
 mod compute_storage;
+mod indirect;
 mod lifecycle;
 mod program;
 mod render_pass;
@@ -47,6 +58,24 @@ pub enum MockCall {
         vertex_array: VertexArrayId,
     },
     DrawRaster(GlDrawCommand),
+    /// One draw carrying the optional base-vertex/base-instance offsets.
+    DrawAdvancedRaster(GlAdvancedDrawCommand),
+    /// One record read from a command buffer, drawn as one command.
+    DrawIndirect(GlIndirectCommandRange),
+    /// One work-group triple read from a command buffer.
+    DispatchIndirect(GlDispatchIndirectCommand),
+    /// A batch issued as one combined command, not as its single draws.
+    ///
+    /// The recorder only produces this variant on the route where a provider
+    /// would issue a combined command.  Decomposing a batch is observable as
+    /// the `DrawRaster` calls it really is, so the trace always says which
+    /// submission shape happened instead of only which batch was requested.
+    MultiDraw(GlMultiDraw),
+    MultiDrawIndirect(GlIndirectCommandRange),
+    MultiDrawIndirectCount {
+        commands: GlIndirectCommandRange,
+        count: GlIndirectCountRange,
+    },
     CopyBuffer {
         source: BufferId,
         destination: BufferId,
@@ -148,6 +177,14 @@ pub struct MockGlFamilyApi {
     pass_active: bool,
     /// The compute program installed for dispatch work, if any.
     installed_compute_program: Option<ProgramId>,
+    /// The optional draw offsets this recorder treats as proved.
+    ///
+    /// A provider learns these from its own context queries, which the
+    /// recorder has no equivalent of, so the test names them explicitly for the
+    /// same reason fence completion and program reflection are injected.  The
+    /// default proves nothing: an unconfigured recorder rejects a nonzero
+    /// offset instead of accepting one no provider ever proved.
+    advanced_raster: GlAdvancedRasterCapabilities,
     pixel_store: GlPixelStoreState,
     calls: Vec<MockCall>,
     next_error: Option<GlError>,
@@ -189,6 +226,10 @@ impl MockGlFamilyApi {
             surface_suspended: false,
             pass_active: false,
             installed_compute_program: None,
+            advanced_raster: GlAdvancedRasterCapabilities {
+                base_vertex: false,
+                first_instance: false,
+            },
             pixel_store: GlPixelStoreState::DEFAULT,
             calls: vec![],
             next_error: None,
@@ -228,6 +269,15 @@ impl MockGlFamilyApi {
     /// Injects the reflection the next `create_program` call returns.
     pub fn set_next_program_reflection(&mut self, reflection: GlProgramReflection) {
         self.next_reflection = Some(reflection);
+    }
+    /// Records which optional draw offsets this context proved.
+    ///
+    /// The seam exists because the recorder owns no context query for these
+    /// facts, exactly like the injected fence completion and program
+    /// reflection.  Without it a caller could only ever observe the
+    /// fail-closed default, and the gate itself would stay untested.
+    pub fn set_advanced_raster_capabilities(&mut self, capabilities: GlAdvancedRasterCapabilities) {
+        self.advanced_raster = capabilities;
     }
     /// The injected answer for one fence, defaulting to `Pending`.
     ///
@@ -375,6 +425,13 @@ impl MockGlFamilyApi {
         self.fences.revoke_all();
         self.pass_active = false;
         self.installed_compute_program = None;
+        // The new epoch has to requery every optional fact, and the recorder
+        // cannot requery anything: keeping the previous context's answers would
+        // let a restored context accept an offset it never proved.
+        self.advanced_raster = GlAdvancedRasterCapabilities {
+            base_vertex: false,
+            first_instance: false,
+        };
         self.query_results.clear();
         // Every fence is revoked above, so no surviving lease can name an
         // injected status; clearing keeps the oracle describing exactly the

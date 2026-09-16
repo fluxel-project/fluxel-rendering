@@ -13,7 +13,10 @@ use super::super::{
     GlFormatCapabilities, GlFormatEvidence, GlFormatResourceKind, GlFormatTable, GlKnownExtension,
     GlLimits, GlOperationProbe, GlVersion,
 };
-use super::probes::{GlowProbes, NativeGlProbes, ProbeAnswer, ProbeReport, run_operation_probes};
+use super::probes::{
+    GlowProbes, NativeGlProbes, ProbeAnswer, ProbeReport, record_extension_probes,
+    run_operation_probes,
+};
 
 /// Failure to obtain a complete native discovery record.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,8 +197,13 @@ fn discover_with_query_pair(
     )?;
     let vendor = required_string(query, glow_const::VENDOR, "GL_VENDOR")?;
     let renderer = required_string(query, glow_const::RENDERER, "GL_RENDERER")?;
-    let extensions = extensions(query, profile)?;
+    let mut extensions = extensions(query, profile)?;
     let report = run_operation_probes(probes, profile, &extensions);
+    // Acquisition says the entry points were loaded, never that they work, so
+    // the ledger advances only for the extensions whose probe really ran and
+    // passed. This runs before `limits` and `native_formats`, which both read
+    // acquisition, and `is_acquired` covers `Probed`, so neither can regress.
+    record_extension_probes(profile, &report, &mut extensions);
     let limits = limits(query, profile, &extensions, &report)?;
     let formats = native_formats(profile, &extensions, limits.max_samples, &report)?;
     let mut builder = GlDiscoveryBuilder::new(

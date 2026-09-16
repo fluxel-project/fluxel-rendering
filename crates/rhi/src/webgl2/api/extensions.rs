@@ -24,6 +24,45 @@
 //!   and aliasing revisions would claim a shader contract this contract does
 //!   not implement. It remains an untyped raw name.
 //!
+//! # Route alternatives
+//!
+//! A `CoreOrExtension` row names at most one typed extension alternative, and
+//! no row in this contract has a second one: on every accepted profile each
+//! normalized capability is reachable through exactly one route, so the row
+//! keeps a single optional slot instead of a preference list. The routes an
+//! audit named as unexpressible are decided here rather than modelled:
+//!
+//! - `GL_ARB_timer_query` is the extension form of the timer-query row's
+//!   desktop core floor, and every desktop profile this contract accepts is 4.0
+//!   or newer, so core supplies that row on every accepted desktop context and
+//!   an alternative spelling could never be the enabling evidence. The only
+//!   profile where core does not supply it is WebGL2, whose route is the
+//!   WebGL2 typed name, so the desktop extension form is not a typed name here
+//!   at all.
+//! - `GL_ARB_multi_draw_indirect` cannot satisfy anything: glow 0.18 binds no
+//!   `glMultiDrawArraysIndirect`, so the probe is permanently `Unavailable`, and
+//!   every confirmed limit set fixes the multi-draw-indirect count at `None`,
+//!   which leaves that row unable to enable on any profile even if the name were
+//!   acquired. A second alternative would describe a route nothing can reach.
+//! - `GL_ARB_direct_state_access` is an issuance style (which entry points
+//!   create and update objects) rather than a capability, so it satisfies no
+//!   row and cannot be an alternative to one. A `CoreOrExtension` row records
+//!   what a context can do, never which command spelling Fluxel uses to do it.
+//!
+//! Registry-spelling variants are not a second alternative either: the
+//! anisotropic, multiview and compressed-texture spellings collapse onto one
+//! typed name in `GlKnownExtension::from_raw_name`, so "the same capability
+//! under several runtime names" is already recorded at the raw level while the
+//! row stays single-valued.
+//!
+//! When a row does have two real alternatives, the minimal shape is a
+//! preference-ordered set of alternatives resolved exactly as `extension` is
+//! today (legality for the profile, then acquisition or a passed probe).
+//! `CapabilityEvidence::Extension` already names the alternative that resolved
+//! the row, so the recorded provenance needs no change to carry that. Building
+//! the list before such a row exists would add a routing system with no
+//! consumer.
+//!
 //! Provenance is not capability: recording a name here never enables a
 //! capability on its own.
 
@@ -221,6 +260,11 @@ pub enum ExtensionProvenance {
     /// Required entry points or browser extension object were acquired.
     Acquired,
     /// A required operation probe succeeded.
+    ///
+    /// The native probe executor is the only producer: it records this after a
+    /// probe really ran on the context and answered success. The browser path
+    /// issues no discovery-time command, so it cannot honestly reach this state
+    /// and leaves its routes at whatever acquisition proved.
     Probed,
     /// Acquisition or operation probing failed.
     Failed,
