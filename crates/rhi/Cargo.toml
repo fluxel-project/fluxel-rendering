@@ -40,7 +40,11 @@ webgpu = ["dep:js-sys", "dep:web-sys", "dep:wasm-bindgen-futures"]
 test-support = []
 
 [target.'cfg(windows)'.dependencies]
-wgpu-hal = { version = "=30.0.1", default-features = false }
+# Patched wgpu-hal 30.0.1 (upstream fix gfx-rs/wgpu#10221 for DX12 validation
+# error #1361). A path dependency inside this repository, not a root
+# `[patch.crates-io]`: a patch only applies where it is declared, so it never
+# reached consumers that depend on this crate through Git.
+wgpu-hal = { package = "fluxel-wgpu-hal", path = "../wgpu-hal", version = "30.0.1", default-features = false }
 wgpu-types = { version = "=30.0.0", default-features = false, features = ["std"] }
 windows = { version = "=0.62.2", optional = true, features = ["Win32_Graphics_Direct3D12"] }
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }

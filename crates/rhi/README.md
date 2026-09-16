@@ -167,10 +167,11 @@ when its exact squared length is positive, applies fixed `+Z` Lambert to RGB,
 and preserves alpha. Strong portable identity and safe/native role validation
 keep this recipe distinct from every UV layout.
 
-For reproducible DX12 validation the workspace carries the upstream
-gfx-rs/wgpu#10221 fix on its vendored `wgpu-hal` 30.0.1 source. See
-`vendor/wgpu-hal-30.0.1/FLUXEL-PATCH.md`; the patch can be removed once a
-Rust-1.87-compatible release includes it.
+For reproducible DX12 validation, `fluxel-rhi` depends by path on the patched
+wgpu-hal 30.0.1 source in `crates/wgpu-hal` (upstream gfx-rs/wgpu#10221). Because
+it is an ordinary path dependency of this crate and not a root
+`[patch.crates-io]`, the fix travels to Git consumers automatically — no
+`[patch]` of your own is needed. See `crates/wgpu-hal/FLUXEL-PATCH.md`.
 
 X01 samples that complete color texture in
 a closed compute artifact, packs row-major RGBA8 pixels into an RW storage

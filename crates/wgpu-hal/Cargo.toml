@@ -12,7 +12,11 @@
 [package]
 edition = "2021"
 rust-version = "1.87"
-name = "wgpu-hal"
+# Renamed from the upstream `wgpu-hal` so this patched source can live in the
+# Fluxel workspace without colliding with the registry package it is derived
+# from. The library target keeps its upstream name (see `[lib]`), so every
+# `wgpu_hal::…` path in this crate is unchanged from crates.io 30.0.1.
+name = "fluxel-wgpu-hal"
 version = "30.0.1"
 authors = ["gfx-rs developers"]
 build = "build.rs"
@@ -162,18 +166,10 @@ vulkan = [
 name = "wgpu_hal"
 path = "src/lib.rs"
 
-[[example]]
-name = "halmark"
-path = "examples/halmark/main.rs"
-
-[[example]]
-name = "raw-gles"
-path = "examples/raw-gles.rs"
-required-features = ["gles"]
-
-[[example]]
-name = "ray-traced-triangle"
-path = "examples/ray-traced-triangle/main.rs"
+# Upstream's `[[example]]` targets and dev-dependencies (winit, glutin,
+# glutin-winit, glam, env_logger) are deliberately absent from this fork: they
+# are never built for a path dependency, and Fluxel's ecosystem rules exclude
+# winit/glutin from every repository. See FLUXEL-PATCH.md.
 
 [dependencies.arrayvec]
 version = "0.7.1"
@@ -248,24 +244,6 @@ version = "30.0.0"
 version = "30.0.0"
 default-features = false
 
-[dev-dependencies.env_logger]
-version = "0.11"
-default-features = false
-
-[dev-dependencies.glam]
-version = "0.33.0"
-
-[dev-dependencies.naga]
-version = "30.0.0"
-features = [
-    "wgsl-in",
-    "termcolor",
-]
-
-[dev-dependencies.winit]
-version = "0.30.8"
-features = ["android-native-activity"]
-
 [build-dependencies.cfg_aliases]
 version = "0.2.2"
 
@@ -304,26 +282,6 @@ default-features = false
 [target.'cfg(any(not(target_has_atomic = "64"), not(target_has_atomic = "ptr")))'.dependencies.portable-atomic]
 version = "1.10"
 optional = true
-
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "visionos", target_env = "ohos")))'.dev-dependencies.glutin]
-version = "0.32"
-features = [
-    "egl",
-    "wgl",
-    "wayland",
-    "x11",
-]
-default-features = false
-
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "visionos", target_env = "ohos")))'.dev-dependencies.glutin-winit]
-version = "0.5"
-features = [
-    "egl",
-    "wgl",
-    "wayland",
-    "x11",
-]
-default-features = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.ash]
 version = "0.38"

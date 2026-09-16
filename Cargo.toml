@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
 members = ["crates/rendergraph", "crates/renderer", "crates/rhi", "crates/rendering-wasm"]
+# `crates/wgpu-hal` is the patched wgpu-hal 30.0.1 source consumed only through
+# `fluxel-rhi`'s path dependency. It is excluded so workspace-wide commands
+# neither build it with `--all-features` nor reach its upstream-only dev
+# surface; being a path dependency inside the repository is what makes the
+# patch travel to Git consumers, which a root `[patch.crates-io]` cannot do.
+exclude = ["crates/wgpu-hal"]
 
 [workspace.package]
 version = "0.14.0"
@@ -8,9 +14,3 @@ version = "0.14.0"
 [profile.profiling]
 inherits = "release"
 debug = true
-
-[patch.crates-io]
-# wgpu-hal 30.0.1 lowers a non-comparison DX12 sampler's absent compare
-# function to ALWAYS, which triggers D3D12 validation error #1361. This local
-# source carries upstream fix gfx-rs/wgpu#10221 until a compatible crate release.
-wgpu-hal = { path = "vendor/wgpu-hal-30.0.1" }

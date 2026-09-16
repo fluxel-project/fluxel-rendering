@@ -14,7 +14,3 @@ publish = false
 fluxel-renderer = { path = "../../crates/renderer", features = ["gpu-upload"] }
 fluxel-rhi = { path = "../../crates/rhi", features = ["dx12", "vulkan", "test-support"] }
 fluxel-host = { path = "../../../fluxel-host" }
-
-[patch.crates-io]
-# Keep this proof harness on the workspace's validation-fixed HAL source.
-wgpu-hal = { path = "../../vendor/wgpu-hal-30.0.1" }
