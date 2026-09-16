@@ -7,17 +7,23 @@
 //! one safe to keep:
 //!
 //! 1. **Structural keys.**  A key carries every input that changes the value,
-//!    including the context stamp.  A hash may accelerate a lookup; it may
-//!    never replace equality, because the reference implementation this series
-//!    was written against used hash-only geometry identity and the plan records
-//!    that as a weakness not to reproduce.
+//!    including the context stamp.  The keys are Layer 1's own descriptor types,
+//!    which is why this table is bounded on `Eq + Hash + Clone` and not on
+//!    `Ord`: those types deliberately derive the former and not the latter, and
+//!    the alternative -- a hand-written total order over every descriptor -- is a
+//!    second definition of a key that can disagree with the first.  A hash may
+//!    accelerate a lookup; it may never replace equality, because the reference
+//!    implementation this series was written against used hash-only geometry
+//!    identity and the plan records that as a weakness not to reproduce.
 //! 2. **Reverse dependencies.**  Every entry records the resources it was
 //!    derived from, so deleting a buffer can invalidate the geometry records
 //!    built from it *before* the backend deletes the name and a new object
 //!    reuses it.
 //! 3. **Deterministic eviction under a lease.**  Eviction is a function of the
 //!    access trace alone -- never wall-clock age, and never weak-reference
-//!    death, neither of which proves the GPU is done with an object.
+//!    death, neither of which proves the GPU is done with an object.  Order is
+//!    deterministic regardless of the table's iteration order: access ticks are
+//!    unique, and removals that happen in one call report in creation order.
 //!
 //! # Leases
 //!
@@ -27,15 +33,30 @@
 //! just created without retaining it.  That is a slower frame, not an incorrect
 //! one.
 //!
+//! # Who destroys what
+//!
+//! A cached value is normally a backend object this layer created, so a cache
+//! must never drop one silently.  Every call that can remove an entry hands the
+//! removed pairs back for the caller to destroy, and the two teardown paths are
+//! kept apart because they are not the same act: [`StructuralCache::drain`]
+//! returns everything so a machine shutting down destroys what it made, while
+//! [`StructuralCache::purge`] destroys nothing, because the identities in those
+//! entries belong to a context epoch the backend no longer accepts.
+//!
 //! # Where the typed caches live
 //!
-//! This module holds the machinery and nothing else: budgets, the ordered
-//! entry table, eviction, leasing, and reverse-dependency invalidation.  Each
-//! domain's cache -- its key type, its value type, and what one entry costs --
-//! is declared beside the domain that owns those types, because a key that
-//! omitted one of its domain's inputs is a defect only that domain can notice.
+//! This module holds the machinery and nothing else: budgets, the entry table,
+//! eviction, leasing, and reverse-dependency invalidation.  Each domain's cache
+//! is a sibling module named after that domain, because a cache's key, value and
+//! per-entry cost are that domain's knowledge: a key that omitted one of the
+//! domain's inputs is a defect only the domain can notice, and a cost estimate
+//! that is wrong in the direction of "too small" is what turns a bounded cache
+//! into unbounded memory.  Keeping them here rather than inside the domain
+//! module leaves one place to read every budget the layer spends.
 
-use std::collections::BTreeMap;
+pub(super) mod framebuffer;
+
+use std::collections::HashMap;
 
 use crate::webgl2::api::{
     BufferId, FramebufferId, ProgramId, QueryId, RenderbufferId, SamplerId, ShaderId,
@@ -129,21 +150,51 @@ struct CacheEntry<V> {
     /// Estimated retained bytes, chosen by the cache that owns the entry.
     bytes: u64,
     /// The cache's own monotonic access tick, never a wall-clock instant.
+    ///
+    /// Unique per entry: every lookup and every insert takes a fresh tick, so
+    /// the least-recently-used search below always has a single answer and never
+    /// needs a tie-break that would depend on iteration order.
     last_used: u64,
+    /// The tick this entry was created at, so removals can be reported in
+    /// creation order without the key type being ordered.
+    sequence: u64,
     /// Leases held by accepted work.  A leased entry is pinned.
     leases: u32,
     /// Resources this value was derived from.
     dependencies: DependencySet,
 }
 
-/// A structurally keyed cache with deterministic eviction.
+/// What one cache call removed, and whether it kept what it was given.
 ///
-/// The key is ordered rather than hashed so that eviction ties break by key and
-/// a report of live entries is stable across runs of the same trace.
+/// `removed` is in creation order, so a caller that destroys each value makes
+/// the same sequence of backend calls on every run of the same trace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CacheMutation<K, V> {
+    /// Entries this call took out of the table, for the caller to destroy.
+    pub removed: Vec<(K, V)>,
+    /// Whether the value the call was given is now retained by the cache.
+    ///
+    /// `false` means the budget could not be met without evicting a leased
+    /// entry: nothing was inserted, the caller still owns the value it passed,
+    /// and it must destroy that value when it is done with it.
+    pub retained: bool,
+}
+
+impl<K, V> CacheMutation<K, V> {
+    /// A call that removed nothing.
+    fn untouched(retained: bool) -> Self {
+        Self {
+            removed: Vec::new(),
+            retained,
+        }
+    }
+}
+
+/// A structurally keyed cache with deterministic eviction.
 #[derive(Debug)]
 pub(crate) struct StructuralCache<K, V> {
     budget: CacheBudget,
-    entries: BTreeMap<K, CacheEntry<V>>,
+    entries: HashMap<K, CacheEntry<V>>,
     live_bytes: u64,
     peak_bytes: u64,
     tick: u64,
@@ -151,13 +202,13 @@ pub(crate) struct StructuralCache<K, V> {
 
 impl<K, V> StructuralCache<K, V>
 where
-    K: Ord + Clone,
+    K: Clone + Eq + std::hash::Hash,
 {
     /// An empty cache with this budget.
     pub(crate) fn new(budget: CacheBudget) -> Self {
         Self {
             budget,
-            entries: BTreeMap::new(),
+            entries: HashMap::new(),
             live_bytes: 0,
             peak_bytes: 0,
             tick: 0,
@@ -215,9 +266,13 @@ where
 
     /// Inserts an entry, evicting unleased entries until it fits.
     ///
-    /// Returns `false` when the budget could not be met without evicting a
-    /// leased entry.  Nothing was inserted in that case and the caller must use
-    /// its value uncached; see the module note on leases.
+    /// The evicted values are returned in [`CacheMutation::removed`] for the
+    /// caller to destroy.  A key already present is replaced, and its previous
+    /// value is reported the same way.
+    ///
+    /// The victims are chosen before anything is removed, so a refused insert
+    /// leaves the cache exactly as it was: no entry is destroyed for an insert
+    /// that did not happen.
     pub(crate) fn insert(
         &mut self,
         key: K,
@@ -225,16 +280,34 @@ where
         bytes: u64,
         dependencies: DependencySet,
         counters: &mut CacheCounters,
-    ) -> bool {
-        if let Some(previous) = self.entries.remove(&key) {
-            self.live_bytes -= previous.bytes;
+    ) -> CacheMutation<K, V> {
+        // Take the entry this key replaces out of the table whole, so a refused
+        // insert can put it back with its own bytes, sequence and dependencies
+        // rather than with the new ones.
+        let previous = self.entries.remove(&key);
+        let victims = match self.plan_eviction(bytes, previous.as_ref()) {
+            Some(victims) => victims,
+            None => {
+                if let Some(entry) = previous {
+                    self.entries.insert(key, entry);
+                }
+                return CacheMutation::untouched(false);
+            }
+        };
+
+        let mut removed = Vec::with_capacity(victims.len() + 1);
+        if let Some(entry) = previous {
+            self.live_bytes -= entry.bytes;
+            removed.push((key.clone(), entry.value));
         }
-        while !self.fits_after(bytes) {
-            if !self.evict_one(counters) {
-                // Re-insert nothing: the caller keeps its value uncached.
-                return false;
+        for victim in victims {
+            if let Some(entry) = self.entries.remove(&victim) {
+                self.live_bytes -= entry.bytes;
+                removed.push((victim, entry.value));
+                counters.evicted += 1;
             }
         }
+
         let tick = self.advance();
         self.entries.insert(
             key,
@@ -242,6 +315,7 @@ where
                 value,
                 bytes,
                 last_used: tick,
+                sequence: tick,
                 leases: 0,
                 dependencies,
             },
@@ -252,42 +326,55 @@ where
         counters.live_entries = self.entries.len() as u64;
         counters.live_bytes = self.live_bytes;
         counters.peak_bytes = self.peak_bytes;
-        true
+        CacheMutation {
+            removed,
+            retained: true,
+        }
     }
 
-    /// Whether one more entry of `bytes` would stay within both bounds.
-    fn fits_after(&self, bytes: u64) -> bool {
-        // The entry about to be inserted counts as one more; the loop above has
-        // already removed the entry this key may be replacing.
-        let entries = self.entries.len() as u64 + 1;
-        entries <= self.budget.max_entries as u64
-            && self.live_bytes + bytes <= self.budget.max_bytes
-    }
+    /// Chooses which unleased entries an insert of `bytes` would have to evict.
+    ///
+    /// `replaced` is the entry this key is replacing, already out of the table.
+    /// Returns `None` when the budget cannot be met without evicting a leased
+    /// entry.  Nothing is removed here: a refusal must cost nothing.
+    fn plan_eviction(&self, bytes: u64, replaced: Option<&CacheEntry<V>>) -> Option<Vec<K>> {
+        // The key's previous entry is already out of the table, so the entry
+        // count needs no adjustment -- but `live_bytes` has not been reduced for
+        // it yet, because a refused insert must be able to put it back with its
+        // own accounting intact.
+        let mut entries = self.entries.len();
+        let mut total = self.live_bytes;
+        if let Some(entry) = replaced {
+            total -= entry.bytes;
+        }
 
-    /// Evicts the least recently used unleased entry, if there is one.
-    fn evict_one(&mut self, counters: &mut CacheCounters) -> bool {
-        let victim = self
+        let fits = |entries: usize, total: u64| {
+            entries < self.budget.max_entries && total + bytes <= self.budget.max_bytes
+        };
+        if fits(entries, total) {
+            return Some(Vec::new());
+        }
+
+        let mut candidates: Vec<(u64, K)> = self
             .entries
             .iter()
             .filter(|(_, entry)| entry.leases == 0)
-            .min_by(|(left_key, left), (right_key, right)| {
-                left.last_used
-                    .cmp(&right.last_used)
-                    .then_with(|| left_key.cmp(right_key))
-            })
-            .map(|(key, _)| key.clone());
-        match victim {
-            Some(key) => {
-                if let Some(entry) = self.entries.remove(&key) {
-                    self.live_bytes -= entry.bytes;
-                    counters.evicted += 1;
-                    counters.live_entries = self.entries.len() as u64;
-                    counters.live_bytes = self.live_bytes;
-                }
-                true
+            .map(|(key, entry)| (entry.last_used, key.clone()))
+            .collect();
+        // Access ticks are unique, so this order is total and needs no
+        // tie-break that would depend on the table's iteration order.
+        candidates.sort_by_key(|(last_used, _)| *last_used);
+
+        let mut victims = Vec::new();
+        for (_, key) in candidates {
+            if fits(entries, total) {
+                break;
             }
-            None => false,
+            total -= self.entries.get(&key).map_or(0, |entry| entry.bytes);
+            entries -= 1;
+            victims.push(key);
         }
+        fits(entries, total).then_some(victims)
     }
 
     /// Takes a lease on an entry so it cannot be evicted.
@@ -318,54 +405,75 @@ where
         self.entries.get(key).is_some_and(|entry| entry.leases > 0)
     }
 
-    /// Drops every entry that names `resource`, returning how many were dropped.
+    /// Drops every entry that names `resource`, reporting what was dropped.
     pub(crate) fn invalidate_resource(
         &mut self,
         resource: ResourceRef,
         counters: &mut CacheCounters,
-    ) -> usize {
-        let doomed: Vec<K> = self
+    ) -> CacheMutation<K, V> {
+        let mut doomed: Vec<(u64, K)> = self
             .entries
             .iter()
             .filter(|(_, entry)| entry.dependencies.contains(&resource))
-            .map(|(key, _)| key.clone())
+            .map(|(key, entry)| (entry.sequence, key.clone()))
             .collect();
-        self.drop_keys(doomed, counters)
+        // Creation order, so a caller destroying each value makes a
+        // reproducible sequence of backend calls.
+        doomed.sort_by_key(|(sequence, _)| *sequence);
+
+        let mut removed = Vec::with_capacity(doomed.len());
+        for (_, key) in doomed {
+            if let Some(entry) = self.entries.remove(&key) {
+                self.live_bytes -= entry.bytes;
+                removed.push((key, entry.value));
+                counters.invalidated += 1;
+            }
+        }
+        counters.live_entries = self.entries.len() as u64;
+        counters.live_bytes = self.live_bytes;
+        CacheMutation {
+            removed,
+            retained: true,
+        }
     }
 
-    /// Drops every entry, without calling anything on the backend.
+    /// Empties the cache for a normal teardown, reporting everything held.
     ///
-    /// This is the context-loss path: the backend values in these entries are
-    /// no longer callable, so nothing may be destroyed through them, and the
-    /// only correct action is to forget them and count the purge separately
-    /// from an eviction.
+    /// The caller destroys what comes back: these values are backend objects
+    /// this layer created, and dropping the table without destroying them would
+    /// leak them in the driver for as long as the context lives.
+    pub(crate) fn drain(&mut self, counters: &mut CacheCounters) -> Vec<(K, V)> {
+        let mut doomed: Vec<(u64, K)> = self
+            .entries
+            .iter()
+            .map(|(key, entry)| (entry.sequence, key.clone()))
+            .collect();
+        doomed.sort_by_key(|(sequence, _)| *sequence);
+
+        let mut removed = Vec::with_capacity(doomed.len());
+        for (_, key) in doomed {
+            if let Some(entry) = self.entries.remove(&key) {
+                removed.push((key, entry.value));
+            }
+        }
+        counters.live_entries = 0;
+        counters.live_bytes = 0;
+        self.live_bytes = 0;
+        removed
+    }
+
+    /// Empties the cache after a context loss, destroying nothing.
+    ///
+    /// The backend values in these entries are no longer callable, so nothing
+    /// may be destroyed through them, and the only correct action is to forget
+    /// them.  The purge is counted separately from an eviction because it is
+    /// not a policy decision.
     pub(crate) fn purge(&mut self, counters: &mut CacheCounters) {
-        counters.purged_on_loss += self.entries.len() as u64;
+        counters.purged += self.entries.len() as u64;
         counters.live_entries = 0;
         counters.live_bytes = 0;
         self.entries.clear();
         self.live_bytes = 0;
-    }
-
-    fn drop_keys(&mut self, keys: Vec<K>, counters: &mut CacheCounters) -> usize {
-        let mut dropped = 0;
-        for key in keys {
-            if let Some(entry) = self.entries.remove(&key) {
-                self.live_bytes -= entry.bytes;
-                dropped += 1;
-                counters.invalidated += 1;
-            }
-        }
-        if dropped > 0 {
-            counters.live_entries = self.entries.len() as u64;
-            counters.live_bytes = self.live_bytes;
-        }
-        dropped
-    }
-
-    /// The live keys, in key order, for a deterministic report.
-    pub(crate) fn keys(&self) -> impl Iterator<Item = &K> {
-        self.entries.keys()
     }
 
     /// The dependencies of one entry, for a report or a test.
@@ -389,6 +497,13 @@ mod tests {
     use super::{CacheBudget, CacheMode, DependencySet, StructuralCache};
     use crate::webgl2::state::counters::CacheCounters;
 
+    // `invalidate_resource` and `drain` are exercised here only through their
+    // bookkeeping, because every `ResourceRef` variant holds an
+    // `ObjectIdentity` whose constructor is `pub(super)` inside `api` -- this
+    // module deliberately cannot mint one.  Their dependency-filtering and
+    // removal-order behaviour is covered by the fixture-backed cache tests,
+    // which obtain real identities from a provider.
+
     fn cache() -> StructuralCache<u32, u32> {
         StructuralCache::new(CacheBudget::new(2, 32))
     }
@@ -397,12 +512,21 @@ mod tests {
     fn eviction_is_deterministic_and_prefers_the_least_recently_used() {
         let mut cache = cache();
         let mut counters = CacheCounters::default();
-        assert!(cache.insert(1, 10, 8, DependencySet::new(), &mut counters));
-        assert!(cache.insert(2, 20, 8, DependencySet::new(), &mut counters));
+        assert!(
+            cache
+                .insert(1, 10, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
+        assert!(
+            cache
+                .insert(2, 20, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
         // Touch 1 so 2 is the least recently used.
         assert_eq!(cache.get(&1, &mut counters), Some(&10));
-        assert!(cache.insert(3, 30, 8, DependencySet::new(), &mut counters));
+        let mutation = cache.insert(3, 30, 8, DependencySet::new(), &mut counters);
 
+        assert_eq!(mutation.removed, vec![(2, 20)]);
         assert!(cache.peek(&1).is_some());
         assert!(cache.peek(&2).is_none());
         assert!(cache.peek(&3).is_some());
@@ -415,21 +539,114 @@ mod tests {
         // One entry of room, so the second insert has to evict or refuse.
         let mut cache = StructuralCache::new(CacheBudget::new(1, 32));
         let mut counters = CacheCounters::default();
-        assert!(cache.insert(1, 10, 8, DependencySet::new(), &mut counters));
+        assert!(
+            cache
+                .insert(1, 10, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
         assert!(cache.lease(&1));
 
-        assert!(!cache.insert(2, 20, 8, DependencySet::new(), &mut counters));
+        let mutation = cache.insert(2, 20, 8, DependencySet::new(), &mut counters);
+        assert!(!mutation.retained);
+        // Nothing was evicted and nothing is handed back: the caller still owns
+        // the value it passed.
+        assert!(mutation.removed.is_empty());
         assert!(cache.peek(&1).is_some());
         assert!(cache.peek(&2).is_none());
-        // A refused insert is not an eviction: nothing left the cache.
         assert_eq!(counters.evicted, 0);
         assert_eq!(cache.live_bytes(), 8);
 
         cache.release(&1);
-        assert!(cache.insert(2, 20, 8, DependencySet::new(), &mut counters));
+        assert!(
+            cache
+                .insert(2, 20, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
         assert!(cache.peek(&2).is_some());
         assert!(cache.peek(&1).is_none());
         assert_eq!(counters.evicted, 1);
+    }
+
+    #[test]
+    fn a_byte_budget_bounds_a_cache_that_is_under_its_entry_budget() {
+        let mut cache = StructuralCache::new(CacheBudget::new(64, 24));
+        let mut counters = CacheCounters::default();
+        assert!(
+            cache
+                .insert(1, 1, 16, DependencySet::new(), &mut counters)
+                .retained
+        );
+        // The second entry would take the cache to 32 bytes against a 24-byte
+        // budget, so the first has to go even though the entry budget is 64.
+        assert!(
+            cache
+                .insert(2, 2, 16, DependencySet::new(), &mut counters)
+                .retained
+        );
+        assert!(cache.peek(&1).is_none());
+        assert_eq!(cache.live_bytes(), 16);
+        assert_eq!(counters.peak_bytes, 16);
+    }
+
+    #[test]
+    fn a_purge_is_not_an_eviction_and_destroys_nothing() {
+        let mut cache = cache();
+        let mut counters = CacheCounters::default();
+        assert!(
+            cache
+                .insert(1, 10, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
+        // `purge` returns nothing at all, which is the point: after a context
+        // loss there is no callable value left to hand back.
+        cache.purge(&mut counters);
+
+        assert_eq!(cache.len(), 0);
+        assert_eq!(counters.purged, 1);
+        assert_eq!(counters.evicted, 0);
+        assert_eq!(counters.live_bytes, 0);
+    }
+
+    #[test]
+    fn a_normal_drain_hands_back_everything_for_the_caller_to_destroy() {
+        let mut cache = cache();
+        let mut counters = CacheCounters::default();
+        assert!(
+            cache
+                .insert(1, 10, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
+        assert!(
+            cache
+                .insert(2, 20, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
+
+        let drained = cache.drain(&mut counters);
+        // Creation order, not table order.
+        assert_eq!(drained, vec![(1, 10), (2, 20)]);
+        assert_eq!(cache.len(), 0);
+        // A drain is neither an eviction nor a loss purge.
+        assert_eq!(counters.evicted, 0);
+        assert_eq!(counters.purged, 0);
+    }
+
+    #[test]
+    fn replacing_a_key_reports_the_previous_value_and_does_not_double_count_bytes() {
+        let mut cache = StructuralCache::new(CacheBudget::new(8, 100));
+        let mut counters = CacheCounters::default();
+        assert!(
+            cache
+                .insert(1, 10, 40, DependencySet::new(), &mut counters)
+                .retained
+        );
+        let mutation = cache.insert(1, 11, 24, DependencySet::new(), &mut counters);
+
+        assert_eq!(mutation.removed, vec![(1, 10)]);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.live_bytes(), 24);
+        assert_eq!(cache.peek(&1), Some(&11));
+        assert_eq!(counters.evicted, 0);
     }
 
     #[test]
@@ -441,48 +658,13 @@ mod tests {
         assert!(!cache.is_leased(&7));
 
         let mut counters = CacheCounters::default();
-        assert!(cache.insert(7, 70, 8, DependencySet::new(), &mut counters));
+        assert!(
+            cache
+                .insert(7, 70, 8, DependencySet::new(), &mut counters)
+                .retained
+        );
         assert!(cache.lease(&7));
         assert!(cache.is_leased(&7));
-    }
-
-    #[test]
-    fn a_byte_budget_bounds_a_cache_that_is_under_its_entry_budget() {
-        let mut cache = StructuralCache::new(CacheBudget::new(64, 24));
-        let mut counters = CacheCounters::default();
-        assert!(cache.insert(1, 1, 16, DependencySet::new(), &mut counters));
-        // The second entry would take the cache to 32 bytes against a 24-byte
-        // budget, so the first has to go even though the entry budget is 64.
-        assert!(cache.insert(2, 2, 16, DependencySet::new(), &mut counters));
-        assert!(cache.peek(&1).is_none());
-        assert_eq!(cache.live_bytes(), 16);
-        assert_eq!(counters.peak_bytes, 16);
-    }
-
-    #[test]
-    fn a_loss_purge_is_not_an_eviction() {
-        let mut cache = cache();
-        let mut counters = CacheCounters::default();
-        assert!(cache.insert(1, 10, 8, DependencySet::new(), &mut counters));
-        cache.purge(&mut counters);
-
-        assert_eq!(cache.len(), 0);
-        assert_eq!(counters.purged_on_loss, 1);
-        assert_eq!(counters.evicted, 0);
-        assert_eq!(counters.live_bytes, 0);
-    }
-
-    #[test]
-    fn replacing_a_key_does_not_double_count_its_bytes() {
-        let mut cache = StructuralCache::new(CacheBudget::new(8, 100));
-        let mut counters = CacheCounters::default();
-        assert!(cache.insert(1, 10, 40, DependencySet::new(), &mut counters));
-        assert!(cache.insert(1, 11, 24, DependencySet::new(), &mut counters));
-
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.live_bytes(), 24);
-        assert_eq!(cache.peek(&1), Some(&11));
-        assert_eq!(counters.evicted, 0);
     }
 
     #[test]

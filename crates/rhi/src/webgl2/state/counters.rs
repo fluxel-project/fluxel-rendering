@@ -86,7 +86,7 @@ pub(crate) struct CacheCounters {
     pub peak_bytes: u64,
     /// Entries dropped without touching a backend, because the context was lost
     /// and its backend values are no longer callable.
-    pub purged_on_loss: u64,
+    pub purged: u64,
 }
 
 /// Command submission tallies, which belong to no single state domain.

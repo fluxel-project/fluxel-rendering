@@ -57,6 +57,8 @@ pub(super) mod counters;
 pub(super) mod error;
 pub(super) mod event;
 pub(super) mod knowledge;
+pub(super) mod machine;
+pub(super) mod session;
 
 pub(crate) use backend::{GlOptionalComputeBackend, GlOptionalIndirectBackend, GlStateBackend};
 pub(crate) use cache::{
