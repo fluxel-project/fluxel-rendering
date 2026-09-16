@@ -20,7 +20,7 @@
 //! - [`error`], [`counters`] -- what a refused transition carries out, and what
 //!   an accepted one is accountable for.
 //! - [`cache`] -- the derived-state machinery: structural keys, budgets,
-//!   deterministic eviction, leases, and reverse-dependency invalidation.
+//!   deterministic eviction, and reverse-dependency invalidation.
 //!
 //! One module per state domain follows, each owning its own `desired`/`applied`
 //! pair and its own `reconcile`/`invalidate` pair, so that a domain's

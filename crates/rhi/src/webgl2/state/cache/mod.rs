@@ -19,19 +19,23 @@
 //!    derived from, so deleting a buffer can invalidate the geometry records
 //!    built from it *before* the backend deletes the name and a new object
 //!    reuses it.
-//! 3. **Deterministic eviction under a lease.**  Eviction is a function of the
-//!    access trace alone -- never wall-clock age, and never weak-reference
-//!    death, neither of which proves the GPU is done with an object.  Order is
-//!    deterministic regardless of the table's iteration order: access ticks are
-//!    unique, and removals that happen in one call report in creation order.
+//! 3. **Deterministic eviction.**  Eviction is a function of the access trace
+//!    alone -- never wall-clock age, and never weak-reference death, neither of
+//!    which proves the GPU is done with an object.  Order is deterministic
+//!    regardless of the table's iteration order: access ticks are unique, and
+//!    removals that happen in one call report in creation order.
 //!
-//! # Leases
+//! # What eviction does not know
 //!
-//! An entry referenced by accepted work is leased.  A leased entry is never
-//! evicted and never destroyed; a cache that cannot make room without breaking a
-//! lease refuses the insert and says so, and the caller then uses the object it
-//! just created without retaining it.  That is a slower frame, not an incorrect
-//! one.
+//! An entry whose object is still named by work the driver has not finished is
+//! *not* protected here, and this module deliberately does not pretend
+//! otherwise.  Deciding that would need a completion signal that lives above
+//! this layer, and the two mechanisms that actually make an early drop safe are
+//! already in force below it: Layer 1 defers the deletion of an object that
+//! still has a name until it is unbound, and every entry carries the generation
+//! it was derived under, so a record whose object was deleted is dropped by
+//! invalidation rather than reused.  So an eviction can make a frame slower; it
+//! cannot make it wrong.
 //!
 //! # Who destroys what
 //!
@@ -46,7 +50,7 @@
 //! # Where the typed caches live
 //!
 //! This module holds the machinery and nothing else: budgets, the entry table,
-//! eviction, leasing, and reverse-dependency invalidation.  Each domain's cache
+//! eviction, and reverse-dependency invalidation.  Each domain's cache
 //! lives inside that domain's own module, because a cache's key, value and
 //! per-entry cost are that domain's knowledge: a key that omitted one of the
 //! domain's inputs is a defect only the domain can notice, and a cost estimate
@@ -157,8 +161,6 @@ struct CacheEntry<V> {
     /// The tick this entry was created at, so removals can be reported in
     /// creation order without the key type being ordered.
     sequence: u64,
-    /// Leases held by accepted work.  A leased entry is pinned.
-    leases: u32,
     /// Resources this value was derived from.
     dependencies: DependencySet,
 }
@@ -173,9 +175,10 @@ pub(crate) struct CacheMutation<K, V> {
     pub removed: Vec<(K, V)>,
     /// Whether the value the call was given is now retained by the cache.
     ///
-    /// `false` means the budget could not be met without evicting a leased
-    /// entry: nothing was inserted, the caller still owns the value it passed,
-    /// and it must destroy that value when it is done with it.
+    /// `false` means the value does not fit the budget even with the cache
+    /// emptied -- a record larger than `max_bytes`, or a budget of zero entries.
+    /// Nothing was inserted, the caller still owns the value it passed, and it
+    /// must destroy that value when it is done with it.
     pub retained: bool,
 }
 
@@ -263,7 +266,7 @@ where
         self.entries.get(key).map(|entry| &entry.value)
     }
 
-    /// Inserts an entry, evicting unleased entries until it fits.
+    /// Inserts an entry, evicting entries until it fits.
     ///
     /// The evicted values are returned in [`CacheMutation::removed`] for the
     /// caller to destroy.  A key already present is replaced, and its previous
@@ -315,7 +318,6 @@ where
                 bytes,
                 last_used: tick,
                 sequence: tick,
-                leases: 0,
                 dependencies,
             },
         );
@@ -331,11 +333,11 @@ where
         }
     }
 
-    /// Chooses which unleased entries an insert of `bytes` would have to evict.
+    /// Chooses which entries an insert of `bytes` would have to evict.
     ///
     /// `replaced` is the entry this key is replacing, already out of the table.
-    /// Returns `None` when the budget cannot be met without evicting a leased
-    /// entry.  Nothing is removed here: a refusal must cost nothing.
+    /// Returns `None` when the value cannot fit the budget even with the cache
+    /// emptied.  Nothing is removed here: a refusal must cost nothing.
     fn plan_eviction(&self, bytes: u64, replaced: Option<&CacheEntry<V>>) -> Option<Vec<K>> {
         // The key's previous entry is already out of the table, so the entry
         // count needs no adjustment -- but `live_bytes` has not been reduced for
@@ -357,7 +359,6 @@ where
         let mut candidates: Vec<(u64, K)> = self
             .entries
             .iter()
-            .filter(|(_, entry)| entry.leases == 0)
             .map(|(key, entry)| (entry.last_used, key.clone()))
             .collect();
         // Access ticks are unique, so this order is total and needs no
@@ -374,34 +375,6 @@ where
             victims.push(key);
         }
         fits(entries, total).then_some(victims)
-    }
-
-    /// Takes a lease on an entry so it cannot be evicted.
-    ///
-    /// Returns whether the entry exists.  A caller that accepted work naming
-    /// this entry must hold a lease until the work's completion is terminal;
-    /// releasing it early re-exposes the object to eviction while the GPU may
-    /// still read it.
-    pub(crate) fn lease(&mut self, key: &K) -> bool {
-        match self.entries.get_mut(key) {
-            Some(entry) => {
-                entry.leases += 1;
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Releases one lease.
-    pub(crate) fn release(&mut self, key: &K) {
-        if let Some(entry) = self.entries.get_mut(key) {
-            entry.leases = entry.leases.saturating_sub(1);
-        }
-    }
-
-    /// Whether an entry is currently leased.
-    pub(crate) fn is_leased(&self, key: &K) -> bool {
-        self.entries.get(key).is_some_and(|entry| entry.leases > 0)
     }
 
     /// Drops every entry that names `resource`, reporting what was dropped.
@@ -534,36 +507,40 @@ mod tests {
     }
 
     #[test]
-    fn a_leased_entry_is_never_evicted_and_the_insert_is_refused_instead() {
-        // One entry of room, so the second insert has to evict or refuse.
-        let mut cache = StructuralCache::new(CacheBudget::new(1, 32));
+    fn a_value_that_cannot_fit_the_budget_is_refused_and_costs_the_cache_nothing() {
+        // 32 bytes of room, and a value of 64: no amount of eviction makes room,
+        // so the insert is refused rather than accepted and immediately evicted.
+        let mut cache = StructuralCache::new(CacheBudget::new(2, 32));
         let mut counters = CacheCounters::default();
         assert!(
             cache
                 .insert(1, 10, 8, DependencySet::new(), &mut counters)
                 .retained
         );
-        assert!(cache.lease(&1));
 
-        let mutation = cache.insert(2, 20, 8, DependencySet::new(), &mut counters);
+        let mutation = cache.insert(2, 20, 64, DependencySet::new(), &mut counters);
         assert!(!mutation.retained);
         // Nothing was evicted and nothing is handed back: the caller still owns
-        // the value it passed.
+        // the value it passed, and the resident entry kept its own accounting.
         assert!(mutation.removed.is_empty());
         assert!(cache.peek(&1).is_some());
         assert!(cache.peek(&2).is_none());
-        assert_eq!(counters.evicted, 0);
+        assert_eq!(cache.len(), 1);
         assert_eq!(cache.live_bytes(), 8);
+        assert_eq!(counters.evicted, 0);
+    }
 
-        cache.release(&1);
-        assert!(
-            cache
-                .insert(2, 20, 8, DependencySet::new(), &mut counters)
-                .retained
-        );
-        assert!(cache.peek(&2).is_some());
-        assert!(cache.peek(&1).is_none());
-        assert_eq!(counters.evicted, 1);
+    #[test]
+    fn a_budget_of_no_entries_refuses_every_insert() {
+        // The degenerate budget, kept honest: an entry bound of zero is a cache
+        // that retains nothing, not a cache that silently holds one entry.
+        let mut cache = StructuralCache::new(CacheBudget::new(0, 32));
+        let mut counters = CacheCounters::default();
+        let mutation = cache.insert(1, 10, 8, DependencySet::new(), &mut counters);
+
+        assert!(!mutation.retained);
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.live_bytes(), 0);
     }
 
     #[test]
@@ -646,24 +623,6 @@ mod tests {
         assert_eq!(cache.live_bytes(), 24);
         assert_eq!(cache.peek(&1), Some(&11));
         assert_eq!(counters.evicted, 0);
-    }
-
-    #[test]
-    fn leasing_a_key_that_is_not_present_reports_instead_of_succeeding() {
-        // A domain that accepts work naming a derived object has to be able to
-        // tell that the object is gone rather than hold a lease on nothing.
-        let mut cache = cache();
-        assert!(!cache.lease(&7));
-        assert!(!cache.is_leased(&7));
-
-        let mut counters = CacheCounters::default();
-        assert!(
-            cache
-                .insert(7, 70, 8, DependencySet::new(), &mut counters)
-                .retained
-        );
-        assert!(cache.lease(&7));
-        assert!(cache.is_leased(&7));
     }
 
     #[test]

@@ -17,7 +17,7 @@
 //! | [`StateEvent::SamplerDeleted`] | textures, groups |
 //! | [`StateEvent::ShaderDeleted`] | pipeline |
 //! | [`StateEvent::ProgramDeleted`] | pipeline, groups |
-//! | [`StateEvent::VertexArrayDeleted`] | geometry |
+//! | [`StateEvent::VertexArrayDeleted`] | geometry, pipeline |
 //! | [`StateEvent::FramebufferDeleted`] | session |
 //! | [`StateEvent::QueryDeleted`] | sync |
 //! | [`StateEvent::SyncDeleted`] | sync |

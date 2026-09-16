@@ -43,7 +43,13 @@ pub(crate) enum StateDomain {
     /// the base-instance values that change attribute addressing.
     Geometry,
     /// Generic and indexed buffer bindings, including uniform and storage
-    /// ranges, plus the pixel-store parameters an upload depends on.
+    /// ranges.
+    ///
+    /// The plan's state model also names the pixel-store parameters an upload
+    /// depends on.  They are deliberately not here: Layer 1's pixel-store method
+    /// is a read-only getter rather than a verb this layer could emit, and the
+    /// transfer verbs scope their own layout around the call they make, so there
+    /// is no request a mirror could prove redundant and nothing to own.
     Buffers,
     /// Active texture unit, per-unit texture and sampler bindings.
     ///
@@ -55,13 +61,37 @@ pub(crate) enum StateDomain {
     Textures,
     /// Common bind-group slots as logical identities plus their dynamic
     /// offsets, before they expand into the buffer and texture domains.
+    ///
+    /// No mirror is built against this group, and the plan records why: what a
+    /// bind-group identity adds over the per-slot comparison the buffer and
+    /// texture domains already do is a *short-circuit* — skip the whole expansion
+    /// when the group applied is the one already applied — which is a decision
+    /// above those two domains rather than a third mirror of their slots.  The
+    /// group is kept here because the invalidation matrix and the counters name
+    /// it, and because whether the short-circuit is worth its cost is
+    /// Checkpoint G's measurement rather than this module's assumption.
     Groups,
-    /// Compute program identity, storage-buffer and storage-image bindings, and
-    /// pending memory visibility, for profiles with the optional command
-    /// domains.
+    /// Storage-image bindings and pending memory visibility, for profiles with
+    /// the optional command domains.
+    ///
+    /// The plan's state model also names the compute program identity.  It is
+    /// not claimed here until Layer 1's `set_compute_program` installs what its
+    /// own documentation says it installs — the plan records that as P1-16 — and
+    /// the storage-buffer half of that model belongs to [`Self::Buffers`], whose
+    /// storage role is the one binding point the storage bind verb addresses.
     Compute,
     /// Active queries, sync objects, timer-query disjointness, and the bounded
     /// in-flight submission queue.
+    ///
+    /// Only the active-query half is a mirrorable driver fact, and even that has
+    /// no verb whose redundancy it could prove: the query verbs are
+    /// begin/end/timestamp commands whose effect is per-invocation, and a fence is
+    /// an object Layer 1 is asked about rather than driver state.  So no mirror is
+    /// built here, and the plan records the reason rather than leaving the row
+    /// looking unimplemented: completion and retention — the part this group's
+    /// second half describes — belong to the compatibility adapter, which is the
+    /// layer that knows the use set.  The group is kept for the matrix and the
+    /// counters, as [`Self::Groups`] is.
     Sync,
 }
 
@@ -260,6 +290,21 @@ impl<T> DriverKnowledge<T> {
 /// domains, the same validation and the same call order with every skip
 /// disabled, so that a differential test can compare an optimized trace against
 /// the trace a machine with no mirror at all would have produced.
+///
+/// # What the comparison can and cannot establish
+///
+/// It can establish that no call was skipped that the mode forbids skipping, and
+/// that the optimized and oracle traces differ only in the calls a mirror proved
+/// redundant.  It **cannot** establish that a mirror's *belief* about the driver
+/// is correct: the mock provider models object tables and three state facts
+/// (whether a pass is open, the pixel-store parameters, the installed compute
+/// program) and models no raster, depth, blend or texture-unit state at all, so a
+/// disagreement between a mirror's claim and the driver's real value is invisible
+/// to any trace comparison.  A test that wants to say something about a belief has
+/// to say it against the Layer 1 call surface the belief was derived from, which
+/// is why each domain's own tests assert on the verb's effects rather than only on
+/// the trace.  Skipping correctness and belief correctness are separate claims;
+/// this type only serves the first.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExecutionMode {
     /// Skip every call the mirror proves redundant.

@@ -134,7 +134,7 @@ fn pipeline(
     }
 }
 
-fn pipeline_state(mode: CacheMode) -> PipelineState {
+fn pipeline_state(mode: ExecutionMode) -> PipelineState {
     PipelineState::new(DEFAULT_BUDGET, mode)
 }
 
@@ -172,7 +172,7 @@ fn destroys(backend: &MockGlFamilyApi) -> usize {
 fn a_pipeline_that_is_already_installed_is_not_installed_again() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -214,10 +214,103 @@ fn a_pipeline_that_is_already_installed_is_not_installed_again() {
 }
 
 #[test]
+fn an_oracle_emits_the_redundant_install_the_optimized_mirror_skips() {
+    // A skip is two decisions -- the mirror agrees, and this mode may act on
+    // that -- and a domain that made only the first would produce one trace in
+    // both modes.  The oracle exists to be the trace a machine with no mirror at
+    // all would have produced, so a skip it should not have made is invisible to
+    // the comparison it exists for.  Both instances are given the same two
+    // requests: one install, and then the request that repeats it.
+    let mut optimized_backend = backend_with_a_pass();
+    let optimized_vao = vertex_array(&mut optimized_backend);
+    let mut optimized = pipeline_state(ExecutionMode::Optimized);
+    let mut optimized_counters = StateCounters::default();
+    let (program, _, _) = optimized
+        .program_for(
+            &mut optimized_backend,
+            &descriptor("f"),
+            &mut optimized_counters,
+        )
+        .expect("the program links");
+    let wanted = pipeline(program, optimized_vao, GlCullMode::None);
+
+    let mut oracle_backend = backend_with_a_pass();
+    let oracle_vao = vertex_array(&mut oracle_backend);
+    let mut oracle = pipeline_state(ExecutionMode::Oracle);
+    let mut oracle_counters = StateCounters::default();
+    let (oracle_program, _, _) = oracle
+        .program_for(&mut oracle_backend, &descriptor("f"), &mut oracle_counters)
+        .expect("the oracle still links a usable program");
+    let repeated = pipeline(oracle_program, oracle_vao, GlCullMode::None);
+
+    optimized.set_pipeline(&wanted);
+    let first = optimized
+        .reconcile(&mut optimized_backend, &mut optimized_counters)
+        .expect("the first install emits");
+    assert_eq!(
+        first,
+        PipelineEffects {
+            pipeline_installed: true,
+        }
+    );
+    optimized.set_pipeline(&wanted);
+    let skipped = optimized
+        .reconcile(&mut optimized_backend, &mut optimized_counters)
+        .expect("a redundant install is not a failure");
+
+    oracle.set_pipeline(&repeated);
+    let oracle_first = oracle
+        .reconcile(&mut oracle_backend, &mut oracle_counters)
+        .expect("the oracle installs the pipeline as well");
+    assert_eq!(
+        oracle_first,
+        PipelineEffects {
+            pipeline_installed: true,
+        }
+    );
+    oracle.set_pipeline(&repeated);
+    let re_emitted = oracle
+        .reconcile(&mut oracle_backend, &mut oracle_counters)
+        .expect("the oracle re-installs rather than skipping");
+
+    // First observable: the trace.  Two requests cost the driver one install
+    // under the optimized mirror and two under the oracle.
+    assert_eq!(skipped, PipelineEffects::NONE);
+    assert_eq!(installs(&optimized_backend), 1);
+    assert_eq!(
+        re_emitted,
+        PipelineEffects {
+            pipeline_installed: true,
+        }
+    );
+    assert_eq!(installs(&oracle_backend), 2);
+
+    // Second observable, and the discriminating one: this domain's own tally.
+    // It is what a report reads to say how much the mirror saved, and the trace
+    // is what says whether a call reached the driver -- so an ungated skip would
+    // show up as a saving the oracle claimed for a call the optimized instance
+    // is supposed to be the only one allowed to drop.  The counts are asserted
+    // per instance rather than as a difference, because the oracle's zero is the
+    // half that fails when the mode is ignored.
+    assert_eq!(
+        optimized_counters
+            .domain_counts(StateDomain::Pipeline)
+            .skipped,
+        1,
+        "the optimized mirror proved the repeated install redundant"
+    );
+    assert_eq!(
+        oracle_counters.domain_counts(StateDomain::Pipeline).skipped,
+        0,
+        "the oracle has nothing to report as skipped: it emitted every required call"
+    );
+}
+
+#[test]
 fn a_changed_pipeline_is_installed_again() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -255,7 +348,7 @@ fn a_reconcile_with_nothing_asked_for_emits_nothing() {
     // A pass that only clears, or a compute-only frame, runs the domains
     // without ever asking this one for a pipeline.
     let mut backend = backend_with_a_pass();
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     let effects = state
@@ -272,7 +365,7 @@ fn a_reconcile_with_nothing_asked_for_emits_nothing() {
 fn a_pass_that_ended_makes_the_next_reconcile_install_again() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -316,7 +409,7 @@ fn a_pass_that_ended_makes_the_next_reconcile_install_again() {
 #[test]
 fn a_program_is_linked_once_and_served_from_the_cache_afterwards() {
     let mut backend = backend_with_a_pass();
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     let (first, reflection, owned) = state
@@ -350,7 +443,7 @@ fn a_program_is_linked_once_and_served_from_the_cache_afterwards() {
 #[test]
 fn a_program_for_a_different_descriptor_is_linked_separately() {
     let mut backend = backend_with_a_pass();
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     let (first, _, _) = state
@@ -371,7 +464,7 @@ fn a_program_for_a_different_descriptor_is_linked_separately() {
 fn linking_a_program_forgets_the_installed_pipeline() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -405,7 +498,7 @@ fn linking_a_program_forgets_the_installed_pipeline() {
 fn deleting_a_program_drops_its_record_and_the_pipeline_that_named_it() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -457,9 +550,78 @@ fn deleting_a_program_drops_its_record_and_the_pipeline_that_named_it() {
 }
 
 #[test]
+fn deleting_a_vertex_array_forgets_the_pipeline_that_named_it() {
+    let mut backend = backend_with_a_pass();
+    let vao = vertex_array(&mut backend);
+    let unrelated = vertex_array(&mut backend);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
+    let mut counters = StateCounters::default();
+    let (program, _, _) = state
+        .program_for(&mut backend, &descriptor("f"), &mut counters)
+        .expect("the program links");
+    state.set_pipeline(&pipeline(program, vao, GlCullMode::None));
+    apply(&mut state, &mut backend, &mut counters);
+    assert_eq!(installs(&backend), 1);
+    let destroyed = destroys(&backend);
+
+    // The negative control first: an array this pipeline does not name leaves
+    // the claim alone.  Without it the test would pass against an arm that
+    // invalidated on every array deletion, which is a different -- and wrong --
+    // statement about what the mirror knows.
+    state.invalidate(
+        &mut backend,
+        &StateEvent::VertexArrayDeleted(unrelated),
+        &mut counters,
+    );
+    assert!(
+        state.pipeline_installed(),
+        "the install this mirror believes in does not name that array"
+    );
+
+    state.invalidate(
+        &mut backend,
+        &StateEvent::VertexArrayDeleted(vao),
+        &mut counters,
+    );
+
+    // The claim covers the whole verb, and the verb binds this array.  Layer 1
+    // unbinds it when the object is deleted, so the program and the rasterization
+    // values being still installed does not make the claim true: one component of
+    // its effect is gone.
+    assert!(
+        !state.pipeline_installed(),
+        "an install whose vertex array was deleted is not what the driver holds"
+    );
+    assert_eq!(
+        counters.lifecycle.domain_invalidations, 0,
+        "a single deletion is not a whole-domain invalidation"
+    );
+    assert_eq!(
+        destroys(&backend),
+        destroyed,
+        "the event says the owner is deleting the array, so destroying it here would be the second deletion"
+    );
+
+    // And the whole point of dropping the claim: the same request the mirror
+    // would otherwise have skipped is emitted again, which is the install the
+    // deletion made necessary.
+    state.set_pipeline(&pipeline(program, vao, GlCullMode::None));
+    let effects = state
+        .reconcile(&mut backend, &mut counters)
+        .expect("the install is emitted again");
+    assert_eq!(
+        effects,
+        PipelineEffects {
+            pipeline_installed: true,
+        }
+    );
+    assert_eq!(installs(&backend), 2);
+}
+
+#[test]
 fn a_deleted_shader_object_is_not_a_program_cache_event() {
     let mut backend = backend_with_a_pass();
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let shader = backend
         .create_shader(&source(GlShaderStage::Vertex, 1, "v"))
@@ -485,7 +647,7 @@ fn a_deleted_shader_object_is_not_a_program_cache_event() {
 fn a_refused_install_reports_the_domain_and_leaves_no_installed_pipeline() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -523,7 +685,7 @@ fn a_refused_install_reports_the_domain_and_leaves_no_installed_pipeline() {
 #[test]
 fn a_refused_link_reports_the_domain_and_operation() {
     let mut backend = backend_with_a_pass();
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     backend.fail_next(GlError::OutOfMemory {
         operation: "create-program",
@@ -548,7 +710,7 @@ fn a_refused_link_reports_the_domain_and_operation() {
 fn a_context_loss_purges_program_records_without_destroying_them() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -578,7 +740,7 @@ fn a_context_loss_purges_program_records_without_destroying_them() {
 fn a_raw_scope_that_touched_this_domain_drops_the_programs_it_can_still_delete() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -612,7 +774,7 @@ fn a_raw_scope_that_touched_this_domain_drops_the_programs_it_can_still_delete()
 #[test]
 fn a_raw_scope_that_declared_another_domain_leaves_this_one_alone() {
     let mut backend = backend_with_a_pass();
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -634,7 +796,7 @@ fn a_raw_scope_that_declared_another_domain_leaves_this_one_alone() {
 fn shutdown_destroys_the_programs_this_domain_linked() {
     let mut backend = backend_with_a_pass();
     let vao = vertex_array(&mut backend);
-    let mut state = pipeline_state(CacheMode::Enabled);
+    let mut state = pipeline_state(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let (program, _, _) = state
         .program_for(&mut backend, &descriptor("f"), &mut counters)
@@ -658,7 +820,7 @@ fn shutdown_destroys_the_programs_this_domain_linked() {
 #[test]
 fn an_oracle_never_reuses_a_program_and_hands_ownership_back() {
     let mut backend = backend_with_a_pass();
-    let mut state = pipeline_state(CacheMode::Disabled);
+    let mut state = pipeline_state(ExecutionMode::Oracle);
     let mut counters = StateCounters::default();
 
     let (_, _, owned) = state

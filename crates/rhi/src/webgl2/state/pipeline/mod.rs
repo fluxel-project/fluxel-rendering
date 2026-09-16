@@ -67,11 +67,11 @@ use crate::webgl2::api::{GlProgramDescriptor, GlProgramReflection, GlRasterPipel
 pub(super) mod cache;
 
 use super::GlStateBackend;
-use super::cache::{CacheBudget, CacheMode};
+use super::cache::CacheBudget;
 use super::counters::StateCounters;
 use super::error::{PartialApplication, StateError};
 use super::event::StateEvent;
-use super::knowledge::{DriverKnowledge, StateDomain};
+use super::knowledge::{DriverKnowledge, ExecutionMode, StateDomain};
 use cache::{ProgramCache, ProgramKey, ProgramRecord};
 
 /// What changed about the installed pipeline when a reconcile ran.
@@ -137,12 +137,12 @@ pub(crate) struct PipelineState {
     desired: Desired,
     applied: Applied,
     programs: ProgramCache,
-    mode: CacheMode,
+    mode: ExecutionMode,
 }
 
 impl PipelineState {
     /// A pipeline state that has installed nothing and linked nothing.
-    pub(crate) fn new(budget: CacheBudget, mode: CacheMode) -> Self {
+    pub(crate) fn new(budget: CacheBudget, mode: ExecutionMode) -> Self {
         Self {
             desired: Desired::default(),
             applied: Applied::default(),
@@ -151,8 +151,18 @@ impl PipelineState {
         }
     }
 
-    /// The cache mode this domain runs.
-    pub(crate) const fn mode(&self) -> CacheMode {
+    /// The execution mode this domain runs.
+    ///
+    /// The domain holds the mode rather than a [`CacheMode`] because the two are
+    /// not the same decision: retention governs whether a linked program this
+    /// domain derived is kept, and skipping governs whether an install it can
+    /// prove redundant is re-emitted.  A domain given only the retention half
+    /// would skip unconditionally, which is what makes an oracle trace unusable
+    /// as a comparison.  The retention policy is derived where a cache needs it,
+    /// via [`ExecutionMode::cache`].
+    ///
+    /// [`CacheMode`]: super::cache::CacheMode
+    pub(crate) const fn mode(&self) -> ExecutionMode {
         self.mode
     }
 
@@ -195,8 +205,8 @@ impl PipelineState {
     /// [`super::session::SessionState::framebuffer_for`] reports ownership of a
     /// framebuffer.  That is true in two cases, and both are ordinary rather
     /// than error paths: the oracle mode, where nothing is retained by
-    /// construction, and a cache whose budget could not be met without evicting
-    /// a leased record.  The program was still linked, because the caller needs
+    /// construction, and a budget the record does not fit.  The program was
+    /// still linked, because the caller needs
     /// one to install; it is simply not kept, which is a slower frame rather
     /// than a refusal.
     pub(crate) fn program_for(
@@ -207,7 +217,7 @@ impl PipelineState {
     ) -> Result<(ProgramId, GlProgramReflection, bool), StateError> {
         // The key is built only when the cache is allowed to reuse, so the
         // oracle neither looks a program up nor pays for the key it would need.
-        let key = self.mode.may_reuse().then(|| {
+        let key = self.mode.cache().may_reuse().then(|| {
             counters.allocated();
             ProgramKey::new(backend.context_stamp(), descriptor.clone())
         });
@@ -246,6 +256,15 @@ impl PipelineState {
         Ok((program, reflection, !retained))
     }
 
+    /// Whether the mirror proves this request redundant under this mode.
+    ///
+    /// The two halves are one decision.  An oracle machine runs the same domains
+    /// with skipping disabled, so a domain that skipped in oracle mode would emit
+    /// a trace no mirror-free machine could have produced.
+    fn skippable(&self, agrees: bool) -> bool {
+        self.mode.may_skip() && agrees
+    }
+
     /// Makes the backend's installed pipeline match the desired one.
     pub(crate) fn reconcile(
         &mut self,
@@ -255,10 +274,13 @@ impl PipelineState {
         counters.domain(StateDomain::Pipeline).request();
 
         let Some(wanted) = self.desired.pipeline.as_ref() else {
+            // No pipeline was asked for.  There is no verb that uninstalls one,
+            // so this is not a redundancy the mirror proved -- it is a request
+            // model with nothing in it, and it counts as a skip in both modes.
             counters.domain(StateDomain::Pipeline).skip();
             return Ok(PipelineEffects::NONE);
         };
-        if self.applied.pipeline.agrees(wanted) {
+        if self.skippable(self.applied.pipeline.agrees(wanted)) {
             counters.domain(StateDomain::Pipeline).skip();
             return Ok(PipelineEffects::NONE);
         }
@@ -309,13 +331,21 @@ impl PipelineState {
 
     /// Reacts to an invalidation.
     ///
-    /// The events this domain owns are a program deletion and the two ways the
-    /// whole mirror stops being knowable: an epoch change, and a raw scope that
-    /// said it may have touched pipeline state.  A shader-object deletion is
-    /// owned here by the matrix and is satisfied by doing nothing, because Layer
-    /// 1 links from lowered source content and its providers delete the shader
-    /// objects as soon as the link succeeds -- a deleted shader object names
-    /// nothing this domain holds.
+    /// The events this domain owns are a program deletion, a vertex-array
+    /// deletion, and the two ways the whole mirror stops being knowable: an epoch
+    /// change, and a raw scope that said it may have touched pipeline state.  A
+    /// shader-object deletion is owned here by the matrix and is satisfied by
+    /// doing nothing, because Layer 1 links from lowered source content and its
+    /// providers delete the shader objects as soon as the link succeeds -- a
+    /// deleted shader object names nothing this domain holds.
+    ///
+    /// Both object deletions are the same argument, which is why they are one
+    /// match arm apart: a pipeline verb's effect includes binding the pipeline's
+    /// vertex array, so a pipeline that *names* a deleted object is no longer a
+    /// description of what the driver holds.  The vertex array's own mirror is
+    /// geometry's, and geometry invalidates its claim independently -- but this
+    /// mirror's claim is about the whole verb, and a mirror that kept it would
+    /// skip the re-install that the deletion made necessary.
     ///
     /// The backend is needed only for the raw-scope arm: a whole-mirror epoch
     /// event purges records whose identities are no longer callable, while a
@@ -339,6 +369,21 @@ impl PipelineState {
                     .pipeline
                     .get()
                     .is_some_and(|installed| installed.program == *program)
+                {
+                    self.applied.pipeline.invalidate();
+                }
+            }
+            StateEvent::VertexArrayDeleted(vertex_array) => {
+                // The mirror's claim covers the whole verb, and the verb binds
+                // this array.  Deleting it leaves that binding undone while the
+                // program and the rasterization values stay installed, so the
+                // claim is no longer a description of the driver -- and keeping it
+                // would skip the install that the deletion made necessary.
+                if self
+                    .applied
+                    .pipeline
+                    .get()
+                    .is_some_and(|installed| installed.vertex_array == *vertex_array)
                 {
                     self.applied.pipeline.invalidate();
                 }

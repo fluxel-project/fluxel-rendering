@@ -38,11 +38,11 @@ use crate::webgl2::api::{FramebufferId, GlFramebufferDescriptor, GlRenderPassDes
 pub(super) mod framebuffer;
 
 use super::GlStateBackend;
-use super::cache::{CacheBudget, CacheMode};
+use super::cache::CacheBudget;
 use super::counters::StateCounters;
 use super::error::{PartialApplication, StateError};
 use super::event::StateEvent;
-use super::knowledge::StateDomain;
+use super::knowledge::{ExecutionMode, StateDomain};
 use framebuffer::FramebufferCache;
 
 /// What changed about the pass boundary when a reconcile ran.
@@ -95,12 +95,12 @@ pub(crate) struct SessionState {
     desired: Desired,
     applied: Applied,
     framebuffers: FramebufferCache,
-    mode: CacheMode,
+    mode: ExecutionMode,
 }
 
 impl SessionState {
     /// A session that has opened no pass.
-    pub(crate) fn new(budget: CacheBudget, mode: CacheMode) -> Self {
+    pub(crate) fn new(budget: CacheBudget, mode: ExecutionMode) -> Self {
         Self {
             desired: Desired::default(),
             applied: Applied::default(),
@@ -109,8 +109,18 @@ impl SessionState {
         }
     }
 
-    /// The cache mode this session runs.
-    pub(crate) const fn mode(&self) -> CacheMode {
+    /// The execution mode this session runs.
+    ///
+    /// The domain holds the mode rather than a [`CacheMode`] because the two are
+    /// not the same decision: retention governs whether a framebuffer this
+    /// session derived is kept, and skipping governs whether a pass it can prove
+    /// unchanged is re-opened.  A domain given only the retention half would skip
+    /// unconditionally, which is what makes an oracle trace unusable as a
+    /// comparison.  The retention policy is derived where a cache needs it, via
+    /// [`ExecutionMode::cache`].
+    ///
+    /// [`CacheMode`]: super::cache::CacheMode
+    pub(crate) const fn mode(&self) -> ExecutionMode {
         self.mode
     }
 
@@ -160,7 +170,16 @@ impl SessionState {
         counters: &mut StateCounters,
     ) -> Result<(FramebufferId, bool), StateError> {
         self.framebuffers
-            .framebuffer_for(backend, descriptor, self.mode, counters)
+            .framebuffer_for(backend, descriptor, self.mode.cache(), counters)
+    }
+
+    /// Whether the mirror proves this request redundant under this mode.
+    ///
+    /// The two halves are one decision.  An oracle machine runs the same domains
+    /// with skipping disabled, so a domain that skipped in oracle mode would emit
+    /// a trace no mirror-free machine could have produced.
+    fn skippable(&self, agrees: bool) -> bool {
+        self.mode.may_skip() && agrees
     }
 
     /// Makes the backend's pass boundary match the desired one.
@@ -172,12 +191,22 @@ impl SessionState {
         counters.domain(StateDomain::Session).request();
 
         let applied_open = self.applied.pass.is_some();
+        // A boundary with nothing on either side is not a redundancy this layer
+        // proved -- there is no verb that would close nothing -- so it counts as
+        // a skip in both modes, exactly as a domain with no request does.
+        if self.desired.pass.is_none() && !applied_open {
+            counters.domain(StateDomain::Session).skip();
+            return Ok(SessionEffects::NONE);
+        }
+        // Re-opening the pass that is already open *is* a proven redundancy, so
+        // only a mode that may skip acts on it.  An oracle falls through and
+        // re-establishes the boundary, which is what a mirror-free machine given
+        // the same two requests would have done.
         let unchanged = match (&self.desired.pass, &self.applied.pass) {
             (Some(wanted), Some(open)) => wanted == open,
-            (None, None) => true,
             _ => false,
         };
-        if unchanged {
+        if self.skippable(unchanged) {
             counters.domain(StateDomain::Session).skip();
             return Ok(SessionEffects::NONE);
         }
@@ -356,7 +385,7 @@ mod tests {
         MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2))
     }
 
-    fn session(mode: CacheMode) -> SessionState {
+    fn session(mode: ExecutionMode) -> SessionState {
         SessionState::new(DEFAULT_BUDGET, mode)
     }
 
@@ -404,7 +433,7 @@ mod tests {
     fn an_unchanged_pass_is_not_reopened() {
         let mut backend = backend();
         let (_, pass) = attachment_set(&mut backend);
-        let mut session = session(CacheMode::Enabled);
+        let mut session = session(ExecutionMode::Optimized);
         let mut counters = StateCounters::default();
 
         session.begin_pass(pass);
@@ -437,7 +466,7 @@ mod tests {
         let mut backend = backend();
         let (_, first_pass) = attachment_set(&mut backend);
         let (_, second_pass) = attachment_set(&mut backend);
-        let mut session = session(CacheMode::Enabled);
+        let mut session = session(ExecutionMode::Optimized);
         let mut counters = StateCounters::default();
 
         session.begin_pass(first_pass);
@@ -467,7 +496,7 @@ mod tests {
     fn ending_a_pass_reports_the_effect_that_invalidates_the_pipeline() {
         let mut backend = backend();
         let (_, pass) = attachment_set(&mut backend);
-        let mut session = session(CacheMode::Enabled);
+        let mut session = session(ExecutionMode::Optimized);
         let mut counters = StateCounters::default();
 
         session.begin_pass(pass.clone());
@@ -512,7 +541,7 @@ mod tests {
     fn the_same_attachment_set_reuses_one_framebuffer_object() {
         let mut backend = backend();
         let (descriptor, _) = attachment_set(&mut backend);
-        let mut session = session(CacheMode::Enabled);
+        let mut session = session(ExecutionMode::Optimized);
         let mut counters = StateCounters::default();
         let built_by_the_fixture = created_framebuffers(&backend);
 
@@ -536,7 +565,7 @@ mod tests {
     fn a_disabled_cache_never_reuses_and_hands_ownership_back() {
         let mut backend = backend();
         let (descriptor, _) = attachment_set(&mut backend);
-        let mut session = session(CacheMode::Disabled);
+        let mut session = session(ExecutionMode::Oracle);
         let mut counters = StateCounters::default();
         let built_by_the_fixture = created_framebuffers(&backend);
 
@@ -566,7 +595,7 @@ mod tests {
             GlAttachmentTarget::Texture(texture) => texture,
             other => panic!("the fixture attaches a texture, not {other:?}"),
         };
-        let mut session = session(CacheMode::Enabled);
+        let mut session = session(ExecutionMode::Optimized);
         let mut counters = StateCounters::default();
         session
             .framebuffer_for(&mut backend, &descriptor, &mut counters)
@@ -594,7 +623,7 @@ mod tests {
     fn a_context_loss_purges_records_without_destroying_them() {
         let mut backend = backend();
         let (descriptor, pass) = attachment_set(&mut backend);
-        let mut session = session(CacheMode::Enabled);
+        let mut session = session(ExecutionMode::Optimized);
         let mut counters = StateCounters::default();
         session
             .framebuffer_for(&mut backend, &descriptor, &mut counters)
@@ -624,7 +653,7 @@ mod tests {
     fn a_pass_that_cannot_be_opened_leaves_no_applied_pass() {
         let mut backend = backend();
         let (_, pass) = attachment_set(&mut backend);
-        let mut session = session(CacheMode::Enabled);
+        let mut session = session(ExecutionMode::Optimized);
         let mut counters = StateCounters::default();
         backend.context_lost().expect("the mock records the loss");
 

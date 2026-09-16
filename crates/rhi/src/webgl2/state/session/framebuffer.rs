@@ -107,10 +107,9 @@ impl FramebufferCache {
     /// both are the ordinary ones rather than error paths:
     ///
     /// - The oracle mode, where nothing is retained by construction.
-    /// - A cache whose budget could not be met without evicting a leased
-    ///   record.  The framebuffer was still built, because the caller needs one
-    ///   to render into; it is simply not kept, which is a slower frame rather
-    ///   than a refusal.
+    /// - A budget the record does not fit.  The framebuffer was still built,
+    ///   because the caller needs one to render into; it is simply not kept,
+    ///   which is a slower frame rather than a refusal.
     pub(crate) fn framebuffer_for(
         &mut self,
         backend: &mut impl GlStateBackend,

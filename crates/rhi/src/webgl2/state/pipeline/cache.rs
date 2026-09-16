@@ -165,9 +165,9 @@ impl ProgramCache {
 
     /// Retains a record, destroying whatever the budget pushed out.
     ///
-    /// Returns whether the cache kept the record.  `false` means the budget
-    /// could not be met without evicting a leased one: nothing was inserted and
-    /// the caller still owns the program it just linked.
+    /// Returns whether the cache kept the record.  `false` means the record does
+    /// not fit the budget: nothing was inserted and the caller still owns the
+    /// program it just linked.
     pub(crate) fn retain(
         &mut self,
         backend: &mut impl GlStateBackend,

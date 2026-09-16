@@ -12,7 +12,7 @@ use super::*;
 #[test]
 fn a_binding_point_outside_the_index_space_is_refused_by_layer_one() {
     let (mut backend, buffer) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     // The WebGL2 fixture proves 24 indexed uniform binding points, so index 24
@@ -38,7 +38,7 @@ fn a_binding_point_outside_the_index_space_is_refused_by_layer_one() {
 #[test]
 fn a_storage_binding_point_outside_its_own_space_is_refused_too() {
     let mut fixture = two_role_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let mark = storage_mark(&fixture.storage);
 
@@ -59,7 +59,7 @@ fn a_storage_binding_point_outside_its_own_space_is_refused_too() {
 #[test]
 fn a_driver_failure_leaves_the_whole_group_unknown() {
     let (mut backend, buffer) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.bind_uniform_buffer(0, Some(buffer), 0, 0, &mut counters);

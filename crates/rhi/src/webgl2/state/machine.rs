@@ -67,15 +67,25 @@
 //! between draining and purging is the one [`super::cache`] documents: shutdown
 //! destroys through live identities, an epoch change destroys nothing.
 
-use crate::webgl2::api::{FramebufferId, GlFramebufferDescriptor, GlRenderPassDescriptor};
+use crate::webgl2::api::{
+    BufferId, FramebufferId, GlBufferRange, GlFramebufferDescriptor, GlIndexBinding,
+    GlProgramDescriptor, GlProgramReflection, GlRasterPipeline, GlRenderPassDescriptor,
+    GlStorageBufferApi, GlStorageBufferRange, GlTextureTarget, GlVertexBufferBinding,
+    GlVertexLayout, ProgramId, SamplerId, TextureId, VertexArrayId,
+};
 
-use super::backend::GlStateBackend;
+use super::GlStateBackend;
+use super::backend::GlOptionalComputeBackend;
+use super::buffers::BuffersState;
 use super::cache::DEFAULT_BUDGET;
 use super::counters::StateCounters;
 use super::error::StateError;
 use super::event::StateEvent;
+use super::geometry::{GeometryEffects, GeometryState, VertexInput};
 use super::knowledge::ExecutionMode;
+use super::pipeline::{PipelineEffects, PipelineState};
 use super::session::{SessionEffects, SessionState};
+use super::textures::TexturesState;
 
 /// A backend plus the mirror of what it holds.
 #[derive(Debug)]
@@ -84,6 +94,10 @@ pub(crate) struct GlStateMachine<B: GlStateBackend> {
     mode: ExecutionMode,
     counters: StateCounters,
     session: SessionState,
+    pipeline: PipelineState,
+    geometry: GeometryState,
+    textures: TexturesState,
+    buffers: BuffersState,
 }
 
 impl<B: GlStateBackend> GlStateMachine<B> {
@@ -113,7 +127,18 @@ impl<B: GlStateBackend> GlStateMachine<B> {
             backend,
             mode,
             counters: StateCounters::default(),
-            session: SessionState::new(DEFAULT_BUDGET, mode.cache()),
+            // Every domain is constructed with the *mode* rather than the cache
+            // policy it implies, because the two are separate decisions: the
+            // retention half reaches a domain's caches, and the skipping half
+            // decides whether a call it can prove redundant is emitted.  A domain
+            // given only retention would skip unconditionally, and an oracle
+            // machine that skipped would emit a trace no mirror-free machine could
+            // have produced -- which is the comparison it exists for.
+            session: SessionState::new(DEFAULT_BUDGET, mode),
+            pipeline: PipelineState::new(DEFAULT_BUDGET, mode),
+            geometry: GeometryState::new(DEFAULT_BUDGET, mode),
+            textures: TexturesState::new(mode),
+            buffers: BuffersState::new(mode),
         }
     }
 
@@ -142,41 +167,239 @@ impl<B: GlStateBackend> GlStateMachine<B> {
         &mut self.session
     }
 
+    /// The pipeline domain, for the installed pipeline and the program records.
+    pub(crate) fn pipeline(&mut self) -> &mut PipelineState {
+        &mut self.pipeline
+    }
+
+    /// The geometry domain, for the bound vertex input and the vertex arrays.
+    pub(crate) fn geometry(&mut self) -> &mut GeometryState {
+        &mut self.geometry
+    }
+
+    /// The texture domain, for the active unit and the per-unit bindings.
+    pub(crate) fn textures(&mut self) -> &mut TexturesState {
+        &mut self.textures
+    }
+
+    /// The buffer domain, for the indexed uniform and storage binding points.
+    pub(crate) fn buffers(&mut self) -> &mut BuffersState {
+        &mut self.buffers
+    }
+
     /// Records that the caller wants this pass open, and applies the boundary.
     pub(crate) fn begin_pass(
         &mut self,
         descriptor: GlRenderPassDescriptor,
     ) -> Result<SessionEffects, StateError> {
         self.session.begin_pass(descriptor);
-        self.session
-            .reconcile(&mut self.backend, &mut self.counters)
+        let effects = self
+            .session
+            .reconcile(&mut self.backend, &mut self.counters)?;
+        self.apply_session_effects(effects);
+        Ok(effects)
     }
 
     /// Records that the caller wants no pass open, and applies the boundary.
     ///
-    /// The effects are reported rather than applied because a pass that ended
-    /// invalidated whatever pipeline was installed: Layer 1's `end_render_pass`
-    /// forgets it, so a mirror that kept believing a pipeline was still
-    /// installed would skip the `set_raster_pipeline` the next draw needs.
+    /// The effects are reported *and* applied: Layer 1's `end_render_pass`
+    /// forgets the installed pipeline, so a mirror that kept believing a pipeline
+    /// was installed would skip the `set_raster_pipeline` the next draw needs.
+    /// The caller still gets the value, because a caller that has to re-establish
+    /// a pipeline of its own may want to know that this is why.
     pub(crate) fn end_pass(&mut self) -> Result<SessionEffects, StateError> {
         self.session.end_pass();
-        self.session
-            .reconcile(&mut self.backend, &mut self.counters)
+        let effects = self
+            .session
+            .reconcile(&mut self.backend, &mut self.counters)?;
+        self.apply_session_effects(effects);
+        Ok(effects)
+    }
+
+    /// Applies the consequences a pass boundary has for the other domains.
+    ///
+    /// A domain never calls another domain: the one that knows the consequence
+    /// reports it, and the machine applies it.  A pass that ended is the worked
+    /// case -- Layer 1's `end_render_pass` forgets the installed pipeline, so the
+    /// pipeline mirror must forget it too or the next draw skips the install it
+    /// needs.
+    ///
+    /// A pass that *began* has no consequence here.  Layer 1's
+    /// `begin_render_pass` binds a framebuffer and issues clears, and neither act
+    /// reaches a value any other domain mirrors.
+    fn apply_session_effects(&mut self, effects: SessionEffects) {
+        if effects.pass_ended {
+            self.pipeline.pass_ended();
+        }
     }
 
     /// Returns the framebuffer for an attachment set, building it if needed.
     ///
     /// The second half of the pair is whether the caller owns the result: a
     /// framebuffer the cache could not retain -- because the cache is disabled
-    /// or because its budget could not be met without breaking a lease -- is
-    /// still perfectly usable, and the caller destroys it when the pass is done.
-    /// See [`super::cache::framebuffer::FramebufferCache::framebuffer_for`].
+    /// or because its budget could not be met -- is still perfectly usable, and
+    /// the caller destroys it when the pass is done.
+    /// See [`super::session::framebuffer::FramebufferCache::framebuffer_for`].
     pub(crate) fn framebuffer_for(
         &mut self,
         descriptor: &GlFramebufferDescriptor,
     ) -> Result<(FramebufferId, bool), StateError> {
         self.session
             .framebuffer_for(&mut self.backend, descriptor, &mut self.counters)
+    }
+
+    /// Records that the caller wants `pipeline` installed.
+    pub(crate) fn set_pipeline(&mut self, pipeline: &GlRasterPipeline) {
+        self.pipeline.set_pipeline(pipeline);
+    }
+
+    /// Installs the desired pipeline, and applies what installing it implies.
+    ///
+    /// Layer 1's `set_raster_pipeline` binds the vertex array the pipeline names
+    /// *without* re-emitting its attribute description, so the geometry domain's
+    /// belief about which input is in force may no longer describe the driver --
+    /// and the pipeline may have named an array this domain never derived.  The
+    /// consequence is applied here rather than inside either domain, because a
+    /// domain never calls another domain.
+    ///
+    /// The claim is dropped conservatively, even when the pipeline installed the
+    /// very array the geometry domain derived, so the cost is one re-bind after
+    /// each pipeline install.  Refining that would need the pipeline to report
+    /// *which* array it installed, and [`PipelineEffects`] deliberately reports
+    /// only that it did; the merge of two domains' beliefs is not a thing either
+    /// domain can do alone, and a wrong guess here is a silently wrong image.
+    pub(crate) fn apply_pipeline(&mut self) -> Result<PipelineEffects, StateError> {
+        let effects = self
+            .pipeline
+            .reconcile(&mut self.backend, &mut self.counters)?;
+        if effects.pipeline_installed {
+            self.geometry.vertex_input_unknown();
+        }
+        Ok(effects)
+    }
+
+    /// The program for a descriptor, linking it if needed.
+    ///
+    /// The second and third halves are the reflection Layer 1 recorded and
+    /// whether the caller owns the program, on the same terms as
+    /// [`GlStateMachine::framebuffer_for`].
+    pub(crate) fn program_for(
+        &mut self,
+        descriptor: &GlProgramDescriptor,
+    ) -> Result<(ProgramId, GlProgramReflection, bool), StateError> {
+        self.pipeline
+            .program_for(&mut self.backend, descriptor, &mut self.counters)
+    }
+
+    /// Records that the caller wants this vertex input bound.
+    pub(crate) fn set_vertex_input(&mut self, input: VertexInput) {
+        self.geometry.set_vertex_input(input);
+    }
+
+    /// Binds the desired vertex input.
+    ///
+    /// The effects report the two binding points Layer 1 leaves at values it does
+    /// not promise; nothing in this layer mirrors either, so the machine records
+    /// that they are unknown and the caller decides.  `#[must_use]` on
+    /// [`GeometryEffects`] is what makes that decision explicit.
+    pub(crate) fn apply_geometry(&mut self) -> Result<GeometryEffects, StateError> {
+        self.geometry
+            .reconcile(&mut self.backend, &mut self.counters)
+    }
+
+    /// The vertex array for an input, deriving it if needed.
+    ///
+    /// The second half is whether the caller owns the array, on the same terms as
+    /// [`GlStateMachine::framebuffer_for`].  A caller that only wants the identity
+    /// -- to hand it to a pipeline -- asks this instead of
+    /// [`GlStateMachine::apply_geometry`], and must then ask for the bind before
+    /// a draw: installing a pipeline binds an array without enabling anything in
+    /// it.
+    pub(crate) fn vertex_array_for(
+        &mut self,
+        input: &VertexInput,
+    ) -> Result<(VertexArrayId, bool), StateError> {
+        self.geometry
+            .vertex_array_for(&mut self.backend, input, &mut self.counters)
+    }
+
+    /// Records that the caller wants `unit` to be the active texture unit.
+    pub(crate) fn active_texture(&mut self, unit: u32) {
+        self.textures.active_texture(unit);
+    }
+
+    /// Records that the caller wants `texture` bound at `unit` for `target`.
+    pub(crate) fn bind_texture(
+        &mut self,
+        unit: u32,
+        target: GlTextureTarget,
+        texture: Option<TextureId>,
+    ) {
+        self.textures.bind_texture(unit, target, texture);
+    }
+
+    /// Records that the caller wants `sampler` bound at `unit`.
+    pub(crate) fn bind_sampler(&mut self, unit: u32, sampler: Option<SamplerId>) {
+        self.textures.bind_sampler(unit, sampler);
+    }
+
+    /// Applies the desired texture and sampler binding.
+    pub(crate) fn apply_textures(&mut self) -> Result<(), StateError> {
+        self.textures
+            .reconcile(&mut self.backend, &mut self.counters)
+    }
+
+    /// Records that the caller wants `index` to hold `buffer`'s byte range.
+    pub(crate) fn bind_uniform_buffer(
+        &mut self,
+        index: u32,
+        buffer: Option<BufferId>,
+        offset: u32,
+        size: u32,
+    ) {
+        self.buffers
+            .bind_uniform_buffer(index, buffer, offset, size, &mut self.counters);
+    }
+
+    /// Records that the caller wants `binding` to hold `range`.
+    ///
+    /// Gated on the optional bound for the reason the storage role exists at all:
+    /// the verb it mirrors is not in the required profile, so a machine over a
+    /// profile without it must not be able to record a want it could never settle.
+    pub(crate) fn bind_storage_buffer(&mut self, binding: u32, range: GlStorageBufferRange)
+    where
+        B: GlOptionalComputeBackend,
+    {
+        self.buffers
+            .bind_storage_buffer(binding, range, &mut self.counters);
+    }
+
+    /// Applies the desired indexed uniform bindings.
+    ///
+    /// This is the whole of the required role.  A caller on a profile with the
+    /// optional command domains settles the storage role with
+    /// [`GlStateMachine::apply_storage_buffers`] afterwards, so a required-role
+    /// failure is reported before the optional role emits anything.
+    pub(crate) fn apply_buffers(&mut self) -> Result<(), StateError> {
+        self.buffers
+            .reconcile(&mut self.backend, &mut self.counters)
+    }
+
+    /// Applies the desired indexed storage bindings, on a profile that has them.
+    ///
+    /// The bound is on this method rather than on the machine, which is what makes
+    /// "this profile has no storage binding points" a compile-time property instead
+    /// of a run-time flag: a machine over a backend without the optional command
+    /// domains has no way to call this, and none of its callers can forget to
+    /// check.  The alternative -- a helper trait with a no-op impl for every
+    /// backend and a real one for the optional backends -- does not compile, because
+    /// the two blanket impls overlap and Rust has no specialization to resolve it.
+    pub(crate) fn apply_storage_buffers(&mut self) -> Result<(), StateError>
+    where
+        B: GlOptionalComputeBackend,
+    {
+        self.buffers
+            .reconcile_storage(&mut self.backend, &mut self.counters)
     }
 
     /// Dispatches an invalidation to every domain.
@@ -188,11 +411,25 @@ impl<B: GlStateBackend> GlStateMachine<B> {
     /// of a call it does not make, so it is part of this layer's contract and is
     /// checked by the differential tests.
     ///
+    /// Every domain is dispatched, unconditionally, and each reacts to the rows
+    /// it owns and ignores the rest -- the matrix in [`super::event`] is the list
+    /// of which those are.  Dispatching on a mask built here instead would put a
+    /// second copy of that matrix in this file, where it could drift from the one
+    /// the domains act on.
+    ///
     /// Each domain counts its own whole-mirror invalidation, so
     /// `lifecycle.domain_invalidations` reads as the number of *domain*
     /// invalidations, not the number of events.
     pub(crate) fn invalidate(&mut self, event: StateEvent) {
         self.session
+            .invalidate(&mut self.backend, &event, &mut self.counters);
+        self.pipeline
+            .invalidate(&mut self.backend, &event, &mut self.counters);
+        self.geometry
+            .invalidate(&mut self.backend, &event, &mut self.counters);
+        self.textures
+            .invalidate(&mut self.backend, &event, &mut self.counters);
+        self.buffers
             .invalidate(&mut self.backend, &event, &mut self.counters);
     }
 
@@ -204,8 +441,19 @@ impl<B: GlStateBackend> GlStateMachine<B> {
     /// [`StateCounters::lifecycle`]'s `driver_errors` rather than returned: the
     /// caller has no decision left to make about it, and the count is what a
     /// leak report reads.
+    ///
+    /// Only the domains that *derive* objects are drained, which is the three that
+    /// own a cache: the session's framebuffers, the pipeline's programs and the
+    /// geometry's vertex arrays.  The texture and buffer domains create nothing --
+    /// they mirror bindings -- so there is nothing of theirs to destroy, and a
+    /// `shutdown` that called into them would be looking for a drain they do not
+    /// have.
     pub(crate) fn shutdown(&mut self) {
         self.session.shutdown(&mut self.backend, &mut self.counters);
+        self.pipeline
+            .shutdown(&mut self.backend, &mut self.counters);
+        self.geometry
+            .shutdown(&mut self.backend, &mut self.counters);
     }
 }
 
@@ -220,7 +468,6 @@ mod tests {
         GlColorAttachment, GlColorClearValue, GlFamilyProfile, GlFramebufferApi, GlLoadOp,
         GlResourceApi, GlStoreOp, MockCall, MockGlFamilyApi,
     };
-    use crate::webgl2::state::cache::CacheMode;
 
     /// A machine over the mock and a pass that names a framebuffer the machine
     /// built for it, which is the ordering a real caller uses.
@@ -229,9 +476,25 @@ mod tests {
         GlFramebufferDescriptor,
         GlRenderPassDescriptor,
     ) {
-        let mut machine = GlStateMachine::new(MockGlFamilyApi::from_discovery(snapshot(
-            GlFamilyProfile::WebGl2,
-        )));
+        machine_with_a_pass_in(ExecutionMode::Optimized)
+    }
+
+    /// The same machine, in a named mode.
+    ///
+    /// Every other helper here builds the optimized machine, because that is the
+    /// one production runs.  The oracle is built explicitly where a test is about
+    /// what the oracle does differently.
+    fn machine_with_a_pass_in(
+        mode: ExecutionMode,
+    ) -> (
+        GlStateMachine<MockGlFamilyApi>,
+        GlFramebufferDescriptor,
+        GlRenderPassDescriptor,
+    ) {
+        let mut machine = GlStateMachine::with_mode(
+            MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2)),
+            mode,
+        );
         let texture = machine
             .backend()
             .create_texture_resource(texture_desc(1))
@@ -343,17 +606,43 @@ mod tests {
         );
     }
 
+    /// The oracle must not skip, and that is the whole point of it.
+    ///
+    /// This is the test the mode's own accessor test was standing in for: it
+    /// asserts the property on a *machine*, through a domain, rather than
+    /// asserting that `ExecutionMode` reports itself.  A redundant request is the
+    /// case that distinguishes the two modes, so it is the case that is run: an
+    /// optimized machine re-opening the pass it already has skips the boundary,
+    /// and an oracle machine re-establishes it.  If the oracle ever skipped, its
+    /// trace would be a trace no mirror-free machine could have produced, and the
+    /// differential comparison it exists for would prove nothing.
     #[test]
-    fn an_oracle_machine_runs_the_same_domains_without_retaining_anything() {
-        let mut oracle = GlStateMachine::with_mode(
-            MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2)),
-            ExecutionMode::Oracle,
-        );
-        assert_eq!(oracle.mode(), ExecutionMode::Oracle);
+    fn an_oracle_machine_emits_a_redundant_boundary_the_optimized_one_skips() {
+        let (mut optimized, _, pass) = machine_with_a_pass();
+        apply(&mut optimized, Some(pass.clone()));
+        let before = calls_of(&mut optimized, |call| {
+            matches!(call, MockCall::EndRenderPass)
+        });
+        apply(&mut optimized, Some(pass.clone()));
+        let after = calls_of(&mut optimized, |call| {
+            matches!(call, MockCall::EndRenderPass)
+        });
         assert_eq!(
-            oracle.session().mode(),
-            CacheMode::Disabled,
-            "the oracle's domains must be the ones that retain nothing"
+            after, before,
+            "the optimized machine proved the boundary redundant and skipped it"
         );
+        assert_eq!(optimized.session().mode(), ExecutionMode::Optimized);
+
+        let (mut oracle, _, pass) = machine_with_a_pass_in(ExecutionMode::Oracle);
+        apply(&mut oracle, Some(pass.clone()));
+        let before = calls_of(&mut oracle, |call| matches!(call, MockCall::EndRenderPass));
+        apply(&mut oracle, Some(pass));
+        let after = calls_of(&mut oracle, |call| matches!(call, MockCall::EndRenderPass));
+        assert_eq!(
+            after,
+            before + 1,
+            "the oracle re-established the boundary instead of skipping it"
+        );
+        assert_eq!(oracle.session().mode(), ExecutionMode::Oracle);
     }
 }

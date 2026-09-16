@@ -102,7 +102,7 @@ use super::GlStateBackend;
 use super::counters::StateCounters;
 use super::error::{PartialApplication, StateError};
 use super::event::StateEvent;
-use super::knowledge::{DirtyDomains, DriverKnowledge, StateDomain};
+use super::knowledge::{DirtyDomains, DriverKnowledge, ExecutionMode, StateDomain};
 
 /// One indexed uniform binding point: everything `bind_uniform_buffer` carried.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -219,6 +219,7 @@ impl<T: Copy + PartialEq> Role<T> {
     fn settle<E>(
         &mut self,
         operation: &'static str,
+        mode: ExecutionMode,
         counters: &mut StateCounters,
         mut emit: E,
     ) -> Result<(), StateError>
@@ -244,7 +245,7 @@ impl<T: Copy + PartialEq> Role<T> {
         for (slot, value) in &self.desired {
             let known = self.applied.get(slot);
             let redundant = known.is_some_and(|known| known.agrees(value));
-            if redundant {
+            if BuffersState::skippable(mode, redundant) {
                 counters.domain(StateDomain::Buffers).skip();
                 continue;
             }
@@ -307,12 +308,13 @@ impl<T: BindingEntry> Role<T> {
 }
 
 /// The indexed buffer binding points, one mirror per role.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct BuffersState {
     /// The required role: the indexed uniform binding points.
     uniform: Role<UniformBinding>,
     /// The optional role: the indexed storage binding points.
     storage: Role<GlStorageBufferRange>,
+    mode: ExecutionMode,
 }
 
 impl BuffersState {
@@ -323,8 +325,37 @@ impl BuffersState {
     /// the trade the machine makes for every domain: one redundant call per slot
     /// per context, in exchange for a mirror that cannot be wrong about a binding
     /// point it never set.
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(mode: ExecutionMode) -> Self {
+        Self {
+            uniform: Role::default(),
+            storage: Role::default(),
+            mode,
+        }
+    }
+
+    /// The execution mode this domain runs.
+    ///
+    /// This domain derives no objects and so has no cache and no retention
+    /// policy to derive: the mode reaches it for the skipping half alone.  A
+    /// domain that skipped in oracle mode would emit a trace no mirror-free
+    /// machine could have produced, which is what makes the differential
+    /// comparison meaningless.
+    pub(crate) const fn mode(&self) -> ExecutionMode {
+        self.mode
+    }
+
+    /// Whether the mirror proves this request redundant under this mode.
+    ///
+    /// The two halves are one decision.  An oracle machine runs the same domains
+    /// with skipping disabled, so a domain that skipped in oracle mode would emit
+    /// a trace no mirror-free machine could have produced.
+    ///
+    /// This is an associated function rather than a method because the loop that
+    /// decides per slot lives on the private `Role<T>`, which does not hold the
+    /// mode; a method here would need a `Role` to call it from and a second copy
+    /// there would be a second definition of the same predicate.
+    fn skippable(mode: ExecutionMode, agrees: bool) -> bool {
+        mode.may_skip() && agrees
     }
 
     /// Records that the caller wants `index` to hold `buffer`'s byte range.
@@ -378,10 +409,14 @@ impl BuffersState {
         backend: &mut impl GlStateBackend,
         counters: &mut StateCounters,
     ) -> Result<(), StateError> {
-        self.uniform
-            .settle("bind-uniform-buffer", counters, |index, binding| {
+        self.uniform.settle(
+            "bind-uniform-buffer",
+            self.mode,
+            counters,
+            |index, binding| {
                 backend.bind_uniform_buffer(index, binding.buffer, binding.offset, binding.size)
-            })
+            },
+        )
     }
 
     /// Makes the backend's indexed storage bindings agree with the caller's.
@@ -401,10 +436,12 @@ impl BuffersState {
         backend: &mut impl GlStorageBufferApi,
         counters: &mut StateCounters,
     ) -> Result<(), StateError> {
-        self.storage
-            .settle("bind-storage-buffer", counters, |binding, range| {
-                backend.bind_storage_buffer(binding, *range)
-            })
+        self.storage.settle(
+            "bind-storage-buffer",
+            self.mode,
+            counters,
+            |binding, range| backend.bind_storage_buffer(binding, *range),
+        )
     }
 
     /// Reacts to an invalidation.

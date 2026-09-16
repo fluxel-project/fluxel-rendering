@@ -61,11 +61,11 @@ use crate::webgl2::api::{
 pub(super) mod cache;
 
 use super::GlStateBackend;
-use super::cache::{CacheBudget, CacheMode};
+use super::cache::CacheBudget;
 use super::counters::StateCounters;
 use super::error::{PartialApplication, StateError};
 use super::event::StateEvent;
-use super::knowledge::{DriverKnowledge, StateDomain};
+use super::knowledge::{DriverKnowledge, ExecutionMode, StateDomain};
 use cache::VertexArrayCache;
 
 /// The complete input that establishes one vertex-array binding.
@@ -133,7 +133,7 @@ struct AppliedInput {
     /// Whether this domain created the array and must therefore destroy it.
     ///
     /// True only when the derivation could not be retained -- the oracle mode,
-    /// or a budget that could not be met without breaking a lease.  In that case
+    /// or a budget the record does not fit.  In that case
     /// the object is this domain's alone: no cache holds it and no caller has
     /// seen it, so dropping the claim without destroying it would leak it.
     owned: bool,
@@ -171,12 +171,12 @@ pub(crate) struct GeometryState {
     desired: Desired,
     applied: Applied,
     vertex_arrays: VertexArrayCache,
-    mode: CacheMode,
+    mode: ExecutionMode,
 }
 
 impl GeometryState {
     /// A geometry domain that has bound nothing.
-    pub(crate) fn new(budget: CacheBudget, mode: CacheMode) -> Self {
+    pub(crate) fn new(budget: CacheBudget, mode: ExecutionMode) -> Self {
         Self {
             desired: Desired::default(),
             applied: Applied::unknown(),
@@ -185,8 +185,18 @@ impl GeometryState {
         }
     }
 
-    /// The cache mode this domain runs.
-    pub(crate) const fn mode(&self) -> CacheMode {
+    /// The execution mode this domain runs.
+    ///
+    /// The domain holds the mode rather than a [`CacheMode`] because the two are
+    /// not the same decision: retention governs whether a vertex array this
+    /// domain derived is kept, and skipping governs whether a bind it can prove
+    /// redundant is re-emitted.  A domain given only the retention half would
+    /// skip unconditionally, which is what makes an oracle trace unusable as a
+    /// comparison.  The retention policy is derived where a cache needs it, via
+    /// [`ExecutionMode::cache`].
+    ///
+    /// [`CacheMode`]: super::cache::CacheMode
+    pub(crate) const fn mode(&self) -> ExecutionMode {
         self.mode
     }
 
@@ -202,6 +212,22 @@ impl GeometryState {
     /// The input the caller last asked for, if any.
     pub(crate) fn desired_input(&self) -> Option<&VertexInput> {
         self.desired.input.as_ref()
+    }
+
+    /// Forgets which input the driver holds, keeping what the caller asked for.
+    ///
+    /// The machine calls this after a pipeline install, which is the one act
+    /// outside this domain that can change the driver's vertex input: Layer 1
+    /// binds the array a pipeline names without re-emitting its attribute
+    /// description, and that array may be one this domain never derived.  The
+    /// want is kept, so the next [`GeometryState::reconcile`] re-binds and the
+    /// driver ends up holding the input the caller asked for; dropping the want
+    /// instead would leave whatever the pipeline bound with no error anywhere.
+    ///
+    /// Only the *claim* is dropped, never the derivation: the arrays this domain
+    /// created are still valid objects and still keyed by their layouts.
+    pub(crate) fn vertex_input_unknown(&mut self) {
+        self.applied.input.invalidate();
     }
 
     /// The input the backend is known to hold, if any.
@@ -236,20 +262,30 @@ impl GeometryState {
         input: &VertexInput,
         counters: &mut StateCounters,
     ) -> Result<(VertexArrayId, bool), StateError> {
-        let derivation = self
-            .vertex_arrays
-            .vertex_array_for(backend, input, self.mode, counters)?;
+        let derivation =
+            self.vertex_arrays
+                .vertex_array_for(backend, input, self.mode.cache(), counters)?;
         for (_, vertex_array) in derivation.removed {
             // The derivation made room for itself by evicting records, and one
-            // of them may be the array the mirror believes is bound.  A derived
-            // array is never leased by this domain, so this is the only way a
-            // claim can come to name an object that no longer exists.
+            // of them may be the array the mirror believes is bound.  An eviction
+            // is the only way a claim can come to name an object that no longer
+            // exists, because this loop is the only place a derived array is
+            // destroyed.
             if self.names_array(vertex_array) {
                 self.applied.input.invalidate();
             }
             destroy(backend, vertex_array, counters);
         }
         Ok((derivation.vertex_array, derivation.owned))
+    }
+
+    /// Whether the mirror proves this request redundant under this mode.
+    ///
+    /// The two halves are one decision.  An oracle machine runs the same domains
+    /// with skipping disabled, so a domain that skipped in oracle mode would emit
+    /// a trace no mirror-free machine could have produced.
+    fn skippable(&self, agrees: bool) -> bool {
+        self.mode.may_skip() && agrees
     }
 
     /// Makes the backend's vertex input match the desired one.
@@ -274,7 +310,7 @@ impl GeometryState {
             counters.domain(StateDomain::Geometry).skip();
             return Ok(GeometryEffects::NONE);
         };
-        if self.applied.agrees(wanted) {
+        if self.skippable(self.applied.agrees(wanted)) {
             counters.domain(StateDomain::Geometry).skip();
             return Ok(GeometryEffects::NONE);
         }
@@ -293,9 +329,9 @@ impl GeometryState {
         // applied state is never a mixture of two inputs, and a derivation that
         // fails leaves the driver's input unknown rather than described.
         self.release_claim(backend, counters);
-        let derivation = self
-            .vertex_arrays
-            .vertex_array_for(backend, &wanted, self.mode, counters)?;
+        let derivation =
+            self.vertex_arrays
+                .vertex_array_for(backend, &wanted, self.mode.cache(), counters)?;
         // The claim was released above, so a record this derivation evicted is
         // one nothing here still refers to: it is destroyed rather than
         // repaired, and the identity the bind below names is the new one.

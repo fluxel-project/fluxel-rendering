@@ -10,7 +10,7 @@ use super::*;
 #[test]
 fn a_vacuous_reconcile_emits_nothing() {
     let (mut backend, _) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state
@@ -33,7 +33,7 @@ fn a_vacuous_reconcile_emits_nothing() {
 #[test]
 fn a_redundant_request_emits_nothing() {
     let (mut backend, buffer) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.bind_uniform_buffer(2, Some(buffer), 0, 0, &mut counters);
@@ -69,9 +69,87 @@ fn a_redundant_request_emits_nothing() {
 }
 
 #[test]
+fn an_oracle_emits_the_redundant_binding_the_optimized_mirror_skips() {
+    // A skip is two decisions -- the mirror agrees, and this mode may act on
+    // that -- and a domain that made only the first would produce one trace in
+    // both modes.  The oracle exists to be the trace a machine with no mirror at
+    // all would have produced, so a skip it should not have made is invisible to
+    // the comparison it exists for.  Both instances are given the same two
+    // requests: one that establishes the binding point, and one that restates it.
+    let (mut optimized_backend, optimized_buffer) = uniform_backend();
+    let mut optimized = BuffersState::new(ExecutionMode::Optimized);
+    let mut optimized_counters = StateCounters::default();
+    let (mut oracle_backend, oracle_buffer) = uniform_backend();
+    let mut oracle = BuffersState::new(ExecutionMode::Oracle);
+    let mut oracle_counters = StateCounters::default();
+
+    optimized.bind_uniform_buffer(2, Some(optimized_buffer), 0, 0, &mut optimized_counters);
+    optimized
+        .reconcile(&mut optimized_backend, &mut optimized_counters)
+        .expect("the first request emits");
+    optimized.bind_uniform_buffer(2, Some(optimized_buffer), 0, 0, &mut optimized_counters);
+    optimized
+        .reconcile(&mut optimized_backend, &mut optimized_counters)
+        .expect("a redundant request is not a failure");
+
+    oracle.bind_uniform_buffer(2, Some(oracle_buffer), 0, 0, &mut oracle_counters);
+    oracle
+        .reconcile(&mut oracle_backend, &mut oracle_counters)
+        .expect("the oracle establishes the binding point as well");
+    oracle.bind_uniform_buffer(2, Some(oracle_buffer), 0, 0, &mut oracle_counters);
+    oracle
+        .reconcile(&mut oracle_backend, &mut oracle_counters)
+        .expect("the oracle restates it rather than skipping");
+
+    // First observable: the trace.  Two requests cost the driver one call under
+    // the optimized mirror and two under the oracle.
+    assert_eq!(
+        uniform_calls(&optimized_backend),
+        vec![uniform(2, Some(optimized_buffer), 0, 0)]
+    );
+    assert_eq!(
+        uniform_calls(&oracle_backend),
+        vec![
+            uniform(2, Some(oracle_buffer), 0, 0),
+            uniform(2, Some(oracle_buffer), 0, 0),
+        ],
+        "nothing proved the restated request redundant, so the driver is told again"
+    );
+
+    // Second observable, and the discriminating one: this domain's own tally.  It
+    // is what a report reads to say how much the mirror saved, and the trace is
+    // what says whether a call reached the driver -- so an ungated skip would
+    // show up as a saving the oracle claimed for a binding the optimized
+    // instance is supposed to be the only one allowed to drop.  The counts are
+    // asserted per instance rather than as a difference, because the oracle's
+    // zero is the half that fails when the mode is ignored.
+    assert_eq!(
+        counters_for(&optimized_counters),
+        DomainCounters {
+            requests: 2,
+            emitted: 1,
+            skipped: 1,
+            unknown_recoveries: 1,
+        }
+    );
+    assert_eq!(
+        counters_for(&oracle_counters),
+        DomainCounters {
+            requests: 2,
+            emitted: 2,
+            skipped: 0,
+            // One, not two: the second call re-established a slot the mirror
+            // still knew, which is a call that changed nothing rather than a
+            // value it had to recover.
+            unknown_recoveries: 1,
+        }
+    );
+}
+
+#[test]
 fn the_same_buffer_at_a_different_range_is_not_redundant() {
     let (mut backend, buffer) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     // Three requests that name one buffer and three different ranges.  None is
@@ -100,7 +178,7 @@ fn the_same_buffer_at_a_different_range_is_not_redundant() {
 #[test]
 fn an_unbind_is_a_request_of_its_own() {
     let (mut backend, buffer) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.bind_uniform_buffer(0, Some(buffer), 0, 0, &mut counters);
@@ -132,7 +210,7 @@ fn an_unbind_is_a_request_of_its_own() {
 #[test]
 fn the_two_roles_do_not_share_one_mirror_entry() {
     let mut fixture = two_role_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let mark = storage_mark(&fixture.storage);
 
@@ -176,7 +254,7 @@ fn the_two_roles_do_not_share_one_mirror_entry() {
 #[test]
 fn a_redundant_storage_request_emits_nothing() {
     let mut fixture = two_role_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let mark = storage_mark(&fixture.storage);
     let wanted = range(fixture.first);
@@ -208,7 +286,7 @@ fn a_redundant_storage_request_emits_nothing() {
 #[test]
 fn a_storage_request_that_differs_only_in_usage_is_re_emitted() {
     let mut fixture = two_role_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let mark = storage_mark(&fixture.storage);
 

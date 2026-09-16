@@ -12,7 +12,7 @@ use super::*;
 #[test]
 fn deleting_a_buffer_forgets_it_in_every_role() {
     let mut fixture = two_role_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.bind_uniform_buffer(0, Some(fixture.first), 0, 0, &mut counters);
@@ -73,7 +73,7 @@ fn deleting_a_buffer_forgets_it_in_every_role() {
 #[test]
 fn a_declared_scope_only_forgets_when_it_names_this_domain() {
     let (mut backend, buffer) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.bind_uniform_buffer(3, Some(buffer), 0, 0, &mut counters);
@@ -132,7 +132,7 @@ fn a_declared_scope_only_forgets_when_it_names_this_domain() {
 #[test]
 fn a_whole_mirror_event_keeps_the_want_and_forgets_the_belief() {
     let (mut backend, buffer) = uniform_backend();
-    let mut state = BuffersState::new();
+    let mut state = BuffersState::new(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.bind_uniform_buffer(1, Some(buffer), 256, 0, &mut counters);

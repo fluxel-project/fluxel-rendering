@@ -93,7 +93,7 @@ fn indexed(layout: GlVertexLayout, buffer: BufferId, source: BufferId) -> Vertex
     }
 }
 
-fn geometry(mode: CacheMode) -> GeometryState {
+fn geometry(mode: ExecutionMode) -> GeometryState {
     GeometryState::new(DEFAULT_BUDGET, mode)
 }
 
@@ -142,7 +142,7 @@ fn apply(state: &mut GeometryState, backend: &mut MockGlFamilyApi, counters: &mu
 #[test]
 fn a_reconcile_with_nothing_asked_for_emits_nothing() {
     let mut backend = backend();
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     apply(&mut state, &mut backend, &mut counters);
@@ -157,7 +157,7 @@ fn a_reconcile_with_nothing_asked_for_emits_nothing() {
 fn an_unchanged_request_is_not_bound_twice() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let wanted = input(layout(12, GlVertexStepMode::Vertex), buffer, 0);
 
@@ -201,10 +201,77 @@ fn an_unchanged_request_is_not_bound_twice() {
 }
 
 #[test]
+fn an_oracle_emits_the_redundant_bind_the_optimized_mirror_skips() {
+    // A skip is two decisions -- the mirror agrees, and this mode may act on
+    // that -- and a domain that made only the first would produce one trace in
+    // both modes.  The oracle exists to be the trace a machine with no mirror at
+    // all would have produced, so a skip it should not have made is invisible to
+    // the comparison it exists for.  Both instances are given the same two
+    // requests: one bind, and then the request that repeats it.
+    let mut optimized_backend = backend();
+    let optimized_buffer = vertex_buffer(&mut optimized_backend);
+    let mut optimized = geometry(ExecutionMode::Optimized);
+    let mut optimized_counters = StateCounters::default();
+    let wanted = input(layout(12, GlVertexStepMode::Vertex), optimized_buffer, 0);
+
+    let mut oracle_backend = backend();
+    let oracle_buffer = vertex_buffer(&mut oracle_backend);
+    let mut oracle = geometry(ExecutionMode::Oracle);
+    let mut oracle_counters = StateCounters::default();
+    let repeated = input(layout(12, GlVertexStepMode::Vertex), oracle_buffer, 0);
+
+    optimized.set_vertex_input(wanted.clone());
+    let first = optimized
+        .reconcile(&mut optimized_backend, &mut optimized_counters)
+        .expect("the first bind emits");
+    assert!(first.vertex_array_bound);
+    optimized.set_vertex_input(wanted);
+    let skipped = optimized
+        .reconcile(&mut optimized_backend, &mut optimized_counters)
+        .expect("a redundant input is not a failure");
+
+    oracle.set_vertex_input(repeated.clone());
+    let oracle_first = oracle
+        .reconcile(&mut oracle_backend, &mut oracle_counters)
+        .expect("the oracle binds the input as well");
+    assert!(oracle_first.vertex_array_bound);
+    oracle.set_vertex_input(repeated);
+    let re_emitted = oracle
+        .reconcile(&mut oracle_backend, &mut oracle_counters)
+        .expect("the oracle re-binds rather than skipping");
+
+    // First observable: the trace.  Two requests cost the driver one bind under
+    // the optimized mirror and two under the oracle -- the oracle derives a
+    // second array too, because it retains nothing to derive from.
+    assert_eq!(skipped, GeometryEffects::NONE);
+    assert_eq!(binds(&optimized_backend), 1);
+    assert!(re_emitted.vertex_array_bound);
+    assert_eq!(binds(&oracle_backend), 2);
+
+    // Second observable, and the discriminating one: this domain's own tally.
+    // It is what a report reads to say how much the mirror saved, and the trace
+    // is what says whether a call reached the driver -- so an ungated skip would
+    // show up as a saving the oracle claimed for a bind the optimized instance
+    // is supposed to be the only one allowed to drop.  The counts are asserted
+    // per instance rather than as a difference, because the oracle's zero is the
+    // half that fails when the mode is ignored.
+    assert_eq!(
+        counts(&optimized_counters).skipped,
+        1,
+        "the optimized mirror proved the repeated input redundant"
+    );
+    assert_eq!(
+        counts(&oracle_counters).skipped,
+        0,
+        "the oracle has nothing to report as skipped: it emitted every required call"
+    );
+}
+
+#[test]
 fn a_changed_request_binds_again_through_the_same_array() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let vertex_layout = layout(12, GlVertexStepMode::Vertex);
 
@@ -233,7 +300,7 @@ fn a_changed_request_binds_again_through_the_same_array() {
 fn a_second_request_for_the_same_record_reuses_it_without_binding_it() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let wanted = input(layout(12, GlVertexStepMode::Vertex), buffer, 0);
 
@@ -263,7 +330,7 @@ fn a_second_request_for_the_same_record_reuses_it_without_binding_it() {
 fn two_layouts_differing_in_one_field_do_not_share_an_array() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     // A stride is one input of the derivation, and a step mode is another.
@@ -293,7 +360,7 @@ fn two_layouts_differing_in_one_field_do_not_share_an_array() {
 #[test]
 fn a_layout_with_no_slots_does_not_reach_the_array_buffer_point() {
     let mut backend = backend();
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     // A layout with no slots is legal, and a bind of one emits no attribute
@@ -327,7 +394,7 @@ fn an_indexed_input_depends_on_its_index_buffer() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
     let source = index_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.set_vertex_input(indexed(
@@ -356,7 +423,7 @@ fn an_indexed_input_depends_on_its_index_buffer() {
 fn deleting_a_buffer_the_record_reads_drops_the_record() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.set_vertex_input(input(layout(12, GlVertexStepMode::Vertex), buffer, 0));
@@ -394,7 +461,7 @@ fn a_buffer_only_the_claim_names_still_forces_a_rebind() {
     let mut backend = backend();
     let first = vertex_buffer(&mut backend);
     let second = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let vertex_layout = layout(12, GlVertexStepMode::Vertex);
 
@@ -436,7 +503,7 @@ fn a_buffer_only_the_claim_names_still_forces_a_rebind() {
 fn a_refused_bind_is_not_mirrored_as_an_applied_input() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let vertex_layout = layout(12, GlVertexStepMode::Vertex);
 
@@ -484,7 +551,7 @@ fn a_refused_bind_is_not_mirrored_as_an_applied_input() {
 fn a_refused_creation_is_reported_against_the_derivation() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let wanted = input(layout(12, GlVertexStepMode::Vertex), buffer, 0);
 
@@ -517,7 +584,7 @@ fn a_refused_creation_is_reported_against_the_derivation() {
 fn a_whole_mirror_event_purges_without_destroying_and_keeps_the_request() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let wanted = input(layout(12, GlVertexStepMode::Vertex), buffer, 0);
 
@@ -547,7 +614,7 @@ fn a_whole_mirror_event_purges_without_destroying_and_keeps_the_request() {
 fn a_scope_that_declares_this_domain_forgets_the_claim_and_keeps_the_records() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let wanted = input(layout(12, GlVertexStepMode::Vertex), buffer, 0);
 
@@ -593,7 +660,7 @@ fn a_scope_that_declares_this_domain_forgets_the_claim_and_keeps_the_records() {
 fn a_failed_buffer_domain_drops_the_claim_but_not_the_records() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let wanted = input(layout(12, GlVertexStepMode::Vertex), buffer, 0);
 
@@ -630,7 +697,7 @@ fn a_failed_buffer_domain_drops_the_claim_but_not_the_records() {
 fn deleting_the_bound_array_drops_the_record_without_destroying_it_again() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.set_vertex_input(input(layout(12, GlVertexStepMode::Vertex), buffer, 0));
@@ -670,7 +737,7 @@ fn deleting_the_bound_array_drops_the_record_without_destroying_it_again() {
 fn a_disabled_cache_never_reuses_and_hands_ownership_back() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Disabled);
+    let mut state = geometry(ExecutionMode::Oracle);
     let mut counters = StateCounters::default();
     let wanted = input(layout(12, GlVertexStepMode::Vertex), buffer, 0);
 
@@ -705,7 +772,7 @@ fn an_array_the_budget_could_not_keep_is_destroyed_when_its_claim_is_replaced() 
     // built belongs to the domain alone.
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = GeometryState::new(CacheBudget::new(0, 0), CacheMode::Enabled);
+    let mut state = GeometryState::new(CacheBudget::new(0, 0), ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
     let vertex_layout = layout(12, GlVertexStepMode::Vertex);
 
@@ -742,7 +809,7 @@ fn an_array_the_budget_could_not_keep_is_destroyed_when_its_claim_is_replaced() 
 fn shutdown_destroys_what_the_domain_derived_and_forgets_the_request() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.set_vertex_input(input(layout(12, GlVertexStepMode::Vertex), buffer, 0));
@@ -762,7 +829,7 @@ fn shutdown_destroys_what_the_domain_derived_and_forgets_the_request() {
 fn an_emitted_bind_counts_one_allocation_and_a_skipped_one_counts_none() {
     let mut backend = backend();
     let buffer = vertex_buffer(&mut backend);
-    let mut state = geometry(CacheMode::Enabled);
+    let mut state = geometry(ExecutionMode::Optimized);
     let mut counters = StateCounters::default();
 
     state.set_vertex_input(input(layout(12, GlVertexStepMode::Vertex), buffer, 0));
