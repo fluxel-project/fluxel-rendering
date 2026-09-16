@@ -8,138 +8,23 @@
 //! because the fixtures are the one part every group must agree on while the
 //! groups themselves change for unrelated reasons.
 //!
-//! The discovery fixture below is deliberately a copy of the API-level one:
-//! `api/tests/mod.rs` now exposes the same builders `pub(crate)`, but this suite
-//! keeps its own copy so its evidence cannot be invalidated by an edit to a file
-//! another work package is still moving.  Two copies can drift; the assertions
-//! inside each recorder fixture below are what make a drifted copy fail loudly
-//! instead of quietly weakening a test.
+//! The discovery fixtures are shared with the api-level suite rather than
+//! copied. This suite used to keep its own copy, for the sound reason that a
+//! work package was still moving `api/tests/mod.rs` and its evidence should not
+//! be invalidated by an edit in flight. That reason has expired: no package is
+//! moving that file now, and two copies of a limits table can drift apart
+//! without any test noticing, which is the failure the shared fixture exists to
+//! prevent. `api/tests/mod.rs` exposes them `pub(crate)` for exactly this.
 
 mod command;
 mod multiview;
 mod oracle;
 
+pub(crate) use crate::webgl2::api::tests::{
+    batch, compute, context, desktop_limits, formats, limits, multiview, stamp,
+};
+
 use super::*;
-
-fn limits() -> GlLimits {
-    GlLimits {
-        max_texture_size: 2_048,
-        max_3d_texture_size: 256,
-        max_array_texture_layers: 256,
-        max_cube_map_texture_size: 2_048,
-        max_renderbuffer_size: 4_096,
-        max_color_attachments: 4,
-        max_draw_buffers: 4,
-        max_vertex_attributes: 16,
-        max_viewport_dimensions: [2_048; 2],
-        max_viewports: 1,
-        max_vertex_texture_image_units: 16,
-        max_fragment_texture_image_units: 16,
-        max_combined_texture_image_units: 16,
-        max_uniform_buffer_bindings: 24,
-        max_uniform_block_size: 16_384,
-        uniform_buffer_offset_alignment: 256,
-        max_vertex_uniform_blocks: 12,
-        max_fragment_uniform_blocks: 12,
-        max_compute_uniform_blocks: 12,
-        max_combined_uniform_blocks: 24,
-        max_storage_buffer_bindings: 8,
-        max_storage_block_size: 1 << 27,
-        storage_buffer_offset_alignment: 256,
-        max_vertex_storage_blocks: 4,
-        max_fragment_storage_blocks: 4,
-        max_compute_storage_blocks: 4,
-        max_combined_storage_blocks: 8,
-        max_image_units: 4,
-        max_combined_image_units: 4,
-        max_samples: 4,
-        max_color_texture_samples: 4,
-        max_depth_texture_samples: 4,
-        max_integer_samples: 4,
-        max_compute_work_group_count: [65_535; 3],
-        max_compute_work_group_size: [1_024, 1_024, 64],
-        max_compute_work_group_invocations: 1_024,
-        max_multiview_view_count: 2,
-        max_multi_draw_indirect_count: Some(1),
-        query_counter_bits: 32,
-        max_texture_anisotropy: GlFiniteF32::new(16.0),
-    }
-}
-
-fn formats() -> GlFormatTable {
-    let mut table = GlFormatTable::default();
-    for format in [
-        GlFormat::Rgba8Unorm,
-        GlFormat::Rgba8Srgb,
-        GlFormat::Depth32Float,
-    ] {
-        table
-            .record(GlFormatCapabilities {
-                format,
-                resource_kind: GlFormatResourceKind::Texture,
-                sample_count: 1,
-                evidence: GlFormatEvidence::CoreGuaranteed,
-                sampled: true,
-                filterable: true,
-                renderable: true,
-                blendable: true,
-                storage_read: false,
-                storage_write: false,
-                copy_source: true,
-                copy_destination: true,
-            })
-            .expect("unique fact");
-    }
-    table
-}
-
-/// The desktop limits a 4.3 context reports: the same floors as `limits`, raised
-/// where the desktop profile requires more.
-fn desktop_limits() -> GlLimits {
-    let mut limits = limits();
-    limits.max_texture_size = 16_384;
-    limits.max_3d_texture_size = 2_048;
-    limits.max_array_texture_layers = 2_048;
-    limits.max_cube_map_texture_size = 16_384;
-    limits.max_renderbuffer_size = 16_384;
-    limits.max_color_attachments = 8;
-    limits.max_draw_buffers = 8;
-    limits.max_viewport_dimensions = [16_384; 2];
-    limits.max_uniform_buffer_bindings = 36;
-    limits
-}
-
-/// The context stamp every fixture in this suite is bound to.
-fn stamp() -> ContextStamp {
-    ContextStamp::new(
-        DeviceIdentity::new(7).expect("identity"),
-        ContextEpoch::INITIAL,
-    )
-}
-
-/// One context's identity facts, with the raw strings standing in for a driver.
-fn context(profile: GlFamilyProfile) -> GlContextInfo {
-    GlContextInfo::new(
-        profile,
-        "version",
-        "glsl",
-        "vendor",
-        "renderer",
-        "driver",
-        GlContextFlags::default(),
-    )
-}
-
-/// The compute route both providers resolve: a desktop/embedded core version
-/// plus the ARB extension, gated on its own operation probe.
-fn compute() -> CoreOrExtension {
-    CoreOrExtension {
-        desktop_core: Some(GlVersion::new(4, 3)),
-        embedded_core: Some(GlVersion::new(3, 1)),
-        extension: Some(GlKnownExtension::ArbComputeShader),
-        extension_requires_probe: true,
-    }
-}
 
 /// The storage-buffer route, gated the same way as compute.
 fn storage_buffer() -> CoreOrExtension {
@@ -165,28 +50,6 @@ fn core_route(desktop: Option<GlVersion>, embedded: Option<GlVersion>) -> CoreOr
     }
 }
 
-/// The batch route: one extension whose oracle is the acquired, complete command
-/// set of the extension object, with no queryable limit and no probe.
-fn batch() -> CoreOrExtension {
-    CoreOrExtension {
-        desktop_core: None,
-        embedded_core: None,
-        extension: Some(GlKnownExtension::WebglMultiDraw),
-        extension_requires_probe: false,
-    }
-}
-
-/// The multiview route: the second-revision extension, which needs both its
-/// acquisition and a successful operation probe.
-fn multiview() -> CoreOrExtension {
-    CoreOrExtension {
-        desktop_core: None,
-        embedded_core: None,
-        extension: Some(GlKnownExtension::OvrMultiview2),
-        extension_requires_probe: true,
-    }
-}
-
 /// A recorder on a desktop 4.3 context that proved the optional rows only a
 /// desktop family can reach: compute, storage buffers and the indirect commands.
 ///
@@ -197,11 +60,11 @@ fn multiview() -> CoreOrExtension {
 /// call site below.
 fn desktop_recorder() -> MockGlFamilyApi {
     let mut builder = GlDiscoveryBuilder::new(
-        stamp(),
+        stamp(ContextEpoch::INITIAL),
         context(GlFamilyProfile::Desktop { major: 4, minor: 3 }),
         GlExtensionSet::default(),
         desktop_limits(),
-        formats(),
+        formats(false),
     )
     .expect("desktop discovery");
     builder.resolve(GlCapability::Compute, compute(), GlOperationProbe::Passed);
@@ -268,11 +131,11 @@ fn webgl2_recorder() -> MockGlFamilyApi {
     assert!(extensions.acquire(GlKnownExtension::OvrMultiview2));
     assert!(extensions.probe(GlKnownExtension::OvrMultiview2));
     let mut builder = GlDiscoveryBuilder::new(
-        stamp(),
+        stamp(ContextEpoch::INITIAL),
         context(GlFamilyProfile::WebGl2),
         extensions,
         limits(),
-        formats(),
+        formats(false),
     )
     .expect("webgl2 discovery");
     builder.resolve(
@@ -299,11 +162,11 @@ fn webgl2_recorder() -> MockGlFamilyApi {
 /// A recorder bound to a WebGL2 snapshot at exactly the profile minimums.
 fn recorder() -> MockGlFamilyApi {
     let snapshot = GlDiscoveryBuilder::new(
-        stamp(),
+        stamp(ContextEpoch::INITIAL),
         context(GlFamilyProfile::WebGl2),
         GlExtensionSet::default(),
         limits(),
-        formats(),
+        formats(false),
     )
     .expect("test discovery")
     .build();
@@ -317,7 +180,7 @@ fn compressed_recorder() -> MockGlFamilyApi {
     let mut extensions = GlExtensionSet::default();
     extensions.report_raw("WEBGL_compressed_texture_s3tc");
     assert!(extensions.acquire(extension), "the ledger acquires S3TC");
-    let mut table = formats();
+    let mut table = formats(false);
     table
         .record(GlFormatCapabilities {
             format: GlFormat::Bc1RgbaUnorm,
@@ -336,7 +199,7 @@ fn compressed_recorder() -> MockGlFamilyApi {
         .expect("exact compressed fact");
     MockGlFamilyApi::from_discovery(
         GlDiscoveryBuilder::new(
-            stamp(),
+            stamp(ContextEpoch::INITIAL),
             context(GlFamilyProfile::WebGl2),
             extensions,
             limits(),
