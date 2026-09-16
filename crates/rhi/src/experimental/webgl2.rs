@@ -5,11 +5,7 @@
 //! objects, including the canvas context, remain owned here.
 
 use core::fmt;
-use std::{
-    cell::Cell,
-    collections::{HashMap, VecDeque},
-    rc::Rc,
-};
+use std::{cell::Cell, collections::VecDeque, rc::Rc};
 
 use js_sys::{Float32Array, Object, Reflect, Uint32Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -21,11 +17,11 @@ use web_sys::{
 
 use fluxel_rendergraph::{
     BufferCapabilities, BufferUsageKind, CompileError, CompileResult, CompiledGraph,
-    DeviceCapabilities, DeviceLimits, LoadOp, PassKind, QueueCapabilities, QueueDescriptor,
-    QueueId, RecordingCapabilities, RecordingModel, RenderGraph, ResourceAccessState,
-    ResourceUsageSummary, StoreOp, SurfaceCapabilities, SynchronizationCapabilities, TextureFormat,
-    TextureFormatCapabilities, TextureUsageKind, TimestampCapabilities,
-    TransientResourceCapabilities, TransitionCapabilities,
+    DeviceCapabilities, DeviceIdentity, DeviceLimits, LoadOp, PassKind, QueueCapabilities,
+    QueueDescriptor, QueueId, RecordingCapabilities, RecordingModel, RenderGraph,
+    ResourceAccessState, ResourceUsageSummary, StoreOp, SurfaceCapabilities,
+    SynchronizationCapabilities, TextureFormat, TextureFormatCapabilities, TextureUsageKind,
+    TimestampCapabilities, TransientResourceCapabilities, TransitionCapabilities,
 };
 
 mod resource_floor;
@@ -331,39 +327,27 @@ struct PendingFence {
     resident_meshes: Vec<Rc<ResidentMeshPhysical>>,
 }
 
-/// Exact logical asset revision for the closed WebGL2 residency seam.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct WebGl2AssetKey {
-    logical: u64,
-    content: u64,
-}
-impl WebGl2AssetKey {
-    /// Creates an exact logical asset/content key.
-    pub const fn new(logical: u64, content: u64) -> Self {
-        Self { logical, content }
-    }
-}
-
 /// Opaque resident mesh identity; it never exposes a WebGL object.
+///
+/// The device is the whole of what this token claims: the context that minted
+/// the buffers.  It carries no logical asset identity, because keying one is the
+/// caller's -- `fluxel_renderer`'s residency table keys on a typed logical
+/// identity and reaches this executor only once it has decided an upload is
+/// due.  A token whose device differs from [`WebGl2Session::device_identity`] is
+/// from a context that has been lost and replaced, and its buffers are gone.
 #[derive(Clone)]
 pub struct WebGl2ResidentMesh {
-    #[expect(
-        dead_code,
-        reason = "identity is retained for renderer-owned replacement diagnostics"
-    )]
-    key: WebGl2AssetKey,
+    device: DeviceIdentity,
     generation: u64,
     physical: Rc<ResidentMeshPhysical>,
     index_count: i32,
 }
 /// Opaque resident image identity; it never exposes a WebGL object.
+///
+/// On [`WebGl2ResidentMesh`]'s terms: the device, and no logical identity.
 #[derive(Clone)]
 pub struct WebGl2ResidentImage {
-    #[expect(
-        dead_code,
-        reason = "identity is retained for renderer-owned replacement diagnostics"
-    )]
-    key: WebGl2AssetKey,
+    device: DeviceIdentity,
     generation: u64,
     #[expect(
         dead_code,
@@ -373,12 +357,20 @@ pub struct WebGl2ResidentImage {
 }
 
 impl WebGl2ResidentMesh {
+    /// The context this token was minted by.
+    pub const fn device(&self) -> DeviceIdentity {
+        self.device
+    }
     /// Device generation for diagnostics only.
     pub const fn generation(&self) -> u64 {
         self.generation
     }
 }
 impl WebGl2ResidentImage {
+    /// The context this token was minted by.
+    pub const fn device(&self) -> DeviceIdentity {
+        self.device
+    }
     /// Device generation for diagnostics only.
     pub const fn generation(&self) -> u64 {
         self.generation
@@ -415,13 +407,29 @@ impl Drop for ResidentImagePhysical {
 }
 
 /// One explicit canvas-bound, owner-thread WebGL2 session.
+///
+/// The session owns the context and the physical objects it mints, and nothing
+/// else.  It deliberately keeps no table of resident assets: deciding *which*
+/// logical asset a set of buffers realizes, whether a newer revision replaced
+/// it, and when the old one may be released is `fluxel_renderer`'s residency
+/// contract, which keys on a typed logical identity plus content generation.
+/// A second table here keyed on anything the RHI could invent would be a second
+/// lifecycle for the same resources.
 pub struct WebGl2Session {
     canvas: HtmlCanvasElement,
     gl: Gl,
     objects: Option<Objects>,
     resource_floor: Option<ResourceFloorObjects>,
-    resident_meshes: HashMap<WebGl2AssetKey, Rc<ResidentMeshPhysical>>,
-    resident_images: HashMap<WebGl2AssetKey, Rc<ResidentImagePhysical>>,
+    /// The common identity of the context this session currently holds.
+    ///
+    /// Reallocated whenever a context is activated, so a lost-then-restored
+    /// canvas is a *new* device to every key derived from it rather than the
+    /// same one holding resources the new context never had.  Taken from the
+    /// crate's device allocator rather than derived from the canvas or the
+    /// generation, for the reason `compat::identity` records: the identity's job
+    /// is to keep two simultaneously live contexts apart, and a derived value
+    /// could make two contexts equal.
+    identity: DeviceIdentity,
     fences: VecDeque<PendingFence>,
     state: WebGl2SessionState,
     generation: u64,
@@ -469,8 +477,7 @@ impl WebGl2Session {
             gl,
             objects: None,
             resource_floor: None,
-            resident_meshes: HashMap::new(),
-            resident_images: HashMap::new(),
+            identity: DeviceIdentity::new(crate::next_identity()),
             fences: VecDeque::new(),
             state: WebGl2SessionState::Suspended,
             generation: 0,
@@ -738,11 +745,18 @@ impl WebGl2Session {
             .evidence)
     }
 
-    /// Uploads or reuses an exact indexed mesh revision for the current context
-    /// generation. The token is only an identity, never a WebGL handle.
-    pub fn resident_mesh(
+    /// Uploads one indexed mesh as buffers this context owns.
+    ///
+    /// The verb uploads unconditionally, and that is the point rather than an
+    /// omission: whether an upload is *due* is a question about a logical asset
+    /// and its content generation, and this executor holds neither. A caller
+    /// that wants one upload per revision asks once, which is what a keyed
+    /// residency table is for; a caller that asks twice gets two independent
+    /// buffer pairs, and both are whosever token names them.
+    ///
+    /// The token is only an identity, never a WebGL handle.
+    pub fn upload_resident_mesh(
         &mut self,
-        key: WebGl2AssetKey,
         positions: &[[f32; 3]],
         indices: &[u32],
     ) -> Result<WebGl2ResidentMesh, WebGl2SessionError> {
@@ -761,62 +775,61 @@ impl WebGl2Session {
                 "invalid mesh ABI",
             ));
         }
-        if !self.resident_meshes.contains_key(&key) {
-            let position = self
-                .gl
-                .create_buffer()
-                .ok_or_else(|| self.fail("resident-mesh", "createBuffer returned null"))?;
-            let index = match self.gl.create_buffer() {
-                Some(value) => value,
-                None => {
-                    self.gl.delete_buffer(Some(&position));
-                    return Err(self.fail("resident-mesh", "createBuffer returned null"));
-                }
-            };
-            // The physical guard owns both buffers before any upload can fail:
-            // a rejected upload or error check then drops this candidate and
-            // deletes exactly these never-submitted objects, leaving the
-            // registry without a half-updated entry.
-            let physical = Rc::new(ResidentMeshPhysical {
-                gl: self.gl.clone(),
-                live_generation: Rc::clone(&self.live_resident_generation),
-                generation: self.generation,
-                position,
-                index,
-            });
-            self.gl
-                .bind_buffer(Gl::ARRAY_BUFFER, Some(&physical.position));
-            let values: Vec<f32> = positions.iter().flatten().copied().collect();
-            self.gl.buffer_data_with_array_buffer_view(
-                Gl::ARRAY_BUFFER,
-                &Float32Array::from(values.as_slice()),
-                Gl::STATIC_DRAW,
-            );
-            self.gl
-                .bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&physical.index));
-            self.gl.buffer_data_with_array_buffer_view(
-                Gl::ELEMENT_ARRAY_BUFFER,
-                &Uint32Array::from(indices),
-                Gl::STATIC_DRAW,
-            );
-            self.check_error("resident-mesh-upload")?;
-            self.resident_meshes.insert(key, Rc::clone(&physical));
-        }
-        let Some(physical) = self.resident_meshes.get(&key) else {
-            unreachable!("mesh was inserted")
+        let position = self
+            .gl
+            .create_buffer()
+            .ok_or_else(|| self.fail("resident-mesh", "createBuffer returned null"))?;
+        let index = match self.gl.create_buffer() {
+            Some(value) => value,
+            None => {
+                self.gl.delete_buffer(Some(&position));
+                return Err(self.fail("resident-mesh", "createBuffer returned null"));
+            }
         };
-        Ok(WebGl2ResidentMesh {
-            key,
+        // The physical guard owns both buffers before either upload can fail:
+        // a rejected upload or error check then drops this candidate and deletes
+        // exactly these never-submitted objects.  No entry escapes, because
+        // there is no entry -- the returned token is the only thing that keeps
+        // this pair alive, and it does not exist until both uploads hold.
+        let physical = Rc::new(ResidentMeshPhysical {
+            gl: self.gl.clone(),
+            live_generation: Rc::clone(&self.live_resident_generation),
             generation: self.generation,
-            physical: Rc::clone(physical),
+            position,
+            index,
+        });
+        self.gl
+            .bind_buffer(Gl::ARRAY_BUFFER, Some(&physical.position));
+        let values: Vec<f32> = positions.iter().flatten().copied().collect();
+        self.gl.buffer_data_with_array_buffer_view(
+            Gl::ARRAY_BUFFER,
+            &Float32Array::from(values.as_slice()),
+            Gl::STATIC_DRAW,
+        );
+        self.gl
+            .bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&physical.index));
+        self.gl.buffer_data_with_array_buffer_view(
+            Gl::ELEMENT_ARRAY_BUFFER,
+            &Uint32Array::from(indices),
+            Gl::STATIC_DRAW,
+        );
+        self.check_error("resident-mesh-upload")?;
+        Ok(WebGl2ResidentMesh {
+            device: self.identity,
+            generation: self.generation,
+            physical,
             index_count: indices.len() as i32,
         })
     }
 
-    /// Uploads or reuses a linear RGBA8 image revision for the current context.
-    pub fn resident_image(
+    /// Uploads one linear RGBA8 image as a texture this context owns.
+    ///
+    /// On [`WebGl2Session::upload_resident_mesh`]'s terms, down to the verb: the
+    /// upload is unconditional because the revision this image realizes is the
+    /// caller's fact, and the returned token is the only thing keeping the
+    /// texture alive.
+    pub fn upload_resident_image(
         &mut self,
-        key: WebGl2AssetKey,
         extent: [u32; 2],
         pixels: &[u8],
     ) -> Result<WebGl2ResidentImage, WebGl2SessionError> {
@@ -833,104 +846,80 @@ impl WebGl2Session {
                 "invalid RGBA8 image ABI",
             ));
         }
-        if !self.resident_images.contains_key(&key) {
-            let image = self
-                .gl
-                .create_texture()
-                .ok_or_else(|| self.fail("resident-image", "createTexture returned null"))?;
-            // The physical guard owns the texture before any upload step can
-            // fail: a rejected upload or error check then drops this candidate
-            // and deletes this never-sampled texture, leaving the registry
-            // without a half-updated entry.
-            let physical = Rc::new(ResidentImagePhysical {
-                gl: self.gl.clone(),
-                live_generation: Rc::clone(&self.live_resident_generation),
-                generation: self.generation,
-                image,
-            });
-            self.gl.bind_texture(Gl::TEXTURE_2D, Some(&physical.image));
-            self.gl
-                .tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::NEAREST as i32);
-            self.gl
-                .tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MAG_FILTER, Gl::NEAREST as i32);
-            self.gl
-                .tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-                    Gl::TEXTURE_2D,
-                    0,
-                    Gl::RGBA as i32,
-                    extent[0] as i32,
-                    extent[1] as i32,
-                    0,
-                    Gl::RGBA,
-                    Gl::UNSIGNED_BYTE,
-                    Some(pixels),
-                )
-                .map_err(|error| {
-                    self.fail(
-                        "resident-image-upload",
-                        error
-                            .as_string()
-                            .unwrap_or_else(|| "texImage2D failed".into()),
-                    )
-                })?;
-            self.check_error("resident-image-upload")?;
-            self.resident_images.insert(key, Rc::clone(&physical));
-        }
-        let Some(physical) = self.resident_images.get(&key) else {
-            unreachable!("image was inserted")
-        };
-        Ok(WebGl2ResidentImage {
-            key,
+        let image = self
+            .gl
+            .create_texture()
+            .ok_or_else(|| self.fail("resident-image", "createTexture returned null"))?;
+        // The physical guard owns the texture before the upload can fail, on the
+        // mesh verb's terms: a rejected upload or error check drops this
+        // never-sampled candidate, and no entry outlives it.
+        let physical = Rc::new(ResidentImagePhysical {
+            gl: self.gl.clone(),
+            live_generation: Rc::clone(&self.live_resident_generation),
             generation: self.generation,
-            physical: Rc::clone(physical),
+            image,
+        });
+        self.gl.bind_texture(Gl::TEXTURE_2D, Some(&physical.image));
+        self.gl
+            .tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::NEAREST as i32);
+        self.gl
+            .tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MAG_FILTER, Gl::NEAREST as i32);
+        self.gl
+            .tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                Gl::TEXTURE_2D,
+                0,
+                Gl::RGBA as i32,
+                extent[0] as i32,
+                extent[1] as i32,
+                0,
+                Gl::RGBA,
+                Gl::UNSIGNED_BYTE,
+                Some(pixels),
+            )
+            .map_err(|error| {
+                self.fail(
+                    "resident-image-upload",
+                    error
+                        .as_string()
+                        .unwrap_or_else(|| "texImage2D failed".into()),
+                )
+            })?;
+        self.check_error("resident-image-upload")?;
+        Ok(WebGl2ResidentImage {
+            device: self.identity,
+            generation: self.generation,
+            physical,
         })
     }
 
-    /// Invalidates one exact revision. Physical deletion waits until pending
-    /// frame fences are drained, so replacement cannot free submitted work.
-    pub fn retire_resident_asset(&mut self, key: WebGl2AssetKey) {
-        self.resident_meshes.remove(&key);
-        self.resident_images.remove(&key);
-    }
-
-    /// Invalidates all revisions of a logical asset for replacement.
-    pub fn replace_resident_asset(&mut self, logical: u64) {
-        let mesh_keys: Vec<_> = self
-            .resident_meshes
-            .keys()
-            .copied()
-            .filter(|key| key.logical == logical)
-            .collect();
-        let image_keys: Vec<_> = self
-            .resident_images
-            .keys()
-            .copied()
-            .filter(|key| key.logical == logical)
-            .collect();
-        for key in mesh_keys.into_iter().chain(image_keys) {
-            self.retire_resident_asset(key);
-        }
-    }
-
-    /// Reports whether a mesh token remains current for the restored context.
+    /// Reports whether a mesh token still names buffers this session can draw.
+    ///
+    /// The device is the whole of the question.  A token whose device is this
+    /// session's was minted by the context currently bound, so its buffers are
+    /// this context's; a token from before an activation names the context that
+    /// activation replaced, whatever the canvas and the generation happen to say.
     pub fn resident_mesh_current(&self, value: &WebGl2ResidentMesh) -> bool {
-        self.state == WebGl2SessionState::Active && value.generation == self.generation
+        self.state == WebGl2SessionState::Active && value.device == self.identity
     }
 
-    /// Reports whether an image token remains current for the restored context.
+    /// Reports whether an image token still names a texture this session can sample.
     pub fn resident_image_current(&self, value: &WebGl2ResidentImage) -> bool {
-        self.state == WebGl2SessionState::Active && value.generation == self.generation
+        self.state == WebGl2SessionState::Active && value.device == self.identity
     }
 
     /// Stops drawing because the adapter observed a context-loss event.
+    ///
+    /// Nothing is cleared here that a token could name.  The objects dropped are
+    /// the session's own; the resident buffers and textures belong to whoever
+    /// holds their tokens, and those tokens keep them alive until the holder
+    /// lets go -- which it will, because the loss marks every one of them
+    /// non-current against the identity the next activation allocates.
     pub fn context_lost(&mut self) {
         if !matches!(self.state, WebGl2SessionState::Disposed) {
             self.live_resident_generation.set(0);
             self.fences.clear();
             self.objects = None;
             self.resource_floor = None;
-            self.resident_meshes.clear();
-            self.resident_images.clear();
             self.state = WebGl2SessionState::Lost;
         }
     }
@@ -970,8 +959,6 @@ impl WebGl2Session {
         if let Some(fixture) = self.resource_floor.take() {
             resource_floor::destroy(&self.gl, fixture);
         }
-        self.resident_meshes.clear();
-        self.resident_images.clear();
         self.live_resident_generation.set(0);
         if let Some(error) = finish_error {
             return Err(error);
@@ -991,6 +978,16 @@ impl WebGl2Session {
     pub const fn generation(&self) -> u64 {
         self.generation
     }
+    /// Returns the identity of the context this session currently holds.
+    ///
+    /// It is the device half of every key a residency table derives from this
+    /// session, and it changes on every activation: a canvas restored to a new
+    /// context mints a new identity, so `(asset, generation, device)` keys taken
+    /// before the loss select nothing after it and the caller re-uploads instead
+    /// of drawing buffers the new context never held.
+    pub const fn device_identity(&self) -> DeviceIdentity {
+        self.identity
+    }
 
     fn activate(&mut self) -> Result<(), WebGl2SessionError> {
         if self.gl.is_context_lost() {
@@ -1004,6 +1001,11 @@ impl WebGl2Session {
             .generation
             .checked_add(1)
             .ok_or_else(|| self.fail("generation", "generation exhausted"))?;
+        // A new activation is a new context even when the canvas is the same,
+        // so every token minted before this point names a device that no longer
+        // exists.  That is what makes a caller's keyed table re-upload instead
+        // of drawing buffers the new context never held.
+        self.identity = DeviceIdentity::new(crate::next_identity());
         self.live_resident_generation.set(self.generation);
         self.objects = Some(objects);
         self.state = WebGl2SessionState::Active;

@@ -15,34 +15,40 @@ use super::*;
 wasm_bindgen_test_configure!(run_in_browser);
 
 #[wasm_bindgen_test]
-fn resident_assets_reuse_replace_and_reupload_after_context_restoration() {
+fn resident_uploads_are_unconditional_and_an_activation_retires_every_token() {
     let mut session = WebGl2Session::new(canvas().into()).expect("WebGL2 session");
     let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
     let indices = [0, 1, 2];
     let mesh = session
-        .resident_mesh(WebGl2AssetKey::new(51, 1), &positions, &indices)
+        .upload_resident_mesh(&positions, &indices)
         .expect("mesh");
     let image = session
-        // Same raw logical/content key must coexist across typed maps.
-        .resident_image(WebGl2AssetKey::new(51, 1), [1, 1], &[1, 2, 3, 4])
+        .upload_resident_image([1, 1], &[1, 2, 3, 4])
         .expect("image");
     assert!(session.resident_mesh_current(&mesh));
     assert!(session.resident_image_current(&image));
-    session.replace_resident_asset(51);
-    // Lookup replacement does not invalidate an acquired same-context token.
+    assert_eq!(mesh.device(), session.device_identity());
+    // Asking twice is two uploads rather than a reuse: the session cannot know
+    // that these bytes are a revision it already holds, because the revision is
+    // the caller's fact and the caller is a keyed table.
+    let second = session
+        .upload_resident_mesh(&positions, &indices)
+        .expect("second mesh");
+    assert!(session.resident_mesh_current(&second));
     assert!(session.resident_mesh_current(&mesh));
-    assert!(session.resident_image_current(&image));
-    let replacement = session
-        .resident_mesh(WebGl2AssetKey::new(51, 2), &positions, &indices)
-        .expect("replacement");
-    assert!(session.resident_mesh_current(&replacement));
+    let device = session.device_identity();
     let old_generation = session.generation();
     session.context_lost();
-    assert!(!session.resident_mesh_current(&replacement));
+    assert!(!session.resident_mesh_current(&mesh));
     session.context_restored().expect("restore");
     assert_eq!(session.generation(), old_generation + 1);
+    // A token is not stale by generation alone: what it names is a context, and
+    // the restored context is a different one that never held these buffers.
+    assert_ne!(session.device_identity(), device);
+    assert!(!session.resident_mesh_current(&mesh));
+    assert!(!session.resident_image_current(&image));
     let recreated = session
-        .resident_mesh(WebGl2AssetKey::new(51, 2), &positions, &indices)
+        .upload_resident_mesh(&positions, &indices)
         .expect("reupload");
     assert!(session.resident_mesh_current(&recreated));
     session.dispose().expect("dispose");

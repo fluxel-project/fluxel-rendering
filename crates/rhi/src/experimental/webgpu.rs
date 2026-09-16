@@ -32,14 +32,15 @@ mod resources;
 mod tests;
 
 use contract::{validate, validate_resident};
+use fluxel_rendergraph::{CompiledGraph, DeviceIdentity};
 use js::{
     BrowserRequestProvider, ProductionBrowserRequests, call0, call1, call2, call3, get, js_message,
     request_browser, set, to_js,
 };
 use resources::{
-    FrameDrawResources, ResidentLease, ResidentRegistry, create_frame_resources,
-    create_uniform_and_binding, destroy_frame_resources, pipeline, unregister_uncaptured_error,
-    write_buffer,
+    FrameDrawResources, ResidentLease, create_frame_resources, create_uniform_and_binding,
+    destroy_frame_resources, image as upload_image, mesh as upload_mesh, pipeline,
+    unregister_uncaptured_error, write_buffer,
 };
 
 use resource_floor::{
@@ -48,8 +49,6 @@ use resource_floor::{
 };
 #[cfg(test)]
 use resource_floor::{observe_pending, prepare as prepare_resource_floor};
-
-use fluxel_rendergraph::CompiledGraph;
 
 const MAX_FRAMES_IN_FLIGHT: usize = 3;
 
@@ -143,42 +142,29 @@ impl WebGpuResourceKey {
     }
 }
 
-/// Exact logical asset revision used by the closed browser residency seam.
-/// The renderer supplies stable logical and immutable-content generations;
-/// the session adds its current device generation internally.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct WebGpuAssetKey {
-    logical: u64,
-    content: u64,
-}
-impl WebGpuAssetKey {
-    /// Creates an exact logical asset/content key.
-    pub const fn new(logical: u64, content: u64) -> Self {
-        Self { logical, content }
-    }
-}
-
 /// Opaque resident indexed mesh token. It contains no browser object.
+///
+/// The device is the whole of what this token claims: the `GPUDevice` that
+/// minted the buffers.  It carries no logical asset identity, because keying
+/// one is the caller's -- `fluxel_renderer`'s residency table keys on a typed
+/// logical identity plus a content generation and reaches this executor only
+/// once it has decided an upload is due.  A token whose device differs from
+/// [`WebGpuSession::device_identity`] was minted by a `GPUDevice` that has since
+/// been lost or replaced, and its buffers are gone.
 #[derive(Clone)]
 pub struct WebGpuResidentMesh {
-    #[expect(
-        dead_code,
-        reason = "identity is retained for renderer-owned replacement diagnostics"
-    )]
-    key: WebGpuAssetKey,
+    device: DeviceIdentity,
     generation: u64,
     index_count: u32,
     lease: ResidentLease,
 }
 
 /// Opaque resident RGBA8 image token. It contains no browser object.
+///
+/// On [`WebGpuResidentMesh`]'s terms: the device, and no logical identity.
 #[derive(Clone)]
 pub struct WebGpuResidentImage {
-    #[expect(
-        dead_code,
-        reason = "identity is retained for renderer-owned replacement diagnostics"
-    )]
-    key: WebGpuAssetKey,
+    device: DeviceIdentity,
     generation: u64,
     #[expect(
         dead_code,
@@ -188,6 +174,10 @@ pub struct WebGpuResidentImage {
 }
 
 impl WebGpuResidentMesh {
+    /// The device this token was minted by.
+    pub const fn device(&self) -> DeviceIdentity {
+        self.device
+    }
     /// Device generation for diagnostics; no native identity is exposed.
     pub const fn generation(&self) -> u64 {
         self.generation
@@ -198,6 +188,10 @@ impl WebGpuResidentMesh {
     }
 }
 impl WebGpuResidentImage {
+    /// The device this token was minted by.
+    pub const fn device(&self) -> DeviceIdentity {
+        self.device
+    }
     /// Device generation for diagnostics; no native identity is exposed.
     pub const fn generation(&self) -> u64 {
         self.generation
@@ -278,6 +272,16 @@ pub enum WebGpuSessionError {
 struct Shared {
     state: WebGpuSessionState,
     generation: u64,
+    /// The common identity of the `GPUDevice` currently installed.
+    ///
+    /// Reallocated at every install, so a device created to replace a lost one
+    /// is a *new* device to every key derived from it rather than the same one
+    /// still holding resources the new device never had.  Taken from the
+    /// crate's device allocator rather than derived from the browser object or
+    /// the generation counter, for the reason `webgl2::compat::identity`
+    /// records: the identity's job is to keep two simultaneously live devices
+    /// apart, and a derived value could make two of them equal.
+    identity: DeviceIdentity,
     token: u64,
     next_marker: u64,
     diagnostics: Vec<WebGpuDiagnostic>,
@@ -300,6 +304,7 @@ impl Default for Shared {
         Self {
             state: WebGpuSessionState::Suspended,
             generation: 0,
+            identity: DeviceIdentity::new(0),
             token: 0,
             next_marker: 0,
             diagnostics: Vec::new(),
@@ -350,6 +355,14 @@ struct RenderObjects {
 ///
 /// `new` and `recover` are asynchronous because requestAdapter/requestDevice
 /// are browser Promises. No raw browser GPU object is exposed by this type.
+///
+/// The session owns the device, the queue, the swap-chain context and the fixed
+/// recipe's objects, and nothing else.  It deliberately keeps no table of
+/// resident assets: deciding *which* logical asset a set of buffers realizes,
+/// whether a newer revision replaced it, and when the old one may be released
+/// is `fluxel_renderer`'s residency contract, which keys on a typed logical
+/// identity plus a content generation.  A second table here keyed on anything
+/// the RHI could invent would be a second lifecycle for the same resources.
 pub struct WebGpuSession {
     canvas: HtmlCanvasElement,
     desired_extent: Rc<Cell<[u32; 2]>>,
@@ -367,7 +380,6 @@ pub struct WebGpuSession {
     adapter_info: Rc<RefCell<WebGpuAdapterInfo>>,
     requests: Rc<dyn BrowserRequestProvider>,
     resource_registry: Rc<RefCell<ResourceRegistry>>,
-    resident_registry: Rc<RefCell<ResidentRegistry>>,
 }
 
 impl WebGpuSession {
@@ -406,7 +418,6 @@ impl WebGpuSession {
             adapter_info: Rc::new(RefCell::new(info)),
             requests,
             resource_registry: Rc::new(RefCell::new(ResourceRegistry::default())),
-            resident_registry: Rc::new(RefCell::new(ResidentRegistry::default())),
         };
         let objects = match value
             .install(
@@ -572,15 +583,20 @@ impl WebGpuSession {
         self.resource_registry.borrow_mut().retire_key(key);
     }
 
-    /// Uploads or reuses one exact indexed-mesh revision for this device
-    /// generation. The returned token is opaque. Retirement or replacement of
-    /// its key removes future lookup ownership only: an already acquired token
-    /// keeps its lease and may still complete a same-generation submission.
-    /// Only a device identity mismatch, the end of its device generation, or a
-    /// terminal session state forbids further submission.
-    pub fn resident_mesh(
+    /// Uploads one indexed mesh as buffers this device owns.
+    ///
+    /// The verb uploads unconditionally, and that is the point rather than an
+    /// omission: whether an upload is *due* is a question about a logical asset
+    /// and its content generation, and this executor holds neither. A caller
+    /// that wants one upload per revision asks once, which is what a keyed
+    /// residency table is for; a caller that asks twice gets two independent
+    /// buffer pairs, and both are whosever token names them.
+    ///
+    /// The returned token is opaque. A token names exactly one device: only a
+    /// device identity mismatch, a terminal session state, or the end of its
+    /// device generation forbids further submission.
+    pub fn upload_resident_mesh(
         &mut self,
-        key: WebGpuAssetKey,
         positions: &[[f32; 3]],
         indices: &[u32],
     ) -> Result<WebGpuResidentMesh, WebGpuSessionError> {
@@ -599,25 +615,24 @@ impl WebGpuSession {
             ));
         }
         let objects = self.render_objects()?;
-        let lease = self
-            .resident_registry
-            .borrow_mut()
-            .mesh(&objects.device, &objects.queue, key, positions, indices)
+        let lease = upload_mesh(&objects.device, &objects.queue, positions, indices)
             .map_err(|error| self.fail("resident-mesh-upload", error))?;
         Ok(WebGpuResidentMesh {
-            key,
+            device: self.device_identity(),
             generation: self.generation(),
             index_count: indices.len() as u32,
             lease,
         })
     }
 
-    /// Uploads or reuses one exact linear-RGBA8 image revision. The fixed
-    /// unlit browser recipe does not sample this token yet, but its ownership
-    /// and retirement rules are identical to mesh residency.
-    pub fn resident_image(
+    /// Uploads one linear-RGBA8 image as a texture this device owns.
+    ///
+    /// On [`WebGpuSession::upload_resident_mesh`]'s terms, down to the verb: the
+    /// upload is unconditional because the revision this image realizes is the
+    /// caller's fact.  The fixed unlit browser recipe does not sample this token
+    /// yet, but its ownership rules are identical to mesh residency.
+    pub fn upload_resident_image(
         &mut self,
-        key: WebGpuAssetKey,
         extent: [u32; 2],
         pixels: &[u8],
     ) -> Result<WebGpuResidentImage, WebGpuSessionError> {
@@ -634,45 +649,43 @@ impl WebGpuSession {
             ));
         }
         let objects = self.render_objects()?;
-        let lease = self
-            .resident_registry
-            .borrow_mut()
-            .image(&objects.device, &objects.queue, key, extent, pixels)
+        let lease = upload_image(&objects.device, &objects.queue, extent, pixels)
             .map_err(|error| self.fail("resident-image-upload", error))?;
         Ok(WebGpuResidentImage {
-            key,
+            device: self.device_identity(),
             generation: self.generation(),
             lease,
         })
     }
 
-    /// Retires one exact content revision. Three facts stay distinguishable:
-    /// retirement removes future lookup ownership, so the next upload of this
-    /// key creates fresh physical resources; it does not revoke leases a
-    /// caller already acquired, which may still complete and submit within
-    /// their device generation; and the GPU memory becomes reclaimable only
-    /// after that completion. Device identity mismatch, generation end, or a
-    /// terminal state is what forbids submission.
-    pub fn retire_resident_asset(&mut self, key: WebGpuAssetKey) {
-        self.collect();
-        self.resident_registry.borrow_mut().retire(key);
-    }
-
-    /// Retires every content revision of one logical asset, used for atomic
-    /// replacement by a higher renderer-owned residency table.
-    pub fn replace_resident_asset(&mut self, logical: u64) {
-        self.collect();
-        self.resident_registry.borrow_mut().retire_logical(logical);
-    }
-
-    /// Reports whether this opaque mesh token remains current for this device.
+    /// Reports whether this opaque mesh token still names buffers this device
+    /// can draw.
+    ///
+    /// The device is the whole of the question.  A token whose device is this
+    /// session's was minted by the `GPUDevice` currently installed, so its
+    /// buffers are that device's; a token from before a loss names the device
+    /// the recovery replaced, whatever the generation counter happens to say.
+    /// Retirement of physical memory is a separate fact -- it waits for the
+    /// completion of the work already accepted, and a token that is no longer
+    /// current is exactly what stops new work from being accepted.
     pub fn resident_mesh_current(&self, value: &WebGpuResidentMesh) -> bool {
-        self.state() == WebGpuSessionState::Active && value.generation == self.generation()
+        self.state() == WebGpuSessionState::Active && value.device == self.device_identity()
     }
 
     /// Reports whether this opaque image token remains current for this device.
     pub fn resident_image_current(&self, value: &WebGpuResidentImage) -> bool {
-        self.state() == WebGpuSessionState::Active && value.generation == self.generation()
+        self.state() == WebGpuSessionState::Active && value.device == self.device_identity()
+    }
+
+    /// Returns the identity of the device this session currently holds.
+    ///
+    /// It is the device half of every key a residency table derives from this
+    /// session, and it changes at every install: a device created to replace a
+    /// lost one mints a new identity, so `(asset, generation, device)` keys
+    /// taken before the loss select nothing after it and the caller re-uploads
+    /// instead of drawing buffers the new device never held.
+    pub fn device_identity(&self) -> DeviceIdentity {
+        self.shared.borrow().identity
     }
 
     /// Merges the latest desired extent; active nonzero extents reconfigure.
@@ -1008,7 +1021,6 @@ impl WebGpuSession {
         // registry now, while detached tickets keep accepted work alive until
         // its completion Promise settles.
         self.resource_registry.borrow_mut().retire_generation();
-        self.resident_registry.borrow_mut().retire_generation();
         let quarantined = std::mem::take(&mut *self.quarantined.borrow_mut());
         destroy_frame_resources(quarantined);
         if let Some(objects) = self.objects.borrow_mut().take() {
@@ -1184,7 +1196,6 @@ impl WebGpuSession {
         let recovery = self.recovery_promise.borrow().clone();
         let objects = self.objects.borrow_mut().take();
         self.resource_registry.borrow_mut().retire_generation();
-        self.resident_registry.borrow_mut().retire_generation();
         let session = self.shared_clone();
         let promise = future_to_promise(async move {
             if let Some(recovery) = recovery {
@@ -1237,7 +1248,6 @@ impl WebGpuSession {
             adapter_info: Rc::clone(&self.adapter_info),
             requests: Rc::clone(&self.requests),
             resource_registry: Rc::clone(&self.resource_registry),
-            resident_registry: Rc::clone(&self.resident_registry),
         }
     }
 
@@ -1412,6 +1422,12 @@ impl WebGpuSession {
             }
         }) as Box<dyn FnMut(JsValue)>);
         let _ = lost_promise.then2(&lost_ok, &lost_err);
+        // The device is adopted here and nowhere else, so this is where its
+        // identity is allocated.  A device created to replace a lost one is a
+        // new device even when the canvas and the generation counter say
+        // otherwise, and a token minted against the old one has to stop
+        // selecting anything.
+        self.shared.borrow_mut().identity = DeviceIdentity::new(crate::next_identity());
         Ok(Objects {
             device,
             queue,

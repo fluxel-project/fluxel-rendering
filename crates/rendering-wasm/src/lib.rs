@@ -13,8 +13,8 @@ pub use webgpu::WebGpuSession;
 use fluxel_renderer::adapter::{PreparedBasicGraph, PreparedBasicScene};
 use fluxel_renderer::{BasicMaterial, Camera, DrawList, Geometry, Mesh, ModelTransform};
 use fluxel_rhi::adapter::webgl2::{
-    FixedResidentUnlitDraw, FixedUnlitGraph, WebGl2AssetKey, WebGl2ResidentMesh,
-    WebGl2Session as RhiSession, WebGl2SessionError,
+    FixedResidentUnlitDraw, FixedUnlitGraph, WebGl2ResidentMesh, WebGl2Session as RhiSession,
+    WebGl2SessionError,
 };
 use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::prelude::*;
@@ -185,6 +185,15 @@ impl WebGl2Session {
     }
 }
 
+/// Uploads every draw of the fixed scene as buffers this session's context owns.
+///
+/// The upload is unconditional on the RHI's side and this function is the
+/// caller that decides when it is due -- the one thing the RHI deliberately
+/// cannot know, because a revision is a fact about a logical asset and this
+/// bridge's scene is a fixed list rather than a store.  So the caller's own
+/// generation gate is the upload policy: [`WebGl2Session::render_once`] calls
+/// this exactly once per context generation, and the tokens it returns are what
+/// the draws then bind.
 fn prepare_webgl2_resident_meshes(
     session: &mut RhiSession,
     scene: &PreparedBasicScene,
@@ -192,14 +201,9 @@ fn prepare_webgl2_resident_meshes(
     scene
         .draws()
         .iter()
-        .enumerate()
-        .map(|(index, draw)| {
+        .map(|draw| {
             session
-                .resident_mesh(
-                    WebGl2AssetKey::new(index as u64, 1),
-                    draw.positions(),
-                    draw.indices(),
-                )
+                .upload_resident_mesh(draw.positions(), draw.indices())
                 .map_err(error)
         })
         .collect()

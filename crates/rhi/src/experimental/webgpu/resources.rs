@@ -3,13 +3,13 @@
 //! Resource ownership remains with the parent session's tickets; this module
 //! only constructs and destroys the JavaScript objects it is handed.
 
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::JsValue;
 
 use super::js::{call0, call1, call2, call3, call4, set_js, set_raw};
-use super::{Objects, WebGpuAssetKey, WebGpuCanvasFormat};
+use super::{Objects, WebGpuCanvasFormat};
 use crate::experimental::resource_candidate::CreationCandidate;
 
 /// Full per-draw transient resources for one unretained draw. This path
@@ -61,128 +61,105 @@ impl Drop for ResidentPhysical {
     }
 }
 
-/// Generation-local closed asset lookup. Retirement only removes lookup
-/// authority; accepted work keeps its `ResidentLease` alive.
-#[derive(Default)]
-pub(super) struct ResidentRegistry {
-    meshes: HashMap<WebGpuAssetKey, ResidentLease>,
-    images: HashMap<WebGpuAssetKey, ResidentLease>,
+/// Creates one indexed mesh's buffers and writes their contents.
+///
+/// This is a creation seam and not a table.  It deliberately keeps no record of
+/// what it created: a caller that wants one upload per asset revision asks
+/// once, and `fluxel_renderer`'s residency table -- which keys on a typed
+/// logical identity plus a content generation -- is what decides that.  A table
+/// here would be a second lifecycle over the same buffers, and the two would
+/// have to agree about replacement, which is not a question this module can
+/// answer.
+///
+/// Every created object enters the candidate immediately; any failed creation
+/// or write below destroys exactly what was created.  The only reference to the
+/// result is the returned lease, so a failure leaves nothing behind and a
+/// success leaves nothing behind either until the caller holds the token.
+pub(super) fn mesh(
+    device: &JsValue,
+    queue: &JsValue,
+    positions: &[[f32; 3]],
+    indices: &[u32],
+) -> Result<ResidentLease, JsValue> {
+    let mut candidate = CreationCandidate::new(destroy_js_object);
+    let position = buffer(device, bytes_rounded(positions.len() * 3 * 4), 0x20 | 0x8)?;
+    candidate.keep(&position);
+    let index = buffer(device, bytes_rounded(indices.len() * 4), 0x10 | 0x8)?;
+    candidate.keep(&index);
+    let values: Vec<f32> = positions.iter().flatten().copied().collect();
+    write_buffer(
+        queue,
+        &position,
+        &js_sys::Float32Array::from(values.as_slice()).into(),
+    )?;
+    write_buffer(queue, &index, &js_sys::Uint32Array::from(indices).into())?;
+    candidate.commit();
+    Ok(ResidentLease(Rc::new(ResidentPhysical {
+        position: Some(position),
+        index: Some(index),
+        image: None,
+    })))
 }
 
-impl ResidentRegistry {
-    pub(super) fn mesh(
-        &mut self,
-        device: &JsValue,
-        queue: &JsValue,
-        key: WebGpuAssetKey,
-        positions: &[[f32; 3]],
-        indices: &[u32],
-    ) -> Result<ResidentLease, JsValue> {
-        if let Some(value) = self.meshes.get(&key) {
-            return Ok(value.clone());
-        }
-        // Every created object enters the candidate immediately; any failed
-        // creation or write below destroys exactly what was created and never
-        // half-updates this registry.
-        let mut candidate = CreationCandidate::new(destroy_js_object);
-        let position = buffer(device, bytes_rounded(positions.len() * 3 * 4), 0x20 | 0x8)?;
-        candidate.keep(&position);
-        let index = buffer(device, bytes_rounded(indices.len() * 4), 0x10 | 0x8)?;
-        candidate.keep(&index);
-        let values: Vec<f32> = positions.iter().flatten().copied().collect();
-        write_buffer(
-            queue,
-            &position,
-            &js_sys::Float32Array::from(values.as_slice()).into(),
-        )?;
-        write_buffer(queue, &index, &js_sys::Uint32Array::from(indices).into())?;
-        candidate.commit();
-        let value = ResidentLease(Rc::new(ResidentPhysical {
-            position: Some(position),
-            index: Some(index),
-            image: None,
-        }));
-        self.meshes.insert(key, value.clone());
-        Ok(value)
+/// Creates one linear-RGBA8 image's texture and writes its contents.
+///
+/// On [`mesh`]'s terms: a creation seam with no table behind it.
+pub(super) fn image(
+    device: &JsValue,
+    queue: &JsValue,
+    extent: [u32; 2],
+    pixels: &[u8],
+) -> Result<ResidentLease, JsValue> {
+    let size = Object::new();
+    set_raw(&size, "width", extent[0])?;
+    set_raw(&size, "height", extent[1])?;
+    set_raw(&size, "depthOrArrayLayers", 1_u32)?;
+    let descriptor = Object::new();
+    set_js(&descriptor, "size", &size)?;
+    set_raw(&descriptor, "format", "rgba8unorm")?;
+    set_raw(&descriptor, "usage", 0x04_u32 | 0x02_u32)?;
+    let image = call1(device, "createTexture", &descriptor)?;
+    // From the successful creation onward the candidate owns the texture,
+    // so every descriptor or upload failure destroys it.
+    let mut candidate = CreationCandidate::new(destroy_js_object);
+    candidate.keep(&image);
+    let destination = Object::new();
+    set_js(&destination, "texture", &image)?;
+    let row_bytes = usize::try_from(extent[0])
+        .unwrap_or(usize::MAX)
+        .saturating_mul(4);
+    let padded_row = row_bytes.next_multiple_of(256);
+    let mut padded = vec![0_u8; padded_row.saturating_mul(extent[1] as usize)];
+    for row in 0..extent[1] as usize {
+        let source = row * row_bytes;
+        let target = row * padded_row;
+        padded[target..target + row_bytes].copy_from_slice(&pixels[source..source + row_bytes]);
     }
-
-    pub(super) fn image(
-        &mut self,
-        device: &JsValue,
-        queue: &JsValue,
-        key: WebGpuAssetKey,
-        extent: [u32; 2],
-        pixels: &[u8],
-    ) -> Result<ResidentLease, JsValue> {
-        if let Some(value) = self.images.get(&key) {
-            return Ok(value.clone());
-        }
-        let size = Object::new();
-        set_raw(&size, "width", extent[0])?;
-        set_raw(&size, "height", extent[1])?;
-        set_raw(&size, "depthOrArrayLayers", 1_u32)?;
-        let descriptor = Object::new();
-        set_js(&descriptor, "size", &size)?;
-        set_raw(&descriptor, "format", "rgba8unorm")?;
-        set_raw(&descriptor, "usage", 0x04_u32 | 0x02_u32)?;
-        let image = call1(device, "createTexture", &descriptor)?;
-        // From the successful creation onward the candidate owns the texture,
-        // so every descriptor or upload failure destroys it.
-        let mut candidate = CreationCandidate::new(destroy_js_object);
-        candidate.keep(&image);
-        let destination = Object::new();
-        set_js(&destination, "texture", &image)?;
-        let row_bytes = usize::try_from(extent[0])
-            .unwrap_or(usize::MAX)
-            .saturating_mul(4);
-        let padded_row = row_bytes.next_multiple_of(256);
-        let mut padded = vec![0_u8; padded_row.saturating_mul(extent[1] as usize)];
-        for row in 0..extent[1] as usize {
-            let source = row * row_bytes;
-            let target = row * padded_row;
-            padded[target..target + row_bytes].copy_from_slice(&pixels[source..source + row_bytes]);
-        }
-        let layout = Object::new();
-        set_raw(
-            &layout,
-            "bytesPerRow",
-            u32::try_from(padded_row).unwrap_or(u32::MAX),
-        )?;
-        set_raw(&layout, "rowsPerImage", extent[1])?;
-        let copy_extent = Object::new();
-        set_raw(&copy_extent, "width", extent[0])?;
-        set_raw(&copy_extent, "height", extent[1])?;
-        set_raw(&copy_extent, "depthOrArrayLayers", 1_u32)?;
-        call4(
-            queue,
-            "writeTexture",
-            &destination,
-            &Uint8Array::from(padded.as_slice()).into(),
-            &layout,
-            &copy_extent,
-        )?;
-        candidate.commit();
-        let value = ResidentLease(Rc::new(ResidentPhysical {
-            position: None,
-            index: None,
-            image: Some(image),
-        }));
-        self.images.insert(key, value.clone());
-        Ok(value)
-    }
-
-    pub(super) fn retire(&mut self, key: WebGpuAssetKey) {
-        self.meshes.remove(&key);
-        self.images.remove(&key);
-    }
-    pub(super) fn retire_logical(&mut self, logical: u64) {
-        self.meshes.retain(|key, _| key.logical != logical);
-        self.images.retain(|key, _| key.logical != logical);
-    }
-    pub(super) fn retire_generation(&mut self) {
-        self.meshes.clear();
-        self.images.clear();
-    }
+    let layout = Object::new();
+    set_raw(
+        &layout,
+        "bytesPerRow",
+        u32::try_from(padded_row).unwrap_or(u32::MAX),
+    )?;
+    set_raw(&layout, "rowsPerImage", extent[1])?;
+    let copy_extent = Object::new();
+    set_raw(&copy_extent, "width", extent[0])?;
+    set_raw(&copy_extent, "height", extent[1])?;
+    set_raw(&copy_extent, "depthOrArrayLayers", 1_u32)?;
+    call4(
+        queue,
+        "writeTexture",
+        &destination,
+        &Uint8Array::from(padded.as_slice()).into(),
+        &layout,
+        &copy_extent,
+    )?;
+    candidate.commit();
+    Ok(ResidentLease(Rc::new(ResidentPhysical {
+        position: None,
+        index: None,
+        image: Some(image),
+    })))
 }
 
 impl ResidentLease {

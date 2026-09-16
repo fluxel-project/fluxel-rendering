@@ -8,7 +8,7 @@ use fluxel_renderer::adapter::{
     PreparedBasicGraph, PreparedBasicScene, PresentableFormat, PresentationProfile,
 };
 use fluxel_rhi::adapter::webgpu::{
-    FixedResidentUnlitDraw, FixedUnlitGraph, WebGpuAssetKey, WebGpuCanvasFormat, WebGpuLossReason,
+    FixedResidentUnlitDraw, FixedUnlitGraph, WebGpuCanvasFormat, WebGpuLossReason,
     WebGpuRenderOutcome, WebGpuResidentMesh, WebGpuSession as RhiSession, WebGpuSessionError,
     WebGpuSessionState,
 };
@@ -247,6 +247,11 @@ impl WebGpuSession {
     }
 }
 
+/// Uploads every draw of the fixed scene as buffers this device owns.
+///
+/// On the WebGL2 bridge's terms: the RHI uploads unconditionally because a
+/// revision is a fact about a logical asset, and this caller-owned generation
+/// gate is what decides an upload is due.
 fn prepare_resident_meshes(
     session: &mut RhiSession,
     scene: &PreparedBasicScene,
@@ -254,14 +259,9 @@ fn prepare_resident_meshes(
     scene
         .draws()
         .iter()
-        .enumerate()
-        .map(|(index, draw)| {
+        .map(|draw| {
             session
-                .resident_mesh(
-                    WebGpuAssetKey::new(index as u64, 1),
-                    draw.positions(),
-                    draw.indices(),
-                )
+                .upload_resident_mesh(draw.positions(), draw.indices())
                 .map_err(|error| webgpu_error_at(error, session.generation()))
         })
         .collect()

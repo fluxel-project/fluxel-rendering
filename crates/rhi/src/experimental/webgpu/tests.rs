@@ -10,45 +10,41 @@ use crate::experimental::webgpu::js::BrowserRequestProvider;
 wasm_bindgen_test_configure!(run_in_browser);
 
 #[wasm_bindgen_test(async)]
-async fn resident_assets_reuse_replace_and_recreate_by_device_generation() {
+async fn resident_uploads_are_unconditional_and_a_new_device_retires_every_token() {
     let mut session = WebGpuSession::new(canvas()).await.expect("WebGPU session");
-    let mesh_key = WebGpuAssetKey::new(41, 1);
-    // Same raw logical/content key must coexist across the typed mesh/image maps.
-    let image_key = WebGpuAssetKey::new(41, 1);
     let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
     let indices = [0, 1, 2];
     let mesh = session
-        .resident_mesh(mesh_key, &positions, &indices)
+        .upload_resident_mesh(&positions, &indices)
         .expect("upload mesh");
-    let mesh_again = session
-        .resident_mesh(mesh_key, &positions, &indices)
-        .expect("reuse mesh");
     let image = session
-        .resident_image(image_key, [1, 1], &[9, 8, 7, 6])
+        .upload_resident_image([1, 1], &[9, 8, 7, 6])
         .expect("upload image");
     assert!(session.resident_mesh_current(&mesh));
-    assert!(session.resident_mesh_current(&mesh_again));
     assert!(session.resident_image_current(&image));
-    session.replace_resident_asset(41);
-    // Retirement removes future lookup ownership only. This acquired lease is
-    // not revoked: it stays admissible for an accepted same-generation
-    // submission, and its GPU memory becomes reclaimable only after such a
-    // submission completes.
+    assert_eq!(mesh.device(), session.device_identity());
+    // Asking twice is two uploads rather than a reuse: the session cannot know
+    // that these bytes are a revision it already holds, because the revision is
+    // the caller's fact and the caller is a keyed table.
+    let second = session
+        .upload_resident_mesh(&positions, &indices)
+        .expect("second mesh");
+    assert!(session.resident_mesh_current(&second));
     assert!(session.resident_mesh_current(&mesh));
-    assert!(session.resident_image_current(&image));
-    let replacement = session
-        .resident_mesh(WebGpuAssetKey::new(41, 2), &positions, &indices)
-        .expect("replacement");
-    assert!(session.resident_mesh_current(&replacement));
+    let device = session.device_identity();
     session.controlled_destroy_for_evidence().expect("destroy");
     lose(&mut session).await;
     JsFuture::from(session.recover().expect("recover"))
         .await
         .expect("recovered");
     assert_eq!(session.generation(), 2);
-    assert!(!session.resident_mesh_current(&replacement));
+    // The recovery installs a different `GPUDevice`, and that -- not the
+    // generation counter -- is what a token names.
+    assert_ne!(session.device_identity(), device);
+    assert!(!session.resident_mesh_current(&mesh));
+    assert!(!session.resident_image_current(&image));
     let recreated = session
-        .resident_mesh(WebGpuAssetKey::new(41, 2), &positions, &indices)
+        .upload_resident_mesh(&positions, &indices)
         .expect("reupload");
     assert!(session.resident_mesh_current(&recreated));
     dispose(&mut session).await;
@@ -734,10 +730,10 @@ fn resident_graph(
     graph.compile(&capabilities).expect("counting graph").graph
 }
 
-/// Resident draws bind registry-owned mesh buffers, so repeated resident
-/// drawing must grow only the per-frame uniform pair. Vertex/index buffers
-/// and their uploads are created exactly once by the initial upload. This is
-/// the regression contract for the removed per-draw dead transient buffers.
+/// Resident draws bind token-owned mesh buffers, so repeated resident drawing
+/// must grow only the per-frame uniform pair. Vertex/index buffers and their
+/// uploads come from the caller's single upload. This is the regression
+/// contract for the removed per-draw dead transient buffers.
 #[wasm_bindgen_test(async)]
 async fn resident_draws_reuse_mesh_buffers_and_only_grow_per_frame_uniforms() {
     let mut session =
@@ -747,7 +743,7 @@ async fn resident_draws_reuse_mesh_buffers_and_only_grow_per_frame_uniforms() {
     let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
     let indices = [0, 1, 2];
     let mesh = session
-        .resident_mesh(WebGpuAssetKey::new(7, 1), &positions, &indices)
+        .upload_resident_mesh(&positions, &indices)
         .expect("upload resident mesh");
     assert_eq!(
         draw_counter("vertex"),
@@ -896,17 +892,12 @@ fn fake_queue(device: &JsValue) -> JsValue {
 fn injected_resident_failures_destroy_created_objects_without_half_updates() {
     let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
     let indices = [0, 1, 2];
-    let mesh_key = WebGpuAssetKey::new(3, 1);
-    let image_key = WebGpuAssetKey::new(4, 1);
 
     for fail_creation in [1, 2] {
         let device = fake_resident_device(fail_creation, 0);
         let queue = fake_queue(&device);
-        let mut registry = ResidentRegistry::default();
         assert!(
-            registry
-                .mesh(&device, &queue, mesh_key, &positions, &indices)
-                .is_err(),
+            super::resources::mesh(&device, &queue, &positions, &indices).is_err(),
             "injected creation failure {fail_creation} must reject the upload"
         );
         let state = fake_state(&device);
@@ -915,25 +906,18 @@ fn injected_resident_failures_destroy_created_objects_without_half_updates() {
             fail_creation - 1,
             "exactly the objects created before the failure are destroyed"
         );
-        // The failed attempt installed nothing: a healthy retry performs the
-        // full recipe instead of observing a half-updated entry.
+        // The failed attempt left nothing behind: a healthy retry performs the
+        // full recipe rather than writing into a half-created entry.
         let good = fake_resident_device(0, 0);
-        assert!(
-            registry
-                .mesh(&good, &fake_queue(&good), mesh_key, &positions, &indices)
-                .is_ok()
-        );
+        assert!(super::resources::mesh(&good, &fake_queue(&good), &positions, &indices).is_ok());
         assert_eq!(fake_number(&fake_state(&good), "creations"), 2);
     }
 
     for fail_write in [1, 2] {
         let device = fake_resident_device(0, fail_write);
         let queue = fake_queue(&device);
-        let mut registry = ResidentRegistry::default();
         assert!(
-            registry
-                .mesh(&device, &queue, mesh_key, &positions, &indices)
-                .is_err(),
+            super::resources::mesh(&device, &queue, &positions, &indices).is_err(),
             "injected write failure {fail_write} must reject the upload"
         );
         assert_eq!(
@@ -942,11 +926,7 @@ fn injected_resident_failures_destroy_created_objects_without_half_updates() {
             "both buffers created before the write failure are destroyed"
         );
         let good = fake_resident_device(0, 0);
-        assert!(
-            registry
-                .mesh(&good, &fake_queue(&good), mesh_key, &positions, &indices)
-                .is_ok()
-        );
+        assert!(super::resources::mesh(&good, &fake_queue(&good), &positions, &indices).is_ok());
         assert_eq!(fake_number(&fake_state(&good), "creations"), 2);
     }
 
@@ -954,81 +934,40 @@ fn injected_resident_failures_destroy_created_objects_without_half_updates() {
     // fresh complete recipe.
     let device = fake_resident_device(0, 1);
     let queue = fake_queue(&device);
-    let mut registry = ResidentRegistry::default();
-    assert!(
-        registry
-            .image(&device, &queue, image_key, [1, 1], &[1, 2, 3, 4])
-            .is_err()
-    );
+    assert!(super::resources::image(&device, &queue, [1, 1], &[1, 2, 3, 4]).is_err());
     assert_eq!(fake_number(&fake_state(&device), "destroys"), 1);
     let good = fake_resident_device(0, 0);
-    assert!(
-        registry
-            .image(&good, &fake_queue(&good), image_key, [1, 1], &[1, 2, 3, 4])
-            .is_ok()
-    );
+    assert!(super::resources::image(&good, &fake_queue(&good), [1, 1], &[1, 2, 3, 4]).is_ok());
     assert_eq!(fake_number(&fake_state(&good), "creations"), 1);
     assert_eq!(fake_number(&fake_state(&good), "destroys"), 0);
 }
 
-/// Without injection the registry recipes install exactly once and then reuse
-/// the physical set for every later request of the same key.
+/// Without injection the recipe creates exactly what each request asks for:
+/// there is no table here to reuse a physical set, and the returned lease is
+/// the only owner of what was created.
 #[wasm_bindgen_test]
-fn resident_registry_installs_once_and_reuses_without_destroying() {
+fn resident_recipe_creates_once_per_request_and_the_lease_owns_the_result() {
     let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
     let indices = [0, 1, 2];
     let device = fake_resident_device(0, 0);
     let queue = fake_queue(&device);
-    let mut registry = ResidentRegistry::default();
-    let mesh = registry
-        .mesh(
-            &device,
-            &queue,
-            WebGpuAssetKey::new(5, 1),
-            &positions,
-            &indices,
-        )
+    let mesh = super::resources::mesh(&device, &queue, &positions, &indices)
         .expect("first upload succeeds");
-    let reused = registry
-        .mesh(
-            &device,
-            &queue,
-            WebGpuAssetKey::new(5, 1),
-            &positions,
-            &indices,
-        )
-        .expect("reuse succeeds");
-    let image = registry
-        .image(
-            &device,
-            &queue,
-            WebGpuAssetKey::new(5, 1),
-            [2, 1],
-            &[1, 2, 3, 4, 5, 6, 7, 8],
-        )
+    let second = super::resources::mesh(&device, &queue, &positions, &indices)
+        .expect("second upload succeeds");
+    let image = super::resources::image(&device, &queue, [2, 1], &[1, 2, 3, 4, 5, 6, 7, 8])
         .expect("image upload succeeds");
-    let reused_image = registry
-        .image(
-            &device,
-            &queue,
-            WebGpuAssetKey::new(5, 1),
-            [2, 1],
-            &[1, 2, 3, 4, 5, 6, 7, 8],
-        )
-        .expect("image reuse succeeds");
-    assert_eq!(fake_number(&fake_state(&device), "creations"), 3);
+    assert_eq!(fake_number(&fake_state(&device), "creations"), 5);
     assert_eq!(fake_number(&fake_state(&device), "writes"), 3);
     assert_eq!(fake_number(&fake_state(&device), "destroys"), 0);
     assert!(mesh.mesh().is_some());
-    assert!(reused.mesh().is_some());
-    registry.retire(WebGpuAssetKey::new(5, 1));
+    assert!(second.mesh().is_some());
     drop(mesh);
-    drop(reused);
+    drop(second);
     drop(image);
-    drop(reused_image);
     assert_eq!(
         fake_number(&fake_state(&device), "destroys"),
-        3,
-        "retirement drops the last lease references, destroying both mesh buffers and the image"
+        5,
+        "dropping the last references destroys both meshes' buffers and the image"
     );
 }
