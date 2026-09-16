@@ -5,10 +5,17 @@
 //! (the only WebGL2 resize mechanism) and invalidates outstanding leases.
 //! DOM events, RAF scheduling, and page visibility stay Host-owned; this
 //! module never registers listeners or schedules frames.
+//!
+//! Publishing blits the frame into the drawing buffer, which is the browser's
+//! equivalent of the default framebuffer and the object the compositor reads
+//! after the frame. The compositor's own present is still not this module's
+//! call: it flushes and stops there.
+
+use web_sys::WebGl2RenderingContext as Gl;
 
 use super::super::{
     GlError, GlFamilyApi as _, GlSurfaceAcquire, GlSurfaceLease, GlSurfacePresentationApi,
-    GlSurfaceSize,
+    GlSurfaceSize, TextureId, validate_publish_source,
 };
 use super::discovery::WebGl2BrowserDiscovery;
 
@@ -86,6 +93,61 @@ impl GlSurfacePresentationApi for WebGl2BrowserDiscovery {
         // The browser compositor presents the canvas after the frame; this
         // flush only guarantees accepted work reached the submission queue
         // before the lease is consumed. It never implies completion.
+        self.raw.flush();
+        self.driver_error(OP)
+    }
+
+    fn publish_surface_image(
+        &mut self,
+        lease: GlSurfaceLease,
+        source: TextureId,
+    ) -> Result<(), GlError> {
+        const OP: &str = "publish-surface-image";
+        self.assert_provider_ready(OP)?;
+        // The texture entry is borrowed from the discovery, so both facts are
+        // taken out of it before the lease is consumed, which needs `&mut`.
+        let (raw, descriptor) = {
+            let entry = self.texture(OP, source)?;
+            (entry.raw.clone(), entry.desc)
+        };
+        validate_publish_source(OP, descriptor, lease)?;
+        // The acquisition ends when its frame is published, so this is the
+        // consume, exactly as it is in `present_surface`.
+        self.surface.consume(lease)?;
+        let (width, height) = (lease.size.width as i32, lease.size.height as i32);
+        let scratch = self
+            .raw
+            .create_framebuffer()
+            .ok_or(GlError::OutOfMemory { operation: OP })?;
+        self.raw
+            .bind_framebuffer(Gl::READ_FRAMEBUFFER, Some(&scratch));
+        // `None` is the drawing buffer, which is what the compositor reads.
+        self.raw.bind_framebuffer(Gl::DRAW_FRAMEBUFFER, None);
+        self.raw.framebuffer_texture_2d(
+            Gl::READ_FRAMEBUFFER,
+            Gl::COLOR_ATTACHMENT0,
+            Gl::TEXTURE_2D,
+            Some(&raw),
+            0,
+        );
+        self.raw.blit_framebuffer(
+            0,
+            0,
+            width,
+            height,
+            0,
+            0,
+            width,
+            height,
+            Gl::COLOR_BUFFER_BIT,
+            Gl::NEAREST,
+        );
+        let result = self.driver_error(OP);
+        // The scratch framebuffer is deleted on every path, so no object
+        // survives a refused publish and the drawing buffer is left bound.
+        self.raw.bind_framebuffer(Gl::FRAMEBUFFER, None);
+        self.raw.delete_framebuffer(Some(&scratch));
+        result?;
         self.raw.flush();
         self.driver_error(OP)
     }

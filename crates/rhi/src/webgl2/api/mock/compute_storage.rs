@@ -479,4 +479,11 @@ impl GlSurfacePresentationApi for MockComputeStorageApi {
     fn present_surface(&mut self, lease: GlSurfaceLease) -> Result<(), GlError> {
         self.inner.present_surface(lease)
     }
+    fn publish_surface_image(
+        &mut self,
+        lease: GlSurfaceLease,
+        source: TextureId,
+    ) -> Result<(), GlError> {
+        self.inner.publish_surface_image(lease, source)
+    }
 }

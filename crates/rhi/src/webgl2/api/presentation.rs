@@ -1,6 +1,6 @@
 //! Host-sized surface lifecycle with generation-bound acquire leases.
 
-use super::{GlError, GlFamilyApi, SurfaceImageId};
+use super::{GlError, GlFamilyApi, GlTextureDesc, GlTextureDimension, SurfaceImageId, TextureId};
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 
@@ -97,21 +97,124 @@ pub(crate) enum GlSurfaceAcquire {
 
 /// RHI owns the surface executor; Host owns the native window. Resize,
 /// suspend, and resume invalidate all old leases before they return.
+///
+/// # Two families, and what the drawable is to each
+///
+/// The window system's drawable is reached in one of two ways, and the trait
+/// says which way each implementation takes rather than papering over the
+/// difference. A provider that owns the drawable *and* the object tables its
+/// images are created in can publish: it takes the frame the acquired image
+/// holds and puts it on the drawable. A provider that owns only the drawable
+/// -- the WGL and EGL surface types, which borrow no object tables and mint no
+/// identities -- cannot, because it has no texture to publish and no table to
+/// find one in; those implementations refuse and keep `present_surface` as the
+/// flip it already is.
+///
+/// The two are mutually exclusive per acquisition: both consume the lease, and
+/// a lease is consumed once, so a frame is either already in its acquired image
+/// or published into it from another texture, never both.
 pub(crate) trait GlSurfacePresentationApi: GlFamilyApi {
     fn acquire_surface_image(&mut self) -> Result<GlSurfaceAcquire, GlError>;
     fn resize_surface(&mut self, size: GlSurfaceSize) -> Result<(), GlError>;
     fn suspend_surface(&mut self) -> Result<(), GlError>;
     fn resume_surface(&mut self) -> Result<(), GlError>;
     fn present_surface(&mut self, lease: GlSurfaceLease) -> Result<(), GlError>;
+    /// Puts the frame that `source` holds on the drawable `lease` acquired.
+    ///
+    /// `source` is the texture the caller allocated for `lease`'s image, which
+    /// is why it is an argument rather than something this layer looks up: the
+    /// surface image is an acquisition identity, and the storage behind it
+    /// belongs to whoever created it. The lease is consumed on success, so the
+    /// acquisition ends here exactly as it does through `present_surface`, and
+    /// the extent check
+    /// [`validate_publish_source`] performs is what keeps a source that does
+    /// not belong to this acquisition from being scaled onto the drawable by
+    /// the driver's own choice of what to keep.
+    fn publish_surface_image(
+        &mut self,
+        lease: GlSurfaceLease,
+        source: TextureId,
+    ) -> Result<(), GlError>;
+}
+
+/// Checks that a texture can serve as one acquired image's presentation source.
+///
+/// The rule is shared by every provider that publishes because it is a property
+/// of the contract rather than of a driver: the blit that follows copies the
+/// whole source into a drawable that has exactly the acquired extent and no
+/// sample count of its own to reconcile with. A multisampled, layered, or
+/// differently-sized source is therefore refused before any driver call instead
+/// of being resolved by whatever the driver decides to keep.
+pub(crate) fn validate_publish_source(
+    operation: &'static str,
+    descriptor: GlTextureDesc,
+    lease: GlSurfaceLease,
+) -> Result<(), GlError> {
+    if descriptor.dimension != GlTextureDimension::D2
+        || descriptor.sample_count != 1
+        || descriptor.extent.depth_or_layers != 1
+    {
+        return Err(GlError::Validation {
+            operation,
+            message: "presentation source must be a single-sample 2D texture".into(),
+        });
+    }
+    if descriptor.extent.width != lease.size.width || descriptor.extent.height != lease.size.height
+    {
+        return Err(GlError::Validation {
+            operation,
+            message: "presentation source extent does not match the acquired image".into(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GlSurfaceLeaseBook, GlSurfaceSize};
-    use crate::webgl2::api::{ContextEpoch, ContextStamp, DeviceIdentity, SurfaceImageId};
+    use super::{
+        GlSurfaceLeaseBook, GlSurfaceSize, GlTextureDesc, GlTextureDimension,
+        validate_publish_source,
+    };
+    use crate::webgl2::api::{
+        ContextEpoch, ContextStamp, DeviceIdentity, GlError, GlExtent3d, GlFormat, GlTextureUsage,
+        SurfaceImageId,
+    };
+
+    fn stamp() -> ContextStamp {
+        ContextStamp::new(DeviceIdentity::new(1).unwrap(), ContextEpoch::INITIAL)
+    }
+
+    /// One acquisition at `width` x `height`, which is the extent a publish
+    /// source has to match.
+    fn lease(width: u32, height: u32) -> super::GlSurfaceLease {
+        let mut book = GlSurfaceLeaseBook::new();
+        book.acquire(
+            SurfaceImageId::new(stamp(), 1, 1),
+            GlSurfaceSize { width, height },
+        )
+        .expect("lease")
+    }
+
+    fn source(
+        dimension: GlTextureDimension,
+        extent: GlExtent3d,
+        sample_count: u32,
+    ) -> GlTextureDesc {
+        GlTextureDesc {
+            dimension,
+            extent,
+            mip_level_count: 1,
+            sample_count,
+            format: GlFormat::Rgba8Unorm,
+            usage: GlTextureUsage::RENDER_ATTACHMENT,
+        }
+    }
+
+    const OP: &str = "publish-surface-image";
+
     #[test]
     fn resize_invalidates_an_old_acquire_lease() {
-        let s = ContextStamp::new(DeviceIdentity::new(1).unwrap(), ContextEpoch::INITIAL);
+        let s = stamp();
         let mut b = GlSurfaceLeaseBook::new();
         let lease = b
             .acquire(
@@ -124,5 +227,44 @@ mod tests {
             .unwrap();
         b.invalidate_generation().unwrap();
         assert!(b.validate(lease).is_err());
+    }
+
+    #[test]
+    fn a_presentation_source_must_be_a_single_sample_2d_texture_of_the_acquired_extent() {
+        let plain = GlExtent3d {
+            width: 1,
+            height: 1,
+            depth_or_layers: 1,
+        };
+        assert!(
+            validate_publish_source(OP, source(GlTextureDimension::D2, plain, 1), lease(1, 1))
+                .is_ok()
+        );
+
+        // Three refusals, each of which a driver would otherwise resolve by its
+        // own choice of what to keep: a source that is the wrong size, one with
+        // samples to reconcile, and one with layers to choose between.
+        let wrong_size = GlExtent3d {
+            width: 2,
+            height: 2,
+            depth_or_layers: 1,
+        };
+        let layered = GlExtent3d {
+            width: 1,
+            height: 1,
+            depth_or_layers: 2,
+        };
+        for (descriptor, against) in [
+            (source(GlTextureDimension::D2, wrong_size, 1), lease(1, 1)),
+            (source(GlTextureDimension::D2, plain, 4), lease(1, 1)),
+            (source(GlTextureDimension::D3, layered, 1), lease(1, 1)),
+        ] {
+            let refused = validate_publish_source(OP, descriptor, against)
+                .expect_err("refused before any driver call");
+            assert!(
+                matches!(refused, GlError::Validation { operation, .. } if operation == OP),
+                "expected a validation refusal naming the verb, got {refused:?}"
+            );
+        }
     }
 }

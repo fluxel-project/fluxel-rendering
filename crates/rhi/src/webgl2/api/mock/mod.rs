@@ -127,6 +127,16 @@ pub enum MockCall {
     SuspendSurface,
     ResumeSurface,
     PresentSurface(GlSurfaceLease),
+    /// One frame published into the drawable from a texture.
+    ///
+    /// Recorded with both the lease and the source because the recorder has no
+    /// drawable to blit into: what it can witness is that a caller paired this
+    /// acquisition with this texture, which is the whole of what a publish
+    /// claims before any driver is involved.
+    PublishSurface {
+        lease: GlSurfaceLease,
+        source: TextureId,
+    },
     CreateQuery(QueryId),
     DestroyQuery(QueryId),
     QueryResult(QueryId),

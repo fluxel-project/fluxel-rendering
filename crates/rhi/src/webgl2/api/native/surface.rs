@@ -6,10 +6,16 @@
 //! executor records the extent the Host reports, hands out one lease per frame,
 //! and flushes the frame's commands so that the platform flip that follows shows
 //! a complete frame. It never creates, sizes, or swaps a drawable.
+//!
+//! Publishing is the one place the executor writes into the drawable rather
+//! than beside it, and it still does not own the drawable: the default
+//! framebuffer is the borrowed context's, the blit that fills it is the step
+//! between "the frame is finished" and "the platform flips", and the flip
+//! remains the platform's call after this returns.
 
 use super::super::{
     GlError, GlFamilyApi as _, GlSurfaceAcquire, GlSurfaceLease, GlSurfacePresentationApi,
-    GlSurfaceSize, SurfaceImageId,
+    GlSurfaceSize, SurfaceImageId, TextureId, validate_publish_source,
 };
 use super::provider::NativeGlProvider;
 
@@ -85,6 +91,72 @@ impl GlSurfacePresentationApi for NativeGlProvider<'_> {
         // accepted commands reached the driver before the lease is consumed. It
         // never implies the frame was displayed, and it never implies
         // completion.
+        self.driver_error(OP)
+    }
+
+    fn publish_surface_image(
+        &mut self,
+        lease: GlSurfaceLease,
+        source: TextureId,
+    ) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        const OP: &str = "publish-surface-image";
+        self.assert_ready(OP)?;
+        self.validate_object_context(OP, lease.image.context)?;
+        let (raw, descriptor) = self.texture(OP, source)?;
+        validate_publish_source(OP, descriptor, lease)?;
+        // Consuming before the driver call is the ordering the lease exists to
+        // enforce: the acquisition ends when its frame is published, so a
+        // driver failure afterwards cannot leave a lease that would publish a
+        // second frame into a drawable the platform is about to swap.
+        self.surface.consume(lease)?;
+        let (width, height) = (lease.size.width as i32, lease.size.height as i32);
+        // SAFETY: current-context contract. The source texture is live and its
+        // shape was validated against the acquired extent above. The read
+        // framebuffer is created for this one blit and deleted before this
+        // method returns, so it never enters the object tables and no caller
+        // can name it. Binding the default framebuffer as the draw target is
+        // what publishing is -- it is the same object the platform's swap
+        // reads, which is why the flip after this shows the frame.
+        let published = unsafe {
+            match self.gl.create_framebuffer() {
+                Ok(read) => {
+                    self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(read));
+                    self.gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+                    self.gl.framebuffer_texture_2d(
+                        glow::READ_FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
+                        glow::TEXTURE_2D,
+                        Some(raw),
+                        0,
+                    );
+                    self.gl.blit_framebuffer(
+                        0,
+                        0,
+                        width,
+                        height,
+                        0,
+                        0,
+                        width,
+                        height,
+                        glow::COLOR_BUFFER_BIT,
+                        glow::NEAREST,
+                    );
+                    // Clearing the single binding clears both read and draw, so
+                    // the default framebuffer is left current for whatever runs
+                    // next rather than this scratch object.
+                    self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                    self.gl.delete_framebuffer(read);
+                    self.gl.flush();
+                    Ok(())
+                }
+                Err(message) => Err(GlError::Driver {
+                    operation: OP,
+                    message,
+                }),
+            }
+        };
+        published?;
         self.driver_error(OP)
     }
 }

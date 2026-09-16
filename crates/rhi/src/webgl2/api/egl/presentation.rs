@@ -8,6 +8,7 @@
 use super::super::{
     ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyApi, GlSurfaceAcquire,
     GlSurfaceLease, GlSurfacePresentationApi, GlSurfaceSize, OwnerThreadIdentity, SurfaceImageId,
+    TextureId,
 };
 use super::{
     EglGlesContext, EglPbufferSize, EglProviderError, EglSurfaceKind, check_drawable_extent,
@@ -166,5 +167,23 @@ impl GlSurfacePresentationApi for EglGlesContext {
         // not resurrect a consumed lease, and the caller retries with a new
         // acquisition.
         self.present().map_err(EglProviderError::into_gl_error)
+    }
+
+    /// Refused, and the module doc is why: this provider owns the context and
+    /// the surface, while the GL object domains belong to the borrowed-context
+    /// executor assembled over it. An acquired image here is the EGL back
+    /// buffer rather than an allocation in a table this type can search, so
+    /// there is no texture for a publish to move a frame out of. Refusing
+    /// fail-closed leaves the lease live, so a caller that reaches this still
+    /// has `present_surface` and its flip.
+    fn publish_surface_image(
+        &mut self,
+        _lease: GlSurfaceLease,
+        _source: TextureId,
+    ) -> Result<(), GlError> {
+        Err(GlError::Unsupported {
+            operation: "publish-surface-image",
+            reason: "this provider owns the surface and its flip but no GL object domains, so an acquired image has no texture to publish",
+        })
     }
 }

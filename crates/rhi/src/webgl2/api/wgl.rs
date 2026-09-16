@@ -843,7 +843,10 @@ impl super::GlFamilyApi for WglContextSurface {
 ///    `GlFramebufferDescriptor::validate` rejects an attachment-less
 ///    framebuffer, so the swapchain has no Layer-1 pass to render through yet.
 ///    Which viewport a default-framebuffer pass renders with is therefore a
-///    Layer 2/3 decision, not a provider decision.
+///    Layer 2/3 decision, not a provider decision. `publish_surface_image`
+///    below does write the drawable, but it writes it as the end of a frame
+///    rather than as a pass's target, so it settles nothing about a viewport
+///    and this residue is unchanged by it.
 ///
 /// What the provider does enforce is the fact it *can* own: the drawable extent
 /// is bounded by the context's recorded maximum viewport dimensions, and an
@@ -929,5 +932,23 @@ impl super::GlSurfacePresentationApi for WglContextSurface {
         // not resurrect a consumed lease, and the caller retries with a new
         // acquisition.
         self.present()
+    }
+
+    /// Refused, and the type's own shape is why: a `WglContextSurface` owns the
+    /// window, the drawable, and the flip, but no object tables -- the GL object
+    /// domains belong to the borrowed-context executor assembled over it (see
+    /// the WGL module doc). The image a lease names here is the implicit back
+    /// buffer, so there is no texture for a publish to move a frame out of and
+    /// no table to search for one. Refusing fail-closed leaves the lease live,
+    /// so a caller that reaches this still has `present_surface` and its flip.
+    fn publish_surface_image(
+        &mut self,
+        _lease: super::GlSurfaceLease,
+        _source: super::TextureId,
+    ) -> Result<(), GlError> {
+        Err(GlError::Unsupported {
+            operation: "publish-surface-image",
+            reason: "this provider owns the drawable and its flip but no object tables, so an acquired image has no texture to publish",
+        })
     }
 }

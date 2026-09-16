@@ -91,6 +91,22 @@ impl GlSurfacePresentationApi for MockGlFamilyApi {
         self.calls.push(MockCall::PresentSurface(l));
         Ok(())
     }
+    fn publish_surface_image(
+        &mut self,
+        l: GlSurfaceLease,
+        source: TextureId,
+    ) -> Result<(), GlError> {
+        self.ready("publish-surface-image")?;
+        // The source must be live and shaped for the acquired extent before the
+        // lease is consumed, so a refused publish leaves the acquisition intact
+        // and the caller can still present the frame it already has.
+        let descriptor = self.texture("publish-surface-image", source)?;
+        validate_publish_source("publish-surface-image", descriptor, l)?;
+        self.surface.consume(l)?;
+        self.calls
+            .push(MockCall::PublishSurface { lease: l, source });
+        Ok(())
+    }
 }
 impl GlQueryObjectsApi for MockGlFamilyApi {
     fn create_query(&mut self) -> Result<QueryId, GlError> {

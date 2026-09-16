@@ -58,3 +58,59 @@ fn mock_elapsed_and_timestamp_queries_record_and_inject_results() {
             .any(|call| matches!(call, MockCall::QueryTimestamp(q) if *q == query))
     );
 }
+
+/// One acquisition against the recorder's default 1x1 drawable.
+fn acquire_one_frame(api: &mut MockGlFamilyApi) -> GlSurfaceLease {
+    match api.acquire_surface_image().expect("acquire") {
+        GlSurfaceAcquire::Lease(lease) => lease,
+        GlSurfaceAcquire::Suspended => panic!("active surface"),
+    }
+}
+
+#[test]
+fn mock_records_publishing_one_frame_into_the_drawable() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    let source = api
+        .create_texture_resource(mock_texture_desc())
+        .expect("source texture");
+    let lease = acquire_one_frame(&mut api);
+
+    api.publish_surface_image(lease, source).expect("publish");
+    assert!(
+        api.calls()
+            .ends_with(&[MockCall::PublishSurface { lease, source }])
+    );
+
+    // Publishing is what ends the acquisition, so it cannot also be presented:
+    // one lease is one frame, and the second verb has nothing left to act on.
+    assert!(api.present_surface(lease).is_err());
+}
+
+#[test]
+fn a_refused_publish_leaves_the_acquisition_to_present() {
+    let mut api = MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2));
+    // The drawable is 1x1, so a 2x2 source is refused by the shared extent
+    // rule rather than being scaled onto it by whatever the driver keeps.
+    let source = api
+        .create_texture_resource(GlTextureDesc {
+            extent: GlExtent3d {
+                width: 2,
+                height: 2,
+                depth_or_layers: 1,
+            },
+            ..mock_texture_desc()
+        })
+        .expect("source texture");
+    let lease = acquire_one_frame(&mut api);
+
+    assert!(api.publish_surface_image(lease, source).is_err());
+    assert!(
+        !api.calls()
+            .iter()
+            .any(|call| matches!(call, MockCall::PublishSurface { .. })),
+        "a refused publish must not be recorded as one"
+    );
+    // The refusal happens before the consume, so the frame the caller already
+    // has is still presentable.
+    api.present_surface(lease).expect("present");
+}
