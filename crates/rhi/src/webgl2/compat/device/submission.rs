@@ -106,7 +106,10 @@ pub(super) struct SubmissionLedger {
 /// a record that happens to read `Unknown` keeps its leases exactly like one
 /// that reads `Pending`.
 pub(super) const fn is_terminal(status: CompletionStatus) -> bool {
-    matches!(status, CompletionStatus::Complete | CompletionStatus::Failed(_))
+    matches!(
+        status,
+        CompletionStatus::Complete | CompletionStatus::Failed(_)
+    )
 }
 
 impl SubmissionLedger {
