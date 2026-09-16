@@ -8,6 +8,8 @@
 //!
 //! - [`transient`] lowers a compiled resource requirement onto a Layer 1
 //!   creation descriptor, in both directions.
+//! - [`region`] lowers the addressing half of a copy onto the values Layer 1's
+//!   copy verbs take.
 //! - [`retention`] is what keeps a transient alive until its last handle drops,
 //!   and where its death is recorded.
 //! - [`submission`] is the record that makes a completion query total without
@@ -35,22 +37,33 @@
 //! a cached slot.  [`retention`] therefore keeps the object until the last clone
 //! drops.
 //!
-//! # What this slice does not express
+//! # What this slice expresses, and what it still refuses
 //!
-//! Everything that would record a command refuses with `GlError::Unsupported`,
-//! naming itself and giving one reason.  That includes the two transitions,
-//! which is worth stating as a decision rather than an omission: this adapter
-//! does report `TransitionCapabilities::BackendManaged`, but the contract still
-//! requires `before == after` to be a real memory barrier, and a barrier is a
-//! command like any other.  Accepting a transition as a no-op would be the one
-//! thing a fail-closed layer must not do -- it would tell the executor a hazard
-//! was resolved when nothing was emitted.
+//! Two things that a reader would expect to be commands are real here and issue
+//! none.
 //!
-//! The copy-pass brackets are the exception, and they are not a stub: a copy in
-//! this family is a direct command with no scope around it, so `begin_copy` and
-//! `end_copy` have nothing to bracket and are no-ops in the final implementation
-//! too.  A graph that opens a copy pass therefore gets past the brackets and is
-//! refused by the copy verb itself, which is where the work would have happened.
+//! A **transition** is accepted and emits nothing, because neither half of what
+//! the contract asks for needs a command in this family: a GL-family resource
+//! carries no access state of its own, and the ordering and visibility the
+//! contract calls a memory barrier are carried by the execution model this
+//! adapter declares (`SynchronizationCapabilities::SingleQueueOrdering`).  The
+//! argument is made where it is needed rather than here -- see
+//! [`Self::accept_transition`] -- because "this is accepted and nothing happens"
+//! is exactly the claim a fail-closed layer must not make without showing its
+//! work.
+//!
+//! A **copy** is the one command this adapter issues.  `copy_texture` and
+//! `copy_buffer` lower the contract's addressing onto Layer 1's and hand it to
+//! the provider, which checks the region against the real descriptor -- the only
+//! place one exists.  [`region`] owns that lowering and states what it decides.
+//!
+//! Everything that would record a *raster* or *compute* command still refuses
+//! with `GlError::Unsupported`, naming itself and giving one reason.
+//!
+//! The copy-pass brackets are not among those refusals, and they are not a stub:
+//! a copy in this family is a direct command with no scope around it, so
+//! `begin_copy` and `end_copy` have nothing to bracket and are no-ops in the
+//! final implementation too.
 //!
 //! # Teardown
 //!
@@ -63,6 +76,7 @@
 //! a provider from a lease, which is the arrangement [`retention`] exists to
 //! avoid.
 
+mod region;
 mod retention;
 mod submission;
 mod transient;
@@ -132,14 +146,6 @@ pub(crate) struct GlCommandBuffer {
 /// The reason every verb that would record a command refuses in this slice.
 const NO_COMMAND_VOCABULARY: &str =
     "this adapter records no command yet, so the request cannot be made true in the driver";
-
-/// The reason a semantic transition refuses in this slice.
-///
-/// Separate from [`NO_COMMAND_VOCABULARY`] because there is a second thing to
-/// say: a transition whose `before` and `after` agree is not a no-op in this
-/// contract -- it is a memory barrier -- so a backend that skipped it would be
-/// dropping a hazard rather than saving a call.
-const NO_TRANSITION_BARRIER: &str = "a transition is a memory barrier as well as a state change, and this adapter has no barrier command to emit";
 
 /// A GL-family state machine presented as a common execution backend.
 pub(crate) struct GlCompatibilityDevice<B: GlStateBackend> {
@@ -234,6 +240,60 @@ impl<B: GlStateBackend> GlCompatibilityDevice<B> {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+
+    /// Accepts one semantic transition after checking the two things that can be
+    /// wrong about it at this boundary, and issues nothing.
+    ///
+    /// The contract asks two things of a transition, and this family satisfies
+    /// both without a command -- which is a claim that has to be shown and not
+    /// asserted, so here is each half.
+    ///
+    /// The *state change* half has nothing to change.  A GL-family texture or
+    /// buffer has no access state of its own: what a resource is being used for
+    /// is a property of the call that uses it, decided by the binding the Layer 2
+    /// mirror reconciles at that call, not a mode the resource is put into.  The
+    /// graph is telling this backend about a hazard it will not have, because the
+    /// hazard exists for backends whose resources do carry state -- the native
+    /// ones track it per subresource and lower each transition to a real barrier
+    /// (`imp/command/copy.rs`).
+    ///
+    /// The *memory barrier* half, including the `before == after` case the
+    /// contract calls out, is carried by the execution model rather than by a
+    /// command.  This adapter declares
+    /// [`SynchronizationCapabilities::SingleQueueOrdering`]: one immediate context
+    /// on one queue, where commands are issued in order and a write is visible to
+    /// a later read, and where two submissions are ordered by `flush` and the
+    /// fence [`Self::submit`] inserts between them.  There is no barrier to emit
+    /// for texture or buffer access in this family -- Layer 1's only barrier verb
+    /// is the compute domain's, documented as a shader-storage coherency barrier
+    /// that WebGL2 providers do not implement (`api/compute.rs`), and it serves a
+    /// different hazard than this one.
+    ///
+    /// So the verb's real work here is the check that the transition names
+    /// resources and an encoder of the *current* context generation: a
+    /// transition carrying a superseded identity is exactly the stale-plan
+    /// mistake the common contract wants rejected locally, and it is the one
+    /// thing about a transition this backend can determine to be wrong.
+    ///
+    /// Accepting a range and not consulting it is deliberate.  The range narrows
+    /// where a barrier applies, and there is no barrier; a version of this verb
+    /// that consulted the range would have to invent an operation to justify the
+    /// narrowing, which is the same mistake as refusing the transition for the
+    /// wrong reason.  That includes the aspect a `TextureRange::Subresources`
+    /// carries: with no barrier there is nothing for an aspect to select, and an
+    /// aspect is a claim about a resource the same way the copy region's would
+    /// be -- see [`region`] for why this adapter does not make one.
+    fn accept_transition(
+        &mut self,
+        operation: &'static str,
+        encoder: ContextStamp,
+        object: ContextStamp,
+    ) -> Result<(), GlError> {
+        self.refresh();
+        let backend = self.machine.backend();
+        backend.validate_object_context(operation, encoder)?;
+        backend.validate_object_context(operation, object)
     }
 }
 
@@ -342,30 +402,24 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
 
     fn transition_texture(
         &mut self,
-        _encoder: &mut Self::Encoder,
-        _texture: &Self::Texture,
+        encoder: &mut Self::Encoder,
+        texture: &Self::Texture,
         _range: TextureRange,
         _before: ResourceAccessState,
         _after: ResourceAccessState,
     ) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "transition-texture",
-            reason: NO_TRANSITION_BARRIER,
-        })
+        self.accept_transition("transition-texture", encoder.context, texture.context)
     }
 
     fn transition_buffer(
         &mut self,
-        _encoder: &mut Self::Encoder,
-        _buffer: &Self::Buffer,
+        encoder: &mut Self::Encoder,
+        buffer: &Self::Buffer,
         _range: BufferRange,
         _before: ResourceAccessState,
         _after: ResourceAccessState,
     ) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "transition-buffer",
-            reason: NO_TRANSITION_BARRIER,
-        })
+        self.accept_transition("transition-buffer", encoder.context, buffer.context)
     }
 
     fn begin_raster(
@@ -537,28 +591,48 @@ impl<B: GlStateBackend> ExecutionBackend for GlCompatibilityDevice<B> {
 
     fn copy_texture(
         &mut self,
-        _encoder: &mut Self::Encoder,
-        _source: &Self::Texture,
-        _destination: &Self::Texture,
-        _region: TextureCopyRegion,
+        encoder: &mut Self::Encoder,
+        source: &Self::Texture,
+        destination: &Self::Texture,
+        region: TextureCopyRegion,
     ) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "copy-texture",
-            reason: NO_COMMAND_VOCABULARY,
-        })
+        self.refresh();
+        let backend = self.machine.backend();
+        backend.validate_object_context("copy-texture", encoder.context)?;
+        backend.validate_object_context("copy-texture", source.context)?;
+        backend.validate_object_context("copy-texture", destination.context)?;
+        backend.copy_texture_region(
+            region::texture_region(
+                *source,
+                region.source_mip_level,
+                region.source_origin,
+                region.extent,
+            ),
+            region::texture_region(
+                *destination,
+                region.destination_mip_level,
+                region.destination_origin,
+                region.extent,
+            ),
+        )
     }
 
     fn copy_buffer(
         &mut self,
-        _encoder: &mut Self::Encoder,
-        _source: &Self::Buffer,
-        _destination: &Self::Buffer,
-        _region: BufferCopyRegion,
+        encoder: &mut Self::Encoder,
+        source: &Self::Buffer,
+        destination: &Self::Buffer,
+        region: BufferCopyRegion,
     ) -> Result<(), Self::Error> {
-        Err(GlError::Unsupported {
-            operation: "copy-buffer",
-            reason: NO_COMMAND_VOCABULARY,
-        })
+        self.refresh();
+        let backend = self.machine.backend();
+        backend.validate_object_context("copy-buffer", encoder.context)?;
+        backend.validate_object_context("copy-buffer", source.context)?;
+        backend.validate_object_context("copy-buffer", destination.context)?;
+        backend.copy_buffer_range(
+            region::buffer_range(*source, region.source_offset, region.size),
+            region::buffer_range(*destination, region.destination_offset, region.size),
+        )
     }
 
     fn finish_encoder(

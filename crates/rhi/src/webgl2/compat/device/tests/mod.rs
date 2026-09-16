@@ -15,6 +15,8 @@
 //! being tested is what the adapter does with an observed outcome, and an
 //! outcome the test names is as much an observation as one a driver produced.
 
+mod commands;
+
 use fluxel_rendergraph::{
     BufferDesc, BufferUsage, BufferUsageKind, CompletionFailure, CompletionStatus,
     ExecutionBackend, Extent3d, FrameExecutor, QueueId, TextureDesc, TextureDimension,
@@ -142,6 +144,21 @@ fn refused<T>(result: Result<T, GlError>) -> &'static str {
     }
 }
 
+/// The operation name of the validation failure `result` carries.
+///
+/// The counterpart of [`refused`] for the verbs that *do* reach a provider: what
+/// a bad request gets back from there is a validation failure and not a
+/// fail-closed refusal, and a test that accepted either would not be able to
+/// tell "this adapter does not implement it" from "this adapter tried and the
+/// request was wrong".
+fn invalid<T>(result: Result<T, GlError>) -> &'static str {
+    match result {
+        Ok(_) => panic!("the adapter was expected to reject this"),
+        Err(GlError::Validation { operation, .. }) => operation,
+        Err(other) => panic!("expected a validation failure, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // What the adapter describes itself as.
 // ---------------------------------------------------------------------------
@@ -195,7 +212,7 @@ fn the_three_object_types_this_adapter_cannot_produce_are_uninhabited() {
 }
 
 // ---------------------------------------------------------------------------
-// The encoder: one queue, and no vocabulary to record with.
+// The encoder: one queue, one command, and no vocabulary beyond it.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -220,19 +237,10 @@ fn the_encoder_opens_on_the_one_queue_and_refuses_any_other() {
 }
 
 #[test]
-fn every_verb_that_would_record_a_command_refuses_and_names_itself() {
-    use fluxel_rendergraph::{
-        BufferCopyRegion, BufferRange, IndexFormat, RasterPassDescriptor, ScissorRect,
-        TextureCopyRegion, TextureRange, Viewport,
-    };
+fn every_raster_and_compute_verb_refuses_and_names_itself() {
+    use fluxel_rendergraph::{IndexFormat, RasterPassDescriptor, ScissorRect, Viewport};
 
     let mut adapter = adapter();
-    let source = adapter
-        .create_transient_texture(plain_texture(), colour_usage())
-        .expect("a transient texture");
-    let destination = adapter
-        .create_transient_texture(plain_texture(), colour_usage())
-        .expect("a transient texture");
     let buffer = adapter
         .create_transient_buffer(
             BufferDesc { size: 64 },
@@ -249,31 +257,11 @@ fn every_verb_that_would_record_a_command_refuses_and_names_itself() {
         depth_stencil: None,
     };
 
-    // The transitions come first and are refused for a reason of their own: the
-    // contract makes `before == after` a memory barrier, so there is no pair of
-    // states this adapter could accept without emitting one.
-    assert_eq!(
-        refused(adapter.transition_texture(
-            &mut encoder,
-            &source.physical,
-            TextureRange::Whole,
-            fluxel_rendergraph::ResourceAccessState::Undefined,
-            fluxel_rendergraph::ResourceAccessState::Undefined,
-        )),
-        "transition-texture",
-        "a same-state transition is a barrier, not a no-op"
-    );
-    assert_eq!(
-        refused(adapter.transition_buffer(
-            &mut encoder,
-            &buffer.physical,
-            BufferRange::Whole,
-            fluxel_rendergraph::ResourceAccessState::Undefined,
-            fluxel_rendergraph::ResourceAccessState::Undefined,
-        )),
-        "transition-buffer"
-    );
-
+    // What is left of the fail-closed set after the copy slice landed: the two
+    // scopes and the every command that would record into one.  `set-raster-
+    // pipeline` and its two siblings are absent rather than untested -- their
+    // argument types are uninhabited, so a call to one cannot be written down
+    // (`the_three_object_types_this_adapter_cannot_produce_are_uninhabited`).
     assert_eq!(
         refused(adapter.begin_raster(&mut encoder, &pass)),
         "begin-raster"
@@ -327,38 +315,10 @@ fn every_verb_that_would_record_a_command_refuses_and_names_itself() {
         refused(adapter.dispatch(&mut encoder, [1, 1, 1])),
         "dispatch"
     );
-    assert_eq!(
-        refused(adapter.copy_texture(
-            &mut encoder,
-            &source.physical,
-            &destination.physical,
-            TextureCopyRegion {
-                source_origin: [0, 0, 0],
-                destination_origin: [0, 0, 0],
-                extent: [4, 4, 1],
-                source_mip_level: 0,
-                destination_mip_level: 0,
-            },
-        )),
-        "copy-texture"
-    );
-    assert_eq!(
-        refused(adapter.copy_buffer(
-            &mut encoder,
-            &buffer.physical,
-            &buffer.physical,
-            BufferCopyRegion {
-                source_offset: 0,
-                destination_offset: 32,
-                size: 32,
-            },
-        )),
-        "copy-buffer"
-    );
 }
 
 #[test]
-fn a_copy_pass_opens_and_closes_over_a_copy_that_still_refuses() {
+fn a_copy_pass_opens_and_closes_over_a_copy_with_no_scope_of_its_own() {
     use fluxel_rendergraph::{BufferCopyRegion, PresentationSubmission};
 
     let mut adapter = adapter();
@@ -384,20 +344,29 @@ fn a_copy_pass_opens_and_closes_over_a_copy_that_still_refuses() {
         "a copy scope has no GL counterpart to open or close"
     );
 
-    // Which is why the refusal is where the work would have been, not at the
-    // bracket.
-    assert_eq!(
-        refused(adapter.copy_buffer(
-            &mut encoder,
-            &buffer.physical,
-            &buffer.physical,
-            BufferCopyRegion {
-                source_offset: 0,
-                destination_offset: 32,
-                size: 32,
-            },
-        )),
-        "copy-buffer"
+    // Which is exactly why the copy itself carries the whole cost: it is the
+    // one thing between the brackets that reaches the driver.
+    assert!(
+        adapter
+            .copy_buffer(
+                &mut encoder,
+                &buffer.physical,
+                &buffer.physical,
+                BufferCopyRegion {
+                    source_offset: 0,
+                    destination_offset: 32,
+                    size: 32,
+                },
+            )
+            .is_ok()
+    );
+    assert!(
+        matches!(
+            calls(&mut adapter).as_slice(),
+            [MockCall::CopyBuffer { .. }]
+        ),
+        "one copy between two no-op brackets is one command: {:?}",
+        calls(&mut adapter)
     );
 
     // No presentation token can exist either, so this adapter can only ever be
