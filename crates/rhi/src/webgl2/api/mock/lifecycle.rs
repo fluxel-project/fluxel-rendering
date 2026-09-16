@@ -19,6 +19,11 @@ impl GlSyncApi for MockGlFamilyApi {
         self.fences.validate(l)?;
         self.syncs.remove(&l.fence);
         self.fences.revoke(l);
+        // The fence is gone, so its injected completion must go with it: a
+        // context-stamp/genuine slot reuse can hand out the same `SyncId`
+        // again, and a surviving entry would report the new fence complete
+        // before the test ever observed it.
+        self.fence_statuses.remove(&l.fence);
         self.calls.push(MockCall::DestroyFence(l));
         Ok(())
     }
@@ -27,14 +32,19 @@ impl GlSyncApi for MockGlFamilyApi {
         self.stamp("poll-fence", l.fence.context)?;
         self.fences.validate(l)?;
         self.calls.push(MockCall::PollFence(l));
-        Ok(GlFenceStatus::Pending)
+        Ok(self.fence_status(l.fence))
     }
     fn wait_fence(&mut self, l: GlFenceLease, _: GlWaitBound) -> Result<GlFenceStatus, GlError> {
         self.ready("wait-fence")?;
         self.stamp("wait-fence", l.fence.context)?;
         self.fences.validate(l)?;
         self.calls.push(MockCall::WaitFence(l));
-        Ok(GlFenceStatus::Pending)
+        // A bounded wait does not make progress the recorder was never told
+        // about: it observes the same injected answer as a poll.  The bound is
+        // deliberately not modelled -- the recorder has no queue to wait on,
+        // and pretending a zero bound differs from a non-zero one would let a
+        // caller "prove" bounded-progress behaviour against no clock at all.
+        Ok(self.fence_status(l.fence))
     }
     fn flush(&mut self) -> Result<(), GlError> {
         self.ready("flush")?;

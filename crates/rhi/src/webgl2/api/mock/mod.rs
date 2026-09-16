@@ -12,6 +12,8 @@ mod lifecycle;
 mod program;
 mod render_pass;
 mod resource;
+#[cfg(test)]
+mod tests;
 mod transfer;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -151,6 +153,12 @@ pub struct MockGlFamilyApi {
     next_error: Option<GlError>,
     /// Deterministic oracle answers for query observations.
     query_results: BTreeMap<QueryId, GlQueryResult>,
+    /// Deterministic oracle answers for fence observations, keyed by the fence
+    /// the observation names.  A fence absent from this map is reported
+    /// `Pending`, never `Complete`: the recorder must not invent completion it
+    /// was not told about, or every completion-safe release test would pass
+    /// against a mock that never modelled the wait at all.
+    fence_statuses: BTreeMap<SyncId, GlFenceStatus>,
     /// Deterministic reflection for the next `create_program` call.
     next_reflection: Option<GlProgramReflection>,
 }
@@ -185,6 +193,7 @@ impl MockGlFamilyApi {
             calls: vec![],
             next_error: None,
             query_results: BTreeMap::new(),
+            fence_statuses: BTreeMap::new(),
             next_reflection: None,
         }
     }
@@ -204,9 +213,33 @@ impl MockGlFamilyApi {
     pub fn inject_query_result(&mut self, query: QueryId, result: GlQueryResult) {
         self.query_results.insert(query, result);
     }
+    /// Injects the deterministic answer one fence observation returns.
+    ///
+    /// Completion is injected rather than simulated because the recorder has no
+    /// submission queue: nothing it records can actually finish, so a
+    /// completion-safe release path can only be exercised if the test names the
+    /// fence that has completed.  Keying by `SyncId` rather than by lease means
+    /// an injected completion survives re-issuing a lease for the same fence,
+    /// which is what a driver-side signal does.  The map is kept to cover
+    /// exactly the live fence set: `destroy_fence` removes the entry.
+    pub fn inject_fence_status(&mut self, fence: SyncId, status: GlFenceStatus) {
+        self.fence_statuses.insert(fence, status);
+    }
     /// Injects the reflection the next `create_program` call returns.
     pub fn set_next_program_reflection(&mut self, reflection: GlProgramReflection) {
         self.next_reflection = Some(reflection);
+    }
+    /// The injected answer for one fence, defaulting to `Pending`.
+    ///
+    /// `Pending` is the only honest default: the recorder has no submission
+    /// queue, so nothing it records can complete on its own.  A default of
+    /// `Complete` would make every completion-safe release test pass without
+    /// the wait ever being modelled.
+    fn fence_status(&self, fence: SyncId) -> GlFenceStatus {
+        self.fence_statuses
+            .get(&fence)
+            .copied()
+            .unwrap_or(GlFenceStatus::Pending)
     }
     fn owner(&self, op: &'static str) -> Result<(), GlError> {
         let actual = OwnerThreadIdentity::current();
@@ -343,6 +376,10 @@ impl MockGlFamilyApi {
         self.pass_active = false;
         self.installed_compute_program = None;
         self.query_results.clear();
+        // Every fence is revoked above, so no surviving lease can name an
+        // injected status; clearing keeps the oracle describing exactly the
+        // live fence set rather than a previous context's observations.
+        self.fence_statuses.clear();
         let _ = self.surface.invalidate_generation();
     }
     /// Validates one attachment view exactly as the executable backends do:
