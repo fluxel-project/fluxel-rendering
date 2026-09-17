@@ -9,7 +9,7 @@ members = ["crates/rendergraph", "crates/renderer", "crates/rhi", "crates/render
 exclude = ["crates/wgpu-hal"]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.15.0"
 
 [profile.profiling]
 inherits = "release"

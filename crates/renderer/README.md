@@ -27,7 +27,7 @@ pipeline/bind-group API, or own windows and swapchains.
 ```toml
 [dependencies.fluxel-renderer]
 git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.14.0"
+tag = "v0.15.0"
 features = ["gpu-upload"]
 ```
 
@@ -48,7 +48,7 @@ branch:
 ```toml
 [dependencies]
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "22c4eb0e199575aa71b59f3abc6ec3f72d934b9a", version = "=0.13.4" }
-fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.14.0", features = ["gpu-residency"] }
+fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0", features = ["gpu-residency"] }
 ```
 
 Residency is private renderer policy keyed exactly by

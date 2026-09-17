@@ -34,3 +34,22 @@ the matching `fluxel-jsbridge` candidate. Archive its manifest, representative
 screenshots, and browser diagnostics with an explicit SHA-256 checksum; record
 both repository SHAs. Browser evidence is additional to, never a replacement
 for, the native DX12/Vulkan gate above.
+
+When a release changes the GL family, the same candidate also needs the
+GL-specific gates, in this order:
+
+```powershell
+python scripts/check_gl_architecture.py
+python scripts/check_desktop_gl4_conformance.py --report scripts/tests/data/desktop_gl4_radeon_780m.json
+python scripts/check_gl4_raster_readback.py
+```
+
+The first is the three-layer import boundary and runs anywhere. The second
+re-adjudicates a durable conformance report on a machine with no GPU, so CI can
+hold a driver claim to its numbers; a report that no longer adjudicates green
+must be re-measured, not re-labelled. The third drives a real desktop GL context
+and requires the driver and GPU to be recorded with it. A frame that comes from
+a GLES implementation reached through EGL, or from a browser, is evidence about
+that implementation and must say so rather than being filed as desktop GL
+evidence. Do not create or push a release tag when any of these has failed or
+could not run.

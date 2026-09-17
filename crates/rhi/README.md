@@ -37,7 +37,7 @@ padded to the native 256-byte requirement.
 ```toml
 [dependencies.fluxel-rhi]
 git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.14.0"
+tag = "v0.15.0"
 ```
 
 The crate is not published on crates.io yet, so the Git dependency is the
@@ -47,7 +47,7 @@ To select one explicitly:
 ```toml
 [dependencies.fluxel-rhi]
 git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.14.0"
+tag = "v0.15.0"
 default-features = false
 features = ["dx12"]
 ```
@@ -56,6 +56,15 @@ features = ["dx12"]
 | --- | --- |
 | `dx12` | Compile Direct3D 12 device bootstrap. |
 | `vulkan` | Compile Vulkan device bootstrap. |
+| `native-gl-wgl` | Compile the desktop GL 4.x provider (WGL + `glow`). |
+| `native-gles-egl` | Compile the GLES 3.x provider (EGL + `glow`). |
+
+Both native GL-family features are off by default and are independent of each
+other and of `dx12`/`vulkan`. `gl-family` on its own compiles the
+platform-neutral three-layer contract with no provider, which is what the
+architecture gate checks; a build that selects none of these features does not
+compile the module at all. `webgl2` is the browser provider and is meaningful
+only for `wasm32`.
 
 The non-default `test-support` feature is reserved for workspace conformance
 fixtures. Its doc-hidden exact-state readback and diagnostics capture are not a
@@ -81,6 +90,43 @@ image indices, synchronization, and HWND remain private. Renderer
 bounded frames-in-flight and back pressure are separate private scheduler policy.
 `Surface::open` is a single-surface bootstrap, not a general surface API or a
 commitment to an eventual multi-surface topology.
+
+## The GL family
+
+Desktop GL, GLES, and WebGL2 share one implementation, built as three private
+layers under a single crate-private module. Each layer may name only the ones
+below it, and the direction is machine-checked by
+`scripts/check_gl_architecture.py` rather than left to review:
+
+1. **`api/`** is one unified GL-family command contract, with three providers
+   behind it: WGL, EGL, and the browser. `glow` and the platform loaders are
+   confined here.
+2. **`state/`** is the measured state machine and object cache over that
+   contract: desired versus applied groups, invalidation, retention, counters.
+3. **`compat/`** adapts the state machine to the same `ExecutionBackend` the
+   DX12, Vulkan, and WebGPU paths answer, so a graph does not know which one it
+   compiled against.
+
+Nothing of the platform escapes the boundary. There is no session, context
+handle, or platform token in the public model: resource ownership is device
+identity plus generation, the same model DX12's `ID3D12Device`, Vulkan's
+`VkDevice`, and WebGPU's `GPUDevice` follow, and a resource from another device
+or a superseded generation is refused by the library rather than by the driver.
+Browser objects (`WebGL2RenderingContext`, `web_sys` handles, `Rc` leases) are
+private to the browser provider and are not nameable from outside the crate.
+
+In 0.15 the layers are private implementation details rather than a public
+entry point: `Backend` still selects only `Dx12` and `Vulkan`, and nothing
+here is re-exported at the crate root. A consumer reaches this path the way it
+reaches any other backend — through the `ExecutionBackend` contract the
+renderer already compiles against — once a later release exposes the selector.
+Until then the feature flags exist to compile and test the layers, and the
+`test-support` re-exports below are the doc-hidden seam that the workspace's own
+hardware fixtures use.
+
+This path is not a general graphics API either. It carries the same closed
+artifact set as the other backends, and where a profile cannot express a
+capability the verb refuses before it reaches the driver rather than emulating.
 
 ## Open a device
 

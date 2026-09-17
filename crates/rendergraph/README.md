@@ -22,7 +22,7 @@ or pipeline API remain outside it.
 ```toml
 [dependencies.fluxel-rendergraph]
 git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.14.0"
+tag = "v0.15.0"
 ```
 
 The crate is not published on crates.io yet, so the Git dependency is the

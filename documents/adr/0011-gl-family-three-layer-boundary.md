@@ -1,6 +1,10 @@
 # ADR-0011: Build the GL family through three private layers
 
-**Status:** Accepted for 0.15 implementation
+**Status:** Accepted, and implemented in the 0.15 release. The three layers
+exist under `crates/rhi/src/webgl2/` (`api/`, `state/`, `compat/`), the boundary
+below is enforced by `scripts/check_gl_architecture.py` rather than by
+convention, and the release gate in the 0.15 plan records what was proven on
+real hardware and what was not.
 
 ## Context
 

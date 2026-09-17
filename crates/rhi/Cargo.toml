@@ -4,12 +4,12 @@ version.workspace = true
 edition = "2024"
 rust-version = "1.87"
 license = "MIT OR Apache-2.0"
-description = "DX12/Vulkan fixed GPU execution and closed WebGL2/WebGPU adapters for Fluxel"
+description = "DX12/Vulkan fixed GPU execution, a three-layer GL-family path, and closed WebGL2/WebGPU adapters for Fluxel"
 repository = "https://github.com/fluxel-project/fluxel-rendering"
 readme = "README.md"
 
 [dependencies]
-fluxel-rendergraph = { path = "../rendergraph", version = "0.14.0" }
+fluxel-rendergraph = { path = "../rendergraph", version = "0.15.0" }
 glow = { version = "=0.18.0", optional = true }
 raw-window-handle = "0.6.2"
 

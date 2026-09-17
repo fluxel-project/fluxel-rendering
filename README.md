@@ -47,12 +47,12 @@ The workspace releases its three publishable crates together. Git consumers must
 release tag rather than follow `main`:
 
 ```toml
-fluxel-rendergraph = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.14.0" }
-fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.14.0" }
-fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.14.0" }
+fluxel-rendergraph = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0" }
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0" }
+fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0" }
 ```
 
-`v0.14.0` and each publishable package's `0.14.0` version identify the same workspace
+`v0.15.0` and each publishable package's `0.15.0` version identify the same workspace
 release. See [RELEASING.md](RELEASING.md) for the release gate.
 
 ## Documentation
@@ -107,6 +107,13 @@ Current retained closures are:
   storage-texture reads on Vulkan only;
 - structured, zero-side-effect WebGL2 rejection for Compute and every storage
   resource operation;
+- a GL-family execution path behind one internal three-layer boundary
+  (`api/` → `state/` → `compat/`), covering desktop GL 4.x over WGL, GLES 3.x
+  over EGL, and browser WebGL2, as a peer of DX12/Vulkan rather than a second
+  public graphics API; the GLES half of this was proven against a GLES 3.1
+  implementation driven through EGL, not against a physical GLES 3.1 device,
+  and the desktop half's profile floor is enforced from a spec-derived table
+  rather than from a measured one;
 - headless DX12/Vulkan execution and real-GPU conformance;
 - visible Windows DX12/Vulkan surface lifecycle and bounded completion;
 - the retained RGB scene on the named Chrome/WebGL2 target; and
