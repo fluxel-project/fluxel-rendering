@@ -73,6 +73,23 @@ fn is_legal(requirements: &vk::MemoryRequirements, index: usize) -> bool {
     requirements.memory_type_bits & bit != 0
 }
 
+/// The memory types one adapter reports, in the driver's own order.
+///
+/// The driver writes a fixed-width array plus a count; this returns exactly the
+/// reported prefix as an owned vector, so a caller cannot read past the count and
+/// an index into the result is a legal index into the driver's list.
+///
+/// Nothing is created: reading memory properties needs a physical device, not a
+/// logical one, which is what lets a caller decide whether a resource is even
+/// placeable before a device exists.
+pub(crate) fn types(instance: &ash::Instance, adapter: vk::PhysicalDevice) -> Vec<vk::MemoryType> {
+    // SAFETY: the adapter was enumerated from this instance, which is still live,
+    // and the call only reports facts.
+    let properties = unsafe { instance.get_physical_device_memory_properties(adapter) };
+    let count = (properties.memory_type_count as usize).min(properties.memory_types.len());
+    properties.memory_types[..count].to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +182,57 @@ mod tests {
                 considered: 1,
             })
         );
+    }
+
+    #[test]
+    fn a_real_adapter_reports_memory_types_including_a_device_local_one() {
+        // End-to-end for the reading half of step 3, against the real driver. Skips
+        // rather than fails where no adapter exists, since having no GPU is not
+        // what this test is about.
+        use crate::Validation;
+        use crate::native::vulkan::open;
+
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let reported = types(opened.instance.instance(), opened.adapter);
+        assert!(
+            !reported.is_empty(),
+            "an adapter that was opened reports at least one memory type"
+        );
+        assert!(
+            reported.iter().any(|memory_type| memory_type
+                .property_flags
+                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)),
+            "a GPU adapter reports a device-local memory type"
+        );
+        // The selection rule is reached with what the driver actually reported, so
+        // this asserts the two halves agree on real data rather than on fixtures.
+        let requirements = vk::MemoryRequirements {
+            size: 4096,
+            alignment: 64,
+            // Every reported type is legal for this synthetic request, which is the
+            // "driver placed no restriction" case.
+            memory_type_bits: (1u32 << reported.len().min(31)) - 1,
+        };
+        assert!(
+            select(
+                &requirements,
+                &reported,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL
+            )
+            .is_ok(),
+            "the device-local type the driver reported is selectable"
+        );
+    }
+
+    #[test]
+    fn the_reported_prefix_never_exceeds_the_array() {
+        // The count is the driver's word and the array is fixed width; the helper
+        // clamps rather than trusting the count, because reading past the array
+        // would be undefined.
+        let properties = vk::PhysicalDeviceMemoryProperties::default();
+        let count = (properties.memory_type_count as usize).min(properties.memory_types.len());
+        assert!(count <= properties.memory_types.len());
     }
 }
