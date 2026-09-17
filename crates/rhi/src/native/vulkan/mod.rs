@@ -117,5 +117,8 @@ pub(crate) mod buffer;
 /// Step 4's pure half: portable formats lowered onto Vulkan image formats.
 pub(crate) mod format;
 
+/// Step 3''s second half: suballocation and binding memory to a handle.
+pub(crate) mod allocator;
+
 /// Step 4's pure half: portable texture descriptions lowered onto Vulkan.
 pub(crate) mod texture;
