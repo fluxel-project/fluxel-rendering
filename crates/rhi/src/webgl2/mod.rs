@@ -39,3 +39,13 @@ pub(super) mod compat;
     feature = "test-support"
 ))]
 pub(crate) mod conformance;
+
+/// The browser measurement surface, for the other half of the same checkpoint.
+///
+/// It sits above the layers for the same reason `conformance` does, and the
+/// constraint is sharper here: `api/browser` may not name `compat` and `compat`
+/// may not name a browser type, so a test that joins them cannot live in either
+/// one.  It is test-only, because the production browser cutover is F6(c) and
+/// nothing outside this crate consumes a browser GL-family device until it lands.
+#[cfg(all(test, target_arch = "wasm32", feature = "webgl2"))]
+mod browser_draws;

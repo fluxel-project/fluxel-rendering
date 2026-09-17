@@ -172,6 +172,15 @@ mod submission;
 mod surface;
 mod transient;
 mod upload;
+// The workload both measurement surfaces drive.  It is here rather than beside
+// either of them because it is a fact about the adapter and the verbs and not
+// about WGL or a canvas, and both callers are inside this module tree: the
+// desktop entry beside it, and -- through the `pub(crate)` re-export in
+// `compat/mod.rs` -- the browser draw test, which lives above the layers because
+// `compat` may not name a browser type and `api/browser` may not name `compat`.
+// `pub(crate)` for the same reason `harness` is: without it that re-export
+// cannot path through a private module.
+pub(crate) mod workload;
 
 #[cfg(test)]
 mod tests;

@@ -70,6 +70,17 @@ pub(crate) use wgl::WglContextSurface;
 ))]
 pub(crate) use native::NativeGlProvider;
 
+/// The same provider, one platform over, for the browser measurement surface.
+///
+/// The identical hop and the identical reason: `mod browser` is private, the
+/// crate's browser draw test drives a frame rather than observing a context, and
+/// a module outside `api` cannot name a type it cannot path to.  It stops at
+/// `pub(crate)` for the reason above -- the provider borrows its canvas context
+/// for as long as it lives -- and it is reachable only where a browser context
+/// exists at all.
+#[cfg(all(target_arch = "wasm32", feature = "webgl2"))]
+pub(crate) use browser::WebGl2BrowserDiscovery;
+
 pub(crate) use binding::*;
 pub(crate) use compute::*;
 pub(crate) use copy::*;

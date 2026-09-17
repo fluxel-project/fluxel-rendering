@@ -58,3 +58,19 @@ mod shader;
     feature = "test-support"
 ))]
 pub use device::harness::{DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws};
+
+/// The shared measurement workload, for the browser surface.
+///
+/// The same allowance as above, one surface over.  The browser draw test cannot
+/// live inside either layer it joins: `compat` may not name a browser type (this
+/// module's own doc says so, and `scripts/check_gl_architecture.py` enforces it),
+/// and `api/browser` may not name `compat`.  So the test sits above both, where
+/// it may name the browser provider, and reaches the one workload through this
+/// hop.  `device` and `workload` are both private, so the path exists only inside
+/// the crate and nothing public is introduced.
+///
+/// `test` is part of the gate because the only consumer is that test: a
+/// re-export that exists in a build where nothing can name it is an unused
+/// import, and the crate denies warnings.
+#[cfg(all(test, target_arch = "wasm32", feature = "webgl2"))]
+pub(crate) use device::workload::{DrawCost, drive as drive_workload};

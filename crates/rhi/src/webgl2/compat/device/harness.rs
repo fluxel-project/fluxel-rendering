@@ -18,22 +18,14 @@
 //! durations the layer deliberately does not record.  Nothing here is public API
 //! and nothing here becomes one -- see the note on `mode` below.
 //!
-//! # The workload is one pass with a draw loop, and that is a choice
+//! # What is left here once the workload moved out
 //!
-//! A frame's cost is dominated by what it *repeats*: the state a draw re-installs
-//! because the previous draw left it alone.  Two thousand separate passes would
-//! measure the per-pass setup, which no candidate in the experiment funnel
-//! targets, and it would also conflate the adapter with the executor's per-pass
-//! scheduling.  So the workload is one raster pass whose recording closure issues
-//! `draws` indexed draws over the same pipeline, the same binding set and the
-//! same two buffers -- the steady state the grouped-dirty-state and
-//! bind-group-identity candidates are about -- and the counters it reports are
-//! the ones that say whether that steady state was actually reached.
-//!
-//! It is not a *representative* workload yet, and it does not claim to be.  What
-//! makes a workload representative is variety in the state a frame dirties, and
-//! that variety is added when a candidate needs it, by the funnel's own screening
-//! step, rather than guessed at here.
+//! Everything that is a fact about *this* surface: opening a WGL context over
+//! the caller's drawable, taking the desktop reading that only this surface can
+//! take, and projecting both into one report.  The workload itself -- the graph,
+//! the draw loop, the counters -- is [`super::workload`], shared with the browser
+//! surface so that the cached-versus-uncached differential compares two contexts
+//! rather than two frames.
 //!
 //! # The mode is a string, and that is not a style preference
 //!
@@ -47,51 +39,16 @@
 //! defaulted, because a differential whose two halves silently ran the same mode
 //! is worse than one that failed.
 
-use std::time::Instant;
-
-use fluxel_rendergraph::Extent3d;
-use fluxel_rendergraph::{
-    AttachmentOps, BindingSetId, BoundBuffer, BoundTexture, BufferBindingId, BufferDesc,
-    BufferRange, BufferReadUse, BufferUsage, BufferUsageKind, ColorAttachmentDesc,
-    ExecutionBackend, ExportTextureContract, ExternalOwnership, FrameBindingError,
-    FrameBindingErrorKind, FrameExecutor, FrameInputs, FrameResourceProvider, ImportBufferContract,
-    ImportedBuffer, IndexFormat, InitialContents, LoadOp, RasterPipelineId, RenderGraph,
-    ResourceAccessState, StoreOp, TextureBindingId, TextureDesc, TextureDimension, TextureFormat,
-    TextureRange, WriteCoverage,
-};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use super::object::Recipe;
-use super::retention::GlRetentionLease;
-use super::{GlCompatibilityDevice, GlObjectRegistry};
-use crate::resource::RasterKernel;
+use super::workload::{self, DrawCost};
 use crate::webgl2::api::{
-    BufferId, ContextEpoch, ContextStamp, DeviceIdentity, NativeGlProvider, TextureId,
-    WglContextSurface,
+    ContextEpoch, ContextStamp, DeviceIdentity, NativeGlProvider, WglContextSurface,
 };
 use crate::webgl2::conformance::{self, DesktopGl4ContextReport};
-use crate::webgl2::state::{ExecutionMode, GlStateBackend, StateCounters};
+use crate::webgl2::state::ExecutionMode;
 
-/// One domain's tallies, as a report row.
-///
-/// The four numbers are the ones `DomainCounters` carries, restated as plain
-/// data so an out-of-workspace gate can read them without naming a crate-private
-/// type.  `requests` is what the frame *asked* for and `emitted` what the layer
-/// *did*; the gap between them is skipped work, which is the quantity every
-/// optimization candidate is judged on.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DomainTally {
-    /// The domain's stable name.
-    pub domain: String,
-    /// How many times the frame named this domain.
-    pub requests: u64,
-    /// How many calls the layer emitted for it.
-    pub emitted: u64,
-    /// How many it skipped as already applied.
-    pub skipped: u64,
-    /// How many times it had to re-derive state it could not vouch for.
-    pub unknown_recoveries: u64,
-}
+pub use super::workload::DomainTally;
 
 /// What one driven run of the workload cost, together with the context it ran on.
 ///
@@ -107,7 +64,7 @@ pub struct DomainTally {
 ///
 /// # Three of the submission tallies are absent, and why
 ///
-/// [`StateCounters::submissions`] carries twelve tallies because the other
+/// `StateCounters::submissions` carries twelve tallies because the other
 /// backends need all twelve.  This family writes **three** of them -- `passes`,
 /// `pass_loads` and `pass_stores`, all from its session domain -- and never
 /// increments `draws`, `clears`, `presents` or the rest.  A report that carried
@@ -157,6 +114,39 @@ pub struct DesktopGl4DrawReport {
     pub total_nanos: u64,
     /// The extent the context was opened for.
     pub drawable_extent: [u32; 2],
+}
+
+impl DesktopGl4DrawReport {
+    /// This surface's context reading, over a cost the shared workload measured.
+    ///
+    /// Written out field by field rather than derived, because the two structs
+    /// are deliberately not the same type: the cost is what *both* surfaces
+    /// measure, and this report is what only the native surface can add to it.
+    /// A `Deref` or an embedded field would tie the public report's shape to the
+    /// shared one, and the shared one is free to change when the funnel adds
+    /// variety to the workload.
+    fn from_cost(context: DesktopGl4ContextReport, cost: DrawCost) -> Self {
+        Self {
+            context,
+            mode: cost.mode,
+            draws_requested: cost.draws_requested,
+            passes: cost.passes,
+            pass_loads: cost.pass_loads,
+            pass_stores: cost.pass_stores,
+            cache_hits: cost.cache_hits,
+            cache_misses: cost.cache_misses,
+            cache_created: cost.cache_created,
+            cache_evicted: cost.cache_evicted,
+            cache_live_entries: cost.cache_live_entries,
+            cache_live_bytes: cost.cache_live_bytes,
+            steady_state_allocations: cost.steady_state_allocations,
+            binding_bytes_copied: cost.binding_bytes_copied,
+            domains: cost.domains,
+            submit_nanos: cost.submit_nanos,
+            total_nanos: cost.total_nanos,
+            drawable_extent: cost.drawable_extent,
+        }
+    }
 }
 
 /// Opens a real desktop GL context over `host`'s drawable and drives `draws`
@@ -216,17 +206,20 @@ where
         // context produced during its own discovery -- which is the pair of
         // conditions `from_discovered` requires.
         let backend = unsafe { NativeGlProvider::from_discovered(gl, snapshot.clone()) };
-        Ok(run(backend, mode, draws, extent, reading))
+        Ok(workload::drive(backend, mode, draws, extent))
     });
     match outcome {
         Err(error) => Err(format!(
             "the context refused to run the workload: {error:?}"
         )),
-        Ok(inner) => inner,
+        // The workload's own refusals keep their own message: they are statements
+        // about this frame rather than about the context, and prefixing them with
+        // a context failure would point a reader at the driver.
+        Ok(Err(inner)) => Err(inner),
+        Ok(Ok(cost)) => Ok(DesktopGl4DrawReport::from_cost(reading, cost)),
     }
 }
 
-/// Parses the caller's spelling of an execution mode.
 /// Everything [`drive_desktop_gl4_draws`] can refuse before it opens anything.
 ///
 /// Split out for the same reason the context is opened last: a request that is
@@ -256,319 +249,6 @@ fn parse_mode(mode: &str) -> Result<ExecutionMode, String> {
         other => Err(format!(
             "an execution mode is `optimized` or `oracle`, and `{other}` is neither"
         )),
-    }
-}
-
-/// The two streams one indexed triangle draw reads, as host bytes.
-///
-/// The same geometry the crate's own frame suites draw, restated here because
-/// this module is not `#[cfg(test)]` and therefore cannot reach their fixtures.
-/// Three vertices rather than a mesh, because what the workload varies is how
-/// many times the draw happens and not how much it covers.
-fn geometry() -> (Vec<u8>, Vec<u8>) {
-    const POSITIONS: [[f32; 3]; 3] = [[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.0, 0.5, 0.0]];
-    const INDICES: [u32; 3] = [0, 1, 2];
-    let positions = POSITIONS
-        .iter()
-        .flatten()
-        .flat_map(|component| component.to_le_bytes())
-        .collect();
-    let indices = INDICES
-        .iter()
-        .flat_map(|index| index.to_le_bytes())
-        .collect();
-    (positions, indices)
-}
-
-/// The colour attachment the workload renders into: index zero, cleared, stored.
-fn cleared() -> ColorAttachmentDesc {
-    ColorAttachmentDesc {
-        index: 0,
-        range: TextureRange::Whole,
-        operations: AttachmentOps {
-            load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
-            store: StoreOp::Store,
-            write_coverage: WriteCoverage::Full,
-        },
-    }
-}
-
-/// The off-screen target, one two-dimensional layer of RGBA8.
-fn target() -> TextureDesc {
-    TextureDesc {
-        dimension: TextureDimension::D2,
-        extent: Extent3d {
-            width: 4,
-            height: 4,
-            depth: 1,
-        },
-        mip_levels: 1,
-        array_layers: 1,
-        sample_count: 1,
-        format: TextureFormat::Rgba8Unorm,
-    }
-}
-
-/// The provider that answers this frame's two imports with objects the adapter
-/// created before the frame existed.
-///
-/// A provider has to answer *per binding*, which is why the two are held as
-/// pairs rather than as a list: a frame with two imports whose provider returned
-/// whichever object it happened to hold would pass this workload and be wrong the
-/// moment the two differ in usage.
-struct Geometry {
-    vertices: (BufferBindingId, BoundBuffer<BufferId, GlRetentionLease>),
-    indices: (BufferBindingId, BoundBuffer<BufferId, GlRetentionLease>),
-}
-
-/// The same resolved buffer, restated so the provider can hand it out.
-///
-/// The lease is cloned rather than moved, and the clone shares the one inner
-/// record: the contract lets a provider answer the same object more than once in
-/// a frame, so the object is released when the last holder drops.
-fn reissue(
-    buffer: &BoundBuffer<BufferId, GlRetentionLease>,
-) -> BoundBuffer<BufferId, GlRetentionLease> {
-    BoundBuffer {
-        device: buffer.device,
-        identity: buffer.identity,
-        physical: buffer.physical,
-        descriptor: buffer.descriptor,
-        usage: buffer.usage,
-        initial_state: buffer.initial_state,
-        lease: buffer.lease.clone(),
-    }
-}
-
-impl<B: GlStateBackend> FrameResourceProvider<GlCompatibilityDevice<B, super::compute::NoCompute>>
-    for Geometry
-{
-    fn texture(
-        &self,
-        id: TextureBindingId,
-    ) -> Result<BoundTexture<TextureId, GlRetentionLease>, FrameBindingError> {
-        Err(missing(
-            FrameBindingErrorKind::MissingTexture,
-            format!("this frame imports two buffers and no texture, so {id:?} has no answer"),
-        ))
-    }
-
-    fn buffer(
-        &self,
-        id: BufferBindingId,
-    ) -> Result<BoundBuffer<BufferId, GlRetentionLease>, FrameBindingError> {
-        if id == self.vertices.0 {
-            return Ok(reissue(&self.vertices.1));
-        }
-        if id == self.indices.0 {
-            return Ok(reissue(&self.indices.1));
-        }
-        Err(missing(
-            FrameBindingErrorKind::MissingBuffer,
-            format!("this frame binds two buffers, so {id:?} has no answer"),
-        ))
-    }
-}
-
-/// The refusal this provider answers with for a binding it was not given.
-fn missing(kind: FrameBindingErrorKind, detail: String) -> FrameBindingError {
-    FrameBindingError {
-        kind,
-        texture_slot: None,
-        buffer_slot: None,
-        resource: None,
-        surface_binding: None,
-        detail,
-    }
-}
-
-/// Creates one caller-owned buffer and fills it, before any frame exists.
-fn own<B: GlStateBackend>(
-    device: &mut GlCompatibilityDevice<B, super::compute::NoCompute>,
-    size: u64,
-    usage: BufferUsageKind,
-    bytes: &[u8],
-) -> Result<BoundBuffer<BufferId, GlRetentionLease>, String> {
-    let buffer = device
-        .create_transient_buffer(BufferDesc { size }, BufferUsage::from_kinds([usage]))
-        .map_err(|error| format!("a caller-owned buffer was refused: {error:?}"))?;
-    device
-        .upload_buffer(buffer.physical, 0, bytes)
-        .map_err(|error| format!("the bytes did not reach the buffer: {error:?}"))?;
-    Ok(buffer)
-}
-
-/// Builds the graph, drives it once, and reads the tallies back.
-///
-/// Generic over the backend on purpose: the workload is a fact about the graph
-/// and the verbs, not about WGL, so the same code drives the mock in this
-/// crate's own tests and a real context in the hardware gate.
-fn run<B: GlStateBackend>(
-    backend: B,
-    mode: ExecutionMode,
-    draws: u32,
-    extent: [u32; 2],
-    context: DesktopGl4ContextReport,
-) -> Result<DesktopGl4DrawReport, String> {
-    let started = Instant::now();
-    let (positions, elements) = geometry();
-    let (vertex_bytes, index_bytes) = (positions.len() as u64, elements.len() as u64);
-
-    let mut device = GlCompatibilityDevice::with_mode(backend, mode);
-    let vertex_buffer = own(
-        &mut device,
-        vertex_bytes,
-        BufferUsageKind::Vertex,
-        &positions,
-    )?;
-    let index_buffer = own(&mut device, index_bytes, BufferUsageKind::Index, &elements)?;
-
-    let mut graph = RenderGraph::new();
-    let vertices = imported(&mut graph, "triangle-vertices", vertex_bytes);
-    let indices = imported(&mut graph, "triangle-indices", index_bytes);
-    let colour = graph.create_texture("colour", target());
-    let raster = graph.add_raster_pass(
-        "triangle",
-        |pass| {
-            let vertices = pass.read_buffer(
-                &vertices.version,
-                BufferReadUse::Vertex,
-                BufferRange::whole(),
-            );
-            let indices =
-                pass.read_buffer(&indices.version, BufferReadUse::Index, BufferRange::whole());
-            let colour = pass.color_attachment(colour, cleared());
-            (colour, (vertices, indices))
-        },
-        // `move` because the recording closure is required to be `'static`, so
-        // the draw count has to be owned by it rather than borrowed from here.
-        move |commands, resolver, (vertices, indices), _frame| {
-            commands.set_pipeline(RasterPipelineId::new(1))?;
-            commands.set_vertex_buffer(0, vertices)?;
-            commands.set_index_buffer(indices, IndexFormat::Uint32)?;
-            let bindings = resolver.resolve_bindings(BindingSetId::new(0), &[], &[])?;
-            commands.set_bindings(&bindings)?;
-            // The workload: the same draw, repeated.  Nothing between two
-            // iterations dirties a domain, so every call after the first is a
-            // request an optimized layer is entitled to skip and an oracle layer
-            // must emit -- which is exactly the difference the report has to show.
-            for _ in 0..draws {
-                commands.draw_indexed(0..3, 0, 0..1)?;
-            }
-            Ok(())
-        },
-    );
-    graph.export_texture(
-        raster.output,
-        ExportTextureContract {
-            final_state: ResourceAccessState::ColorAttachmentWrite,
-        },
-    );
-
-    let compiled = graph
-        .compile(device.capabilities())
-        .map_err(|error| format!("the graph did not compile for this context: {error:?}"))?
-        .graph;
-    let mut objects: GlObjectRegistry<B, super::compute::NoCompute> = device.object_registry();
-    let kernel = RasterKernel::IndexedPositionFloat32x3;
-    objects
-        .register_raster_pipeline(RasterPipelineId::new(1), kernel)
-        .map_err(|error| format!("the pipeline was refused: {error:?}"))?;
-    objects.register_bindings(BindingSetId::new(0), Recipe::Raster(kernel));
-
-    let provider = Geometry {
-        vertices: (BufferBindingId::new(1), vertex_buffer),
-        indices: (BufferBindingId::new(2), index_buffer),
-    };
-    let mut inputs = FrameInputs::new(());
-    inputs.bind_buffer(vertices.slot, provider.vertices.0);
-    inputs.bind_buffer(indices.slot, provider.indices.0);
-
-    let executor = FrameExecutor::new(device);
-    let submit_started = Instant::now();
-    executor
-        .execute(
-            &compiled,
-            compiled.instantiate_local(inputs),
-            &provider,
-            &objects,
-        )
-        .map_err(|error| format!("the frame did not run: {error:?}"))?;
-    let submit_nanos = submit_started.elapsed().as_nanos() as u64;
-
-    let backend = executor.try_backend().ok_or_else(|| {
-        "the executor still holds the backend after the frame returned".to_owned()
-    })?;
-    let report = project(
-        backend.counters(),
-        context,
-        mode,
-        draws,
-        extent,
-        submit_nanos,
-    );
-    let total_nanos = started.elapsed().as_nanos() as u64;
-    drop(backend);
-    Ok(DesktopGl4DrawReport {
-        total_nanos,
-        ..report
-    })
-}
-
-/// One imported buffer slot, declared the way this adapter's creation verb answers.
-fn imported(graph: &mut RenderGraph, name: &str, size: u64) -> ImportedBuffer {
-    graph.import_buffer_slot(
-        name,
-        ImportBufferContract {
-            descriptor: BufferDesc { size },
-            initial_state: ResourceAccessState::Undefined,
-            ownership: ExternalOwnership::Caller,
-            initial_contents: InitialContents::Defined,
-        },
-    )
-}
-
-/// Projects the layer's counters into the report, total time aside.
-fn project(
-    counters: &StateCounters,
-    context: DesktopGl4ContextReport,
-    mode: ExecutionMode,
-    draws: u32,
-    extent: [u32; 2],
-    submit_nanos: u64,
-) -> DesktopGl4DrawReport {
-    let domains = counters
-        .report()
-        .map(|(domain, counts)| DomainTally {
-            domain: domain.name().to_owned(),
-            requests: counts.requests,
-            emitted: counts.emitted,
-            skipped: counts.skipped,
-            unknown_recoveries: counts.unknown_recoveries,
-        })
-        .collect();
-    DesktopGl4DrawReport {
-        context,
-        mode: match mode {
-            ExecutionMode::Optimized => "optimized".to_owned(),
-            ExecutionMode::Oracle => "oracle".to_owned(),
-        },
-        draws_requested: draws,
-        passes: counters.submissions.passes,
-        pass_loads: counters.submissions.pass_loads,
-        pass_stores: counters.submissions.pass_stores,
-        cache_hits: counters.caches.hits,
-        cache_misses: counters.caches.misses,
-        cache_created: counters.caches.created,
-        cache_evicted: counters.caches.evicted,
-        cache_live_entries: counters.caches.live_entries,
-        cache_live_bytes: counters.caches.live_bytes,
-        steady_state_allocations: counters.steady_state_allocations,
-        binding_bytes_copied: counters.binding_bytes_copied,
-        domains,
-        submit_nanos,
-        total_nanos: 0,
-        drawable_extent: extent,
     }
 }
 

@@ -32,20 +32,20 @@ use crate::webgl2::state::StateDomain;
 ///
 /// The reading is projected from the same snapshot the mock is built from,
 /// through the same function the real entry calls, so the mock run exercises
-/// the whole of `run` rather than a reduced version of it.
+/// the whole of the workload rather than a reduced version of it.
 fn drive(mode: ExecutionMode, draws: u32) -> DesktopGl4DrawReport {
     let discovery = snapshot(GlFamilyProfile::WebGl2);
     // The test thread owns the mock, so the identity it reports is this
     // thread's -- which is the same fact the real entry records.
     let reading = conformance::report(&discovery, [4, 4], &OwnerThreadIdentity::current());
-    run(
+    let cost = workload::drive(
         MockGlFamilyApi::from_discovery(discovery),
         mode,
         draws,
         [4, 4],
-        reading,
     )
-    .unwrap_or_else(|error| panic!("the workload runs over the mock context in {mode:?}: {error}"))
+    .unwrap_or_else(|error| panic!("the workload runs over the mock context in {mode:?}: {error}"));
+    DesktopGl4DrawReport::from_cost(reading, cost)
 }
 
 /// A report's per-domain rows, as `(name, requests, emitted, skipped)`.
