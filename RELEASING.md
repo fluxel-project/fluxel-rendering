@@ -28,10 +28,10 @@ shortfalls when there are any, and the toolchain that ran; a previous manifest
 for the same SHA is kept beside it as `manifest.json.previous`, since the
 artifact directory is keyed by SHA and a later failing run would otherwise
 replace a passing verdict without a trace. Inspect the manifest and log before
-tagging. They stay out of the source commit so that the tested SHA
-does not change, but both files must be uploaded as assets of the GitHub Release
-for the matching tag. A release is incomplete until those durable asset URLs
-exist and identify the tagged commit.
+tagging. They stay out of the source commit so that the tested SHA does not
+change, and they stay local: they are this machine's record of the run, not
+something a release has to publish. Nothing is uploaded anywhere, and no release
+step depends on an artifact URL existing.
 
 A release that moves the workspace version also moves the version of every path
 dependency in it, and the three example projects under `examples/` are separate
@@ -45,16 +45,20 @@ manifest that disagree and is also a CI row.
 
 After the conformance gate and the required platform checks pass, create an
 annotated tag, push the branch and tag, then verify that `origin/main` and the
-remote tag resolve to the same release commit. Create the GitHub Release and
-attach that commit's `manifest.json` and `cargo.log`. Do not create or push a
-release tag when the hardware gate has failed or could not run.
+remote tag resolve to the same release commit. **The push is the release.** There
+is no GitHub Release to create, no asset to attach, and no GitHub CLI in this
+process: the annotated tag is the release identity, and the evidence for it is
+the gate record above plus whatever the repository already retains. Do not create
+or push a release tag when the hardware gate has failed or could not run.
 
 When a release changes the browser executor, also build the release WASM for
 the exact candidate commit and run the named-browser evidence harness against
-the matching `fluxel-jsbridge` candidate. Archive its manifest, representative
-screenshots, and browser diagnostics with an explicit SHA-256 checksum; record
-both repository SHAs. Browser evidence is additional to, never a replacement
-for, the native DX12/Vulkan gate above.
+the matching `fluxel-jsbridge` candidate. Keep its manifest, representative
+screenshots, and browser diagnostics with an explicit SHA-256 checksum, and
+record both repository SHAs. What has to survive is the reading, not the file: a
+representative capture belongs in `scripts/tests/data/` beside the other retained
+fixtures, and the rest is regenerable (§7 of the project rules). Browser evidence
+is additional to, never a replacement for, the native DX12/Vulkan gate above.
 
 When a release changes the GL family, the same candidate also needs the
 GL-specific gates, in this order:
