@@ -28,6 +28,13 @@ subtlety: those rows are open items in the series plan, so they are expected to
 be *exactly* as recorded, and one that starts answering differently fails the
 run too -- not because the new answer is worse, but because a ledger entry
 changed and nobody adjudicated it.  Silence is never a pass.
+
+The drawable is required rather than recorded, and for the opposite reason: the
+record used to read ``unavailable`` here on *every* desktop core context,
+because six of the eight queries it asked were removed from the core profile --
+a structural refusal, not a driver quirk.  P1-15 closed it by asking the
+core-profile question, so a report that comes back unobserved now means the
+observation regressed.
 """
 
 from __future__ import annotations
@@ -67,7 +74,22 @@ RECORDED_OPEN = {
     "multi-draw": (False, "P2-15"),
     "multiview": (False, "P2-14"),
 }
-RECORDED_SURFACE_FACTS = ("unavailable", "P1-15")
+
+# The drawable, which P1-15 turned from a recorded absence into a requirement.
+# Its typed form is the crate's own rendering of `GlSurfaceFacts::Observed`, and
+# the four rows below are the values that record is documented to accompany: the
+# attachment the widths were read from, the widths themselves, and the sample
+# state presentation acts on.  Requiring the rows to agree with the typed value
+# is the same agreement the crate asserts of its own fixtures, checked here
+# against a driver that was not written to pass.
+OBSERVED_SURFACE_FACTS = re.compile(r"Observed \{ color_bits: \[(\d+), (\d+), (\d+), (\d+)\] \}")
+SURFACE_FACT_KEYS = (
+    "gl.surface-color-buffer",
+    "gl.surface-color-bits",
+    "gl.surface-sample-buffers",
+    "gl.surface-samples",
+)
+P1_15 = "P1-15"
 
 REQUIRED_SCALARS = (
     "profile",
@@ -167,14 +189,53 @@ def check(report: dict, expected_extent: tuple[int, int] | None = None) -> list[
     problems.extend(_check_extensions(report))
     problems.extend(_check_capabilities(report))
     problems.extend(_check_limits(report))
+    problems.extend(_check_surface(report))
+    return problems
 
-    recorded, row = RECORDED_SURFACE_FACTS
-    surface_facts = report.get("surface_facts")
-    if surface_facts != recorded:
+
+def _flag_values(report: dict) -> dict[str, str]:
+    """Returns the ``other_flags`` rows as name -> value.
+
+    A row that carries no ``=`` is kept under its own name with an empty value,
+    so that its presence is still visible instead of being dropped.
+    """
+    values: dict[str, str] = {}
+    rows = report.get("other_flags")
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, str):
+                name, _, value = row.partition("=")
+                values[name] = value
+    return values
+
+
+def _check_surface(report: dict) -> list[str]:
+    problems: list[str] = []
+    facts = report.get("surface_facts")
+    matched = OBSERVED_SURFACE_FACTS.fullmatch(facts) if isinstance(facts, str) else None
+    if matched is None:
         problems.append(
-            f"surface_facts is {surface_facts!r}, not the recorded {recorded!r} of {row} -- "
-            f"adjudicate it and update the ledger and this gate together"
+            f"surface_facts is {facts!r}, not an observed drawable -- {P1_15} closed the "
+            f"structural refusal that made this read 'unavailable' on every desktop core "
+            f"context, so an unobserved drawable is a regression to adjudicate rather than "
+            f"a driver this gate may bless"
         )
+    elif not any(int(part) for part in matched.groups()):
+        problems.append(f"surface_facts describes a drawable with no colour width: {facts!r}")
+
+    flags = _flag_values(report)
+    for name in SURFACE_FACT_KEYS:
+        if name not in flags:
+            problems.append(f"the drawable row {name} is absent from other_flags")
+        elif not flags[name]:
+            problems.append(f"the drawable row {name} is empty")
+    if matched is not None and flags.get("gl.surface-color-bits"):
+        recorded = ",".join(matched.groups())
+        if flags["gl.surface-color-bits"] != recorded:
+            problems.append(
+                f"the typed drawable says {recorded} where gl.surface-color-bits says "
+                f"{flags['gl.surface-color-bits']!r}"
+            )
     return problems
 
 

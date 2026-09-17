@@ -12,12 +12,13 @@ use super::super::{
     ContextStamp, CoreOrExtension, GlCapability, GlContextFlags, GlContextInfo, GlDiscoveryBuilder,
     GlDiscoveryError, GlDiscoverySnapshot, GlExtensionSet, GlFamilyProfile, GlFiniteF32, GlFormat,
     GlFormatCapabilities, GlFormatEvidence, GlFormatResourceKind, GlFormatTable, GlKnownExtension,
-    GlLimits, GlOperationProbe, GlSurfaceFacts, GlVersion,
+    GlLimits, GlOperationProbe, GlVersion,
 };
 use super::probes::{
     GlowProbes, NativeGlProbes, ProbeAnswer, ProbeReport, record_extension_probes,
     run_operation_probes,
 };
+use super::surface_facts;
 
 /// Failure to obtain a complete native discovery record.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +52,16 @@ pub(super) trait NativeGlQuery {
     fn indexed_integer(&self, name: u32, index: u32) -> Option<i64>;
     fn float(&self, name: u32) -> Option<f32>;
     fn indexed_string(&self, name: u32, index: u32) -> Option<String>;
+    /// A parameter of the draw framebuffer's attachment, or `None` when the
+    /// driver refused the query.
+    ///
+    /// A separate entry point rather than an argument to `integer`, because it
+    /// is a different GL command and not a different parameter: this is the one
+    /// place a core profile still answers what the default framebuffer's
+    /// component widths are. The target is always the draw framebuffer, so it
+    /// is not a parameter -- `DRAW_FRAMEBUFFER_BINDING` above is the query that
+    /// says which object that is.
+    fn drawable_attachment(&self, attachment: u32, name: u32) -> Option<i64>;
 }
 
 /// The driver identity recorded when no platform layer supplied one.
@@ -180,6 +191,21 @@ pub(crate) unsafe fn discover_current_glow_identified(
             let value = unsafe { self.0.get_parameter_indexed_string(name, index) };
             (!self.take_error() && !value.is_empty()).then_some(value)
         }
+        fn drawable_attachment(&self, attachment: u32, name: u32) -> Option<i64> {
+            // SAFETY: upheld by discover_current_glow's current-context contract.
+            let value = unsafe {
+                self.0.get_framebuffer_attachment_parameter_i32(
+                    glow_const::DRAW_FRAMEBUFFER,
+                    attachment,
+                    name,
+                )
+            };
+            // SAFETY: see integer. The draw-framebuffer target is named rather
+            // than left to a default because there is no default: a query
+            // against the wrong target would answer about a framebuffer nobody
+            // bound and read as an observation of the drawable.
+            (!self.take_error()).then_some(i64::from(value))
+        }
     }
 
     let raw_get_query_iv = proc_loader("glGetQueryiv");
@@ -236,6 +262,9 @@ impl<Q: NativeGlQuery + NativeGlProbes> NativeGlQuery for NativeOnly<'_, Q> {
     fn indexed_string(&self, name: u32, index: u32) -> Option<String> {
         self.0.indexed_string(name, index)
     }
+    fn drawable_attachment(&self, attachment: u32, name: u32) -> Option<i64> {
+        self.0.drawable_attachment(attachment, name)
+    }
 }
 
 fn discover_with_query_pair(
@@ -271,7 +300,7 @@ fn discover_with_query_pair(
     // the snapshot's only durable free-form fact set. It is an observation about
     // the surface rather than about the context, and it is recorded at all
     // because FBO 0 has no `GlFormatTable` row that could carry it.
-    let (surface, surface_strings) = surface_facts(query);
+    let (surface, surface_strings) = surface_facts::observe(query);
     flags.other.extend(surface_strings);
     // The desktop requirement is recorded next to the observed facts so a report
     // that shows a 4.2 context can see, in the same record, that this family
@@ -458,132 +487,6 @@ fn context_flags(
         }
     }
     Ok(flags)
-}
-
-/// Records the default framebuffer's observed format, or says explicitly why it
-/// could not be observed.
-///
-/// FBO 0 is not a `GlFormatTable` row, so the surface the platform flips is the
-/// one piece of format evidence that no other record carries, and a presenter
-/// needs it to know what it is presenting. The queries used here are the
-/// drawable's own component widths and sample counts, which every accepted
-/// profile answers about the *bound* draw framebuffer -- hence the binding check
-/// first: with an application framebuffer bound, those same queries describe
-/// that framebuffer, and recording them as the surface format would be recording
-/// a different object's format under the surface's name. Every path that cannot
-/// observe the drawable records a reason instead of a value, so a missing
-/// surface format is never mistaken for an observed one.
-///
-/// The color encoding of the drawable is deliberately not recorded: no accepted
-/// profile exposes a portable query for the default framebuffer's encoding, and
-/// a guess between linear and sRGB is a double-gamma error rather than a missing
-/// fact. It is recorded as unavailable instead.
-///
-/// Both renderings come out of this one function and one set of queries. The
-/// strings are the reporting channel and the [`GlSurfaceFacts`] value is the
-/// acting one; deriving either from the other would put a formatted marker back
-/// on the path a consumer acts on, which is what typing the value is for. The
-/// narrowing to the value's own widths is part of that: a negative answer cannot
-/// be a width, so it fails the observation the same way a missing component does,
-/// and neither rendering is written for it.
-/// The eight drawable facts one surface observation needs, each with the name the
-/// record reports it under.
-///
-/// One table so the two cannot drift: the failure marker names the component that
-/// failed, and a name retyped beside a token is a second spelling of the same fact
-/// that can rot without anything failing. The order is the destructuring order
-/// below, and the first seven entries are the ones that are narrowed to a width --
-/// sample buffers is a flag rather than a width and is recorded as queried.
-///
-/// Naming the component matters because a bare `query-failed` cannot be
-/// adjudicated from outside the crate: the first real desktop context this
-/// repository opened recorded exactly that, and the plan could say no more about
-/// it than that some query had failed.
-const SURFACE_COMPONENTS: [(&str, u32); 8] = [
-    ("GL_RED_BITS", glow_const::RED_BITS),
-    ("GL_GREEN_BITS", glow_const::GREEN_BITS),
-    ("GL_BLUE_BITS", glow_const::BLUE_BITS),
-    ("GL_ALPHA_BITS", glow_const::ALPHA_BITS),
-    ("GL_DEPTH_BITS", glow_const::DEPTH_BITS),
-    ("GL_STENCIL_BITS", glow_const::STENCIL_BITS),
-    ("GL_SAMPLES", glow_const::SAMPLES),
-    ("GL_SAMPLE_BUFFERS", glow_const::SAMPLE_BUFFERS),
-];
-
-fn surface_facts(query: &impl NativeGlQuery) -> (GlSurfaceFacts, BTreeSet<String>) {
-    let mut facts = BTreeSet::new();
-    let unavailable = |facts: BTreeSet<String>| (GlSurfaceFacts::Unavailable, facts);
-    let Some(binding) = query.integer(glow_const::DRAW_FRAMEBUFFER_BINDING) else {
-        facts.insert("gl.surface-facts-unavailable=unqueried".into());
-        return unavailable(facts);
-    };
-    if binding != 0 {
-        facts.insert("gl.surface-facts-unavailable=draw-framebuffer-bound".into());
-        return unavailable(facts);
-    }
-    // The whole set is required together: a partial surface format cannot decide
-    // anything a presenter would ask it, so a failed component leaves the record
-    // saying "not observed" rather than half a format -- and it says which
-    // component, since a failure the reader cannot attribute is a failure the
-    // reader has to reproduce by hand.
-    let mut observed = [0_i64; 8];
-    let mut failed: Vec<&'static str> = Vec::new();
-    for (slot, (name, token)) in observed.iter_mut().zip(SURFACE_COMPONENTS) {
-        match query.integer(token) {
-            Some(value) => *slot = value,
-            None => failed.push(name),
-        }
-    }
-    if !failed.is_empty() {
-        for name in failed {
-            facts.insert(format!("gl.surface-facts-unavailable=query-failed:{name}"));
-        }
-        return unavailable(facts);
-    }
-    let [
-        red,
-        green,
-        blue,
-        alpha,
-        depth,
-        stencil,
-        samples,
-        sample_buffers,
-    ] = observed;
-    // The typed value is unsigned by construction: a component width and a sample
-    // count are never negative, so a negative answer is the driver answering a
-    // different question than the one asked. It fails the whole observation for the
-    // same reason a missing component does -- narrowing it unchecked would wrap into
-    // a huge width, and a huge width is a format claim rather than a missing fact.
-    let mut widths = [0_u32; 7];
-    for ((slot, value), (name, _)) in widths
-        .iter_mut()
-        .zip([red, green, blue, alpha, depth, stencil, samples])
-        .zip(SURFACE_COMPONENTS)
-    {
-        match u32::try_from(value) {
-            Ok(width) => *slot = width,
-            Err(_) => {
-                facts.insert(format!("gl.surface-facts-unavailable=query-failed:{name}"));
-                return unavailable(facts);
-            }
-        }
-    }
-    let [red, green, blue, alpha, depth, stencil, samples] = widths;
-    facts.insert(format!(
-        "gl.surface-color-bits={red},{green},{blue},{alpha}"
-    ));
-    facts.insert(format!("gl.surface-depth-bits={depth}"));
-    facts.insert(format!("gl.surface-stencil-bits={stencil}"));
-    facts.insert(format!("gl.surface-sample-buffers={sample_buffers}"));
-    facts.insert(format!("gl.surface-samples={samples}"));
-    facts.insert("gl.surface-srgb=unavailable".into());
-    (
-        GlSurfaceFacts::Observed {
-            color_bits: [red, green, blue, alpha],
-        },
-        facts,
-    )
 }
 
 pub(super) fn required_string(
@@ -1309,12 +1212,37 @@ pub(super) mod glow_const {
     /// The framebuffer bound for drawing, which tells the drawable queries
     /// below whether they would answer about the surface at all.
     pub const DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+    /// The draw framebuffer itself, as the target an attachment query is asked
+    /// about. The same object the binding query above reads the identity of.
+    pub const DRAW_FRAMEBUFFER: u32 = 0x8CA9;
     pub const SAMPLE_BUFFERS: u32 = 0x80A8;
     pub const SAMPLES: u32 = 0x80A9;
-    pub const RED_BITS: u32 = 0x0D52;
-    pub const GREEN_BITS: u32 = 0x0D53;
-    pub const BLUE_BITS: u32 = 0x0D54;
-    pub const ALPHA_BITS: u32 = 0x0D55;
-    pub const DEPTH_BITS: u32 = 0x0D56;
-    pub const STENCIL_BITS: u32 = 0x0D57;
+    /// The drawable's colour buffers and its depth and stencil attachments.
+    ///
+    /// The component widths are read from an attachment rather than from the
+    /// default-framebuffer `GL_*_BITS` queries this table used to carry: those
+    /// were deprecated in 3.0 and removed from the core profile in 3.1, so on
+    /// the core profile this crate accepts they answer `GL_INVALID_ENUM`, and
+    /// `glGetFramebufferAttachmentParameteriv` is the question the profile
+    /// still answers. The samples pair above is unaffected -- the core profile
+    /// kept it, which is visible on the hardware this was found on, where the
+    /// six bit queries failed and these two answered.
+    ///
+    /// Values cross-checked against two independent bindings, because a wrong
+    /// token here is a question asked about nothing: `glow` 0.18 and `web-sys`
+    /// 0.3 agree on all six sizes and on the object type, and the two colour
+    /// buffers are consistent with the `FRONT`/`BACK` values the latter records
+    /// (`GL_FRONT` is `0x0404`, so `GL_FRONT_LEFT`/`GL_BACK_LEFT` are the two
+    /// entries below it).
+    pub const BACK_LEFT: u32 = 0x0402;
+    pub const FRONT_LEFT: u32 = 0x0400;
+    pub const DEPTH: u32 = 0x1801;
+    pub const STENCIL: u32 = 0x1802;
+    pub const FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE: u32 = 0x8CD0;
+    pub const FRAMEBUFFER_ATTACHMENT_RED_SIZE: u32 = 0x8212;
+    pub const FRAMEBUFFER_ATTACHMENT_GREEN_SIZE: u32 = 0x8213;
+    pub const FRAMEBUFFER_ATTACHMENT_BLUE_SIZE: u32 = 0x8214;
+    pub const FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE: u32 = 0x8215;
+    pub const FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE: u32 = 0x8216;
+    pub const FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE: u32 = 0x8217;
 }

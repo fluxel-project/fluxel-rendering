@@ -152,11 +152,38 @@ class CheckDesktopGl4ConformanceTests(unittest.TestCase):
         problems = CHECKER.check(report)
         self.assertTrue(any("max_multiview_view_count" in p for p in problems), problems)
 
-    def test_the_probe_bound_surface_facts_are_recorded_not_blessed(self) -> None:
-        problems = self.mutate(surface_facts="default_framebuffer")
+    def test_a_drawable_that_stops_being_observed_fails(self) -> None:
+        # P1-15's shape: every desktop core context read ``unavailable`` here,
+        # because the queries the record asked were removed from the profile.
+        problems = self.mutate(surface_facts="unavailable")
         self.assertTrue(
-            any(CHECKER.RECORDED_SURFACE_FACTS[1] in problem for problem in problems), problems
+            any(CHECKER.P1_15 in problem for problem in problems), problems
         )
+
+    def test_a_drawable_with_no_colour_width_fails(self) -> None:
+        problems = self.mutate(surface_facts="Observed { color_bits: [0, 0, 0, 0] }")
+        self.assertTrue(any("no colour width" in problem for problem in problems), problems)
+
+    def test_a_missing_drawable_row_fails(self) -> None:
+        for name in CHECKER.SURFACE_FACT_KEYS:
+            with self.subTest(key=name):
+                report = copy.deepcopy(self.report)
+                report["other_flags"] = [
+                    row for row in report["other_flags"] if not row.startswith(f"{name}=")
+                ]
+                problems = CHECKER.check(report)
+                self.assertTrue(any(name in problem for problem in problems), problems)
+
+    def test_a_drawable_row_that_disagrees_with_the_typed_facts_fails(self) -> None:
+        report = copy.deepcopy(self.report)
+        report["other_flags"] = [
+            "gl.surface-color-bits=8,8,8,0"
+            if row.startswith("gl.surface-color-bits=")
+            else row
+            for row in report["other_flags"]
+        ]
+        problems = CHECKER.check(report)
+        self.assertTrue(any("gl.surface-color-bits" in problem for problem in problems), problems)
 
     def test_the_requested_extent_is_compared_when_one_is_given(self) -> None:
         self.assertTrue(CHECKER.check(self.report, (800, 600)))

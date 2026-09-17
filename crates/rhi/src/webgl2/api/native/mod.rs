@@ -9,6 +9,7 @@ mod discovery;
 mod probes;
 mod provider;
 mod surface;
+mod surface_facts;
 #[cfg(test)]
 mod tests;
 
