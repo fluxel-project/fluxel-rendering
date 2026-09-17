@@ -1,0 +1,385 @@
+{
+ "draws": 2000,
+ "pairs": 10,
+ "warmup_pairs": 1,
+ "seed": 1517,
+ "order": [
+  "oracle",
+  "optimized",
+  "optimized",
+  "oracle",
+  "optimized",
+  "optimized",
+  "oracle",
+  "optimized",
+  "oracle",
+  "optimized",
+  "oracle",
+  "optimized",
+  "optimized",
+  "oracle",
+  "oracle",
+  "optimized",
+  "oracle",
+  "oracle",
+  "optimized",
+  "oracle",
+  "optimized",
+  "oracle"
+ ],
+ "scored_order": [
+  "optimized",
+  "oracle",
+  "optimized",
+  "optimized",
+  "oracle",
+  "optimized",
+  "oracle",
+  "optimized",
+  "oracle",
+  "optimized",
+  "optimized",
+  "oracle",
+  "oracle",
+  "optimized",
+  "oracle",
+  "oracle",
+  "optimized",
+  "oracle",
+  "optimized",
+  "oracle"
+ ],
+ "renderer": "AMD Radeon 780M Graphics",
+ "driver_or_browser": "ATI Technologies Inc. AMD Radeon 780M Graphics",
+ "profile": "Desktop { major: 4, minor: 3 }",
+ "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276",
+ "decision": {
+  "kind": "screening",
+  "metric": "submit_nanos",
+  "criterion": "candidate median outside the baseline's whole range, on the side this kind of run asks about",
+  "candidate_median_nanos": 14778350,
+  "baseline_min_nanos": 109778000,
+  "baseline_max_nanos": 171966200,
+  "beyond_noise": true,
+  "winner": "optimized",
+  "verdict": "retained",
+  "stats": {
+   "oracle": {
+    "submit_nanos": {
+     "rounds": 10,
+     "min": 109778000,
+     "median": 127990150,
+     "p95": 171966200,
+     "max": 171966200
+    },
+    "total_nanos": {
+     "rounds": 10,
+     "min": 114710000,
+     "median": 134320550,
+     "p95": 179836300,
+     "max": 179836300
+    },
+    "emitted": {
+     "rounds": 10,
+     "min": 12003,
+     "median": 12003,
+     "p95": 12003,
+     "max": 12003
+    },
+    "skipped": {
+     "rounds": 10,
+     "min": 0,
+     "median": 0,
+     "p95": 0,
+     "max": 0
+    }
+   },
+   "optimized": {
+    "submit_nanos": {
+     "rounds": 10,
+     "min": 12973800,
+     "median": 14778350,
+     "p95": 24321600,
+     "max": 24321600
+    },
+    "total_nanos": {
+     "rounds": 10,
+     "min": 16317700,
+     "median": 18668800,
+     "p95": 28931400,
+     "max": 28931400
+    },
+    "emitted": {
+     "rounds": 10,
+     "min": 8,
+     "median": 8,
+     "p95": 8,
+     "max": 8
+    },
+    "skipped": {
+     "rounds": 10,
+     "min": 5997,
+     "median": 5997,
+     "p95": 5997,
+     "max": 5997
+    }
+   }
+  }
+ },
+ "warmups": [
+  {
+   "round": 0,
+   "mode": "oracle",
+   "submit_nanos": 110745400,
+   "total_nanos": 115417700
+  },
+  {
+   "round": 1,
+   "mode": "optimized",
+   "submit_nanos": 18847100,
+   "total_nanos": 21894900
+  }
+ ],
+ "rounds": [
+  {
+   "round": 2,
+   "mode": "optimized",
+   "submit_nanos": 12973800,
+   "total_nanos": 16317700,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 3,
+   "mode": "oracle",
+   "submit_nanos": 123702500,
+   "total_nanos": 129049800,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 4,
+   "mode": "optimized",
+   "submit_nanos": 15736700,
+   "total_nanos": 18991800,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 5,
+   "mode": "optimized",
+   "submit_nanos": 14242400,
+   "total_nanos": 17838500,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 6,
+   "mode": "oracle",
+   "submit_nanos": 117460900,
+   "total_nanos": 124280000,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 7,
+   "mode": "optimized",
+   "submit_nanos": 16422600,
+   "total_nanos": 19750100,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 8,
+   "mode": "oracle",
+   "submit_nanos": 109859200,
+   "total_nanos": 114710000,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 9,
+   "mode": "optimized",
+   "submit_nanos": 13527500,
+   "total_nanos": 16772300,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 10,
+   "mode": "oracle",
+   "submit_nanos": 115361100,
+   "total_nanos": 119706700,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 11,
+   "mode": "optimized",
+   "submit_nanos": 14158100,
+   "total_nanos": 17723300,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 12,
+   "mode": "optimized",
+   "submit_nanos": 14620900,
+   "total_nanos": 18761000,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 13,
+   "mode": "oracle",
+   "submit_nanos": 109778000,
+   "total_nanos": 115021800,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 14,
+   "mode": "oracle",
+   "submit_nanos": 135112500,
+   "total_nanos": 139591300,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 15,
+   "mode": "optimized",
+   "submit_nanos": 24321600,
+   "total_nanos": 28931400,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 16,
+   "mode": "oracle",
+   "submit_nanos": 167746400,
+   "total_nanos": 175697600,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 17,
+   "mode": "oracle",
+   "submit_nanos": 150952400,
+   "total_nanos": 155674100,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 18,
+   "mode": "optimized",
+   "submit_nanos": 15461900,
+   "total_nanos": 18576600,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 19,
+   "mode": "oracle",
+   "submit_nanos": 171966200,
+   "total_nanos": 179836300,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 20,
+   "mode": "optimized",
+   "submit_nanos": 14935800,
+   "total_nanos": 18824900,
+   "emitted": 8,
+   "skipped": 5997,
+   "cache_hits": 2000,
+   "cache_misses": 3,
+   "steady_state_allocations": 4005,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  },
+  {
+   "round": 21,
+   "mode": "oracle",
+   "submit_nanos": 132277800,
+   "total_nanos": 140616700,
+   "emitted": 12003,
+   "skipped": 0,
+   "cache_hits": 0,
+   "cache_misses": 0,
+   "steady_state_allocations": 6001,
+   "colour_sha256": "0d18605583c84d0f98752488f8eacd189567be721076e7e6e486ba0006f75276"
+  }
+ ]
+}

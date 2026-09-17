@@ -284,6 +284,11 @@ jobs:
       # it holds is what fails when the crate's contract drifts away from the
       # hardware answer it was last checked against.
       - run: python scripts/check_desktop_gl4_conformance.py --report scripts/tests/data/desktop_gl4_radeon_780m.json
+      # The screening itself needs WGL and a driver, which is why it is not here;
+      # its arithmetic is what is checked, against the workload block a real
+      # context produced.  A funnel whose statistics quietly changed shape would
+      # still print a winner, and this is the line that refuses that.
+      - run: python -m unittest scripts/tests/test_check_gl_state_cache_screening.py
 
   windows-workspace:
     name: Windows workspace native glue
