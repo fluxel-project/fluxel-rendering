@@ -36,8 +36,15 @@ use crate::common::base::stamp::{DeviceStamp, StampMismatch};
 /// The kinds of resource the base knows how to identify.
 ///
 /// The set is closed because the base's resource model is: vertex, index, uniform
-/// and storage buffers on one side, and textures on the other. A backend does not
-/// add kinds here; a kind arrives only with the resource model that needs it.
+/// and storage buffers on one side, textures on the other, and the samplers a
+/// binding reads them through. A backend does not add kinds here; a kind arrives
+/// only with the resource model that needs it.
+///
+/// A sampler is a kind for the same reason a texture is: it is a device-owned
+/// object a descriptor names, so an id from a replaced device generation has to be
+/// refused before it can be bound. It is a different kind from a texture rather
+/// than one "bindable" kind, because the two are created from different
+/// descriptions, destroyed differently, and never interchangeable at a binding.
 pub(crate) trait ResourceKind: 'static {
     /// The kind's name, for diagnostics.
     const NAME: &'static str;
@@ -59,6 +66,14 @@ impl ResourceKind for TextureKind {
     const NAME: &'static str = "texture";
 }
 
+/// A sampler resource.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct SamplerKind;
+
+impl ResourceKind for SamplerKind {
+    const NAME: &'static str = "sampler";
+}
+
 /// Identity of one resource on one device generation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ResourceId<K: ResourceKind> {
@@ -72,6 +87,9 @@ pub(crate) type BufferId = ResourceId<BufferKind>;
 
 /// Identity of a texture.
 pub(crate) type TextureId = ResourceId<TextureKind>;
+
+/// Identity of a sampler.
+pub(crate) type SamplerId = ResourceId<SamplerKind>;
 
 impl<K: ResourceKind> ResourceId<K> {
     /// Creates an id for `identity` on the device generation `stamp` names.
@@ -169,5 +187,12 @@ mod tests {
         let texture = TextureId::new(stamp(1), raw(1));
         assert_eq!(texture.kind_name(), "texture");
         assert_ne!(texture.identity(), raw(2));
+
+        // The three kinds report three names, so a diagnostic can say which object a
+        // stale id named rather than only that it was stale.
+        let sampler = SamplerId::new(stamp(1), raw(1));
+        assert_eq!(sampler.kind_name(), "sampler");
+        assert_ne!(sampler.kind_name(), buffer(1).kind_name());
+        assert_ne!(sampler.kind_name(), texture.kind_name());
     }
 }

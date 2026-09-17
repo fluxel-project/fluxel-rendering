@@ -16,6 +16,12 @@
 //! driver cannot move between them. One table also means one identity counter, so a
 //! buffer and a texture can never be handed the same physical identity.
 //!
+//! Samplers are in this table for the second of those reasons rather than the first:
+//! a sampler owns no memory and needs no allocation, but it is a device-owned handle
+//! that must be destroyed exactly once and must carry an identity a stale generation
+//! cannot reuse. Keeping them beside the rest means one owner answers for every
+//! handle this backend creates, and a caller has one identity space to check.
+//!
 //! # Teardown order
 //!
 //! The table holds a clone of the device's `ash::Device`, because destroying a
@@ -29,10 +35,12 @@
 //! which is what unbinds it, and only then is the allocation handed back to the
 //! allocator. A texture adds one step in front: its view is destroyed before its
 //! image, because a view refers to an image and not the other way round, and the
-//! image is what binds the memory. That is the order the borrowed Vulkan backend
-//! being replaced uses, so the owned path does not differ behaviorally from the one
-//! it supersedes; releasing memory out from under a live binding would be the
-//! difference that matters.
+//! image is what binds the memory. Samplers are destroyed first, before both, and
+//! that placement claims nothing: a sampler refers to no image and binds no memory,
+//! so it has no ordering dependency on any other record. That is the order the
+//! borrowed Vulkan backend being replaced uses, so the owned path does not differ
+//! behaviorally from the one it supersedes; releasing memory out from under a live
+//! binding would be the difference that matters.
 //!
 //! # Why a hash map rather than an ordered one
 //!
@@ -47,13 +55,13 @@ use std::collections::HashMap;
 use ash::vk;
 use fluxel_rendergraph::{BufferUsage, PhysicalResourceIdentity, TextureDesc, TextureUsage};
 
-use crate::common::base::resource::{BufferId, ResourceId, ResourceKind, TextureId};
+use crate::common::base::resource::{BufferId, ResourceId, ResourceKind, SamplerId, TextureId};
 use crate::common::base::stamp::DeviceStamp;
+use crate::common::sampler::SamplerDescriptor;
 
 use super::allocator::GpuAllocator;
-use super::buffer;
 use super::memory::MemoryPurpose;
-use super::texture;
+use super::{buffer, sampler, texture};
 
 /// Why a resource could not be created, found, or destroyed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,7 +78,15 @@ pub(crate) enum ResourceError {
     /// different: a zero-sized buffer is a bad length, while an unsupported texture
     /// is a description this backend has not been taught.
     UnsupportedTexture,
-    /// The driver refused to create a handle (buffer, image or view).
+    /// The sampler description is internally inconsistent, so it is not a description
+    /// the driver could accept.
+    ///
+    /// Today that is an inverted LOD range. Kept separate from
+    /// [`Self::UnsupportedTexture`] because "this backend has not been taught the
+    /// description" and "this description contradicts itself" are different things
+    /// for a caller to fix.
+    InvalidSampler,
+    /// The driver refused to create a handle (buffer, image, view or sampler).
     Create(vk::Result),
     /// The driver refused to bind memory to the handle.
     Bind(vk::Result),
@@ -108,6 +124,7 @@ pub(crate) struct ResourceTable {
     allocator: GpuAllocator,
     buffers: HashMap<BufferId, BufferRecord>,
     textures: HashMap<TextureId, TextureRecord>,
+    samplers: HashMap<SamplerId, vk::Sampler>,
     next_identity: u64,
 }
 
@@ -127,6 +144,7 @@ impl ResourceTable {
             allocator,
             buffers: HashMap::new(),
             textures: HashMap::new(),
+            samplers: HashMap::new(),
             next_identity: 1,
         }
     }
@@ -139,6 +157,11 @@ impl ResourceTable {
     /// Returns how many textures are live.
     pub(crate) fn texture_count(&self) -> usize {
         self.textures.len()
+    }
+
+    /// Returns how many samplers are live.
+    pub(crate) fn sampler_count(&self) -> usize {
+        self.samplers.len()
     }
 
     /// Returns the driver handle for a live buffer, or `None` for a stale id.
@@ -171,6 +194,14 @@ impl ResourceTable {
     /// rather than recovered from the driver.
     pub(crate) fn texture_desc(&self, id: TextureId) -> Option<TextureDesc> {
         self.texture(id).map(|record| record.desc)
+    }
+
+    /// Returns the handle for a live sampler, or `None` for a stale id.
+    ///
+    /// A sampler has no memory and no view, so the handle is the whole resource and
+    /// this is the only accessor it needs.
+    pub(crate) fn sampler_handle(&self, id: SamplerId) -> Option<vk::Sampler> {
+        self.samplers.get(&id).copied()
     }
 
     /// Creates a buffer of `size` bytes and binds memory to it.
@@ -348,6 +379,38 @@ impl ResourceTable {
             .map_err(|_| ResourceError::Memory)
     }
 
+    /// Creates a sampler from `desc`.
+    ///
+    /// A sampler is the one resource here with nothing to bind and nothing to
+    /// allocate, so creation is a single call and there is no failure path to undo.
+    /// The description is validated first anyway, so an inconsistent one is refused
+    /// with a reason rather than by the driver with a validation error.
+    pub(crate) fn create_sampler(
+        &mut self,
+        desc: &SamplerDescriptor,
+    ) -> Result<SamplerId, ResourceError> {
+        let info = sampler::create_info(desc).ok_or(ResourceError::InvalidSampler)?;
+        // SAFETY: the device is live and owned above this table, and the description
+        // was validated above.
+        let handle = unsafe { self.device.create_sampler(&info, None) }
+            .map_err(ResourceError::Create)?;
+        let id = self.next_id();
+        self.samplers.insert(id, handle);
+        Ok(id)
+    }
+
+    /// Destroys a sampler's handle.
+    ///
+    /// The only teardown step: a sampler owns no memory, refers to no image and has
+    /// no dependency to honour, which is why it neither releases an allocation nor
+    /// waits on another record.
+    pub(crate) fn destroy_sampler(&mut self, id: SamplerId) -> Result<(), ResourceError> {
+        let handle = self.samplers.remove(&id).ok_or(ResourceError::Unknown)?;
+        // SAFETY: the handle was created by this device and is destroyed once.
+        unsafe { self.device.destroy_sampler(handle, None) };
+        Ok(())
+    }
+
     /// Mints the next identity for this device generation.
     ///
     /// One counter serves both kinds, so a buffer and a texture can never be handed
@@ -373,7 +436,14 @@ impl Drop for ResourceTable {
     fn drop(&mut self) {
         // Every allocation must go back to its allocator, and every handle must be
         // destroyed, even when the owner is dropped without destroying them. The
-        // order per resource is the same as `destroy_buffer` / `destroy_texture`.
+        // order per resource is the same as `destroy_buffer` / `destroy_texture` /
+        // `destroy_sampler`; the sampler loop is first only because a sampler has no
+        // dependency on anything, not because anything requires that order.
+        for (_, handle) in self.samplers.drain() {
+            // SAFETY: each handle was created by this device and is destroyed once
+            // here; the device outlives this table by the caller's field order.
+            unsafe { self.device.destroy_sampler(handle, None) };
+        }
         for (_, record) in self.textures.drain() {
             // SAFETY: each view and image was created by this device and is destroyed
             // once here, view before image; the device outlives this table by the
@@ -398,6 +468,7 @@ impl core::fmt::Debug for ResourceTable {
             .field("stamp", &self.stamp)
             .field("buffers", &self.buffers.len())
             .field("textures", &self.textures.len())
+            .field("samplers", &self.samplers.len())
             .finish_non_exhaustive()
     }
 }
@@ -407,6 +478,7 @@ mod tests {
     use super::*;
     use crate::Validation;
     use crate::common::base::stamp::StampMismatch;
+    use crate::common::sampler::{CompareFunction, SamplerDescriptor};
     use crate::native::vulkan::{memory, open};
     use fluxel_rendergraph::{
         BufferUsageKind, Extent3d, TextureDimension, TextureFormat, TextureUsageKind,
@@ -636,5 +708,96 @@ mod tests {
             Err(ResourceError::UnsupportedTexture)
         ));
         assert_eq!(table.texture_count(), 0);
+    }
+
+    #[test]
+    fn a_real_table_creates_looks_up_and_destroys_samplers() {
+        // Step 4's sampler half against the real driver: a sampler owns no memory
+        // and no view, so identity, the handle and destruction are the whole
+        // contract. Skips where no adapter exists.
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        let linear = table
+            .create_sampler(&SamplerDescriptor::linear_clamp())
+            .expect("a linear-clamp sampler");
+        let comparing = table
+            .create_sampler(&SamplerDescriptor {
+                compare: Some(CompareFunction::LessEqual),
+                ..SamplerDescriptor::nearest_clamp()
+            })
+            .expect("a comparison sampler");
+
+        assert_eq!(table.sampler_count(), 2);
+        assert_ne!(linear, comparing, "identities are distinct");
+        assert!(
+            table.sampler_handle(linear).is_some(),
+            "a live sampler has a handle"
+        );
+        // The one identity counter serves every kind, so a sampler cannot be handed
+        // an identity a buffer or texture already used.
+        let buffer = table
+            .create_buffer(
+                256,
+                declared(&[BufferUsageKind::Vertex]),
+                &memory_types,
+                MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local vertex buffer");
+        assert_ne!(buffer.identity(), linear.identity());
+        assert_ne!(buffer.identity(), comparing.identity());
+
+        // A sampler id carries this device generation like any other resource.
+        assert_eq!(linear.verify(table.stamp), Ok(()));
+        assert_eq!(linear.kind_name(), "sampler");
+
+        table.destroy_sampler(linear).expect("sampler released");
+        assert_eq!(table.sampler_count(), 1);
+        assert_eq!(
+            table.sampler_handle(linear),
+            None,
+            "a destroyed id resolves to nothing"
+        );
+        assert_eq!(table.destroy_sampler(linear), Err(ResourceError::Unknown));
+
+        // The second sampler and the buffer are released by the table's own drop,
+        // which must leave nothing behind.
+        drop(table);
+    }
+
+    #[test]
+    fn an_inconsistent_sampler_is_refused_before_the_driver_is_reached() {
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        let inverted = SamplerDescriptor {
+            lod_min_clamp: 4.0,
+            lod_max_clamp: 2.0,
+            ..SamplerDescriptor::nearest_clamp()
+        };
+        assert_eq!(
+            table.create_sampler(&inverted),
+            Err(ResourceError::InvalidSampler)
+        );
+        assert_eq!(table.sampler_count(), 0);
     }
 }
