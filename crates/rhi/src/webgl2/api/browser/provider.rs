@@ -3,7 +3,7 @@
 use web_sys::WebGl2RenderingContext;
 
 use super::super::{
-    BufferId, ContextStamp, GlBufferDesc, GlContextLifecycle, GlError, GlFamilyApi,
+    BufferId, ContextStamp, GlBufferDesc, GlBufferUsage, GlContextLifecycle, GlError, GlFamilyApi,
     GlPixelStoreState, GlRenderBufferDesc, GlResourceApi, GlSamplerApi, GlSamplerDesc,
     GlTextureDesc, GlTextureDimension, OwnerThreadIdentity, RenderbufferId, SamplerId, TextureId,
 };
@@ -19,6 +19,34 @@ use super::objects::BrowserRenderbuffer;
 /// never-resident data may only be introduced after profiling attributes a
 /// benefit (plan "Private: upload-ring/orphaning strategy").
 pub(super) const BUFFER_ALLOCATION_USAGE: u32 = WebGl2RenderingContext::DYNAMIC_DRAW;
+
+/// Whether a usage set asks one buffer to be both an index buffer and a buffer
+/// whose binding point an index buffer can never reach.
+///
+/// A WebGL2 buffer's target is fixed by its *first* bind and cannot be changed
+/// afterwards: binding the buffer to a different target is refused, and
+/// releasing the first binding does not undo it.  Measured on the real adapter
+/// (AMD Radeon 780M through ANGLE/D3D11; the table is in the 0.15 series plan's
+/// 2026-09-17 browser entry):
+///
+/// - A buffer first bound to `ELEMENT_ARRAY_BUFFER` is refused `ARRAY_BUFFER`
+///   and `UNIFORM_BUFFER`, through `bindBuffer` and `bindBufferBase` alike.
+/// - That same buffer still reaches `COPY_READ_BUFFER` and `COPY_WRITE_BUFFER`,
+///   which is what lets the corrected allocation keep using the existing
+///   transfer path instead of needing one of its own.
+/// - A buffer first bound anywhere else reaches every target except
+///   `ELEMENT_ARRAY_BUFFER`, so only the index role has to choose its target.
+///
+/// So index combines with the copy roles and with nothing else, and the roles
+/// it cannot combine with are refused before a driver object exists rather than
+/// at whichever bind happens to come second.
+const fn index_role_cannot_share_its_buffer(usage: GlBufferUsage) -> bool {
+    usage.contains(GlBufferUsage::INDEX)
+        && (usage.contains(GlBufferUsage::VERTEX)
+            || usage.contains(GlBufferUsage::UNIFORM)
+            || usage.contains(GlBufferUsage::STORAGE)
+            || usage.contains(GlBufferUsage::INDIRECT))
+}
 
 impl GlFamilyApi for WebGl2BrowserDiscovery {
     fn lifecycle(&self) -> GlContextLifecycle {
@@ -104,20 +132,63 @@ impl GlResourceApi for WebGl2BrowserDiscovery {
                 "buffer size exceeds exact browser integer range",
             ));
         }
+        if index_role_cannot_share_its_buffer(desc.usage) {
+            return Err(GlError::Unsupported {
+                operation: OP,
+                reason: "an index buffer cannot also serve as a vertex, uniform, storage, or \
+                         indirect buffer: WebGL2 fixes a buffer's binding target at its first \
+                         bind, and a buffer bound as an index buffer can never reach those \
+                         binding points. Create a second buffer for the other role.",
+            });
+        }
         let raw = self
             .raw
             .create_buffer()
             .ok_or(GlError::OutOfMemory { operation: OP })?;
-        // ARRAY_BUFFER is Layer 1-private scratch: bound immediately before the
-        // allocation, not restored on return (`GlCopyDomainApi` documents why).
+        // The target is fixed by this first bind and can never change, so the
+        // role picks it -- once, here (`index_role_cannot_share_its_buffer`
+        // documents which combinations that leaves representable).
+        let is_index = desc.usage.contains(GlBufferUsage::INDEX);
+        let target = if is_index {
+            WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER
+        } else {
+            // ARRAY_BUFFER is Layer 1-private scratch for every other role:
+            // bound immediately before the allocation, not restored on return
+            // (`GlCopyDomainApi` documents why).
+            WebGl2RenderingContext::ARRAY_BUFFER
+        };
+        // ELEMENT_ARRAY_BUFFER is vertex-array state, and the bind is what the
+        // bound array stores: allocating an index buffer under a live vertex
+        // array would overwrite that array's index binding, and rebinding the
+        // array afterwards would not put it back.  Allocating against the
+        // default array leaves every live array untouched.
+        let rebound = if is_index {
+            self.bound_vertex_array
+        } else {
+            None
+        };
+        if rebound.is_some() {
+            self.raw.bind_vertex_array(None);
+        }
+        self.raw.bind_buffer(target, Some(&raw));
         self.raw
-            .bind_buffer(WebGl2RenderingContext::ARRAY_BUFFER, Some(&raw));
-        self.raw.buffer_data_with_f64(
-            WebGl2RenderingContext::ARRAY_BUFFER,
-            desc.size as f64,
-            BUFFER_ALLOCATION_USAGE,
-        );
-        if let Err(error) = self.driver_error(OP) {
+            .buffer_data_with_f64(target, desc.size as f64, BUFFER_ALLOCATION_USAGE);
+        let allocation = self.driver_error(OP);
+        if let Some(vertex_array) = rebound {
+            // The driver holds the default array now, so putting the previous
+            // one back is a plain rebind, and the mirror already says it is
+            // bound -- it is only corrected if the array left the table.
+            let live = self
+                .vertex_arrays
+                .get(&vertex_array.slot)
+                .filter(|entry| entry.generation == vertex_array.generation)
+                .map(|entry| entry.raw.clone());
+            match live {
+                Some(array) => self.raw.bind_vertex_array(Some(&array)),
+                None => self.bound_vertex_array = None,
+            }
+        }
+        if let Err(error) = allocation {
             self.raw.delete_buffer(Some(&raw));
             return Err(error);
         }

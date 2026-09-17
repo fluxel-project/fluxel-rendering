@@ -176,7 +176,13 @@ impl GlCopyDomainApi for WebGl2BrowserDiscovery {
             return Err(validation(OP, "byte length differs from the range"));
         }
         // COPY_WRITE_BUFFER keeps ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER
-        // vertex-state bindings untouched by transfer work.
+        // vertex-state bindings untouched by transfer work, and the two copy
+        // targets are the only ones an index buffer can still reach: creation
+        // allocates it through ELEMENT_ARRAY_BUFFER, and this bind neither
+        // revokes that association nor disturbs any bound vertex array.
+        // Measured on the real adapter (AMD Radeon 780M through ANGLE/D3D11;
+        // see the 0.15 series plan's 2026-09-17 browser entry) -- which is why
+        // an index buffer needs no upload path of its own.
         self.raw.bind_buffer(Gl::COPY_WRITE_BUFFER, Some(&raw));
         self.raw.buffer_sub_data_with_f64_and_u8_array(
             Gl::COPY_WRITE_BUFFER,

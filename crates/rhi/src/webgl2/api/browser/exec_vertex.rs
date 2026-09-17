@@ -178,15 +178,21 @@ impl GlVertexApi for WebGl2BrowserDiscovery {
         // ELEMENT_ARRAY_BUFFER state lives inside the VAO, so the index
         // binding is recorded for draw-time bounds checks and byte offsets.
         if let Some(index) = index {
-            let raw = self
+            let index_raw = self
                 .buffers
                 .get(&index.buffer.slot)
                 .map(|entry| entry.raw.clone())
                 .ok_or_else(|| Self::validation(OP, "index buffer disappeared"))?;
-            self.raw.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&raw));
+            self.raw
+                .bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&index_raw));
         } else {
             self.raw.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, None);
         }
+        // A buffer reaches this binding point only if creation bound it to
+        // ELEMENT_ARRAY_BUFFER first: the target is fixed by that first bind,
+        // and a refusal here means the index buffer was allocated for another
+        // role (`create_buffer_resource` owns that choice).
+        self.driver_error(OP)?;
         let result = self.driver_error(OP);
         match result {
             Ok(()) => {
