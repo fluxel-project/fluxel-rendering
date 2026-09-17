@@ -1,68 +1,88 @@
-//! The buffer table: one owner for handles, allocations and identities.
+//! The resource table: one owner for handles, allocations and identities.
 //!
-//! # Why one table owns all three
+//! # Why one table owns all of them
 //!
 //! `gpu_allocator`'s `free` takes the `Allocation` **by value** and needs
-//! `&mut Allocator`, so a buffer cannot release its own memory when it is dropped:
+//! `&mut Allocator`, so a resource cannot release its own memory when it is dropped:
 //! a `Drop` body has no way to reach the allocator. Releasing memory therefore has
 //! to be driven by whatever owns both, and that is this table. Handing an
 //! `Allocation` out to a caller would be a leak waiting for someone to guess which
 //! allocator frees it, and `gpu_allocator` cannot detect a free sent to the wrong
 //! allocator -- so the structure makes the mistake unrepresentable instead.
 //!
+//! Buffers and textures share the one table rather than each owning an allocator,
+//! because `gpu_allocator` suballocates whole `vkDeviceMemory` blocks: a second
+//! allocator on the same device would be a second set of blocks for memory the
+//! driver cannot move between them. One table also means one identity counter, so a
+//! buffer and a texture can never be handed the same physical identity.
+//!
 //! # Teardown order
 //!
 //! The table holds a clone of the device's `ash::Device`, because destroying a
 //! handle needs it and `Drop` cannot take a parameter. That clone is a handle, not
-//! an owner: the `VkDevice` itself is owned by [`VulkanDevice`](super::device::VulkanDevice),
-//! which must therefore be dropped **after** this table. The owner of both fixes
-//! that by field order, which is the same rule the plan's preserved-semantics table
-//! records for native teardown.
+//! an owner: the `VkDevice` itself is owned by
+//! [`VulkanDevice`](super::device::VulkanDevice), which must therefore be dropped
+//! **after** this table. The owner of both fixes that by field order, which is the
+//! same rule the plan's preserved-semantics table records for native teardown.
 //!
-//! Within the table the order is also fixed: the handle is destroyed first, which is
-//! what unbinds it, and only then is the allocation handed back to the allocator.
-//! That is the order the borrowed Vulkan backend being replaced uses, so the owned
-//! path does not differ behaviorally from the one it supersedes; releasing memory
-//! out from under a live binding would be the difference that matters.
+//! Within the table the order is also fixed. A buffer's handle is destroyed first,
+//! which is what unbinds it, and only then is the allocation handed back to the
+//! allocator. A texture adds one step in front: its view is destroyed before its
+//! image, because a view refers to an image and not the other way round, and the
+//! image is what binds the memory. That is the order the borrowed Vulkan backend
+//! being replaced uses, so the owned path does not differ behaviorally from the one
+//! it supersedes; releasing memory out from under a live binding would be the
+//! difference that matters.
 //!
 //! # Why a hash map rather than an ordered one
 //!
-//! [`BufferId`] is `Eq + Hash` by construction -- it is a stamp plus a physical
-//! identity -- and deliberately not `Ord`: nothing about identity is ordered, and
-//! adding an ordering just to key a table would invent a comparison the rest of the
-//! layer does not have. The records therefore live in a `HashMap`, and teardown
-//! order across buffers is not meaningful.
+//! [`BufferId`] and [`TextureId`] are `Eq + Hash` by construction -- a stamp plus a
+//! physical identity -- and deliberately not `Ord`: nothing about identity is
+//! ordered, and adding an ordering just to key a table would invent a comparison the
+//! rest of the layer does not have. The records therefore live in `HashMap`s, and
+//! teardown order across resources is not meaningful.
 
 use std::collections::HashMap;
 
 use ash::vk;
-use fluxel_rendergraph::{BufferUsage, PhysicalResourceIdentity};
+use fluxel_rendergraph::{BufferUsage, PhysicalResourceIdentity, TextureDesc, TextureUsage};
 
-use crate::common::base::resource::BufferId;
+use crate::common::base::resource::{BufferId, ResourceId, ResourceKind, TextureId};
 use crate::common::base::stamp::DeviceStamp;
 
 use super::allocator::GpuAllocator;
 use super::buffer;
 use super::memory::MemoryPurpose;
+use super::texture;
 
-/// Why a buffer could not be created, found, or destroyed.
+/// Why a resource could not be created, found, or destroyed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BufferError {
-    /// The requested size was zero, which Vulkan does not allow.
+pub(crate) enum ResourceError {
+    /// The requested buffer size was zero, which Vulkan does not allow.
     ///
     /// Refused here rather than passed on, because a driver validation error is a
     /// worse answer than a reason the caller can act on.
     ZeroSize,
-    /// The driver refused to create the handle.
+    /// The texture description names a dimension, format, sample count or extent
+    /// this backend cannot honour.
+    ///
+    /// A different sentence from [`Self::ZeroSize`] because the caller's mistake is
+    /// different: a zero-sized buffer is a bad length, while an unsupported texture
+    /// is a description this backend has not been taught.
+    UnsupportedTexture,
+    /// The driver refused to create a handle (buffer, image or view).
     Create(vk::Result),
     /// The driver refused to bind memory to the handle.
     Bind(vk::Result),
-    /// The id names no live buffer.
+    /// The driver refused to create the image view of a texture.
+    View(vk::Result),
+    /// The id names no live resource of its kind.
     ///
     /// A value rather than a panic, because an id can be stale: it may belong to a
     /// retired device generation, which is the whole reason identities are stamped.
     Unknown,
-    /// The allocation failed. Carried separately because it is not a `vk::Result`.
+    /// The allocation failed, or could not be released. Carried separately because
+    /// it is not a `vk::Result`.
     Memory,
 }
 
@@ -73,16 +93,25 @@ struct BufferRecord {
     size: u64,
 }
 
-/// Every buffer one device generation owns.
-pub(crate) struct BufferTable {
+/// One live texture: its image, the view it is sampled through, and its memory.
+struct TextureRecord {
+    image: vk::Image,
+    view: vk::ImageView,
+    allocation: gpu_allocator::vulkan::Allocation,
+    desc: TextureDesc,
+}
+
+/// Every resource one device generation owns, over one allocator.
+pub(crate) struct ResourceTable {
     device: ash::Device,
     stamp: DeviceStamp,
     allocator: GpuAllocator,
-    records: HashMap<BufferId, BufferRecord>,
+    buffers: HashMap<BufferId, BufferRecord>,
+    textures: HashMap<TextureId, TextureRecord>,
     next_identity: u64,
 }
 
-impl BufferTable {
+impl ResourceTable {
     /// Creates an empty table for one device generation.
     ///
     /// The caller guarantees, by field order, that the device outlives this table;
@@ -96,24 +125,52 @@ impl BufferTable {
             device: device.clone(),
             stamp,
             allocator,
-            records: HashMap::new(),
+            buffers: HashMap::new(),
+            textures: HashMap::new(),
             next_identity: 1,
         }
     }
 
     /// Returns how many buffers are live.
-    pub(crate) fn len(&self) -> usize {
-        self.records.len()
+    pub(crate) fn buffer_count(&self) -> usize {
+        self.buffers.len()
+    }
+
+    /// Returns how many textures are live.
+    pub(crate) fn texture_count(&self) -> usize {
+        self.textures.len()
     }
 
     /// Returns the driver handle for a live buffer, or `None` for a stale id.
-    pub(crate) fn handle(&self, id: BufferId) -> Option<vk::Buffer> {
-        self.record(id).map(|record| record.handle)
+    pub(crate) fn buffer_handle(&self, id: BufferId) -> Option<vk::Buffer> {
+        self.buffer(id).map(|record| record.handle)
     }
 
     /// Returns the created size of a live buffer, or `None` for a stale id.
-    pub(crate) fn size(&self, id: BufferId) -> Option<u64> {
-        self.record(id).map(|record| record.size)
+    pub(crate) fn buffer_size(&self, id: BufferId) -> Option<u64> {
+        self.buffer(id).map(|record| record.size)
+    }
+
+    /// Returns the image handle for a live texture, or `None` for a stale id.
+    ///
+    /// The image rather than the view, because the copy path addresses subresources
+    /// of the image itself.
+    pub(crate) fn texture_image(&self, id: TextureId) -> Option<vk::Image> {
+        self.texture(id).map(|record| record.image)
+    }
+
+    /// Returns the view a live texture is sampled through, or `None` for a stale id.
+    pub(crate) fn texture_view(&self, id: TextureId) -> Option<vk::ImageView> {
+        self.texture(id).map(|record| record.view)
+    }
+
+    /// Returns the description a live texture was created from, or `None` for a
+    /// stale id.
+    ///
+    /// The description is what a copy's range checks address against, so it is kept
+    /// rather than recovered from the driver.
+    pub(crate) fn texture_desc(&self, id: TextureId) -> Option<TextureDesc> {
+        self.texture(id).map(|record| record.desc)
     }
 
     /// Creates a buffer of `size` bytes and binds memory to it.
@@ -122,18 +179,18 @@ impl BufferTable {
     /// reach the driver, and the handle is destroyed again if binding fails: a
     /// half-created buffer that never got memory is not a resource this table may
     /// leave behind.
-    pub(crate) fn create(
+    pub(crate) fn create_buffer(
         &mut self,
         size: u64,
         usage: BufferUsage,
         memory_types: &[vk::MemoryType],
         purpose: MemoryPurpose,
-    ) -> Result<BufferId, BufferError> {
-        let info = buffer::create_info(size, usage).ok_or(BufferError::ZeroSize)?;
+    ) -> Result<BufferId, ResourceError> {
+        let info = buffer::create_info(size, usage).ok_or(ResourceError::ZeroSize)?;
         // SAFETY: the device is live and owned above this table; the description is
         // valid because `create_info` refused a zero size.
-        let handle = unsafe { self.device.create_buffer(&info, None) }
-            .map_err(BufferError::Create)?;
+        let handle =
+            unsafe { self.device.create_buffer(&info, None) }.map_err(ResourceError::Create)?;
 
         // SAFETY: the requirements are read for a handle this table just created.
         let requirements = unsafe { self.device.get_buffer_memory_requirements(handle) };
@@ -145,7 +202,7 @@ impl BufferTable {
             Err(_) => {
                 // SAFETY: the handle has no memory bound and is destroyed once.
                 unsafe { self.device.destroy_buffer(handle, None) };
-                return Err(BufferError::Memory);
+                return Err(ResourceError::Memory);
             }
         };
 
@@ -160,15 +217,11 @@ impl BufferTable {
             // allocation goes back to the allocator that produced it.
             let _ = self.allocator.release(allocation);
             unsafe { self.device.destroy_buffer(handle, None) };
-            return Err(BufferError::Bind(error));
+            return Err(ResourceError::Bind(error));
         }
 
-        let id = BufferId::new(
-            self.stamp,
-            PhysicalResourceIdentity::new(self.next_identity),
-        );
-        self.next_identity += 1;
-        self.records.insert(
+        let id = self.next_id();
+        self.buffers.insert(
             id,
             BufferRecord {
                 handle,
@@ -179,34 +232,157 @@ impl BufferTable {
         Ok(id)
     }
 
+    /// Creates a texture and the view it is sampled through, and binds memory to it.
+    ///
+    /// The view is created as part of the texture rather than on demand, because the
+    /// two share one lifetime: a texture with no view is not a resource a graph may
+    /// sample, and a view outliving its image is invalid. Every failure path
+    /// destroys what it created, in the order Vulkan requires, so a refused texture
+    /// leaves neither a handle nor an allocation behind.
+    pub(crate) fn create_texture(
+        &mut self,
+        desc: TextureDesc,
+        usage: TextureUsage,
+        memory_types: &[vk::MemoryType],
+        purpose: MemoryPurpose,
+    ) -> Result<TextureId, ResourceError> {
+        let info =
+            texture::image_create_info(&desc, usage).ok_or(ResourceError::UnsupportedTexture)?;
+        // SAFETY: the device is live and owned above this table, and the description
+        // was validated above.
+        let image =
+            unsafe { self.device.create_image(&info, None) }.map_err(ResourceError::Create)?;
+
+        // SAFETY: the requirements are read for a handle this table just created.
+        let requirements = unsafe { self.device.get_image_memory_requirements(image) };
+        let allocation = match self
+            .allocator
+            .allocate(&requirements, memory_types, purpose, "fluxel texture")
+        {
+            Ok(allocation) => allocation,
+            Err(_) => {
+                // SAFETY: the image has no memory bound and is destroyed once.
+                unsafe { self.device.destroy_image(image, None) };
+                return Err(ResourceError::Memory);
+            }
+        };
+
+        // SAFETY: the allocation comes from this device's allocator, sized for this
+        // very image, and is bound at the offset the allocation reports. The image is
+        // bound exactly once.
+        if let Err(error) = unsafe {
+            self.device
+                .bind_image_memory(image, allocation.memory(), allocation.offset())
+        } {
+            // SAFETY: nothing is bound, so both are released in either order.
+            let _ = self.allocator.release(allocation);
+            unsafe { self.device.destroy_image(image, None) };
+            return Err(ResourceError::Bind(error));
+        }
+
+        // From here on the image is bound, so teardown is always image first -- that
+        // is what unbinds it -- and allocation release only afterwards.
+        let Some(view_info) = texture::view_create_info(&desc, image) else {
+            // A description that got this far but cannot build a view is one
+            // `image_create_info` should have refused; the image is torn down anyway
+            // rather than left as a resource with no way to be sampled.
+            // SAFETY: the image is bound and destroyed once.
+            unsafe { self.device.destroy_image(image, None) };
+            let _ = self.allocator.release(allocation);
+            return Err(ResourceError::UnsupportedTexture);
+        };
+        // SAFETY: the device is live and the view description refers to the image
+        // this table just created and bound.
+        let view = match unsafe { self.device.create_image_view(&view_info, None) } {
+            Ok(view) => view,
+            Err(error) => {
+                // SAFETY: the image is bound and destroyed once.
+                unsafe { self.device.destroy_image(image, None) };
+                let _ = self.allocator.release(allocation);
+                return Err(ResourceError::View(error));
+            }
+        };
+
+        let id = self.next_id();
+        self.textures.insert(
+            id,
+            TextureRecord {
+                image,
+                view,
+                allocation,
+                desc,
+            },
+        );
+        Ok(id)
+    }
+
     /// Destroys a buffer's handle and returns its memory to the allocator.
     ///
     /// Order matters: the handle is destroyed first, which unbinds the memory, and
     /// the allocation is released only after that. An id that names nothing answers
-    /// [`BufferError::Unknown`] rather than being ignored, because a caller
+    /// [`ResourceError::Unknown`] rather than being ignored, because a caller
     /// destroying a buffer it does not own has a bug that silence would hide.
-    pub(crate) fn destroy(&mut self, id: BufferId) -> Result<(), BufferError> {
-        let record = self.records.remove(&id).ok_or(BufferError::Unknown)?;
+    pub(crate) fn destroy_buffer(&mut self, id: BufferId) -> Result<(), ResourceError> {
+        let record = self.buffers.remove(&id).ok_or(ResourceError::Unknown)?;
         // SAFETY: the handle was created by this device and is destroyed once;
         // destroying it unbinds the memory, which is released only afterwards.
         unsafe { self.device.destroy_buffer(record.handle, None) };
         self.allocator
             .release(record.allocation)
-            .map_err(|_| BufferError::Memory)
+            .map_err(|_| ResourceError::Memory)
     }
 
-    /// Returns a live record, or `None`.
-    fn record(&self, id: BufferId) -> Option<&BufferRecord> {
-        self.records.get(&id)
+    /// Destroys a texture's view and image and returns its memory to the allocator.
+    ///
+    /// The view goes first because it refers to the image, then the image, which
+    /// unbinds the memory, and the allocation only after that.
+    pub(crate) fn destroy_texture(&mut self, id: TextureId) -> Result<(), ResourceError> {
+        let record = self.textures.remove(&id).ok_or(ResourceError::Unknown)?;
+        // SAFETY: the view and image were created by this device and are each
+        // destroyed once, view before image; destroying the image unbinds the memory,
+        // which is released only afterwards.
+        unsafe { self.device.destroy_image_view(record.view, None) };
+        unsafe { self.device.destroy_image(record.image, None) };
+        self.allocator
+            .release(record.allocation)
+            .map_err(|_| ResourceError::Memory)
+    }
+
+    /// Mints the next identity for this device generation.
+    ///
+    /// One counter serves both kinds, so a buffer and a texture can never be handed
+    /// the same identity even though they live in different maps.
+    fn next_id<K: ResourceKind>(&mut self) -> ResourceId<K> {
+        let identity = PhysicalResourceIdentity::new(self.next_identity);
+        self.next_identity += 1;
+        ResourceId::new(self.stamp, identity)
+    }
+
+    /// Returns a live buffer record, or `None`.
+    fn buffer(&self, id: BufferId) -> Option<&BufferRecord> {
+        self.buffers.get(&id)
+    }
+
+    /// Returns a live texture record, or `None`.
+    fn texture(&self, id: TextureId) -> Option<&TextureRecord> {
+        self.textures.get(&id)
     }
 }
 
-impl Drop for BufferTable {
+impl Drop for ResourceTable {
     fn drop(&mut self) {
         // Every allocation must go back to its allocator, and every handle must be
         // destroyed, even when the owner is dropped without destroying them. The
-        // order per buffer is the same as `destroy`'s.
-        for (_, record) in self.records.drain() {
+        // order per resource is the same as `destroy_buffer` / `destroy_texture`.
+        for (_, record) in self.textures.drain() {
+            // SAFETY: each view and image was created by this device and is destroyed
+            // once here, view before image; the device outlives this table by the
+            // caller's field order.
+            unsafe { self.device.destroy_image_view(record.view, None) };
+            unsafe { self.device.destroy_image(record.image, None) };
+            let _ = self.allocator.release(record.allocation);
+        }
+        for (_, record) in self.buffers.drain() {
             // SAFETY: each handle was created by this device and is destroyed once
             // here; the device outlives this table by the caller's field order.
             unsafe { self.device.destroy_buffer(record.handle, None) };
@@ -215,12 +391,13 @@ impl Drop for BufferTable {
     }
 }
 
-impl core::fmt::Debug for BufferTable {
+impl core::fmt::Debug for ResourceTable {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("BufferTable")
+            .debug_struct("ResourceTable")
             .field("stamp", &self.stamp)
-            .field("live", &self.records.len())
+            .field("buffers", &self.buffers.len())
+            .field("textures", &self.textures.len())
             .finish_non_exhaustive()
     }
 }
@@ -231,10 +408,31 @@ mod tests {
     use crate::Validation;
     use crate::common::base::stamp::StampMismatch;
     use crate::native::vulkan::{memory, open};
-    use fluxel_rendergraph::BufferUsageKind;
+    use fluxel_rendergraph::{
+        BufferUsageKind, Extent3d, TextureDimension, TextureFormat, TextureUsageKind,
+    };
 
     fn declared(kinds: &[BufferUsageKind]) -> BufferUsage {
         BufferUsage::from_kinds(kinds.iter().copied())
+    }
+
+    fn texture_desc(format: TextureFormat, sample_count: u32) -> TextureDesc {
+        TextureDesc {
+            dimension: TextureDimension::D2,
+            extent: Extent3d {
+                width: 16,
+                height: 8,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            sample_count,
+            format,
+        }
+    }
+
+    fn texture_usage(kinds: &[TextureUsageKind]) -> TextureUsage {
+        TextureUsage::from_kinds(kinds.iter().copied())
     }
 
     #[test]
@@ -249,14 +447,14 @@ mod tests {
             GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
                 .expect("an allocator for an opened device");
         let memory_types = memory::types(opened.instance.instance(), opened.adapter);
-        let mut table = BufferTable::new(
+        let mut table = ResourceTable::new(
             opened.device.device(),
             opened.device.stamp(),
             allocator,
         );
 
         let first = table
-            .create(
+            .create_buffer(
                 256,
                 declared(&[BufferUsageKind::Vertex]),
                 &memory_types,
@@ -264,7 +462,7 @@ mod tests {
             )
             .expect("a device-local vertex buffer");
         let second = table
-            .create(
+            .create_buffer(
                 512,
                 declared(&[BufferUsageKind::Uniform]),
                 &memory_types,
@@ -272,11 +470,14 @@ mod tests {
             )
             .expect("a device-local uniform buffer");
 
-        assert_eq!(table.len(), 2);
+        assert_eq!(table.buffer_count(), 2);
         assert_ne!(first, second, "identities are distinct");
-        assert_eq!(table.size(first), Some(256));
-        assert_eq!(table.size(second), Some(512));
-        assert!(table.handle(first).is_some(), "a live buffer has a handle");
+        assert_eq!(table.buffer_size(first), Some(256));
+        assert_eq!(table.buffer_size(second), Some(512));
+        assert!(
+            table.buffer_handle(first).is_some(),
+            "a live buffer has a handle"
+        );
 
         // The ids carry this device generation, so a stale one is rejected before
         // it could reach the table.
@@ -289,10 +490,14 @@ mod tests {
             })
         );
 
-        table.destroy(first).expect("first buffer released");
-        assert_eq!(table.len(), 1);
-        assert_eq!(table.handle(first), None, "a destroyed id resolves to nothing");
-        assert_eq!(table.destroy(first), Err(BufferError::Unknown));
+        table.destroy_buffer(first).expect("first buffer released");
+        assert_eq!(table.buffer_count(), 1);
+        assert_eq!(
+            table.buffer_handle(first),
+            None,
+            "a destroyed id resolves to nothing"
+        );
+        assert_eq!(table.destroy_buffer(first), Err(ResourceError::Unknown));
 
         // The second buffer is released by the table's own drop, which must leave
         // nothing behind.
@@ -308,20 +513,128 @@ mod tests {
             GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
                 .expect("an allocator for an opened device");
         let memory_types = memory::types(opened.instance.instance(), opened.adapter);
-        let mut table = BufferTable::new(
+        let mut table = ResourceTable::new(
             opened.device.device(),
             opened.device.stamp(),
             allocator,
         );
         assert!(matches!(
-            table.create(
+            table.create_buffer(
                 0,
                 declared(&[BufferUsageKind::Vertex]),
                 &memory_types,
                 MemoryPurpose::DeviceLocal
             ),
-            Err(BufferError::ZeroSize)
+            Err(ResourceError::ZeroSize)
         ));
-        assert_eq!(table.len(), 0);
+        assert_eq!(table.buffer_count(), 0);
+    }
+
+    #[test]
+    fn a_real_table_creates_an_image_view_and_destroys_them_together() {
+        // The texture half of step 4 against the real driver: the table owns the
+        // image, the memory bound to it and the view it is sampled through, and
+        // releases all three together. Skips where no adapter exists.
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        let described = texture_desc(TextureFormat::Rgba8Unorm, 1);
+        let texture = table
+            .create_texture(
+                described,
+                texture_usage(&[TextureUsageKind::Sampled, TextureUsageKind::CopyDestination]),
+                &memory_types,
+                MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local sampled texture");
+
+        assert_eq!(table.texture_count(), 1);
+        assert_eq!(table.texture_desc(texture), Some(described));
+        assert!(
+            table.texture_image(texture).is_some(),
+            "a live texture has an image"
+        );
+        assert!(
+            table.texture_view(texture).is_some(),
+            "a live texture has the view it is sampled through"
+        );
+        assert_eq!(texture.verify(table.stamp), Ok(()));
+
+        // Both live at once, and one identity counter means the two kinds never
+        // share one: the buffer and the texture are distinguishable even though
+        // their ids are different types.
+        let buffer = table
+            .create_buffer(
+                256,
+                declared(&[BufferUsageKind::Vertex]),
+                &memory_types,
+                MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local vertex buffer");
+        assert_ne!(buffer.identity(), texture.identity());
+
+        table.destroy_texture(texture).expect("texture released");
+        assert_eq!(table.texture_count(), 0);
+        assert_eq!(table.texture_view(texture), None);
+        assert_eq!(table.texture_image(texture), None);
+        assert_eq!(
+            table.destroy_texture(texture),
+            Err(ResourceError::Unknown)
+        );
+
+        // The buffer is released by the table's own drop, which must leave nothing
+        // behind.
+        drop(table);
+    }
+
+    #[test]
+    fn an_unsupported_texture_is_refused_before_the_driver_is_reached() {
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        // Nothing has proved a multisample row and no recipe asks for one.
+        assert!(matches!(
+            table.create_texture(
+                texture_desc(TextureFormat::Rgba8Unorm, 4),
+                texture_usage(&[TextureUsageKind::Sampled]),
+                &memory_types,
+                MemoryPurpose::DeviceLocal
+            ),
+            Err(ResourceError::UnsupportedTexture)
+        ));
+        assert_eq!(table.texture_count(), 0);
+
+        let mut zero = texture_desc(TextureFormat::Rgba8Unorm, 1);
+        zero.extent.width = 0;
+        assert!(matches!(
+            table.create_texture(
+                zero,
+                texture_usage(&[TextureUsageKind::Sampled]),
+                &memory_types,
+                MemoryPurpose::DeviceLocal
+            ),
+            Err(ResourceError::UnsupportedTexture)
+        ));
+        assert_eq!(table.texture_count(), 0);
     }
 }

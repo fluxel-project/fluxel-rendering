@@ -123,6 +123,7 @@ pub(crate) mod allocator;
 /// Step 4's pure half: portable texture descriptions lowered onto Vulkan.
 pub(crate) mod texture;
 
-/// Step 4's owning half: the buffer table, which holds handles, allocations and
-/// identities together so memory cannot be freed through the wrong allocator.
+/// Step 4's owning half: the resource table, which holds handles (buffers, images
+/// and the views sampled through them), allocations and identities together so
+/// memory cannot be freed through the wrong allocator.
 pub(crate) mod resource;

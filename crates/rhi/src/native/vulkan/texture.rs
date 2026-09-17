@@ -85,6 +85,60 @@ pub(crate) fn aspect(format: vk::Format) -> vk::ImageAspectFlags {
     }
 }
 
+/// The `Vulkan` image-view type for one portable description.
+///
+/// A two-dimensional description with more than one layer is an *array* view rather
+/// than a single slice: the caller declared layers, and a `TYPE_2D` view of a layered
+/// image silently selects layer zero, which is a different resource than the one the
+/// graph described. A dimension this backend has not been taught is refused for the
+/// same reason [`image_type`] refuses it.
+pub(crate) fn view_type(desc: &TextureDesc) -> Option<vk::ImageViewType> {
+    Some(match desc.dimension {
+        TextureDimension::D1 => vk::ImageViewType::TYPE_1D,
+        TextureDimension::D2 => {
+            if desc.array_layers.max(1) > 1 {
+                vk::ImageViewType::TYPE_2D_ARRAY
+            } else {
+                vk::ImageViewType::TYPE_2D
+            }
+        }
+        TextureDimension::D3 => vk::ImageViewType::TYPE_3D,
+        // A dimension added upstream, which this backend has not been taught.
+        _ => return None,
+    })
+}
+
+/// The create-info for the view a caller samples an image through.
+///
+/// The view spans exactly the levels and layers the description declared, so a
+/// caller cannot sample a mip the graph did not name, and its aspect is asked of the
+/// mapped `Vulkan` format rather than the portable one, so the depth question keeps
+/// the single source of truth [`aspect`] exists for. The component mapping is left at
+/// its default identity swizzle, which is what "the image's own channels" means.
+///
+/// Returns `None` wherever this backend cannot build the view, which is the same set
+/// of descriptions [`image_create_info`] refuses: a view of an image this backend
+/// cannot create is not a thing to build.
+pub(crate) fn view_create_info(
+    desc: &TextureDesc,
+    image: vk::Image,
+) -> Option<vk::ImageViewCreateInfo<'static>> {
+    let format = super::format::image_format(desc.format)?;
+    Some(
+        vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(view_type(desc)?)
+            .format(format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: aspect(format),
+                base_mip_level: 0,
+                level_count: desc.mip_levels.max(1),
+                base_array_layer: 0,
+                layer_count: desc.array_layers.max(1),
+            }),
+    )
+}
+
 /// The create-info for an image described by `desc` and used exactly as `usage`
 /// states.
 ///
@@ -236,6 +290,76 @@ mod tests {
             image_type(TextureDimension::D3),
             Some(vk::ImageType::TYPE_3D)
         );
+    }
+
+    #[test]
+    fn a_layered_two_dimensional_texture_gets_an_array_view() {
+        // A `TYPE_2D` view of a layered image silently selects layer zero, which is
+        // a different resource than the one the description named.
+        let single = desc(TextureFormat::Rgba8Unorm, 1);
+        assert_eq!(view_type(&single), Some(vk::ImageViewType::TYPE_2D));
+
+        let mut layered = single;
+        layered.array_layers = 4;
+        assert_eq!(view_type(&layered), Some(vk::ImageViewType::TYPE_2D_ARRAY));
+    }
+
+    #[test]
+    fn each_dimension_maps_to_its_own_view_type() {
+        let mut one = desc(TextureFormat::Rgba8Unorm, 1);
+        one.dimension = TextureDimension::D1;
+        assert_eq!(view_type(&one), Some(vk::ImageViewType::TYPE_1D));
+
+        let mut three = desc(TextureFormat::Rgba8Unorm, 1);
+        three.dimension = TextureDimension::D3;
+        assert_eq!(view_type(&three), Some(vk::ImageViewType::TYPE_3D));
+    }
+
+    #[test]
+    fn a_view_spans_the_declared_levels_and_layers_and_the_colour_aspect() {
+        let mut described = desc(TextureFormat::Rgba8Unorm, 1);
+        described.mip_levels = 3;
+        described.array_layers = 2;
+        let info = view_create_info(&described, vk::Image::null()).expect("a supported view");
+        assert_eq!(info.view_type, vk::ImageViewType::TYPE_2D_ARRAY);
+        assert_eq!(info.format, vk::Format::R8G8B8A8_UNORM);
+        assert_eq!(
+            info.subresource_range.aspect_mask,
+            vk::ImageAspectFlags::COLOR
+        );
+        assert_eq!(info.subresource_range.base_mip_level, 0);
+        assert_eq!(info.subresource_range.level_count, 3);
+        assert_eq!(info.subresource_range.base_array_layer, 0);
+        assert_eq!(info.subresource_range.layer_count, 2);
+        // The default component mapping is the identity swizzle, which is what "the
+        // image's own channels" means. Compared field by field because ash's
+        // `ComponentMapping` derives no `PartialEq`.
+        assert!(info.components.r == vk::ComponentSwizzle::IDENTITY);
+        assert!(info.components.g == vk::ComponentSwizzle::IDENTITY);
+        assert!(info.components.b == vk::ComponentSwizzle::IDENTITY);
+        assert!(info.components.a == vk::ComponentSwizzle::IDENTITY);
+    }
+
+    #[test]
+    fn a_depth_texture_view_takes_the_depth_aspect() {
+        let info = view_create_info(&desc(TextureFormat::Depth32Float, 1), vk::Image::null())
+            .expect("a supported view");
+        assert_eq!(
+            info.subresource_range.aspect_mask,
+            vk::ImageAspectFlags::DEPTH
+        );
+    }
+
+    #[test]
+    fn zero_levels_or_layers_become_the_one_the_image_was_created_with() {
+        // The image lowering floors both at one, so the view has to span the same
+        // range or it would name levels the image does not have.
+        let mut sparse = desc(TextureFormat::Rgba8Unorm, 1);
+        sparse.mip_levels = 0;
+        sparse.array_layers = 0;
+        let info = view_create_info(&sparse, vk::Image::null()).expect("a supported view");
+        assert_eq!(info.subresource_range.level_count, 1);
+        assert_eq!(info.subresource_range.layer_count, 1);
     }
 
     #[test]
