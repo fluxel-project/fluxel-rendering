@@ -26,6 +26,7 @@
 
 use ash::vk;
 
+use crate::common::base::stamp::DeviceStamp;
 use crate::common::caps::{
     AdapterLimits, Capability, CapabilityEvidence, CapabilityFact, CapabilityLedger, OperationProbe,
 };
@@ -79,6 +80,7 @@ pub(crate) struct VulkanDevice {
     queue: vk::Queue,
     selected: SelectedQueue,
     ledger: CapabilityLedger,
+    stamp: DeviceStamp,
 }
 
 impl VulkanDevice {
@@ -95,6 +97,16 @@ impl VulkanDevice {
     /// Returns the family and queue index the device was created with.
     pub(crate) const fn selected_queue(&self) -> SelectedQueue {
         self.selected
+    }
+
+    /// Returns this device generation's stamp.
+    ///
+    /// One device is one generation: this backend has no recovery path yet, so the
+    /// first generation is the only one. Every resource id is stamped with this
+    /// value, which is what lets a stale id from a replaced device be refused
+    /// without consulting any table.
+    pub(crate) const fn stamp(&self) -> DeviceStamp {
+        self.stamp
     }
 }
 
@@ -216,6 +228,11 @@ pub(crate) fn open(
         queue,
         selected,
         ledger: ledger(selected, limits),
+        // The first generation of a freshly identified device. Identity comes from
+        // the crate's monotonic counter, which is unique among live devices; the
+        // generation advances only when a device is replaced, which this backend
+        // does not yet do.
+        stamp: DeviceStamp::initial(fluxel_rendergraph::DeviceIdentity::new(crate::next_identity())),
     })
 }
 

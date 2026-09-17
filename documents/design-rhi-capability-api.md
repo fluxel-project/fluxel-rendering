@@ -311,10 +311,11 @@ layer is private (`crates/rhi/src/common/`), and ADR-0006/0007 continue to hold.
 | `api::{family, handle, negotiate}` | implemented, tested |
 | `api::{graphics, families}` | vocabulary complete; no backend implements them yet |
 | `vertex`, `sampler` | implemented, tested |
-| Vulkan (`native::vulkan`) | steps 1-2 done and proven on real hardware; memory types, format/dimension mapping and real buffer/image handle creation done; steps 3-11 not started |
+| Vulkan (`native::vulkan`) | steps 1-3 done and proven on real hardware; format/dimension mapping, real buffer/image handles, and the buffer table that owns handles plus allocations done; step 4's texture/view/sampler owning half and steps 5-11 not started |
 | DX12, Metal | not started; both are 0.16 |
 | GL family, browser WebGPU, compressed formats | **0.17**, not 0.16 |
 
-Test evidence: `common::` and `native::` hold 100+ unit tests, and two
-Vulkan tests open a real instance, adapter and `VkDevice` on this machine. Clippy
+Test evidence: `common::` and `native::` hold 100+ unit tests, and the Vulkan tests
+that open a real instance, adapter and `VkDevice` on this machine now cover memory
+selection, suballocation, buffer and image handles, and the buffer table. Clippy
 is clean under `-D warnings` for all-features and no-default-features.
