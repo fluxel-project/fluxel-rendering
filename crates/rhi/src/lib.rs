@@ -36,6 +36,18 @@ use core::fmt;
 pub(crate) use std::collections::HashMap;
 use std::sync::Arc;
 
+/// The common layer: one RHI-semantics contract that every backend implements.
+///
+/// Private by design (lead 3F, decision G): it is not part of this crate's
+/// semver surface, it names no platform crate, and it holds the required floor
+/// plus one trait per optional capability domain.
+mod common;
+/// The native modern family: Direct3D 12, Vulkan and Metal (lead 3F, W2-W5).
+///
+/// A grouping for readers, not a shared implementation: each backend implements
+/// the common layer directly and owns its own barriers, descriptors, encoders,
+/// memory and shader compilation.
+mod native;
 mod execution;
 /// Explicitly unstable APIs for closed vertical slices.
 ///
