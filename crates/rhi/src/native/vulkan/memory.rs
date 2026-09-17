@@ -73,6 +73,50 @@ fn is_legal(requirements: &vk::MemoryRequirements, index: usize) -> bool {
     requirements.memory_type_bits & bit != 0
 }
 
+/// What a resource's memory is for.
+///
+/// This is the input both to [`required_flags`] and, one step later, to
+/// `gpu-allocator`'s location choice. Naming the purpose rather than repeating a
+/// property set at each call site is what keeps a device-local resource from being
+/// created host-visible because someone copied the wrong flags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MemoryPurpose {
+    /// Memory the GPU reads and writes: sampled images, attachments, vertex,
+    /// index, uniform and storage buffers.
+    DeviceLocal,
+    /// Host-written memory the GPU reads: the staging side of an upload.
+    UploadStaging,
+    /// Host-read memory the GPU has written: the staging side of a readback.
+    ReadbackStaging,
+}
+
+/// The properties a resource of `purpose` requires.
+///
+/// The three sets are the smallest that serve their purpose:
+///
+/// - **device-local** asks for nothing but `DEVICE_LOCAL`, so the driver may pick
+///   any type of that class. `HOST_VISIBLE` is deliberately not requested, because
+///   asking for memory the CPU can reach costs bandwidth on a discrete GPU and the
+///   GPU does not need the CPU for these resources.
+/// - **upload staging** asks for `HOST_VISIBLE | HOST_COHERENT`. Coherence matters
+///   because the upload writes and then submits without an explicit flush; a
+///   non-coherent type would need a flush this path does not perform.
+/// - **readback staging** asks for `HOST_VISIBLE | HOST_CACHED`. `HOST_CACHED` is
+///   the read-side counterpart of coherence: a cached host type is what makes
+///   reading the mapped bytes back cheap, and a readback that landed in uncached
+///   memory would work and be slow rather than work and be fast.
+pub(crate) fn required_flags(purpose: MemoryPurpose) -> vk::MemoryPropertyFlags {
+    match purpose {
+        MemoryPurpose::DeviceLocal => vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        MemoryPurpose::UploadStaging => {
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
+        }
+        MemoryPurpose::ReadbackStaging => {
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_CACHED
+        }
+    }
+}
+
 /// The memory types one adapter reports, in the driver's own order.
 ///
 /// The driver writes a fixed-width array plus a count; this returns exactly the
@@ -182,6 +226,79 @@ mod tests {
                 considered: 1,
             })
         );
+    }
+
+    #[test]
+    fn a_device_local_resource_does_not_ask_for_host_visibility() {
+        // Asking for memory the CPU can reach would cost bandwidth on a discrete
+        // GPU, and the GPU does not need the CPU for these resources.
+        let flags = required_flags(MemoryPurpose::DeviceLocal);
+        assert!(flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL));
+        assert!(!flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE));
+    }
+
+    #[test]
+    fn upload_staging_is_host_visible_and_coherent() {
+        // Coherent, because the upload path writes and submits without a flush.
+        let flags = required_flags(MemoryPurpose::UploadStaging);
+        assert!(flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE));
+        assert!(flags.contains(vk::MemoryPropertyFlags::HOST_COHERENT));
+        assert!(!flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL));
+    }
+
+    #[test]
+    fn readback_staging_is_host_visible_and_cached() {
+        // Cached is the read-side counterpart of coherence: it is what makes
+        // reading the mapped bytes cheap.
+        let flags = required_flags(MemoryPurpose::ReadbackStaging);
+        assert!(flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE));
+        assert!(flags.contains(vk::MemoryPropertyFlags::HOST_CACHED));
+    }
+
+    #[test]
+    fn the_three_purposes_ask_for_three_different_sets() {
+        // A caller cannot reach one purpose's flags by copying another's.
+        let sets = [
+            required_flags(MemoryPurpose::DeviceLocal),
+            required_flags(MemoryPurpose::UploadStaging),
+            required_flags(MemoryPurpose::ReadbackStaging),
+        ];
+        for (index, flags) in sets.iter().enumerate() {
+            for (other_index, other) in sets.iter().enumerate() {
+                if index != other_index {
+                    assert_ne!(flags, other, "{index} and {other_index} agree");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_purpose_is_selectable_from_real_driver_memory_types() {
+        // The purposes are checked against what this machine's driver actually
+        // reports, so a property set no adapter can satisfy is caught here rather
+        // than at the first upload. Skips where no adapter exists.
+        use crate::Validation;
+        use crate::native::vulkan::open;
+
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let reported = types(opened.instance.instance(), opened.adapter);
+        let requirements = vk::MemoryRequirements {
+            size: 4096,
+            alignment: 64,
+            memory_type_bits: (1u32 << reported.len().min(31)) - 1,
+        };
+        for purpose in [
+            MemoryPurpose::DeviceLocal,
+            MemoryPurpose::UploadStaging,
+            MemoryPurpose::ReadbackStaging,
+        ] {
+            assert!(
+                select(&requirements, &reported, required_flags(purpose)).is_ok(),
+                "{purpose:?} is not satisfiable on this adapter"
+            );
+        }
     }
 
     #[test]
