@@ -43,6 +43,7 @@ use std::time::Instant;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use super::readback;
 use super::workload::{self, DrawCost};
 use crate::webgl2::api::{
     ContextEpoch, ContextStamp, DeviceIdentity, NativeGlProvider, WglContextSurface,
@@ -51,6 +52,38 @@ use crate::webgl2::conformance::{self, DesktopGl4ContextReport};
 use crate::webgl2::state::ExecutionMode;
 
 pub use super::workload::DomainTally;
+
+/// The pixels the frame left in its exported colour target.
+///
+/// Deliberately plain data with no accessor: the consumer is an out-of-workspace
+/// fixture that writes them to a file, and every type on the path that produced
+/// them is crate-private.
+///
+/// The row order is carried rather than left to the reader because it is the one
+/// property of these bytes that a consumer can silently get wrong and still
+/// produce a plausible-looking image.  The family's copy verbs follow the GL
+/// bottom-left convention, so the first row here is the *bottom* one and an
+/// image written straight out would be upside down.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ColourReadback {
+    /// The pixel extent that was read.
+    pub extent: [u32; 2],
+    /// Four eight-bit channels per pixel, `extent[0] * extent[1] * 4` bytes.
+    pub bytes: Vec<u8>,
+    /// The row order [`Self::bytes`] is in.
+    pub row_order: &'static str,
+}
+
+impl ColourReadback {
+    /// The readback as this report states it.
+    fn from_pixels(pixels: readback::TexturePixels) -> Self {
+        Self {
+            extent: pixels.extent,
+            bytes: pixels.bytes,
+            row_order: "gl-bottom-left",
+        }
+    }
+}
 
 /// What one driven run of the workload cost, together with the context it ran on.
 ///
@@ -116,6 +149,14 @@ pub struct DesktopGl4DrawReport {
     pub total_nanos: u64,
     /// The extent the context was opened for.
     pub drawable_extent: [u32; 2],
+    /// What the frame left in its exported colour target, when the caller asked
+    /// for it.
+    ///
+    /// `None` means the caller asked for a cost and no picture, and it is the
+    /// only thing that distinguishes such a run: the readback is a GL call on the
+    /// clocked path, so a run that does not want the pixels must not pay for
+    /// them, and one that does gets them measured inside `total_nanos`.
+    pub colour: Option<ColourReadback>,
 }
 
 impl DesktopGl4DrawReport {
@@ -127,7 +168,11 @@ impl DesktopGl4DrawReport {
     /// A `Deref` or an embedded field would tie the public report's shape to the
     /// shared one, and the shared one is free to change when the funnel adds
     /// variety to the workload.
-    fn from_cost(context: DesktopGl4ContextReport, cost: DrawCost) -> Self {
+    fn from_cost(
+        context: DesktopGl4ContextReport,
+        cost: DrawCost,
+        colour: Option<ColourReadback>,
+    ) -> Self {
         Self {
             context,
             mode: cost.mode,
@@ -147,6 +192,7 @@ impl DesktopGl4DrawReport {
             submit_nanos: cost.submit_nanos,
             total_nanos: cost.total_nanos,
             drawable_extent: cost.drawable_extent,
+            colour,
         }
     }
 }
@@ -157,6 +203,15 @@ impl DesktopGl4DrawReport {
 /// `mode` is `"optimized"` or `"oracle"`; `draws` must be nonzero.  The context
 /// is made current on the calling thread, driven, and destroyed before this
 /// returns, so nothing borrowed from `host` outlives it.
+///
+/// `read_colour` asks for the frame's own picture as well as its cost.  It is a
+/// parameter and not a second entry point because the two cannot be separated:
+/// the readback has to happen inside the one call that still holds the frame's
+/// lease, so a caller who wants both cannot get them from two calls.  A caller
+/// who wants only the cost passes `false` and pays nothing for a readback, which
+/// is the shape every measurement in the funnel uses -- the readback is a GL
+/// command pair on the clocked path, and a cost that silently carried one would
+/// not be the cost the funnel compared.
 ///
 /// # Errors
 ///
@@ -170,6 +225,7 @@ pub fn drive_desktop_gl4_draws<H>(
     identity: u64,
     mode: &str,
     draws: u32,
+    read_colour: bool,
 ) -> Result<DesktopGl4DrawReport, String>
 where
     H: HasWindowHandle + HasDisplayHandle,
@@ -211,13 +267,36 @@ where
     let epoch = Instant::now();
     let now_nanos = || epoch.elapsed().as_nanos() as u64;
 
+    // Where the readback lands, when one was asked for.  It is a local rather
+    // than a return value because the hook that fills it cannot be the thing
+    // that returns: the hook runs *inside* the frame, and the report it feeds is
+    // assembled after the context has closed.
+    let mut readback: Option<readback::TexturePixels> = None;
     let outcome = context.with_current("drive the representative workload", |gl| {
         // SAFETY: `with_current` made this context current on this thread and
         // owns it for the whole call, and `snapshot` is the evidence this exact
         // context produced during its own discovery -- which is the pair of
         // conditions `from_discovered` requires.
         let backend = unsafe { NativeGlProvider::from_discovered(gl, snapshot.clone()) };
-        Ok(workload::drive(backend, mode, draws, extent, now_nanos))
+        let pixels = &mut readback;
+        Ok(workload::drive_with(
+            backend,
+            mode,
+            draws,
+            extent,
+            now_nanos,
+            move |device, texture| {
+                // A run that asked for no picture reads nothing, so its clocked
+                // path is the one every other measurement takes.
+                if !read_colour {
+                    return Ok(());
+                }
+                *pixels = Some(device.read_texture(texture).map_err(|error| {
+                    format!("the frame's colour target was not readable: {error:?}")
+                })?);
+                Ok(())
+            },
+        ))
     });
     match outcome {
         Err(error) => Err(format!(
@@ -227,7 +306,11 @@ where
         // about this frame rather than about the context, and prefixing them with
         // a context failure would point a reader at the driver.
         Ok(Err(inner)) => Err(inner),
-        Ok(Ok(cost)) => Ok(DesktopGl4DrawReport::from_cost(reading, cost)),
+        Ok(Ok(cost)) => Ok(DesktopGl4DrawReport::from_cost(
+            reading,
+            cost,
+            readback.map(ColourReadback::from_pixels),
+        )),
     }
 }
 

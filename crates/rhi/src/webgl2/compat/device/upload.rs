@@ -47,9 +47,9 @@
 //!
 //! The adapter checks one thing per arm: that the object is one *this device*
 //! created, which is also what gives it the facts the verb needs -- a buffer's
-//! allocation size, a texture's extent and format.  Those records are adapter
-//! knowledge -- Layer 1 exposes no verb that reads a descriptor back, and an
-//! identity names an object rather than describing one -- and they are the same
+//! allocation size, a texture's extent, shape and format.  Those records are
+//! adapter knowledge -- Layer 1 exposes no verb that reads a descriptor back, and
+//! an identity names an object rather than describing one -- and they are the same
 //! records [`Self::storage_range`] and the pass lowering read for the identical
 //! reason, kept and dropped beside the creation that wrote them so an identity
 //! reused after a deletion cannot resolve to its predecessor's facts.
@@ -64,25 +64,24 @@
 //! no driver command has been issued.
 //!
 //! The texture arm's *own* two refusals -- a dimension and a format this family
-//! cannot transfer a rectangle for -- are the exception, and only because they
-//! are facts the adapter is the first to know rather than rules Layer 1 applies.
-//! Both are conditions of the family, not of the request, so they refuse as
-//! [`unsupported`] rather than as a validation failure.
+//! cannot transfer a rectangle for -- are the exception, and they are not stated
+//! here either: they are [`super::transfer`]'s, because
+//! [`Self::read_texture`](super::GlCompatibilityDevice::read_texture) reads the
+//! same rectangle back out and must refuse the same shapes as this verb fills.
+//! This arm passes the record and its own operation name and does nothing else
+//! with them.
 //!
 //! Nothing is batched and nothing is staged: one call is one upload.  §1 of the
 //! plan forbids building the framework ahead of the consumer, and the consumer
 //! this exists for is one imported vertex stream and one imported sampled image.
 
-use crate::webgl2::api::{
-    BufferId, GlError, GlFormat, GlPixelFormat, GlPixelLayout, GlRepackPolicy, GlTextureDimension,
-    GlTextureRegion, TextureId,
-};
+use crate::webgl2::api::{BufferId, GlError, TextureId};
 
 use super::GlCompatibilityDevice;
 use super::compute::ComputeDomain;
-use super::failure::{malformed, unsupported};
-use super::pass;
+use super::failure::malformed;
 use super::region;
+use super::transfer;
 use crate::webgl2::state::GlStateBackend;
 
 impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
@@ -123,8 +122,8 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     /// The bytes are the attachment's pixels, tightly packed in the one client
     /// encoding this family transfers, and the caller states nothing else: the
     /// extent is the attachment's, and the row pitch, the image height and the
-    /// layer all follow from it.  [`addressing`] argues why that is the only
-    /// shape of upload this verb offers and what it refuses instead.
+    /// layer all follow from it.  [`transfer::whole_level`] argues why that is the
+    /// only shape of transfer this family offers and what it refuses instead.
     ///
     /// As on the buffer arm, an identity this device did not create -- or one of
     /// its own that has already been destroyed -- is refused against the adapter's
@@ -143,102 +142,7 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
                 "an upload names a texture this device did not create",
             ));
         };
-        let (region, layout) = addressing(texture, facts)?;
+        let (region, layout) = transfer::whole_level(texture, facts, OP)?;
         self.machine.backend().upload_texture(region, layout, bytes)
     }
-}
-
-/// The region and client layout a whole-level upload of one recorded texture
-/// implies.
-///
-/// The two are derived together because neither is a free choice: the region's
-/// extent is the attachment's own, and the layout is that extent's tight packing
-/// in the one client encoding this family transfers.  Returning them as a pair
-/// keeps the caller from pairing a region with a layout derived from a different
-/// extent, which is the mistake the derivation exists to prevent.
-///
-/// # Why only a two-dimensional attachment
-///
-/// Because a rectangle is the only thing a whole-level upload can be *said* to
-/// cover here.  For a two-dimensional attachment that rectangle is its whole
-/// extent, and the question never arises.  For a `D3` or an arrayed one it is one
-/// slice of several, and the subresource addressing that would have to name
-/// *which* slices is exactly what [`region::texture_region`] pins at one layer
-/// for the copy verbs' reason -- so a verb that accepted one would be claiming
-/// the whole of a level it was about to fill a fraction of.  Refusing keeps that
-/// a named gap rather than a silent partial upload, and closing it is a question
-/// about layer ranges and not about this verb.
-///
-/// A one-dimensional attachment is refused by the same test, and it is the one
-/// case where the rectangle genuinely is the whole level: what is missing there
-/// is not the addressing but the binding, since no point in this family samples a
-/// `D1` texture at all, so there is no consumer a verb for it would serve.
-///
-/// # Why the refusal is unsupported and the overflow is not
-///
-/// The dimension and the format are facts about what this family can transfer, so
-/// the same sentence is true of every caller and a caller cannot fix either one.
-/// A width whose row does not fit in the layout's own 32-bit pitch field is not
-/// that -- it is a fact about this attachment -- and it is stated as a validation
-/// failure for the same reason.  It is also unreachable through the public path,
-/// since a texture this wide cannot be created in the first place; it is checked
-/// rather than asserted because the arithmetic is Layer 1's own spelling too, and
-/// a saturating or wrapping one here would be a quiet way to upload the wrong
-/// number of bytes.
-///
-/// The format rule is the one decision here that Layer 1 also makes, and the
-/// overlap is worth stating rather than hiding.  Both executable providers accept
-/// a CPU pixel upload for exactly the two RGBA8 formats this match names, so the
-/// pair is stated twice.  What makes that safe is which way the two can diverge:
-/// this match is the *narrower* place by construction, since it can only ever
-/// refuse a call the provider would have accepted, and a verb that refuses is
-/// wrong in a way a caller sees and reports.  A provider that widened its pair
-/// without widening this one would cost an upload, never a mis-transfer.
-fn addressing(
-    texture: TextureId,
-    facts: pass::Attachment,
-) -> Result<(GlTextureRegion, GlPixelLayout), GlError> {
-    const OP: &str = "upload-texture";
-    if !matches!(facts.dimension(), GlTextureDimension::D2) {
-        return Err(unsupported(
-            OP,
-            "this verb fills a whole two-dimensional level, which is not the shape this attachment was created with",
-        ));
-    }
-    // The two formats this verb can state a client encoding for.  Both are four
-    // eight-bit channels on the client side, which is why one encoding covers the
-    // pair, and the family's other two creatable formats -- the half-float one,
-    // which has no client encoding in this vocabulary at all, and the depth one,
-    // whose encoding no provider transfers -- are refused below.
-    let format = match facts.format() {
-        GlFormat::Rgba8Unorm | GlFormat::Rgba8Srgb => GlPixelFormat::Rgba8,
-        _ => {
-            return Err(unsupported(
-                OP,
-                "this verb states a client encoding for the two RGBA8 formats this family transfers, and this attachment is not one of them",
-            ));
-        }
-    };
-    let (width, height) = facts.extent();
-    let Some(bytes_per_row) = width.checked_mul(format.bytes_per_pixel()) else {
-        return Err(malformed(
-            OP,
-            "this attachment's rows are too wide to state as a client row pitch",
-        ));
-    };
-    // The pitch is the packed width and the alignment divides it, so the pair is
-    // always expressible by GL pixel-store and a repack can never be asked for.
-    // `Disallow` says that rather than leaving a bound nobody chose.
-    let layout = GlPixelLayout {
-        format,
-        bytes_per_row,
-        rows_per_image: height,
-        offset: 0,
-        alignment: 4,
-        repack: GlRepackPolicy::Disallow,
-    };
-    Ok((
-        region::texture_region(texture, 0, [0, 0, 0], [width, height, 1]),
-        layout,
-    ))
 }

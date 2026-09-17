@@ -58,8 +58,18 @@ pub use crate::webgl2::conformance::{DesktopGl4ContextReport, observe_desktop_gl
 /// mode a renderer runs is not a choice the common contract offers, and a
 /// differential whose two halves silently ran the same mode would be worse than
 /// one that failed.
+///
+/// A caller may also ask for the frame's own picture, and that is what keeps this
+/// entry inside the rule rather than outside it: the pixels are of a texture this
+/// crate created, rendered by the frame it drove, and read back before the
+/// context dies -- a reading of the run, not a handle on it.  It is opt-in
+/// because the readback costs a GL command pair on the clocked path, so a
+/// measurement that did not ask for a picture is the same measurement it was
+/// before the parameter existed.
 #[cfg(all(windows, feature = "native-gl-wgl", feature = "test-support"))]
-pub use crate::webgl2::compat::{DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws};
+pub use crate::webgl2::compat::{
+    ColourReadback, DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws,
+};
 
 /// RAII latch for exactly one later successful DX12 presentation completion.
 ///

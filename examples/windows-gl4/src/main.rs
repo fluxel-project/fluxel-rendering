@@ -24,16 +24,32 @@
 //! the context reading with it, and a run that asks for no workload prints
 //! exactly the object it printed before the flag existed.
 //!
+//! # The third thing it can be asked for
+//!
+//! With `--readback PATH` the workload run also reads its colour target back and
+//! writes the raw bytes to `PATH`, so that the picture a real desktop GL4 context
+//! produced can be *looked at* and not only counted.  The pixels are reported in
+//! the same JSON by value as well, because the target is a fixed four-by-four and
+//! a reviewer checking coverage and orientation should not have to decode a file
+//! to do it.
+//!
+//! The bytes are written in the order the family produced them and the report
+//! says which order that is; nothing here flips them.  A fixture that reversed
+//! rows would be inventing an interpretation, and the one thing a consumer of
+//! this output must not have to guess is whether the image is upside down.
+//!
 //! ```powershell
 //! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --frames 1
 //! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --draws 2000 --mode oracle
+//! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --draws 1 --readback target/evidence/gl4.rgba
 //! ```
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use fluxel_host::{Window, WindowConfig};
 use fluxel_rhi::test_support::{
-    DesktopGl4ContextReport, DesktopGl4DrawReport, drive_desktop_gl4_draws,
+    ColourReadback, DesktopGl4ContextReport, DesktopGl4DrawReport, drive_desktop_gl4_draws,
     observe_desktop_gl4_context,
 };
 
@@ -55,6 +71,7 @@ fn main() -> ExitCode {
     let mut draws = 0_u32;
     let mut mode = String::from("optimized");
     let mut mode_given = false;
+    let mut readback: Option<PathBuf> = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -89,11 +106,25 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
+            "--readback" => match arguments.next() {
+                Some(path) => readback = Some(PathBuf::from(path)),
+                None => {
+                    eprintln!("--readback wants the path to write the colour target to");
+                    return ExitCode::from(2);
+                }
+            },
             other => {
                 eprintln!("unknown argument {other}");
                 return ExitCode::from(2);
             }
         }
+    }
+    if readback.is_some() && draws == 0 {
+        // There is no frame to read a picture out of, and the alternative --
+        // opening a context, driving nothing and writing a file of zeroes --
+        // would be evidence of a frame that never happened.
+        eprintln!("--readback only means something with --draws: without a workload there is no frame to read");
+        return ExitCode::from(2);
     }
     if mode_given && draws == 0 {
         // The entry refuses a zero-draw workload for the same reason, so saying
@@ -135,11 +166,24 @@ fn main() -> ExitCode {
             Err(error) => return report_failure(&error),
         }
     } else {
-        match drive_desktop_gl4_draws(&window, extent, CONTEXT_IDENTITY, &mode, draws) {
+        let wanted = readback.is_some();
+        match drive_desktop_gl4_draws(&window, extent, CONTEXT_IDENTITY, &mode, draws, wanted) {
             Ok(report) => (report.context.clone(), Some(report)),
             Err(error) => return report_failure(&error),
         }
     };
+
+    // Written before the report is printed, so that a document naming a file
+    // cannot be produced by a run whose file was never written.  A failure here
+    // is a failure of the run: the evidence this flag exists for is the pair.
+    if let (Some(path), Some(workload)) = (readback.as_ref(), workload.as_ref()) {
+        if let Some(colour) = workload.colour.as_ref() {
+            if let Err(error) = std::fs::write(path, &colour.bytes) {
+                eprintln!("the colour target did not reach {}: {error}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     for _ in 1..frames {
         if let Err(error) = window.poll_events() {
@@ -291,7 +335,7 @@ fn json_workload(report: &DesktopGl4DrawReport) -> String {
         .collect::<Vec<_>>()
         .join(",\n");
     let domains = format!("[\n{rows}\n  ]");
-    let fields = [
+    let mut fields = vec![
         ("mode".to_owned(), json_string(&report.mode)),
         ("draws_requested".to_owned(), report.draws_requested.to_string()),
         ("passes".to_owned(), report.passes.to_string()),
@@ -327,12 +371,57 @@ fn json_workload(report: &DesktopGl4DrawReport) -> String {
             ),
         ),
     ];
+    if let Some(colour) = report.colour.as_ref() {
+        fields.push(("colour".to_owned(), json_colour(colour)));
+    }
     let body = fields
         .into_iter()
         .map(|(name, value)| format!("    {}: {}", json_string(&name), value))
         .collect::<Vec<_>>()
         .join(",\n");
     format!("{{\n{body},\n    \"domains\": {domains}\n  }}")
+}
+
+/// The frame's colour target, as a nested JSON object.
+///
+/// The pixels are stated by value and in the order the file holds them, which is
+/// the order the family produced: `row_order` says which order that is and the
+/// grid below it is read in that order, left to right.  Stating them twice -- once
+/// as bytes on disk and once as hex here -- is the point rather than a
+/// duplication: the file is what a reviewer looks at, and this is what a checker
+/// asserts on without decoding it.
+///
+/// The whole grid is written out because the workload's target is a fixed
+/// four-by-four.  A run that could render an arbitrary extent would write the
+/// file and summarise here instead; there is nothing to summarise at sixteen
+/// pixels, and a summary is the one form in which a wrong pixel can hide.
+fn json_colour(colour: &ColourReadback) -> String {
+    let pixels = colour
+        .bytes
+        .chunks_exact(4)
+        .map(|pixel| {
+            format!(
+                "\"{:02x}{:02x}{:02x}{:02x}\"",
+                pixel[0], pixel[1], pixel[2], pixel[3]
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let fields = [
+        (
+            "extent".to_owned(),
+            format!("[{}, {}]", colour.extent[0], colour.extent[1]),
+        ),
+        ("row_order".to_owned(), json_string(colour.row_order)),
+        ("bytes".to_owned(), colour.bytes.len().to_string()),
+        ("pixels_rgba8".to_owned(), format!("[{pixels}]")),
+    ];
+    let body = fields
+        .into_iter()
+        .map(|(name, value)| format!("      {}: {}", json_string(&name), value))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("{{\n{body}\n    }}")
 }
 
 fn json_strings(values: &[String]) -> String {

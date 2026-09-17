@@ -57,7 +57,9 @@ mod shader;
     feature = "native-gl-wgl",
     feature = "test-support"
 ))]
-pub use device::harness::{DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws};
+pub use device::harness::{
+    ColourReadback, DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws,
+};
 
 /// The shared measurement workload, for the browser surface.
 ///

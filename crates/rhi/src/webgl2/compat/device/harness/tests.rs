@@ -46,7 +46,39 @@ fn drive(mode: ExecutionMode, draws: u32) -> DesktopGl4DrawReport {
         stepping_clock(),
     )
     .unwrap_or_else(|error| panic!("the workload runs over the mock context in {mode:?}: {error}"));
-    DesktopGl4DrawReport::from_cost(reading, cost)
+    DesktopGl4DrawReport::from_cost(reading, cost, None)
+}
+
+/// One run of the workload that reads its colour target back, over the mock.
+///
+/// The same shape as [`drive`] plus the hook, which is what makes this the
+/// vehicle for the *wiring* rather than for a driver: what is asserted is that a
+/// run which asks for the picture gets one, in the layout this module states,
+/// and that a run which does not ask gets nothing -- both facts about the
+/// projection and the parameters rather than about any GL implementation.
+fn drive_reading_colour(mode: ExecutionMode, draws: u32, wanted: bool) -> Option<ColourReadback> {
+    let discovery = snapshot(GlFamilyProfile::WebGl2);
+    let reading = conformance::report(&discovery, [4, 4], &OwnerThreadIdentity::current());
+    let mut pixels = None;
+    let cost = workload::drive_with(
+        MockGlFamilyApi::from_discovery(discovery),
+        mode,
+        draws,
+        [4, 4],
+        stepping_clock(),
+        |device, texture| {
+            if !wanted {
+                return Ok(());
+            }
+            let read = device
+                .read_texture(texture)
+                .map_err(|error| format!("the colour target was not readable: {error:?}"))?;
+            pixels = Some(read);
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|error| panic!("the workload runs over the mock context in {mode:?}: {error}"));
+    DesktopGl4DrawReport::from_cost(reading, cost, pixels.map(ColourReadback::from_pixels)).colour
 }
 
 /// A clock that is not a clock: it advances one fixed step per read.
@@ -151,6 +183,41 @@ fn the_uncached_path_completes_a_frame_with_more_than_one_draw() {
         assert_eq!(oracle.draws_requested, draws);
         assert_eq!(oracle.passes, 1);
     }
+}
+
+/// The picture is reported when it is asked for, and absent when it is not.
+///
+/// Both halves are one test because they are one decision.  The flag exists so
+/// that a measurement which wants no picture pays for none, and a test that
+/// checked only the `Some` half would pass against an entry that read the colour
+/// target back unconditionally -- which is exactly the cost the flag was added
+/// to keep off the clocked path.
+///
+/// What the bytes *are* is not asserted here, and cannot be: over the mock they
+/// are zeroes, because the mock answers verbs rather than rendering.  That the
+/// picture is the right picture is a claim about hardware, and the vehicle for
+/// it is the real-context run (`CLAUDE.md` §4.5) -- what this test holds is that
+/// the wiring carries a picture of the stated shape from the frame to the report
+/// at all.
+#[test]
+fn the_colour_target_is_read_back_only_when_it_is_asked_for() {
+    let asked = drive_reading_colour(ExecutionMode::Optimized, 1, true)
+        .expect("a run that asked for the picture reports one");
+    assert_eq!(asked.extent, [4, 4], "the extent the workload renders");
+    assert_eq!(
+        asked.bytes.len(),
+        4 * 4 * 4,
+        "four channels a pixel over sixteen pixels"
+    );
+    assert_eq!(
+        asked.row_order, "gl-bottom-left",
+        "the order the family produces, stated rather than left to a reader to assume"
+    );
+    assert_eq!(
+        drive_reading_colour(ExecutionMode::Optimized, 1, false),
+        None,
+        "and a run that asked for none reports none"
+    );
 }
 
 /// The differential this whole entry exists for.

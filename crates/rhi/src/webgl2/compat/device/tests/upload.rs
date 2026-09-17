@@ -270,7 +270,7 @@ fn a_texture_upload_of_a_shape_this_verb_cannot_address_is_refused() {
     );
     assert_eq!(
         refusal_reason(adapter.upload_texture(texture.physical, &[0; 64])),
-        "this verb fills a whole two-dimensional level, which is not the shape this attachment was created with",
+        "this verb transfers a whole two-dimensional level, which is not the shape this attachment was created with",
         "and it is the fail-closed kind, because the shape is a fact about the family rather than about the request"
     );
     assert!(

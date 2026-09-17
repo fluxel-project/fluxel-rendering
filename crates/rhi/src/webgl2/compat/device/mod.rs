@@ -12,8 +12,12 @@
 //!   copy verbs take.
 //! - [`retention`] is what keeps a transient alive until its last handle drops,
 //!   and where its death is recorded.
-//! - [`upload`] is how host bytes reach a buffer this device created, which is
-//!   the one half of a caller-owned resource the contract has no verb for.
+//! - [`upload`] and [`readback`] are how host bytes cross this boundary in each
+//!   direction -- into a buffer or a texture this device created, and back out of
+//!   one -- which is the half of a caller-owned resource the contract has no verb
+//!   for either way.  [`transfer`] is the rectangle and the client encoding both
+//!   directions share, so that the shape a frame's picture is written with and
+//!   the shape it is read back with cannot drift apart.
 //! - [`submission`] is the record that makes a completion query total without
 //!   polling.
 //!
@@ -165,11 +169,13 @@ pub(crate) mod harness;
 mod object;
 mod pass;
 mod raster;
+mod readback;
 mod region;
 mod registry;
 mod retention;
 mod submission;
 mod surface;
+mod transfer;
 mod transient;
 mod upload;
 // The workload both measurement surfaces drive.  It is here rather than beside

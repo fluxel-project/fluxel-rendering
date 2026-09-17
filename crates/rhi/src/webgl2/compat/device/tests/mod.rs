@@ -23,6 +23,7 @@ mod frame;
 mod harness;
 mod objects;
 mod raster;
+mod readback;
 mod upload;
 
 use harness::*;

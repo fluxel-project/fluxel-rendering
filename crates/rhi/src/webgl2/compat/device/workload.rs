@@ -171,12 +171,50 @@ pub struct DrawCost {
 /// and what a gate needs from a failure is the message.  A failure here is always
 /// a defect or an unsupported context -- never a wrong number, because every
 /// field of [`DrawCost`] is read from a counter the layer keeps.
+///
+/// This is [`drive_with`] and a hook that does nothing, which is what a surface
+/// that owes only the counters passes.
 pub(crate) fn drive<B: GlStateBackend>(
     backend: B,
     mode: ExecutionMode,
     draws: u32,
     extent: [u32; 2],
     now_nanos: impl Fn() -> u64,
+) -> Result<DrawCost, String> {
+    drive_with(backend, mode, draws, extent, now_nanos, |_, _| Ok(()))
+}
+
+/// [`drive`], with one hook the caller may use on the frame that has just run.
+///
+/// The hook exists for exactly one consumer -- the native evidence run, which
+/// reads the colour target back so that the picture a real desktop GL4 context
+/// produced can be looked at rather than only counted -- and it is a hook rather
+/// than a return value because the readback needs the frame's *lease*, which
+/// lives and dies inside this function.  A `DrawCost` carrying pixels would
+/// either have to be produced after the lease had already released the texture or
+/// would have to keep the provider stack alive past the call, and the second is
+/// the one thing this module's caller is written to avoid.
+///
+/// `after` is called once, after the frame has been submitted and the backend
+/// handed back, and before the counters are read.  It receives the backend and
+/// the exported colour target's physical identity.  Returning `Err` fails the
+/// run: a caller that cannot produce the evidence it asked for has not measured
+/// anything it can report, and a cost with a silently missing picture beside it
+/// is worse than no cost at all.
+///
+/// The browser surface passes a hook that does nothing, so both surfaces still
+/// drive one implementation of the frame and the differential still compares two
+/// contexts rather than two frames.
+pub(crate) fn drive_with<B: GlStateBackend>(
+    backend: B,
+    mode: ExecutionMode,
+    draws: u32,
+    extent: [u32; 2],
+    now_nanos: impl Fn() -> u64,
+    after: impl FnOnce(
+        &mut GlCompatibilityDevice<B, super::compute::NoCompute>,
+        TextureId,
+    ) -> Result<(), String>,
 ) -> Result<DrawCost, String> {
     let started = now_nanos();
     let (positions, elements) = geometry();
@@ -226,7 +264,7 @@ pub(crate) fn drive<B: GlStateBackend>(
             Ok(())
         },
     );
-    graph.export_texture(
+    let colour_slot = graph.export_texture(
         raster.output,
         ExportTextureContract {
             final_state: ResourceAccessState::ColorAttachmentWrite,
@@ -254,7 +292,12 @@ pub(crate) fn drive<B: GlStateBackend>(
 
     let executor = FrameExecutor::new(device);
     let submit_started = now_nanos();
-    executor
+    // The executed frame is held rather than dropped at the end of the call,
+    // because its exports are what keep the colour target alive: the lease in
+    // there is caller-owned, and the object it retains is released when the last
+    // holder drops.  A caller's hook therefore runs while the picture it is
+    // reading still exists.
+    let frame = executor
         .execute(
             &compiled,
             compiled.instantiate_local(inputs),
@@ -264,9 +307,17 @@ pub(crate) fn drive<B: GlStateBackend>(
         .map_err(|error| format!("the frame did not run: {error:?}"))?;
     let submit_nanos = now_nanos().saturating_sub(submit_started);
 
-    let backend = executor.try_backend().ok_or_else(|| {
+    let mut backend = executor.try_backend().ok_or_else(|| {
         "the executor still holds the backend after the frame returned".to_owned()
     })?;
+    // The frame declares exactly one exported texture, so a missing export is a
+    // disagreement between this module and the graph it built rather than a
+    // condition a caller could have caused.
+    let exported = frame
+        .exports
+        .texture(colour_slot)
+        .ok_or_else(|| "the frame exported no colour target".to_owned())?;
+    after(&mut *backend, exported.physical)?;
     let cost = project(backend.counters(), mode, draws, extent, submit_nanos);
     let total_nanos = now_nanos().saturating_sub(started);
     // The backend is dropped before the cost is returned so the provider stack
