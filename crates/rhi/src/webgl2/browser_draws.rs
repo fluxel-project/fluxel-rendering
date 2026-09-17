@@ -73,9 +73,31 @@ fn open() -> WebGl2BrowserDiscovery {
 
 /// One run of the shared workload over a fresh browser context.
 fn drive(mode: ExecutionMode, draws: u32) -> DrawCost {
-    drive_workload(open(), mode, draws, [4, 4]).unwrap_or_else(|error| {
+    drive_workload(open(), mode, draws, [4, 4], now_nanos).unwrap_or_else(|error| {
         panic!("the workload runs over the browser context in {mode:?}: {error}")
     })
+}
+
+/// The browser's monotonic clock, in nanoseconds.
+///
+/// The workload takes its clock from its caller, and this is why there has to be
+/// one here: the durations used to come from `std::time::Instant` inside the
+/// workload, and on `wasm32-unknown-unknown` that panics with "time not
+/// implemented on this platform" before a single GL call is made.  Both browser
+/// tests died there rather than in the differential they were written for.
+///
+/// `performance.now()` returns milliseconds since the page's time origin as a
+/// float, and it is the browser's *monotonic* clock, which is what a duration
+/// needs.  `js_sys::Date::now()` needs no web-sys feature and was the cheaper
+/// option, but it is wall-clock and its resolution is deliberately coarsened, so
+/// a run this small would report zeroes and the field would look measured while
+/// saying nothing.
+fn now_nanos() -> u64 {
+    let window = web_sys::window().expect("browser window");
+    let performance = window
+        .performance()
+        .expect("the window has a performance timeline");
+    (performance.now() * 1_000_000.0) as u64
 }
 
 /// The uncached path completes a frame, over a real browser context.

@@ -67,6 +67,11 @@ web-sys = { version = "0.3.77", optional = true, features = [
     # Typed surfaces for the Layer 1 browser command domains: query objects
     # (occlusion), active-resource reflection, and context-attribute evidence.
     "WebGlQuery", "WebGlActiveInfo", "WebGlContextAttributes",
+    # The browser's monotonic clock.  The measurement workload takes its clock
+    # from its caller rather than reaching for one, because `std::time::Instant`
+    # does not exist on `wasm32-unknown-unknown` -- it panics -- and this is what
+    # the browser surface hands it instead.
+    "Performance",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

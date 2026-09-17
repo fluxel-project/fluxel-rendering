@@ -43,10 +43,30 @@ fn drive(mode: ExecutionMode, draws: u32) -> DesktopGl4DrawReport {
         mode,
         draws,
         [4, 4],
+        stepping_clock(),
     )
     .unwrap_or_else(|error| panic!("the workload runs over the mock context in {mode:?}: {error}"));
     DesktopGl4DrawReport::from_cost(reading, cost)
 }
+
+/// A clock that is not a clock: it advances one fixed step per read.
+///
+/// The workload takes its clock from its caller, because the two surfaces that
+/// drive it have different ones and `Instant` does not exist on
+/// `wasm32-unknown-unknown` at all.  That makes the durations a *wiring* fact
+/// rather than a timing fact, and this is the vehicle that can assert wiring:
+/// with a real clock the assertion would be a race it could lose, and the
+/// numbers below would say nothing a second run would repeat.
+fn stepping_clock() -> impl Fn() -> u64 {
+    let tick = std::cell::Cell::new(0u64);
+    move || {
+        tick.set(tick.get() + STEP_NANOS);
+        tick.get()
+    }
+}
+
+/// One step of [`stepping_clock`], in nanoseconds.
+const STEP_NANOS: u64 = 1_000;
 
 /// A report's per-domain rows, as `(name, requests, emitted, skipped)`.
 fn rows(report: &DesktopGl4DrawReport) -> Vec<(String, u64, u64, u64)> {
@@ -83,6 +103,34 @@ fn the_workload_runs_as_one_pass_whatever_the_mode() {
             "the report names every domain, not only the ones this frame touched"
         );
     }
+}
+
+/// The two durations are the gaps between the clock reads the run makes.
+///
+/// The exact numbers are the assertion rather than a coincidence of the stepping
+/// clock: they say the run reads its clock *four* times -- once to open the run,
+/// once either side of the executor call, once to close the run -- so
+/// `submit_nanos` is one step and `total_nanos` is three, and the second contains
+/// the first.  A run that read its clock per draw would also produce two
+/// plausible-looking numbers, and would be reporting the wrong interval.
+///
+/// This is the regression guard for the defect that put the clock in the
+/// signature: the durations used to come from `std::time::Instant` inside the
+/// workload, which panics on `wasm32-unknown-unknown`, so the browser surface
+/// could not drive the workload at all.  Nothing *here* would have caught that --
+/// a native-only test cannot -- which is why the browser test exists beside it.
+#[test]
+fn the_durations_are_the_gaps_between_the_clock_reads_the_run_makes() {
+    let report = drive(ExecutionMode::Optimized, 2);
+    assert_eq!(
+        report.submit_nanos, STEP_NANOS,
+        "one step: the clock is read either side of the executor call, and nowhere inside it"
+    );
+    assert_eq!(
+        report.total_nanos,
+        3 * STEP_NANOS,
+        "three steps: open the run, open the executor call, close it, close the run"
+    );
 }
 
 /// A differential is only a differential if both halves complete.

@@ -39,6 +39,8 @@
 //! defaulted, because a differential whose two halves silently ran the same mode
 //! is worse than one that failed.
 
+use std::time::Instant;
+
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::workload::{self, DrawCost};
@@ -200,13 +202,22 @@ where
     // the one that built it.  The callback's own error channel is the context's,
     // so the run's message-shaped failures ride out through the inner `Result`
     // rather than being forced into a driver error they are not.
+    // The clock this surface hands the workload.  `Instant` is the host's, and it
+    // is supplied from here rather than taken by the workload because the browser
+    // surface cannot use it at all: `Instant::now` panics on
+    // `wasm32-unknown-unknown`, and a module that reached for a clock itself would
+    // be a module that only runs on one of its two surfaces.  The epoch is taken
+    // once so the closure hands out plain nanoseconds from it.
+    let epoch = Instant::now();
+    let now_nanos = || epoch.elapsed().as_nanos() as u64;
+
     let outcome = context.with_current("drive the representative workload", |gl| {
         // SAFETY: `with_current` made this context current on this thread and
         // owns it for the whole call, and `snapshot` is the evidence this exact
         // context produced during its own discovery -- which is the pair of
         // conditions `from_discovered` requires.
         let backend = unsafe { NativeGlProvider::from_discovered(gl, snapshot.clone()) };
-        Ok(workload::drive(backend, mode, draws, extent))
+        Ok(workload::drive(backend, mode, draws, extent, now_nanos))
     });
     match outcome {
         Err(error) => Err(format!(

@@ -37,7 +37,23 @@
 //! A caller supplies a backend that already satisfies
 //! [`GlStateBackend`] -- which is to say a provider over a *current* context,
 //! because Layer 1's verbs are context-bound and this module never opens one --
-//! plus the mode, the draw count and the extent it wants reported.
+//! plus the mode, the draw count, the extent it wants reported, and a clock.
+//!
+//! # Why the clock is the caller's, and not this module's
+//!
+//! The two durations this module reports are the only readings a run produces
+//! that are not Layer 2 counters, and there is no clock in the layers to read
+//! them from: `state` is barred from naming a browser crate, so a clock declared
+//! there could not be implemented by the browser provider, and `api/browser` is
+//! barred from naming `state`, so it could not implement one anyway.  On the
+//! native side there is also nothing to declare -- `std::time::Instant` is a fact
+//! about the host, not about a GL context.
+//!
+//! It is the caller's for the same reason the context reading below is nobody's:
+//! a clock is a per-surface fact.  `Instant` is unsupported on
+//! `wasm32-unknown-unknown` -- it panics, which is how this was found -- and the
+//! browser's monotonic clock is `performance.now()`.  A module that reached for
+//! either one itself would be a module that only runs on one of its two surfaces.
 //!
 //! Back comes [`DrawCost`]: the per-domain tallies, the cache traffic behind
 //! them, and the two durations.  It carries no context reading, because the
@@ -46,8 +62,6 @@
 //! kind.  A shared struct with an optional context in it would have been a type
 //! that is a different shape on each surface, which is the one thing this module
 //! exists to avoid.
-
-use std::time::Instant;
 
 use fluxel_rendergraph::{
     AttachmentOps, BindingSetId, BoundBuffer, BoundTexture, BufferBindingId, BufferDesc,
@@ -142,6 +156,14 @@ pub struct DrawCost {
 /// four-by-four texture, and the extent is the caller's statement about the
 /// drawable behind the context, which is a fact this module has no way to read.
 ///
+/// `now_nanos` is the caller's monotonic clock, in nanoseconds, and the module
+/// doc says why it is the caller's.  It is called twice for the whole run and
+/// twice more around the executor call, so a clock that is expensive to read is
+/// read four times and not once per draw.  The two differences are taken with
+/// `saturating_sub` rather than `-`: the contract is that the clock is monotonic,
+/// and a subtraction that can only be right when the contract holds would turn a
+/// violating clock into a panic inside a measurement.
+///
 /// # Errors
 ///
 /// The `Err` is a rendered description rather than a typed error, for the reason
@@ -154,8 +176,9 @@ pub(crate) fn drive<B: GlStateBackend>(
     mode: ExecutionMode,
     draws: u32,
     extent: [u32; 2],
+    now_nanos: impl Fn() -> u64,
 ) -> Result<DrawCost, String> {
-    let started = Instant::now();
+    let started = now_nanos();
     let (positions, elements) = geometry();
     let (vertex_bytes, index_bytes) = (positions.len() as u64, elements.len() as u64);
 
@@ -230,7 +253,7 @@ pub(crate) fn drive<B: GlStateBackend>(
     inputs.bind_buffer(indices.slot, provider.indices.0);
 
     let executor = FrameExecutor::new(device);
-    let submit_started = Instant::now();
+    let submit_started = now_nanos();
     executor
         .execute(
             &compiled,
@@ -239,13 +262,13 @@ pub(crate) fn drive<B: GlStateBackend>(
             &objects,
         )
         .map_err(|error| format!("the frame did not run: {error:?}"))?;
-    let submit_nanos = submit_started.elapsed().as_nanos() as u64;
+    let submit_nanos = now_nanos().saturating_sub(submit_started);
 
     let backend = executor.try_backend().ok_or_else(|| {
         "the executor still holds the backend after the frame returned".to_owned()
     })?;
     let cost = project(backend.counters(), mode, draws, extent, submit_nanos);
-    let total_nanos = started.elapsed().as_nanos() as u64;
+    let total_nanos = now_nanos().saturating_sub(started);
     // The backend is dropped before the cost is returned so the provider stack
     // the counters came from does not outlive the call: a caller reads numbers,
     // never a device.
