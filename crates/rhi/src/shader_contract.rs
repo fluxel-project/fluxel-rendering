@@ -7,6 +7,12 @@
 
 /// A pipeline stage in Fluxel's private shader artifact contract.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[allow(
+    dead_code,
+    reason = "Every variant of this enum is named by the GL-family lowering, which is behind \
+              `gl-family`; a build without that feature has the vocabulary and no consumer, and \
+              the sibling enums below carry the same allow for the same reason."
+)]
 pub(crate) enum ShaderStage {
     Vertex,
     Fragment,
@@ -22,7 +28,14 @@ pub(crate) enum ShaderStage {
 pub(crate) struct ShaderSourceHash(pub(crate) [u8; 32]);
 
 /// The GLSL dialect emitted by an authoring or backend-lowering path.
+///
+/// Both variants are selected from a GL profile, so they are dead on a build
+/// that compiles no GL-family provider — see [`ShaderStage`] above.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "Both dialects are selected from a GL profile, which exists only behind `gl-family`."
+)]
 pub(crate) enum GlslDialect {
     Desktop { version: u16 },
     Embedded { version: u16 },

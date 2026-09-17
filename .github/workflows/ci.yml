@@ -267,6 +267,14 @@ jobs:
       # pair) is invisible to a lib-only lint, so the weaker form would have
       # blessed the warning that made this line worth adding.
       - run: cargo clippy -p fluxel-rhi --no-default-features --features native-gl-wgl --all-targets --locked -- -D warnings
+      # The default feature set, which is the one a consumer gets and the only
+      # one nothing here linted.  `--all-features` compiles the GL-family
+      # lowering, and every other row enables a provider explicitly, so a
+      # `pub(crate)` item constructed only inside the `gl-family` module is dead
+      # exactly on the default build and live everywhere this job looked.  The
+      # 0.15 candidate shipped two such items for that reason; this row is what
+      # makes the next one a CI failure instead of a discovery.
+      - run: cargo clippy -p fluxel-rhi --all-targets --locked -- -D warnings
 
   gl4-conformance:
     name: Desktop GL4 conformance gate
