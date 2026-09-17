@@ -26,6 +26,27 @@ impl GlContextLifecycle {
     pub const fn accepts_commands(self) -> bool {
         matches!(self, Self::Active)
     }
+
+    /// The error a call reports for a lifecycle that cannot accept it.
+    ///
+    /// `Active` is the only state a verb may proceed in, so this is total over
+    /// the states a caller can observe and it is the one place the four answers
+    /// are decided.  [`GlFamilyApi::assert_ready`](super::GlFamilyApi::assert_ready)
+    /// and the presentation acquire both read it, and they have to agree: an
+    /// acquire that answered "suspended" for a lost context would tell a frame
+    /// loop to retry something that is never coming back, which is a different
+    /// instruction from "stop and re-create".
+    pub(crate) fn refusal(self, operation: &'static str) -> GlError {
+        match self {
+            Self::Lost => GlError::ContextLost { operation },
+            Self::Disposed => GlError::Disposed { operation },
+            Self::Poisoned => GlError::Poisoned { operation },
+            lifecycle => GlError::InvalidLifecycle {
+                operation,
+                lifecycle,
+            },
+        }
+    }
 }
 
 /// A failure which is meaningful to Layer 2 and Layer 3 without GL bindings.

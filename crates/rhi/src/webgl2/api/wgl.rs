@@ -859,10 +859,12 @@ impl super::GlSurfacePresentationApi for WglContextSurface {
         const OP: &str = "acquire-surface-image";
         self.assert_owner(OP)
             .map_err(|error| error.as_gl_error(OP))?;
-        if self.lifecycle.get() != GlContextLifecycle::Active {
-            // A suspended or lost drawable cannot present; report suspension
-            // instead of handing out an unbacked lease.
-            return Ok(super::GlSurfaceAcquire::Suspended);
+        // A suspended drawable answers "not now" rather than handing out an
+        // unbacked lease, and a terminal lifecycle answers what it is -- the
+        // distinction is `acquire_position`'s, so this verb cannot drift from
+        // `assert_ready` about what a lost context is called.
+        if let Some(position) = super::acquire_position(OP, self.lifecycle.get())? {
+            return Ok(position);
         }
         let [width, height] = self.extent.get();
         if width == 0 || height == 0 {

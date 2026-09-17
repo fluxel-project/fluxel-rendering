@@ -8,7 +8,7 @@
 use super::super::{
     ContextStamp, GlContextLifecycle, GlDiscoverySnapshot, GlError, GlFamilyApi, GlSurfaceAcquire,
     GlSurfaceLease, GlSurfacePresentationApi, GlSurfaceSize, OwnerThreadIdentity, SurfaceImageId,
-    TextureId,
+    TextureId, acquire_position,
 };
 use super::{
     EglGlesContext, EglPbufferSize, EglProviderError, EglSurfaceKind, check_drawable_extent,
@@ -92,10 +92,12 @@ impl GlSurfacePresentationApi for EglGlesContext {
     fn acquire_surface_image(&mut self) -> Result<GlSurfaceAcquire, GlError> {
         const OP: &str = "acquire-surface-image";
         self.assert_owner(OP)?;
-        if self.lifecycle != GlContextLifecycle::Active {
-            // A suspended or disposed surface cannot present; report
-            // suspension instead of handing out an unbacked lease.
-            return Ok(GlSurfaceAcquire::Suspended);
+        // A suspended drawable answers "not now" rather than handing out an
+        // unbacked lease, and a terminal lifecycle answers what it is -- the
+        // distinction is `acquire_position`'s, so this verb cannot drift from
+        // `assert_ready` about what a lost context is called.
+        if let Some(position) = acquire_position(OP, self.lifecycle)? {
+            return Ok(position);
         }
         let size = self
             .query_surface_size()

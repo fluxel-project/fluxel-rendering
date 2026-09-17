@@ -171,13 +171,7 @@ pub trait GlFamilyApi {
         self.assert_owner_thread(operation)?;
         match self.lifecycle() {
             GlContextLifecycle::Active => Ok(()),
-            GlContextLifecycle::Lost => Err(GlError::ContextLost { operation }),
-            GlContextLifecycle::Disposed => Err(GlError::Disposed { operation }),
-            GlContextLifecycle::Poisoned => Err(GlError::Poisoned { operation }),
-            lifecycle => Err(GlError::InvalidLifecycle {
-                operation,
-                lifecycle,
-            }),
+            lifecycle => Err(lifecycle.refusal(operation)),
         }
     }
 

@@ -1,6 +1,9 @@
 //! Host-sized surface lifecycle with generation-bound acquire leases.
 
-use super::{GlError, GlFamilyApi, GlTextureDesc, GlTextureDimension, SurfaceImageId, TextureId};
+use super::{
+    GlContextLifecycle, GlError, GlFamilyApi, GlTextureDesc, GlTextureDimension, SurfaceImageId,
+    TextureId,
+};
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 
@@ -110,6 +113,31 @@ impl GlSurfaceLeaseBook {
 pub(crate) enum GlSurfaceAcquire {
     Lease(GlSurfaceLease),
     Suspended,
+}
+
+/// What an [`GlSurfacePresentationApi::acquire_surface_image`] answers for a
+/// lifecycle, before any drawable is looked at.
+///
+/// `Ok(None)` means the context may be asked for a lease.  `Suspended` is the
+/// one state whose whole answer is "not now" -- the drawable is gone and a
+/// resume brings it back -- so it is the only state that returns
+/// [`GlSurfaceAcquire::Suspended`].  Every terminal state reports itself
+/// through the same words [`GlContextLifecycle::refusal`] gives every other
+/// verb, because the acquire is a verb: a caller that reads a lost or disposed
+/// context as merely suspended skips the frame and asks again forever, and the
+/// adapter's own lowering turns `Suspended` into exactly that skip.
+///
+/// The two providers share this rather than each spelling the match out,
+/// because they had already drifted from the trait default once by doing so.
+pub(crate) fn acquire_position(
+    operation: &'static str,
+    lifecycle: GlContextLifecycle,
+) -> Result<Option<GlSurfaceAcquire>, GlError> {
+    match lifecycle {
+        GlContextLifecycle::Active => Ok(None),
+        GlContextLifecycle::Suspended => Ok(Some(GlSurfaceAcquire::Suspended)),
+        lifecycle => Err(lifecycle.refusal(operation)),
+    }
 }
 
 /// RHI owns the surface executor; Host owns the native window. Resize,
