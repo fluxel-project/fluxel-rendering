@@ -1,7 +1,20 @@
 //! The remaining capability families, as vocabulary.
 //!
 //! [`graphics`](super::graphics) is the first family and states the conventions
-//! section 11.9 of the lead 3F plan fixes; these four follow them exactly:
+//! section 11.9 of the lead 3F plan fixes; these follow them exactly:
+//!
+//! # The rule that decides where a family is split
+//!
+//! **One independently negotiable batch of API per family, and one ledger row per
+//! family.** The test is not whether two verbs sound alike; it is whether they
+//! always appear, are always proved, and always fail together.
+//!
+//! Indirect draw and indirect dispatch fail that test: a platform can offer one
+//! without the other, and the ledger already carries them as two rows. An earlier
+//! version of this file merged them into one trait, which forced any backend with
+//! only one of the two to write a refusing method for the other -- precisely the
+//! lowest-common-denominator shape this layer exists to remove. They are two traits
+//! here, and the same question must be asked of every family added later.
 //!
 //! - each is bounded on [`FamilyApi`](super::handle::FamilyApi), never the other
 //!   way round;
@@ -32,6 +45,8 @@
 //! and the execution model is one queue. Writing their methods now would be
 //! vocabulary for work nobody has asked for, and the markers already let a caller
 //! state the requirement.
+
+use fluxel_rendergraph::{BufferCopyRegion, TextureCopyRegion};
 
 use crate::common::base::resource::{BufferId, TextureId};
 
@@ -104,8 +119,11 @@ pub(crate) trait StorageTextureApi: FamilyApi {
     ) -> Result<Self::Binding, Self::Error>;
 }
 
-/// The indirect family: commands whose parameters are read from a buffer.
-pub(crate) trait IndirectApi: FamilyApi {
+/// The indirect-draw family: a draw whose parameters are read from a buffer.
+///
+/// Separate from [`IndirectDispatchApi`] because the two are separately negotiable:
+/// the ledger carries one row each, and a platform may offer one without the other.
+pub(crate) trait IndirectDrawApi: FamilyApi {
     /// Why a command in this family was refused or failed.
     type Error;
 
@@ -121,11 +139,47 @@ pub(crate) trait IndirectApi: FamilyApi {
         count: u32,
         stride: u32,
     ) -> Result<(), Self::Error>;
+}
+
+/// The indirect-dispatch family: a dispatch whose workgroup counts come from a buffer.
+pub(crate) trait IndirectDispatchApi: FamilyApi {
+    /// Why a command in this family was refused or failed.
+    type Error;
 
     /// Records one dispatch whose workgroup counts are read from `commands`.
     fn dispatch_indirect(
         &mut self,
         commands: BufferId,
         offset: u64,
+    ) -> Result<(), Self::Error>;
+}
+
+/// The copy family: buffer and texture copies, as a family rather than as floor.
+///
+/// Every backend in the five-platform set serves copies today, and that is not a
+/// reason to put them in the base. [`graphics`](super::graphics)'s membership test
+/// says a base item is something all backends must agree on for Fluxel's own
+/// semantics to hold; "all five happen to have it" is a fact about today's backends,
+/// not a semantic requirement. Keeping copy a family also gives the facade migration
+/// somewhere to point: the retired `CopyBackend` tier becomes "the device implements
+/// `Copy`", which is a ledger row rather than a parallel type hierarchy.
+pub(crate) trait CopyApi: FamilyApi {
+    /// Why a copy was refused or failed.
+    type Error;
+
+    /// Copies `region` from one buffer to another.
+    fn copy_buffer(
+        &mut self,
+        source: BufferId,
+        destination: BufferId,
+        region: BufferCopyRegion,
+    ) -> Result<(), Self::Error>;
+
+    /// Copies `region` from one texture to another.
+    fn copy_texture(
+        &mut self,
+        source: TextureId,
+        destination: TextureId,
+        region: TextureCopyRegion,
     ) -> Result<(), Self::Error>;
 }

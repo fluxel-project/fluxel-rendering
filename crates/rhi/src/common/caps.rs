@@ -179,6 +179,14 @@ pub(crate) enum Capability {
     AsyncCompute,
     /// Transfers on a queue dedicated to them.
     TransferQueue,
+    /// Buffer and texture copies.
+    ///
+    /// A family rather than floor even though every current backend serves it: the
+    /// base holds what Fluxel's semantics require of every backend, and "all five
+    /// happen to have it" is a fact about today rather than a requirement. As a row
+    /// it is also where the retired `CopyBackend` tier becomes a capability instead
+    /// of a parallel type hierarchy.
+    Copy,
     /// A query that reports whether any sample passed.
     OcclusionQuery,
     /// A query that reports elapsed time between two points.

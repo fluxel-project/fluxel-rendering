@@ -27,17 +27,16 @@
 //! requires, and a descriptor that could not express depth would have hidden the
 //! choice instead of recording it.
 //!
-//! # Instance ranges, and what is deliberately not here
+//! # Instance counts, and what is deliberately not here
 //!
-//! [`Self::draw`] and [`Self::draw_indexed`] take an instance range because plain
-//! instancing is part of the draw vocabulary and every backend serves it; what no
-//! retained artifact declares is a *per-instance vertex stream*, which is a recipe
-//! change and not a vocabulary one. A range that starts at a non-zero instance is
-//! a different thing again -- the `FirstInstance` family -- and a backend that has
-//! not proved that row refuses it.
-//!
-//! Base vertex is likewise absent: it is the `BaseVertex` family, it exists on
-//! desktop GL only among the accepted profiles, and no artifact needs it.
+//! The draw verbs take an instance *count*, not a range, so the first instance is
+//! fixed at zero. Plain instancing is part of the draw vocabulary and every backend
+//! serves it; what no retained artifact declares is a per-instance vertex stream,
+//! which is a recipe change rather than a vocabulary one. A non-zero first instance
+//! is the `FirstInstance` family, and base vertex is the `BaseVertex` family, so
+//! neither can be expressed here: **a family's parameter space must not be able to
+//! name another family's capability.** The same rule will apply to depth-stencil
+//! state, multiview, mesh shaders and everything after them.
 
 use std::ops::Range;
 
@@ -92,11 +91,19 @@ pub(crate) trait GraphicsApi: FamilyApi {
     /// Sets the scissor rectangle for subsequent draws.
     fn set_scissor(&mut self, scissor: ScissorRect) -> Result<(), Self::Error>;
 
-    /// Records a non-indexed draw over `vertices`, once per instance in `instances`.
-    fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) -> Result<(), Self::Error>;
+    /// Records a non-indexed draw over `vertices`, `instance_count` times.
+    ///
+    /// The first instance is fixed at zero. A range would let this method express a
+    /// non-zero first instance, which is the `FirstInstance` family -- and a base
+    /// family whose parameters can express another capability forces every backend
+    /// that lacks it to refuse at run time, which is the shape this layer exists to
+    /// remove.
+    fn draw(&mut self, vertices: Range<u32>, instance_count: u32) -> Result<(), Self::Error>;
 
-    /// Records an indexed draw over `indices`, once per instance in `instances`.
-    fn draw_indexed(&mut self, indices: Range<u32>, instances: Range<u32>)
+    /// Records an indexed draw over `indices`, `instance_count` times.
+    ///
+    /// The first instance is fixed at zero, for `draw`'s reason.
+    fn draw_indexed(&mut self, indices: Range<u32>, instance_count: u32)
     -> Result<(), Self::Error>;
 }
 
@@ -212,12 +219,12 @@ mod tests {
             Ok(())
         }
 
-        fn draw(&mut self, _: Range<u32>, _: Range<u32>) -> Result<(), ()> {
+        fn draw(&mut self, _: Range<u32>, _: u32) -> Result<(), ()> {
             self.0.calls.borrow_mut().push("draw");
             Ok(())
         }
 
-        fn draw_indexed(&mut self, _: Range<u32>, _: Range<u32>) -> Result<(), ()> {
+        fn draw_indexed(&mut self, _: Range<u32>, _: u32) -> Result<(), ()> {
             self.0.calls.borrow_mut().push("draw-indexed");
             Ok(())
         }
@@ -267,8 +274,8 @@ mod tests {
             height: 8,
         })
         .expect("scissor sets");
-        api.draw(0..3, 0..1).expect("draw records");
-        api.draw_indexed(0..6, 0..1).expect("indexed draw records");
+        api.draw(0..3, 1).expect("draw records");
+        api.draw_indexed(0..6, 1).expect("indexed draw records");
         api.end_raster().expect("pass closes");
         assert_eq!(
             device.calls(),

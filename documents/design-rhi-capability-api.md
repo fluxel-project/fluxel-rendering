@@ -6,6 +6,13 @@ backend against it or judge a change to it without reading the whole crate.
 
 **Design principle: unify semantics and ownership, not hardware capability.**
 
+**Scope, as re-cut:** this layer is designed to the five-backend standard — no
+backend mechanism may leak into it, and the family vocabulary is written for five —
+but **0.16 requires only the three native backends** (DX12, Vulkan, Metal) to
+implement it. The GL family, the browser WebGPU adapter and compressed formats are
+0.17. The goal of 0.16 is not to finish every GPU platform; it is to prove that this
+model holds up. See section 20 of the lead 3F plan.
+
 A familiar failure mode is avoided on purpose. This is *not* one wide interface
 whose methods a backend may decline:
 
@@ -61,6 +68,7 @@ Not in the base, deliberately:
 | --- | --- | --- |
 | `draw`, `dispatch` | the graphics and compute families | a base method forces every backend to answer for a capability it may not have |
 | `storage_texture` | the storage-texture family | the capability varies per adapter, not only per backend |
+| copies | the copy family | every backend serves them today, and that is a fact about today's backends rather than a semantic requirement — the same argument that keeps `Graphics` a family |
 | `graphics_queue`, `compute_queue`, `transfer_queue` | the queue-shape rows | DX12 and Vulkan expose several queues, Metal's model differs, WebGPU has its own constraints and WebGL2 is not the same thing at all |
 
 ## 3. Capability rows and the ledger
@@ -124,21 +132,27 @@ trait GraphicsApi: FamilyApi {
     fn set_index_buffer(&mut self, buffer: BufferId, offset: u64, format: IndexFormat) -> Result<(), Self::Error>;
     fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Self::Error>;
     fn set_scissor(&mut self, scissor: ScissorRect) -> Result<(), Self::Error>;
-    fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) -> Result<(), Self::Error>;
-    fn draw_indexed(&mut self, indices: Range<u32>, instances: Range<u32>) -> Result<(), Self::Error>;
+    fn draw(&mut self, vertices: Range<u32>, instance_count: u32) -> Result<(), Self::Error>;
+    fn draw_indexed(&mut self, indices: Range<u32>, instance_count: u32) -> Result<(), Self::Error>;
 }
 ```
 
-The handle *is* the recording context, so no encoder type appears in this
-vocabulary. The pass descriptor is `fluxel_rendergraph`'s, already generic over the
+The current single-queue implementation may use the handle as its recording context,
+**but the contract does not require capability negotiation and recording context to
+remain the same object** (plan section 21). Freezing that identity would have to be
+undone the moment there are graphics, compute and transfer queues with parallel
+recording. The pass descriptor is `fluxel_rendergraph`'s, already generic over the
 resource type — the GL family instantiates it with its own texture id today, so the
 pass vocabulary is not restated. Its optional depth-stencil attachment is why the
 current "no depth recipe" refusal is *expressible* rather than hidden.
 
-Instance ranges are present because plain instancing is part of the draw
-vocabulary and every backend serves it. A range starting at a non-zero instance is
-the `FirstInstance` family instead, and base vertex is the `BaseVertex` family;
-neither is here.
+Instance *counts* rather than instance ranges, so the first instance is fixed at
+zero. A range can express a non-zero first instance, which is the `FirstInstance`
+family, and **a family's parameter space must not be able to name another family's
+capability** — otherwise every backend without that family must refuse at run time,
+which is the shape this layer removes. Base vertex is the `BaseVertex` family for the
+same reason; neither is here. The rule applies next to depth-stencil state,
+multiview, variable-rate shading, mesh shaders and ray tracing.
 
 ### 4.3 `ComputeApi`
 
@@ -179,21 +193,56 @@ structurally unable to build the binding. They carry no capability query — ask
 whether a role is available is `require::<StorageBuffer>()`, and a second way to ask
 would be a second answer.
 
-### 4.5 `IndirectApi`
+### 4.5 `IndirectDrawApi` / `IndirectDispatchApi`
 
 ```rust
-trait IndirectApi: FamilyApi {
+trait IndirectDrawApi: FamilyApi {
     type Error;
     fn draw_indirect(&mut self, commands: BufferId, offset: u64, count: u32, stride: u32)
         -> Result<(), Self::Error>;
+}
+
+trait IndirectDispatchApi: FamilyApi {
+    type Error;
     fn dispatch_indirect(&mut self, commands: BufferId, offset: u64) -> Result<(), Self::Error>;
 }
 ```
 
+**These are two traits, not one, and an earlier version of this document had them
+merged.** That version violated the rule the ledger already encoded: it carried
+`IndirectDraw` and `IndirectDispatch` as two rows, while the trait asked a backend to
+implement both verbs. A platform with indirect draw and no indirect dispatch would
+have been forced to write a refusing `dispatch_indirect` — the lowest-common-
+denominator shape this whole design exists to remove.
+
+The rule that decides every split, now frozen: **one independently negotiable batch
+of API per family, and one ledger row per family.** The test is not whether two verbs
+sound alike; it is whether they always appear, are always proved, and always fail
+together.
+
 `stride` is stated rather than assumed: a caller may pack records with padding, and
 an assumed tight packing reads the wrong offsets.
 
-### 4.6 Markers without traits
+### 4.6 `CopyApi`
+
+```rust
+trait CopyApi: FamilyApi {
+    type Error;
+    fn copy_buffer(&mut self, source: BufferId, destination: BufferId, region: BufferCopyRegion)
+        -> Result<(), Self::Error>;
+    fn copy_texture(&mut self, source: TextureId, destination: TextureId, region: TextureCopyRegion)
+        -> Result<(), Self::Error>;
+}
+```
+
+A **family rather than floor**, by the same argument that keeps `Graphics` a family:
+every backend in the set serves copies today, and "all five happen to have it" is a
+fact about today's backends rather than a requirement of Fluxel's semantics. Keeping
+copy a family is also where the facade migration points: the retired `CopyBackend`
+tier becomes "this device implements `Copy`" — a ledger row instead of a parallel
+type hierarchy.
+
+### 4.7 Markers without traits
 
 `Multiview`, `AsyncCompute` and `TransferQueue` have ledger rows and markers but no
 trait: no retained recipe declares a multiview attachment, and the execution model
@@ -262,9 +311,9 @@ layer is private (`crates/rhi/src/common/`), and ADR-0006/0007 continue to hold.
 | `api::{family, handle, negotiate}` | implemented, tested |
 | `api::{graphics, families}` | vocabulary complete; no backend implements them yet |
 | `vertex`, `sampler` | implemented, tested |
-| Vulkan (`native::vulkan`) | steps 1-2 done and proven on real hardware; steps 3-11 not started |
-| DX12, Metal | not started |
-| GL family, browser WebGPU convergence | not started |
+| Vulkan (`native::vulkan`) | steps 1-2 done and proven on real hardware; memory types, format/dimension mapping and real buffer/image handle creation done; steps 3-11 not started |
+| DX12, Metal | not started; both are 0.16 |
+| GL family, browser WebGPU, compressed formats | **0.17**, not 0.16 |
 
 Test evidence: `common::` and `native::` hold 100+ unit tests, and two
 Vulkan tests open a real instance, adapter and `VkDevice` on this machine. Clippy

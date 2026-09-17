@@ -55,10 +55,26 @@ impl CapabilityFamily for StorageTexture {
     const ROW: Capability = Capability::StorageImage;
 }
 
-/// The indirect family: commands whose parameters come from a buffer.
-pub(crate) struct Indirect;
-impl CapabilityFamily for Indirect {
+/// The indirect-draw family: a draw whose parameters come from a buffer.
+pub(crate) struct IndirectDraw;
+impl CapabilityFamily for IndirectDraw {
     const ROW: Capability = Capability::IndirectDraw;
+}
+
+/// The indirect-dispatch family: a dispatch whose counts come from a buffer.
+///
+/// A separate marker from [`IndirectDraw`] because the rows are separately
+/// negotiable. One row per independently negotiable family is what keeps a
+/// capability check from answering for a batch the device has not proved.
+pub(crate) struct IndirectDispatch;
+impl CapabilityFamily for IndirectDispatch {
+    const ROW: Capability = Capability::IndirectDispatch;
+}
+
+/// The copy family: buffer and texture copies.
+pub(crate) struct Copy;
+impl CapabilityFamily for Copy {
+    const ROW: Capability = Capability::Copy;
 }
 
 /// The asynchronous-compute family: compute on a queue other than the graphics one.
