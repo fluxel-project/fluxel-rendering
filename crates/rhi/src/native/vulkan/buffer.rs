@@ -71,6 +71,28 @@ pub(crate) fn upload_destination_flags(usage: BufferUsage) -> vk::BufferUsageFla
     usage_flags(usage) | vk::BufferUsageFlags::TRANSFER_DST
 }
 
+/// The create-info for a buffer of `size` bytes used exactly as `usage` states.
+///
+/// Returns `None` for a zero size, because `Vulkan` requires a buffer to have a
+/// non-zero extent: passing zero would be refused by the driver with a validation
+/// error rather than by this layer with a reason a caller can act on.
+///
+/// Sharing is exclusive. This backend has one queue and no concurrent-sharing
+/// capability row, and `CONCURRENT` would claim a cross-queue contract the
+/// execution model cannot honour -- a claim that belongs to the `TransferQueue` and
+/// `AsyncCompute` rows, which are unproved today.
+pub(crate) fn create_info(size: u64, usage: BufferUsage) -> Option<vk::BufferCreateInfo<'static>> {
+    if size == 0 {
+        return None;
+    }
+    Some(
+        vk::BufferCreateInfo::default()
+            .size(size)
+            .usage(usage_flags(usage))
+            .sharing_mode(vk::SharingMode::EXCLUSIVE),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +176,45 @@ mod tests {
         assert!(widened.contains(vk::BufferUsageFlags::TRANSFER_DST));
     }
 
+    #[test]
+    fn a_zero_sized_buffer_is_refused_rather_than_sent_to_the_driver() {
+        assert!(create_info(0, BufferUsage::empty()).is_none());
+    }
+
+    #[test]
+    fn the_create_info_carries_the_size_the_usage_flags_and_exclusive_sharing() {
+        let declared = of(&[BufferUsageKind::Vertex, BufferUsageKind::CopySource]);
+        let info = create_info(4096, declared).expect("a non-zero size");
+        assert_eq!(info.size, 4096);
+        assert!(info.usage.contains(vk::BufferUsageFlags::VERTEX_BUFFER));
+        assert!(info.usage.contains(vk::BufferUsageFlags::TRANSFER_SRC));
+        assert!(!info.usage.contains(vk::BufferUsageFlags::TRANSFER_DST));
+        // One queue, so nothing is shared concurrently; claiming otherwise would
+        // assert a cross-queue contract the execution model cannot honour.
+        assert_eq!(info.sharing_mode, vk::SharingMode::EXCLUSIVE);
+    }
+
+    #[test]
+    fn a_real_buffer_is_created_and_destroyed_on_this_machine() {
+        // Step 4 against the real driver, without an allocator: creating a buffer
+        // handle and binding memory are separate operations in Vulkan, so this
+        // proves the handle half before step 3's allocation is wired in. Skips where
+        // no adapter exists.
+        use crate::Validation;
+        use crate::native::vulkan::open;
+
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let declared = of(&[BufferUsageKind::Vertex]);
+        let info = create_info(256, declared).expect("a non-zero size");
+        // SAFETY: the device is live and owns the create/destroy entry points; the
+        // handle is destroyed exactly once below and never stored.
+        let handle = unsafe { opened.device.device().create_buffer(&info, None) }
+            .expect("a valid buffer description");
+        // SAFETY: the handle came from this device and is destroyed here once.
+        unsafe { opened.device.device().destroy_buffer(handle, None) };
+    }
     #[test]
     fn every_flag_this_backend_needs_is_reachable() {
         // What is checkable: the seven flags the retained recipes use are all
