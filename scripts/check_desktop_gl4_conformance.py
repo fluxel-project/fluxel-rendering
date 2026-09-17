@@ -23,11 +23,11 @@ rather than a second implementation of discovery competing with the first.
 Fail-closed
 -----------
 A required capability that is false, a required fact that is missing or empty,
-or a report that does not open all fail the run.  ``RECORDED_OPEN`` is the one
-subtlety: those rows are open items in the series plan, so they are expected to
-be *exactly* as recorded, and one that starts answering differently fails the
-run too -- not because the new answer is worse, but because a ledger entry
-changed and nobody adjudicated it.  Silence is never a pass.
+or a report that does not open all fail the run.  ``RECORDED_ROWS`` is the one
+subtlety: those rows were adjudicated by a numbered plan row, so they are
+expected to be *exactly* as recorded, and one that starts answering differently
+fails the run too -- not because the new answer is worse, but because the
+adjudication changed and nobody renewed it.  Silence is never a pass.
 
 The drawable is required rather than recorded, and for the opposite reason: the
 record used to read ``unavailable`` here on *every* desktop core context,
@@ -65,11 +65,14 @@ REQUIRED_CAPABILITIES = (
     "timer-query",
 )
 
-# Rows this gate must not silently bless.  Each is an open item in
-# ``0.15-plan.md`` with its own stable number, and the recorded value is what the
-# ledger currently claims, so the gate fails when the claim stops matching the
-# context rather than when the claim is inconvenient.
-RECORDED_OPEN = {
+# Rows this gate must not silently bless.  Each was adjudicated by a numbered row
+# in ``0.15-plan.md`` and the value here is what that adjudication fixed, so the
+# gate fails when the context stops answering as the ledger says rather than when
+# the answer is inconvenient.  Two of the three are decisions (P2-14's count is
+# unqueried by design, P2-15 narrowed its domain to the fixture route) and one
+# was open when the row was written; what they share is that a changed value has
+# to be adjudicated again, not that the ledger disagrees with it.
+RECORDED_ROWS = {
     "multi-draw-indirect": (False, "P2-15"),
     "multi-draw": (False, "P2-15"),
     "multiview": (False, "P2-14"),
@@ -291,7 +294,7 @@ def _check_capabilities(report: dict) -> list[str]:
                 f"capability {name} is false, but a desktop core "
                 f"{DESKTOP_CORE_FLOOR[0]}.{DESKTOP_CORE_FLOOR[1]} context owes it"
             )
-    for name, (recorded, row) in RECORDED_OPEN.items():
+    for name, (recorded, row) in RECORDED_ROWS.items():
         if name not in resolved:
             problems.append(f"capability {name} is absent from the report")
         elif resolved[name] != recorded:

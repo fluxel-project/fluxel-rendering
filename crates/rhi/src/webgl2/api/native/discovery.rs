@@ -852,9 +852,17 @@ fn limits(
             glow_const::MAX_COMPUTE_WORK_GROUP_INVOCATIONS,
             "GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS",
         )?,
-        // No GL family exposes a portable multi-draw-indirect count limit
-        // query; the honest fact stays `None` (unbounded/unqueried), and
-        // enablement is governed by route evidence plus the operation probe.
+        // No GL family exposes a portable multi-draw-indirect count limit query,
+        // so the fact is `None` here -- and this is the row that decides the
+        // domain, not a note beside it: `GlLimits::supports_multi_draw_indirect`
+        // is exactly "a queried count of at least one", so with no query to read
+        // one from, the limit half answers false on every real context and the
+        // capability cannot enable however the route is resolved. The route and
+        // the probe are false here too and independently: `GlowProbes` has no
+        // multi-draw-indirect probe because glow 0.18 does not bind the entry
+        // point, and no executor implements the verb (plan P2-15, narrowly
+        // resolved as a fixture-only domain rather than left to be discovered a
+        // fourth time).
         max_multi_draw_indirect_count: None,
         // The view count is only queryable on a context that acquired the
         // multiview extension; without it the fact is 0 and the multiview floor

@@ -88,8 +88,8 @@ class CheckDesktopGl4ConformanceTests(unittest.TestCase):
         problems = CHECKER.check(report)
         self.assertTrue(any("compute" in problem for problem in problems), problems)
 
-    def test_a_recorded_open_row_that_changes_fails(self) -> None:
-        for name, (recorded, row) in CHECKER.RECORDED_OPEN.items():
+    def test_a_recorded_row_that_changes_fails(self) -> None:
+        for name, (recorded, row) in CHECKER.RECORDED_ROWS.items():
             with self.subTest(capability=name):
                 problems = self.mutate(**{f"capability__{name}": not recorded})
                 self.assertTrue(

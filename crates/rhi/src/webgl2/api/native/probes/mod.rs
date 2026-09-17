@@ -330,7 +330,11 @@ pub(super) fn run_operation_probes(
         },
         // glow 0.18 does not bind glMultiDrawArraysIndirect, so neither a probe
         // nor an executor can exist; the capability stays fail-closed instead
-        // of pretending a portable count limit exists.
+        // of pretending a portable count limit exists. This is the recorded
+        // narrowing rather than a missing probe (plan P2-15): the domain's
+        // supported range is the mock route, which is the only one that has the
+        // verb and a count limit to enable it with, and this answer is what
+        // keeps a real context from advertising a command no provider serves.
         multi_draw_indirect: ProbeAnswer::Unavailable,
         query_counter_bits: probes.query_counter_bits(),
     }

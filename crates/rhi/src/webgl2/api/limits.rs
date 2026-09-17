@@ -172,6 +172,13 @@ impl GlLimits {
         true
     }
     /// Multi-draw/count needs a specifically queried count limit.
+    ///
+    /// That limit is a recorded fact rather than a driver property on this
+    /// family: no GL or WebGL2 context exposes a portable query for how many
+    /// draws one multi-draw command may issue, so every real route records
+    /// `None` and this answers false there. The mock route is the only one that
+    /// records a count, which is what makes this the domain's narrowing decision
+    /// rather than a note beside it (plan P2-15).
     pub(crate) const fn supports_multi_draw_indirect(&self) -> bool {
         matches!(self.max_multi_draw_indirect_count, Some(value) if value != 0)
     }
