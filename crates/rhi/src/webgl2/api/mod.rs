@@ -44,6 +44,17 @@ mod vertex;
 #[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 mod wgl;
 
+/// The context owner, reachable by the one module that opens a context at all.
+///
+/// It is `pub(crate)` and stops there.  Until `webgl2::conformance` existed,
+/// this type and its `open` were named nowhere outside their own module: the
+/// layer above owns the decision to open
+/// a context, so the layer that knows how belongs to it rather than to the
+/// world.  Nothing here exposes a HAL type, a browser object, or a `Backend`
+/// variant, and no public path leads to it.
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
+pub(crate) use wgl::WglContextSurface;
+
 pub(crate) use binding::*;
 pub(crate) use compute::*;
 pub(crate) use copy::*;

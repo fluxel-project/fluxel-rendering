@@ -1,0 +1,20 @@
+[package]
+name = "fluxel-desktop-gl4-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Independent manifest for the same reason the DX12 harness has one: the
+# workspace resolves its own dev-dependencies, and a path edge to a sibling
+# repository inside it would break every workspace job on a checkout that does
+# not have that sibling.  Out here the edge is the fixture's problem alone.
+[workspace]
+
+[dependencies]
+# Default features off: this fixture is a GL-family build, and the DX12/Vulkan
+# HAL path is neither reachable from it nor built for it.
+fluxel-rhi = { path = "../../crates/rhi", default-features = false, features = [
+    "native-gl-wgl",
+    "test-support",
+] }
+fluxel-host = { path = "../../../fluxel-host" }

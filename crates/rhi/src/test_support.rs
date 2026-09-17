@@ -4,11 +4,34 @@
 //! nor native handles. It is intentionally limited to observing completed
 //! fixture work and injecting private conformance faults; production callers
 //! must not use it as a general readback or submission API.
+//!
+//! # The one entry that opens something, and why the sentence above survives it
+//!
+//! `observe_desktop_gl4_context` (Windows, `native-gl-wgl` builds only) is not
+//! an observation of completed work: it
+//! opens a desktop GL context, because the GL-family providers had no reachable
+//! entry point at all and a release gate that asks for real-hardware evidence
+//! could not otherwise collect any.  It is named here rather than folded in
+//! silently, and what it hands back is what keeps the rule intact -- a report
+//! of what the driver answered, and no context, provider, device, or native
+//! handle for a caller to hold.  The context it opens is dropped before the
+//! call returns, so there is nothing to misuse even by accident.
 
 use crate::{
     BufferUploadError, BufferUploadStage, Device, TextureUploadError, TextureUploadStage,
     UploadedBuffer, UploadedTexture,
 };
+
+/// Opens a real desktop GL context over the caller's drawable and reports it.
+///
+/// The window is the caller's, named through the standard raw-handle traits;
+/// this crate never creates one, and the ecosystem's host is one of the
+/// producers that satisfies them.  The entry is scoped -- it opens the context,
+/// observes it and drops it inside one call -- and it hands back a report rather
+/// than a context, provider, device, or native handle, so no borrowed provider
+/// stack ever escapes.
+#[cfg(all(windows, feature = "native-gl-wgl"))]
+pub use crate::webgl2::conformance::{DesktopGl4ContextReport, observe_desktop_gl4_context};
 
 /// RAII latch for exactly one later successful DX12 presentation completion.
 ///
