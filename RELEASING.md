@@ -22,6 +22,16 @@ does not change, but both files must be uploaded as assets of the GitHub Release
 for the matching tag. A release is incomplete until those durable asset URLs
 exist and identify the tagged commit.
 
+A release that moves the workspace version also moves the version of every path
+dependency in it, and the three example projects under `examples/` are separate
+Cargo projects with separate lock files. Committing the bump without refreshing
+them leaves a candidate whose harnesses cannot build: Cargo refuses to resolve
+`fluxel-rhi` at the new version against a lock that still names the old one, so
+the first hardware gate fails rather than the workspace gate. Run
+`cargo update --workspace --offline` in each of those directories — or run
+`python scripts/check_lockfile_versions.py`, which names the lock and the
+manifest that disagree and is also a CI row.
+
 After the conformance gate and the required platform checks pass, create an
 annotated tag, push the branch and tag, then verify that `origin/main` and the
 remote tag resolve to the same release commit. Create the GitHub Release and

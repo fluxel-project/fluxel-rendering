@@ -22,6 +22,22 @@ jobs:
       - run: python -m unittest scripts/tests/test_check_gl_architecture.py
       - run: python scripts/check_gl_architecture.py
 
+  manifests:
+    name: Lock files agree with their manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest scripts.tests.test_check_lockfile_versions
+      # The workspace gate resolves the workspace.  `examples/windows-gl4`,
+      # `examples/windows-dx12` and `examples/android-gles` are three separate
+      # Cargo projects and therefore three separate resolutions, which is why a
+      # version bump can leave all three behind while every workspace row passes.
+      # The 0.15 candidate did exactly that, and the hardware gate found it.
+      - run: python scripts/check_lockfile_versions.py
+
   fmt:
     runs-on: ubuntu-latest
     steps:

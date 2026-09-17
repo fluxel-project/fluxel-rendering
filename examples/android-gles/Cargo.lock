@@ -103,11 +103,11 @@ dependencies = [
 
 [[package]]
 name = "fluxel-rendergraph"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "fluxel-rhi"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "fluxel-rendergraph",
  "fluxel-wgpu-hal",
