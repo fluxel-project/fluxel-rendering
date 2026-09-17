@@ -16,8 +16,19 @@ The script is deliberately fail-closed: it rejects a dirty checkout, a GNU or
 other non-Microsoft host/target, an invalid `HEAD`, and a conflicting
 `CARGO_BUILD_TARGET`. It runs all workspace ignored fixtures, stores the exact
 SHA and test command in `target/conformance/<sha>/manifest.json`, and keeps
-the combined Cargo log there even if a fixture fails. Inspect the manifest and
-log before tagging. They stay out of the source commit so that the tested SHA
+the combined Cargo log there even if a fixture fails.
+
+A green Cargo exit is not by itself a pass. The gate additionally requires that
+at least the expected number of ignored cases actually ran and that a GPU adapter
+was recorded, because libtest treats an `--ignored` filter that matched nothing
+as success — it prints `running 0 tests` and exits 0 — so a dropped or renamed
+`#[ignore]` would otherwise be recorded as a clean run, and a run with no adapter
+cannot be attributed to hardware at all. The manifest states both counts, the
+shortfalls when there are any, and the toolchain that ran; a previous manifest
+for the same SHA is kept beside it as `manifest.json.previous`, since the
+artifact directory is keyed by SHA and a later failing run would otherwise
+replace a passing verdict without a trace. Inspect the manifest and log before
+tagging. They stay out of the source commit so that the tested SHA
 does not change, but both files must be uploaded as assets of the GitHub Release
 for the matching tag. A release is incomplete until those durable asset URLs
 exist and identify the tagged commit.
@@ -52,14 +63,26 @@ GL-specific gates, in this order:
 python scripts/check_gl_architecture.py
 python scripts/check_desktop_gl4_conformance.py --report scripts/tests/data/desktop_gl4_radeon_780m.json
 python scripts/check_gl4_raster_readback.py
+python scripts/check_gl_state_cache_screening.py --guard
 ```
 
 The first is the three-layer import boundary and runs anywhere. The second
 re-adjudicates a durable conformance report on a machine with no GPU, so CI can
 hold a driver claim to its numbers; a report that no longer adjudicates green
 must be re-measured, not re-labelled. The third drives a real desktop GL context
-and requires the driver and GPU to be recorded with it. A frame that comes from
-a GLES implementation reached through EGL, or from a browser, is evidence about
-that implementation and must say so rather than being filed as desktop GL
-evidence. Do not create or push a release tag when any of these has failed or
-could not run.
+and requires the driver and GPU to be recorded with it, and the fourth does the
+same for the state cache's guard frame, where it must find no regression. Both
+hardware gates write the commit they ran under, what that checkout held beyond
+it, and which interpreter ran them, into their reports; a reading that cannot be
+attributed to a revision is not evidence for one.
+
+The screening's exit status is part of its contract rather than a convenience: a
+`--guard` run that reports a regression exits non-zero, while a screening that
+finds the candidate did not beat the baseline exits 0, because that is an
+ordinary result of the experiment and not a failure of the run. Read the verdict
+from the report either way.
+
+A frame that comes from a GLES implementation reached through EGL, or from a
+browser, is evidence about that implementation and must say so rather than being
+filed as desktop GL evidence. Do not create or push a release tag when any of
+these has failed or could not run.

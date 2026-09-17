@@ -313,6 +313,39 @@ jobs:
       # context produced.  A funnel whose statistics quietly changed shape would
       # still print a winner, and this is the line that refuses that.
       - run: python -m unittest scripts/tests/test_check_gl_state_cache_screening.py
+      # The readback gate's own arithmetic, and the third module this series
+      # shipped without a job running it.  It is here rather than in a job of its
+      # own because it is the same fact the two rows above hold -- what the
+      # workload requires of a frame -- asked of the bytes a real context wrote.
+      - run: python -m unittest scripts/tests/test_check_gl4_raster_readback.py
+
+  evidence-modules:
+    name: Evidence gate modules that need no surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Each of these is pure logic against a retained hardware report or a
+      # scratch checkout, so none of them needs a GPU, a device or a browser --
+      # which is exactly why none of them should have been the one nothing ran.
+      # A gate module with no job is a gate that exists only where somebody
+      # remembers to type it, and the 0.15 candidate shipped two of them.
+      #
+      # The device reports are the Android side of the same picture contract the
+      # job above adjudicates for the desktop: `android_gles_evidence.py` needs a
+      # device or an emulator to *collect* one and none to check one, so whether
+      # a frame is the workload's is a standing question on a machine with no
+      # Android at all.
+      - run: python -m unittest scripts/tests/test_android_gles_evidence.py
+      # And the identity every artifact in `target/` is keyed by: which commit,
+      # whether that commit is what ran, and what ran it.  Checked here against
+      # scratch checkouts rather than this repository, because what is under test
+      # is what the module does with a dirty tree and this repository cannot be
+      # relied on to be in a particular state while the suite runs.
+      - run: python -m unittest scripts/tests/test_run_provenance.py
+      - run: python -m unittest scripts/tests/test_browser_webgl2_integration.py
 
   windows-workspace:
     name: Windows workspace native glue

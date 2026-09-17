@@ -8,7 +8,16 @@ import sys
 import unittest
 
 
-SCRIPT = Path(__file__).parents[1] / "check_gl_state_cache_screening.py"
+SCRIPTS = Path(__file__).parents[1]
+sys.path.insert(0, str(SCRIPTS))
+
+# The picture contract is its own module and the screening consults it, so this
+# test reaches for it the same way rather than through the screening's re-export:
+# a helper that went through the screening would keep passing if the screening
+# stopped calling it.
+import gl_raster_picture  # noqa: E402  (after the path it needs)
+
+SCRIPT = SCRIPTS / "check_gl_state_cache_screening.py"
 SPEC = importlib.util.spec_from_file_location("check_gl_state_cache_screening", SCRIPT)
 assert SPEC and SPEC.loader
 SCREENING = importlib.util.module_from_spec(SPEC)
@@ -60,11 +69,20 @@ def round_(mode: str, submit_nanos: int, skipped: int, emitted: int,
         domain["skipped"] = 0
     workload["domains"][0]["emitted"] = emitted
     workload["domains"][0]["skipped"] = skipped
+    # The bytes are the workload's own hex grid, because the gate requires the
+    # two statements of the picture to agree: a fixture whose file disagreed with
+    # its grid would be testing a run that failed for a reason no expected
+    # picture can diagnose, which is the readback gate's subject and not this
+    # one's.  `opened` is set for the same reason -- a round that reported a
+    # workload block and a colour target necessarily opened a context, and the
+    # expected picture refuses a report that says otherwise.
     return {
         "round": index,
         "requested_mode": mode,
         "mode": mode,
+        "opened": True,
         "workload": workload,
+        "_colour_raw": gl_raster_picture.pixels_from_hex(workload["colour"]["pixels_rgba8"]),
         "_colour_sha256": digest,
     }
 
@@ -111,6 +129,30 @@ class PictureTests(unittest.TestCase):
         problems = SCREENING.picture_problems(rounds)
         self.assertEqual(len(problems), 1)
         self.assertIn("not comparable", problems[0])
+
+    def test_the_expected_picture_is_consulted_and_not_only_the_digests(self) -> None:
+        # The failure identity alone cannot see: every round drew the same thing,
+        # which is nothing, so the digests agree perfectly and the two halves of
+        # the differential are "comparable" over a frame with no triangle in it.
+        rounds = pair(1000, 0)
+        blank = ("000000ff",) * 16
+        for round_ in rounds:
+            round_["workload"]["colour"]["pixels_rgba8"] = list(blank)
+            round_["_colour_raw"] = bytes.fromhex("".join(blank))
+        problems = SCREENING.picture_problems(rounds)
+        self.assertTrue(problems)
+        self.assertTrue(any("kernel's" in problem for problem in problems))
+        self.assertTrue(
+            all(problem.startswith(("the oracle#0 round:", "the optimized#0 round:"))
+                for problem in problems),
+            problems,
+        )
+
+    def test_a_round_that_claimed_a_context_it_did_not_open_is_refused(self) -> None:
+        rounds = pair(1000, 0)
+        rounds[0]["opened"] = False
+        problems = SCREENING.picture_problems(rounds)
+        self.assertTrue(any("did not open" in problem for problem in problems))
 
 
 class PredictionTests(unittest.TestCase):
@@ -275,6 +317,45 @@ class DecisionTests(unittest.TestCase):
             decision["stats"]["oracle"]["total_nanos"]["median"],
             decision["stats"]["optimized"]["total_nanos"]["median"],
         )
+
+
+class ExitStatusTests(unittest.TestCase):
+    """The verdict has to reach ``$?``, or no gate can act on it.
+
+    A guard and a screening are on opposite sides of this on purpose, which is
+    what these three cases pin down: one is a check with a failure, the other is
+    an experiment whose most ordinary answer is "no".
+    """
+
+    def test_a_guarded_regression_is_a_non_zero_status(self) -> None:
+        rounds = [round_("oracle", value, 0, 9, index=index)
+                  for index, value in enumerate([1000, 2000, 3000])]
+        rounds += [round_("optimized", value, 0, 8, index=index)
+                   for index, value in enumerate([4000, 5000, 6000])]
+        decision = SCREENING.decide(rounds, guard=True)
+        self.assertEqual(decision["verdict"], "regression")
+        self.assertNotEqual(SCREENING.exit_code_for(decision), 0)
+
+    def test_a_guard_that_found_no_regression_is_a_zero_status(self) -> None:
+        rounds = [round_("oracle", value, 0, 9, index=index)
+                  for index, value in enumerate([3000, 5000, 7000])]
+        rounds += [round_("optimized", value, 0, 8, index=index)
+                   for index, value in enumerate([1000, 2000, 2900])]
+        decision = SCREENING.decide(rounds, guard=True)
+        self.assertEqual(decision["verdict"], "no_regression")
+        self.assertEqual(SCREENING.exit_code_for(decision), 0)
+
+    def test_a_screening_that_did_not_retain_the_candidate_is_a_zero_status(self) -> None:
+        # The funnel's most ordinary outcome.  Exiting non-zero for it would make
+        # "this workload does not show the candidate winning" indistinguishable
+        # from a run that broke, and the verdict is in the report either way.
+        rounds = [round_("oracle", value, 0, 12000, index=index)
+                  for index, value in enumerate([1000, 5000, 7000])]
+        rounds += [round_("optimized", value, 11990, 10, cache_hits=1999, index=index)
+                   for index, value in enumerate([4000, 6000, 8000])]
+        decision = SCREENING.decide(rounds, guard=False)
+        self.assertEqual(decision["verdict"], "baseline_retained")
+        self.assertEqual(SCREENING.exit_code_for(decision), 0)
 
 
 class RetainedReportTests(unittest.TestCase):

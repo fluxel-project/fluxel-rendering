@@ -21,11 +21,32 @@ compilation, which is exactly "owner-thread CPU submission latency".  ``total_na
 brackets the whole run and *includes* the pixel readback this checker asks for, so
 it is reported as a secondary reading and never used as the decision metric.
 
-The picture gate is byte identity across every round of both modes, and it is a
-gate rather than a statistic: a mode that rendered a different frame would make
-the two halves of the differential incomparable, which is the confound the
-differential exists to remove.  A run whose readback is missing, unreadable or
-different fails the whole screening closed.
+The picture gate is two claims about every round of both modes, and it is a gate
+rather than a statistic.  The first is that the round rendered the frame the
+workload requires -- ``gl_raster_picture``'s expectations, which are the
+workload's and not this file's, checked against the bytes the round wrote.  The
+second is byte identity across the rounds: a mode that rendered a different frame
+would make the two halves of the differential incomparable, which is the confound
+the differential exists to remove.  The first is not redundant with the second,
+because a path that quietly stopped drawing is perfectly identical to itself on
+every round.  A run whose readback is missing, unreadable, wrong or merely
+self-inconsistent fails the whole screening closed.
+
+What the exit status means
+--------------------------
+A guard is a check, so a ``regression`` exits non-zero and a caller can act on
+it.  A screening is an experiment, and ``baseline_retained`` -- the candidate did
+not clear the bar at this workload -- is a legitimate answer rather than a
+defect, so it exits 0 and the verdict is read from the report.  Either way the
+report carries the full decision and the numbers under it; ``exit_code_for`` is
+the one place that mapping is stated.
+
+What the report is evidence for
+-------------------------------
+It names the commit it was collected under, what that checkout had in it beyond
+the commit, and which interpreter ran it (``run_provenance``).  A hardware
+reading cannot be re-derived from a SHA, so the checkout state at collection time
+is part of what the reading means rather than metadata beside it.
 
 The guard, and why it is the same script
 ----------------------------------------
@@ -86,7 +107,14 @@ import sys
 # whichever caller happened to be first.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from gl_raster_picture import extract_json  # noqa: E402  (after the path it needs)
+from gl_raster_picture import (  # noqa: E402  (after the path it needs)
+    check as picture_check,
+    extract_json,
+)
+from run_provenance import (  # noqa: E402  (after the path it needs)
+    ProvenanceError,
+    record as provenance_record,
+)
 
 DEFAULT_MANIFEST = Path("examples/windows-gl4/Cargo.toml")
 DEFAULT_OUT = Path("target/gl-state-cache-screening")
@@ -184,8 +212,15 @@ def run_fixture(manifest: Path, draws: int, mode: str, colour: Path,
         raise ScreeningError(f"the {mode} round printed no report: {error}") from error
     if not colour.exists():
         raise ScreeningError(f"the {mode} round did not write {colour}")
-    report["_colour_sha256"] = hashlib.sha256(colour.read_bytes()).hexdigest()
-    report["_colour_bytes"] = colour.stat().st_size
+    # The bytes are kept and not only hashed.  A digest answers "did every round
+    # render the same frame", which a path that stopped drawing satisfies
+    # perfectly -- so the bytes are what lets the *expected* picture be checked
+    # at all.  They are not copied into the report; the round file beside it in
+    # ``rounds/`` is the durable copy, and the JSON stays a summary.
+    raw = colour.read_bytes()
+    report["_colour_raw"] = raw
+    report["_colour_sha256"] = hashlib.sha256(raw).hexdigest()
+    report["_colour_bytes"] = len(raw)
     return report
 
 
@@ -270,20 +305,45 @@ def prediction_problems(rounds: list[dict], guard: bool) -> list[str]:
 
 
 def picture_problems(rounds: list[dict]) -> list[str]:
-    """Whether every round rendered the same frame, both modes included."""
+    """Whether the rounds rendered the frame the workload requires, and the same one.
+
+    Two claims, and identity alone is the weaker one.  Identity across rounds is
+    what makes the two halves of the differential comparable -- but a path that
+    quietly stopped drawing is byte-identical to itself on every round, so the
+    digests would agree over a frame that is nothing but its clear, and the
+    screening would report a latency improvement for a picture it never drew.
+    That is the failure this gate exists for, so every round that still carries
+    its bytes is adjudicated by ``gl_raster_picture``, whose expected picture is
+    the workload's and is deliberately not restated here.
+
+    A round rebuilt by ``replay`` carries only the digest a committed report
+    keeps, so it can support the identity claim and not the content one.  That is
+    the limit of what the artifact holds rather than a check skipped at this
+    line, and it is why the digests are still compared on their own.
+    """
+    problems: list[str] = []
+    for round_ in rounds:
+        raw = round_.get("_colour_raw")
+        if raw is None:
+            continue
+        problems.extend(
+            f"the {round_['mode']}#{round_['round']} round: {problem}"
+            for problem in picture_check(round_, raw)
+        )
     digests = {round_["_colour_sha256"] for round_ in rounds}
     if len(digests) == 1:
-        return []
+        return problems
     detail = ", ".join(
         sorted(
             f"{round_['mode']}#{round_['round']}={round_['_colour_sha256'][:12]}"
             for round_ in rounds
         )
     )
-    return [
+    problems.append(
         "the rounds did not all render the same frame, so the two halves of the "
         f"differential are not comparable: {detail}"
-    ]
+    )
+    return problems
 
 
 def decide(rounds: list[dict], guard: bool) -> dict:
@@ -351,6 +411,25 @@ def decide(rounds: list[dict], guard: bool) -> dict:
         else ("retained" if clears else "baseline_retained"),
         "stats": stats,
     }
+
+
+def exit_code_for(decision: dict) -> int:
+    """The process status a decision earns, stated here rather than left to the caller.
+
+    A guard is a *check*, so it has a failure: a candidate whose typical round is
+    worse than the baseline's worst has regressed, and a caller that ran this to
+    find that out has to be able to read it in ``$?`` -- a verdict that only ever
+    reaches stdout is a verdict no gate can act on.
+
+    A screening is an *experiment*, and ``baseline_retained`` is a legitimate
+    answer to it: "the candidate did not earn its place at this workload" is a
+    result, not a defect, and exiting non-zero for it would make the funnel's
+    most ordinary outcome indistinguishable from a broken run.  The verdict is
+    read from the report, which states it in full.
+    """
+    if decision["kind"] == "guard" and decision["verdict"] == "regression":
+        return 1
+    return 0
 
 
 def replay(report: dict) -> list[dict]:
@@ -431,6 +510,19 @@ def main() -> int:
     random.Random(arguments.seed).shuffle(scored_order)
     order = warmup_order + scored_order
 
+    # Taken before the first round rather than beside the report write, because
+    # what the artifact needs to name is the revision the *rounds* were collected
+    # under: an edit made while they were running would otherwise be recorded as
+    # the revision that produced them.  A dirty checkout is recorded rather than
+    # refused -- a screening against work in progress is still a measurement of
+    # that work -- and the ``dirty`` list is what stops the record being read as
+    # evidence for the commit alone.
+    try:
+        provenance = provenance_record(root)
+    except ProvenanceError as error:
+        print(f"the screening cannot be attributed to a revision: {error}", file=sys.stderr)
+        return 1
+
     rounds: list[dict] = []
     warmups: list[dict] = []
     for index, mode in enumerate(order):
@@ -465,6 +557,7 @@ def main() -> int:
 
     decision = decide(rounds, arguments.guard)
     report = {
+        "provenance": provenance,
         "draws": arguments.draws,
         "pairs": arguments.pairs,
         "warmup_pairs": arguments.warmup_pairs,
@@ -534,7 +627,7 @@ def main() -> int:
         f"{'outside' if decision['beyond_noise'] else 'inside'} the noise band"
     )
     print(f"verdict: {decision['verdict']}, typically faster: {decision['winner']}")
-    return 0
+    return exit_code_for(decision)
 
 
 if __name__ == "__main__":

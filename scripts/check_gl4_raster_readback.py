@@ -43,6 +43,10 @@ import sys
 # whichever caller happened to be first.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from run_provenance import (  # noqa: E402  (after the path it needs)
+    ProvenanceError,
+    record as provenance_record,
+)
 from gl_raster_picture import (  # noqa: E402  (after the path it needs)
     EXPECTED_CLEAR,
     EXPECTED_COLOUR,
@@ -139,6 +143,17 @@ def main() -> int:
                              arguments.timeout)
     except (RuntimeError, ValueError) as error:
         print(f"the run produced no report: {error}", file=sys.stderr)
+        return 1
+    # The frame this gate approves cannot be re-derived from a SHA -- it is the
+    # driver's answer to one drawing, and the point of keeping it is that nobody
+    # can produce it again from the source.  So the report says which revision it
+    # is evidence for, what that checkout had in it beyond the revision, and what
+    # read the bytes back; without that, the artifact is a picture of a frame by
+    # an unknown build.
+    try:
+        report["provenance"] = provenance_record(root)
+    except ProvenanceError as error:
+        print(f"the frame cannot be attributed to a revision: {error}", file=sys.stderr)
         return 1
     (out / "report.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     if not colour_path.exists():

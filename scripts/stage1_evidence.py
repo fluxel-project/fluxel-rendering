@@ -25,6 +25,14 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
+# Every script in this directory is run both as a program and as a module by a
+# test, which loads it by path; neither puts the directory itself on `sys.path`,
+# so the one sibling import this file makes is set up here rather than left to
+# whichever caller happened to be first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from run_provenance import ProvenanceError, require_clean  # noqa: E402  (after the path it needs)
+
 
 TARGET = "x86_64-pc-windows-msvc"
 TITLE = "Fluxel Stage 1 — Windows visible renderer"
@@ -196,35 +204,43 @@ class Win32Backend:
         self.user32.SetForegroundWindow(hwnd)
         self._ok(self.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                                           SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE), "SetWindowPos(HWND_TOPMOST)")
-        time.sleep(0.15)
-        geometry = self.assert_complete(hwnd)
-        screen = self.user32.GetDC(0)
-        memory = self.gdi32.CreateCompatibleDC(screen)
-        bitmap = self.gdi32.CreateCompatibleBitmap(screen, geometry.width, geometry.height)
-        if not screen or not memory or not bitmap:
-            raise EvidenceError("unable to allocate a GDI screenshot surface.")
-        previous = self.gdi32.SelectObject(memory, bitmap)
+        # The drop belongs to *this* block and not to the blit's, which is why
+        # there are two: `assert_complete` below is the call that decides whether
+        # the window is in a state worth capturing at all, it is the call most
+        # likely to raise, and a raise used to leave this harness topmost over the
+        # user's desktop for the rest of the run -- the failure that hides itself,
+        # because the next capture would then succeed by covering everything.
         try:
-            self._ok(self.gdi32.BitBlt(memory, 0, 0, geometry.width, geometry.height, screen,
-                                       geometry.left, geometry.top, SRCCOPY), "BitBlt")
-            info = BITMAPINFO()
-            info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-            info.bmiHeader.biWidth, info.bmiHeader.biHeight = geometry.width, geometry.height
-            info.bmiHeader.biPlanes, info.bmiHeader.biBitCount = 1, 32
-            info.bmiHeader.biCompression = BI_RGB
-            raw = ctypes.create_string_buffer(geometry.width * geometry.height * 4)
-            rows = self.gdi32.GetDIBits(memory, bitmap, 0, geometry.height, raw, ctypes.byref(info), 0)
-            if rows != geometry.height:
-                raise EvidenceError(f"GetDIBits returned {rows}/{geometry.height} rows.")
-            file_header = struct.pack("<2sIHHI", b"BM", 14 + 40 + len(raw), 0, 0, 54)
-            dib_header = struct.pack("<IiiHHIIiiII", 40, geometry.width, geometry.height, 1, 32,
-                                     BI_RGB, len(raw), 0, 0, 0, 0)
-            output.write_bytes(file_header + dib_header + raw.raw)
+            time.sleep(0.15)
+            geometry = self.assert_complete(hwnd)
+            screen = self.user32.GetDC(0)
+            memory = self.gdi32.CreateCompatibleDC(screen)
+            bitmap = self.gdi32.CreateCompatibleBitmap(screen, geometry.width, geometry.height)
+            if not screen or not memory or not bitmap:
+                raise EvidenceError("unable to allocate a GDI screenshot surface.")
+            previous = self.gdi32.SelectObject(memory, bitmap)
+            try:
+                self._ok(self.gdi32.BitBlt(memory, 0, 0, geometry.width, geometry.height, screen,
+                                           geometry.left, geometry.top, SRCCOPY), "BitBlt")
+                info = BITMAPINFO()
+                info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                info.bmiHeader.biWidth, info.bmiHeader.biHeight = geometry.width, geometry.height
+                info.bmiHeader.biPlanes, info.bmiHeader.biBitCount = 1, 32
+                info.bmiHeader.biCompression = BI_RGB
+                raw = ctypes.create_string_buffer(geometry.width * geometry.height * 4)
+                rows = self.gdi32.GetDIBits(memory, bitmap, 0, geometry.height, raw, ctypes.byref(info), 0)
+                if rows != geometry.height:
+                    raise EvidenceError(f"GetDIBits returned {rows}/{geometry.height} rows.")
+                file_header = struct.pack("<2sIHHI", b"BM", 14 + 40 + len(raw), 0, 0, 54)
+                dib_header = struct.pack("<IiiHHIIiiII", 40, geometry.width, geometry.height, 1, 32,
+                                         BI_RGB, len(raw), 0, 0, 0, 0)
+                output.write_bytes(file_header + dib_header + raw.raw)
+            finally:
+                self.gdi32.SelectObject(memory, previous)
+                self.gdi32.DeleteObject(bitmap)
+                self.gdi32.DeleteDC(memory)
+                self.user32.ReleaseDC(0, screen)
         finally:
-            self.gdi32.SelectObject(memory, previous)
-            self.gdi32.DeleteObject(bitmap)
-            self.gdi32.DeleteDC(memory)
-            self.user32.ReleaseDC(0, screen)
             self.user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
                                      SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE)
         return geometry
@@ -418,9 +434,16 @@ def main() -> int:
         raise EvidenceError("--frames must leave enough time for all three evidence states.")
     repo = Path(__file__).resolve().parent.parent
     verify_msvc(repo)
-    commit = run_checked(["git", "rev-parse", "HEAD"], repo).strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise EvidenceError(f"invalid HEAD SHA '{commit}'.")
+    # The captures below cannot be re-derived from a SHA: they are one machine's
+    # answer to one drawing, and nothing recomputes them.  The checkout state at
+    # capture time is therefore the only thing that ties them to a revision, so a
+    # dirty one is refused rather than recorded beside a SHA that does not
+    # describe what actually ran.  Untracked files count -- a fixture reading a
+    # file git has never seen is exactly the case this is for.
+    try:
+        commit = require_clean(repo)
+    except ProvenanceError as error:
+        raise EvidenceError(f"Stage 1 capture requires a clean checkout: {error}") from error
     root = repo / "target" / "evidence" / commit / "stage1"
     root.mkdir(parents=True, exist_ok=True)
     manifest_path = root / "manifest.json"
