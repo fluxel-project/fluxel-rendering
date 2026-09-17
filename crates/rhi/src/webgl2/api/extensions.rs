@@ -104,7 +104,10 @@
 //!   cannot observe the surface records a reason instead of a value: one of
 //!   `unqueried`, `query-failed`, or `draw-framebuffer-bound` after
 //!   `gl.surface-facts-unavailable=`, so "not asked", "asked and refused", and
-//!   "asked while a framebuffer was bound" never collapse into one answer. The
+//!   "asked while a framebuffer was bound" never collapse into one answer. A
+//!   failure additionally names the component that failed, after a colon, because
+//!   the first real desktop context this crate opened produced a bare one and no
+//!   reader without that context could say which of the eight queries it was. The
 //!   typed home is a `GlSurfaceFacts` value on `GlDiscoverySnapshot`, owned by
 //!   `discovery.rs`; the trigger is a consumer that acts on the facts rather
 //!   than reporting them -- presentation, which needs the drawable's component

@@ -486,6 +486,30 @@ fn context_flags(
 /// narrowing to the value's own widths is part of that: a negative answer cannot
 /// be a width, so it fails the observation the same way a missing component does,
 /// and neither rendering is written for it.
+/// The eight drawable facts one surface observation needs, each with the name the
+/// record reports it under.
+///
+/// One table so the two cannot drift: the failure marker names the component that
+/// failed, and a name retyped beside a token is a second spelling of the same fact
+/// that can rot without anything failing. The order is the destructuring order
+/// below, and the first seven entries are the ones that are narrowed to a width --
+/// sample buffers is a flag rather than a width and is recorded as queried.
+///
+/// Naming the component matters because a bare `query-failed` cannot be
+/// adjudicated from outside the crate: the first real desktop context this
+/// repository opened recorded exactly that, and the plan could say no more about
+/// it than that some query had failed.
+const SURFACE_COMPONENTS: [(&str, u32); 8] = [
+    ("GL_RED_BITS", glow_const::RED_BITS),
+    ("GL_GREEN_BITS", glow_const::GREEN_BITS),
+    ("GL_BLUE_BITS", glow_const::BLUE_BITS),
+    ("GL_ALPHA_BITS", glow_const::ALPHA_BITS),
+    ("GL_DEPTH_BITS", glow_const::DEPTH_BITS),
+    ("GL_STENCIL_BITS", glow_const::STENCIL_BITS),
+    ("GL_SAMPLES", glow_const::SAMPLES),
+    ("GL_SAMPLE_BUFFERS", glow_const::SAMPLE_BUFFERS),
+];
+
 fn surface_facts(query: &impl NativeGlQuery) -> (GlSurfaceFacts, BTreeSet<String>) {
     let mut facts = BTreeSet::new();
     let unavailable = |facts: BTreeSet<String>| (GlSurfaceFacts::Unavailable, facts);
@@ -499,45 +523,48 @@ fn surface_facts(query: &impl NativeGlQuery) -> (GlSurfaceFacts, BTreeSet<String
     }
     // The whole set is required together: a partial surface format cannot decide
     // anything a presenter would ask it, so a failed component leaves the record
-    // saying "not observed" rather than half a format.
-    let [
-        Some(red),
-        Some(green),
-        Some(blue),
-        Some(alpha),
-        Some(depth),
-        Some(stencil),
-        Some(sample_buffers),
-        Some(samples),
-    ] = [
-        glow_const::RED_BITS,
-        glow_const::GREEN_BITS,
-        glow_const::BLUE_BITS,
-        glow_const::ALPHA_BITS,
-        glow_const::DEPTH_BITS,
-        glow_const::STENCIL_BITS,
-        glow_const::SAMPLE_BUFFERS,
-        glow_const::SAMPLES,
-    ]
-    .map(|token| query.integer(token))
-    else {
-        facts.insert("gl.surface-facts-unavailable=query-failed".into());
+    // saying "not observed" rather than half a format -- and it says which
+    // component, since a failure the reader cannot attribute is a failure the
+    // reader has to reproduce by hand.
+    let mut observed = [0_i64; 8];
+    let mut failed: Vec<&'static str> = Vec::new();
+    for (slot, (name, token)) in observed.iter_mut().zip(SURFACE_COMPONENTS) {
+        match query.integer(token) {
+            Some(value) => *slot = value,
+            None => failed.push(name),
+        }
+    }
+    if !failed.is_empty() {
+        for name in failed {
+            facts.insert(format!("gl.surface-facts-unavailable=query-failed:{name}"));
+        }
         return unavailable(facts);
-    };
+    }
+    let [
+        red,
+        green,
+        blue,
+        alpha,
+        depth,
+        stencil,
+        samples,
+        sample_buffers,
+    ] = observed;
     // The typed value is unsigned by construction: a component width and a sample
     // count are never negative, so a negative answer is the driver answering a
     // different question than the one asked. It fails the whole observation for the
     // same reason a missing component does -- narrowing it unchecked would wrap into
     // a huge width, and a huge width is a format claim rather than a missing fact.
     let mut widths = [0_u32; 7];
-    for (slot, value) in widths
+    for ((slot, value), (name, _)) in widths
         .iter_mut()
         .zip([red, green, blue, alpha, depth, stencil, samples])
+        .zip(SURFACE_COMPONENTS)
     {
         match u32::try_from(value) {
             Ok(width) => *slot = width,
             Err(_) => {
-                facts.insert("gl.surface-facts-unavailable=query-failed".into());
+                facts.insert(format!("gl.surface-facts-unavailable=query-failed:{name}"));
                 return unavailable(facts);
             }
         }

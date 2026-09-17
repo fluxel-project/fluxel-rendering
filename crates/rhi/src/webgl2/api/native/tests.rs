@@ -799,13 +799,6 @@ fn surface_format_is_recorded_from_the_drawable_or_marked_unavailable() {
             },
             "gl.surface-facts-unavailable=unqueried",
         ),
-        (
-            SurfaceFactQuery {
-                bits: None,
-                ..SurfaceFactQuery::observed()
-            },
-            "gl.surface-facts-unavailable=query-failed",
-        ),
     ] {
         let flags = flags_of(&query);
         assert!(flags.contains(reason), "{reason} in {flags:?}");
@@ -819,6 +812,44 @@ fn surface_format_is_recorded_from_the_drawable_or_marked_unavailable() {
             "{flags:?}"
         );
     }
+    // A failed component names itself.  The record has to say which query failed:
+    // a bare "query-failed" cannot be adjudicated by a reader outside the crate,
+    // who has neither the context nor the driver that produced it.  This asserts
+    // every one of the eight is named, so a component added to the observation
+    // without a name is a failure and not a silently broader claim.
+    let flags = flags_of(&SurfaceFactQuery {
+        bits: None,
+        ..SurfaceFactQuery::observed()
+    });
+    let mut named: Vec<&str> = flags
+        .iter()
+        .filter_map(|marker| marker.strip_prefix("gl.surface-facts-unavailable=query-failed:"))
+        .collect();
+    named.sort_unstable();
+    assert_eq!(
+        named,
+        [
+            "GL_ALPHA_BITS",
+            "GL_BLUE_BITS",
+            "GL_DEPTH_BITS",
+            "GL_GREEN_BITS",
+            "GL_RED_BITS",
+            "GL_SAMPLES",
+            "GL_SAMPLE_BUFFERS",
+            "GL_STENCIL_BITS",
+        ],
+        "{flags:?}"
+    );
+    assert!(
+        !flags.contains("gl.surface-facts-unavailable=query-failed"),
+        "an unattributable failure was recorded beside the attributed ones: {flags:?}"
+    );
+    assert!(
+        !flags
+            .iter()
+            .any(|marker| marker.starts_with("gl.surface-color-bits")),
+        "{flags:?}"
+    );
 }
 
 /// The typed surface facts answer the same question the recorded keys do.
@@ -880,7 +911,7 @@ fn the_typed_surface_facts_agree_with_the_recorded_keys() {
     assert_eq!(snapshot.surface_facts(), GlSurfaceFacts::Unavailable);
     let flags = snapshot.context().flags().other.clone();
     assert!(
-        flags.contains("gl.surface-facts-unavailable=query-failed"),
+        flags.contains("gl.surface-facts-unavailable=query-failed:GL_ALPHA_BITS"),
         "{flags:?}"
     );
     assert!(
