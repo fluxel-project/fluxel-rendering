@@ -53,13 +53,34 @@ mod shader;
 /// and not a new contract: nothing public is introduced, and the entry stays
 /// behind the `test-support` feature it is built for.
 #[cfg(all(
+    feature = "test-support",
+    any(
+        all(target_os = "windows", feature = "native-gl-wgl"),
+        all(not(target_arch = "wasm32"), feature = "native-gles-egl")
+    )
+))]
+pub use device::harness::{ColourReadback, DomainTally, NativeGlDrawReport};
+
+#[cfg(all(
     target_os = "windows",
     feature = "native-gl-wgl",
     feature = "test-support"
 ))]
-pub use device::harness::{
-    ColourReadback, DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws,
-};
+pub use device::harness::drive_desktop_gl4_draws;
+
+/// The measurement entry for the offscreen GLES surface.
+///
+/// The same hop as above and the same allowance: `device` and `harness` are
+/// private, so a path to this entry exists only from inside the crate, and the
+/// entry stays behind the `test-support` feature it is built for.  It is gated
+/// on `native-gles-egl` and a non-wasm target rather than on Windows, which is
+/// the whole reason the vocabulary above moved out of the Windows gate.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    feature = "native-gles-egl",
+    feature = "test-support"
+))]
+pub use device::harness::drive_gles_pbuffer_draws;
 
 /// The shared measurement workload, for the browser surface.
 ///

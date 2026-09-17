@@ -1,0 +1,21 @@
+[package]
+name = "fluxel-android-gles-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Independent manifest for the same reason the desktop and DX12 harnesses have
+# one: the workspace resolves its own dev-dependencies, and an edge to a sibling
+# repository inside it would break every workspace job on a checkout that does
+# not have that sibling.  Out here the edge is the fixture's problem alone.
+[workspace]
+
+[dependencies]
+# Default features off: this fixture is a GLES build, so the WGL and DX12/Vulkan
+# paths are neither reachable from it nor built for it.  There is deliberately no
+# `fluxel-host` edge: this surface has no window to own, and a dependency on the
+# native host would say otherwise.
+fluxel-rhi = { path = "../../crates/rhi", default-features = false, features = [
+    "native-gles-egl",
+    "test-support",
+] }

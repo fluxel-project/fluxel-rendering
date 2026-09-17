@@ -12,36 +12,21 @@ the workload's own kernel and geometry require, and a magnified top-down PNG is
 written beside them so that a reviewer can *open* the frame rather than infer it
 from hex (``CLAUDE.md`` §5).
 
+What is left here, now that the picture moved out
+-------------------------------------------------
+The picture is one fact about the workload and both GL-family surfaces assert
+it, so the expectations and the checks live in ``gl_raster_picture`` and are
+re-exported here whole.  What is this file's own is the *runner*: a window, a
+message pump and ``cargo run`` over the caller's drawable.  That half is WGL's
+and cannot be shared with a device that has no window.
+
 What it deliberately does not do
 --------------------------------
 It creates no window and knows nothing about WGL -- the fixture does that.  It
-re-derives no part of the driver's report: the expected picture below is what the
-crate's raster kernel and the workload's geometry state, so a disagreement between
-this file and the crate is a review finding rather than a second implementation
-competing with the first.
-
-The two statements of the picture are checked against each other
-----------------------------------------------------------------
-The fixture writes the pixels twice: as bytes in a file, and as a hex grid in the
-report it prints.  Neither is trusted on its own -- the file could be truncated
-and the report could be stale -- so the checker requires them to agree, and a run
-that disagrees with itself fails before any expected value is consulted.
-
-Fail-closed
------------
-A missing file, a length that is not the extent's, a picture that is not the
-extent the report states, a covered pixel outside the two the geometry puts there,
-a colour that is not the kernel's, a row order that is not the family's -- each
-fails the run.  A blank or all-black frame is the failure this exists for: it
-passes every counter in the report and is what a rendering path that quietly
-stopped drawing looks like.
-
-Orientation is checked rather than assumed
-------------------------------------------
-The bytes are the family's, which is bottom-up, and the workload's two covered
-pixels sit in the row *above the bottom* only.  So a readback that had been
-flipped would put them one row higher in the byte stream, and this gate fails on
-it.  The magnified PNG is top-down, because that is what a viewer sees.
+re-derives no part of the driver's report: the expected picture is what the
+crate's raster kernel and the workload's geometry state, so a disagreement
+between this file and the crate is a review finding rather than a second
+implementation competing with the first.
 """
 
 from __future__ import annotations
@@ -49,207 +34,49 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import struct
 import subprocess
 import sys
-import zlib
 
+# Every script in this directory is run both as a program and as a module by its
+# test, which loads it by path; neither puts the directory itself on `sys.path`,
+# so the one sibling import this file makes is set up here rather than left to
+# whichever caller happened to be first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from gl_raster_picture import (  # noqa: E402  (after the path it needs)
+    EXPECTED_CLEAR,
+    EXPECTED_COLOUR,
+    EXPECTED_COVERED,
+    EXPECTED_EXTENT,
+    EXPECTED_ROW_ORDER,
+    SCALE,
+    check,
+    extract_json,
+    magnify,
+    pixels_from_hex,
+    write_png,
+)
+
+# The names above are this module's answer as much as the imported module's: the
+# gate is one contract stated once, and a caller reading `check_gl4_raster_readback`
+# should not have to know where the statement lives.  Listed rather than aliased
+# one by one so that a name dropped from the import is a NameError here.
+__all__ = [
+    "EXPECTED_CLEAR",
+    "EXPECTED_COLOUR",
+    "EXPECTED_COVERED",
+    "EXPECTED_EXTENT",
+    "EXPECTED_ROW_ORDER",
+    "SCALE",
+    "check",
+    "extract_json",
+    "magnify",
+    "pixels_from_hex",
+    "write_png",
+]
 
 DEFAULT_MANIFEST = Path("examples/windows-gl4/Cargo.toml")
 DEFAULT_OUT = Path("target/gl4-raster-readback")
-
-# What the workload's raster kernel and geometry require of the frame, restated
-# here because this file's answer must not be the crate's own.  Each was
-# adjudicated by a numbered row in ``0.15-plan.md``; a change to any of them is a
-# change to the *workload*, so it fails this gate and the plan and this file are
-# updated together rather than one quietly following the other.
-#
-# - the extent of the render target the workload compiles,
-# - the fragment colour `FIXED_COLOR_FRAGMENT` writes, in RGBA8,
-# - the clear the pass stores over the rest of the target,
-# - the row order the family's copy verbs produce,
-# - and the two pixels the triangle covers, as (row, column) from the region's
-#   own origin: NDC y = -0.25 is the second row and NDC x = +/-0.25 the middle
-#   two columns of a four-by-four target whose pixel centres are at +/-0.25.
-EXPECTED_EXTENT = (4, 4)
-EXPECTED_COLOUR = (48, 176, 112, 255)
-EXPECTED_CLEAR = (0, 0, 0, 255)
-EXPECTED_ROW_ORDER = "gl-bottom-left"
-EXPECTED_COVERED = ((1, 1), (1, 2))
-
-# The magnification the PNG is written at.  Forty-eight puts one target pixel on a
-# 48-pixel block, so the two covered pixels are unmistakable in a 192x192 image
-# opened at any size, and the picture is small enough to read as a whole.
-SCALE = 48
-
-
-def extract_json(stdout: str) -> dict:
-    """Returns the one JSON object the fixture printed.
-
-    The fixture prints a single object and nothing else, but a build line can
-    still reach stdout if the toolchain decides to be helpful, so the object is
-    taken by its own braces rather than by assuming a clean stream.
-    """
-    start = stdout.find("{")
-    end = stdout.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("the fixture printed no JSON object")
-    parsed = json.loads(stdout[start : end + 1])
-    if not isinstance(parsed, dict):
-        raise ValueError(f"the fixture printed a {type(parsed).__name__}, not an object")
-    return parsed
-
-
-def pixels_from_hex(rows: object) -> bytes:
-    """Returns the report's hex grid as the bytes it stands for."""
-    if not isinstance(rows, list) or not rows:
-        raise ValueError(f"the report's pixels are {rows!r}, not a non-empty list")
-    out = bytearray()
-    for row in rows:
-        if not isinstance(row, str) or len(row) != 8:
-            raise ValueError(f"the report carries {row!r} where an RGBA8 word belongs")
-        try:
-            out.extend(bytes.fromhex(row))
-        except ValueError as error:
-            raise ValueError(f"the report carries {row!r}, which is not hex") from error
-    return bytes(out)
-
-
-def check(report: dict, raw: bytes) -> list[str]:
-    """Returns every way the picture contradicts what the workload requires."""
-    problems: list[str] = []
-    if report.get("opened") is not True:
-        return ["the context did not open"]
-
-    workload = report.get("workload")
-    if not isinstance(workload, dict):
-        return [
-            "the report carries no workload block -- the fixture ran without --draws, so no frame "
-            "was driven and there is no picture to gate"
-        ]
-    if workload.get("passes") != 1:
-        problems.append(f"the workload ran {workload.get('passes')} passes, not one")
-    if not workload.get("draws_requested"):
-        problems.append("the workload drew nothing")
-
-    colour = workload.get("colour")
-    if not isinstance(colour, dict):
-        return problems + [
-            "the run reported no colour target -- the fixture ran without --readback, so the frame "
-            "was driven and thrown away"
-        ]
-
-    extent = colour.get("extent")
-    if not isinstance(extent, list) or tuple(extent) != EXPECTED_EXTENT:
-        return problems + [
-            f"the colour target is {extent!r}, not the {EXPECTED_EXTENT[0]}x{EXPECTED_EXTENT[1]} "
-            f"the workload compiles"
-        ]
-    width, height = EXPECTED_EXTENT
-    expected_bytes = width * height * 4
-
-    if colour.get("bytes") != expected_bytes:
-        problems.append(
-            f"the report says the colour target is {colour.get('bytes')} bytes where an "
-            f"{width}x{height} RGBA8 level is {expected_bytes}"
-        )
-    if len(raw) != expected_bytes:
-        return problems + [
-            f"the file holds {len(raw)} bytes where an {width}x{height} RGBA8 level is "
-            f"{expected_bytes}"
-        ]
-    if colour.get("row_order") != EXPECTED_ROW_ORDER:
-        problems.append(
-            f"the report states the row order {colour.get('row_order')!r}, which is not the "
-            f"{EXPECTED_ROW_ORDER!r} this family's copy verbs produce -- the consumer that flips "
-            f"the image is told which order it has, so a wrong statement is a wrong image"
-        )
-
-    # The two statements of one picture, checked against each other before the
-    # expected values are consulted: a run that disagrees with itself has failed
-    # for a reason no expected picture can diagnose.
-    try:
-        stated = pixels_from_hex(colour.get("pixels_rgba8"))
-    except ValueError as error:
-        return problems + [str(error)]
-    if stated != raw:
-        problems.append(
-            "the report's hex grid and the file it names are different pictures -- one of them is "
-            "not what this run produced"
-        )
-        return problems
-
-    covered = {(row, column) for row, column in EXPECTED_COVERED}
-    for row in range(height):
-        for column in range(width):
-            offset = (row * width + column) * 4
-            pixel = tuple(raw[offset : offset + 4])
-            if (row, column) in covered:
-                if pixel != EXPECTED_COLOUR:
-                    problems.append(
-                        f"the covered pixel at row {row}, column {column} is {pixel}, not the "
-                        f"kernel's {EXPECTED_COLOUR}"
-                    )
-            elif pixel != EXPECTED_CLEAR:
-                problems.append(
-                    f"the pixel at row {row}, column {column} is {pixel}, not the clear "
-                    f"{EXPECTED_CLEAR} -- only the two the triangle covers may be anything else"
-                )
-    if not any(
-        tuple(raw[(row * width + column) * 4 : (row * width + column) * 4 + 4]) == EXPECTED_COLOUR
-        for row in range(height)
-        for column in range(width)
-    ):
-        problems.append(
-            "no pixel carries the kernel's colour: the frame was read but nothing was drawn into it"
-        )
-    return problems
-
-
-def write_png(path: Path, width: int, height: int, rows: list[bytes]) -> None:
-    """Writes an 8-bit RGB PNG of ``rows``, top-down, standard library only.
-
-    Hand-written rather than taken from a library because every script in this
-    directory is stdlib-only on purpose (``CLAUDE.md`` §4): the artifact is a
-    picture a reviewer opens, and a third-party runtime in the release path for
-    the sake of one file would be the dependency that rule exists to refuse.
-    """
-
-    def chunk(tag: bytes, body: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(body))
-            + tag
-            + body
-            + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
-        )
-
-    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    flat = b"".join(b"\x00" + row for row in rows)
-    path.write_bytes(
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", header)
-        + chunk(b"IDAT", zlib.compress(flat, 9))
-        + chunk(b"IEND", b"")
-    )
-
-
-def magnify(raw: bytes, extent: tuple[int, int], scale: int) -> tuple[int, int, list[bytes]]:
-    """Returns a top-down, magnified RGB rendering of the raw bottom-up picture.
-
-    The flip is the one this gate exists to make visible: the bytes arrive in the
-    family's order and a viewer sees the frame the way the rasterizer wrote it, so
-    the rows are reversed here rather than being left for whoever opens the file
-    to work out.
-    """
-    width, height = extent
-    top_down: list[bytes] = []
-    for row in reversed(range(height)):
-        pixels = [raw[(row * width + column) * 4 : (row * width + column) * 4 + 3]
-                  for column in range(width)]
-        line = b"".join(pixel * scale for pixel in pixels)
-        for _ in range(scale):
-            top_down.append(line)
-    return width * scale, height * scale, top_down
 
 
 def run_fixture(manifest: Path, draws: int, extent: tuple[int, int], colour: Path,

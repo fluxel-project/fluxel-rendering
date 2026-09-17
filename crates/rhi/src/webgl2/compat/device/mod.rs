@@ -160,10 +160,18 @@ mod failure;
 // `compat`, so the adapter and its verbs are nameable only from inside this
 // module.  It is `pub(crate)` so that `compat/mod.rs` can hand it to
 // `test_support`, which is where it becomes reachable at all.
+// The gate names both native surfaces rather than the Windows one alone.  What
+// lives here is the report vocabulary and the request parsing every native
+// entry shares, and none of it is WGL-shaped; only `drive_desktop_gl4_draws`
+// is, and it carries that gate itself.  Leaving the module on the Windows gate
+// would have locked the shared vocabulary behind one surface, which is the same
+// defect `webgl2::conformance` had and is fixed the same way.
 #[cfg(all(
-    target_os = "windows",
-    feature = "native-gl-wgl",
-    feature = "test-support"
+    feature = "test-support",
+    any(
+        all(target_os = "windows", feature = "native-gl-wgl"),
+        all(not(target_arch = "wasm32"), feature = "native-gles-egl")
+    )
 ))]
 pub(crate) mod harness;
 mod object;

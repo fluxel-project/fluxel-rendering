@@ -34,9 +34,11 @@ pub(super) mod compat;
 /// reach that surface would otherwise compile a module nothing in the crate
 /// names.
 #[cfg(all(
-    target_os = "windows",
-    feature = "native-gl-wgl",
-    feature = "test-support"
+    feature = "test-support",
+    any(
+        all(target_os = "windows", feature = "native-gl-wgl"),
+        all(not(target_arch = "wasm32"), feature = "native-gles-egl")
+    )
 ))]
 pub(crate) mod conformance;
 

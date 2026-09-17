@@ -1,0 +1,2 @@
+# Rust build output for this fixture, which builds outside the workspace.
+/target/

@@ -1,13 +1,23 @@
-//! Opening one real DesktopGl4 context and reporting what it turned out to be.
+//! Opening one real GL-family context and reporting what it turned out to be.
 //!
 //! This module exists because of a hole rather than a plan.  The GL-family
-//! providers had no reachable entry point: [`WglContextSurface`] and its `open`
+//! providers had no reachable entry point: the WGL surface and its `open`
 //! were named nowhere outside their own module, no test in this repository had
 //! ever created a WGL context, and [`crate::Backend`] has no GL-family variant
 //! -- so the matrix cell for desktop GL had no vehicle at all, and a release
 //! gate that asks for real-hardware evidence could not collect any.  This is
 //! the vehicle: the smallest thing that opens the context through the same
 //! constructor a real adapter would use and reports what the driver answered.
+//!
+//! # Two surfaces, one projection
+//!
+//! The *reading* [`report`] produces is a projection of a [`GlDiscoverySnapshot`]
+//! and names nothing platform-specific, so it serves every native GL-family
+//! surface the same way.  Only `observe_desktop_gl4_context` is WGL-shaped --
+//! it takes a caller's drawable through the standard raw-handle traits -- and it
+//! carries that gate itself.  An EGL pbuffer has no drawable to take, so the
+//! GLES entry that reports through the same projection lives with the other
+//! measurements rather than here; this module contributes the reading.
 //!
 //! # What it is, and what it deliberately is not
 //!
@@ -21,28 +31,38 @@
 //! path from this module to one.
 //!
 //! It is not a second discovery implementation.  Everything reported comes from
-//! the snapshot [`WglContextSurface::open`] already gathered and validated --
-//! the same snapshot the executor reads -- so a report cannot disagree with the
+//! the snapshot the surface's own `open` already gathered and validated -- the
+//! same snapshot the executor reads -- so a report cannot disagree with the
 //! context the adapter would go on to use.
 //!
-//! # The window is the caller's
+//! # The drawable belongs to whoever opened the context
 //!
-//! This module never creates a window, owns a message pump, or chooses a
-//! drawable size.  It takes a raw handle from whatever produced one -- the
-//! standard trait every window provider implements, including the ecosystem's
-//! own host -- and the extent the caller says that drawable has.  That is the
-//! narrow protocol the boundary is defined by, and it is why the hardware gate
-//! lives outside this crate while the scenario that needs private identities
-//! lives inside it.
+//! Neither this module nor the entries that report through it create a window,
+//! own a message pump, or choose a drawable size.  The WGL entry takes a raw
+//! handle from whatever produced one -- the standard trait every window provider
+//! implements, including the ecosystem's own host -- and the extent the caller
+//! says that drawable has; the EGL entry is handed an offscreen extent instead,
+//! because a pbuffer has no window behind it to borrow.  That is the narrow
+//! protocol the boundary is defined by, and it is why the hardware gate lives
+//! outside this crate while the scenario that needs private identities lives
+//! inside it.
 
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
+use super::api::{ContextEpoch, ContextStamp, DeviceIdentity, WglContextSurface};
 use super::api::{
-    ContextEpoch, ContextStamp, DeviceIdentity, GlCapability, GlDiscoverySnapshot, GlLimits,
-    GlSurfaceFacts, OwnerThreadIdentity, WglContextSurface,
+    GlCapability, GlDiscoverySnapshot, GlLimits, GlSurfaceFacts, OwnerThreadIdentity,
 };
 
-/// What one real desktop GL context answered when it was asked.
+/// What one real GL-family context answered when it was asked.
+///
+/// The reading is named for the family rather than for a profile because it is
+/// one projection serving every native surface -- a desktop GL 4.x context and a
+/// GLES 3.x one answer the same questions here, and the profile they answered
+/// with is one of the fields.  A name claiming a profile would make a GLES run
+/// reported through it a lie about which context produced the pixels.
 ///
 /// Every field is a projection of the snapshot the context opened with, and the
 /// projection is deliberately lossless where the ledger asks for a fact and
@@ -56,7 +76,7 @@ use super::api::{
 /// the field rather than retyped, so a row cannot drift from the thing it
 /// describes.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DesktopGl4ContextReport {
+pub struct NativeGlContextReport {
     /// The normalized profile the context was accepted as.
     pub profile: String,
     /// The driver's own version string.
@@ -114,11 +134,12 @@ pub struct DesktopGl4ContextReport {
 /// here are crate-private, and a caller outside the crate has no business
 /// matching on them -- what a hardware gate needs from a failure is the exact
 /// message, which is what it gets.
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 pub fn observe_desktop_gl4_context<H>(
     host: &H,
     extent: [u32; 2],
     identity: u64,
-) -> Result<DesktopGl4ContextReport, String>
+) -> Result<NativeGlContextReport, String>
 where
     H: HasWindowHandle + HasDisplayHandle,
 {
@@ -150,12 +171,12 @@ pub(crate) fn report(
     snapshot: &GlDiscoverySnapshot,
     drawable_extent: [u32; 2],
     owner_thread: &OwnerThreadIdentity,
-) -> DesktopGl4ContextReport {
+) -> NativeGlContextReport {
     let context = snapshot.context();
     let flags = context.flags();
     let extensions = snapshot.extensions();
 
-    DesktopGl4ContextReport {
+    NativeGlContextReport {
         profile: format!("{:?}", context.profile()),
         version: context.version().to_owned(),
         shading_language_version: context.shading_language_version().to_owned(),

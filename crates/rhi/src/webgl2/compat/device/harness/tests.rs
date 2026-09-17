@@ -33,7 +33,7 @@ use crate::webgl2::state::StateDomain;
 /// The reading is projected from the same snapshot the mock is built from,
 /// through the same function the real entry calls, so the mock run exercises
 /// the whole of the workload rather than a reduced version of it.
-fn drive(mode: ExecutionMode, draws: u32) -> DesktopGl4DrawReport {
+fn drive(mode: ExecutionMode, draws: u32) -> NativeGlDrawReport {
     let discovery = snapshot(GlFamilyProfile::WebGl2);
     // The test thread owns the mock, so the identity it reports is this
     // thread's -- which is the same fact the real entry records.
@@ -46,7 +46,7 @@ fn drive(mode: ExecutionMode, draws: u32) -> DesktopGl4DrawReport {
         stepping_clock(),
     )
     .unwrap_or_else(|error| panic!("the workload runs over the mock context in {mode:?}: {error}"));
-    DesktopGl4DrawReport::from_cost(reading, cost, None)
+    NativeGlDrawReport::from_cost(reading, cost, None)
 }
 
 /// One run of the workload that reads its colour target back, over the mock.
@@ -78,7 +78,7 @@ fn drive_reading_colour(mode: ExecutionMode, draws: u32, wanted: bool) -> Option
         },
     )
     .unwrap_or_else(|error| panic!("the workload runs over the mock context in {mode:?}: {error}"));
-    DesktopGl4DrawReport::from_cost(reading, cost, pixels.map(ColourReadback::from_pixels)).colour
+    NativeGlDrawReport::from_cost(reading, cost, pixels.map(ColourReadback::from_pixels)).colour
 }
 
 /// A clock that is not a clock: it advances one fixed step per read.
@@ -101,7 +101,7 @@ fn stepping_clock() -> impl Fn() -> u64 {
 const STEP_NANOS: u64 = 1_000;
 
 /// A report's per-domain rows, as `(name, requests, emitted, skipped)`.
-fn rows(report: &DesktopGl4DrawReport) -> Vec<(String, u64, u64, u64)> {
+fn rows(report: &NativeGlDrawReport) -> Vec<(String, u64, u64, u64)> {
     report
         .domains
         .iter()

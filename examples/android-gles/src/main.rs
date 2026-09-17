@@ -1,76 +1,81 @@
-//! Desktop GL 4.x hardware evidence, collected on a real context.
+//! GLES family hardware evidence, collected on a real EGL pbuffer context.
 //!
-//! This fixture is the window half of a split and nothing else.  `fluxel-host`
-//! owns the native window and its message pump; `fluxel-rhi`'s doc-hidden
-//! conformance entry owns opening the context and reading the driver, because
-//! that needs the GL family's private identities and no out-of-workspace caller
-//! can be given them without widening a contract this series froze.  The two
-//! halves meet at the standard raw-handle traits and nowhere else.
+//! This fixture is the offscreen half of the GL-family evidence pair, and it is
+//! the one that can run on a device rather than on the machine that builds it.
+//! `fluxel-rhi`'s doc-hidden conformance entry owns opening the context and
+//! reading the driver, because that needs the GL family's private identities and
+//! no out-of-workspace caller can be given them without widening a contract this
+//! series froze.  What is left here is argument parsing and a report.
 //!
-//! It prints one JSON object describing exactly what the driver answered, which
-//! is the evidence a gate consumes; it does not decide whether the answer is
-//! good.  Verdicts belong to the checking script, so that a run's output is a
-//! record rather than an opinion.
+//! It prints the same JSON object `examples/windows-gl4` prints, key for key, so
+//! that the two evidences can be diffed and one checker can read both.  That is
+//! the reason this file restates the report writer rather than sharing one: the
+//! two fixtures are out-of-workspace crates by design, and a shared crate between
+//! them would be an edge each of them would have to carry.  A reader comparing
+//! the two should find them near-identical on purpose.
 //!
-//! # The second thing it can be asked for
+//! # What it cannot be asked for, and why
 //!
-//! With `--draws N` it drives a measured workload instead -- one raster pass
-//! issuing `N` indexed draws through the compatibility adapter -- and reports
-//! what that run cost alongside what the context turned out to be.  Both
-//! readings come from the same call because they have to: `SetPixelFormat` may
-//! be called once per window, so a process gets exactly one WGL context over a
-//! given drawable, and observing-then-reopening is the second open the driver
-//! refuses with `PixelFormatAlreadyConfigured`.  The cost run therefore carries
-//! the context reading with it, and a run that asks for no workload prints
-//! exactly the object it printed before the flag existed.
+//! There is no observe-only run.  The desktop fixture can print a context reading
+//! with no frame behind it, because WGL has a separate entry for that; here the
+//! reading and the run come from one call, and `drive_gles_pbuffer_draws` refuses
+//! a zero-draw workload rather than measuring only its own setup.  So `--draws`
+//! defaults to one rather than to zero, and there is no `--frames`: an offscreen
+//! context has no message queue to pump and no window that can be closed.
 //!
-//! # The third thing it can be asked for
+//! # Why the extent is a parameter when the target is not
 //!
-//! With `--readback PATH` the workload run also reads its colour target back and
-//! writes the raw bytes to `PATH`, so that the picture a real desktop GL4 context
-//! produced can be *looked at* and not only counted.  The pixels are reported in
-//! the same JSON by value as well, because the target is a fixed four-by-four and
-//! a reviewer checking coverage and orientation should not have to decode a file
-//! to do it.
+//! The workload renders into a fixed four-by-four texture; the extent this
+//! fixture takes is the *pbuffer's* size, which is a fact about the surface the
+//! frame runs on.  They are separate on purpose -- a pbuffer has no window to
+//! adopt an extent from, so the caller has to state it, and the report echoes it
+//! back so that the surface and the frame it carried can be told apart.
+//!
+//! ```text
+//! adb shell /data/local/tmp/fluxel-android-gles-harness \
+//!     --extent 64x64 --draws 1 --readback /data/local/tmp/colour.rgba
+//! ```
+//!
+//! # The picture
+//!
+//! With `--readback PATH` the run also reads its colour target back and writes
+//! the raw bytes to `PATH`, so that the picture a real GLES context produced can
+//! be *looked at* and not only counted.  The pixels are reported in the same JSON
+//! by value as well, because the target is a fixed four-by-four and a reviewer
+//! checking coverage and orientation should not have to decode a file to do it.
 //!
 //! The bytes are written in the order the family produced them and the report
 //! says which order that is; nothing here flips them.  A fixture that reversed
 //! rows would be inventing an interpretation, and the one thing a consumer of
 //! this output must not have to guess is whether the image is upside down.
-//!
-//! ```powershell
-//! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --frames 1
-//! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --draws 2000 --mode oracle
-//! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --draws 1 --readback target/evidence/gl4.rgba
-//! ```
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use fluxel_host::{Window, WindowConfig};
 use fluxel_rhi::test_support::{
-    ColourReadback, NativeGlContextReport, NativeGlDrawReport, drive_desktop_gl4_draws,
-    observe_desktop_gl4_context,
+    ColourReadback, NativeGlContextReport, NativeGlDrawReport, drive_gles_pbuffer_draws,
 };
 
-/// The default client extent, and the extent the context is opened for.
+/// The default pbuffer extent, and the extent the context is opened for.
 ///
-/// Small on purpose: this fixture collects context evidence rather than
-/// pixels, so the drawable only has to be a real one the driver will accept.
-const DEFAULT_EXTENT: [u32; 2] = [640, 480];
+/// Small on purpose: the frame this drives renders into a four-by-four target
+/// whatever the pbuffer is, so a larger surface buys nothing but allocation.  It
+/// is not four-by-four itself, because a pbuffer that exactly matched the target
+/// would make a surface that failed to be created at the requested size
+/// indistinguishable from one that was.
+const DEFAULT_EXTENT: [u32; 2] = [64, 64];
 
-/// The identity the context is opened with, whichever reading is asked for.
+/// The identity the context is opened with.
 ///
-/// One number for both paths because there is one context: a run either
-/// observes it or drives it, and never does both over the same drawable.
+/// Carried through the common device identity rather than being a GL name: the
+/// adapter's resources are keyed by it, and a zero here is refused before
+/// anything is opened.
 const CONTEXT_IDENTITY: u64 = 1;
 
 fn main() -> ExitCode {
     let mut extent = DEFAULT_EXTENT;
-    let mut frames = 1_u32;
-    let mut draws = 0_u32;
+    let mut draws = 1_u32;
     let mut mode = String::from("optimized");
-    let mut mode_given = false;
     let mut readback: Option<PathBuf> = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -78,29 +83,19 @@ fn main() -> ExitCode {
             "--extent" => match arguments.next().as_deref().and_then(parse_extent) {
                 Some(parsed) => extent = parsed,
                 None => {
-                    eprintln!("--extent wants WIDTHxHEIGHT, for example 640x480");
-                    return ExitCode::from(2);
-                }
-            },
-            "--frames" => match arguments.next().as_deref().and_then(|raw| raw.parse().ok()) {
-                Some(parsed) => frames = parsed,
-                None => {
-                    eprintln!("--frames wants a non-negative count");
+                    eprintln!("--extent wants WIDTHxHEIGHT, for example 64x64");
                     return ExitCode::from(2);
                 }
             },
             "--draws" => match arguments.next().as_deref().and_then(|raw| raw.parse().ok()) {
-                Some(parsed) => draws = parsed,
-                None => {
+                Some(0) | None => {
                     eprintln!("--draws wants a positive count");
                     return ExitCode::from(2);
                 }
+                Some(parsed) => draws = parsed,
             },
             "--mode" => match arguments.next() {
-                Some(parsed) => {
-                    mode = parsed;
-                    mode_given = true;
-                }
+                Some(parsed) => mode = parsed,
                 None => {
                     eprintln!("--mode wants `optimized` or `oracle`");
                     return ExitCode::from(2);
@@ -119,84 +114,27 @@ fn main() -> ExitCode {
             }
         }
     }
-    if readback.is_some() && draws == 0 {
-        // There is no frame to read a picture out of, and the alternative --
-        // opening a context, driving nothing and writing a file of zeroes --
-        // would be evidence of a frame that never happened.
-        eprintln!("--readback only means something with --draws: without a workload there is no frame to read");
-        return ExitCode::from(2);
-    }
-    if mode_given && draws == 0 {
-        // The entry refuses a zero-draw workload for the same reason, so saying
-        // it here turns a silent no-op into a usage error.
-        eprintln!("--mode only means something with --draws: without a workload there is nothing to run");
-        return ExitCode::from(2);
-    }
 
-    let config = match WindowConfig::new("fluxel desktop GL4 evidence", extent[0], extent[1]) {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("the window configuration was refused: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let window = match Window::new(config) {
-        Ok(window) => window,
-        Err(error) => {
-            eprintln!("the window did not open: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // The host owns the pump, so pumping is this loop's job rather than the
-    // context entry's: an unfed Win32 queue is a window the driver may block on.
-    if let Err(error) = window.poll_events() {
-        eprintln!("pumping the window failed: {error}");
-        return ExitCode::FAILURE;
-    }
-
-    // One context, one reading: the cost run opens the context and reports what
-    // it found on the way in, because the driver grants this process exactly one
-    // pixel format for this drawable.  Asking for both by opening twice is what
-    // `PixelFormatAlreadyConfigured` refuses, so the flag picks a path rather
-    // than adding one.
-    let (report, workload) = if draws == 0 {
-        match observe_desktop_gl4_context(&window, extent, CONTEXT_IDENTITY) {
-            Ok(report) => (report, None),
-            Err(error) => return report_failure(&error),
-        }
-    } else {
-        let wanted = readback.is_some();
-        match drive_desktop_gl4_draws(&window, extent, CONTEXT_IDENTITY, &mode, draws, wanted) {
-            Ok(report) => (report.context.clone(), Some(report)),
-            Err(error) => return report_failure(&error),
-        }
+    let wanted = readback.is_some();
+    let report = match drive_gles_pbuffer_draws(extent, CONTEXT_IDENTITY, &mode, draws, wanted) {
+        Ok(report) => report,
+        Err(error) => return report_failure(&error),
     };
 
     // Written before the report is printed, so that a document naming a file
     // cannot be produced by a run whose file was never written.  A failure here
     // is a failure of the run: the evidence this flag exists for is the pair.
-    if let (Some(path), Some(workload)) = (readback.as_ref(), workload.as_ref()) {
-        if let Some(colour) = workload.colour.as_ref() {
-            if let Err(error) = std::fs::write(path, &colour.bytes) {
-                eprintln!("the colour target did not reach {}: {error}", path.display());
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-
-    for _ in 1..frames {
-        if let Err(error) = window.poll_events() {
-            eprintln!("pumping the window failed: {error}");
+    if let (Some(path), Some(colour)) = (readback.as_ref(), report.colour.as_ref()) {
+        if let Err(error) = std::fs::write(path, &colour.bytes) {
+            eprintln!(
+                "the colour target did not reach {}: {error}",
+                path.display()
+            );
             return ExitCode::FAILURE;
         }
     }
 
-    println!("{}", render(&report, workload.as_ref()));
-    if window.close_requested() {
-        // Not a failure: the window closing is the fixture's normal ending.
-        eprintln!("the window was closed during the run");
-    }
+    println!("{}", render(&report.context, Some(&report)));
     ExitCode::SUCCESS
 }
 
@@ -204,8 +142,8 @@ fn main() -> ExitCode {
 ///
 /// Machine-readable as well as human-readable, because a gate needs to record
 /// what went wrong and not only that the process exited nonzero: the object is
-/// the same `opened: false` shape either entry's failure produces, so a checker
-/// reads one document whether the context refused to open or refused to run.
+/// the same `opened: false` shape the desktop fixture's failure produces, so a
+/// checker reads one document whichever fixture ran.
 fn report_failure(error: &str) -> ExitCode {
     println!("{{\"opened\":false,\"error\":{}}}", json_string(error));
     eprintln!("{error}");
@@ -213,7 +151,8 @@ fn report_failure(error: &str) -> ExitCode {
 }
 
 /// `WIDTHxHEIGHT`, both nonzero.
-fn parse_extent(raw: &str) -> Option<[u32; 2]> {    let (width, height) = raw.split_once('x')?;
+fn parse_extent(raw: &str) -> Option<[u32; 2]> {
+    let (width, height) = raw.split_once('x')?;
     let width: u32 = width.parse().ok()?;
     let height: u32 = height.parse().ok()?;
     (width > 0 && height > 0).then_some([width, height])
@@ -221,17 +160,15 @@ fn parse_extent(raw: &str) -> Option<[u32; 2]> {    let (width, height) = raw.sp
 
 /// The report as one JSON object.
 ///
-/// Hand-written rather than derived: this fixture is a consumer of a
-/// doc-hidden contract and adding a serialization dependency to it would make
-/// the evidence depend on a third runtime for no gain.  The shape is flat and
-/// the checker reads it by name, so there is nothing here a derive would do
-/// better.
+/// Hand-written rather than derived: this fixture is a consumer of a doc-hidden
+/// contract and adding a serialization dependency to it would make the evidence
+/// depend on a third runtime for no gain.  The shape is flat and the checker
+/// reads it by name, so there is nothing here a derive would do better.
 ///
 /// `workload` is the one nested object, and it is nested rather than flattened
-/// so that the keys of a run that asked for no workload are byte-for-byte the
-/// keys it printed before the flag existed -- a gate reading this document by
-/// name cannot be affected by a field it does not ask for, but an *absence* it
-/// already tolerates is not something to start relying on.
+/// so that the two fixtures' documents have the same keys in the same places: a
+/// gate that reads one reads the other, and a reviewer diffing them sees the
+/// context reading and nothing else diverge.
 fn render(report: &NativeGlContextReport, workload: Option<&NativeGlDrawReport>) -> String {
     let mut fields = vec![
         ("opened".to_owned(), "true".to_owned()),
@@ -252,15 +189,9 @@ fn render(report: &NativeGlContextReport, workload: Option<&NativeGlDrawReport>)
             "forward_compatible".to_owned(),
             report.forward_compatible.to_string(),
         ),
-        (
-            "robust_access".to_owned(),
-            report.robust_access.to_string(),
-        ),
+        ("robust_access".to_owned(), report.robust_access.to_string()),
         ("no_error".to_owned(), report.no_error.to_string()),
-        (
-            "other_flags".to_owned(),
-            json_strings(&report.other_flags),
-        ),
+        ("other_flags".to_owned(), json_strings(&report.other_flags)),
         (
             "reported_extension_count".to_owned(),
             report.reported_extension_count.to_string(),
@@ -273,10 +204,7 @@ fn render(report: &NativeGlContextReport, workload: Option<&NativeGlDrawReport>)
             "typed_extensions".to_owned(),
             json_pairs(&report.typed_extensions),
         ),
-        (
-            "capabilities".to_owned(),
-            json_flags(&report.capabilities),
-        ),
+        ("capabilities".to_owned(), json_flags(&report.capabilities)),
         ("limits".to_owned(), json_pairs(&report.limits)),
         (
             "surface_facts".to_owned(),
@@ -284,12 +212,12 @@ fn render(report: &NativeGlContextReport, workload: Option<&NativeGlDrawReport>)
         ),
         (
             "drawable_extent".to_owned(),
-            format!("[{}, {}]", report.drawable_extent[0], report.drawable_extent[1]),
+            format!(
+                "[{}, {}]",
+                report.drawable_extent[0], report.drawable_extent[1]
+            ),
         ),
-        (
-            "owner_thread".to_owned(),
-            json_string(&report.owner_thread),
-        ),
+        ("owner_thread".to_owned(), json_string(&report.owner_thread)),
     ];
     if let Some(workload) = workload {
         fields.push(("workload".to_owned(), json_workload(workload)));
@@ -305,9 +233,9 @@ fn render(report: &NativeGlContextReport, workload: Option<&NativeGlDrawReport>)
 
 /// What one driven run cost, as a nested JSON object.
 ///
-/// Every field is a `u64` counter or a small string, and each one is named
-/// after the report field it came from, so the mapping from this document back
-/// to `NativeGlDrawReport` needs no table.
+/// Every field is a `u64` counter or a small string, and each one is named after
+/// the report field it came from, so the mapping from this document back to
+/// `NativeGlDrawReport` needs no table.
 ///
 /// The three submission tallies this family never writes are absent here for the
 /// same reason they are absent from the report: a `draws` field that is
@@ -337,7 +265,10 @@ fn json_workload(report: &NativeGlDrawReport) -> String {
     let domains = format!("[\n{rows}\n  ]");
     let mut fields = vec![
         ("mode".to_owned(), json_string(&report.mode)),
-        ("draws_requested".to_owned(), report.draws_requested.to_string()),
+        (
+            "draws_requested".to_owned(),
+            report.draws_requested.to_string(),
+        ),
         ("passes".to_owned(), report.passes.to_string()),
         ("pass_loads".to_owned(), report.pass_loads.to_string()),
         ("pass_stores".to_owned(), report.pass_stores.to_string()),
@@ -386,8 +317,8 @@ fn json_workload(report: &NativeGlDrawReport) -> String {
 ///
 /// The pixels are stated by value and in the order the file holds them, which is
 /// the order the family produced: `row_order` says which order that is and the
-/// grid below it is read in that order, left to right.  Stating them twice -- once
-/// as bytes on disk and once as hex here -- is the point rather than a
+/// grid below it is read in that order, left to right.  Stating them twice --
+/// once as bytes on disk and once as hex here -- is the point rather than a
 /// duplication: the file is what a reviewer looks at, and this is what a checker
 /// asserts on without decoding it.
 ///
@@ -459,8 +390,8 @@ fn json_flags(flags: &[(String, bool)]) -> String {
 
 /// A JSON string literal for `raw`.
 ///
-/// Driver strings reach this function untouched, so the escaping has to be
-/// real rather than reassuring: a vendor string containing a quote or a control
+/// Driver strings reach this function untouched, so the escaping has to be real
+/// rather than reassuring: a vendor string containing a quote or a control
 /// character must not be able to end the literal early and produce a document
 /// the gate then reads as something else.
 fn json_string(raw: &str) -> String {

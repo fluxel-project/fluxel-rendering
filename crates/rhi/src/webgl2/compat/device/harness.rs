@@ -1,5 +1,5 @@
-//! Driving a real DesktopGl4 context through the compatibility adapter, and
-//! reporting what the run cost.
+//! Driving a real native GL-family context through the compatibility adapter,
+//! and reporting what the run cost.
 //!
 //! # Why this exists, and why it is not [`crate::webgl2::conformance`]
 //!
@@ -20,12 +20,24 @@
 //!
 //! # What is left here once the workload moved out
 //!
-//! Everything that is a fact about *this* surface: opening a WGL context over
-//! the caller's drawable, taking the desktop reading that only this surface can
-//! take, and projecting both into one report.  The workload itself -- the graph,
-//! the draw loop, the counters -- is [`super::workload`], shared with the browser
-//! surface so that the cached-versus-uncached differential compares two contexts
-//! rather than two frames.
+//! Everything that is a fact about *a* surface rather than about the frame: the
+//! report vocabulary below, opening the context, taking the reading only that
+//! context can take, and projecting both into one report.  The workload itself --
+//! the graph, the draw loop, the counters -- is [`super::workload`], shared with
+//! the browser surface so that the cached-versus-uncached differential compares
+//! two contexts rather than two frames.
+//!
+//! # Two native surfaces, one report
+//!
+//! This module owns the vocabulary -- [`ColourReadback`], [`NativeGlDrawReport`],
+//! and the request parsing every entry shares -- because the report is a fact
+//! about a *run*, not about the window a run happened to happen on.  The entries
+//! themselves are where the surfaces differ, and they live in separate files:
+//! `drive_desktop_gl4_draws` here opens a WGL context over a caller-supplied
+//! drawable, and `pbuffer::drive_gles_pbuffer_draws` opens an EGL pbuffer that
+//! borrows nothing.  Splitting them is not tidiness: one is gated on Windows and
+//! `native-gl-wgl`, the other on `native-gles-egl` and a non-wasm target, and two
+//! gates in one function body would be a gate inside the thing it gates.
 //!
 //! # The mode is a string, and that is not a style preference
 //!
@@ -39,17 +51,37 @@
 //! defaulted, because a differential whose two halves silently ran the same mode
 //! is worse than one that failed.
 
+// The clock the WGL entry hands the workload is the host's.  It is not a
+// portable fact and is not imported as one: `Instant` does not exist on
+// `wasm32-unknown-unknown` at all, and the EGL entry has no reason to reach for
+// it, so an unconditional import would be an unused one in a build that lacks
+// this gate -- and the crate denies warnings.
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 use std::time::Instant;
 
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::readback;
-use super::workload::{self, DrawCost};
-use crate::webgl2::api::{
-    ContextEpoch, ContextStamp, DeviceIdentity, NativeGlProvider, WglContextSurface,
-};
-use crate::webgl2::conformance::{self, DesktopGl4ContextReport};
+use super::workload::DrawCost;
+use crate::webgl2::api::{ContextEpoch, ContextStamp, DeviceIdentity};
+use crate::webgl2::conformance::NativeGlContextReport;
 use crate::webgl2::state::ExecutionMode;
+
+// Both of these are reached *as modules* only by the WGL entry below: the EGL
+// entry lives in its own file and imports them for itself.  Importing them here
+// unconditionally would make them unused in an EGL-only build.
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
+use super::workload;
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
+use crate::webgl2::api::{NativeGlProvider, WglContextSurface};
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
+use crate::webgl2::conformance;
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-gles-egl"))]
+mod pbuffer;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-gles-egl"))]
+pub use pbuffer::drive_gles_pbuffer_draws;
 
 pub use super::workload::DomainTally;
 
@@ -108,9 +140,9 @@ impl ColourReadback {
 /// are absent here, and the emitted work is read where it is actually recorded,
 /// per domain, as `emitted` against `requests`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DesktopGl4DrawReport {
+pub struct NativeGlDrawReport {
     /// What the context this run drove answered when it was asked.
-    pub context: DesktopGl4ContextReport,
+    pub context: NativeGlContextReport,
     /// The execution mode the run actually used, as it was parsed.
     pub mode: String,
     /// How many draws the caller asked for.
@@ -159,7 +191,7 @@ pub struct DesktopGl4DrawReport {
     pub colour: Option<ColourReadback>,
 }
 
-impl DesktopGl4DrawReport {
+impl NativeGlDrawReport {
     /// This surface's context reading, over a cost the shared workload measured.
     ///
     /// Written out field by field rather than derived, because the two structs
@@ -169,7 +201,7 @@ impl DesktopGl4DrawReport {
     /// shared one, and the shared one is free to change when the funnel adds
     /// variety to the workload.
     fn from_cost(
-        context: DesktopGl4ContextReport,
+        context: NativeGlContextReport,
         cost: DrawCost,
         colour: Option<ColourReadback>,
     ) -> Self {
@@ -219,6 +251,7 @@ impl DesktopGl4DrawReport {
 /// [`crate::test_support::observe_desktop_gl4_context`] gives: the typed errors
 /// here are crate-private, and what a hardware gate needs from a failure is the
 /// message.
+#[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 pub fn drive_desktop_gl4_draws<H>(
     host: &H,
     extent: [u32; 2],
@@ -226,7 +259,7 @@ pub fn drive_desktop_gl4_draws<H>(
     mode: &str,
     draws: u32,
     read_colour: bool,
-) -> Result<DesktopGl4DrawReport, String>
+) -> Result<NativeGlDrawReport, String>
 where
     H: HasWindowHandle + HasDisplayHandle,
 {
@@ -306,7 +339,7 @@ where
         // about this frame rather than about the context, and prefixing them with
         // a context failure would point a reader at the driver.
         Ok(Err(inner)) => Err(inner),
-        Ok(Ok(cost)) => Ok(DesktopGl4DrawReport::from_cost(
+        Ok(Ok(cost)) => Ok(NativeGlDrawReport::from_cost(
             reading,
             cost,
             readback.map(ColourReadback::from_pixels),

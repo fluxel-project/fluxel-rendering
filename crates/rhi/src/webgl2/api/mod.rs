@@ -55,6 +55,22 @@ mod wgl;
 #[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 pub(crate) use wgl::WglContextSurface;
 
+/// The same three things for the EGL provider, which had none of them.
+///
+/// `WglContextSurface` above reached `pub(crate)` when the desktop-GL4 entry
+/// needed it; `egl` was left behind, and by the time anyone looked,
+/// `EglGlesContext::new_pbuffer` had zero callers and no nameable path from
+/// outside its own module -- so the GLES half of the GL-family story had no way
+/// to open a context at all.  This is the same hop, for the same reason, and it
+/// stops in the same place: a context, the version it is asked for, and the
+/// offscreen extent it is asked for, all `pub(crate)`, with no public path to
+/// any of them.
+///
+/// The companion type is `EglPbufferSize`, which is how a caller states that
+/// extent; nothing here exposes a native display, a window, or an EGL handle.
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-gles-egl"))]
+pub(crate) use egl::{EglGlesContext, EglGlesVersion, EglPbufferSize};
+
 /// The provider over a current native context, for the same reason as above and
 /// one more.
 ///

@@ -587,6 +587,46 @@ impl EglGlesContext {
         })
     }
 
+    /// Returns the discovery evidence gathered when this context opened.
+    ///
+    /// Discovery ran once against the exact current context during construction,
+    /// so this needs no repeat currentness and never re-queries -- the same
+    /// contract, and for the same reason, as the WGL surface's `discover`.
+    pub(crate) fn discover(&self) -> Result<&GlDiscoverySnapshot, GlError> {
+        self.assert_owner("discover EGL context")?;
+        if self.lifecycle == GlContextLifecycle::Disposed {
+            return Err(GlError::Disposed {
+                operation: "discover EGL context",
+            });
+        }
+        Ok(&self.snapshot)
+    }
+
+    /// Runs one operation while this context is current, lending it `glow`.
+    ///
+    /// The counterpart of the WGL surface's `with_current`, with two differences
+    /// that are facts about this provider rather than choices.
+    ///
+    /// It builds a `glow` context per call instead of lending out one loaded at
+    /// construction, because [`Self::load_glow`] is this provider's only loading
+    /// path and it needs `&mut self`.  The cost is resolving the driver's proc
+    /// addresses again on each call, which a one-shot measurement does not
+    /// notice; buying it back would mean caching a `glow::Context` in a struct
+    /// that currently has no field for one, for a saving nothing has asked for.
+    ///
+    /// And it takes `&mut self`, which is the honest signature for the same
+    /// reason: two of these cannot run at once over one EGL context, and the
+    /// borrow checker is a better guarantee of that than a comment would be.
+    pub(crate) fn with_current<T>(
+        &mut self,
+        operation: &'static str,
+        callback: impl FnOnce(&glow::Context) -> Result<T, GlError>,
+    ) -> Result<T, EglProviderError> {
+        self.assert_owner(operation)?;
+        let glow = self.load_glow()?;
+        callback(&glow).map_err(EglProviderError::Gl)
+    }
+
     /// Explicitly tears down EGL resources and reports the first driver error.
     pub(crate) fn dispose(&mut self) -> Result<(), EglProviderError> {
         self.assert_owner("eglDestroyContext")?;

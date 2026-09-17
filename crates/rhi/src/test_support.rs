@@ -41,7 +41,22 @@ use crate::{
 /// than a context, provider, device, or native handle, so no borrowed provider
 /// stack ever escapes.
 #[cfg(all(windows, feature = "native-gl-wgl"))]
-pub use crate::webgl2::conformance::{DesktopGl4ContextReport, observe_desktop_gl4_context};
+pub use crate::webgl2::conformance::observe_desktop_gl4_context;
+
+/// What one real native GL-family context answered when it was asked.
+///
+/// One type under one name wherever a native GL-family context can exist: a
+/// GLES 3.1 context answers the same questions a desktop GL 4.3 one does, and
+/// which profile it answered with is a field rather than a different struct.
+/// Two re-exports of one type under two gates would be two names for the same
+/// thing depending on the platform, which is the confusion a single name exists
+/// to prevent -- so this arm names both surfaces and the entries below name
+/// theirs.
+#[cfg(any(
+    all(windows, feature = "native-gl-wgl"),
+    all(not(target_arch = "wasm32"), feature = "native-gles-egl")
+))]
+pub use crate::webgl2::conformance::NativeGlContextReport;
 
 /// Drives one measured workload through the compatibility adapter over a real
 /// desktop GL context, and reports what the run cost.
@@ -66,10 +81,27 @@ pub use crate::webgl2::conformance::{DesktopGl4ContextReport, observe_desktop_gl
 /// because the readback costs a GL command pair on the clocked path, so a
 /// measurement that did not ask for a picture is the same measurement it was
 /// before the parameter existed.
-#[cfg(all(windows, feature = "native-gl-wgl", feature = "test-support"))]
-pub use crate::webgl2::compat::{
-    ColourReadback, DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws,
-};
+#[cfg(any(
+    all(windows, feature = "native-gl-wgl"),
+    all(not(target_arch = "wasm32"), feature = "native-gles-egl")
+))]
+pub use crate::webgl2::compat::{ColourReadback, DomainTally, NativeGlDrawReport};
+
+#[cfg(all(windows, feature = "native-gl-wgl"))]
+pub use crate::webgl2::compat::drive_desktop_gl4_draws;
+
+/// Drives the same measured workload over a real GLES context.
+///
+/// The surface is an EGL pbuffer, so this entry takes an extent rather than a
+/// drawable: there is no window to borrow and nothing offscreen to present to.
+/// Everything else -- the counters, the durations, the mode string, and the
+/// opt-in picture -- is the same report for the same reason, which is why the
+/// two entries share a type and differ only in how they obtain a context.
+///
+/// The same limit applies here as to any driver string: this proves a GLES
+/// implementation ran the frame, not that a particular physical device did.
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-gles-egl"))]
+pub use crate::webgl2::compat::drive_gles_pbuffer_draws;
 
 /// RAII latch for exactly one later successful DX12 presentation completion.
 ///
