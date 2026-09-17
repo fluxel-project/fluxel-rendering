@@ -397,8 +397,10 @@ impl WebGl2BrowserDiscovery {
     /// Applies the pack half of one transfer layout before `readPixels`.
     fn apply_pack(&mut self, layout: GlPixelLayout) {
         let bpp = layout.format.bytes_per_pixel();
-        let mappable = layout.bytes_per_row % bpp == 0
-            && layout.bytes_per_row % u32::from(layout.alignment) == 0;
+        let mappable = layout.bytes_per_row.is_multiple_of(bpp)
+            && layout
+                .bytes_per_row
+                .is_multiple_of(u32::from(layout.alignment));
         if mappable {
             self.raw
                 .pixel_storei(Gl::PACK_ALIGNMENT, i32::from(layout.alignment));
@@ -563,8 +565,10 @@ fn staged_unpack<'a>(
     bytes: &'a [u8],
 ) -> Result<Cow<'a, [u8]>, GlError> {
     let bpp = layout.format.bytes_per_pixel();
-    let mappable =
-        layout.bytes_per_row % bpp == 0 && layout.bytes_per_row % u32::from(layout.alignment) == 0;
+    let mappable = layout.bytes_per_row.is_multiple_of(bpp)
+        && layout
+            .bytes_per_row
+            .is_multiple_of(u32::from(layout.alignment));
     let offset = usize::try_from(layout.offset)
         .map_err(|_| validation(operation, "layout offset exceeds addressable range"))?;
     if offset > bytes.len() {
@@ -616,8 +620,10 @@ fn place_rows(layout: GlPixelLayout, region: GlTextureRegion, body: &[u8], bytes
     let bpp = layout.format.bytes_per_pixel() as usize;
     let width_bytes = (region.extent.width as usize) * bpp;
     let row = layout.bytes_per_row as usize;
-    let mappable = layout.bytes_per_row % (bpp as u32) == 0
-        && layout.bytes_per_row % u32::from(layout.alignment) == 0;
+    let mappable = layout.bytes_per_row.is_multiple_of(bpp as u32)
+        && layout
+            .bytes_per_row
+            .is_multiple_of(u32::from(layout.alignment));
     let offset = layout.offset as usize;
     if mappable {
         if let Some(dst) = bytes.get_mut(offset..offset + body.len()) {

@@ -57,7 +57,7 @@ impl GlDispatchIndirectAbi {
 }
 
 fn validate_indirect_range(range: GlBufferRange, operation: &'static str) -> Result<(), GlError> {
-    if range.size == 0 || range.offset % 4 != 0 || range.size % 4 != 0 {
+    if range.size == 0 || !range.offset.is_multiple_of(4) || !range.size.is_multiple_of(4) {
         Err(GlError::Validation {
             operation,
             message: "indirect buffer ranges must be nonempty and 4-byte aligned".into(),
@@ -112,8 +112,8 @@ impl GlIndirectCommandRange {
             GlIndirectAbi::Indexed => 20,
         };
         if self.draw_count == 0
-            || self.command_offset % 4 != 0
-            || self.stride != 0 && (self.stride < record || self.stride % 4 != 0)
+            || !self.command_offset.is_multiple_of(4)
+            || self.stride != 0 && (self.stride < record || !self.stride.is_multiple_of(4))
         {
             return Err(GlError::Validation {
                 operation,
@@ -151,7 +151,7 @@ impl GlDispatchIndirectCommand {
     /// always read whole, so the only failure modes are alignment and extent.
     pub(crate) fn validate(self, operation: &'static str) -> Result<(), GlError> {
         validate_indirect_range(self.range, operation)?;
-        if self.command_offset % 4 != 0
+        if !self.command_offset.is_multiple_of(4)
             || self
                 .command_offset
                 .checked_add(GlDispatchIndirectAbi::SIZE)
@@ -185,7 +185,7 @@ impl GlIndirectCountRange {
     pub(crate) fn validate(self, operation: &'static str) -> Result<(), GlError> {
         validate_indirect_range(self.range, operation)?;
         if self.max_draw_count == 0
-            || self.count_offset % 4 != 0
+            || !self.count_offset.is_multiple_of(4)
             || self
                 .count_offset
                 .checked_add(4)

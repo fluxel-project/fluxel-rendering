@@ -64,8 +64,10 @@ impl GlPixelLayout {
         if !matches!(self.alignment, 1 | 2 | 4 | 8) {
             return Err(GlCopyValidationError::InvalidPixelAlignment);
         }
-        let mappable = self.bytes_per_row % self.format.bytes_per_pixel() == 0
-            && self.bytes_per_row % u32::from(self.alignment) == 0;
+        let mappable = self
+            .bytes_per_row
+            .is_multiple_of(self.format.bytes_per_pixel())
+            && self.bytes_per_row.is_multiple_of(u32::from(self.alignment));
         if !mappable {
             match self.repack {
                 GlRepackPolicy::Disallow => return Err(GlCopyValidationError::UnmappableRowStride),

@@ -35,7 +35,7 @@ impl GlStorageBufferRange {
             || self.size == 0
             || self.size > limits.max_block_size
             || limits.offset_alignment == 0
-            || self.offset % limits.offset_alignment != 0
+            || !self.offset.is_multiple_of(limits.offset_alignment)
         {
             return Err(GlError::Validation {
                 operation: "bind_storage_buffer",
