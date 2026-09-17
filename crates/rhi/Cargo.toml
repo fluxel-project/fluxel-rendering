@@ -19,7 +19,7 @@ khronos-egl = { version = "=6.0.0", features = ["dynamic"], optional = true }
 [features]
 default = ["dx12", "vulkan"]
 dx12 = ["wgpu-hal/dx12", "dep:windows"]
-vulkan = ["wgpu-hal/vulkan", "dep:ash"]
+vulkan = ["wgpu-hal/vulkan", "dep:ash", "dep:gpu-allocator"]
 # Platform-neutral GL-family API/state contracts. Provider-specific features
 # will add only their own Layer 1 dependencies; this feature owns no window or
 # event loop.
@@ -48,6 +48,12 @@ wgpu-hal = { package = "fluxel-wgpu-hal", path = "../wgpu-hal", version = "30.0.
 wgpu-types = { version = "=30.0.0", default-features = false, features = ["std"] }
 windows = { version = "=0.62.2", optional = true, features = ["Win32_Graphics_Direct3D12"] }
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
+# Suballocation for the owned native backends (lead 3F, decision E). Not a
+# wgpu-family crate: it binds `ash` and the Direct3D 12 API directly, which is why
+# it is reused rather than written here. Declared with no default features and
+# enabled per backend through this crate's own features, exactly as the borrowed
+# layer above does.
+gpu-allocator = { version = "0.28", optional = true, default-features = false }
 glutin_wgl_sys = { version = "=0.6.1", optional = true }
 log = "0.4"
 naga = { version = "=30.0.1", features = ["wgsl-in"] }

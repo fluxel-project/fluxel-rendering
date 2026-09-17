@@ -370,6 +370,7 @@ dependencies = [
  "fluxel-wgpu-hal",
  "glow",
  "glutin_wgl_sys",
+ "gpu-allocator",
  "js-sys",
  "khronos-egl",
  "log",

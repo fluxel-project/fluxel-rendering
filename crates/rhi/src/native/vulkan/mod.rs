@@ -19,7 +19,15 @@
 //!    [`crate::common::caps::AdapterLimits`]; required limits; one queue. The
 //!    adapter index is a bootstrap choice, not an adapter-policy API.
 //! 3. **Memory.** `gpu-allocator` for suballocation. Device-local, host-visible
-//!    and staging kinds, with the staging path the immutable uploads use.
+//!    and staging kinds, with the staging path the immutable uploads use. The
+//!    dependency is direct now (`gpu-allocator` 0.28 behind the `vulkan` feature,
+//!    decision E) rather than only reachable through the borrowed layer, and its
+//!    `AllocatorCreateDesc` takes `instance`, `device` and `physical_device` **by
+//!    value**, so the allocator is built from those handles and must outlive every
+//!    allocation it returns. That is why it belongs beside the resource table that
+//!    owns them rather than inside one resource.
+//!    `memory::types` and `memory::select` already decide *which* type index a
+//!    resource uses; this step binds memory to the handle.
 //! 4. **Resources.** Buffers, textures, texture views and samplers, each created
 //!    with the usage set the portable descriptor asked for and no more, and each
 //!    stamped with a [`crate::common::base::resource::ResourceId`].
