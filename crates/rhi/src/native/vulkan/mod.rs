@@ -28,6 +28,19 @@
 //!    owns them rather than inside one resource.
 //!    `memory::types` and `memory::select` already decide *which* type index a
 //!    resource uses; this step binds memory to the handle.
+//!    The calls to reach for, read from `gpu-allocator` 0.28 rather than guessed:
+//!    `vulkan::Allocator::new(&AllocatorCreateDesc { .. })`, then
+//!    `allocate(&AllocationCreateDesc { name, requirements, location, linear,
+//!    allocation_scheme })` — those five are the whole Vulkan descriptor,
+//!    `requirements` being the `MemoryRequirements` the driver reported for the
+//!    handle being bound, and `AllocationScheme::GpuAllocatorManaged` the
+//!    suballocating choice. `MemoryLocation` is `Unknown | GpuOnly | CpuToGpu |
+//!    GpuToCpu`, which is `memory::MemoryPurpose` one to one:
+//!    `DeviceLocal -> GpuOnly`, `UploadStaging -> CpuToGpu`,
+//!    `ReadbackStaging -> GpuToCpu`. The returned `Allocation` reports `memory()`,
+//!    `offset()` and `size()`, which are what the bind call needs and what the
+//!    allocator's matching free consumes — so an allocation must not be freed
+//!    through a different allocator, and the resource table has to own both.
 //! 4. **Resources.** Buffers, textures, texture views and samplers, each created
 //!    with the usage set the portable descriptor asked for and no more, and each
 //!    stamped with a [`crate::common::base::resource::ResourceId`].
