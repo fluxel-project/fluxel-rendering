@@ -168,6 +168,12 @@ impl GlVertexApi for WebGl2BrowserDiscovery {
             .map(|entry| entry.raw.clone())
             .ok_or_else(|| Self::validation(OP, "vertex array disappeared"))?;
         self.raw.bind_vertex_array(Some(&raw));
+        // Recorded the moment the driver takes the binding rather than after the
+        // rest of this verb succeeds, because the record answers what the driver
+        // holds and not what this call intended: an attribute emission that fails
+        // below leaves the array bound all the same.  This is one of the two
+        // writers of that field.
+        self.bound_vertex_array = Some(vertex_array);
         self.emit_attributes(OP, &layout, buffers)?;
         // ELEMENT_ARRAY_BUFFER state lives inside the VAO, so the index
         // binding is recorded for draw-time bounds checks and byte offsets.

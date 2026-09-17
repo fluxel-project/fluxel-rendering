@@ -68,7 +68,13 @@ pub(super) struct ActivePass {
 /// The raster pipeline installed for the active pass.
 pub(super) struct ActiveRaster {
     pub(super) program: ProgramId,
-    pub(super) vertex_array: VertexArrayId,
+    /// The topology this pipeline installed.
+    ///
+    /// The vertex array is deliberately not recorded here even though the install
+    /// names one: GL's vertex-array binding is a single slot the input domain also
+    /// writes, and its owner is `WebGl2BrowserDiscovery::bound_vertex_array`.  A
+    /// per-pipeline copy went stale the moment the geometry domain reconciled
+    /// inputs, which under the uncached execution mode is on every request.
     pub(super) topology: GlPrimitiveTopology,
 }
 
@@ -183,6 +189,7 @@ impl WebGl2BrowserDiscovery {
         self.fences.revoke_all();
         self.pass = None;
         self.raster = None;
+        self.bound_vertex_array = None;
         self.active_query = None;
         self.next_shader_slot = 0;
         self.next_program_slot = 0;

@@ -39,7 +39,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::api::{
     ContextEpoch, ContextStamp, DeviceIdentity, GlCapability, GlDiscoverySnapshot, GlLimits,
-    GlSurfaceFacts, WglContextSurface,
+    GlSurfaceFacts, OwnerThreadIdentity, WglContextSurface,
 };
 
 /// What one real desktop GL context answered when it was asked.
@@ -146,10 +146,10 @@ where
 /// Projects one validated snapshot into the report.
 ///
 /// Reads only; nothing here can alter the context or its evidence.
-fn report(
+pub(crate) fn report(
     snapshot: &GlDiscoverySnapshot,
     drawable_extent: [u32; 2],
-    owner_thread: &super::api::OwnerThreadIdentity,
+    owner_thread: &OwnerThreadIdentity,
 ) -> DesktopGl4ContextReport {
     let context = snapshot.context();
     let flags = context.flags();

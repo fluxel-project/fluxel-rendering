@@ -90,7 +90,6 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
         // The program is resolved first even though it is selected last, so that
         // a dead program is reported before anything about the state is.
         self.program(OP, pipeline.program)?;
-        let vertex_array_raw = self.vertex_array(OP, pipeline.vertex_array)?.raw;
         pipeline
             .state
             .validate(GlRasterValidationInfo {
@@ -108,21 +107,22 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
         }
         // The program selection goes through the one owner of that fact, so a
         // compute install that ran in between cannot leave this pipeline's
-        // program unselected without this verb noticing.
+        // program unselected without this verb noticing.  The vertex array goes
+        // through the owner of the other binding slot for the same reason: this
+        // install states which array it wants, but what the driver holds is the
+        // provider's record to keep, and both draws read that record rather than
+        // this call's argument.
         self.ensure_program(OP, pipeline.program)?;
+        self.ensure_vertex_array(OP, pipeline.vertex_array)?;
         // SAFETY: current-context contract; the full validated state is
         // applied in one fixed order and a failure clears the installation.
-        let applied = unsafe {
-            self.gl.bind_vertex_array(Some(vertex_array_raw));
-            self.apply_raster_state(OP, &pipeline.state)
-        };
+        let applied = unsafe { self.apply_raster_state(OP, &pipeline.state) };
         if let Err(error) = applied.and_then(|()| self.driver_error(OP)) {
             self.raster = None;
             return Err(error);
         }
         self.raster = Some(ActiveRaster {
             program: pipeline.program,
-            vertex_array: pipeline.vertex_array,
             topology: pipeline.state.topology,
         });
         Ok(())
@@ -135,21 +135,29 @@ impl GlRasterCommandApi for NativeGlProvider<'_> {
         if self.pass.is_none() {
             return Err(Self::validation(OP, "no active render pass"));
         }
-        let (program, vertex_array, topology) = {
+        let (program, topology) = {
             let raster = self
                 .raster
                 .as_ref()
                 .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
-            (raster.program, raster.vertex_array, raster.topology)
+            (raster.program, raster.topology)
         };
         // A compute install or a link may have left another program current since
-        // this pipeline was installed.  The vertex array and the rasterization
-        // values are still in the driver -- neither verb touches them -- so
-        // re-asserting the program is what makes this draw the one the caller
-        // asked for rather than the one that happens to be selected.
+        // this pipeline was installed, so re-asserting the program is what makes
+        // this draw the one the caller asked for rather than the one that happens
+        // to be selected.
         self.ensure_program(OP, program)?;
+        // The vertex array is *not* re-asserted from the pipeline: the geometry
+        // domain reconciles inputs between the install and this draw and, under
+        // the uncached execution mode, replaces the array on every request, so
+        // the install-time identity is a dead object by now.  The provider's
+        // record of what the driver holds is the fact this draw needs, and it is
+        // also the array whose index binding and layout the draw must read.
+        let bound = self
+            .bound_vertex_array
+            .ok_or_else(|| Self::validation(OP, "no vertex array is bound"))?;
         let mode = topology_mode(topology);
-        let vertex_array = self.vertex_array(OP, vertex_array)?;
+        let vertex_array = self.vertex_array(OP, bound)?;
         let index = vertex_array.index;
         // SAFETY: current-context contract; counts, instances, and index spans
         // are checked against the recorded allocations before any draw call.

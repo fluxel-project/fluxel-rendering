@@ -69,6 +69,7 @@ use crate::webgl2::api::{
     BufferId, ContextEpoch, ContextStamp, DeviceIdentity, NativeGlProvider, TextureId,
     WglContextSurface,
 };
+use crate::webgl2::conformance::{self, DesktopGl4ContextReport};
 use crate::webgl2::state::{ExecutionMode, GlStateBackend, StateCounters};
 
 /// One domain's tallies, as a report row.
@@ -92,12 +93,17 @@ pub struct DomainTally {
     pub unknown_recoveries: u64,
 }
 
-/// What one driven run of the workload cost.
+/// What one driven run of the workload cost, together with the context it ran on.
 ///
-/// Counters and durations only.  It deliberately does not repeat the discovery
-/// projection [`crate::test_support::observe_desktop_gl4_context`] already
-/// returns: one entry answers what the context is, this one answers what the run
-/// did, and a caller that wants both calls both.
+/// The context reading is carried rather than left to a second call, and the
+/// reason is a driver fact this entry learned by being run: `SetPixelFormat` may
+/// be called **once** per window, so a process cannot open two WGL contexts over
+/// the same drawable -- the second is refused with `PixelFormatAlreadyConfigured`
+/// before anything is measured.  What a caller would otherwise do is observe the
+/// context, drop it, then reopen it to drive the frame, and that second open is
+/// exactly the call the driver refuses.  So the reading rides along with the run
+/// that produced it, and [`crate::test_support::observe_desktop_gl4_context`]
+/// stays what it is: the entry for callers who want the reading and no run.
 ///
 /// # Three of the submission tallies are absent, and why
 ///
@@ -111,6 +117,8 @@ pub struct DomainTally {
 /// per domain, as `emitted` against `requests`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesktopGl4DrawReport {
+    /// What the context this run drove answered when it was asked.
+    pub context: DesktopGl4ContextReport,
     /// The execution mode the run actually used, as it was parsed.
     pub mode: String,
     /// How many draws the caller asked for.
@@ -190,6 +198,11 @@ where
         .discover()
         .map_err(|error| format!("the context opened but discovery refused it: {error:?}"))?
         .clone();
+    // The context reading is taken here because here is the only place it can be:
+    // this context is the only one this process gets over this drawable, so a
+    // caller who wants the reading and the run gets both from this call or
+    // neither.
+    let reading = conformance::report(&snapshot, extent, &context.owner_thread());
 
     // The whole run happens inside one `with_current`, and it has to: the
     // provider borrows the `glow::Context` for its entire lifetime, so the
@@ -203,7 +216,7 @@ where
         // context produced during its own discovery -- which is the pair of
         // conditions `from_discovered` requires.
         let backend = unsafe { NativeGlProvider::from_discovered(gl, snapshot.clone()) };
-        Ok(run(backend, mode, draws, extent))
+        Ok(run(backend, mode, draws, extent, reading))
     });
     match outcome {
         Err(error) => Err(format!(
@@ -395,6 +408,7 @@ fn run<B: GlStateBackend>(
     mode: ExecutionMode,
     draws: u32,
     extent: [u32; 2],
+    context: DesktopGl4ContextReport,
 ) -> Result<DesktopGl4DrawReport, String> {
     let started = Instant::now();
     let (positions, elements) = geometry();
@@ -485,7 +499,14 @@ fn run<B: GlStateBackend>(
     let backend = executor.try_backend().ok_or_else(|| {
         "the executor still holds the backend after the frame returned".to_owned()
     })?;
-    let report = project(backend.counters(), mode, draws, extent, submit_nanos);
+    let report = project(
+        backend.counters(),
+        context,
+        mode,
+        draws,
+        extent,
+        submit_nanos,
+    );
     let total_nanos = started.elapsed().as_nanos() as u64;
     drop(backend);
     Ok(DesktopGl4DrawReport {
@@ -510,6 +531,7 @@ fn imported(graph: &mut RenderGraph, name: &str, size: u64) -> ImportedBuffer {
 /// Projects the layer's counters into the report, total time aside.
 fn project(
     counters: &StateCounters,
+    context: DesktopGl4ContextReport,
     mode: ExecutionMode,
     draws: u32,
     extent: [u32; 2],
@@ -526,6 +548,7 @@ fn project(
         })
         .collect();
     DesktopGl4DrawReport {
+        context,
         mode: match mode {
             ExecutionMode::Optimized => "optimized".to_owned(),
             ExecutionMode::Oracle => "oracle".to_owned(),
@@ -553,7 +576,7 @@ fn project(
 mod tests {
     use super::*;
     use crate::webgl2::api::tests::snapshot;
-    use crate::webgl2::api::{GlFamilyProfile, MockGlFamilyApi};
+    use crate::webgl2::api::{GlFamilyProfile, MockGlFamilyApi, OwnerThreadIdentity};
     use crate::webgl2::state::StateDomain;
 
     /// One run of the workload over the mock backend this crate's own suites use.
@@ -562,14 +585,25 @@ mod tests {
     /// module has to get right is *which number goes where*, and that is a fact
     /// about the projection rather than about a driver.  A real context would make
     /// the same assertions harder to read and no more true.
+    ///
+    /// The reading is projected from the same snapshot the mock is built from,
+    /// through the same function the real entry calls, so the mock run exercises
+    /// the whole of `run` rather than a reduced version of it.
     fn drive(mode: ExecutionMode, draws: u32) -> DesktopGl4DrawReport {
+        let discovery = snapshot(GlFamilyProfile::WebGl2);
+        // The test thread owns the mock, so the identity it reports is this
+        // thread's -- which is the same fact the real entry records.
+        let reading = conformance::report(&discovery, [4, 4], &OwnerThreadIdentity::current());
         run(
-            MockGlFamilyApi::from_discovery(snapshot(GlFamilyProfile::WebGl2)),
+            MockGlFamilyApi::from_discovery(discovery),
             mode,
             draws,
             [4, 4],
+            reading,
         )
-        .expect("the workload runs over the mock context")
+        .unwrap_or_else(|error| {
+            panic!("the workload runs over the mock context in {mode:?}: {error}")
+        })
     }
 
     /// A report's per-domain rows, as `(name, requests, emitted, skipped)`.
@@ -606,6 +640,26 @@ mod tests {
                 StateDomain::COUNT,
                 "the report names every domain, not only the ones this frame touched"
             );
+        }
+    }
+
+    /// A differential is only a differential if both halves complete.
+    ///
+    /// Found on hardware, not here: the optimized path was the only one that
+    /// preserved an invariant the draw verb asserts.  A pipeline install binds
+    /// the pipeline's vertex array and records it; under the oracle the next
+    /// geometry request re-derives that array and destroys the one it replaced,
+    /// so the recorded id is dead by the time the draw re-resolves it, and the
+    /// run refuses with `draw-raster / vertex array is not live` -- at *one*
+    /// draw, not at some count.  The recorder has to model that refusal or this
+    /// test passes for the wrong reason, which is what it did before the
+    /// recorder was taught the rule.
+    #[test]
+    fn the_uncached_path_completes_a_frame_with_more_than_one_draw() {
+        for draws in [1, 2, 8] {
+            let oracle = drive(ExecutionMode::Oracle, draws);
+            assert_eq!(oracle.draws_requested, draws);
+            assert_eq!(oracle.passes, 1);
         }
     }
 

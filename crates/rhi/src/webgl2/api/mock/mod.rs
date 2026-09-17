@@ -212,6 +212,17 @@ pub struct MockGlFamilyApi {
     /// draw has anything to draw with.  A pass end clears it, as the executable
     /// backends do.
     installed_raster_program: Option<ProgramId>,
+    /// The vertex array the modelled driver holds, or `None` when it holds none.
+    ///
+    /// Separate from the program because the two go stale for different reasons:
+    /// nothing but a compute install or a link touches the program slot, while
+    /// the vertex-array slot is written by an input reconcile as well -- and an
+    /// uncached reconcile destroys and replaces the array on *every* request.  So
+    /// a recorder that kept the array the pipeline install named would refuse the
+    /// array the driver is actually holding, which is precisely the defect the
+    /// real provider had.  Both writers of the slot record it here: the pipeline
+    /// install and `bind_vertex_array`.
+    bound_vertex_array: Option<VertexArrayId>,
     /// The optional draw offsets this recorder treats as proved.
     ///
     /// A provider learns these from its own context queries, which the
@@ -263,6 +274,7 @@ impl MockGlFamilyApi {
             installed_compute_program: None,
             current_program: None,
             installed_raster_program: None,
+            bound_vertex_array: None,
             advanced_raster: GlAdvancedRasterCapabilities {
                 base_vertex: false,
                 first_instance: false,
@@ -476,6 +488,7 @@ impl MockGlFamilyApi {
         self.installed_compute_program = None;
         self.current_program = None;
         self.installed_raster_program = None;
+        self.bound_vertex_array = None;
         // The new epoch has to requery every optional fact, and the recorder
         // cannot requery anything: keeping the previous context's answers would
         // let a restored context accept an offset it never proved.

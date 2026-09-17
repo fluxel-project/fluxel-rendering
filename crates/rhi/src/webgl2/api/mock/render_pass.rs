@@ -134,6 +134,7 @@ impl GlFramebufferApi for MockGlFamilyApi {
         // as a draw the driver would reject.  The current program is *not*
         // cleared: nothing in a pass end changes it.
         self.installed_raster_program = None;
+        self.bound_vertex_array = None;
         self.calls.push(MockCall::EndRenderPass);
         Ok(())
     }
@@ -264,6 +265,7 @@ impl GlRasterCommandApi for MockGlFamilyApi {
         })?;
         self.select_program(p.program);
         self.installed_raster_program = Some(p.program);
+        self.bound_vertex_array = Some(p.vertex_array);
         self.calls.push(MockCall::SetRasterPipeline {
             program: p.program,
             vertex_array: p.vertex_array,
@@ -280,12 +282,18 @@ impl GlRasterCommandApi for MockGlFamilyApi {
         }
         // The recorder models no installed pipeline for the draw domains -- a
         // provider's "no pipeline is installed" refusal has its own tests against
-        // the provider -- but where a pipeline *was* installed this models the one
-        // thing a draw has to restore: a compute install or a link may have taken
-        // the current-program slot since, and the vertex array and rasterization
-        // values are untouched by either.
+        // the provider -- but where a pipeline *was* installed this models the two
+        // things a draw has to restore: a compute install or a link may have taken
+        // the current-program slot since, and the vertex array the pipeline named
+        // may have been destroyed and replaced by a later input reconcile, which
+        // is what an uncached run does on every request.  Both are refusals the
+        // executable backends make at the draw, so a recorder that skipped them
+        // would let a differential pass here and fail on hardware.
         if let Some(program) = self.installed_raster_program {
             self.select_program(program);
+        }
+        if let Some(array) = self.bound_vertex_array {
+            self.live("draw-raster", array, |this| this.vaos.contains(&array))?;
         }
         self.calls.push(MockCall::DrawRaster(d));
         Ok(())

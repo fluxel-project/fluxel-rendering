@@ -16,6 +16,7 @@ use super::super::{
     GlError, GlExtensionSet, GlFamilyApi as _, GlFamilyProfile, GlFenceLeaseBook, GlFiniteF32,
     GlFormat, GlFormatTable, GlKnownExtension, GlLimits, GlOperationProbe, GlPixelStoreState,
     GlSurfaceFacts, GlSurfaceLeaseBook, GlTextureDesc, OwnerThreadIdentity, TextureId,
+    VertexArrayId,
 };
 use super::exec_multidraw::BrowserMultiDraw;
 use super::exec_timer::{self, BrowserTimerQuery};
@@ -56,6 +57,17 @@ pub(crate) struct WebGl2BrowserDiscovery {
     pub(super) surface_suspended: bool,
     pub(super) pass: Option<ActivePass>,
     pub(super) raster: Option<ActiveRaster>,
+    /// The vertex array the modelled driver holds, or `None` when it holds none.
+    ///
+    /// GL has one vertex-array binding slot, and this provider models the slot
+    /// rather than the intent of each verb: a pipeline install and an input
+    /// reconcile both reach it, and the install's choice is the older of the two
+    /// by the time a draw runs.  A draw resolves *this* record and not the array
+    /// the pipeline install named, because the geometry domain replaces that
+    /// array on every request under the uncached execution mode.  The two verbs
+    /// that bind a real array write it -- the input domain's `bind_vertex_array`
+    /// and a raster pipeline install -- and `prepare_draw` is what reads it.
+    pub(super) bound_vertex_array: Option<VertexArrayId>,
     /// The batch commands retained from the acquired batch extension object.
     ///
     /// `Some` exactly when that object exposed every command the batch domain
@@ -270,6 +282,7 @@ impl WebGl2BrowserDiscovery {
             surface_suspended: false,
             pass: None,
             raster: None,
+            bound_vertex_array: None,
             multi_draw: commands.multi_draw,
             timer: commands.timer,
             active_query: None,

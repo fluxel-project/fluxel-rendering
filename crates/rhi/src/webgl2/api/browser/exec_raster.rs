@@ -130,6 +130,12 @@ impl GlRasterCommandApi for WebGl2BrowserDiscovery {
         }
         self.raw.use_program(Some(&program_raw));
         self.raw.bind_vertex_array(Some(&vertex_array_raw));
+        // What the driver now holds, recorded where the binding happens, for the
+        // same reason the input domain records it there: the draws read this slot
+        // and not the identity passed to this install, because the geometry domain
+        // replaces the installed array on every request under the uncached
+        // execution mode.
+        self.bound_vertex_array = Some(pipeline.vertex_array);
         self.apply_raster_state(OP, &pipeline.state)?;
         if let Err(error) = self.driver_error(OP) {
             self.raster = None;
@@ -137,7 +143,6 @@ impl GlRasterCommandApi for WebGl2BrowserDiscovery {
         }
         self.raster = Some(super::objects::ActiveRaster {
             program: pipeline.program,
-            vertex_array: pipeline.vertex_array,
             topology: pipeline.state.topology,
         });
         Ok(())
@@ -200,11 +205,20 @@ impl WebGl2BrowserDiscovery {
         operation: &'static str,
         draw: GlDrawCommand,
     ) -> Result<PreparedDraw, GlError> {
-        let raster = self
-            .raster
-            .as_ref()
-            .ok_or_else(|| Self::validation(operation, "no raster pipeline is installed"))?;
-        let vertex_array = self.vertex_array(operation, raster.vertex_array)?;
+        if self.raster.is_none() {
+            return Err(Self::validation(
+                operation,
+                "no raster pipeline is installed",
+            ));
+        }
+        // The array comes from the binding record rather than from the pipeline,
+        // the same way `draw_raster` reads it in the native provider: the geometry
+        // domain reconciles inputs between the install and the draw and replaces
+        // the installed array under the uncached execution mode.
+        let bound = self
+            .bound_vertex_array
+            .ok_or_else(|| Self::validation(operation, "no vertex array is bound"))?;
+        let vertex_array = self.vertex_array(operation, bound)?;
         let index = vertex_array.index;
         match draw {
             GlDrawCommand::NonIndexed(draw) => {

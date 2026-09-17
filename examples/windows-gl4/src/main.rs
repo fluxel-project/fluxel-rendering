@@ -12,14 +12,30 @@
 //! good.  Verdicts belong to the checking script, so that a run's output is a
 //! record rather than an opinion.
 //!
+//! # The second thing it can be asked for
+//!
+//! With `--draws N` it drives a measured workload instead -- one raster pass
+//! issuing `N` indexed draws through the compatibility adapter -- and reports
+//! what that run cost alongside what the context turned out to be.  Both
+//! readings come from the same call because they have to: `SetPixelFormat` may
+//! be called once per window, so a process gets exactly one WGL context over a
+//! given drawable, and observing-then-reopening is the second open the driver
+//! refuses with `PixelFormatAlreadyConfigured`.  The cost run therefore carries
+//! the context reading with it, and a run that asks for no workload prints
+//! exactly the object it printed before the flag existed.
+//!
 //! ```powershell
 //! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --frames 1
+//! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --draws 2000 --mode oracle
 //! ```
 
 use std::process::ExitCode;
 
 use fluxel_host::{Window, WindowConfig};
-use fluxel_rhi::test_support::{DesktopGl4ContextReport, observe_desktop_gl4_context};
+use fluxel_rhi::test_support::{
+    DesktopGl4ContextReport, DesktopGl4DrawReport, drive_desktop_gl4_draws,
+    observe_desktop_gl4_context,
+};
 
 /// The default client extent, and the extent the context is opened for.
 ///
@@ -27,9 +43,18 @@ use fluxel_rhi::test_support::{DesktopGl4ContextReport, observe_desktop_gl4_cont
 /// pixels, so the drawable only has to be a real one the driver will accept.
 const DEFAULT_EXTENT: [u32; 2] = [640, 480];
 
+/// The identity the context is opened with, whichever reading is asked for.
+///
+/// One number for both paths because there is one context: a run either
+/// observes it or drives it, and never does both over the same drawable.
+const CONTEXT_IDENTITY: u64 = 1;
+
 fn main() -> ExitCode {
     let mut extent = DEFAULT_EXTENT;
     let mut frames = 1_u32;
+    let mut draws = 0_u32;
+    let mut mode = String::from("optimized");
+    let mut mode_given = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -47,11 +72,34 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
+            "--draws" => match arguments.next().as_deref().and_then(|raw| raw.parse().ok()) {
+                Some(parsed) => draws = parsed,
+                None => {
+                    eprintln!("--draws wants a positive count");
+                    return ExitCode::from(2);
+                }
+            },
+            "--mode" => match arguments.next() {
+                Some(parsed) => {
+                    mode = parsed;
+                    mode_given = true;
+                }
+                None => {
+                    eprintln!("--mode wants `optimized` or `oracle`");
+                    return ExitCode::from(2);
+                }
+            },
             other => {
                 eprintln!("unknown argument {other}");
                 return ExitCode::from(2);
             }
         }
+    }
+    if mode_given && draws == 0 {
+        // The entry refuses a zero-draw workload for the same reason, so saying
+        // it here turns a silent no-op into a usage error.
+        eprintln!("--mode only means something with --draws: without a workload there is nothing to run");
+        return ExitCode::from(2);
     }
 
     let config = match WindowConfig::new("fluxel desktop GL4 evidence", extent[0], extent[1]) {
@@ -76,14 +124,20 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let report = match observe_desktop_gl4_context(&window, extent, 1) {
-        Ok(report) => report,
-        Err(error) => {
-            // Machine-readable failure too: a gate needs to record what went
-            // wrong, not only that the process exited nonzero.
-            println!("{{\"opened\":false,\"error\":{}}}", json_string(&error));
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
+    // One context, one reading: the cost run opens the context and reports what
+    // it found on the way in, because the driver grants this process exactly one
+    // pixel format for this drawable.  Asking for both by opening twice is what
+    // `PixelFormatAlreadyConfigured` refuses, so the flag picks a path rather
+    // than adding one.
+    let (report, workload) = if draws == 0 {
+        match observe_desktop_gl4_context(&window, extent, CONTEXT_IDENTITY) {
+            Ok(report) => (report, None),
+            Err(error) => return report_failure(&error),
+        }
+    } else {
+        match drive_desktop_gl4_draws(&window, extent, CONTEXT_IDENTITY, &mode, draws) {
+            Ok(report) => (report.context.clone(), Some(report)),
+            Err(error) => return report_failure(&error),
         }
     };
 
@@ -94,7 +148,7 @@ fn main() -> ExitCode {
         }
     }
 
-    println!("{}", render(&report));
+    println!("{}", render(&report, workload.as_ref()));
     if window.close_requested() {
         // Not a failure: the window closing is the fixture's normal ending.
         eprintln!("the window was closed during the run");
@@ -102,9 +156,20 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Reports a refused context both ways, and says how the process ended.
+///
+/// Machine-readable as well as human-readable, because a gate needs to record
+/// what went wrong and not only that the process exited nonzero: the object is
+/// the same `opened: false` shape either entry's failure produces, so a checker
+/// reads one document whether the context refused to open or refused to run.
+fn report_failure(error: &str) -> ExitCode {
+    println!("{{\"opened\":false,\"error\":{}}}", json_string(error));
+    eprintln!("{error}");
+    ExitCode::FAILURE
+}
+
 /// `WIDTHxHEIGHT`, both nonzero.
-fn parse_extent(raw: &str) -> Option<[u32; 2]> {
-    let (width, height) = raw.split_once('x')?;
+fn parse_extent(raw: &str) -> Option<[u32; 2]> {    let (width, height) = raw.split_once('x')?;
     let width: u32 = width.parse().ok()?;
     let height: u32 = height.parse().ok()?;
     (width > 0 && height > 0).then_some([width, height])
@@ -117,7 +182,13 @@ fn parse_extent(raw: &str) -> Option<[u32; 2]> {
 /// the evidence depend on a third runtime for no gain.  The shape is flat and
 /// the checker reads it by name, so there is nothing here a derive would do
 /// better.
-fn render(report: &DesktopGl4ContextReport) -> String {
+///
+/// `workload` is the one nested object, and it is nested rather than flattened
+/// so that the keys of a run that asked for no workload are byte-for-byte the
+/// keys it printed before the flag existed -- a gate reading this document by
+/// name cannot be affected by a field it does not ask for, but an *absence* it
+/// already tolerates is not something to start relying on.
+fn render(report: &DesktopGl4ContextReport, workload: Option<&DesktopGl4DrawReport>) -> String {
     let mut fields = vec![
         ("opened".to_owned(), "true".to_owned()),
         ("profile".to_owned(), json_string(&report.profile)),
@@ -176,6 +247,9 @@ fn render(report: &DesktopGl4ContextReport) -> String {
             json_string(&report.owner_thread),
         ),
     ];
+    if let Some(workload) = workload {
+        fields.push(("workload".to_owned(), json_workload(workload)));
+    }
     fields.sort_by(|left, right| left.0.cmp(&right.0));
     let body = fields
         .into_iter()
@@ -183,6 +257,82 @@ fn render(report: &DesktopGl4ContextReport) -> String {
         .collect::<Vec<_>>()
         .join(",\n");
     format!("{{\n{body}\n}}")
+}
+
+/// What one driven run cost, as a nested JSON object.
+///
+/// Every field is a `u64` counter or a small string, and each one is named
+/// after the report field it came from, so the mapping from this document back
+/// to `DesktopGl4DrawReport` needs no table.
+///
+/// The three submission tallies this family never writes are absent here for the
+/// same reason they are absent from the report: a `draws` field that is
+/// structurally zero would read as "no draws were emitted", and the emitted work
+/// is recorded per domain instead.
+fn json_workload(report: &DesktopGl4DrawReport) -> String {
+    // Joined rather than printed with a separator after each row, because a
+    // trailing comma before `]` is not JSON and a gate reading this document
+    // would refuse the whole run for a reason that has nothing to do with the
+    // context.
+    let rows = report
+        .domains
+        .iter()
+        .map(|domain| {
+            format!(
+                "    {{\"domain\": {}, \"requests\": {}, \"emitted\": {}, \
+                 \"skipped\": {}, \"unknown_recoveries\": {}}}",
+                json_string(&domain.domain),
+                domain.requests,
+                domain.emitted,
+                domain.skipped,
+                domain.unknown_recoveries
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let domains = format!("[\n{rows}\n  ]");
+    let fields = [
+        ("mode".to_owned(), json_string(&report.mode)),
+        ("draws_requested".to_owned(), report.draws_requested.to_string()),
+        ("passes".to_owned(), report.passes.to_string()),
+        ("pass_loads".to_owned(), report.pass_loads.to_string()),
+        ("pass_stores".to_owned(), report.pass_stores.to_string()),
+        ("cache_hits".to_owned(), report.cache_hits.to_string()),
+        ("cache_misses".to_owned(), report.cache_misses.to_string()),
+        ("cache_created".to_owned(), report.cache_created.to_string()),
+        ("cache_evicted".to_owned(), report.cache_evicted.to_string()),
+        (
+            "cache_live_entries".to_owned(),
+            report.cache_live_entries.to_string(),
+        ),
+        (
+            "cache_live_bytes".to_owned(),
+            report.cache_live_bytes.to_string(),
+        ),
+        (
+            "steady_state_allocations".to_owned(),
+            report.steady_state_allocations.to_string(),
+        ),
+        (
+            "binding_bytes_copied".to_owned(),
+            report.binding_bytes_copied.to_string(),
+        ),
+        ("submit_nanos".to_owned(), report.submit_nanos.to_string()),
+        ("total_nanos".to_owned(), report.total_nanos.to_string()),
+        (
+            "drawable_extent".to_owned(),
+            format!(
+                "[{}, {}]",
+                report.drawable_extent[0], report.drawable_extent[1]
+            ),
+        ),
+    ];
+    let body = fields
+        .into_iter()
+        .map(|(name, value)| format!("    {}: {}", json_string(&name), value))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("{{\n{body},\n    \"domains\": {domains}\n  }}")
 }
 
 fn json_strings(values: &[String]) -> String {

@@ -55,6 +55,24 @@ pub(crate) struct NativeGlProvider<'a> {
     /// provider answers "which program is current", and
     /// [`Self::ensure_program`] is the only writer.
     pub(super) current_program: Option<ProgramId>,
+    /// The vertex array the modelled driver holds, or `None` when it holds none.
+    ///
+    /// GL has one vertex-array binding slot, and the provider models the slot
+    /// rather than the intent of each verb for the same reason
+    /// [`Self::current_program`] exists: two verbs reach it -- a pipeline install
+    /// and an input reconcile -- and the install's choice is the older of the
+    /// two by the time a draw runs.  A raster draw resolves *this* record and not
+    /// the array the pipeline install named, because the geometry domain may
+    /// legitimately have replaced that array in between: under the uncached
+    /// execution mode it replaces it on every request.  Reading the install-time
+    /// identity instead made the draw validate a fact about the past and refuse
+    /// the array the driver was actually holding, which is the defect that made
+    /// the uncached differential unable to complete a single frame.
+    ///
+    /// Only the two verbs that bind a real array write it: the input domain's
+    /// `bind_vertex_array` and [`Self::ensure_vertex_array`], which is where a
+    /// pipeline install and both draw routes re-assert the binding.
+    pub(super) bound_vertex_array: Option<VertexArrayId>,
     /// The query currently recording a measurement, if any.
     pub(super) active_query: Option<QueryId>,
     /// The compute program the caller selected for dispatch work, if any.
@@ -123,7 +141,14 @@ pub(super) struct ActiveRaster {
     /// another program current, so a draw has to be able to re-assert this one
     /// through [`NativeGlProvider::ensure_program`].
     pub(super) program: ProgramId,
-    pub(super) vertex_array: VertexArrayId,
+    /// The topology this pipeline installed.
+    ///
+    /// The vertex array is deliberately *not* recorded here even though the
+    /// install names one.  GL's vertex-array binding is a single slot that the
+    /// input domain also writes, and the slot's owner is
+    /// [`NativeGlProvider::bound_vertex_array`]; a copy kept per pipeline would
+    /// go stale the moment the geometry domain reconciled inputs, which under the
+    /// uncached execution mode is on every single request.
     pub(super) topology: GlPrimitiveTopology,
 }
 
@@ -184,6 +209,7 @@ impl<'a> NativeGlProvider<'a> {
             pass: None,
             raster: None,
             current_program: None,
+            bound_vertex_array: None,
             active_query: None,
             active_compute_program: None,
             pixel_store: GlPixelStoreState::DEFAULT,
@@ -356,6 +382,40 @@ impl<'a> NativeGlProvider<'a> {
             .ok_or_else(|| Self::validation(operation, "vertex array is not live"))
     }
 
+    /// Makes `array` the vertex array the driver holds, if it is not already.
+    ///
+    /// The mirror of [`Self::ensure_program`] for the other binding slot GL has,
+    /// and it exists for the same reason: several verbs reach the vertex-array
+    /// binding -- an input reconcile, a pipeline install, and the empty array a
+    /// compute dispatch binds -- so "which array the driver holds" is a fact
+    /// about the binding rather than about any one verb, and
+    /// [`Self::bound_vertex_array`] is where it is recorded.  Every verb that
+    /// *uses* the binding re-asserts it here rather than trusting whatever the
+    /// last writer intended, and the comparison makes that free when nothing else
+    /// ran in between.
+    ///
+    /// Returns the live record so the caller reads the index binding and layout
+    /// from the array that is actually bound, which is the whole point: a raster
+    /// install names the array it wants, but by draw time the geometry domain may
+    /// legitimately have replaced it.
+    pub(super) fn ensure_vertex_array(
+        &mut self,
+        operation: &'static str,
+        array: VertexArrayId,
+    ) -> Result<&NativeVertexArray, GlError> {
+        use glow::HasContext as _;
+        let raw = self.vertex_array(operation, array)?.raw;
+        if self.bound_vertex_array != Some(array) {
+            // SAFETY: current-context contract; the record was resolved live
+            // above, so the name handed to GL belongs to this context.
+            unsafe {
+                self.gl.bind_vertex_array(Some(raw));
+            }
+            self.bound_vertex_array = Some(array);
+        }
+        self.vertex_array(operation, array)
+    }
+
     pub(super) fn framebuffer(
         &self,
         operation: &'static str,
@@ -398,6 +458,7 @@ impl<'a> NativeGlProvider<'a> {
         self.pass = None;
         self.raster = None;
         self.current_program = None;
+        self.bound_vertex_array = None;
         self.active_query = None;
         self.active_compute_program = None;
         let _ = self.surface.invalidate_generation();

@@ -289,18 +289,25 @@ impl GlDrawIndirectApi for NativeGlProvider<'_> {
             });
         }
         command.validate(OP)?;
-        let (program, vertex_array, topology) = {
+        let (program, topology) = {
             let raster = self
                 .raster
                 .as_ref()
                 .ok_or_else(|| Self::validation(OP, "no raster pipeline is installed"))?;
-            (raster.program, raster.vertex_array, raster.topology)
+            (raster.program, raster.topology)
         };
         // This is a raster verb that lives beside the compute ones, so the
         // program the compute path may have selected since the pipeline was
         // installed is re-asserted here exactly as `draw_raster` does it.
         self.ensure_program(OP, program)?;
-        let vertex_array = self.vertex_array(OP, vertex_array)?;
+        // The array comes from the binding record rather than from the pipeline
+        // for the same reason it does in `draw_raster`: the geometry domain
+        // replaces the installed array between the install and the draw whenever
+        // the execution mode is uncached.
+        let bound = self
+            .bound_vertex_array
+            .ok_or_else(|| Self::validation(OP, "no vertex array is bound"))?;
+        let vertex_array = self.vertex_array(OP, bound)?;
         let name = self.indirect_command_buffer(OP, command.range)?;
         let offset = draw_indirect_offset(command.range, command.command_offset)?;
         let mode = super::exec_raster::topology_mode(topology);

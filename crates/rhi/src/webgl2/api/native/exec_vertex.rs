@@ -171,6 +171,13 @@ impl GlVertexApi for NativeGlProvider<'_> {
         // against the live allocation table before any GL state changed.
         unsafe {
             self.gl.bind_vertex_array(Some(raw));
+            // Recorded the moment the driver takes the binding rather than after
+            // the rest of this verb succeeds, because the record answers what the
+            // driver holds and not what this call intended: an attribute emission
+            // that fails below leaves the array bound all the same, and a draw
+            // that trusted a stale record would re-bind an array the caller never
+            // asked for.  This is one of the two writers of that field.
+            self.bound_vertex_array = Some(vertex_array);
             self.emit_attributes(&layout, buffers)?;
             // ELEMENT_ARRAY_BUFFER state lives inside the VAO, so the index
             // binding is recorded for draw-time bounds checks and byte offsets.

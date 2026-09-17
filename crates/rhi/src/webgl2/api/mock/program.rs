@@ -192,6 +192,13 @@ impl GlVertexApi for MockGlFamilyApi {
         if let Some(i) = index {
             self.buffer("bind-vertex-array", i.buffer)?;
         }
+        // The recorder models the driver's one vertex-array slot, so this verb
+        // moves it exactly as the pipeline install does.  Without this line the
+        // trace could not tell an uncached frame -- where the geometry domain
+        // reconciles inputs after the install and replaces the array -- from a
+        // cached one, and a draw would be validated against an array the driver
+        // had already been told to stop using.
+        self.bound_vertex_array = Some(id);
         self.calls.push(MockCall::BindVertexArray(id));
         Ok(())
     }
