@@ -119,6 +119,19 @@ impl Attachment {
         self.layers
     }
 
+    /// The dimension this attachment was created with.
+    ///
+    /// Read by the upload verb and by nothing else, and it is read there to
+    /// decide whether the attachment can be addressed *at all*: a whole-level
+    /// pixel upload names one rectangle, which is a two-dimensional attachment's
+    /// whole extent and only part of any other's.  [`Self::target`] answers a
+    /// nearby question -- which binding point accepts this -- and is not usable
+    /// here, because it refuses on the binding vocabulary's terms (`D1`) rather
+    /// than on the upload's and would name the wrong verb in the refusal.
+    pub(super) fn dimension(&self) -> GlTextureDimension {
+        self.dimension
+    }
+
     /// Whether an image unit over this attachment can address its layers as one
     /// set rather than one at a time.
     ///

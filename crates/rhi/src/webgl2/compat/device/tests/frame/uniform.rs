@@ -58,7 +58,14 @@ fn camera_bindings() -> BindingSetId {
 /// something a reader can check against the declaration instead of trusting.
 /// The test below asserts this equals the artifact's own `uniform_binding_size`,
 /// which is what keeps the two from drifting apart silently.
-fn frame_uniforms() -> Vec<u8> {
+///
+/// Reachable from the sibling scenario because the textured artifact declares the
+/// *same* block: it is the camera/material struct with one more binding beside it,
+/// so `uniform_binding_size` is eighty there too and a second spelling here would
+/// be a second thing to keep in step with the artifact.  A sibling is not a
+/// descendant, so the visibility has to be said; it is still `super` and not
+/// `pub(crate)`, because nothing outside this suite has any business with it.
+pub(super) fn frame_uniforms() -> Vec<u8> {
     const VIEW_PROJECTION: [f32; 16] = [
         1.0, 0.0, 0.0, 0.0, //
         0.0, 1.0, 0.0, 0.0, //

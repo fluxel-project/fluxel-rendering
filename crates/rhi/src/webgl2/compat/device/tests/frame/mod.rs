@@ -63,6 +63,19 @@
 //! resource verb there is about *existence*.  That is
 //! [`GlCompatibilityDevice::upload_buffer`](super::super::GlCompatibilityDevice),
 //! and [`imported`] is the imported half made reachable.
+//!
+//! # The same finding, one object kind over, and why it was not the same amount
+//! of work
+//!
+//! The clause above is written about buffers, and it stayed that way for as long
+//! as buffers were the only object an import could name.  A sampled texture is
+//! the object that says why the two are not symmetrical: `create_transient_texture`
+//! also exists and also returns what a provider must return, so the *frame path*
+//! half of the finding was equally false for textures -- but a texture's extent
+//! is a fact about the object rather than a length the caller states, so the verb
+//! that fills one needs a second thing this adapter had to already be keeping.
+//! It was.  [`texture`] is that frame, and its own documentation says what the
+//! creation record already carried and what, in the end, had to be added.
 
 use fluxel_rendergraph::{
     AttachmentOps, BindingSetId, BoundBuffer, BoundTexture, BufferBindingId, BufferDesc,
@@ -80,6 +93,7 @@ use crate::resource::RasterKernel;
 use crate::webgl2::api::{BufferId, GlDrawCommand, GlNonIndexedDraw, MockCall, TextureId};
 
 mod imported;
+mod texture;
 mod uniform;
 
 /// The frame resources the first frame serves: none.
