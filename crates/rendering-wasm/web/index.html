@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FLUXEL-LOADING</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 16px;
+    background: #101014; color: #e8e8ee;
+    font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+  #stage { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  canvas { background: #000; border: 1px solid #333; width: 480px; height: 360px; }
+  #panel { min-width: 380px; max-width: 560px; }
+  #status { font-weight: 600; margin-bottom: 8px; }
+  .ok { color: #5fd07a; } .bad { color: #ff6b6b; } .warn { color: #ffc857; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 10px; }
+  td, th { text-align: left; padding: 2px 8px 2px 0; vertical-align: top; }
+  th { color: #9aa0b5; font-weight: 500; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #cfd3e2; }
+</style>
+</head>
+<body>
+<h1>Fluxel retained browser scene &mdash; WebGL2, real GPU, headed</h1>
+<div id="stage">
+  <canvas id="canvas" width="480" height="360"></canvas>
+  <div id="panel">
+    <div id="status" class="warn">loading&hellip;</div>
+    <div id="adapter"></div>
+    <table id="frames"></table>
+    <div id="diag"></div>
+  </div>
+</div>
+<script>
+// A classic script, deliberately: a module that fails to load or parse never
+// runs a line of its own code, so the diagnosis has to be installed from
+// outside it.  Without this the only observable is a page stuck on the loading
+// title, which names no cause.
+(function () {
+  const terminal = () => !document.title.startsWith('FLUXEL-LOADING');
+  const fail = (msg) => {
+    if (terminal()) return;
+    document.title = 'FLUXEL-ERROR ' + String(msg).replace(/\s+/g, ' ').slice(0, 200);
+    const el = document.getElementById('status');
+    if (el) { el.className = 'bad'; el.textContent = String(msg); }
+  };
+  window.addEventListener('error', (e) => {
+    fail((e.message || 'script error') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || '?'));
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason;
+    fail('unhandled rejection: ' + ((r && r.message) ? r.message : String(r)));
+  });
+  // The last resort: if nothing above fired, the module simply never finished.
+  setTimeout(() => fail('watchdog: module did not reach a terminal state'), 25000);
+})();
+</script>
+<script type="module">
+import init, { WebGl2Session } from './fluxel_rendering_wasm.js';
+
+const FRAMES = 30;
+const canvas = document.getElementById('canvas');
+const statusEl = document.getElementById('status');
+const adapterEl = document.getElementById('adapter');
+const framesEl = document.getElementById('frames');
+const diagEl = document.getElementById('diag');
+
+// Which adapter actually drew this frame.
+//
+// CLAUDE.md section 4.5 refuses a software rasteriser as evidence of real-GPU
+// correctness, and "the vehicle did not ask for `--headless`" is not the same
+// statement as "these pixels came off the GPU" -- a driver can still be blocked
+// or overridden.  So the page asks the context and shows the driver's own
+// answer, in the panel and therefore in the captured image and in the text the
+// capture vehicle prints.  A hidden renderer is reported as hidden rather than
+// guessed at.
+adapterEl.textContent = (() => {
+  try {
+    const probe = document.createElement('canvas').getContext('webgl2');
+    if (!probe) return 'adapter: no webgl2 context';
+    const info = probe.getExtension('WEBGL_debug_renderer_info');
+    if (!info) return 'adapter: renderer hidden';
+    return 'adapter: ' + probe.getParameter(info.UNMASKED_RENDERER_WEBGL);
+  } catch (e) {
+    return 'adapter: unavailable (' + String(e) + ')';
+  }
+})();
+
+// The title is the readiness signal the capture script waits on.  It is set
+// only after the frames have been composited, so a capture can never race the
+// render, and a failure is named in the title rather than only on the page.
+const settle = (title, statusText, cls) => {
+  statusEl.textContent = statusText;
+  statusEl.className = cls;
+  document.title = title;
+};
+
+const describe = (e) => {
+  if (e && typeof e === 'object' && e.code) {
+    return `${e.code} / ${e.operation} / gen ${e.generation}: ${e.message}`;
+  }
+  return String(e);
+};
+
+try {
+  await init();
+} catch (e) {
+  settle('FLUXEL-ERROR', 'wasm init failed: ' + describe(e), 'bad');
+  throw e;
+}
+
+let session;
+try {
+  session = new WebGl2Session(canvas);
+} catch (e) {
+  settle('FLUXEL-ERROR', 'session construction failed: ' + describe(e), 'bad');
+  throw e;
+}
+
+const counts = new Map();
+const rows = [];
+
+for (let i = 0; i < FRAMES; i++) {
+  let report;
+  try {
+    report = session.render_once();
+  } catch (e) {
+    rows.push(`<tr><th>frame ${i}</th><td class="bad">${describe(e)}</td></tr>`);
+    framesEl.innerHTML = rows.join('');
+    settle('FLUXEL-ERROR', `frame ${i} failed: ` + describe(e), 'bad');
+    throw e;
+  }
+  counts.set(report.outcome, (counts.get(report.outcome) ?? 0) + 1);
+  if (i === 0 || i === FRAMES - 1) {
+    rows.push(
+      `<tr><th>frame ${i}</th><td>${report.outcome}` +
+      ` &middot; marker ${report.frameMarker ?? '-'}` +
+      ` &middot; gen ${report.generation}` +
+      ` &middot; ${report.cpuSubmissionMs.toFixed(2)} ms</td></tr>`
+    );
+  }
+}
+framesEl.innerHTML = rows.join('');
+
+const summary = [...counts].map(([k, v]) => `${k}=${v}`).join('  ');
+const diagnostics = session.diagnostics_snapshot();
+const errors = diagnostics.filter((d) => d.severity === 'error');
+
+if (errors.length > 0) {
+  diagEl.innerHTML = '<pre>' + errors
+    .map((d) => `${d.code} / ${d.operation} / gen ${d.generation}: ${d.message}`)
+    .join('\n') + '</pre>';
+} else {
+  diagEl.innerHTML = `<pre>diagnostics: none (${diagnostics.length} recorded)</pre>`;
+}
+
+// The composited-frame wait, and why it is a race.
+//
+// EXP-006: reading or capturing right after the last render can race the
+// compositor, so the page waits for two animation frames before it declares
+// itself ready.  A double `requestAnimationFrame` is the honest signal for "the
+// last frame has been handed to the compositor" -- and it is also the one that
+// stops arriving when Chrome decides the window is occluded, which is exactly
+// what a headed run behind a terminal window looks like.  Waiting on rAF alone
+// then means the page never reports, the watchdog above names it a module
+// failure, and a working render is recorded as a broken one.
+//
+// So the wait is a race against a bounded timer, and the page says which one
+// won.  On a visible window the rAF pair wins in about one frame and the
+// guarantee is unchanged; on an occluded one the timer settles the page after
+// FALLBACK_MS and the panel reports `composited: timer`, so a capture taken
+// without the compositor's own signal is visible as such instead of being
+// indistinguishable from one taken with it.
+const FALLBACK_MS = 1500;
+const compositedSignal = await Promise.race([
+  new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve('raf')))),
+  new Promise((resolve) => setTimeout(() => resolve('timer'), FALLBACK_MS)),
+]);
+
+const ok = errors.length === 0 && (counts.get('submitted') ?? 0) > 0;
+// `textContent`, not markup, so the separator is a character rather than an
+// entity -- and the signal is in the *status line* because that is the text the
+// capture vehicle prints, which is what makes it evidence.
+const summaryText = `${FRAMES} frames: ${summary} · composited: ${compositedSignal}`;
+settle(ok ? 'FLUXEL-READY' : 'FLUXEL-DEGRADED', summaryText, ok ? 'ok' : 'warn');
+</script>
+</body>
+</html>
