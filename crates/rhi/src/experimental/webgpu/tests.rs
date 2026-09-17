@@ -885,9 +885,8 @@ fn fake_queue(device: &JsValue) -> JsValue {
 }
 
 /// Injected creation/write failures must destroy every created object and
-/// never leave a half-updated registry entry: a healthy retry after any
-/// injected failure creates a fresh complete set instead of observing a
-/// partial entry.
+/// leave nothing behind: a healthy retry after any injected failure performs
+/// the full recipe rather than continuing from a partial one.
 #[wasm_bindgen_test]
 fn injected_resident_failures_destroy_created_objects_without_half_updates() {
     let positions = [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
@@ -907,7 +906,7 @@ fn injected_resident_failures_destroy_created_objects_without_half_updates() {
             "exactly the objects created before the failure are destroyed"
         );
         // The failed attempt left nothing behind: a healthy retry performs the
-        // full recipe rather than writing into a half-created entry.
+        // full recipe rather than continuing from a partial set.
         let good = fake_resident_device(0, 0);
         assert!(super::resources::mesh(&good, &fake_queue(&good), &positions, &indices).is_ok());
         assert_eq!(fake_number(&fake_state(&good), "creations"), 2);
@@ -937,9 +936,23 @@ fn injected_resident_failures_destroy_created_objects_without_half_updates() {
     assert!(super::resources::image(&device, &queue, [1, 1], &[1, 2, 3, 4]).is_err());
     assert_eq!(fake_number(&fake_state(&device), "destroys"), 1);
     let good = fake_resident_device(0, 0);
-    assert!(super::resources::image(&good, &fake_queue(&good), [1, 1], &[1, 2, 3, 4]).is_ok());
+    // Bound rather than asserted on the call's own temporary: the returned lease
+    // owns the texture, so a temporary would be dropped inside the assertion and
+    // the destroy counted before the line that reads it.
+    let image = super::resources::image(&good, &fake_queue(&good), [1, 1], &[1, 2, 3, 4])
+        .expect("a healthy image upload succeeds");
     assert_eq!(fake_number(&fake_state(&good), "creations"), 1);
-    assert_eq!(fake_number(&fake_state(&good), "destroys"), 0);
+    assert_eq!(
+        fake_number(&fake_state(&good), "destroys"),
+        0,
+        "a held lease owns its texture and destroys nothing"
+    );
+    drop(image);
+    assert_eq!(
+        fake_number(&fake_state(&good), "destroys"),
+        1,
+        "the lease is the only owner, so dropping it destroys exactly what it owns"
+    );
 }
 
 /// Without injection the recipe creates exactly what each request asks for:
@@ -958,7 +971,10 @@ fn resident_recipe_creates_once_per_request_and_the_lease_owns_the_result() {
     let image = super::resources::image(&device, &queue, [2, 1], &[1, 2, 3, 4, 5, 6, 7, 8])
         .expect("image upload succeeds");
     assert_eq!(fake_number(&fake_state(&device), "creations"), 5);
-    assert_eq!(fake_number(&fake_state(&device), "writes"), 3);
+    // One write per created object: each mesh uploads its position and index
+    // buffer, the image uploads its texture's pixels.  Nothing is shared between
+    // the two meshes, so the second request writes its own pair again.
+    assert_eq!(fake_number(&fake_state(&device), "writes"), 5);
     assert_eq!(fake_number(&fake_state(&device), "destroys"), 0);
     assert!(mesh.mesh().is_some());
     assert!(second.mesh().is_some());
