@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "fluxel-renderer"
-version = "0.8.3"
+version = "0.14.0"
 dependencies = [
  "fluxel-rendergraph",
  "fluxel-rhi",
@@ -147,21 +147,57 @@ dependencies = [
 
 [[package]]
 name = "fluxel-rendergraph"
-version = "0.8.3"
+version = "0.14.0"
 
 [[package]]
 name = "fluxel-rhi"
-version = "0.8.3"
+version = "0.14.0"
 dependencies = [
  "ash",
  "fluxel-rendergraph",
+ "fluxel-wgpu-hal",
  "log",
  "naga",
  "ordered-float",
  "raw-window-handle",
- "wgpu-hal",
+ "wasm-bindgen",
  "wgpu-types",
  "windows",
+]
+
+[[package]]
+name = "fluxel-wgpu-hal"
+version = "30.0.1"
+dependencies = [
+ "android_system_properties",
+ "arrayvec",
+ "ash",
+ "bit-set",
+ "bitflags",
+ "bytemuck",
+ "cfg-if",
+ "cfg_aliases",
+ "gpu-allocator",
+ "hashbrown 0.17.1",
+ "libc",
+ "libloading",
+ "log",
+ "naga",
+ "naga-types",
+ "once_cell",
+ "ordered-float",
+ "parking_lot",
+ "profiling",
+ "range-alloc",
+ "raw-window-handle",
+ "raw-window-metal",
+ "smallvec",
+ "static_assertions",
+ "thiserror",
+ "wgpu-naga-bridge",
+ "wgpu-types",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]
@@ -681,41 +717,6 @@ checksum = "9fbddc4a036f00ec4f18c83445bd3115cb306a91da554919a099d9222fe4a7f8"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "wgpu-hal"
-version = "30.0.1"
-dependencies = [
- "android_system_properties",
- "arrayvec",
- "ash",
- "bit-set",
- "bitflags",
- "bytemuck",
- "cfg-if",
- "cfg_aliases",
- "gpu-allocator",
- "hashbrown 0.17.1",
- "libc",
- "libloading",
- "log",
- "naga",
- "naga-types",
- "once_cell",
- "ordered-float",
- "parking_lot",
- "profiling",
- "range-alloc",
- "raw-window-handle",
- "raw-window-metal",
- "smallvec",
- "static_assertions",
- "thiserror",
- "wgpu-naga-bridge",
- "wgpu-types",
- "windows",
- "windows-core",
 ]
 
 [[package]]
