@@ -5,7 +5,7 @@
 //! fixture work and injecting private conformance faults; production callers
 //! must not use it as a general readback or submission API.
 //!
-//! # The one entry that opens something, and why the sentence above survives it
+//! # The two entries that open something, and why the sentence above survives them
 //!
 //! `observe_desktop_gl4_context` (Windows, `native-gl-wgl` builds only) is not
 //! an observation of completed work: it
@@ -16,6 +16,16 @@
 //! of what the driver answered, and no context, provider, device, or native
 //! handle for a caller to hold.  The context it opens is dropped before the
 //! call returns, so there is nothing to misuse even by accident.
+//!
+//! `drive_desktop_gl4_draws` is the second, and it opens a context for a reason
+//! the first cannot serve: a *cost* cannot be observed, it has to be incurred.
+//! Observing and dropping cannot measure what a frame does, so this entry keeps
+//! the provider stack alive across a compiled graph, an executor and a
+//! submission, and hands back counters and durations.  The same rule holds for
+//! the same reason -- the context, the provider and the device all die inside
+//! the call, and the caller gets numbers -- and the one thing it adds is that a
+//! caller may choose the execution mode, which is a string here precisely so
+//! that the crate-private type behind it stays crate-private.
 
 use crate::{
     BufferUploadError, BufferUploadStage, Device, TextureUploadError, TextureUploadStage,
@@ -32,6 +42,24 @@ use crate::{
 /// stack ever escapes.
 #[cfg(all(windows, feature = "native-gl-wgl"))]
 pub use crate::webgl2::conformance::{DesktopGl4ContextReport, observe_desktop_gl4_context};
+
+/// Drives one measured workload through the compatibility adapter over a real
+/// desktop GL context, and reports what the run cost.
+///
+/// The window is the caller's, named through the same standard raw-handle traits
+/// [`observe_desktop_gl4_context`] takes, and the context, provider and device
+/// are all dropped before this returns.  What comes back is counters and
+/// durations -- the numbers a candidate optimization is accepted or rejected on
+/// -- plus the mode the run actually used, so that a cached-versus-uncached
+/// differential can be shown to have differed rather than assumed to have.
+///
+/// The mode is spelled as a string (`"optimized"` or `"oracle"`) and a
+/// misspelling is refused: the type behind it is crate-private because which
+/// mode a renderer runs is not a choice the common contract offers, and a
+/// differential whose two halves silently ran the same mode would be worse than
+/// one that failed.
+#[cfg(all(windows, feature = "native-gl-wgl", feature = "test-support"))]
+pub use crate::webgl2::compat::{DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws};
 
 /// RAII latch for exactly one later successful DX12 presentation completion.
 ///

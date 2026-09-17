@@ -55,6 +55,21 @@ mod wgl;
 #[cfg(all(target_os = "windows", feature = "native-gl-wgl"))]
 pub(crate) use wgl::WglContextSurface;
 
+/// The provider over a current native context, for the same reason as above and
+/// one more.
+///
+/// `conformance` could reach its types without this line because it only opens
+/// and observes.  Driving a frame needs the provider itself, and `mod native` is
+/// private here, so the type has to be re-exported before any module outside
+/// `api` can name it.  It stops at `pub(crate)`: the provider borrows its
+/// context, and lending one out for longer than a call is the 0.16 ownership
+/// question this crate has deliberately not answered.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "native-gl-wgl", feature = "native-gles-egl")
+))]
+pub(crate) use native::NativeGlProvider;
+
 pub(crate) use binding::*;
 pub(crate) use compute::*;
 pub(crate) use copy::*;

@@ -151,6 +151,17 @@ mod backend;
 mod compute;
 mod encoder;
 mod failure;
+// The measurement entry lives here rather than beside `webgl2::conformance`
+// because of module privacy and not preference: `mod device` is private inside
+// `compat`, so the adapter and its verbs are nameable only from inside this
+// module.  It is `pub(crate)` so that `compat/mod.rs` can hand it to
+// `test_support`, which is where it becomes reachable at all.
+#[cfg(all(
+    target_os = "windows",
+    feature = "native-gl-wgl",
+    feature = "test-support"
+))]
+pub(crate) mod harness;
 mod object;
 mod pass;
 mod raster;
@@ -172,7 +183,9 @@ use std::rc::Rc;
 use fluxel_rendergraph::DeviceCapabilities;
 
 use crate::webgl2::api::{BufferId, ContextStamp, GlError, TextureId};
-use crate::webgl2::state::{GlStateBackend, GlStateMachine, StateEvent};
+use crate::webgl2::state::{
+    ExecutionMode, GlStateBackend, GlStateMachine, StateCounters, StateEvent,
+};
 
 use super::identity::DeviceIdentityMap;
 use compute::{ComputeDomain, NoCompute};
@@ -234,10 +247,27 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     /// context rather than about the mirror: they come from the discovery
     /// snapshot, which the machine does not consult.
     pub(crate) fn new(backend: B) -> Self {
+        Self::with_mode(backend, ExecutionMode::Optimized)
+    }
+
+    /// The adapter over `backend`, running Layer 2 in `mode`.
+    ///
+    /// The mode is a parameter here rather than a flag on the machine because it
+    /// is fixed for the machine's whole life: it decides whether a redundant call
+    /// may be skipped, and a machine that changed its mind part-way through would
+    /// have a trace whose middle was filtered by one rule and whose end by
+    /// another.  So the only way to run the same frame both ways is to build two
+    /// adapters, which is what a cached-versus-uncached differential does.
+    ///
+    /// It is `pub(crate)` and not public on purpose.  Which mode a *renderer*
+    /// runs is not a choice the common contract offers -- an optimized adapter is
+    /// the only production adapter -- so this exists for the differential and for
+    /// nothing else.  `new` is the same call with [`ExecutionMode::Optimized`].
+    pub(crate) fn with_mode(backend: B, mode: ExecutionMode) -> Self {
         let stamp = backend.context_stamp();
         let capabilities = super::capabilities::capabilities(backend.discovery());
         Self {
-            machine: GlStateMachine::new(backend),
+            machine: GlStateMachine::with_mode(backend, mode),
             identity: DeviceIdentityMap::new(stamp),
             capabilities,
             releases: ReleaseQueue::new(),
@@ -246,6 +276,25 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
             buffers: HashMap::new(),
             witness: PhantomData,
         }
+    }
+
+    /// The mode this adapter's machine was built with.
+    pub(crate) fn execution_mode(&self) -> ExecutionMode {
+        self.machine.mode()
+    }
+
+    /// What the machine has emitted, skipped and cached so far.
+    ///
+    /// Read-only, and deliberately not a `counters_mut`: every counter is the
+    /// machine's own tally of what it did, so a caller that could write one could
+    /// make the tally disagree with the trace it is supposed to describe.
+    ///
+    /// This is the *only* place a caller outside `compat::device` can reach these
+    /// numbers, and it exists because the differential needs them: a candidate is
+    /// accepted on emitted calls falling as predicted, and that prediction is
+    /// checked against this, not against a log.
+    pub(crate) fn counters(&self) -> &StateCounters {
+        self.machine.counters()
     }
 
     /// Adopts a context generation change, if the provider reports one.

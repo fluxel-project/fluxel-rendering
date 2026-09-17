@@ -44,3 +44,17 @@ mod capabilities;
 mod device;
 mod identity;
 mod shader;
+
+/// The measurement entry, re-exported here because `device` is private.
+///
+/// A path through `device` is unnameable from outside this module, so the
+/// crate's doc-hidden `test_support` surface cannot reach the harness without
+/// this hop.  It is the same kind of allowance `api::NativeGlProvider` needed
+/// and not a new contract: nothing public is introduced, and the entry stays
+/// behind the `test-support` feature it is built for.
+#[cfg(all(
+    target_os = "windows",
+    feature = "native-gl-wgl",
+    feature = "test-support"
+))]
+pub use device::harness::{DesktopGl4DrawReport, DomainTally, drive_desktop_gl4_draws};
