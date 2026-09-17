@@ -63,8 +63,14 @@ GL-specific gates, in this order:
 python scripts/check_gl_architecture.py
 python scripts/check_desktop_gl4_conformance.py --report scripts/tests/data/desktop_gl4_radeon_780m.json
 python scripts/check_gl4_raster_readback.py
-python scripts/check_gl_state_cache_screening.py --guard
+python scripts/check_gl_state_cache_screening.py --guard --draws 1
 ```
+
+The draw count is part of the guard command and not a default: the guard is the
+frame that has *nothing to skip*, and the script refuses any round that skipped
+something rather than reporting a screening as its own guard. `--draws` defaults
+to the screening's 2000, so `--guard` alone is a run the gate rejects — which is
+the gate working, and why the arguments above are the ones to copy.
 
 The first is the three-layer import boundary and runs anywhere. The second
 re-adjudicates a durable conformance report on a machine with no GPU, so CI can
