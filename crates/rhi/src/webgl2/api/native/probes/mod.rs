@@ -451,6 +451,8 @@ impl Drop for ProbeScratch<'_> {
             }
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
+            gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, None);
+            gl.bind_buffer(glow::DISPATCH_INDIRECT_BUFFER, None);
             if self.storage_bound {
                 gl.bind_buffer_base(glow::SHADER_STORAGE_BUFFER, 0, None);
             }
@@ -623,10 +625,11 @@ impl NativeGlProbes for GlowProbes<'_> {
         use glow::HasContext as _;
         let mut scratch = ProbeScratch::new(self.gl);
         let stages = [(glow::COMPUTE_SHADER, source)];
-        if !self.link_program(&stages, &mut scratch) {
+        if !self.link_active_program(&stages, &mut scratch) {
             return ProbeAnswer::Failed;
         }
-        // SAFETY: current-context contract; a one-work-group empty dispatch.
+        // SAFETY: current-context contract; a one-work-group empty dispatch,
+        // with the compute program this just made current.
         let errored = unsafe {
             self.gl.dispatch_compute(1, 1, 1);
             self.take_error()
@@ -719,7 +722,7 @@ impl NativeGlProbes for GlowProbes<'_> {
     fn issues_indirect_draw(&self, indexed: bool, stages: &[(u32, &'static str)]) -> ProbeAnswer {
         use glow::HasContext as _;
         let mut scratch = ProbeScratch::new(self.gl);
-        if !self.link_program(stages, &mut scratch) {
+        if !self.link_active_program(stages, &mut scratch) {
             return ProbeAnswer::Failed;
         }
         // SAFETY: current-context contract. A zeroed `count` draw record is a
@@ -736,9 +739,21 @@ impl NativeGlProbes for GlowProbes<'_> {
                 return ProbeAnswer::Unavailable;
             };
             scratch.buffers.push(command);
-            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(command));
+            // The record is read from the indirect target, not from the array
+            // buffer: `glDrawArraysIndirect` and `glDrawElementsIndirect` never
+            // look at the `GL_ARRAY_BUFFER` binding, so a record bound there is
+            // a record the draw never sees.
             self.gl
-                .buffer_data_u8_slice(glow::ARRAY_BUFFER, &[0; 16], glow::STATIC_DRAW);
+                .bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(command));
+            // An indexed record is twenty bytes -- `count`, `instanceCount`,
+            // `firstIndex`, `baseVertex`, `baseInstance` -- and the driver reads
+            // the whole record before it knows the count is zero. Sizing the
+            // store for the non-indexed shape would therefore leave the indexed
+            // read running past the end of it, which is a defect the wrong bind
+            // target was hiding.
+            let record: &[u8] = if indexed { &[0; 20] } else { &[0; 16] };
+            self.gl
+                .buffer_data_u8_slice(glow::DRAW_INDIRECT_BUFFER, record, glow::STATIC_DRAW);
             if indexed {
                 let elements = self.gl.create_buffer();
                 let Ok(elements) = elements else {
@@ -770,7 +785,7 @@ impl NativeGlProbes for GlowProbes<'_> {
         use glow::HasContext as _;
         let mut scratch = ProbeScratch::new(self.gl);
         let stages = [(glow::COMPUTE_SHADER, compute_source)];
-        if !self.link_program(&stages, &mut scratch) {
+        if !self.link_active_program(&stages, &mut scratch) {
             return ProbeAnswer::Failed;
         }
         // SAFETY: current-context contract; the empty shader makes the single
@@ -781,9 +796,13 @@ impl NativeGlProbes for GlowProbes<'_> {
                 return ProbeAnswer::Unavailable;
             };
             scratch.buffers.push(command);
-            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(command));
+            // `glDispatchComputeIndirect` reads its three work-group counts from
+            // the dispatch-indirect target; an array-buffer binding leaves it
+            // with no command at all.
+            self.gl
+                .bind_buffer(glow::DISPATCH_INDIRECT_BUFFER, Some(command));
             self.gl.buffer_data_u8_slice(
-                glow::ARRAY_BUFFER,
+                glow::DISPATCH_INDIRECT_BUFFER,
                 &[1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
                 glow::STATIC_DRAW,
             );
@@ -832,6 +851,35 @@ impl GlowProbes<'_> {
             }
             linked
         }
+    }
+
+    /// Links one program and leaves it current.
+    ///
+    /// Every probe that issues a draw or a dispatch needs an active program:
+    /// the driver raises `GL_INVALID_OPERATION` for a draw or dispatch with no
+    /// program current for the stage it uses, so a successful link is not
+    /// enough.  This exists as one call so the requirement is stated once
+    /// instead of remembered per probe -- three of them used to omit it and
+    /// answered `Failed` on every real driver while the bind-only probes beside
+    /// them passed, which is what made `compute`, `indirect-draw` and
+    /// `indirect-dispatch` permanently false on real hardware.
+    fn link_active_program(
+        &self,
+        stages: &[(u32, &'static str)],
+        scratch: &mut ProbeScratch,
+    ) -> bool {
+        use glow::HasContext as _;
+        if !self.link_program(stages, scratch) {
+            return false;
+        }
+        let Some(program) = scratch.program else {
+            return false;
+        };
+        // SAFETY: current-context contract.  The program was linked on this
+        // context a moment ago and stays owned by `scratch`, whose `Drop`
+        // clears the binding before deleting it.
+        unsafe { self.gl.use_program(Some(program)) };
+        true
     }
 }
 #[cfg(test)]
