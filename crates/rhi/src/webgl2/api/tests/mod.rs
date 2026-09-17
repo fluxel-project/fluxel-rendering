@@ -403,6 +403,7 @@ mod discovery;
 mod formats;
 mod framebuffer;
 mod indirect;
+mod limits;
 mod multi_draw;
 mod multiview;
 mod query;

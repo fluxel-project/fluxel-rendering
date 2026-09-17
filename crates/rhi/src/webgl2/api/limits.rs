@@ -127,6 +127,10 @@ impl GlLimits {
         }
     }
     /// Validates the exact core profile's raster/resource floor.
+    ///
+    /// Everything checked here is a capacity the profile's fixed artifacts need.
+    /// The two offset alignments are deliberately **not** checked, and the note
+    /// on `requirements` says why.
     pub(crate) fn validate_profile_minimums(
         &self,
         profile: GlFamilyProfile,
@@ -236,7 +240,28 @@ impl GlProfileMinimums {
             },
         }
     }
-    fn requirements(self, l: &GlLimits) -> [(&'static str, u64, u64); 15] {
+    /// The capacity floors this profile's fixed artifacts depend on.
+    ///
+    /// Offset alignment is deliberately absent, and it is worth saying why
+    /// rather than leaving a gap a later reader would fill back in. Both
+    /// `uniform_buffer_offset_alignment` and `storage_buffer_offset_alignment`
+    /// are moduli a buffer offset has to land on, not capacities: the binding
+    /// half of this layer enforces `offset % alignment`, and the native and
+    /// common binding validators take the same discovered value as the
+    /// alignment they check a caller's offset against. Every consumer therefore
+    /// *honours* whatever the context reported instead of assuming a small
+    /// value, so a coarse answer narrows which offsets a caller may choose and a
+    /// fine one widens it -- neither is a reason to refuse the context.
+    ///
+    /// This table used to carry `uniform_buffer_offset_alignment` as
+    /// `actual < 256`, which is the comparison backwards, and an inverted
+    /// alignment row can only ever reject the *more* capable context: a driver
+    /// whose required alignment is 16 accepts every 256-byte offset, while one
+    /// demanding 512 accepts fewer. No test caught it because every fixture
+    /// answered exactly 256 -- the single value an inverted comparison accepts
+    /// -- so the first real desktop GL context this repository ever opened was
+    /// refused by it.
+    fn requirements(self, l: &GlLimits) -> [(&'static str, u64, u64); 14] {
         [
             (
                 "max_texture_size",
@@ -294,11 +319,6 @@ impl GlProfileMinimums {
                 self.uniform_bindings,
             ),
             ("max_uniform_block_size", l.max_uniform_block_size, 16_384),
-            (
-                "uniform_buffer_offset_alignment",
-                l.uniform_buffer_offset_alignment,
-                256,
-            ),
             ("max_samples", u64::from(l.max_samples), self.samples),
             (
                 "max_vertex_attributes",
