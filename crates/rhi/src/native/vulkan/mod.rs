@@ -95,3 +95,6 @@ pub(crate) mod buffer;
 
 /// Step 4's pure half: portable formats lowered onto Vulkan image formats.
 pub(crate) mod format;
+
+/// Step 4's pure half: portable texture descriptions lowered onto Vulkan.
+pub(crate) mod texture;
