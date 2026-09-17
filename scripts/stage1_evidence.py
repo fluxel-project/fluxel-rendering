@@ -30,7 +30,8 @@ TARGET = "x86_64-pc-windows-msvc"
 TITLE = "Fluxel Stage 1 — Windows visible renderer"
 WM_CLOSE = 0x0010
 SW_MINIMIZE, SW_RESTORE = 6, 9
-SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
+SWP_NOZORDER, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE = 0x0004, 0x0010, 0x0002, 0x0001
+HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
 SRCCOPY = 0x00CC0020
 BI_RGB = 0
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
@@ -181,7 +182,20 @@ class Win32Backend:
         self._ok(self.user32.PostMessageW(hwnd, WM_CLOSE, 0, 0), "PostMessage(WM_CLOSE)")
 
     def capture_bmp(self, hwnd: int, output: Path) -> Geometry:
+        # The blit below reads the *screen* at the window's rectangle, so the
+        # window has to be what DWM composited there, and on a desktop it is not
+        # enough for the window to exist at that spot.  Measured 2026-09-17 with
+        # a maximized browser covering the virtual screen: `SetForegroundWindow`
+        # is refused for a background process, and re-positioning with
+        # `HWND_TOP` left the window at z-order 2 -- still behind the browser,
+        # so the gate captured the browser and only the picture oracle noticed.
+        # `HWND_TOPMOST` moved it to 0, which is why the capture is bracketed by
+        # a topmost raise and an immediate drop: the raise is what makes this
+        # window the captured one, and the drop keeps the harness from sitting
+        # above the user's desktop for the rest of the run.
         self.user32.SetForegroundWindow(hwnd)
+        self._ok(self.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                          SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE), "SetWindowPos(HWND_TOPMOST)")
         time.sleep(0.15)
         geometry = self.assert_complete(hwnd)
         screen = self.user32.GetDC(0)
@@ -211,6 +225,8 @@ class Win32Backend:
             self.gdi32.DeleteObject(bitmap)
             self.gdi32.DeleteDC(memory)
             self.user32.ReleaseDC(0, screen)
+            self.user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                                     SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE)
         return geometry
 
 
@@ -276,19 +292,33 @@ def inspect_capture(path: Path, geometry: Geometry) -> PixelStats:
     return stats
 
 
-def compare_static(first: Path, second: Path) -> dict[str, int]:
+def compare_static(first: Path, second: Path, geometry: Geometry) -> dict[str, int]:
+    # Scoped to the client rectangle, because that is the only part of these
+    # captures the renderer drew.  The capture is the whole window rect and
+    # Windows draws the rest, so an unscoped comparison lets the window
+    # manager decide the verdict: on 2026-09-17 the title bar's activation
+    # colour differed between the stable capture and the just-restored one and
+    # this check read it as flicker at 1758/57300, while the rendered pixels
+    # were stable to within 18 samples of 206388.  Scoping it the way
+    # `inspect_capture` already scopes its colour oracle keeps the check
+    # fail-closed -- a real repaint difference inside the client area still
+    # crosses the same threshold -- and stops the chrome from deciding it.
     left, right = first.read_bytes(), second.read_bytes()
     if left[18:30] != right[18:30]:
         raise EvidenceError("stable/restore captures have different BMP dimensions.")
     width, height = struct.unpack_from("<ii", left, 18)
+    x0, y0 = geometry.client_left - geometry.left, geometry.client_top - geometry.top
+    client_width, client_height = geometry.client_width, geometry.client_height
+    if x0 < 0 or y0 < 0 or x0 + client_width > width or y0 + client_height > height:
+        raise EvidenceError("client rectangle is outside the captured desktop bitmap.")
     differing = samples = 0
-    for y in range(0, height, 4):
-        for x in range(0, width, 4):
+    for y in range(y0, y0 + client_height, 4):
+        for x in range(x0, x0 + client_width, 4):
             a, b = read_bmp_pixel(left, width, height, x, y), read_bmp_pixel(right, width, height, x, y)
             samples += 1
             differing += int(sum(abs(one - two) for one, two in zip(a, b)) > 24)
     if differing > max(12, int(samples * .003)):
-        raise EvidenceError(f"stable/restore differ at {differing}/{samples} sampled pixels; possible flicker.")
+        raise EvidenceError(f"stable/restore differ at {differing}/{samples} sampled client pixels; possible flicker.")
     return {"sampled_pixels": samples, "differing_pixels": differing}
 
 
@@ -444,7 +474,7 @@ def main() -> int:
                 restored_path = Path(f"{prefix}-restored.bmp")
                 restored_geometry = win.capture_bmp(hwnd, restored_path)
                 restored_stats = inspect_capture(restored_path, restored_geometry)
-                flicker = compare_static(stable_path, restored_path)
+                flicker = compare_static(stable_path, restored_path, restored_geometry)
 
                 win.close(hwnd)
                 try:
