@@ -59,6 +59,21 @@ class CheckGlArchitectureTests(unittest.TestCase):
                 ("compat", "renderer"),
             })
 
+    def test_state_cannot_reach_the_compatibility_adapter(self) -> None:
+        """The release gate's first bullet, and the only line enforcing it.
+
+        The `state` row listed `renderer` and `rendergraph` but not `compat`,
+        so Layer 2 could name Layer 3 and this gate -- whose whole job is to
+        keep the layers apart -- reported nothing.  The direction is the one
+        the layered contract names explicitly, which is why it is worth a test
+        rather than only the entry in the forbidden set.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(root, "state/mod.rs", "use crate::webgl2::compat::CompatibleDevice;\n")
+            observed = {(item.layer, item.dependency) for item in CHECKER.check(root)}
+            self.assertIn(("state", "compat"), observed)
+
     def test_browser_can_reach_platform_and_native_can_reach_glow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

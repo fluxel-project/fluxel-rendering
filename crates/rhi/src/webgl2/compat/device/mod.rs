@@ -361,6 +361,9 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     /// the identity still means the object it describes, or a slot reused after
     /// the deletion could reach a record of its previous occupant.
     ///
+    /// A record whose context stamp is not the current one is dropped rather
+    /// than dispatched: see the comment in the body.
+    ///
     /// A context that accepts no commands does nothing here and keeps the
     /// records.  Every destroy verb preflights the lifecycle, so there is no
     /// call to make -- and "suspended" and "lost" are not the same fact: a
@@ -371,8 +374,20 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
         if !self.machine.backend().lifecycle().accepts_commands() {
             return Ok(());
         }
+        // The queue outlives an epoch, and a lease can be dropped after the
+        // generation change that invalidated the object it names -- nothing
+        // stops a caller holding one across a restore.  `forget` clears the
+        // records that were present *at* the change; this is the same rule
+        // applied to the ones that arrive afterwards, and it is the rule
+        // `forget`'s own documentation states: the objects named there are
+        // already gone, so destroying them would be a call against identities
+        // of a dead epoch.  The record still has to go, and only the record.
+        let stamp = self.machine.backend().context_stamp();
         let mut first_error = None;
         for object in self.releases.drain() {
+            if object.context() != stamp {
+                continue;
+            }
             let outcome = match object {
                 RetainedObject::Texture(texture) => {
                     // Dropped before the object is destroyed, so that a slot

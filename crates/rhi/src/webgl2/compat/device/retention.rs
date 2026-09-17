@@ -42,7 +42,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::webgl2::api::{BufferId, TextureId};
+use crate::webgl2::api::{BufferId, ContextStamp, TextureId};
 
 /// One native object whose last lease has dropped.
 ///
@@ -55,6 +55,23 @@ pub(super) enum RetainedObject {
     Texture(TextureId),
     /// A physical buffer created by `create_buffer_resource`.
     Buffer(BufferId),
+}
+
+impl RetainedObject {
+    /// The context the object was minted in.
+    ///
+    /// Read by the drain, because this queue outlives an epoch.  A lease can be
+    /// dropped after a restore -- nothing stops a caller holding one across the
+    /// boundary -- and its identity then names an object the restored context
+    /// has already invalidated.  `forget` drops the records present at the
+    /// generation change; this is what lets the drain apply the same rule to
+    /// the ones that arrive after it.
+    pub(super) fn context(self) -> ContextStamp {
+        match self {
+            Self::Texture(texture) => texture.context,
+            Self::Buffer(buffer) => buffer.context,
+        }
+    }
 }
 
 /// The objects released since the adapter last looked.

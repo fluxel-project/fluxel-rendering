@@ -26,9 +26,15 @@
 //!   attribute description reaches the array-buffer point once per slot.  This
 //!   domain mirrors neither point and no verb it can call names either, so the
 //!   reconcile result reports them as unknown rather than holding an opinion.
-//! - An *indexed draw* takes its index binding from the vertex array the
-//!   installed pipeline recorded, not from the one currently bound, so a caller
-//!   must hand a pipeline the same array it asks this domain to bind.
+//! - An *indexed draw* reads its index binding from the vertex array the
+//!   provider holds bound -- the one the last bind named -- and not from the
+//!   pipeline, which only names the array it made current at the install.  The
+//!   two are the same object only because of how the caller drives this domain:
+//!   a bind is followed by reading the identity back out of the applied claim
+//!   and installing *that* array in the pipeline, so a bind that replaced the
+//!   array after the install would leave the pipeline naming an object the draw
+//!   no longer reads.  Nothing in this layer or in Layer 1 enforces that
+//!   agreement; the caller's own order between its install and its draw does.
 //! - *Installing a pipeline* binds that array without re-emitting the attribute
 //!   description.  It cannot be relied on to establish a vertex input: the bind
 //!   this domain emits is what enables the attributes, and a caller that skips
@@ -247,8 +253,9 @@ impl GeometryState {
 
     /// The array object the applied input is held in, if any.
     ///
-    /// A caller needs this to name the same array in a pipeline, which is the
-    /// one thing an indexed draw takes its index binding from.
+    /// A caller needs this to name the same array in a pipeline: a draw reads
+    /// its index binding from the array the provider holds bound, and naming
+    /// this identity at the install is what keeps the two the same object.
     pub(crate) fn applied_vertex_array(&self) -> Option<VertexArrayId> {
         self.applied.input.get().map(|held| held.vertex_array)
     }
@@ -266,6 +273,11 @@ impl GeometryState {
     /// paths -- the caller gets a usable array either way, and only pays for
     /// building it again next time.  See
     /// [`cache::VertexArrayCache::vertex_array_for`].
+    ///
+    /// Nothing outside this domain's tests asks for the identity alone -- a
+    /// production caller establishes a vertex input through
+    /// [`GeometryState::reconcile`] -- so this exists to let the tests observe
+    /// what a derivation creates before any bind follows it.
     pub(crate) fn vertex_array_for(
         &mut self,
         backend: &mut impl GlStateBackend,
@@ -301,11 +313,9 @@ impl GeometryState {
     /// Makes the backend's vertex input match the desired one.
     ///
     /// The derive-and-bind pair is one transition: the array comes from the
-    /// layout, and the bind is what points it at the buffers.  A caller that
-    /// only wants the identity -- to name it in a pipeline -- asks
-    /// [`GeometryState::vertex_array_for`] instead, and is then responsible for
-    /// asking this domain to bind it before a draw, because installing a
-    /// pipeline binds the array without enabling anything in it.
+    /// layout, and the bind is what points it at the buffers and enables the
+    /// attributes.  A caller establishes a vertex input through this entry point;
+    /// deriving an array is not binding it.
     pub(crate) fn reconcile(
         &mut self,
         backend: &mut impl GlStateBackend,

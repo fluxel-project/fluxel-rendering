@@ -595,6 +595,54 @@ fn a_context_generation_change_forgets_what_the_previous_one_released() {
     );
 }
 
+#[test]
+fn a_lease_dropped_after_a_generation_change_is_not_destroyed_in_the_new_one() {
+    let mut adapter = adapter();
+    let bound = adapter
+        .create_transient_texture(plain_texture(), colour_usage())
+        .expect("a transient texture");
+
+    adapter
+        .machine
+        .backend()
+        .context_lost()
+        .expect("context loss");
+    adapter
+        .machine
+        .backend()
+        .context_restored()
+        .expect("context restoration");
+
+    // The generation change is absorbed *while the lease is still alive*, and
+    // that is the ordering `forget` cannot cover.  Nothing stops a caller
+    // holding a lease across a restore, and the entry that notices the change
+    // clears the records then in the queue -- of which there are none, because
+    // this lease has not dropped yet.  The record it pushes afterwards names an
+    // identity of an epoch the restored context has already invalidated, and no
+    // later entry will call `forget` for it, because the stamp no longer moves.
+    adapter
+        .begin_encoder(QueueId::new(0))
+        .expect("the restored context accepts work");
+    drop(bound);
+    trace_from_here(&mut adapter);
+
+    // Draining that record into a destroy verb is a call against a dead
+    // generation, and the provider answers exactly that -- so without the
+    // drain's own context check this fails the entry that happened to be next.
+    let reopened = adapter.begin_encoder(QueueId::new(0));
+    assert!(
+        reopened.is_ok(),
+        "the restored context accepts work without being handed a dead identity: {:?}",
+        reopened.err()
+    );
+
+    assert_eq!(
+        count(&mut adapter, is_destroy_texture),
+        0,
+        "and nothing was destroyed against the restored context"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The lowering, called directly because the target it picks is not observable
 // through the adapter.

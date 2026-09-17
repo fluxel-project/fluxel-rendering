@@ -194,6 +194,12 @@ pub struct MockGlFamilyApi {
     surface_size: GlSurfaceSize,
     surface_suspended: bool,
     pass_active: bool,
+    /// The framebuffer the active pass renders into.
+    ///
+    /// Kept so an end can look it up, which is what both executable providers
+    /// do after they have already consumed the pass: a mock that never checked
+    /// would accept an end over a framebuffer the caller destroyed mid-pass.
+    pass_framebuffer: Option<FramebufferId>,
     /// The compute program installed for dispatch work, if any.
     installed_compute_program: Option<ProgramId>,
     /// The program the modelled driver holds, or `None` when none is selected.
@@ -271,6 +277,7 @@ impl MockGlFamilyApi {
             },
             surface_suspended: false,
             pass_active: false,
+            pass_framebuffer: None,
             installed_compute_program: None,
             current_program: None,
             installed_raster_program: None,
@@ -485,6 +492,7 @@ impl MockGlFamilyApi {
         self.syncs.clear();
         self.fences.revoke_all();
         self.pass_active = false;
+        self.pass_framebuffer = None;
         self.installed_compute_program = None;
         self.current_program = None;
         self.installed_raster_program = None;

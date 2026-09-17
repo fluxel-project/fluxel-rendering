@@ -211,13 +211,25 @@ impl SessionState {
             return Ok(SessionEffects::NONE);
         }
 
-        // Close first, and only clear the applied pass once the backend agreed:
-        // a failed end leaves the pass open, and a mirror that forgot it would
-        // then open a second one over it.
+        // Close first, and clear the applied pass on *both* outcomes, because
+        // Layer 1 consumes the pass before anything that can fail: its
+        // `end_render_pass` takes the pass, then validates the framebuffer and
+        // reads the driver's error queue.  The only failure that precedes the
+        // take is a not-ready context, and that state either has already lost
+        // the backend's pass or announces itself as a whole-mirror event, which
+        // clears this domain anyway.
+        //
+        // Keeping the pass on a failed end was the earlier rule, and it bricked
+        // the context: the mirror would believe a pass was open that no layer
+        // had, so every later reconcile failed closing it before it could open
+        // the next one, and nothing short of a context restore cleared the
+        // belief.  A stale GL error surfacing at the tail of the end is enough
+        // to reach that.
         let closing = applied_open;
         if applied_open {
-            end(backend, counters)?;
+            let ended = end(backend, counters);
             self.applied.pass = None;
+            ended?;
         }
         let Some(wanted) = self.desired.pass.clone() else {
             return Ok(SessionEffects {
@@ -338,9 +350,11 @@ mod tests {
     use super::*;
     use crate::webgl2::api::tests::{snapshot, texture_desc, texture_view};
     use crate::webgl2::api::{
-        GlAttachmentTarget, GlColorAttachment, GlColorClearValue, GlFamilyApi, GlFamilyProfile,
-        GlFramebufferApi, GlLoadOp, GlResourceApi, GlStoreOp, MockCall, MockGlFamilyApi,
+        GlAttachmentTarget, GlColorAttachment, GlColorClearValue, GlError, GlFamilyApi,
+        GlFamilyProfile, GlFramebufferApi, GlLoadOp, GlResourceApi, GlStoreOp, MockCall,
+        MockGlFamilyApi,
     };
+
     use crate::webgl2::state::cache::DEFAULT_BUDGET;
 
     /// A backend, an attachment set, and the framebuffer and pass over it.
@@ -671,5 +685,64 @@ mod tests {
         assert_eq!(counters.lifecycle.driver_errors, 1);
         assert_eq!(counters.submissions.passes, 0);
         assert_eq!(begins(&backend), 0);
+    }
+
+    /// A failed pass *end* must leave the session able to open the next one.
+    ///
+    /// Layer 1 consumes the pass before anything that can fail, so on this path
+    /// no layer has a pass, and a mirror that kept one would be claiming a
+    /// boundary that does not exist.  The claim used to be permanent: every
+    /// later reconcile closed the phantom pass first and failed before it could
+    /// open anything, so one failed end bricked the context until a restore.
+    ///
+    /// The failure is provoked after the pass is already consumed, and the
+    /// context is left healthy on purpose: the point is that the mirror
+    /// recovers on its own.  A restore clearing it would prove nothing, since
+    /// that is the path the finding said was the only escape.
+    #[test]
+    fn a_failed_pass_end_leaves_the_session_able_to_open_another() {
+        let mut backend = backend();
+        let (_, pass) = attachment_set(&mut backend);
+        let mut session = session(ExecutionMode::Optimized);
+        let mut counters = StateCounters::default();
+        session.begin_pass(pass.clone());
+        let opened = session
+            .reconcile(&mut backend, &mut counters)
+            .expect("the pass opens on a healthy context");
+        assert!(opened.pass_began);
+        assert!(session.pass_open());
+        assert_eq!(begins(&backend), 1);
+
+        // The framebuffer is destroyed underneath the open pass.  That is the
+        // shape of the real failure: both providers take the pass first and
+        // validate the framebuffer after, so the end fails with no pass left
+        // open anywhere -- and nothing tells the session its belief is stale.
+        backend
+            .destroy_framebuffer(pass.framebuffer)
+            .expect("the pass's framebuffer was live");
+        session.end_pass();
+        let error = session
+            .reconcile(&mut backend, &mut counters)
+            .expect_err("an end over a destroyed framebuffer fails");
+
+        assert_eq!(error.domain(), StateDomain::Session);
+        assert_eq!(error.operation(), "end-pass");
+        assert_eq!(counters.lifecycle.driver_errors, 1);
+        assert!(
+            !session.pass_open(),
+            "a failed end must not be mirrored as an open pass"
+        );
+
+        // A fresh attachment set, because the one the failed pass named is gone.
+        // The next reconcile is what has to notice there is nothing open and
+        // open it, rather than failing to close a pass no layer has.
+        let (_, next) = attachment_set(&mut backend);
+        session.begin_pass(next);
+        let reopened = session
+            .reconcile(&mut backend, &mut counters)
+            .expect("a pass opens again after a failed end");
+        assert!(reopened.pass_began);
+        assert!(session.pass_open());
+        assert_eq!(begins(&backend), 2);
     }
 }

@@ -120,6 +120,7 @@ impl GlFramebufferApi for MockGlFamilyApi {
             }
         }
         self.pass_active = true;
+        self.pass_framebuffer = Some(d.framebuffer);
         self.calls.push(MockCall::BeginRenderPass(d.framebuffer));
         Ok(())
     }
@@ -128,7 +129,21 @@ impl GlFramebufferApi for MockGlFamilyApi {
         if !self.pass_active {
             return self.invalid("end-render-pass", "no active render pass");
         }
+        // The pass is consumed *before* the framebuffer is looked up, which is
+        // the order both executable providers use: their `end` takes the pass,
+        // then validates the framebuffer and reads the driver's error queue.
+        // So a failure here leaves no pass active, exactly as it does on real
+        // hardware -- and that is the state a caller cannot see from the error
+        // alone, which is why the mock has to model it rather than only the
+        // lifecycle refusals that happen before the take.
         self.pass_active = false;
+        let framebuffer = self
+            .pass_framebuffer
+            .take()
+            .expect("an active pass always names its framebuffer");
+        self.live("end-render-pass", framebuffer, |this| {
+            this.framebuffers.contains_key(&framebuffer)
+        })?;
         // The pass end forgets the installed pipeline, exactly as the executable
         // backends do, so a draw outside a pass is refused rather than recorded
         // as a draw the driver would reject.  The current program is *not*

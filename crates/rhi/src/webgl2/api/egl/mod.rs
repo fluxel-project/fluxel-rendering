@@ -371,7 +371,12 @@ impl EglGlesContext {
         }
         // Verification and discovery observe the exact current context before
         // construction completes; any failure drops the transactional result
-        // and rolls the EGL objects back.
+        // and rolls the EGL objects back.  That rollback is why the remaining
+        // steps run in one fallible scope rather than as bare `?` returns: from
+        // here on the context is already current and the pair has no owner yet,
+        // so an `Err` that returned without destroying them would leak both for
+        // the life of the display and leave a context nothing can name
+        // installed on the owner thread.
         let egl_loader = |name: &str| {
             lease
                 .egl
@@ -380,46 +385,58 @@ impl EglGlesContext {
                     function as *const () as *const c_void
                 })
         };
-        // SAFETY: make_current above established this exact EGL context on the
-        // owner thread and EGL owns the loader for the glow context's use.
-        let glow = unsafe { glow::Context::from_loader_function(egl_loader) };
-        use glow::HasContext as _;
-        // SAFETY: as above; this queries only the current GLES context.
-        let observed = unsafe { glow.get_parameter_string(glow::VERSION) };
-        if parse_gles_version(&observed) != Some(version) {
-            return Err(EglProviderError::UnexpectedProfile {
-                requested: version,
-                observed,
-            });
-        }
-        // The EGL display's own identity strings exist only here, so they are
-        // read while this display is initialized and this exact context is
-        // current (audit P2-6).
-        let driver_identity = egl_driver_identity(&lease.egl, lease.display);
-        // SAFETY: the current context serves every discovery query and probe.
-        let snapshot = unsafe {
-            super::native::discover_current_glow_identified(
-                &glow,
-                stamp,
-                egl_loader,
-                &driver_identity,
-            )
-        }
-        .map_err(|error| {
-            EglProviderError::Gl(GlError::Driver {
-                operation: "discover EGL context",
-                message: format!("native GL discovery failed: {error:?}"),
-            })
-        })?;
-        // A pbuffer's extent is fixed by this construction, so it is bounded
-        // before the context is handed back; window surfaces report their live
-        // extent from EGL at each acquisition and are bounded there.
-        if let EglSurfaceKind::Pbuffer(size) = kind {
-            check_drawable_extent(
-                snapshot.limits().max_viewport_dimensions,
-                [size.width, size.height],
-            )?;
-        }
+        let prepared = (|| -> Result<GlDiscoverySnapshot, EglProviderError> {
+            // SAFETY: make_current above established this exact EGL context on
+            // the owner thread and EGL owns the loader for glow's use.
+            let glow = unsafe { glow::Context::from_loader_function(egl_loader) };
+            use glow::HasContext as _;
+            // SAFETY: as above; this queries only the current GLES context.
+            let observed = unsafe { glow.get_parameter_string(glow::VERSION) };
+            if parse_gles_version(&observed) != Some(version) {
+                return Err(EglProviderError::UnexpectedProfile {
+                    requested: version,
+                    observed,
+                });
+            }
+            // The EGL display's own identity strings exist only here, so they
+            // are read while this display is initialized and this exact context
+            // is current (audit P2-6).
+            let driver_identity = egl_driver_identity(&lease.egl, lease.display);
+            // SAFETY: the current context serves every discovery query and probe.
+            let snapshot = unsafe {
+                super::native::discover_current_glow_identified(
+                    &glow,
+                    stamp,
+                    egl_loader,
+                    &driver_identity,
+                )
+            }
+            .map_err(|error| {
+                EglProviderError::Gl(GlError::Driver {
+                    operation: "discover EGL context",
+                    message: format!("native GL discovery failed: {error:?}"),
+                })
+            })?;
+            // A pbuffer's extent is fixed by this construction, so it is
+            // bounded before the context is handed back; window surfaces report
+            // their live extent from EGL at each acquisition and are bounded
+            // there.
+            if let EglSurfaceKind::Pbuffer(size) = kind {
+                check_drawable_extent(
+                    snapshot.limits().max_viewport_dimensions,
+                    [size.width, size.height],
+                )?;
+            }
+            Ok(snapshot)
+        })();
+        let snapshot = match prepared {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                let _ = lease.egl.destroy_surface(lease.display, surface);
+                let _ = lease.egl.destroy_context(lease.display, context);
+                return Err(error);
+            }
+        };
         let result = Self {
             lease,
             config,
@@ -457,12 +474,7 @@ impl EglGlesContext {
     /// Makes this context current on its owner thread.
     pub(crate) fn make_current(&mut self) -> Result<(), EglProviderError> {
         self.assert_owner("eglMakeCurrent")?;
-        if self.lifecycle == GlContextLifecycle::Disposed {
-            return Err(GlError::Disposed {
-                operation: "eglMakeCurrent",
-            }
-            .into());
-        }
+        self.refuse_unusable("eglMakeCurrent")?;
         let surface = self.surface.ok_or(GlError::InvalidLifecycle {
             operation: "eglMakeCurrent",
             lifecycle: self.lifecycle,
@@ -524,14 +536,6 @@ impl EglGlesContext {
         self.make_current()?;
         self.suspend()?;
         let old = self.surface.expect("suspend retains the EGL surface");
-        self.lease
-            .egl
-            .destroy_surface(self.lease.display, old)
-            .map_err(|error| EglProviderError::Egl {
-                operation: "eglDestroySurface",
-                error,
-            })?;
-        self.surface = None;
         let attributes = pbuffer_attributes(size)?;
         let surface = self
             .lease
@@ -541,23 +545,51 @@ impl EglGlesContext {
                 operation: "eglCreatePbufferSurface",
                 error,
             })?;
+        // The new surface is adopted before the old one is released, so a
+        // refused `eglCreatePbufferSurface` -- the plausible failure here --
+        // leaves the context holding the surface it already had.  The earlier
+        // order destroyed first and left `surface: None`, which has no recovery
+        // path short of rebuilding the provider: one driver refusal and the
+        // context was permanently unusable rather than merely unresized.  The
+        // old surface is not current (`suspend` above detached it), so deleting
+        // it after the swap is legal.
         self.surface = Some(surface);
         self.kind = EglSurfaceKind::Pbuffer(size);
-        self.resume()
+        let released = self.lease.egl.destroy_surface(self.lease.display, old);
+        self.resume()?;
+        released.map_err(|error| EglProviderError::Egl {
+            operation: "eglDestroySurface",
+            error,
+        })
     }
 
     /// Detaches the context while a Host surface is unavailable.
     pub(crate) fn suspend(&mut self) -> Result<(), EglProviderError> {
         self.assert_owner("eglMakeCurrent")?;
-        if self.lifecycle == GlContextLifecycle::Disposed {
-            return Err(GlError::Disposed {
-                operation: "eglMakeCurrent",
-            }
-            .into());
-        }
+        // Refused for the same reason `make_current` is, and it is not a
+        // technicality: suspending would rewrite `Lost` to `Suspended`, and the
+        // next resume would then reach `Active` through the door this closes.
+        self.refuse_unusable("eglMakeCurrent")?;
         self.detach_self_if_current()?;
         self.lifecycle = GlContextLifecycle::Suspended;
         Ok(())
+    }
+
+    /// Refuses a state change that would revive a context EGL reported lost.
+    ///
+    /// Loss is durable in this provider -- [`Self::context_restored`] refuses
+    /// outright, because only the Host can make a new one -- and the WGL
+    /// provider refuses the identical sequence, so this is the EGL provider
+    /// agreeing with its own trait default (`assert_ready` answers
+    /// `ContextLost` for the same state) rather than a rule of its own.  Before
+    /// this, `resume_surface` reached `Active` from `Lost` and handed out a
+    /// fresh acquire lease from a context that had recorded its own death.
+    fn refuse_unusable(&self, operation: &'static str) -> Result<(), EglProviderError> {
+        match self.lifecycle {
+            GlContextLifecycle::Lost => Err(GlError::ContextLost { operation }.into()),
+            GlContextLifecycle::Disposed => Err(GlError::Disposed { operation }.into()),
+            _ => Ok(()),
+        }
     }
 
     /// Reattaches the owned context/surface after suspension.

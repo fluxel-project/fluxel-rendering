@@ -71,7 +71,7 @@ use crate::webgl2::api::{
     BufferId, FramebufferId, GlBufferRange, GlFramebufferDescriptor, GlIndexBinding,
     GlProgramDescriptor, GlProgramReflection, GlRasterPipeline, GlRenderPassDescriptor,
     GlStorageBufferApi, GlStorageBufferRange, GlStorageImageBinding, GlTextureTarget,
-    GlVertexBufferBinding, GlVertexLayout, ProgramId, SamplerId, TextureId, VertexArrayId,
+    GlVertexBufferBinding, GlVertexLayout, ProgramId, SamplerId, TextureId,
 };
 
 use super::GlStateBackend;
@@ -312,22 +312,6 @@ impl<B: GlStateBackend> GlStateMachine<B> {
     pub(crate) fn apply_geometry(&mut self) -> Result<GeometryEffects, StateError> {
         self.geometry
             .reconcile(&mut self.backend, &mut self.counters)
-    }
-
-    /// The vertex array for an input, deriving it if needed.
-    ///
-    /// The second half is whether the caller owns the array, on the same terms as
-    /// [`GlStateMachine::framebuffer_for`].  A caller that only wants the identity
-    /// -- to hand it to a pipeline -- asks this instead of
-    /// [`GlStateMachine::apply_geometry`], and must then ask for the bind before
-    /// a draw: installing a pipeline binds an array without enabling anything in
-    /// it.
-    pub(crate) fn vertex_array_for(
-        &mut self,
-        input: &VertexInput,
-    ) -> Result<(VertexArrayId, bool), StateError> {
-        self.geometry
-            .vertex_array_for(&mut self.backend, input, &mut self.counters)
     }
 
     /// Records that the caller wants `unit` to be the active texture unit.

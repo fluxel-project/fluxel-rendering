@@ -537,21 +537,30 @@ impl NativeGlProvider<'_> {
     /// Applies the unpack half of one transfer layout before `texSubImage2D`.
     ///
     /// The client offset is applied by slicing the payload, so GL skip
-    /// parameters stay zero and the tracked snapshot resumes exactly.
+    /// parameters stay zero and the tracked snapshot resumes exactly.  A layout
+    /// GL cannot express is staged tightly instead, and this is where the row
+    /// parameters are made to describe that staging rather than the caller's.
     ///
     /// # Safety
     ///
     /// Current-context contract.
     unsafe fn apply_unpack(&self, layout: GlPixelLayout) {
         use glow::HasContext as _;
-        let bpp = layout.format.bytes_per_pixel();
+        let (alignment, row_length) = layout.staged_row_parameters();
+        let mappable = layout.stride_is_mappable();
         unsafe {
             self.gl
-                .pixel_store_i32(glow::UNPACK_ALIGNMENT, i32::from(layout.alignment));
+                .pixel_store_i32(glow::UNPACK_ALIGNMENT, alignment as i32);
             self.gl
-                .pixel_store_i32(glow::UNPACK_ROW_LENGTH, (layout.bytes_per_row / bpp) as i32);
-            self.gl
-                .pixel_store_i32(glow::UNPACK_IMAGE_HEIGHT, layout.rows_per_image as i32);
+                .pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_length as i32);
+            self.gl.pixel_store_i32(
+                glow::UNPACK_IMAGE_HEIGHT,
+                if mappable {
+                    layout.rows_per_image as i32
+                } else {
+                    0
+                },
+            );
             self.gl.pixel_store_i32(glow::UNPACK_SKIP_PIXELS, 0);
             self.gl.pixel_store_i32(glow::UNPACK_SKIP_ROWS, 0);
             self.gl.pixel_store_i32(glow::UNPACK_SKIP_IMAGES, 0);
@@ -565,22 +574,12 @@ impl NativeGlProvider<'_> {
     /// Current-context contract.
     unsafe fn apply_pack(&self, layout: GlPixelLayout) {
         use glow::HasContext as _;
-        let bpp = layout.format.bytes_per_pixel();
-        let mappable = layout.bytes_per_row.is_multiple_of(bpp)
-            && layout
-                .bytes_per_row
-                .is_multiple_of(u32::from(layout.alignment));
+        let (alignment, row_length) = layout.staged_row_parameters();
         unsafe {
-            if mappable {
-                self.gl
-                    .pixel_store_i32(glow::PACK_ALIGNMENT, i32::from(layout.alignment));
-                self.gl
-                    .pixel_store_i32(glow::PACK_ROW_LENGTH, (layout.bytes_per_row / bpp) as i32);
-            } else {
-                // A bounded repack reads tightly and is placed client-side.
-                self.gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
-                self.gl.pixel_store_i32(glow::PACK_ROW_LENGTH, 0);
-            }
+            self.gl
+                .pixel_store_i32(glow::PACK_ALIGNMENT, alignment as i32);
+            self.gl
+                .pixel_store_i32(glow::PACK_ROW_LENGTH, row_length as i32);
         }
     }
 
@@ -713,10 +712,7 @@ fn staged_unpack<'a>(
     bytes: &'a [u8],
 ) -> Result<Cow<'a, [u8]>, GlError> {
     let bpp = layout.format.bytes_per_pixel();
-    let mappable = layout.bytes_per_row.is_multiple_of(bpp)
-        && layout
-            .bytes_per_row
-            .is_multiple_of(u32::from(layout.alignment));
+    let mappable = layout.stride_is_mappable();
     let offset = usize::try_from(layout.offset)
         .map_err(|_| validation(operation, "layout offset exceeds addressable range"))?;
     if offset > bytes.len() {
@@ -768,10 +764,7 @@ fn place_rows(layout: GlPixelLayout, region: GlTextureRegion, body: &[u8], bytes
     let bpp = layout.format.bytes_per_pixel() as usize;
     let width_bytes = (region.extent.width as usize) * bpp;
     let row = layout.bytes_per_row as usize;
-    let mappable = layout.bytes_per_row.is_multiple_of(bpp as u32)
-        && layout
-            .bytes_per_row
-            .is_multiple_of(u32::from(layout.alignment));
+    let mappable = layout.stride_is_mappable();
     let offset = layout.offset as usize;
     if mappable {
         if let Some(dst) = bytes.get_mut(offset..offset + body.len()) {

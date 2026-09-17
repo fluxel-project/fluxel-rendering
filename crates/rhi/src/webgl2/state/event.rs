@@ -22,7 +22,7 @@
 //! | [`StateEvent::QueryDeleted`] | sync |
 //! | [`StateEvent::SyncDeleted`] | sync |
 //! | [`StateEvent::RenderbufferDeleted`] | session |
-//! | [`StateEvent::AttachmentResized`] | session |
+//! | [`StateEvent::AttachmentChanged`] | session |
 //! | [`StateEvent::DomainFailed`] | the named domain, which is already unknown |
 //! | [`StateEvent::ScopedRawAccess`] | every domain the scope declared |
 //! | [`StateEvent::ContextLost`] | every domain |

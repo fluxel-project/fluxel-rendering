@@ -94,6 +94,14 @@ pub(crate) fn formats(storage: bool) -> GlFormatTable {
         GlFormat::Rgba8Srgb,
         GlFormat::Depth32Float,
     ] {
+        // A depth format is not colour: neither executable provider filters,
+        // blends or copies one, and the crate's own canonical baseline agrees.
+        // This table is those providers' oracle, so an over-claim here does
+        // harm past its own tests -- `absorb` OR-folds `copy_*` into the facts
+        // an adapter publishes, and an adapter advertising depth copies that a
+        // real context refuses is worse than a fixture that is merely
+        // incomplete.
+        let depth = format == GlFormat::Depth32Float;
         t.record(GlFormatCapabilities {
             format,
             resource_kind: GlFormatResourceKind::Texture,
@@ -104,13 +112,13 @@ pub(crate) fn formats(storage: bool) -> GlFormatTable {
                 GlFormatEvidence::CoreGuaranteed
             },
             sampled: true,
-            filterable: true,
+            filterable: !depth,
             renderable: true,
-            blendable: true,
+            blendable: !depth,
             storage_read: storage && format == GlFormat::Rgba8Unorm,
             storage_write: storage && format == GlFormat::Rgba8Unorm,
-            copy_source: true,
-            copy_destination: true,
+            copy_source: !depth,
+            copy_destination: !depth,
         })
         .expect("unique fact");
     }

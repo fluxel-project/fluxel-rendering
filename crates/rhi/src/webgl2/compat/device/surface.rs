@@ -113,11 +113,17 @@ pub(crate) struct GlSurfaceToken {
     /// This token's share of the texture's lifetime.
     ///
     /// Never read, and that is the whole of what it does: releasing the object
-    /// is the work its `Drop` performs.  The submission hands it to the
-    /// submission ledger rather than dropping it here, so the source outlives
-    /// the frame that presented it -- see
-    /// [`submit_commands`](super::submission) for why that is the weaker of the
-    /// two orderings and the one the contract asks for.
+    /// is the work its `Drop` performs.  What happens to it depends on the
+    /// publish's outcome, and the two are not the same act.  An *accepted*
+    /// publish hands it to the submission ledger, so the source outlives the
+    /// frame that presented it -- see [`submit_commands`](super::submission) for
+    /// why that is the weaker of the two orderings and the one the contract asks
+    /// for.  A *refused* publish drops it where it stands, and so do the tokens
+    /// left behind it: this is one handle of a lifetime and not the last one,
+    /// because the frame's own [`BoundTexture`] holds a clone of the same lease,
+    /// and [`retention`](super::retention) queues the object only at the last
+    /// drop.  A refused publish also issued no command that reads the source,
+    /// which is the only thing the ledger's ordering exists to outlive.
     pub(super) retention: GlRetentionLease,
 }
 

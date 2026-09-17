@@ -193,8 +193,16 @@ def rules_for(relative: Path) -> tuple[str, tuple[str, ...]] | None:
         return ("api/wgl-provider", ("state", "compat", "web_sys", "js_sys", "wasm_bindgen"))
     if first == "api":
         return ("api/core-profile", ("state", "compat", "platform", "renderer", "rendergraph", "web_sys", "glow", "glutin"))
+    # `compat` is forbidden for the same reason the api layers forbid it: the
+    # release gate's first bullet says the lower layers have no dependency on
+    # the Fluxel compatibility adapter, and this is the only automated
+    # enforcement of that direction.  It was missing here, so a Layer 2 file
+    # could name Layer 3 and the gate would have said nothing.
     if first == "state" or relative.name == "state.rs":
-        return ("state", ("web_sys", "js_sys", "wasm_bindgen", "glow", "glutin", "renderer", "rendergraph"))
+        return (
+            "state",
+            ("compat", "web_sys", "js_sys", "wasm_bindgen", "glow", "glutin", "renderer", "rendergraph"),
+        )
     if first == "compat" or relative.name == "compat.rs":
         return ("compat", ("renderer", "residency", "legacy", "experimental", "web_sys", "js_sys", "wasm_bindgen", "glow", "glutin"))
     return None

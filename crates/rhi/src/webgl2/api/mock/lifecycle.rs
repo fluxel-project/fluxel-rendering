@@ -97,6 +97,12 @@ impl GlSurfacePresentationApi for MockGlFamilyApi {
         source: TextureId,
     ) -> Result<(), GlError> {
         self.ready("publish-surface-image")?;
+        // The lease's own context is checked before the source is looked up,
+        // which is the order the native provider uses and the same check its
+        // `present_surface` makes.  Without it the mock accepted a lease from
+        // another context that native refuses -- the permissive direction, and
+        // the one that lets a cross-context bug pass the shared tests.
+        self.stamp("publish-surface-image", l.image.context)?;
         // The source must be live and shaped for the acquired extent before the
         // lease is consumed, so a refused publish leaves the acquisition intact
         // and the caller can still present the frame it already has.

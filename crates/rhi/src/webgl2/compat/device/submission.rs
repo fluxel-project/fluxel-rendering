@@ -342,10 +342,15 @@ impl<B: GlStateBackend, C: ComputeDomain<B>> GlCompatibilityDevice<B, C> {
     /// The publishes come before `create_fence` so that the fence covers them --
     /// a fence reports the commands issued before it, and a present issued after
     /// one would be a present the completion says nothing about.  That is also
-    /// the weaker of the two orderings for the *error* path, which is why the
-    /// source texture is retained by the submission ledger rather than dropped
-    /// when the publish returns: the object outlives a fence that may have
-    /// signalled before the blit read it.
+    /// the weaker of the two orderings for the *error* path: a publish the
+    /// backend accepted hands its token's retention to this ledger, so the source
+    /// texture outlives a fence that may have signalled before the blit read it,
+    /// while a publish that refuses drops its retention where it stands, as do
+    /// the tokens left unconsumed behind it.  That is one handle of a lifetime and
+    /// not the last one: the frame's own bound texture holds another, the object
+    /// dies when the last handle goes, and a refused publish issued no command
+    /// that reads the source -- which is the only thing this ledger exists to
+    /// outlive.
     pub(super) fn submit_tokens(
         &mut self,
         queue: QueueId,
