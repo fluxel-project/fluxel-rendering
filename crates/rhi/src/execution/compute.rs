@@ -490,7 +490,12 @@ pub(in crate::execution) fn valid_compute_dispatch(groups: [u32; 3], maximum: [u
 }
 
 impl ComputeBackend {
-    #[cfg(all(test, windows))]
+    // Gated exactly as its callers are (`execution/tests/mod.rs`), rather than
+    // on `windows` alone: this accessor exists for the native DX12/Vulkan
+    // witnesses, so a GL-only build compiles it with nothing to call it and
+    // `-D warnings` fails the build for a helper that is not dead so much as
+    // unowned by that combination.
+    #[cfg(all(test, windows, feature = "dx12", feature = "vulkan"))]
     pub(in crate::execution) fn test_transient_observations(&self) -> TestTransientObservations {
         self.transient_observations.clone()
     }

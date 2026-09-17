@@ -238,7 +238,13 @@ jobs:
     strategy:
       matrix:
         toolchain: ["1.87.0", stable]
-        features: [dx12, vulkan, "dx12,vulkan"]
+        # The GL-only combination is here rather than in the Linux job because
+        # its provider is Windows-only (`glutin_wgl_sys` + WGL).  It is a
+        # feature combination and not a backend matrix cell: the crate has no
+        # GL `Backend` variant in 0.15, so what this proves is that the
+        # GL-family contract layer builds, lints and tests with no DX12 or
+        # Vulkan in the graph.
+        features: [dx12, vulkan, "dx12,vulkan", native-gl-wgl]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -255,6 +261,29 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy -p fluxel-rhi --all-targets --all-features --locked -- -D warnings
+      # `--all-targets` rather than `--lib` on purpose: the test-only helper the
+      # first GL-only lint run caught (`execution/compute.rs`, a test accessor
+      # gated on `windows` while its callers are gated on the native feature
+      # pair) is invisible to a lib-only lint, so the weaker form would have
+      # blessed the warning that made this line worth adding.
+      - run: cargo clippy -p fluxel-rhi --no-default-features --features native-gl-wgl --all-targets --locked -- -D warnings
+
+  gl4-conformance:
+    name: Desktop GL4 conformance gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest scripts/tests/test_check_desktop_gl4_conformance.py
+      # The retained report is one real context's answer, so this half runs
+      # everywhere: a driver is required to *collect* the JSON and none is
+      # required to adjudicate it.  Keeping it in CI is what makes the gate a
+      # standing check rather than a script someone ran once -- the arithmetic
+      # it holds is what fails when the crate's contract drifts away from the
+      # hardware answer it was last checked against.
+      - run: python scripts/check_desktop_gl4_conformance.py --report scripts/tests/data/desktop_gl4_radeon_780m.json
 
   windows-workspace:
     name: Windows workspace native glue
