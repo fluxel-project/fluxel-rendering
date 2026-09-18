@@ -49,7 +49,9 @@
 //!
 //! The dispatch's workgroup counts are lowered by [`compute`] rather than spelled
 //! here, so the one rule that command owns -- no zero dimension -- stays provable
-//! without a device.
+//! without a device. The indirect form's command-buffer read is lowered the same
+//! way by [`indirect`]: the alignment and bounds of the offset are decided there,
+//! and this module never spells them.
 //!
 //! Every raster value is lowered by [`draw`] rather than spelled here: the viewport's
 //! Y flip, the scissor's signed offset, the index type and the count computed from a
@@ -87,7 +89,7 @@ use fluxel_rendergraph::{
 
 use super::pipeline::{ComputePipeline, RasterPipeline};
 use super::{
-    barrier, bind_group::BindGroup, compute, copy, draw, format, framebuffer::Framebuffer,
+    barrier, bind_group::BindGroup, compute, copy, draw, format, framebuffer::Framebuffer, indirect,
 };
 
 /// Why a command pool or an encoder could not be created or used.
@@ -153,6 +155,11 @@ pub(crate) enum RecordError {
     /// The dispatch's workgroup counts are not ones this backend records, and the
     /// reason carries the whole triple rather than only the offending axis.
     Dispatch(compute::DispatchError),
+    /// The indirect dispatch's command-buffer read is not one `Vulkan` defines, and
+    /// the reason is carried rather than flattened: an unaligned offset, a command
+    /// that leaves the buffer and an offset whose end does not exist are different
+    /// mistakes to fix.
+    Indirect(indirect::IndirectRangeError),
     /// The id names no live buffer of this device generation.
     UnknownBuffer,
     /// The id names no live texture of this device generation.
@@ -723,6 +730,39 @@ impl Encoder {
         Ok(())
     }
 
+    /// Records one `vkCmdDispatchIndirect` whose counts are read from `buffer`.
+    ///
+    /// The offset is lowered by [`indirect::dispatch_range`], which refuses an
+    /// unaligned offset and a command that would leave the buffer before the driver
+    /// is reached. `buffer_size` is the size the buffer was *created* with, read from
+    /// the table by the caller, so the bound is the fact the graph's own check saw
+    /// rather than a size recovered from the driver -- the same rule
+    /// [`Self::copy_buffer`] states.
+    ///
+    /// The counts themselves are not inspected: they are read by the device, and a
+    /// zero axis inside the buffer is a legal driver no-op that this layer cannot see
+    /// at record time. The caller's declared usage of `buffer` is checked one layer
+    /// up, where the table answers it.
+    pub(crate) fn dispatch_indirect(
+        &mut self,
+        buffer: vk::Buffer,
+        buffer_size: u64,
+        offset: u64,
+    ) -> Result<(), RecordError> {
+        self.check_pass(PassKind::Compute)?;
+        let offset =
+            indirect::dispatch_range(offset, buffer_size).map_err(RecordError::Indirect)?;
+        // SAFETY: the command buffer is recording inside a compute pass with a
+        // pipeline bound by the caller's recorded order, the buffer is a live handle
+        // this device created and kept alive by the caller, and the offset was just
+        // checked to address a whole command inside the buffer's declared size.
+        unsafe {
+            self.device
+                .cmd_dispatch_indirect(self.command_buffer, buffer, offset);
+        }
+        Ok(())
+    }
+
     /// Records the dynamic viewport the open pass draws through.
     ///
     /// The value is lowered by [`draw::viewport`], which keeps the borrowed path's
@@ -944,6 +984,7 @@ mod tests {
     use crate::native::vulkan::shader::MINIMAL_COMPUTE_SPIRV;
     use crate::native::vulkan::test_support::{
         colour_only_state, colour_target_pass, position_stream, raster_shaders,
+        write_indirect_counts,
     };
     use crate::native::vulkan::{allocator::GpuAllocator, memory, open, submission};
     use fluxel_rendergraph::{
@@ -1849,5 +1890,138 @@ mod tests {
         encoder.end_compute().expect("the pass closes");
         encoder.end().expect("the recording ends");
         assert_eq!(encoder.end_compute(), Err(RecordError::NotRecording));
+    }
+
+    #[test]
+    fn a_real_encoder_records_a_real_indirect_dispatch() {
+        // W2's indirect-dispatch command against the real driver: one bracket, one
+        // real compute pipeline over an empty layout, a command buffer whose counts
+        // arrive through a real transfer, and one real `vkCmdDispatchIndirect`,
+        // submitted and reported complete. Skips where no adapter exists.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let pipeline = create_compute(
+            opened.device.device(),
+            create_layout(opened.device.device(), Vec::new()).expect("an empty layout"),
+            &MINIMAL_COMPUTE_SPIRV,
+            c"main",
+        )
+        .expect("a compute pipeline over the retained kernel");
+
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+        // The command buffer is a transfer destination first, which is how a graph
+        // produces its contents, and an indirect buffer second, which is how the
+        // dispatch reads them.
+        let commands = table
+            .create_buffer(
+                12,
+                declared_buffer(&[
+                    BufferUsageKind::Indirect,
+                    BufferUsageKind::CopyDestination,
+                ]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local indirect command buffer");
+        let handle = table.buffer_handle(commands).expect("a live buffer");
+        let size = table.buffer_size(commands).expect("a created size");
+
+        let mut encoder = pool.begin().expect("a recording encoder");
+        encoder
+            .transition_buffer(
+                handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the command buffer is writable");
+        write_indirect_counts(
+            opened.device.device(),
+            encoder.command_buffer(),
+            handle,
+            [1, 1, 1],
+        );
+        encoder
+            .transition_buffer(
+                handle,
+                BufferRange::Whole,
+                ResourceAccessState::CopyDestination,
+                ResourceAccessState::IndirectRead,
+            )
+            .expect("the command buffer enters the state the dispatch reads");
+        encoder.begin_compute().expect("the compute pass opens");
+        encoder
+            .set_compute_pipeline(&pipeline)
+            .expect("the pipeline binds");
+        encoder
+            .dispatch_indirect(handle, size, 0)
+            .expect("an indirect dispatch records");
+        encoder.end_compute().expect("the compute pass closes");
+
+        let finished = encoder.finish().expect("the recording ends");
+        let mut submission =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submission.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "a recorded indirect dispatch runs to completion"
+        );
+        assert!(submission.is_terminal());
+    }
+
+    #[test]
+    fn the_indirect_dispatch_refuses_a_bad_read_without_poisoning_the_recording() {
+        // The three range sentences are decided before the driver, and the bracket
+        // guard runs before them, so a null handle is the honest fixture: it is never
+        // read. The contract says the executor still ends a recording after a
+        // callback error, so a refused read must leave the pass usable.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let pipeline = create_compute(
+            opened.device.device(),
+            create_layout(opened.device.device(), Vec::new()).expect("an empty layout"),
+            &MINIMAL_COMPUTE_SPIRV,
+            c"main",
+        )
+        .expect("a compute pipeline over the retained kernel");
+        let mut encoder = pool.begin().expect("a recording encoder");
+
+        // Without a compute pass the verb answers the bracket's own sentence.
+        assert_eq!(
+            encoder.dispatch_indirect(vk::Buffer::null(), 12, 0),
+            Err(RecordError::NoPass)
+        );
+
+        encoder.begin_compute().expect("the compute pass opens");
+        assert_eq!(
+            encoder.dispatch_indirect(vk::Buffer::null(), 12, 2),
+            Err(RecordError::Indirect(indirect::IndirectRangeError::Misaligned))
+        );
+        assert_eq!(
+            encoder.dispatch_indirect(vk::Buffer::null(), 12, 4),
+            Err(RecordError::Indirect(indirect::IndirectRangeError::OutOfBounds))
+        );
+        assert_eq!(
+            encoder.dispatch_indirect(vk::Buffer::null(), u64::MAX, u64::MAX - 3),
+            Err(RecordError::Indirect(indirect::IndirectRangeError::Overflow))
+        );
+
+        // A refused value does not poison the pass or the recording.
+        encoder
+            .set_compute_pipeline(&pipeline)
+            .expect("the recording is usable after the refusals");
+        encoder.end_compute().expect("the pass closes");
+        encoder.end().expect("the recording ends");
     }
 }

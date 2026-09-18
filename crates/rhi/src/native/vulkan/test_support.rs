@@ -13,6 +13,10 @@
 //! too. A second copy in `command`'s tests could drift from the pipeline's, and the
 //! two would then be testing different recipes while both compiling.
 //!
+//! The indirect-dispatch tests need a command buffer whose counts are known, and
+//! this backend owns no writer for one, so [`write_indirect_counts`] is the one place
+//! that puts a `VkDispatchIndirectCommand` in memory.
+//!
 //! Compiled under `cfg(test)` only: nothing here is part of the backend.
 
 use ash::vk;
@@ -195,6 +199,34 @@ pub(crate) fn colour_target_pass(
     let framebuffer = Framebuffer::create(opened.device.device(), admitted, &resolved, view)
         .expect("a render pass and framebuffer for a real colour target");
     (framebuffer, image, mapped)
+}
+
+/// Writes a three-axis indirect dispatch command into a buffer.
+///
+/// `vkCmdUpdateBuffer` is core `Vulkan` 1.0 and needs the buffer declared
+/// `TRANSFER_DST`, which is the usage a graph's indirect command buffer carries: its
+/// contents are produced by some earlier command, so the graph declares it a transfer
+/// destination beside the indirect read. The helper exists because this backend owns
+/// no indirect-command *writer* -- producing the counts is the graph's own business --
+/// and an indirect dispatch whose counts are uninitialized memory is exactly the
+/// unbounded work a test must not hand the driver.
+///
+/// The caller records this outside every pass, in the recording that will submit it,
+/// and is responsible for having ordered the buffer into a transfer-writable state.
+pub(crate) fn write_indirect_counts(
+    device: &ash::Device,
+    command_buffer: vk::CommandBuffer,
+    buffer: vk::Buffer,
+    counts: [u32; 3],
+) {
+    let mut bytes = [0u8; 12];
+    for (index, count) in counts.iter().enumerate() {
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&count.to_le_bytes());
+    }
+    // SAFETY: the command buffer is recording and outside any render pass (the
+    // caller's own order states that), the buffer is a live handle of the same
+    // device declared `TRANSFER_DST`, and `bytes` is a local that outlives the call.
+    unsafe { device.cmd_update_buffer(command_buffer, buffer, 0, &bytes) };
 }
 
 /// The retained colour-only raster state: one `Rgba8Unorm` target written in full,

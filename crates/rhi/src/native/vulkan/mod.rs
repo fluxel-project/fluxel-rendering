@@ -117,10 +117,14 @@
 //!     [`family::GraphicsRecording`] (`FamilyApi` + `GraphicsApi`), `Provides<Copy>`
 //!     yields [`family::CopyRecording`] (`FamilyApi` + `CopyApi`),
 //!     `Provides<Compute>` yields [`family::ComputeRecording`] (`FamilyApi` +
-//!     `ComputeApi`), `Provides<StorageBuffer>` yields
+//!     `ComputeApi`), `Provides<IndirectDispatch>` yields
+//!     [`family::IndirectDispatchRecording`] (`FamilyApi` + `ComputeApi` +
+//!     `IndirectDispatchApi`, because an indirect dispatch is a compute command and
+//!     the handle that records one must own a compute recording),
+//!     `Provides<StorageBuffer>` yields
 //!     [`family::StorageBufferBindings`] (`FamilyApi` + `StorageBufferApi`) and
 //!     `Provides<StorageTexture>` yields [`family::StorageTextureBindings`]
-//!     (`FamilyApi` + `StorageTextureApi`), each over that table and -- for the three
+//!     (`FamilyApi` + `StorageTextureApi`), each over that table and -- for the
 //!     command families -- its own recording.
 //!     The handles are distinct types so a caller that negotiated one family cannot
 //!     reach another's verbs, and each is its own recording context, which the
@@ -139,11 +143,17 @@
 //!     and a validated value, with no recording at all), and the facts it adds are the
 //!     texture's own declared usage and the device's per-format storage evidence,
 //!     which is why step 11's format table moved onto the device. The
-//!     indirect-dispatch family and the execution-layer migration remain owed by this
-//!     step. This step was added when the list above was exhausted, which is section
+//!     indirect-dispatch family followed the compute one, and it is where the
+//!     command-buffer read and the declared `Indirect` usage are checked: its handle
+//!     wraps the compute recording rather than owning a second one, because an
+//!     indirect dispatch needs a compute pipeline bound in the same buffer, and it
+//!     implements `ComputeApi` beside `IndirectDispatchApi` for that reason. The
+//!     execution-layer migration remains owed by this step. This step was added when
+//!     the list above was exhausted, which is section
 //!     23.1's rule moving to the W2 work package; it is what makes
 //!     `require::<_, Graphics>(&device)`, `require::<_, Copy>(&device)`,
-//!     `require::<_, Compute>(&device)`, `require::<_, StorageBuffer>(&device)` and
+//!     `require::<_, Compute>(&device)`, `require::<_, IndirectDispatch>(&device)`,
+//!     `require::<_, StorageBuffer>(&device)` and
 //!     `require::<_, StorageTexture>(&device)` compile and run against this backend.
 //!
 //! # Acceptance
@@ -272,6 +282,14 @@ pub(crate) mod draw;
 /// on [`command::Encoder`]; the family handle that negotiates them lives in
 /// [`family`].
 pub(crate) mod compute;
+
+/// W2's indirect-dispatch family, pure half: the command buffer one
+/// `vkCmdDispatchIndirect` reads its workgroup counts from. The offset's alignment
+/// and the command's bounds are refused before the driver is reached; the counts
+/// themselves are data the graph wrote, so they are not inspected here. The family
+/// handle that records the command and checks the buffer's declared usage lives in
+/// [`family`].
+pub(crate) mod indirect;
 
 /// Step 13: the family wiring. `VulkanDevice` implements `Provides<Graphics>`,
 /// `Provides<Copy>`, `Provides<Compute>`, `Provides<StorageBuffer>` and

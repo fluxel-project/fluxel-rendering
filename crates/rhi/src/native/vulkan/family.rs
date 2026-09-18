@@ -1,16 +1,17 @@
-//! W2's family wiring: `VulkanDevice` as the graphics, copy, compute and
-//! storage-role families' provider.
+//! W2's family wiring: `VulkanDevice` as the graphics, copy, compute,
+//! indirect-dispatch and storage-role families' provider.
 //!
 //! The common layer's contract says a device *negotiates* a family and receives a
 //! handle that already borrows the device and the ledger that proved it (plan
 //! section 11). This module is the first real backend to do that: `VulkanDevice`
 //! implements [`Provides<Graphics>`], [`Provides<Copy>`], [`Provides<Compute>`],
-//! [`Provides<StorageBuffer>`] and [`Provides<StorageTexture>`] and hands out
-//! [`GraphicsRecording`], [`CopyRecording`], [`ComputeRecording`],
+//! [`Provides<IndirectDispatch>`], [`Provides<StorageBuffer>`] and
+//! [`Provides<StorageTexture>`] and hands out [`GraphicsRecording`],
+//! [`CopyRecording`], [`ComputeRecording`], [`IndirectDispatchRecording`],
 //! [`StorageBufferBindings`] and [`StorageTextureBindings`], which implement
 //! [`FamilyApi`] and their own family's trait over the device's own resource table --
-//! and, for the three command families, over one recording from the device's own
-//! command pool.
+//! and, for the command families, over one recording from the device's own command
+//! pool.
 //!
 //! # One recording owner, one handle type per family
 //!
@@ -24,15 +25,25 @@
 //! [`StorageBufferBindings`] and [`StorageTextureBindings`] are *resource roles* rather
 //! than command domains, so they own no recording at all: each resolves a base
 //! resource id through the table and builds a value the graph's own bind-group step
-//! places at a binding number. That is the one place the five families differ
+//! places at a binding number. That is one place the wired families differ
 //! structurally rather than only in their verbs, and it is stated by those types
 //! having no `Recording` field.
 //!
-//! Each command handle is therefore its own recording context, which the contract
-//! permits (plan section 21: negotiation and recording context need not remain the
-//! same object). A graph execution that names two families negotiates two handles and
-//! so produces two recordings; composing them into one submission is the
-//! execution-layer migration's decision and is deliberately not invented here.
+//! [`IndirectDispatchRecording`] is the other. An indirect dispatch is a compute
+//! command, so its handle wraps [`ComputeRecording`] rather than owning a second
+//! recording of its own -- the bracket, the pipeline and the bindings are the compute
+//! family's body -- and implements [`ComputeApi`] beside [`IndirectDispatchApi`]. That
+//! is sound in one direction only, and the asymmetry is the point: the ledger records
+//! `IndirectDispatch` only beside a proved `Compute` row, while [`ComputeRecording`]
+//! does not implement [`IndirectDispatchApi`], so a caller that negotiated only
+//! `Compute` still cannot name the indirect form.
+//!
+//! The graphics, copy and compute handles are each their own recording context, which
+//! the contract permits (plan section 21: negotiation and recording context need not
+//! remain the same object); the indirect handle shares the compute one because its
+//! command is a compute command. A graph execution that names two recordings
+//! negotiates two handles and so produces two submissions; composing them into one is
+//! the execution-layer migration's decision and is deliberately not invented here.
 //!
 //! # The encoder is private, and the recording is begun lazily
 //!
@@ -76,9 +87,11 @@ use fluxel_rendergraph::{
     ResourceAccessState, ScissorRect, TextureCopyRegion, TextureFormat, TextureRange, Viewport,
 };
 
-use crate::common::api::families::{ComputeApi, CopyApi, StorageBufferApi, StorageTextureApi};
+use crate::common::api::families::{
+    ComputeApi, CopyApi, IndirectDispatchApi, StorageBufferApi, StorageTextureApi,
+};
 use crate::common::api::family::{
-    Compute, Copy, Graphics, StorageBuffer, StorageTexture,
+    Compute, Copy, Graphics, IndirectDispatch, StorageBuffer, StorageTexture,
 };
 use crate::common::api::graphics::GraphicsApi;
 use crate::common::api::handle::FamilyApi;
@@ -795,6 +808,17 @@ impl<'d> ComputeRecording<'d> {
     pub(crate) fn finish(&mut self) -> Result<Finished, ComputeError> {
         self.recording.finish().map_err(ComputeError::Recording)
     }
+
+    /// The recording context, for the sibling handle that shares it.
+    ///
+    /// [`IndirectDispatchRecording`] wraps this type rather than owning a second
+    /// `Recording`, so a compute bracket and an indirect dispatch recorded through
+    /// one handle share one command buffer. The accessor exists so the field stays
+    /// private to this type while the sibling can still reach the table and the
+    /// recorder through it.
+    fn recording_mut(&mut self) -> &mut Recording<'d> {
+        &mut self.recording
+    }
 }
 
 impl FamilyApi for ComputeRecording<'_> {
@@ -846,6 +870,206 @@ impl core::fmt::Debug for ComputeRecording<'_> {
         formatter
             .debug_struct("ComputeRecording")
             .field("recording", &self.recording)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Why an indirect dispatch was refused.
+///
+/// The recorder's refusals -- not recording, no compute pass open, a second begin, a
+/// command-buffer read the driver would reject -- are carried from [`RecordError`]
+/// rather than restated, and the three id/usage sentences are the handle's own,
+/// because the table lookup and the declared-usage check happen before the recorder is
+/// reached. [`Self::UsageNotDeclared`] is the buffer step's own rule at a new boundary:
+/// the portable usage mapping never widens (section 18 of the lead 3F plan), so a
+/// buffer the graph created for vertices is not one a dispatch may read counts from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IndirectDispatchError {
+    /// The recording itself refused the command.
+    Recording(RecordError),
+    /// The id names no live buffer of this device generation.
+    UnknownBuffer,
+    /// The id names no live texture of this device generation.
+    ///
+    /// The family's own verbs never take a texture, but the recording context it wraps
+    /// does, so the sentence is carried rather than folded into [`Self::UnknownBuffer`].
+    UnknownTexture,
+    /// The buffer was created without the indirect usage, so no dispatch may read its
+    /// counts.
+    UsageNotDeclared,
+}
+
+/// Lowers the wrapped compute recording's refusal onto this family's sentence.
+///
+/// Total, and every arm is the same fact: this handle *is* a compute recording, so the
+/// recorder's sentence and its two id sentences are this handle's too. There is no
+/// impossible arm and therefore no invented value.
+fn from_compute(error: ComputeError) -> IndirectDispatchError {
+    match error {
+        ComputeError::Recording(inner) => IndirectDispatchError::Recording(inner),
+        ComputeError::UnknownBuffer => IndirectDispatchError::UnknownBuffer,
+        ComputeError::UnknownTexture => IndirectDispatchError::UnknownTexture,
+    }
+}
+
+/// The indirect-dispatch family's handle on one `Vulkan` device.
+///
+/// # Why this handle also implements `ComputeApi`
+///
+/// An indirect dispatch is a dispatch: `vkCmdDispatchIndirect` reads its counts from a
+/// buffer instead of taking them as arguments, but the command still needs a compute
+/// pipeline bound in the recording, so the handle that records it must own a compute
+/// recording. It therefore implements [`ComputeApi`] beside [`IndirectDispatchApi`],
+/// and that is sound in exactly one direction -- which is the asymmetry the design
+/// turns on:
+///
+/// - `device::ledger` records `Capability::IndirectDispatch` **only** beside a proved
+///   `Capability::Compute` row, and keeps that row's own numeric floor, so a caller
+///   that negotiated the indirect family cannot reach an unproved compute capability;
+/// - [`ComputeRecording`] does **not** implement [`IndirectDispatchApi`], so a caller
+///   that negotiated only `Compute` still cannot name the indirect form.
+///
+/// It is a wrapper rather than a second recording implementation for the reason
+/// [`Recording`] exists: the bracket, the pipeline, the bindings and the transitions
+/// are the compute family's own body, and a second copy would be the "second spelling
+/// of one shape" the plan keeps refusing.
+pub(crate) struct IndirectDispatchRecording<'d> {
+    /// The compute recording this handle records into, begun by the first command.
+    compute: ComputeRecording<'d>,
+}
+
+impl<'d> IndirectDispatchRecording<'d> {
+    /// Wraps one device generation without touching the driver.
+    ///
+    /// Infallible, which is what `Provides::provide` requires: the recording itself is
+    /// begun by the first verb that needs it.
+    fn new(device: &'d VulkanDevice) -> Self {
+        Self {
+            compute: ComputeRecording::new(device),
+        }
+    }
+
+    /// Records the barrier one portable buffer transition requires.
+    ///
+    /// Deliberately not an `IndirectDispatchApi` verb: a pipeline barrier is a backend
+    /// mechanism and the common contract carries none (plan section 1). It is here
+    /// because the command buffer a dispatch reads counts from is ordered by the graph
+    /// before the dispatch, and it resolves the id exactly as the compute handle does.
+    pub(crate) fn transition_buffer(
+        &mut self,
+        buffer: BufferId,
+        range: BufferRange,
+        before: ResourceAccessState,
+        after: ResourceAccessState,
+    ) -> Result<(), IndirectDispatchError> {
+        self.compute
+            .transition_buffer(buffer, range, before, after)
+            .map_err(from_compute)
+    }
+
+    /// Records the barrier one portable texture transition requires.
+    pub(crate) fn transition_texture(
+        &mut self,
+        texture: TextureId,
+        range: TextureRange,
+        before: ResourceAccessState,
+        after: ResourceAccessState,
+    ) -> Result<(), IndirectDispatchError> {
+        self.compute
+            .transition_texture(texture, range, before, after)
+            .map_err(from_compute)
+    }
+
+    /// Ends the recording and hands it to submission.
+    ///
+    /// Not family vocabulary, for the reason [`GraphicsRecording::finish`] states: the
+    /// common contract has no submission verb yet, so this is how the piece that owns
+    /// submission takes the ended command buffer.
+    pub(crate) fn finish(&mut self) -> Result<Finished, IndirectDispatchError> {
+        self.compute.finish().map_err(from_compute)
+    }
+}
+
+impl FamilyApi for IndirectDispatchRecording<'_> {
+    fn stamp(&self) -> DeviceStamp {
+        self.compute.stamp()
+    }
+}
+
+/// The compute recording the indirect handle wraps, exposed as this family's own.
+///
+/// The delegation is deliberate and not a second implementation: an indirect dispatch
+/// is a compute command, so every compute verb records into the same buffer and answers
+/// through one error type. The two families stay separable where it matters --
+/// [`ComputeRecording`] cannot dispatch indirectly, and this handle exists only for a
+/// device that proved the indirect row.
+impl ComputeApi for IndirectDispatchRecording<'_> {
+    type Error = IndirectDispatchError;
+    type Pipeline = ComputePipeline;
+    type Bindings = BindGroup;
+
+    fn begin_compute(&mut self) -> Result<(), Self::Error> {
+        self.compute.begin_compute().map_err(from_compute)
+    }
+
+    fn end_compute(&mut self) -> Result<(), Self::Error> {
+        self.compute.end_compute().map_err(from_compute)
+    }
+
+    fn set_compute_pipeline(&mut self, pipeline: &Self::Pipeline) -> Result<(), Self::Error> {
+        self.compute
+            .set_compute_pipeline(pipeline)
+            .map_err(from_compute)
+    }
+
+    fn set_bindings(&mut self, bindings: &Self::Bindings) -> Result<(), Self::Error> {
+        self.compute.set_bindings(bindings).map_err(from_compute)
+    }
+
+    fn dispatch(&mut self, groups: [u32; 3]) -> Result<(), Self::Error> {
+        self.compute.dispatch(groups).map_err(from_compute)
+    }
+}
+
+impl IndirectDispatchApi for IndirectDispatchRecording<'_> {
+    type Error = IndirectDispatchError;
+
+    fn dispatch_indirect(
+        &mut self,
+        commands: BufferId,
+        offset: u64,
+    ) -> Result<(), Self::Error> {
+        // Every fact comes from the device's table and none from the driver: the
+        // created size and the declared usage are the values the graph's own checks
+        // saw, so the read cannot be admitted against a weaker fact than the buffer
+        // was.
+        let recording = self.compute.recording_mut();
+        let table = recording.device().table();
+        let handle = table
+            .buffer_handle(commands)
+            .ok_or(IndirectDispatchError::UnknownBuffer)?;
+        let size = table
+            .buffer_size(commands)
+            .ok_or(IndirectDispatchError::UnknownBuffer)?;
+        let usage = table
+            .buffer_usage(commands)
+            .ok_or(IndirectDispatchError::UnknownBuffer)?;
+        if !usage.contains(BufferUsageKind::Indirect) {
+            return Err(IndirectDispatchError::UsageNotDeclared);
+        }
+        recording
+            .encoder()
+            .map_err(IndirectDispatchError::Recording)?
+            .dispatch_indirect(handle, size, offset)
+            .map_err(IndirectDispatchError::Recording)
+    }
+}
+
+impl core::fmt::Debug for IndirectDispatchRecording<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("IndirectDispatchRecording")
+            .field("recording", &self.compute)
             .finish_non_exhaustive()
     }
 }
@@ -1109,6 +1333,24 @@ impl Provides<Compute> for VulkanDevice {
     }
 }
 
+/// The indirect-dispatch family's provider, beside the compute one.
+///
+/// A separate impl, for the reason [`Provides<Copy>`] states: the handle type bounds a
+/// caller's vocabulary. The row this negotiation proves is `Capability::IndirectDispatch`,
+/// which `device::ledger` records only beside a proved compute row and with that row's
+/// own numeric floor -- so a device whose selected family does not report compute has
+/// the vocabulary and still refuses the negotiation, the two refusals the design keeps
+/// apart. The handle is [`IndirectDispatchRecording`], which is a compute recording
+/// plus the one indirect verb; the module docs state why that one-directional
+/// composition is sound.
+impl Provides<IndirectDispatch> for VulkanDevice {
+    type Api<'d> = IndirectDispatchRecording<'d>;
+
+    fn provide(&self) -> IndirectDispatchRecording<'_> {
+        IndirectDispatchRecording::new(self)
+    }
+}
+
 /// The storage-buffer family's provider, beside the three command families'.
 ///
 /// A separate impl, for the reason [`Provides<Copy>`] states: the handle type bounds a
@@ -1159,10 +1401,14 @@ mod tests {
     use crate::common::api::negotiate::{CapabilitySource, require};
     use crate::common::binding::BindingResource;
     use crate::common::caps::Capability;
+    use crate::native::vulkan::command::CommandPool;
     use crate::native::vulkan::compute::DispatchError;
+    use crate::native::vulkan::indirect;
     use crate::native::vulkan::pipeline::{create_compute, create_layout, create_raster};
     use crate::native::vulkan::shader::MINIMAL_COMPUTE_SPIRV;
-    use crate::native::vulkan::test_support::{colour_only_state, position_stream, raster_shaders};
+    use crate::native::vulkan::test_support::{
+        colour_only_state, position_stream, raster_shaders, write_indirect_counts,
+    };
     use crate::native::vulkan::{memory, open, submission};
     use ash::vk;
 
@@ -2086,5 +2332,221 @@ mod tests {
         api.dispatch([1, 1, 1]).expect("a real dispatch records");
         api.end_compute().expect("the pass closes");
         api.finish().expect("the recording ends");
+    }
+
+    /// Writes `counts` into an indirect command buffer and leaves it readable.
+    ///
+    /// Recorded in its own submission because the family handle begins its own
+    /// recording lazily: the counts have to exist before the dispatch that reads them
+    /// is recorded, and this backend owns no indirect-command writer -- producing the
+    /// counts is the graph's own business. The buffer is ordered into `CopyDestination`
+    /// for the write, and the family's own barrier moves it to `IndirectRead` where the
+    /// dispatch reads it.
+    fn initialise_indirect_counts(
+        opened: &open::OpenedVulkan,
+        handle: vk::Buffer,
+        counts: [u32; 3],
+    ) {
+        let pool = CommandPool::new(opened.device.device(), opened.device.selected_queue().family)
+            .expect("a command pool on an opened device");
+        let mut encoder = pool.begin().expect("a recording encoder");
+        encoder
+            .transition_buffer(
+                handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the command buffer is writable");
+        write_indirect_counts(
+            opened.device.device(),
+            encoder.command_buffer(),
+            handle,
+            counts,
+        );
+        let finished = encoder.finish().expect("the recording ends");
+        let mut submission =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submission.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "the command buffer's counts are written"
+        );
+    }
+
+    #[test]
+    fn a_negotiated_indirect_dispatch_handle_records_the_indirect_form() {
+        // Step 13's indirect-dispatch family against the real driver: `require` yields
+        // the handle, the compute bracket and pipeline come from the recording it
+        // wraps, the command buffer is read at an offset the pure rule checked, and the
+        // submission reports complete. Skips where no adapter exists, and where the
+        // adapter cannot serve the family -- a device whose selected family reports no
+        // compute is not this test's subject.
+        let Some(mut opened) = device() else {
+            return;
+        };
+        if !opened
+            .device
+            .ledger()
+            .supports(Capability::IndirectDispatch)
+        {
+            return;
+        }
+        let pipeline = compute_pipeline(&opened);
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let commands = opened
+            .device
+            .table_mut()
+            .create_buffer(
+                12,
+                declared_buffer(&[
+                    BufferUsageKind::Indirect,
+                    BufferUsageKind::CopyDestination,
+                ]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local indirect command buffer");
+        let handle = opened
+            .device
+            .table()
+            .buffer_handle(commands)
+            .expect("a live buffer");
+        initialise_indirect_counts(&opened, handle, [1, 1, 1]);
+
+        let mut api = require::<_, IndirectDispatch>(&opened.device)
+            .expect("a device whose selected family reports compute proves the row");
+        assert_eq!(
+            api.stamp(),
+            opened.device.stamp(),
+            "the handle reports the generation it was negotiated on"
+        );
+
+        // The graph's own barrier orders the command buffer into the state the
+        // dispatch reads; the bracket, the pipeline and the command are the family's.
+        api.transition_buffer(
+            commands,
+            BufferRange::Whole,
+            ResourceAccessState::CopyDestination,
+            ResourceAccessState::IndirectRead,
+        )
+        .expect("the command buffer enters the state the dispatch reads");
+        api.begin_compute().expect("the compute pass opens");
+        api.set_compute_pipeline(&pipeline)
+            .expect("the pipeline binds");
+        api.dispatch_indirect(commands, 0)
+            .expect("an indirect dispatch records");
+        api.end_compute().expect("the compute pass closes");
+
+        let finished = api.finish().expect("the recording ends");
+        let mut submission =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submission.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "an indirect dispatch recorded through the family handle runs to completion"
+        );
+        assert!(submission.is_terminal());
+        // The handle is still alive here, so the pipeline outlived the submission that
+        // named it; it is released only now, when nothing executes.
+        drop(api);
+    }
+
+    #[test]
+    fn a_refused_indirect_dispatch_is_a_value_and_leaves_the_recording_usable() {
+        // The table's two sentences, the usage rule and the recorder's range sentences
+        // are all values returned before the driver, and the contract says the executor
+        // still ends a recording after a callback error -- so none of them may poison
+        // the pass.
+        let Some(mut opened) = device() else {
+            return;
+        };
+        if !opened
+            .device
+            .ledger()
+            .supports(Capability::IndirectDispatch)
+        {
+            return;
+        }
+        let pipeline = compute_pipeline(&opened);
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let commands = opened
+            .device
+            .table_mut()
+            .create_buffer(
+                64,
+                declared_buffer(&[
+                    BufferUsageKind::Indirect,
+                    BufferUsageKind::CopyDestination,
+                ]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local indirect command buffer");
+        let vertices = opened
+            .device
+            .table_mut()
+            .create_buffer(
+                64,
+                declared_buffer(&[BufferUsageKind::Vertex]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local vertex buffer");
+
+        let mut api =
+            require::<_, IndirectDispatch>(&opened.device).expect("the indirect row is proved");
+
+        // Without a compute pass every verb that needs one answers with the same
+        // sentence, and the commands id is valid so the guard is what refuses it.
+        assert_eq!(
+            api.dispatch_indirect(commands, 0),
+            Err(IndirectDispatchError::Recording(RecordError::NoPass))
+        );
+
+        // A foreign id has no record in the table, and a buffer the graph created for
+        // vertices is not one a dispatch may read counts from.
+        let foreign = BufferId::new(
+            opened.device.stamp().next_generation(),
+            PhysicalResourceIdentity::new(1),
+        );
+        assert_eq!(
+            api.dispatch_indirect(foreign, 0),
+            Err(IndirectDispatchError::UnknownBuffer)
+        );
+        assert_eq!(
+            api.dispatch_indirect(vertices, 0),
+            Err(IndirectDispatchError::UsageNotDeclared),
+            "the buffer step's mapping never widens, so a vertex buffer is not an indirect one"
+        );
+
+        api.begin_compute().expect("the compute pass opens");
+        // The range rules are the recorder's own sentences, decided before the driver.
+        assert_eq!(
+            api.dispatch_indirect(commands, 2),
+            Err(IndirectDispatchError::Recording(RecordError::Indirect(
+                indirect::IndirectRangeError::Misaligned
+            )))
+        );
+        assert_eq!(
+            api.dispatch_indirect(commands, 60),
+            Err(IndirectDispatchError::Recording(RecordError::Indirect(
+                indirect::IndirectRangeError::OutOfBounds
+            )))
+        );
+
+        // The refused values did not poison the pass: the recording still ends.
+        api.set_compute_pipeline(&pipeline)
+            .expect("the recording is usable after the refusals");
+        api.end_compute().expect("the pass closes");
+        api.finish().expect("the recording ends");
+        // A finished handle must not begin a second recording the caller never asked
+        // for and would never submit.
+        assert_eq!(
+            api.dispatch_indirect(commands, 0),
+            Err(IndirectDispatchError::Recording(RecordError::NotRecording))
+        );
     }
 }
