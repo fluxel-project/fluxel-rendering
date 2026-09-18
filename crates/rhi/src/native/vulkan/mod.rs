@@ -168,3 +168,11 @@ pub(crate) mod copy;
 /// queue 0, and the completion state machine over `common`'s disposition and
 /// lifetime rules, with accepted-unknown work quarantined rather than released.
 pub(crate) mod submission;
+
+/// Step 10's pure half: the fixed presentation contract decided against one
+/// surface's reported formats, present modes and capabilities, and lowered into
+/// the swapchain create-info the driver is handed. It creates and owns nothing, so
+/// every refusal is provable without a window; the surface handle, the swapchain,
+/// the acquire lease and the unpresented-acquire quarantine are step 10's owning
+/// half.
+pub(crate) mod surface;
