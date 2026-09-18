@@ -149,3 +149,12 @@ pub(crate) mod pipeline;
 /// reached. Caller-supplied SPIR-V stays a passthrough and meets this path in
 /// [`wgsl::create_module`].
 pub(crate) mod wgsl;
+
+/// Step 7's pure half: RenderGraph's access states lowered onto the pipeline-stage,
+/// access and layout facts one `vkCmdPipelineBarrier` needs, with a same-state
+/// transition kept a barrier rather than becoming a no-op.
+pub(crate) mod barrier;
+
+/// Step 7's owning half: the command pool on the device's selected queue family and
+/// the one recording encoder, which records exactly the barriers [`barrier`] builds.
+pub(crate) mod command;
