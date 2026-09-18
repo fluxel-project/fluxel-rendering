@@ -36,9 +36,6 @@
 //!
 //! # What is deliberately not here
 //!
-//! - **No reconfigure.** The `old_swapchain` rebuild and the recovery of a poisoned
-//!   surface are the rest of step 10. Present reports a suboptimal or out-of-date
-//!   answer as a value; acting on it is the step that owns the replacement.
 //! - **No rendering submission.** [`AcquireLease::wait_semaphore`] is the acquire
 //!   semaphore a submission drawing to this image must wait on, and
 //!   [`AcquireLease::present`] waits on it directly because nothing has consumed it
@@ -47,6 +44,27 @@
 //!   whichever semaphore present waited on, so it does not change.
 //! - **No sRGB presentation, no format negotiation.** These are
 //!   [`super::surface::contract`]'s decisions, and this module only consumes them.
+//!
+//! # Reconfigure consumes the predecessor, because the specification retires it
+//!
+//! [`Swapchain::reconfigure`] rebuilds the swapchain against the surface's *current*
+//! facts and hands the old handle to the driver as `old_swapchain`. That field has a
+//! consequence a caller must not miss: `Vulkan` retires the old swapchain **even if
+//! the creation fails**, so after a reconfigure there is never a live predecessor to
+//! fall back to. The method therefore takes `self`, and the old swapchain's teardown
+//! is its own [`Drop`] -- device idle, retained present semaphores, then the handle --
+//! which runs whether the rebuild succeeded or failed.
+//!
+//! Two things make the rebuild safe to write:
+//!
+//! - **The lease is the exclusion.** `reconfigure` takes `self`, so it cannot be
+//!   called while an [`AcquireLease`] exists; `Vulkan`'s "no image of the old
+//!   swapchain may be acquired" rule is the borrow checker's to enforce.
+//! - **A poisoned surface is refused first.** The surface's quarantine flag is read
+//!   before the driver is reached, so a surface whose acquire semaphore cannot be
+//!   proven reusable is never presented to as if it were. Recovering such a surface
+//!   means replacing the *surface* -- `VkSurfaceKHR` and window -- not reconfiguring
+//!   the swapchain, which is why this is a refusal rather than a repair.
 //!
 //! # The acquire lease is a borrow, and its drop is the preserved semantic
 //!
@@ -109,6 +127,14 @@ pub(crate) enum SwapchainError {
     Facts(SurfaceQueryError),
     /// The fixed presentation contract is not servable by this surface.
     Contract(PresentationError),
+    /// The surface is quarantined, so no swapchain may be built or rebuilt for it.
+    ///
+    /// An acquired image that was neither presented nor discarded leaves an acquire
+    /// semaphore the presentation engine may still signal, which puts the **surface**
+    /// -- not the swapchain -- beyond reuse (plan section 4). A rebuild would guess
+    /// that a surface this backend has quarantined is reusable, so it is refused by
+    /// name before the driver is reached. Recovering means replacing the surface.
+    Poisoned,
     /// The driver refused to create the swapchain.
     Creation(vk::Result),
     /// The driver refused to report the swapchain's images.
@@ -131,6 +157,13 @@ pub(crate) struct Swapchain<'a> {
     surface: &'a Surface<'a>,
     /// The device that created it, held for the same reason.
     device: &'a SwapchainDevice,
+    /// The adapter both the surface and the device belong to.
+    ///
+    /// It is owned rather than re-requested by [`Swapchain::reconfigure`] because the
+    /// surface facts a rebuild decides against must be read from the adapter this
+    /// swapchain was actually created on; a parameter would let a caller ask a
+    /// different adapter about a surface this one created.
+    physical_device: vk::PhysicalDevice,
     /// The device-level swapchain entry points, loaded once when the handle was
     /// created.
     loader: khr::swapchain::Device,
@@ -278,6 +311,44 @@ impl<'a> Swapchain<'a> {
             suboptimal: acquired.suboptimal,
             semaphore,
         })
+    }
+
+    /// Rebuilds this swapchain against the surface's current facts.
+    ///
+    /// The old handle is passed to the driver as `old_swapchain`, which is what lets
+    /// a resize reuse the presentation engine's resources instead of tearing
+    /// everything down. That field also decides the ownership shape: `Vulkan` retires
+    /// the old swapchain even when the creation fails, so this method takes `self`
+    /// rather than `&mut self` and the old swapchain is destroyed by its own [`Drop`]
+    /// on both the success and the failure path. There is deliberately no state in
+    /// which a caller holds a swapchain the driver has already retired.
+    ///
+    /// A quarantined surface is refused first, before any driver call, because a
+    /// rebuilt swapchain on it would assume the acquire semaphore an unpresented
+    /// image left behind is reusable. The presentation contract itself is re-decided
+    /// from the facts the surface reports *now*, so a resize is not lowered against a
+    /// stale extent.
+    pub(crate) fn reconfigure(
+        self,
+        requested: vk::Extent2D,
+        requested_usage: TextureUsage,
+    ) -> Result<Swapchain<'a>, SwapchainError> {
+        if self.surface.is_poisoned() {
+            return Err(SwapchainError::Poisoned);
+        }
+        let surface = self.surface;
+        let device = self.device;
+        // The old handle is valid until `self` drops at the end of this call, which is
+        // after `build` has created its replacement; that ordering is what makes
+        // `old_swapchain` legal at the driver call.
+        build(
+            device,
+            surface,
+            self.physical_device,
+            requested,
+            requested_usage,
+            self.handle,
+        )
     }
 
     /// Destroys the present wait semaphore retained for a previously presented image.
@@ -522,6 +593,32 @@ pub(crate) fn create<'a>(
     requested: vk::Extent2D,
     requested_usage: TextureUsage,
 ) -> Result<Swapchain<'a>, SwapchainError> {
+    build(
+        device,
+        surface,
+        physical_device,
+        requested,
+        requested_usage,
+        vk::SwapchainKHR::null(),
+    )
+}
+
+/// Builds the swapchain a caller asked for, over a predecessor it may already have.
+///
+/// This is [`create`]'s body and [`Swapchain::reconfigure`]'s replacement path at
+/// once: the only difference between a fresh creation and a rebuild is the
+/// `old_swapchain` handle, so a second copy of the facts read and the contract
+/// decision would be a second place for them to drift. `build` owns nothing beyond
+/// the value it returns, so every refusal it produces happens before a swapchain
+/// exists -- and a refused image read undoes the creation it just made.
+fn build<'a>(
+    device: &'a SwapchainDevice,
+    surface: &'a Surface<'a>,
+    physical_device: vk::PhysicalDevice,
+    requested: vk::Extent2D,
+    requested_usage: TextureUsage,
+    old_swapchain: vk::SwapchainKHR,
+) -> Result<Swapchain<'a>, SwapchainError> {
     let family = device.device().selected_queue().family;
     let presents = surface
         .supports_presentation(physical_device, family)
@@ -540,7 +637,7 @@ pub(crate) fn create<'a>(
     )
     .map_err(SwapchainError::Contract)?;
 
-    let create_info = surface::swapchain_create_info(surface.handle(), &presentation);
+    let create_info = surface::swapchain_create_info(surface.handle(), &presentation, old_swapchain);
     let loader = khr::swapchain::Device::new(
         surface.instance().instance().instance(),
         device.device().device(),
@@ -576,6 +673,7 @@ pub(crate) fn create<'a>(
     Ok(Swapchain {
         surface,
         device,
+        physical_device,
         loader,
         handle,
         images,
@@ -843,5 +941,145 @@ mod tests {
         // Drop order: the swapchain, which idles the device and destroys every
         // retained semaphore, before the device, the surface, the instance and the
         // window.
+    }
+
+    #[test]
+    fn a_real_reconfigure_retires_the_old_swapchain_and_returns_a_live_one() {
+        // The step 10 reconfigure half against the real driver: a real
+        // `vkCreateSwapchainKHR` over its own predecessor, the retained present
+        // semaphore the predecessor left behind, and the replacement that is usable
+        // straight away. Skips only where the machine has no loader, no adapter or no
+        // window station.
+        let Ok(surface_instance) = instance::open_with_surface(Validation::Disabled) else {
+            return;
+        };
+        let instance = surface_instance.instance().instance();
+        let Ok(adapters) = adapter::enumerate(instance) else {
+            return;
+        };
+        if adapters.is_empty() {
+            return;
+        }
+        let Some(window) = TestWindow::open() else {
+            return;
+        };
+        let Ok(surface) = presentation::create(&surface_instance, window.raw()) else {
+            return;
+        };
+        // Not a skip: the assertions below are reached on this machine rather than
+        // bypassed by an early return.
+        let (physical_device, facts) = presenting_adapter(&surface, &adapters)
+            .expect("a surface this loader created is presentable from an enumerated adapter");
+        let adapter_facts = adapter::describe(instance, physical_device);
+        let device =
+            device::open_with_swapchain(&surface_instance, physical_device, &adapter_facts.limits)
+                .expect("the named Windows board reports VK_KHR_swapchain");
+        let usage = TextureUsage::from_kinds([
+            TextureUsageKind::ColorAttachment,
+            TextureUsageKind::Present,
+        ]);
+        let mut swapchain = create(&device, &surface, physical_device, requested(&facts), usage)
+            .expect("the named Windows board serves a swapchain for the fixed contract");
+
+        // A presented frame leaves a semaphore retained on the old swapchain, so a
+        // rebuild must retire that too -- this is the teardown path, not only a new
+        // handle.
+        let lease = swapchain
+            .acquire(Duration::from_secs(5))
+            .expect("a FIFO swapchain with no image in flight yields one within the timeout");
+        lease
+            .present()
+            .expect("the named Windows board presents an image it just acquired");
+        assert!(
+            swapchain.presented.iter().any(Option::is_some),
+            "a present leaves a retained semaphore for the rebuild to retire"
+        );
+
+        let reconfigured = swapchain
+            .reconfigure(requested(&facts), usage)
+            .expect("a surface that just served a swapchain serves its rebuild");
+        assert_ne!(reconfigured.handle(), vk::SwapchainKHR::null());
+        assert!(
+            !reconfigured.images().is_empty(),
+            "a rebuilt swapchain owns at least one image"
+        );
+        assert_eq!(reconfigured.presentation().format, surface::PRESENT_FORMAT);
+        assert!(
+            reconfigured.presentation().extent.width > 0,
+            "the rebuilt contract never chooses a zero extent"
+        );
+        assert!(
+            reconfigured.presented.iter().all(Option::is_none),
+            "a rebuilt swapchain starts with no retained present semaphore"
+        );
+
+        // The replacement is live: it acquires and presents a frame of its own.
+        let mut reconfigured = reconfigured;
+        let lease = reconfigured
+            .acquire(Duration::from_secs(5))
+            .expect("a rebuilt FIFO swapchain yields an image");
+        let outcome = lease
+            .present()
+            .expect("a rebuilt swapchain presents an image it just acquired");
+        assert!(
+            outcome == PresentOutcome::Presented || outcome.is_suboptimal(),
+            "a present over the rebuilt swapchain is success or success-plus-suboptimal"
+        );
+        assert!(
+            !surface.is_poisoned(),
+            "a completed rebuild does not quarantine the surface"
+        );
+    }
+
+    #[test]
+    fn a_poisoned_surface_refuses_reconfigure_before_the_driver() {
+        // An unpresented acquire quarantines the surface, and a rebuild on it would
+        // assume the semaphore that acquire left behind is reusable. The refusal is a
+        // property of this backend, reached before any driver call.
+        let Ok(surface_instance) = instance::open_with_surface(Validation::Disabled) else {
+            return;
+        };
+        let instance = surface_instance.instance().instance();
+        let Ok(adapters) = adapter::enumerate(instance) else {
+            return;
+        };
+        if adapters.is_empty() {
+            return;
+        }
+        let Some(window) = TestWindow::open() else {
+            return;
+        };
+        let Ok(surface) = presentation::create(&surface_instance, window.raw()) else {
+            return;
+        };
+        // Not a skip: the assertions below are reached on this machine rather than
+        // bypassed by an early return.
+        let (physical_device, facts) = presenting_adapter(&surface, &adapters)
+            .expect("a surface this loader created is presentable from an enumerated adapter");
+        let adapter_facts = adapter::describe(instance, physical_device);
+        let device =
+            device::open_with_swapchain(&surface_instance, physical_device, &adapter_facts.limits)
+                .expect("the named Windows board reports VK_KHR_swapchain");
+        let usage = TextureUsage::from_kinds([
+            TextureUsageKind::ColorAttachment,
+            TextureUsageKind::Present,
+        ]);
+        let mut swapchain = create(&device, &surface, physical_device, requested(&facts), usage)
+            .expect("the named Windows board serves a swapchain for the fixed contract");
+
+        drop(
+            swapchain
+                .acquire(Duration::from_secs(5))
+                .expect("a FIFO swapchain yields an image within the timeout"),
+        );
+        assert!(surface.is_poisoned());
+
+        assert_eq!(
+            swapchain.reconfigure(requested(&facts), usage).err(),
+            Some(SwapchainError::Poisoned),
+            "a quarantined surface refuses a rebuild by name"
+        );
+        // The consumed swapchain is dropped, so a poisoned surface ends with no
+        // swapchain either way; recovering it means replacing the surface itself.
     }
 }

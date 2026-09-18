@@ -412,10 +412,16 @@ pub(crate) fn contract(
 ///
 /// Every field is written, including the ones whose defaults would silently claim
 /// something: `clipped` is true (the implementation may ignore obscured pixels,
-/// which the specification permits and the borrowed path does),
-/// `image_array_layers` is one (this contract presents one 2-D image), and
-/// `old_swapchain` is null (this is a fresh creation, and a reconfigure passes its
-/// own predecessor through the field).
+/// which the specification permits and the borrowed path does), and
+/// `image_array_layers` is one (this contract presents one 2-D image).
+///
+/// `old_swapchain` is a parameter rather than a constant because the specification
+/// gives it two meanings that this backend needs. A fresh creation passes
+/// `VK_NULL_HANDLE`; a reconfigure passes its own predecessor, which tells the
+/// driver the new swapchain replaces the old one -- and **retires that predecessor
+/// even if the creation fails**, so the caller that passed it must destroy it
+/// either way. Both callers are in [`super::swapchain`], which is also where that
+/// retirement rule is honoured.
 ///
 /// `pre_transform` was the one field this function used to leave to its caller,
 /// because the transform a surface reports as supported had not been read yet. Step
@@ -430,6 +436,7 @@ pub(crate) fn contract(
 pub(crate) fn swapchain_create_info(
     surface: vk::SurfaceKHR,
     presentation: &Presentation,
+    old_swapchain: vk::SwapchainKHR,
 ) -> vk::SwapchainCreateInfoKHR<'static> {
     vk::SwapchainCreateInfoKHR::default()
         .surface(surface)
@@ -444,7 +451,7 @@ pub(crate) fn swapchain_create_info(
         .composite_alpha(presentation.composite_alpha)
         .present_mode(presentation.present_mode)
         .clipped(true)
-        .old_swapchain(vk::SwapchainKHR::null())
+        .old_swapchain(old_swapchain)
 }
 
 #[cfg(test)]
@@ -806,7 +813,11 @@ mod tests {
     #[test]
     fn the_create_info_states_the_whole_contract() {
         let presentation = accepted();
-        let info = swapchain_create_info(vk::SurfaceKHR::from_raw(0x1234), &presentation);
+        let info = swapchain_create_info(
+            vk::SurfaceKHR::from_raw(0x1234),
+            &presentation,
+            vk::SwapchainKHR::null(),
+        );
         assert_eq!(info.surface, vk::SurfaceKHR::from_raw(0x1234));
         assert_eq!(info.min_image_count, presentation.image_count);
         assert_eq!(info.image_format, presentation.format);
@@ -823,6 +834,17 @@ mod tests {
         assert_eq!(info.image_array_layers, 1);
         assert_ne!(info.clipped, 0);
         assert_eq!(info.old_swapchain, vk::SwapchainKHR::null());
+
+        // A reconfigure passes its own predecessor through the field, and that is
+        // the other meaning the specification gives it: the driver retires the old
+        // swapchain even when the creation fails.
+        let predecessor = vk::SwapchainKHR::from_raw(0x5678);
+        let info = swapchain_create_info(
+            vk::SurfaceKHR::from_raw(0x1234),
+            &presentation,
+            predecessor,
+        );
+        assert_eq!(info.old_swapchain, predecessor);
     }
 
     fn names(values: &[&str]) -> Vec<String> {

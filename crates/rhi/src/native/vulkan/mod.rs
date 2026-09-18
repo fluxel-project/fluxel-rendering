@@ -205,8 +205,10 @@ pub(crate) mod present;
 /// retains the acquire semaphore. Present is landed too: a real `vkQueuePresentKHR`
 /// consumes that lease, and the semaphore it waited on is retained until the
 /// presentation engine hands the image back, because returning from present is not
-/// proof its wait is consumed. Reconfigure and the recovery of a poisoned surface
-/// remain owed by step 10.
+/// proof its wait is consumed. Reconfigure is landed too: a real
+/// `vkCreateSwapchainKHR` over `old_swapchain` that retires its predecessor through
+/// the same teardown and returns a live replacement, refusing a quarantined surface
+/// by name before the driver is reached. Step 10 is complete.
 pub(crate) mod swapchain;
 
 /// Test-only scaffolding shared by the modules that need a real window or surface.
