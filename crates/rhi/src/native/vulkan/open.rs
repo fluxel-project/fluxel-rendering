@@ -10,6 +10,9 @@
 //!   stays true while one function owns the order;
 //! - an absent adapter index is reported with the count of adapters found, not as a
 //!   generic failure;
+//! - the adapter's report is checked against the portable floor ([`limits::BASELINE`])
+//!   before any device exists, so an adapter that cannot hold the RHI's fixed
+//!   recipes refuses without one being created;
 //! - the adapter's facts are read **once**, and the same limit set both selects the
 //!   queue family and builds the capability ledger, so the ledger cannot disagree
 //!   with the device that was created.
@@ -30,6 +33,7 @@ use crate::{HardwareCapabilities, HardwareInfo};
 use super::adapter::{self, AdapterError};
 use super::device::{self, DeviceError, VulkanDevice};
 use super::instance::{self, InstanceError, ValidationInstance};
+use super::limits::{self, BaselineError};
 
 /// Everything one opened headless device consists of.
 pub(crate) struct OpenedVulkan {
@@ -91,6 +95,8 @@ pub(crate) enum OpenVulkanError {
     Instance(InstanceError),
     /// No adapter existed at the requested index.
     Adapter(AdapterError),
+    /// The adapter's report is below the portable limit floor.
+    Baseline(BaselineError),
     /// The logical device could not be created.
     Device(DeviceError),
 }
@@ -107,6 +113,11 @@ pub(crate) fn open(
 
     // Read once: these facts both select the queue family and build the ledger.
     let facts = adapter::describe(instance.instance(), adapter);
+    // The portable floor is checked here, after the adapter's facts are read and
+    // **before** `vkCreateDevice`, so an adapter that cannot serve the RHI's
+    // baseline refuses without a device ever existing -- the same fail-closed order
+    // the validation probe uses. Nothing below may have run for a refused adapter.
+    limits::meets(&facts.limits).map_err(OpenVulkanError::Baseline)?;
     let device = device::open(&instance, adapter, &facts.limits).map_err(OpenVulkanError::Device)?;
     // The RHI-facing capability facts are lowered from the same limit set and the
     // *device's own* format table, so the public facts and the ledger the device
@@ -157,6 +168,23 @@ mod tests {
             ledger.supports(Capability::Copy),
             "the created device proves Copy from the API version alone"
         );
+    }
+
+    #[test]
+    fn the_adapter_this_machine_opens_meets_the_portable_floor() {
+        // The baseline is applied inside `open`, so a successful open on this board
+        // is itself the evidence that the floor was met. The assertion below is the
+        // check run a second time against the same report, which is what names the
+        // fact rather than leaving it implied by an `Ok`.
+        let Ok(opened) = open(Validation::Disabled, 0) else {
+            return;
+        };
+        assert_eq!(
+            limits::meets(&opened.limits),
+            Ok(()),
+            "the device was created, so the same limit set must satisfy the floor"
+        );
+        assert!(limits::meets_baseline(&opened.limits));
     }
 
     #[test]

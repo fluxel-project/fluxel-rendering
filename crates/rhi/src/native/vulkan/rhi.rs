@@ -25,12 +25,10 @@
 //! switching the route before they exist would refuse work the oracle executes
 //! today.
 //!
-//! It also does not validate a portable baseline limit set. The borrowed path
-//! refuses an adapter that cannot meet the default portable limits with
-//! `OpenError::RequiredLimitsUnavailable`, and this backend has no equivalent check
-//! yet; inventing one here would be a second, unwritten rule about which numbers
-//! the RHI's floor is made of. It arrives with the public `Device` wiring, which is
-//! where that floor is defined.
+//! The portable baseline limit set *is* validated, and it is validated one layer
+//! down in [`super::open::open`] rather than here, so every caller of this backend
+//! meets the same floor. [`open_error`] is where its refusal becomes the public
+//! sentence; the failing field stays in the native value.
 
 use fluxel_rendergraph::TextureFormat;
 
@@ -113,14 +111,19 @@ pub(crate) fn open(
 
 /// Lowers one open failure onto the public [`OpenError`].
 ///
-/// Two of the native sentences already have an exact public counterpart and are
+/// Three of the native sentences already have an exact public counterpart and are
 /// mapped rather than flattened, because a caller acts on them differently:
 ///
 /// - a validation facility that could not be verified is
 ///   [`OpenError::ValidationUnavailable`], which is the fail-closed refusal the
 ///   plan's preserved-semantics table fixes;
 /// - an absent adapter index is [`OpenError::AdapterUnavailable`], which carries
-///   both numbers so the caller can tell "no such index" from "no adapter".
+///   both numbers so the caller can tell "no such index" from "no adapter";
+/// - an adapter below the portable limit floor is
+///   [`OpenError::RequiredLimitsUnavailable`], the same public sentence the
+///   borrowed `wgpu-hal` path uses, so a caller that switches backends sees one
+///   behavior. The failing field stays in the native value rather than widening the
+///   public variant, which carries only the backend.
 ///
 /// Everything else keeps its own diagnostic in [`OpenError::NativeUnavailable`].
 /// The reason is the native error's `Debug` rendering, prefixed with the layer that
@@ -142,6 +145,9 @@ pub(crate) fn open_error(error: OpenVulkanError) -> OpenError {
                 available_adapters: available,
             }
         }
+        OpenVulkanError::Baseline(_) => OpenError::RequiredLimitsUnavailable {
+            backend: Backend::Vulkan,
+        },
         OpenVulkanError::Instance(reason) => OpenError::NativeUnavailable {
             backend: Backend::Vulkan,
             reason: format!("instance: {reason:?}"),
@@ -321,6 +327,26 @@ mod tests {
                 backend: Backend::Vulkan,
                 adapter_index: 3,
                 available_adapters: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn an_adapter_below_the_portable_floor_is_the_public_limits_refusal() {
+        use super::super::limits::{BaselineError, Limit};
+
+        // The baseline refusal is the one public sentence the borrowed path already
+        // produces for the same condition, so switching backends does not change
+        // what a caller sees. The failing field stays in the native value.
+        assert_eq!(
+            open_error(OpenVulkanError::Baseline(BaselineError {
+                limit: Limit::MaxBindGroups {
+                    reported: 1,
+                    required: 4,
+                },
+            })),
+            OpenError::RequiredLimitsUnavailable {
+                backend: Backend::Vulkan
             }
         );
     }

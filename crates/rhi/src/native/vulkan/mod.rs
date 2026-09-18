@@ -418,3 +418,12 @@ pub(crate) mod recording;
 /// chains the verified entry point in [`open`] and lowers its refusal. The route swap
 /// that makes the public `Device` open this backend is deliberately not here.
 pub(crate) mod rhi;
+
+/// Step 14's portable floor: the baseline limits an adapter must report before this
+/// backend will create a device on it. It is the same numeric floor the borrowed path
+/// applies through `wgt::Limits::default()`, restated here so the owned backend is not
+/// quietly more permissive than the one it replaces. Pure: it compares the adapter's
+/// already-read report and asks the driver nothing, and [`open::open`] applies it
+/// **before** `vkCreateDevice`, so an adapter below the floor refuses with a device
+/// error rather than after one exists.
+pub(crate) mod limits;
