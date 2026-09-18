@@ -673,8 +673,26 @@ rather than invented, and a refusal becomes the same public
 `OpenError::RequiredLimitsUnavailable` the borrowed path produces -- with the failing
 field and both numbers kept in the native value. It deliberately does not swap the route
 `crate::imp::open` takes, because the borrowed path still serves the frozen oracle until
-the execution verbs speak this backend. Still owed by step 14: that route swap, the
-staging upload path, the fixed-artifact pipeline and binding construction over this
-table, validation diagnostics capture, and the public `Device` / execution wiring.
+the execution verbs speak this backend. Step 14's staging half followed, and it is where
+step 8's deferred buffer-image routes landed: `common::copy` states the texel-copy
+footprint the graph-level copy regions deliberately do not model (`TexelCopyLayout`,
+`TexelCopyBase`, `BufferImageRegion`) beside one shared rule for the box — non-empty, a
+mip the image has, exactly the single layer this execution model records, and inside
+that mip's extent — which both the image-to-image route and the buffer-image route lower
+through, so the two cannot disagree about what a region is. `native::vulkan::copy` gains
+the one `buffer_image_copy` lowering (a buffer-to-image and an image-to-buffer record are
+the same value, so only the recorded command differs, and the offset is refused unless it
+is a four-byte multiple), `command::Encoder` gains `copy_buffer_to_image` and
+`copy_image_to_buffer` over the `TRANSFER_DST_OPTIMAL`/`TRANSFER_SRC_OPTIMAL` layouts the
+graph's own barrier gives those states, and `resource::ResourceTable::write_buffer` is the
+host write the staging side needs: a buffer with no mapping, or a mapped but
+non-coherent one, is refused by name rather than written through a mapping that cannot
+carry the write. Against the real driver a host-written staging buffer is copied into an
+image and back out into a coherent second buffer, and the bytes are read back exactly,
+which is the whole staging round trip minus its orchestration. Still owed by step 14:
+that route swap, the rest of the staging upload path (the non-coherent invalidate a
+readback needs, and the submission that retains staging), the fixed-artifact pipeline and
+binding construction over this table, validation diagnostics capture, and the public
+`Device` / execution wiring.
 Clippy is clean
 under `-D warnings` for all-features and no-default-features.
