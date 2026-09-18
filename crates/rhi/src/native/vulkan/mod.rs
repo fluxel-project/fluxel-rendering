@@ -112,12 +112,18 @@
 //!     it arrive with a consumer. Step 12 is complete.
 //!
 //! 13. **The family wiring.** `VulkanDevice` owns the resource table and the one
-//!     command pool, implements `Provides<Graphics>`, and hands out
-//!     [`family::GraphicsRecording`], which implements `FamilyApi` and `GraphicsApi`
-//!     over that table and its own recording. It is the first real backend to hold a
-//!     family's vocabulary, and it is what makes `require::<_, Graphics>(&device)`
-//!     compile and run against this backend. This step was added when the list above
-//!     was exhausted, which is section 23.1's rule moving to the W2 work package.
+//!     command pool and implements the family providers this backend can serve,
+//!     handing out one handle type per family: `Provides<Graphics>` yields
+//!     [`family::GraphicsRecording`] (`FamilyApi` + `GraphicsApi`) and
+//!     `Provides<Copy>` yields [`family::CopyRecording`] (`FamilyApi` + `CopyApi`),
+//!     each over that table and its own recording. The handles are distinct types so
+//!     a caller that negotiated one family cannot reach another's verbs, and each is
+//!     its own recording context, which the contract permits (plan section 21).
+//!     Composing two families into one submission is the execution-layer migration's
+//!     decision and is deliberately not invented here. This step was added when the
+//!     list above was exhausted, which is section 23.1's rule moving to the W2 work
+//!     package; it is what makes `require::<_, Graphics>(&device)` and
+//!     `require::<_, Copy>(&device)` compile and run against this backend.
 //!
 //! # Acceptance
 //!
@@ -239,11 +245,14 @@ pub(crate) mod framebuffer;
 /// with that extension on a `Vulkan` 1.0 device.
 pub(crate) mod draw;
 
-/// Step 13: the first family wiring. `VulkanDevice` implements
-/// `Provides<Graphics>` and hands out [`family::GraphicsRecording`], which
-/// implements `FamilyApi` and `GraphicsApi` over the device's own resource table
-/// and its own recording, so `require::<_, Graphics>(&device)` is the real
-/// negotiation path for this backend rather than only a contract test.
+/// Step 13: the family wiring. `VulkanDevice` implements `Provides<Graphics>` and
+/// `Provides<Copy>`, handing out [`family::GraphicsRecording`] and
+/// [`family::CopyRecording`], which implement `FamilyApi` and their own family's
+/// trait over the device's own resource table and their own recording. The two
+/// handles are distinct types so one family's verbs cannot be reached from the
+/// other's call site, and both `require::<_, Graphics>(&device)` and
+/// `require::<_, Copy>(&device)` are the real negotiation path for this backend
+/// rather than only a contract test.
 pub(crate) mod family;
 
 /// Step 6: the retained WGSL artifact lowered to SPIR-V with Naga's `spv-out`, with
