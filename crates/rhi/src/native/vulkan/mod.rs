@@ -93,16 +93,20 @@
 //!     whose parameter space `GraphicsApi`'s draw verbs deliberately cannot name
 //!     (plan section 20.1) -- and it is what lets `VulkanDevice` implement
 //!     `Provides<Graphics>`, which `device`'s real-device test still records as not
-//!     compiling. Three bounded pieces have landed: the pure [`render_pass`]
+//!     compiling. Four bounded pieces have landed: the pure [`render_pass`]
 //!     lowering; [`framebuffer`] with the [`command::Encoder`] bracket
 //!     (`begin_raster` / `end_raster`) that owns the render pass and framebuffer a
 //!     recorded pass needs, refusing a barrier, a copy or an `end` while a pass is
-//!     open; and the raster state and draw verbs (`set_raster_pipeline`,
+//!     open; the raster state and draw verbs (`set_raster_pipeline`,
 //!     `set_vertex_buffer`, `set_index_buffer`, `set_viewport`, `set_scissor`,
 //!     `draw`, `draw_indexed`) lowered through [`draw`], which also records the Y
 //!     flip the borrowed path preserves and is why the device verifies and enables
-//!     `VK_KHR_maintenance1`. Binding selection (`set_bindings`, which needs the
-//!     descriptor sets) is still owed.
+//!     `VK_KHR_maintenance1`; and [`bind_group`] with the [`command::Encoder`]
+//!     `set_bindings` verb, which owns the `VkDescriptorPool` and `VkDescriptorSet`
+//!     the retained textured layout fills and refuses a dynamic binding this
+//!     vocabulary cannot supply. What step 12 still owes is the two draw-parameter
+//!     rows (`BaseVertex`, `FirstInstance`) step 11 handed to it; the verbs they gate
+//!     deliberately fix both at zero until those rows are proved.
 //!
 //! # Acceptance
 //!
@@ -189,6 +193,12 @@ pub(crate) mod shader;
 /// Step 5's descriptor half: the descriptor set layout, lowered from the common
 /// bind-group layout vocabulary and owned by the pipeline layout built over it.
 pub(crate) mod descriptor;
+
+/// Step 12's binding selection: the `VkDescriptorPool` and `VkDescriptorSet` the
+/// common bind-group value vocabulary fills, owned together so destroying the pool
+/// is the set's whole release, and validated against the pipeline layout's own set
+/// layout before the driver is reached.
+pub(crate) mod bind_group;
 
 /// Step 5's pipeline half: the pipeline layout, the compute pipeline built over it,
 /// and the raster pipeline lowered from the common fixed-function vocabulary, with

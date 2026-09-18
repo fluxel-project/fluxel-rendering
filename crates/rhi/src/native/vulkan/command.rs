@@ -72,7 +72,7 @@ use fluxel_rendergraph::{
 };
 
 use super::pipeline::RasterPipeline;
-use super::{barrier, copy, draw, format, framebuffer::Framebuffer};
+use super::{barrier, bind_group::BindGroup, copy, draw, format, framebuffer::Framebuffer};
 
 /// Why a command pool or an encoder could not be created or used.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -536,6 +536,33 @@ impl Encoder {
         Ok(())
     }
 
+    /// Binds the descriptor set `group` names at the set index it fills.
+    ///
+    /// The group carries the `VkPipelineLayout` its set was allocated against, so the
+    /// binding and the layout cannot be told different things and `Vulkan`'s
+    /// compatibility rule is satisfied by construction. The caller keeps the group and
+    /// the layout's owner alive for the recording, exactly as it keeps a pipeline and
+    /// a vertex buffer alive.
+    pub(crate) fn set_bindings(&mut self, group: &BindGroup) -> Result<(), RecordError> {
+        self.check_pass()?;
+        let sets = [group.set()];
+        // SAFETY: the command buffer is recording inside a render pass; both handles
+        // are live objects this device created and the caller keeps them alive; and no
+        // bind-time dynamic offsets exist, because a bind group cannot be created for a
+        // layout that declares one (`bind_group::validate` refuses it).
+        unsafe {
+            self.device.cmd_bind_descriptor_sets(
+                self.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                group.pipeline_layout(),
+                group.set_index(),
+                &sets,
+                &[],
+            );
+        }
+        Ok(())
+    }
+
     /// Records the dynamic viewport the open pass draws through.
     ///
     /// The value is lowered by [`draw::viewport`], which keeps the borrowed path's
@@ -753,12 +780,13 @@ mod tests {
     use crate::Validation;
     use crate::native::vulkan::pipeline::{create_layout, create_raster};
     use crate::native::vulkan::resource::ResourceTable;
-    use crate::native::vulkan::test_support::{colour_only_state, position_stream, raster_shaders};
-    use crate::native::vulkan::{allocator::GpuAllocator, memory, open, render_pass, submission};
+    use crate::native::vulkan::test_support::{
+        colour_only_state, colour_target_pass, position_stream, raster_shaders,
+    };
+    use crate::native::vulkan::{allocator::GpuAllocator, memory, open, submission};
     use fluxel_rendergraph::{
-        AttachmentOps, BufferUsage, BufferUsageKind, CompletionStatus, Extent3d, LoadOp,
-        RasterColorAttachment, StoreOp, TextureDesc, TextureDimension, TextureFormat, TextureUsage,
-        TextureUsageKind, WriteCoverage,
+        BufferUsage, BufferUsageKind, CompletionStatus, Extent3d, TextureDesc, TextureDimension,
+        TextureFormat, TextureUsage, TextureUsageKind,
     };
 
     /// Opens a headless device and a real command pool, or returns `None` where no
@@ -1342,59 +1370,8 @@ mod tests {
         assert_eq!(table.buffer_size(buffer), None);
     }
 
-    /// A real colour target and the framebuffer a raster pass begins over it.
-    ///
-    /// Returns the framebuffer, the image a transition must move into the pass's
-    /// initial layout, and that image's mapped format.
-    fn colour_target_pass(
-        opened: &open::OpenedVulkan,
-        table: &mut ResourceTable,
-        memory_types: &[vk::MemoryType],
-    ) -> (Framebuffer, vk::Image, vk::Format) {
-        let target = table
-            .create_texture(
-                TextureDesc {
-                    dimension: TextureDimension::D2,
-                    extent: Extent3d {
-                        width: 16,
-                        height: 8,
-                        depth: 1,
-                    },
-                    mip_levels: 1,
-                    array_layers: 1,
-                    sample_count: 1,
-                    format: TextureFormat::Rgba8Unorm,
-                },
-                declared_texture(&[TextureUsageKind::ColorAttachment]),
-                memory_types,
-                memory::MemoryPurpose::DeviceLocal,
-            )
-            .expect("a device-local colour target");
-        let colors = [RasterColorAttachment {
-            index: 0,
-            texture: &target,
-            range: TextureRange::Whole,
-            operations: AttachmentOps {
-                load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
-                store: StoreOp::Store,
-                write_coverage: WriteCoverage::Full,
-            },
-        }];
-        let admitted = render_pass::admit(&colors, None).expect("one colour at index zero");
-        let resolved = table
-            .texture_desc(*admitted.texture)
-            .expect("a live texture");
-        let view = table.texture_view(*admitted.texture).expect("a live view");
-        let image = table.texture_image(*admitted.texture).expect("a live image");
-        let mapped = format::image_format(resolved.format).expect("a mapped format");
-        let framebuffer = Framebuffer::create(opened.device.device(), admitted, &resolved, view)
-            .expect("a render pass and framebuffer for a real colour target");
-        (framebuffer, image, mapped)
-    }
-
     #[test]
-    fn a_real_encoder_records_a_real_raster_pass_with_both_draws() {
-        // Step 12's state and draw verbs against the real driver: a real pipeline, the
+    fn a_real_encoder_records_a_real_raster_pass_with_both_draws() {        // Step 12's state and draw verbs against the real driver: a real pipeline, the
         // dynamic viewport and scissor, a vertex buffer and an index buffer, and both
         // draws, recorded inside a real pass and submitted to completion. Skips where
         // no adapter exists.

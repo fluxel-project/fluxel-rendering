@@ -142,6 +142,18 @@ impl PipelineLayout {
     pub(crate) const fn handle(&self) -> vk::PipelineLayout {
         self.handle
     }
+
+    /// Returns the set layout this pipeline layout names at `index`, or `None`.
+    ///
+    /// A bind group is created against one *set* of a pipeline layout rather than
+    /// against a description, so this is how the bind-group step reaches the exact
+    /// `VkDescriptorSetLayout` this pipeline layout was built over -- the same handle,
+    /// not a second one created from an equal description. It also carries the
+    /// description the bind group is validated against, so one lookup answers both
+    /// questions.
+    pub(crate) fn set_layout(&self, index: u32) -> Option<&SetLayout> {
+        self.set_layouts.get(index as usize)
+    }
 }
 
 impl Drop for PipelineLayout {

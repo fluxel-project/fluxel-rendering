@@ -5,7 +5,16 @@
 //! The layout a recipe declares is [`BindGroupLayout`]: binding numbers, shader
 //! visibility and a binding kind. `Vulkan` copies that description at creation, so
 //! [`SetLayout`] owns the `VkDescriptorSetLayout` and the device that must destroy
-//! it, and never the description it was built from.
+//! it.
+//!
+//! It keeps the description as well, and that is a deliberate change from the first
+//! draft: a bind group is created against a set layout and validated against the
+//! entries the same description declares, so the description is the layout's own
+//! fact rather than a second copy a caller has to keep in step. A set layout is a
+//! long-lived object while the description is a handful of bytes, and the
+//! alternative -- asking a caller that moved its [`SetLayout`] into a
+//! [`PipelineLayout`](super::pipeline::PipelineLayout) for a description it no
+//! longer holds -- cannot be answered at all.
 //!
 //! # What is lowered, and what is deliberately not
 //!
@@ -57,12 +66,24 @@ pub(crate) enum DescriptorError {
 pub(crate) struct SetLayout {
     device: ash::Device,
     handle: vk::DescriptorSetLayout,
+    /// The description the handle was created from.
+    ///
+    /// Kept because a bind group is created against this layout and validated
+    /// against these entries -- which binding numbers exist, which kind each holds,
+    /// and the descriptor types the pool must size for. The driver does not need it
+    /// again; the bind-group creation does.
+    layout: BindGroupLayout,
 }
 
 impl SetLayout {
     /// Returns the driver handle a pipeline layout is created against.
     pub(crate) const fn handle(&self) -> vk::DescriptorSetLayout {
         self.handle
+    }
+
+    /// Returns the description this layout was created from.
+    pub(crate) fn layout(&self) -> &BindGroupLayout {
+        &self.layout
     }
 }
 
@@ -167,6 +188,7 @@ pub(crate) fn create_set_layout(
     Ok(SetLayout {
         device: device.clone(),
         handle,
+        layout: layout.clone(),
     })
 }
 

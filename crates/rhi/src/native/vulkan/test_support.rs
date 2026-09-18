@@ -16,11 +16,20 @@
 //! Compiled under `cfg(test)` only: nothing here is part of the backend.
 
 use ash::vk;
-use fluxel_rendergraph::TextureFormat;
+use fluxel_rendergraph::{
+    AttachmentOps, Extent3d, LoadOp, RasterColorAttachment, StoreOp, TextureDesc, TextureDimension,
+    TextureFormat, TextureRange, TextureUsage, TextureUsageKind, WriteCoverage,
+};
 use raw_window_handle::{RawWindowHandle, Win32WindowHandle};
 
+use super::format;
+use super::framebuffer::Framebuffer;
+use super::memory;
+use super::open::OpenedVulkan;
 use super::pipeline::RasterShaders;
 use super::presentation::{Surface, SurfaceFacts};
+use super::render_pass;
+use super::resource::ResourceTable;
 use crate::common::pipeline::{ColorTargetState, ColorWriteMask, PipelineState, PrimitiveState};
 use crate::common::vertex::{
     VertexAttribute, VertexBufferLayout, VertexFormat, VertexLayout, VertexStepMode,
@@ -133,6 +142,59 @@ pub(crate) fn presenting_adapter(
         let facts = surface.facts(*adapter).ok()?;
         (!facts.formats.is_empty()).then_some((*adapter, facts))
     })
+}
+
+/// A real colour target and the framebuffer a raster pass begins over it.
+///
+/// Returns the framebuffer, the image a transition must move into the pass's initial
+/// layout, and that image's mapped `Vulkan` format. The recorder's draw tests and the
+/// bind-group tests both need a real pass to record into, so the fixture is written
+/// once here rather than copied into each module, which is section 37.5's rule applied
+/// to the pass target.
+pub(crate) fn colour_target_pass(
+    opened: &OpenedVulkan,
+    table: &mut ResourceTable,
+    memory_types: &[vk::MemoryType],
+) -> (Framebuffer, vk::Image, vk::Format) {
+    let target = table
+        .create_texture(
+            TextureDesc {
+                dimension: TextureDimension::D2,
+                extent: Extent3d {
+                    width: 16,
+                    height: 8,
+                    depth: 1,
+                },
+                mip_levels: 1,
+                array_layers: 1,
+                sample_count: 1,
+                format: TextureFormat::Rgba8Unorm,
+            },
+            TextureUsage::from_kinds([TextureUsageKind::ColorAttachment]),
+            memory_types,
+            memory::MemoryPurpose::DeviceLocal,
+        )
+        .expect("a device-local colour target");
+    let colors = [RasterColorAttachment {
+        index: 0,
+        texture: &target,
+        range: TextureRange::Whole,
+        operations: AttachmentOps {
+            load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+            store: StoreOp::Store,
+            write_coverage: WriteCoverage::Full,
+        },
+    }];
+    let admitted = render_pass::admit(&colors, None).expect("one colour at index zero");
+    let resolved = table
+        .texture_desc(*admitted.texture)
+        .expect("a live texture");
+    let view = table.texture_view(*admitted.texture).expect("a live view");
+    let image = table.texture_image(*admitted.texture).expect("a live image");
+    let mapped = format::image_format(resolved.format).expect("a mapped format");
+    let framebuffer = Framebuffer::create(opened.device.device(), admitted, &resolved, view)
+        .expect("a render pass and framebuffer for a real colour target");
+    (framebuffer, image, mapped)
 }
 
 /// The retained colour-only raster state: one `Rgba8Unorm` target written in full,

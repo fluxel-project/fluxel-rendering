@@ -30,6 +30,8 @@
 
 use fluxel_rendergraph::TextureFormat;
 
+use crate::common::base::resource::{BufferId, SamplerId, TextureId};
+
 /// Which shader stages may read one binding.
 ///
 /// A bitset rather than an enum because the retained raster recipe's frame uniform
@@ -218,7 +220,51 @@ pub(crate) enum BindGroupLayoutError {
     },
 }
 
+/// One resource a bind group binds at one binding number.
+///
+/// This is the *value* half of the bind-group vocabulary: the layout states what a
+/// binding number accepts, and an entry states what is actually placed there. It
+/// names a base resource id rather than a backend handle, so a backend lowers this
+/// and never the other way round -- a raw handle cannot be written here at all.
+///
+/// A texture entry is one variant for both the sampled and the storage case: which
+/// one it is, and therefore which descriptor type and image layout it lowers to, is
+/// the *layout's* answer, and a second spelling here could disagree with it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum BindingResource {
+    /// A buffer range: the resource, the base offset and the bound size.
+    Buffer {
+        /// The buffer the binding reads.
+        buffer: BufferId,
+        /// The byte offset the bound range begins at.
+        offset: u64,
+        /// The size of the bound range in bytes.
+        size: u64,
+    },
+    /// A texture view the binding reads or writes.
+    Texture(TextureId),
+    /// A sampler the binding reads through.
+    Sampler(SamplerId),
+}
+
+/// One entry of a bind group: what one binding number is bound to.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct BindGroupEntry {
+    /// The binding number, which the layout must declare.
+    pub binding: u32,
+    /// The resource placed at that binding.
+    pub resource: BindingResource,
+}
+
 impl BindGroupLayout {
+    /// Returns the entry this layout declares at `binding`, or `None`.
+    ///
+    /// A backend lowering a bind group asks this rather than iterating the entries
+    /// itself, so "which binding numbers exist" has one answer.
+    pub(crate) fn entry(&self, binding: u32) -> Option<&BindGroupLayoutEntry> {
+        self.entries.iter().find(|entry| entry.binding == binding)
+    }
+
     /// Rejects a layout that cannot describe one descriptor set.
     ///
     /// The whole check is local: it compares the entries against each other and
@@ -247,6 +293,8 @@ impl BindGroupLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::base::stamp::DeviceStamp;
+    use fluxel_rendergraph::{DeviceIdentity, PhysicalResourceIdentity};
 
     fn entry(binding: u32, visibility: ShaderVisibility, kind: BindingKind) -> BindGroupLayoutEntry {
         BindGroupLayoutEntry {
@@ -349,8 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn the_binding_kinds_are_distinct_values() {
-        // Every kind a retained artifact declares, kept distinct so a copy-paste in
+    fn the_binding_kinds_are_distinct_values() {        // Every kind a retained artifact declares, kept distinct so a copy-paste in
         // a lowering match shows up as two kinds comparing equal.
         let kinds = [
             BindingKind::Buffer {
@@ -387,5 +434,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn stamp() -> DeviceStamp {
+        DeviceStamp::initial(DeviceIdentity::new(1))
+    }
+
+    #[test]
+    fn a_layout_answers_for_the_bindings_it_declares() {
+        // One answer to "which binding numbers exist", so a backend does not invent a
+        // second scan that could disagree with the layout.
+        let layout = BindGroupLayout {
+            entries: vec![uniform(0), texture(1, true), sampler(2)],
+        };
+        assert_eq!(layout.entry(1).map(|entry| entry.binding), Some(1));
+        assert_eq!(layout.entry(0).map(|entry| entry.visibility), Some(ShaderVisibility::VERTEX_FRAGMENT));
+        assert!(layout.entry(3).is_none());
+    }
+
+    #[test]
+    fn a_bind_group_entry_carries_its_binding_and_its_resource() {
+        // The value half of the vocabulary: a buffer range keeps both numbers, and
+        // the three resource kinds are distinct values.
+        let buffer = BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::Buffer {
+                buffer: BufferId::new(stamp(), PhysicalResourceIdentity::new(1)),
+                offset: 16,
+                size: 80,
+            },
+        };
+        let texture = BindGroupEntry {
+            binding: 1,
+            resource: BindingResource::Texture(TextureId::new(
+                stamp(),
+                PhysicalResourceIdentity::new(2),
+            )),
+        };
+        let sampler = BindGroupEntry {
+            binding: 2,
+            resource: BindingResource::Sampler(SamplerId::new(
+                stamp(),
+                PhysicalResourceIdentity::new(3),
+            )),
+        };
+        assert_eq!(buffer.binding, 0);
+        match buffer.resource {
+            BindingResource::Buffer { offset, size, .. } => {
+                assert_eq!(offset, 16);
+                assert_eq!(size, 80);
+            }
+            _ => panic!("the entry is a buffer"),
+        }
+        assert_ne!(buffer, texture);
+        assert_ne!(texture, sampler);
+        assert_ne!(buffer, sampler);
     }
 }
