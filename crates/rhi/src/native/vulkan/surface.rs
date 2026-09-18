@@ -65,10 +65,12 @@
 //!   increment does not need yet, and the caller of
 //!   [`swapchain_create_info`] owns that field until the swapchain-owning step
 //!   states which transform it selected.
-//! - **No presentation-support query.** Whether a queue family can present to a
-//!   surface is answered by `vkGetPhysicalDeviceSurfaceSupportKHR`, which is
-//!   device enumeration (step 2's rule: the queue family is chosen by rule, and
-//!   introducing presentation support there is its own decision).
+//! - **No presentation-support decision.** Whether a queue family can present to a
+//!   surface is read by [`super::presentation::Surface::supports_presentation`], but
+//!   *acting* on it is not here: step 2's queue rule chooses a family without a
+//!   surface, and changing that rule so the device is created on a family that can
+//!   present belongs to the swapchain-owning step, which is the first step that
+//!   needs a presentable queue.
 //! - **No swapchain, no acquire, no present.** Those are the owning half of step
 //!   10, and this module is what they lower from.
 

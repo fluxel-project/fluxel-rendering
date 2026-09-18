@@ -1,10 +1,29 @@
-//! Step 10's owning half: the `VkSurfaceKHR` created from a host window.
+//! Step 10's owning half: the `VkSurfaceKHR` created from a host window, and the
+//! facts it reports.
 //!
 //! [`super::surface`] is the pure half -- it decides *what* a conformant surface
 //! must report and lowers that decision into a `VkSwapchainCreateInfoKHR`. This
 //! module is the half that owns a driver object: it lowers the host's window handle
 //! into the platform create-info, creates the `VkSurfaceKHR` through the instance
 //! that enabled the surface extensions, and destroys it in `Drop`.
+//!
+//! # The facts query
+//!
+//! A swapchain's configuration is decided against three lists the surface itself
+//! reports, and [`Surface::facts`] is the one place they are read:
+//! `vkGetPhysicalDeviceSurfaceCapabilitiesKHR`,
+//! `vkGetPhysicalDeviceSurfaceFormatsKHR` and
+//! `vkGetPhysicalDeviceSurfacePresentModesKHR`. [`super::surface::contract`] already
+//! decides the fixed presentation contract against exactly those three, so the query
+//! produces the decision's inputs and nothing else: the query does not decide, and
+//! the decision does not read the driver.
+//!
+//! [`Surface::supports_presentation`] is a fourth read and a different question:
+//! whether **one queue family** can present to this surface. Step 2 chose the queue
+//! family by rule and without a surface, so this is the fact that tells the
+//! swapchain-owning step whether that selection can present. It is read rather than
+//! assumed, and it is a value about one surface rather than a capability row about
+//! the device.
 //!
 //! # Why the instance is a witness type, and the surface borrows it
 //!
@@ -31,13 +50,11 @@
 //!
 //! - **No swapchain, no acquire, no present.** Those are the next pieces of step
 //!   10, and they lower from [`super::surface::swapchain_create_info`] over the
-//!   handle this module owns.
-//! - **No surface-facts query.** `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` and
-//!   its two list calls answer what the surface reports; the contract that consumes
-//!   them is already pure, and wiring the query is the swapchain-owning step's
-//!   business.
-//! - **No presentation-support query.** Whether a queue family can present is
-//!   device enumeration, and the queue family is chosen by rule in step 2.
+//!   handle this module owns and the facts it reads.
+//! - **No decision about a family that cannot present.** The query reports the
+//!   fact; acting on it -- changing step 2's selection rule so the device is
+//!   created on a family that can present -- is the swapchain-owning step's
+//!   decision, because it is the step that first needs a presentable queue.
 
 use ash::{khr, vk};
 use raw_window_handle::RawWindowHandle;
@@ -75,6 +92,42 @@ pub(crate) fn win32_create_info(
         .hwnd(handle.hwnd.get()))
 }
 
+/// What one surface reports to a physical device.
+///
+/// These are exactly the three lists [`super::surface::contract`] decides against,
+/// read into one snapshot so the fixed contract is judged against one consistent
+/// report rather than three reads that a resize could have moved between. The
+/// vectors are owned because `Vulkan`'s enumeration is a two-call read whose count
+/// may change between the calls; `ash` retries on `VK_INCOMPLETE` rather than
+/// truncating.
+#[derive(Clone)]
+pub(crate) struct SurfaceFacts {
+    /// The surface's own limits: image counts, extents, transforms, alpha and usage.
+    pub(crate) capabilities: vk::SurfaceCapabilitiesKHR,
+    /// Every format/colour-space pair the surface offers.
+    pub(crate) formats: Vec<vk::SurfaceFormatKHR>,
+    /// Every present mode the surface offers.
+    pub(crate) present_modes: Vec<vk::PresentModeKHR>,
+}
+
+/// Why a surface's facts could not be read.
+///
+/// One variant per call: the first three are one surface's own presentation facts,
+/// and the fourth is whether a queue family can present to it, which is a different
+/// question about a different object. They stay separate sentences because they need
+/// different fixes, exactly as [`SurfaceError`]'s variants do.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SurfaceQueryError {
+    /// `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` failed.
+    Capabilities(vk::Result),
+    /// `vkGetPhysicalDeviceSurfaceFormatsKHR` failed.
+    Formats(vk::Result),
+    /// `vkGetPhysicalDeviceSurfacePresentModesKHR` failed.
+    PresentModes(vk::Result),
+    /// `vkGetPhysicalDeviceSurfaceSupportKHR` failed.
+    PresentationSupport(vk::Result),
+}
+
 /// An owned `VkSurfaceKHR`, bound to the instance that created it.
 ///
 /// The instance field is held for that binding rather than read: it is what makes
@@ -101,6 +154,70 @@ impl Surface<'_> {
     /// Returns the instance this surface belongs to.
     pub(crate) fn instance(&self) -> &SurfaceInstance {
         self.instance
+    }
+
+    /// Reads the three lists the fixed presentation contract decides against.
+    ///
+    /// `physical_device` must have been enumerated from the instance this surface
+    /// was created through; the borrow already keeps that instance alive, and the
+    /// three calls create and destroy nothing. A device that does not support this
+    /// surface answers with empty lists rather than a driver error, and that is
+    /// reported as it arrived: [`super::surface::contract`] is what turns an empty
+    /// format list into its own refusal.
+    pub(crate) fn facts(
+        &self,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<SurfaceFacts, SurfaceQueryError> {
+        // SAFETY: the physical device was enumerated from the same live instance
+        // that created this surface, and the surface is live and owned here. Each
+        // call either writes one value or fills a vector `ash` sized from the
+        // driver's own count; no allocation callbacks are involved.
+        let capabilities = unsafe {
+            self.loader
+                .get_physical_device_surface_capabilities(physical_device, self.handle)
+        }
+        .map_err(SurfaceQueryError::Capabilities)?;
+        // SAFETY: as above.
+        let formats = unsafe {
+            self.loader
+                .get_physical_device_surface_formats(physical_device, self.handle)
+        }
+        .map_err(SurfaceQueryError::Formats)?;
+        // SAFETY: as above.
+        let present_modes = unsafe {
+            self.loader
+                .get_physical_device_surface_present_modes(physical_device, self.handle)
+        }
+        .map_err(SurfaceQueryError::PresentModes)?;
+        Ok(SurfaceFacts {
+            capabilities,
+            formats,
+            present_modes,
+        })
+    }
+
+    /// Whether one queue family can present to this surface.
+    ///
+    /// This is the fact step 2's queue selection has to be told: the family the
+    /// device was created with is the only one this backend may present from, so a
+    /// surface that family cannot present to has no swapchain path at all. The
+    /// answer is a value about one surface rather than a capability row, and it is
+    /// read here rather than assumed from the family's graphics flag.
+    pub(crate) fn supports_presentation(
+        &self,
+        physical_device: vk::PhysicalDevice,
+        queue_family: u32,
+    ) -> Result<bool, SurfaceQueryError> {
+        // SAFETY: as in `facts`; the query writes one boolean into `ash`'s own
+        // local and creates nothing.
+        unsafe {
+            self.loader.get_physical_device_surface_support(
+                physical_device,
+                queue_family,
+                self.handle,
+            )
+        }
+        .map_err(SurfaceQueryError::PresentationSupport)
     }
 }
 
@@ -164,6 +281,8 @@ mod tests {
 
     use crate::Validation;
     use crate::native::vulkan::instance;
+    use crate::native::vulkan::{adapter, surface};
+    use fluxel_rendergraph::{TextureUsage, TextureUsageKind};
 
     /// A fabricated Win32 handle pair, for the pure lowering tests only.
     fn win32(hwnd: isize, hinstance: Option<isize>) -> RawWindowHandle {
@@ -306,5 +425,99 @@ mod tests {
         assert_ne!(surface.handle(), vk::SurfaceKHR::null());
         // Drop order is the borrow's: the surface is destroyed before the instance
         // and before the window that backs it.
+    }
+
+    /// The physical device that actually owns this surface, with the facts it
+    /// reported, or `None` where no enumerated adapter reports a presentable
+    /// surface.
+    ///
+    /// A multi-adapter machine can enumerate an adapter the window is not attached
+    /// to; `Vulkan` answers that with an empty format list rather than a driver
+    /// error, so the first adapter that reports a format is the one this surface is
+    /// on.
+    fn presenting_adapter(
+        surface: &Surface<'_>,
+        adapters: &[vk::PhysicalDevice],
+    ) -> Option<(vk::PhysicalDevice, SurfaceFacts)> {
+        adapters.iter().find_map(|adapter| {
+            let facts = surface.facts(*adapter).ok()?;
+            (!facts.formats.is_empty()).then_some((*adapter, facts))
+        })
+    }
+
+    #[test]
+    fn a_real_surface_reports_the_facts_the_fixed_contract_decides_against() {
+        let Ok(surface_instance) = instance::open_with_surface(Validation::Disabled) else {
+            return;
+        };
+        let Ok(adapters) = adapter::enumerate(surface_instance.instance().instance()) else {
+            return;
+        };
+        // No adapter at all is a machine without a Vulkan driver, which is not what
+        // this test is about; a surface would still be creatable through the loader.
+        if adapters.is_empty() {
+            return;
+        }
+        let Some(window) = TestWindow::open() else {
+            return;
+        };
+        let Ok(surface) = create(&surface_instance, window.raw()) else {
+            return;
+        };
+        // Not a skip: a real surface was created through a real loader and a real
+        // window, so an enumerated adapter must be attached to it. The alternative
+        // would let this test pass without reading a single fact.
+        let (physical_device, facts) = presenting_adapter(&surface, &adapters)
+            .expect("a surface this loader created is presentable from an enumerated adapter");
+
+        assert!(
+            !facts.present_modes.is_empty(),
+            "a surface that offers a format also offers a present mode"
+        );
+
+        let requested = vk::Extent2D {
+            width: 64,
+            height: 64,
+        };
+        let usage = TextureUsage::from_kinds([
+            TextureUsageKind::ColorAttachment,
+            TextureUsageKind::Present,
+        ]);
+        // The join this increment exists for: the lists the driver reported are the
+        // lists the pure contract decides against, and the decision is the one the
+        // frozen oracle was measured with.
+        let presentation = surface::contract(
+            &facts.capabilities,
+            &facts.formats,
+            &facts.present_modes,
+            requested,
+            usage,
+        )
+        .expect("the named Windows board serves the fixed presentation contract");
+        assert_eq!(presentation.format, surface::PRESENT_FORMAT);
+        assert_eq!(presentation.color_space, surface::PRESENT_COLOR_SPACE);
+        assert_eq!(presentation.present_mode, surface::PRESENT_MODE);
+
+        // SAFETY: the adapter belongs to the same live instance the surface was
+        // created through, and the call only reports facts.
+        let families = unsafe {
+            surface_instance
+                .instance()
+                .instance()
+                .get_physical_device_queue_family_properties(physical_device)
+        };
+        assert!(!families.is_empty(), "a physical device reports a family");
+        // Step 2 chose a family without a surface; this is the read that tells the
+        // swapchain step whether its choice can present. Every reported family
+        // answers, and at least one says yes: a surface this loader created is
+        // presentable from somewhere.
+        let supporting = (0..families.len() as u32)
+            .filter(|index| {
+                surface
+                    .supports_presentation(physical_device, *index)
+                    .expect("a live surface answers presentation support for a reported family")
+            })
+            .count();
+        assert!(supporting > 0);
     }
 }

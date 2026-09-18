@@ -178,6 +178,9 @@ pub(crate) mod surface;
 
 /// Step 10's owning half: the `VkSurfaceKHR` created from and bound to a host
 /// window through a surface-capable instance, with the parent/child order stated as
-/// a borrow. The swapchain, the acquire lease, present, reconfigure and the
-/// unpresented-acquire quarantine remain owed by step 10.
+/// a borrow; and the facts that surface reports -- the capabilities, formats and
+/// present modes the pure contract decides against, plus the per-family
+/// presentation-support answer step 2's queue rule has to be told. The swapchain,
+/// the acquire lease, present, reconfigure and the unpresented-acquire quarantine
+/// remain owed by step 10.
 pub(crate) mod presentation;
