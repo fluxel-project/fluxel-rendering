@@ -180,9 +180,8 @@ pub(crate) mod surface;
 /// window through a surface-capable instance, with the parent/child order stated as
 /// a borrow; and the facts that surface reports -- the capabilities, formats and
 /// present modes the pure contract decides against, plus the per-family
-/// presentation-support answer step 2's queue rule has to be told. The acquire
-/// lease, present, reconfigure and the unpresented-acquire quarantine remain owed by
-/// step 10.
+/// presentation-support answer step 2's queue rule has to be told. Reconfigure and
+/// the recovery of a poisoned surface remain owed by step 10.
 pub(crate) mod presentation;
 
 /// Step 10's acquire half, pure: what `vkAcquireNextImageKHR`'s answer means, and
@@ -190,14 +189,24 @@ pub(crate) mod presentation;
 /// acquired image and its semaphore lives beside the swapchain that produced it.
 pub(crate) mod acquire;
 
+/// Step 10's present half, pure: what `vkQueuePresentKHR`'s answer means, with a
+/// suboptimal present carried as a value rather than folded into a refusal and an
+/// out-of-date swapchain kept distinct from a lost surface. The call that consumes
+/// an [`acquire`] lease and retains the wait semaphore it used lives in
+/// [`swapchain`].
+pub(crate) mod present;
+
 /// Step 10's swapchain half: the `VkSwapchainKHR` created from the fixed contract
 /// over a surface, and the images `Vulkan` creates with it. It is reachable only
 /// through [`device::SwapchainDevice`], the device that verified and enabled
 /// `VK_KHR_swapchain`, and it checks the selected queue family's presentation
 /// support before the driver is reached. The acquire lease is landed beside it: a
 /// real `vkAcquireNextImageKHR` whose unpresented drop poisons the surface and
-/// retains the acquire semaphore. Present, reconfigure and the recovery of a
-/// poisoned surface remain owed by step 10.
+/// retains the acquire semaphore. Present is landed too: a real `vkQueuePresentKHR`
+/// consumes that lease, and the semaphore it waited on is retained until the
+/// presentation engine hands the image back, because returning from present is not
+/// proof its wait is consumed. Reconfigure and the recovery of a poisoned surface
+/// remain owed by step 10.
 pub(crate) mod swapchain;
 
 /// Test-only scaffolding shared by the modules that need a real window or surface.

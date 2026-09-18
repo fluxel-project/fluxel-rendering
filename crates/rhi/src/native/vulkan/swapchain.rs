@@ -36,10 +36,15 @@
 //!
 //! # What is deliberately not here
 //!
-//! - **No present and no reconfigure.** `vkQueuePresentKHR` and the
-//!   `old_swapchain` reconfigure path are the rest of step 10; present is what
-//!   consumes an [`AcquireLease`] cleanly, so until it lands every lease drop takes
-//!   the unpresented-acquire quarantine path below.
+//! - **No reconfigure.** The `old_swapchain` rebuild and the recovery of a poisoned
+//!   surface are the rest of step 10. Present reports a suboptimal or out-of-date
+//!   answer as a value; acting on it is the step that owns the replacement.
+//! - **No rendering submission.** [`AcquireLease::wait_semaphore`] is the acquire
+//!   semaphore a submission drawing to this image must wait on, and
+//!   [`AcquireLease::present`] waits on it directly because nothing has consumed it
+//!   yet. When the draw-and-present path lands, present's wait set moves to the
+//!   submission's render-finished semaphore; the retention rule below is about
+//!   whichever semaphore present waited on, so it does not change.
 //! - **No sRGB presentation, no format negotiation.** These are
 //!   [`super::surface::contract`]'s decisions, and this module only consumes them.
 //!
@@ -51,13 +56,27 @@
 //! while a lease exists: the exclusivity rule is the compiler's rather than a
 //! run-time flag that can disagree.
 //!
-//! The lease also carries the acquire semaphore. Dropping it without presenting is
-//! therefore not a no-op: the presentation engine may still signal that semaphore,
-//! `Vulkan` cannot recycle it, and nothing here can establish when it is safe to
-//! destroy. So the drop poisons the surface -- no later acquire may guess reuse --
-//! and leaves the semaphore undestroyed for the process's lifetime. That is plan
-//! section 4's unpresented-acquire quarantine, and it is the borrowed path's
-//! behavior, which forgets the whole native bundle.
+//! The lease also carries the acquire semaphore. [`AcquireLease::present`] is the one
+//! path that discharges the lease by handing that semaphore to `vkQueuePresentKHR` as
+//! its wait. Dropping the lease without presenting is therefore not a no-op: the
+//! presentation engine may still signal that semaphore, `Vulkan` cannot recycle it,
+//! and nothing here can establish when it is safe to destroy. So the drop poisons the
+//! surface -- no later acquire may guess reuse -- and leaves the semaphore
+//! undestroyed for the process's lifetime. That is plan section 4's
+//! unpresented-acquire quarantine, and it is the borrowed path's behavior, which
+//! forgets the whole native bundle.
+//!
+//! # A presented semaphore is retained until its image returns
+//!
+//! A present that happened has no such problem, but it is not free either: the
+//! semaphore `vkQueuePresentKHR` waited on [cannot be destroyed or recycled when the
+//! call returns][angle], because the presentation engine may still be waiting on it.
+//! The one portable proof that it is done with the image is
+//! `vkAcquireNextImageKHR` handing that same image index back, which is the
+//! inference ANGLE records and the reason [`Swapchain::presented`] is keyed by image
+//! index: present fills the slot, the next acquire of that image empties it.
+//!
+//! [angle]: https://chromium.googlesource.com/angle/angle/+/31c4093651079775acf34ea1bb06bdabb4ea4386/src/libANGLE/renderer/vulkan/doc/PresentSemaphores.md
 
 use core::time::Duration;
 
@@ -66,6 +85,7 @@ use fluxel_rendergraph::TextureUsage;
 
 use super::acquire::{self, AcquireError};
 use super::device::SwapchainDevice;
+use super::present::{self, PresentError, PresentOutcome};
 use super::presentation::{Surface, SurfaceQueryError};
 use super::surface::{self, Presentation, PresentationError};
 
@@ -122,6 +142,14 @@ pub(crate) struct Swapchain<'a> {
     /// recording, never allocations to release, and they must not enter the resource
     /// table, which owns memory.
     images: Vec<vk::Image>,
+    /// The present wait semaphores of already-presented images, indexed by image.
+    ///
+    /// [`AcquireLease::present`] fills the slot its image names, and the next
+    /// [`Swapchain::acquire`] of that image empties it -- see the module docs for why
+    /// returning from `vkQueuePresentKHR` is not proof that its wait is consumed.
+    /// Every slot left here is destroyed after a device-idle wait in [`Drop`], which
+    /// is the borrowed path's teardown order.
+    presented: Vec<Option<vk::Semaphore>>,
     /// The presentation decision this swapchain was created with.
     presentation: Presentation,
 }
@@ -171,7 +199,9 @@ impl<'a> Swapchain<'a> {
     /// only then is the driver reached. A driver refusal destroys that semaphore,
     /// because the presentation engine never received it and it is still unsignaled --
     /// unlike the success path, where the semaphore may be signalled later and is
-    /// therefore owned by the lease.
+    /// therefore owned by the lease. A successful acquire also releases the present
+    /// semaphore retained for the image it returned, because handing the image back is
+    /// what proves the presentation engine is done with it.
     pub(crate) fn acquire<'s>(
         &'s mut self,
         timeout: Duration,
@@ -236,6 +266,11 @@ impl<'a> Swapchain<'a> {
             });
         };
 
+        // The driver just handed this image back, which is the proof that the
+        // presentation engine is done with the previous present of it and therefore
+        // done waiting on the semaphore that present retained.
+        self.reclaim_presented(acquired.index);
+
         Ok(AcquireLease {
             swapchain: self,
             image,
@@ -243,6 +278,43 @@ impl<'a> Swapchain<'a> {
             suboptimal: acquired.suboptimal,
             semaphore,
         })
+    }
+
+    /// Destroys the present wait semaphore retained for a previously presented image.
+    ///
+    /// It is called with the index `vkAcquireNextImageKHR` just returned, and that is
+    /// the whole justification: the presentation engine handing the image back proves
+    /// it is done waiting on the semaphore, which is the inference ANGLE records.
+    /// Destroying it at present time instead would free a handle the engine may still
+    /// be waiting on.
+    fn reclaim_presented(&mut self, index: u32) {
+        if let Some(semaphore) = self.presented[index as usize].take() {
+            // SAFETY: the semaphore was created by this device, which is live; the
+            // acquire that just returned this index proves the presentation engine is
+            // done waiting on it, so no queue operation refers to it any more. No
+            // allocation callbacks were supplied.
+            unsafe {
+                self.device
+                    .device()
+                    .device()
+                    .destroy_semaphore(semaphore, None)
+            };
+        }
+    }
+
+    /// Retains the semaphore a successful present waited on until its image returns.
+    ///
+    /// The slot must be empty: the acquire that produced the presented lease emptied
+    /// it, so a filled slot here would mean a lease was presented twice, which the
+    /// lease's own consumption prevents. The assertion states that invariant rather
+    /// than overwriting a live handle and leaking it.
+    fn retain_present_semaphore(&mut self, index: u32, semaphore: vk::Semaphore) {
+        let slot = &mut self.presented[index as usize];
+        debug_assert!(
+            slot.is_none(),
+            "the acquire that produced this lease emptied its present slot"
+        );
+        *slot = Some(semaphore);
     }
 }
 
@@ -285,8 +357,10 @@ impl AcquireLease<'_, '_> {
     ///
     /// It is the whole acquire-side ordering: `Vulkan` signals it when the image is
     /// ready to be written, so a submission that draws before waiting on it would
-    /// race the presentation engine. The submit path that consumes it arrives with
-    /// the presentation step.
+    /// race the presentation engine. [`AcquireLease::present`] waits on it directly
+    /// because no submission has consumed it yet; when the draw-and-present path
+    /// lands, that submission waits on it and present waits on the submission's
+    /// render-finished semaphore instead.
     pub(crate) fn wait_semaphore(&self) -> vk::Semaphore {
         self.semaphore
     }
@@ -299,23 +373,81 @@ impl AcquireLease<'_, '_> {
     pub(crate) fn is_suboptimal(&self) -> bool {
         self.suboptimal
     }
+
+    /// Presents the leased image and consumes the lease.
+    ///
+    /// This is the one path that discharges the lease: the acquire semaphore it
+    /// carries is handed to `vkQueuePresentKHR` as the present's wait, so it is
+    /// consumed by a queue operation rather than left pending. The semaphore is not
+    /// destroyed here -- the presentation engine may still be waiting on it, so it is
+    /// retained on the swapchain until its image is acquired again. A refused present
+    /// leaves that semaphore pending, so the lease's own `Drop` still takes the
+    /// unpresented-acquire quarantine, which is the fail-closed direction.
+    pub(crate) fn present(self) -> Result<PresentOutcome, PresentError> {
+        let index = self.index;
+        let wait_semaphore = self.semaphore;
+        let answer = {
+            let swapchain = &mut *self.swapchain;
+            let wait_semaphores = [wait_semaphore];
+            let swapchains = [swapchain.handle];
+            let image_indices = [index];
+            // One swapchain and one wait semaphore, so the three builder setters --
+            // each of which overwrites `swapchain_count` -- all agree. No `p_results`
+            // is passed: with one swapchain the call's own result carries the same
+            // fact, which is what the borrowed path being replaced reads.
+            let present_info = vk::PresentInfoKHR::default()
+                .wait_semaphores(&wait_semaphores)
+                .swapchains(&swapchains)
+                .image_indices(&image_indices);
+            // SAFETY: the swapchain and the semaphore belong to this device, which is
+            // live for the lease's lifetime; the semaphore was handed to this lease by
+            // a successful acquire and no operation has waited on it since; the three
+            // arrays are locals that outlive the call; and the device enabled
+            // `VK_KHR_swapchain` by construction -- `SwapchainDevice` is that proof --
+            // so this is the real entry point rather than `ash`'s unresolved stub. No
+            // allocation callbacks are supplied.
+            unsafe {
+                swapchain
+                    .loader
+                    .queue_present(swapchain.device.device().queue(), &present_info)
+            }
+        };
+        match present::outcome(answer) {
+            Ok(outcome) => {
+                // The lease's obligation is discharged by a present that happened:
+                // the semaphore is retained until its image returns and the surface is
+                // not poisoned. Forgetting the lease is what keeps its `Drop` from
+                // taking the unpresented-acquire path after all. The lease is not
+                // `Copy` and implements `Drop`, so this is a real suppression and not
+                // the no-op that forgetting a handle would be.
+                let swapchain = &mut *self.swapchain;
+                swapchain.retain_present_semaphore(index, wait_semaphore);
+                core::mem::forget(self);
+                Ok(outcome)
+            }
+            // A present that did not happen leaves the acquire semaphore pending, so
+            // the lease's `Drop` runs and poisons the surface -- the same quarantine
+            // an unpresented drop takes, reached through an error return.
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl Drop for AcquireLease<'_, '_> {
     fn drop(&mut self) {
         // Reaching here means the lease was neither presented nor discarded --
-        // present is the only path that consumes it, and it does not exist yet.
-        // `Vulkan` cannot recycle the acquire semaphore of an image that was never
-        // presented: the presentation engine may signal it at a time this backend
-        // cannot know, so destroying it could free a handle the driver still holds,
-        // and reusing it could hand the driver a semaphore that is already signalled.
-        // The surface is therefore poisoned -- no later acquire may guess reuse --
-        // and the semaphore is left undestroyed. That is plan section 4's preserved
-        // semantic, and the borrowed path being replaced does the same thing by
-        // forgetting its whole native bundle. There is no `Drop` body to suppress for
-        // the handle itself: retaining a `vk::Semaphore` is exactly not calling
-        // `destroy_semaphore`, so the driver object outlives this lease for the
-        // process's lifetime.
+        // `present` is the only path that consumes it, and it discharges the lease by
+        // forgetting it rather than by running this body. `Vulkan` cannot recycle the
+        // acquire semaphore of an image that was never presented: the presentation
+        // engine may signal it at a time this backend cannot know, so destroying it
+        // could free a handle the driver still holds, and reusing it could hand the
+        // driver a semaphore that is already signalled. The surface is therefore
+        // poisoned -- no later acquire may guess reuse -- and the semaphore is left
+        // undestroyed. That is plan section 4's preserved semantic, and the borrowed
+        // path being replaced does the same thing by forgetting its whole native
+        // bundle. There is no `Drop` body to suppress for the handle itself: retaining
+        // a `vk::Semaphore` is exactly not calling `destroy_semaphore`, so the driver
+        // object outlives this lease for the process's lifetime.
         self.swapchain.surface.poison();
     }
 }
@@ -332,6 +464,26 @@ impl core::fmt::Debug for AcquireLease<'_, '_> {
 
 impl Drop for Swapchain<'_> {
     fn drop(&mut self) {
+        // A retained present semaphore may still be waited on by the presentation
+        // engine. There is no portable way to observe a present's completion, so the
+        // device is made idle first -- which completes every queue operation, present
+        // included -- and only then are they destroyed. That is exactly the borrowed
+        // path being replaced (`vkDeviceWaitIdle`, then its semaphores), and it costs
+        // the steady-state path nothing because it happens only at teardown.
+        // SAFETY: the device is live and owned by the borrow on `self`, and the call
+        // only waits for work already submitted.
+        let _ = unsafe { self.device.device().device().device_wait_idle() };
+        for semaphore in self.presented.drain(..).flatten() {
+            // SAFETY: the semaphore was created by this device, which is live; the
+            // idle wait above proves the presentation engine is done waiting on it;
+            // and this loop is its only owner. No allocation callbacks were supplied.
+            unsafe {
+                self.device
+                    .device()
+                    .device()
+                    .destroy_semaphore(semaphore, None)
+            };
+        }
         // SAFETY: this is the only owner and the handle was created through this
         // same device, which the borrow keeps alive; the surface outlives it for the
         // same reason. Destroying the swapchain also destroys its images, and no
@@ -347,6 +499,10 @@ impl core::fmt::Debug for Swapchain<'_> {
             .debug_struct("Swapchain")
             .field("handle", &self.handle)
             .field("images", &self.images.len())
+            .field(
+                "presented",
+                &self.presented.iter().filter(|slot| slot.is_some()).count(),
+            )
             .field("extent", &self.presentation.extent)
             .finish_non_exhaustive()
     }
@@ -414,12 +570,16 @@ pub(crate) fn create<'a>(
         }
     };
 
+    // One slot per image, empty until an image is presented: a slot holds the
+    // semaphore the presentation engine may still be waiting on for that image.
+    let presented = vec![None; images.len()];
     Ok(Swapchain {
         surface,
         device,
         loader,
         handle,
         images,
+        presented,
         presentation,
     })
 }
@@ -589,5 +749,99 @@ mod tests {
         );
         // Drop order is unchanged: the swapchain before the device and the surface,
         // the surface before the instance and the window.
+    }
+
+    #[test]
+    fn a_real_present_consumes_the_lease_and_retains_its_wait_semaphore() {
+        // The step 10 present half against the real driver: a real
+        // `vkQueuePresentKHR` over a real swapchain, the lease it consumes, and the
+        // wait semaphore it retains because returning from present is not proof the
+        // presentation engine is done with it. Skips only where the machine has no
+        // loader, no adapter or no window station.
+        let Ok(surface_instance) = instance::open_with_surface(Validation::Disabled) else {
+            return;
+        };
+        let instance = surface_instance.instance().instance();
+        let Ok(adapters) = adapter::enumerate(instance) else {
+            return;
+        };
+        if adapters.is_empty() {
+            return;
+        }
+        let Some(window) = TestWindow::open() else {
+            return;
+        };
+        let Ok(surface) = presentation::create(&surface_instance, window.raw()) else {
+            return;
+        };
+        // Not a skip: the assertions below are reached on this machine rather than
+        // bypassed by an early return.
+        let (physical_device, facts) = presenting_adapter(&surface, &adapters)
+            .expect("a surface this loader created is presentable from an enumerated adapter");
+        let adapter_facts = adapter::describe(instance, physical_device);
+        let device =
+            device::open_with_swapchain(&surface_instance, physical_device, &adapter_facts.limits)
+                .expect("the named Windows board reports VK_KHR_swapchain");
+        let usage = TextureUsage::from_kinds([
+            TextureUsageKind::ColorAttachment,
+            TextureUsageKind::Present,
+        ]);
+        let mut swapchain = create(&device, &surface, physical_device, requested(&facts), usage)
+            .expect("the named Windows board serves a swapchain for the fixed contract");
+
+        // Frame one: the lease's own semaphore is what present waits on, and a present
+        // that happened discharges the lease rather than quarantining the surface -- so
+        // the semaphore is retained, not destroyed and not left pending.
+        let lease = swapchain
+            .acquire(Duration::from_secs(5))
+            .expect("a FIFO swapchain with no image in flight yields one within the timeout");
+        let index = lease.image_index();
+        let wait_semaphore = lease.wait_semaphore();
+        let outcome = lease
+            .present()
+            .expect("the named Windows board presents an image it just acquired");
+        assert!(
+            outcome == PresentOutcome::Presented || outcome.is_suboptimal(),
+            "a present is either success or success-plus-suboptimal"
+        );
+        assert!(
+            !surface.is_poisoned(),
+            "a present that happened discharges the lease instead of quarantining the surface"
+        );
+        assert_eq!(
+            swapchain.presented[index as usize],
+            Some(wait_semaphore),
+            "present retains the semaphore it waited on until its image returns"
+        );
+
+        // Frame two: the surface stays acquirable, and whichever image comes back has
+        // its retained semaphore released rather than reused or leaked. A driver that
+        // reuses an index here is the case the reclaim exists for.
+        let lease = swapchain
+            .acquire(Duration::from_secs(5))
+            .expect("a presented surface keeps yielding images");
+        let index = lease.image_index();
+        assert!(
+            !surface.is_poisoned(),
+            "presenting leaves the surface live for the next frame"
+        );
+        let outcome = lease
+            .present()
+            .expect("a second present over the same swapchain succeeds");
+        assert!(
+            outcome == PresentOutcome::Presented || outcome.is_suboptimal(),
+            "a second present is success or success-plus-suboptimal"
+        );
+        assert!(
+            swapchain.presented[index as usize].is_some(),
+            "the second present retains its own wait semaphore"
+        );
+        assert!(
+            !surface.is_poisoned(),
+            "two frames through present leave the surface live"
+        );
+        // Drop order: the swapchain, which idles the device and destroys every
+        // retained semaphore, before the device, the surface, the instance and the
+        // window.
     }
 }
