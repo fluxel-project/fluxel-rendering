@@ -68,9 +68,24 @@ impl GpuAllocator {
         device: &VulkanDevice,
         physical_device: vk::PhysicalDevice,
     ) -> Result<Self, AllocatorError> {
+        Self::from_handles(instance, device.device(), physical_device)
+    }
+
+    /// The same construction from the bare device handle.
+    ///
+    /// Device creation needs this shape and nothing else: the table the device owns
+    /// is built before the [`VulkanDevice`] value exists, so `new`'s borrow of one is
+    /// not available there. The two share this body, so the descriptor -- and the
+    /// `buffer_device_address: false` that keeps the allocator off a feature this
+    /// device never enables -- is written once.
+    pub(crate) fn from_handles(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<Self, AllocatorError> {
         let desc = gpu_allocator::vulkan::AllocatorCreateDesc {
             instance: instance.clone(),
-            device: device.device().clone(),
+            device: device.clone(),
             physical_device,
             debug_settings: Default::default(),
             buffer_device_address: false,

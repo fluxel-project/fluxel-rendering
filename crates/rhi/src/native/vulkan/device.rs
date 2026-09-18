@@ -69,10 +69,13 @@ use crate::common::caps::{
 };
 use crate::common::formats::FormatTable;
 
+use super::allocator::GpuAllocator;
+use super::command::{CommandPool, RecordError};
 use super::features::{self, StoreFeatures};
 use super::format_facts::{self, FormatError};
 use super::instance::{SurfaceInstance, ValidationInstance};
 use super::inventory::{EnumerationError, enumerate_device_extensions};
+use super::resource::ResourceTable;
 
 /// The device extension the swapchain path enables.
 ///
@@ -197,6 +200,17 @@ pub(crate) enum DeviceError {
     /// before `vkCreateDevice` is reached, so a driver that cannot answer for a
     /// mapped format refuses the open with nothing created.
     Format(FormatError),
+    /// `gpu-allocator` refused to build the suballocator for this device.
+    ///
+    /// The inner reason is `gpu_allocator`'s `AllocationError`, which is neither
+    /// `Copy` nor `PartialEq` and carries a `String`, so it is not carried here --
+    /// the same flattening `ResourceError::Memory` already performs at the
+    /// allocation boundary, and for the same reason: this error is compared in
+    /// tests, and widening it to a foreign non-`Copy` type would make every use
+    /// site pay for one diagnostic.
+    Allocator,
+    /// The one command pool could not be created on the selected queue family.
+    CommandPool(RecordError),
 }
 
 /// Selects the one queue family the retained execution model uses.
@@ -223,12 +237,58 @@ pub(crate) fn select_queue_family(
         .ok_or(DeviceError::NoGraphicsQueue)
 }
 
-/// A logical device and the single queue created from it.
+/// The logical device handle, with destruction owned by the field that holds it.
 ///
-/// Field order is teardown order: the device is destroyed before the instance that
-/// created it, which is the caller's field order rather than this type's.
+/// Splitting the handle out of [`VulkanDevice`] is what lets field order express the
+/// dependency `Vulkan` requires. A type with a manual `Drop` runs that body *before*
+/// its fields are dropped, so a `destroy_device` written there would run before the
+/// resource table and the command pool that must be released first. As a field, the
+/// destruction is the last thing that happens, after every sibling.
+struct OwnedDevice(ash::Device);
+
+impl OwnedDevice {
+    /// Returns the function table and handle every call site uses.
+    fn get(&self) -> &ash::Device {
+        &self.0
+    }
+}
+
+impl Drop for OwnedDevice {
+    fn drop(&mut self) {
+        // SAFETY: this is the only owner of the device. Every child object of this
+        // device is a field of the containing `VulkanDevice` declared before this
+        // one, so it has already been released; the other holders of `ash::Device`
+        // are clones, which copy a handle and a function table rather than making a
+        // second ownership claim. Destroying the device also destroys the queue,
+        // which is not a separately owned object.
+        unsafe { self.0.destroy_device(None) };
+    }
+}
+
+/// A logical device and the one queue created from it.
+///
+/// # The device owns the table and the pool, and the field order says so
+///
+/// A device owns its resources and the one recording that consumes them:
+/// [`ResourceTable`] holds the handles, the image views and the suballocations, and
+/// [`CommandPool`] holds the family its command buffers are submittable to. Both are
+/// built here rather than by a caller because the capability layer reaches them
+/// through the device -- `Provides::provide` takes only `&self`, so a family handle
+/// can resolve a [`BufferId`](crate::common::base::resource::BufferId) no other way
+/// -- and because a second owner of either would be a second answer about one
+/// device.
+///
+/// Field order is teardown order, and this is the one place it is load bearing: the
+/// table releases every allocation and destroys every handle, the pool destroys the
+/// command pool, and only then is the device itself destroyed. `OwnedDevice` is what
+/// makes that ordering hold; see its own docs.
 pub(crate) struct VulkanDevice {
-    device: ash::Device,
+    /// Every resource this device owns, over one suballocator.
+    table: ResourceTable,
+    /// The one command pool, created on `selected.family`.
+    pool: CommandPool,
+    /// The device handle, destroyed last.
+    device: OwnedDevice,
     queue: vk::Queue,
     selected: SelectedQueue,
     stores: StoreFeatures,
@@ -240,7 +300,27 @@ pub(crate) struct VulkanDevice {
 impl VulkanDevice {
     /// Returns the device's function table.
     pub(crate) fn device(&self) -> &ash::Device {
-        &self.device
+        self.device.get()
+    }
+
+    /// Returns the table that owns every resource of this device generation.
+    pub(crate) const fn table(&self) -> &ResourceTable {
+        &self.table
+    }
+
+    /// Returns the table for mutation, which is how a resource is created or
+    /// destroyed.
+    pub(crate) fn table_mut(&mut self) -> &mut ResourceTable {
+        &mut self.table
+    }
+
+    /// Returns the one command pool of this device generation.
+    ///
+    /// The pool is the device's, so a family handle created through
+    /// `crate::common::api::negotiate::require` begins its recording from here
+    /// without the caller having to own a pool at all.
+    pub(crate) const fn pool(&self) -> &CommandPool {
+        &self.pool
     }
 
     /// Returns the one queue every submission uses.
@@ -500,21 +580,13 @@ pub(crate) fn ledger(
     ledger
 }
 
-impl Drop for VulkanDevice {
-    fn drop(&mut self) {
-        // SAFETY: this is the only owner of the device; destroying it also
-        // destroys the queue, which is not a separately owned object. Nothing else
-        // holds a device-level object because nothing else has been created yet.
-        unsafe { self.device.destroy_device(None) };
-    }
-}
-
 impl core::fmt::Debug for VulkanDevice {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("VulkanDevice")
             .field("selected_queue", &self.selected)
             .field("stores", &self.stores)
+            .field("table", &self.table)
             .finish_non_exhaustive()
     }
 }
@@ -651,18 +723,53 @@ fn create(
     // queue in the selected family -- and the device is still live.
     let queue = unsafe { device.get_device_queue(selected.family, 0) };
 
+    // The first generation of a freshly identified device. Identity comes from the
+    // crate's monotonic counter, which is unique among live devices; the generation
+    // advances only when a device is replaced, which this backend does not yet do.
+    let stamp =
+        DeviceStamp::initial(fluxel_rendergraph::DeviceIdentity::new(crate::next_identity()));
+
+    // The suballocator and the table it serves are built here, from the raw handles
+    // rather than from a `VulkanDevice` borrow: this is the scope in which the device
+    // value does not exist yet, and the table has to be *in* it. Both failures below
+    // happen after `vkCreateDevice`, so each destroys the device it was handed --
+    // there is no owner to inherit it.
+    let allocator = match GpuAllocator::from_handles(instance, &device, adapter) {
+        Ok(allocator) => allocator,
+        Err(_) => {
+            // SAFETY: the device was created just above and has no child object yet,
+            // so destroying it is the whole teardown of this refused open.
+            unsafe { device.destroy_device(None) };
+            return Err(DeviceError::Allocator);
+        }
+    };
+    let table = ResourceTable::new(&device, stamp, allocator);
+    // The one command pool of this device generation, on the family the rule above
+    // selected: a command buffer is submittable only to a queue of its pool's family,
+    // so the pool is where that fact is stated.
+    let pool = match CommandPool::new(&device, selected.family) {
+        Ok(pool) => pool,
+        Err(error) => {
+            // The table is already live, so it is released before the device rather
+            // than by field order, which an early return does not reach.
+            drop(table);
+            // SAFETY: the table was the only child object and is gone, so the device
+            // is destroyed once, here.
+            unsafe { device.destroy_device(None) };
+            return Err(DeviceError::CommandPool(error));
+        }
+    };
+
     Ok(VulkanDevice {
-        device,
+        table,
+        pool,
+        device: OwnedDevice(device),
         queue,
         selected,
         stores,
         ledger: ledger(selected, limits, stores, &formats),
         formats,
-        // The first generation of a freshly identified device. Identity comes from
-        // the crate's monotonic counter, which is unique among live devices; the
-        // generation advances only when a device is replaced, which this backend
-        // does not yet do.
-        stamp: DeviceStamp::initial(fluxel_rendergraph::DeviceIdentity::new(crate::next_identity())),
+        stamp,
     })
 }
 
@@ -1233,15 +1340,17 @@ mod tests {
             "the selected family is a real index"
         );
 
-        // The first real backend implementing the common layer's capability query.
-        //
-        // This asserts the *ledger*, not `require`: `require::<_, Graphics>(&device)`
-        // does not compile yet, because `VulkanDevice` has no `Provides<Graphics>`
-        // until the family's vocabulary exists. That refusal is the design working
-        // -- the type system answers before the ledger is consulted -- and it is why
-        // the value half is asserted here on its own.
-        use crate::common::api::negotiate::CapabilitySource;
+        // The first real backend implementing the common layer's capability query,
+        // and now the first to *negotiate* a family through it. `require` consults
+        // this ledger before the backend is asked for a handle, so the negotiation
+        // succeeding is the same fact the assertions below state about the value.
+        use crate::common::api::family::Graphics;
+        use crate::common::api::negotiate::{CapabilitySource, require};
         assert!(device.ledger().supports(Capability::Graphics));
+        assert!(
+            require::<_, Graphics>(&device).is_ok(),
+            "the graphics row is proved, so a handle exists"
+        );
         assert_eq!(
             device.ledger().supports(Capability::Compute),
             selected.supports_compute,

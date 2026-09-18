@@ -92,8 +92,7 @@
 //!     the two draw-parameter rows step 11 owes arrive with -- they are families
 //!     whose parameter space `GraphicsApi`'s draw verbs deliberately cannot name
 //!     (plan section 20.1) -- and it is what lets `VulkanDevice` implement
-//!     `Provides<Graphics>`, which `device`'s real-device test still records as not
-//!     compiling. Five bounded pieces have landed: the pure [`render_pass`]
+//!     `Provides<Graphics>`. Five bounded pieces have landed: the pure [`render_pass`]
 //!     lowering; [`framebuffer`] with the [`command::Encoder`] bracket
 //!     (`begin_raster` / `end_raster`) that owns the render pass and framebuffer a
 //!     recorded pass needs, refusing a barrier, a copy or an `end` while a pass is
@@ -111,6 +110,14 @@
 //!     `GraphicsApi`'s draw verbs keep both at zero, because a non-zero value is a
 //!     separate family's parameter space (plan section 20.1) and the verbs that name
 //!     it arrive with a consumer. Step 12 is complete.
+//!
+//! 13. **The family wiring.** `VulkanDevice` owns the resource table and the one
+//!     command pool, implements `Provides<Graphics>`, and hands out
+//!     [`family::GraphicsRecording`], which implements `FamilyApi` and `GraphicsApi`
+//!     over that table and its own recording. It is the first real backend to hold a
+//!     family's vocabulary, and it is what makes `require::<_, Graphics>(&device)`
+//!     compile and run against this backend. This step was added when the list above
+//!     was exhausted, which is section 23.1's rule moving to the W2 work package.
 //!
 //! # Acceptance
 //!
@@ -231,6 +238,13 @@ pub(crate) mod framebuffer;
 /// device enables `VK_KHR_maintenance1`: a negative viewport height is legal only
 /// with that extension on a `Vulkan` 1.0 device.
 pub(crate) mod draw;
+
+/// Step 13: the first family wiring. `VulkanDevice` implements
+/// `Provides<Graphics>` and hands out [`family::GraphicsRecording`], which
+/// implements `FamilyApi` and `GraphicsApi` over the device's own resource table
+/// and its own recording, so `require::<_, Graphics>(&device)` is the real
+/// negotiation path for this backend rather than only a contract test.
+pub(crate) mod family;
 
 /// Step 6: the retained WGSL artifact lowered to SPIR-V with Naga's `spv-out`, with
 /// the dialect, entry-point, stage and profile checks decided before the driver is
