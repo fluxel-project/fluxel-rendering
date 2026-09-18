@@ -93,8 +93,11 @@
 //!     whose parameter space `GraphicsApi`'s draw verbs deliberately cannot name
 //!     (plan section 20.1) -- and it is what lets `VulkanDevice` implement
 //!     `Provides<Graphics>`, which `device`'s real-device test still records as not
-//!     compiling. Its first bounded piece landed ahead of the verbs: the pure
-//!     [`render_pass`] lowering declared below.
+//!     compiling. Two bounded pieces have landed ahead of the verbs: the pure
+//!     [`render_pass`] lowering, and [`framebuffer`] with the
+//!     [`command::Encoder`] bracket (`begin_raster` / `end_raster`) that owns the
+//!     render pass and framebuffer a recorded pass needs, refusing a barrier, a copy
+//!     or an `end` while a pass is open. The draw verbs are still owed.
 //!
 //! # Acceptance
 //!
@@ -194,6 +197,14 @@ pub(crate) mod pipeline;
 /// `Vulkan` compares two render passes by exactly those facts. Pure: it creates
 /// nothing, and its owning half lands with the draw verbs.
 pub(crate) mod render_pass;
+
+/// Step 12's owning half: the `VkRenderPass` and `VkFramebuffer` one admitted
+/// [`render_pass`] description needs, built together because `Vulkan` makes the
+/// framebuffer refer to the render pass, and owned together so field order is that
+/// dependency. It refuses a subresource range and an attachment shape a framebuffer
+/// cannot carry before the driver is reached, and the recording bracket that begins it
+/// lives on [`command::Encoder`].
+pub(crate) mod framebuffer;
 
 /// Step 6: the retained WGSL artifact lowered to SPIR-V with Naga's `spv-out`, with
 /// the dialect, entry-point, stage and profile checks decided before the driver is

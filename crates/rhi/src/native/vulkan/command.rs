@@ -14,6 +14,18 @@
 //! `before == after` transition is still a barrier -- in one place: the recorder has
 //! no `before == after` branch, so it cannot have gained one.
 //!
+//! # The raster bracket is explicit state, and commands illegal inside a pass refuse
+//!
+//! [`Encoder::begin_raster`] records `vkCmdBeginRenderPass` for a
+//! [`Framebuffer`](super::framebuffer::Framebuffer), which owns the render pass and
+//! the clear value its attachment states, and [`Encoder::end_raster`] records
+//! `vkCmdEndRenderPass`. The encoder tracks whether a pass is open, and the state is
+//! what refuses the commands `Vulkan` does not allow inside one: a barrier and a copy
+//! answer [`RecordError::PassOpen`], a second `begin_raster` answers
+//! [`RecordError::PassAlreadyOpen`], and an `end_raster` with no pass open answers
+//! [`RecordError::NoPass`]. Ending the recording with a pass open is the same
+//! refusal, because `vkEndCommandBuffer` requires no active render pass.
+//!
 //! # Refusals happen before the driver, and the encoder stays usable
 //!
 //! A state this backend has not been taught, a state of the wrong resource kind, a
@@ -38,7 +50,7 @@ use fluxel_rendergraph::{
     BufferCopyRegion, BufferRange, ResourceAccessState, TextureCopyRegion, TextureRange,
 };
 
-use super::{barrier, copy, format};
+use super::{barrier, copy, format, framebuffer::Framebuffer};
 
 /// Why a command pool or an encoder could not be created or used.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +71,20 @@ pub(crate) enum RecordError {
     End(vk::Result),
     /// The encoder is not recording, so there is nothing to record into or to end.
     NotRecording,
+    /// A raster pass is already open, so a second begin is a caller mistake rather
+    /// than a nested pass.
+    PassAlreadyOpen,
+    /// No raster pass is open, so there is none to end.
+    ///
+    /// Refused rather than accepted idempotently for the same reason a second `end`
+    /// is: silently accepting it would hide the caller's mistake until submission.
+    NoPass,
+    /// A raster pass is still open, so this command may not be recorded here.
+    ///
+    /// A barrier, a copy and the end of a recording are all illegal inside a render
+    /// pass, and the encoder refuses them while one is open rather than recording a
+    /// command the driver would reject.
+    PassOpen,
     /// The state names an access this backend has not been taught how to order, or
     /// one that belongs to the other resource kind.
     UnsupportedState(ResourceAccessState),
@@ -161,6 +187,7 @@ impl CommandPool {
             pool: self.pool,
             command_buffer,
             recording: true,
+            pass_open: false,
         })
     }
 }
@@ -201,6 +228,12 @@ pub(crate) struct Encoder {
     pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     recording: bool,
+    /// Whether a raster pass is open on this recording.
+    ///
+    /// It is state rather than a comment because the commands `Vulkan` forbids inside
+    /// a render pass are refused from it, and because the matching `end_raster` is
+    /// what clears it.
+    pass_open: bool,
 }
 
 impl Encoder {
@@ -231,6 +264,9 @@ impl Encoder {
     ) -> Result<(), RecordError> {
         if !self.recording {
             return Err(RecordError::NotRecording);
+        }
+        if self.pass_open {
+            return Err(RecordError::PassOpen);
         }
         let before_scope =
             barrier::buffer_scope(before).ok_or(RecordError::UnsupportedState(before))?;
@@ -270,6 +306,9 @@ impl Encoder {
     ) -> Result<(), RecordError> {
         if !self.recording {
             return Err(RecordError::NotRecording);
+        }
+        if self.pass_open {
+            return Err(RecordError::PassOpen);
         }
         let is_depth = format::is_depth(image_format);
         let before_state =
@@ -316,6 +355,9 @@ impl Encoder {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
+        if self.pass_open {
+            return Err(RecordError::PassOpen);
+        }
         let lowered = copy::buffer_copy(source_size, destination_size, region)
             .map_err(RecordError::Region)?;
         // SAFETY: the command buffer is recording, both handles were created by the
@@ -346,6 +388,9 @@ impl Encoder {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
+        if self.pass_open {
+            return Err(RecordError::PassOpen);
+        }
         // The mapped format is what the copy record needs, and it is also the
         // cheapest honest answer to "is this a format this backend was taught": a
         // portable format with no equivalent cannot be copied through.
@@ -369,14 +414,77 @@ impl Encoder {
         Ok(())
     }
 
+    /// Records the beginning of the raster pass `framebuffer` describes.
+    ///
+    /// The framebuffer owns both the render pass and the clear value its own
+    /// attachment operations state, so this call cannot name a render pass the
+    /// framebuffer was not built for, and the render area is the framebuffer's own
+    /// extent -- `Vulkan` requires the two to agree. Subpass contents are `INLINE`,
+    /// which is what a single-subpass pass with no secondary command buffers means.
+    ///
+    /// A second begin while a pass is open is refused rather than nested: `Vulkan`
+    /// has no nested render passes, and a caller that reached one has a bug the type
+    /// of a single bracket should have caught.
+    pub(crate) fn begin_raster(&mut self, framebuffer: &Framebuffer) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        if self.pass_open {
+            return Err(RecordError::PassAlreadyOpen);
+        }
+        let clear_values = [framebuffer.clear_value()];
+        let info = vk::RenderPassBeginInfo::default()
+            .render_pass(framebuffer.render_pass())
+            .framebuffer(framebuffer.handle())
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: framebuffer.extent(),
+            })
+            .clear_values(&clear_values);
+        // SAFETY: the command buffer is recording and belongs to this encoder; the
+        // render pass and the framebuffer were created together by this device and
+        // the caller keeps both alive for the recording; `info` borrows locals that
+        // outlive the call.
+        unsafe {
+            self.device
+                .cmd_begin_render_pass(self.command_buffer, &info, vk::SubpassContents::INLINE);
+        }
+        self.pass_open = true;
+        Ok(())
+    }
+
+    /// Records the end of the raster pass this encoder began.
+    ///
+    /// An `end_raster` with no pass open is refused rather than treated as
+    /// idempotent, for the same reason a second `end` is: the caller's mistake would
+    /// otherwise be hidden until the recording is submitted.
+    pub(crate) fn end_raster(&mut self) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        if !self.pass_open {
+            return Err(RecordError::NoPass);
+        }
+        // SAFETY: the command buffer is recording with a pass open, which is the only
+        // state in which `vkCmdEndRenderPass` is legal.
+        unsafe { self.device.cmd_end_render_pass(self.command_buffer) };
+        self.pass_open = false;
+        Ok(())
+    }
+
     /// Ends recording.
     ///
     /// A second call is refused rather than treated as idempotent: "end an encoder
     /// that is not recording" is a caller mistake, and silently accepting it would
-    /// hide the mistake until submission.
+    /// hide the mistake until submission. A recording with a raster pass still open
+    /// is refused for the same reason: `vkEndCommandBuffer` requires no active render
+    /// pass, and the caller's matching `end_raster` is what closes it.
     pub(crate) fn end(&mut self) -> Result<(), RecordError> {
         if !self.recording {
             return Err(RecordError::NotRecording);
+        }
+        if self.pass_open {
+            return Err(RecordError::PassOpen);
         }
         // SAFETY: the command buffer is recording and belongs to this encoder.
         unsafe { self.device.end_command_buffer(self.command_buffer) }.map_err(RecordError::End)?;

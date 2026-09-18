@@ -26,11 +26,11 @@
 //!
 //! # Pure, and nothing owned
 //!
-//! [`admit`] and [`describe`] create nothing and reach no driver entry point, so
-//! every refusal is provable without a device. The owning half -- creating the
-//! `VkRenderPass`, building the `VkFramebuffer` from the attachment's view, and
-//! beginning the pass on the recording encoder -- lands with the draw verbs, which is
-//! why nothing here owns a handle.
+//! [`admit`], [`describe`] and [`framebuffer_extent`] create nothing and reach no
+//! driver entry point, so every refusal is provable without a device. The owning half
+//! is [`super::framebuffer`]: it creates the `VkRenderPass` from [`describe`]'s
+//! attachment, builds the `VkFramebuffer` from the attachment's view and the extent
+//! [`framebuffer_extent`] decides, and owns both. Nothing here owns a handle.
 //!
 //! # Why the create-info is not returned
 //!
@@ -44,7 +44,8 @@
 
 use ash::vk;
 use fluxel_rendergraph::{
-    AttachmentOps, LoadOp, RasterColorAttachment, RasterDepthStencilAttachment, StoreOp,
+    AttachmentOps, LoadOp, RasterColorAttachment, RasterDepthStencilAttachment, StoreOp, TextureDesc,
+    TextureDimension,
 };
 
 use crate::common::base::resource::TextureId;
@@ -208,10 +209,45 @@ pub(crate) fn describe(
     }
 }
 
+/// The framebuffer size one admitted colour attachment's texture describes.
+///
+/// Returns `None` where the description is not one this backend builds a framebuffer
+/// from. The refusals are `Vulkan`'s own rules for a framebuffer attachment rather
+/// than a preference of this layer:
+///
+/// - a view of anything but a two-dimensional image at exactly one mip level and one
+///   layer is not an attachment of a render pass this backend can begin. A
+///   three-dimensional view is not a legal framebuffer attachment at all, and a
+///   layered or multi-mip view names subresources a non-multiview pass neither covers
+///   nor compares a pipeline against. That is exactly the target shape the borrowed
+///   native raster path preserves (`D2`, one mip, one layer, one depth slice), stated
+///   once here rather than repeated in the owning half;
+/// - a zero extent is not an image `Vulkan` accepts.
+///
+/// The dimension is compared rather than matched because [`TextureDimension`] is a
+/// foreign, `#[non_exhaustive]` enum: a variant added upstream cannot be lowered to a
+/// guessed attachment shape, and this function answers `None` for it.
+pub(crate) fn framebuffer_extent(desc: &TextureDesc) -> Option<vk::Extent2D> {
+    if desc.dimension != TextureDimension::D2 {
+        return None;
+    }
+    if desc.extent.width == 0 || desc.extent.height == 0 || desc.extent.depth != 1 {
+        return None;
+    }
+    if desc.mip_levels.max(1) != 1 || desc.array_layers.max(1) != 1 {
+        return None;
+    }
+    Some(vk::Extent2D {
+        width: desc.extent.width,
+        height: desc.extent.height,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use fluxel_rendergraph::{
-        DeviceIdentity, PhysicalResourceIdentity, TextureRange, WriteCoverage,
+        DeviceIdentity, Extent3d, PhysicalResourceIdentity, TextureFormat, TextureRange,
+        WriteCoverage,
     };
 
     use super::*;
@@ -431,5 +467,85 @@ mod tests {
         // is the initialized variant of the union.
         let floats = unsafe { value.color.float32 };
         assert_eq!(floats, [0.1, 0.2, 0.3, 0.4]);
+    }
+
+    fn texture_desc() -> TextureDesc {
+        TextureDesc {
+            dimension: TextureDimension::D2,
+            extent: Extent3d {
+                width: 16,
+                height: 8,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            sample_count: 1,
+            format: TextureFormat::Rgba8Unorm,
+        }
+    }
+
+    #[test]
+    fn the_retained_attachment_shape_has_a_framebuffer_extent() {
+        assert_eq!(
+            framebuffer_extent(&texture_desc()),
+            Some(vk::Extent2D {
+                width: 16,
+                height: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn the_shapes_a_framebuffer_cannot_attach_are_refused() {
+        // Every one of these is a view `Vulkan` either forbids as a framebuffer
+        // attachment or that a render pass without multiview cannot cover, and each
+        // is the shape the borrowed native raster path refuses as well.
+        let layered = TextureDesc {
+            array_layers: 4,
+            ..texture_desc()
+        };
+        assert_eq!(framebuffer_extent(&layered), None, "a layered view");
+
+        let volumetric = TextureDesc {
+            dimension: TextureDimension::D3,
+            ..texture_desc()
+        };
+        assert_eq!(
+            framebuffer_extent(&volumetric),
+            None,
+            "a three-dimensional view is not a framebuffer attachment"
+        );
+
+        let one_dimensional = TextureDesc {
+            dimension: TextureDimension::D1,
+            ..texture_desc()
+        };
+        assert_eq!(framebuffer_extent(&one_dimensional), None, "a 1D view");
+
+        let mipmapped = TextureDesc {
+            mip_levels: 3,
+            ..texture_desc()
+        };
+        assert_eq!(framebuffer_extent(&mipmapped), None, "a multi-mip view");
+
+        let deep = TextureDesc {
+            extent: Extent3d {
+                width: 16,
+                height: 8,
+                depth: 2,
+            },
+            ..texture_desc()
+        };
+        assert_eq!(framebuffer_extent(&deep), None, "a depth axis that is not one");
+
+        let empty = TextureDesc {
+            extent: Extent3d {
+                width: 0,
+                height: 8,
+                depth: 1,
+            },
+            ..texture_desc()
+        };
+        assert_eq!(framebuffer_extent(&empty), None, "a zero-sized image");
     }
 }
