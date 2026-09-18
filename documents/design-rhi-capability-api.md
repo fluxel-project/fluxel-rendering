@@ -447,5 +447,14 @@ way. Against a real adapter the device test asserts the row equals the pair *and
 table's answer, and that the table holds every mapped format in `MAPPED` order — on the named board
 the adapter enables both features and reports `STORAGE_IMAGE` for `R8G8B8A8_UNORM`, `B8G8R8A8_UNORM`
 and `R16G16B16A16_SFLOAT` but not for the sRGB sibling or `D32_SFLOAT`, so the row is proved there.
+Step 11's query-row half records the two remaining query rows from facts the open path already read:
+`OcclusionQuery` from the graphics family the device was created on — the core *imprecise* query, so
+the `occlusionQueryPrecise` feature this device leaves disabled is not part of the proof — and
+`ElapsedQuery` from that same family's own timestamp-valid-bit report, because a `Vulkan` elapsed
+interval is two timestamp writes and their difference rather than a separate query type; neither row
+borrows a numeric floor it does not depend on. The pure tests pin each row's proving shape (occlusion
+proved in a ledger whose every reported number is absent, and elapsed examined only where the family
+reported usable timestamps), and against a real adapter the created device proves occlusion
+unconditionally and elapsed exactly where timestamps were reported.
 Clippy is clean
 under `-D warnings` for all-features and no-default-features.

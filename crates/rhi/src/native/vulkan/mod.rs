@@ -75,6 +75,15 @@
 //!     is recorded -- the ledger is captured at creation and never recomputed, so a
 //!     fact discovered later could not reach it.
 //!
+//!     The occlusion and elapsed query rows are recorded from facts the open path
+//!     already reads: occlusion is a core query type on the graphics family the
+//!     device was created on, and elapsed is that family's own timestamp-valid-bit
+//!     report, because an elapsed interval on `Vulkan` is two timestamp writes and
+//!     their difference rather than a separate query type. Still owed by this step
+//!     are the draw-parameter rows (`BaseVertex`, `FirstInstance`), which arrive
+//!     with the draw verbs whose parameter space they gate and with the family
+//!     markers that would let a caller require them.
+//!
 //! # Acceptance
 //!
 //! W2 closes when the W1-frozen oracle passes **on Vulkan** with

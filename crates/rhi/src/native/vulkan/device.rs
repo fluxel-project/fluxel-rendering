@@ -266,6 +266,14 @@ impl crate::common::api::negotiate::CapabilitySource for VulkanDevice {
 /// - **TimestampQuery** only where the family's `timestamp_valid_bits` report is
 ///   non-zero. That fact was read with the same `queue_family_properties` call the
 ///   selection already made, so the row costs no query of its own.
+/// - **OcclusionQuery** from the same structural fact graphics has: a core
+///   `Vulkan` 1.0 occlusion query on a graphics queue. The row names the imprecise
+///   answer, so the `occlusionQueryPrecise` feature this device leaves disabled is
+///   not part of its proof.
+/// - **ElapsedQuery** wherever the timestamp row is proved, because an elapsed
+///   interval here is two timestamps and their difference rather than a separate
+///   query type. It is not recorded where the family reported no usable timestamps,
+///   which is the one fact that would make a claimed duration unmeasurable.
 /// - **StorageBuffer** only where the device was created with the shader-store pair
 ///   [`StoreFeatures::proves_storage_buffers`] names. The row describes a buffer a
 ///   shader may read *and* write, and `Vulkan` gates the write half per stage, so a
@@ -313,6 +321,21 @@ pub(crate) fn ledger(
             operation_probe: OperationProbe::NotRequired,
         },
     );
+    // Occlusion is a core `Vulkan` 1.0 query type on a graphics queue, and the row
+    // describes the *imprecise* answer -- "did any sample pass" -- which is the
+    // answer the core type gives. The exact sample count is the
+    // `occlusionQueryPrecise` feature this device does not enable, so claiming the
+    // row without it would claim the feature rather than the query. Its proof is the
+    // same structural fact graphics has: a device exists on a family whose flags
+    // contain graphics. Like copy, it has no numeric floor of its own.
+    ledger.record(
+        Capability::OcclusionQuery,
+        CapabilityFact {
+            evidence: Some(CapabilityEvidence::Core),
+            limits_satisfied: true,
+            operation_probe: OperationProbe::NotRequired,
+        },
+    );
     if selected.supports_compute {
         ledger.record(
             Capability::Compute,
@@ -339,6 +362,22 @@ pub(crate) fn ledger(
     if selected.supports_timestamps() {
         ledger.record(
             Capability::TimestampQuery,
+            CapabilityFact {
+                evidence: Some(CapabilityEvidence::Core),
+                limits_satisfied: true,
+                operation_probe: OperationProbe::NotRequired,
+            },
+        );
+        // An elapsed interval on `Vulkan` is two timestamp writes and their
+        // difference, so the family's own valid-bit report is this row's route as
+        // well -- there is no separate elapsed query type to ask about. The two rows
+        // are still recorded separately because the ledger models a dedicated
+        // elapsed facility (the GL family's `TIME_ELAPSED`) that this API reaches
+        // through its timestamp domain; the repetition is honest and is what W4 will
+        // look at once a second backend proves the same pair. Like the timestamp row
+        // it has no numeric floor of its own.
+        ledger.record(
+            Capability::ElapsedQuery,
             CapabilityFact {
                 evidence: Some(CapabilityEvidence::Core),
                 limits_satisfied: true,
@@ -793,6 +832,47 @@ mod tests {
     }
 
     #[test]
+    fn the_query_rows_arrive_from_the_graphics_and_timestamp_facts() {
+        // Occlusion is core on a graphics family, and the row has no numeric floor
+        // of its own -- so it is proved even in a ledger whose every reported number
+        // is absent, which is the discriminating shape for a floor that is trivially
+        // satisfied rather than borrowed from a neighbouring fact.
+        let bare = ledger(
+            selected(false, 0),
+            &AdapterLimits::unavailable(),
+            no_stores(),
+            &no_formats(),
+        );
+        assert!(bare.supports(Capability::OcclusionQuery));
+        assert_eq!(
+            bare.fact(Capability::OcclusionQuery)
+                .map(|fact| fact.limits_satisfied),
+            Some(true),
+            "occlusion has no numeric floor, so nothing can leave it unsatisfied"
+        );
+
+        // Elapsed is the timestamp facility used twice, so it follows that row
+        // exactly: unexamined where the family reported no usable timestamps, and
+        // proved where it did.
+        assert!(!bare.supports(Capability::ElapsedQuery));
+        assert_eq!(
+            bare.fact(Capability::ElapsedQuery),
+            None,
+            "a family that reported no timestamps was never examined for elapsed time"
+        );
+
+        let reporting = ledger(selected(false, 64), &computing_limits(), no_stores(), &no_formats());
+        assert!(reporting.supports(Capability::ElapsedQuery));
+        assert_eq!(
+            reporting
+                .fact(Capability::ElapsedQuery)
+                .map(|fact| fact.operation_probe),
+            Some(OperationProbe::NotRequired),
+            "the family's own valid-bit report is the proof, so no command was owed"
+        );
+    }
+
+    #[test]
     fn the_storage_buffer_row_arrives_only_with_both_store_features() {
         // The row describes a buffer a shader may read and write, and `Vulkan` gates
         // the write half per stage, so each half alone is a partial proof that the
@@ -943,9 +1023,11 @@ mod tests {
     fn the_feature_gated_and_preserved_rows_stay_unproved() {
         // These are absent for different reasons, and each is stated: the step that
         // can prove one narrows the family's parameter space or enables the feature.
-        // The store features are enabled here on purpose and the format table is
-        // empty, so the two storage rows' absence from this list is a fact about the
-        // rows rather than about the fixture.
+        // The fixture records everything this device already reads -- the compute
+        // family, a non-zero timestamp report and both store features -- so the rows
+        // that *are* proved (the command rows, the query rows and the storage rows)
+        // are absent from this list as a fact about the rows rather than about the
+        // fixture.
         let ledger = ledger(selected(true, 64), &computing_limits(), all_stores(), &no_formats());
         for row in [
             // The `IndirectDrawApi` family takes a draw count, and a count above one
@@ -1029,6 +1111,15 @@ mod tests {
             device.ledger().supports(Capability::TimestampQuery),
             selected.supports_timestamps(),
             "timestamp disagreement: queue={selected:?}"
+        );
+        assert!(
+            device.ledger().supports(Capability::OcclusionQuery),
+            "occlusion is a core query type on the graphics family this device was created on"
+        );
+        assert_eq!(
+            device.ledger().supports(Capability::ElapsedQuery),
+            selected.supports_timestamps(),
+            "an elapsed interval is the timestamp facility used twice"
         );
         assert!(
             !device.ledger().supports(Capability::IndirectDraw),
