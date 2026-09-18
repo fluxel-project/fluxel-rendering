@@ -383,6 +383,45 @@ impl Encoder {
         self.recording = false;
         Ok(())
     }
+
+    /// Ends recording if it is still open and hands the recording to step 9.
+    ///
+    /// This is the only way to obtain a [`Finished`], and that is the point: a
+    /// command buffer is submittable only in the executable state, so the type
+    /// makes "submit a recording that has not ended" unrepresentable rather than a
+    /// run-time refusal. A recording that already ended passes through unchanged,
+    /// and one that is still open is ended here.
+    pub(crate) fn finish(mut self) -> Result<Finished, RecordError> {
+        if self.recording {
+            self.end()?;
+        }
+        Ok(Finished { encoder: self })
+    }
+}
+
+/// A recording that has ended, so it is the only value submission accepts.
+///
+/// It owns the [`Encoder`] -- and therefore the command buffer -- for exactly as
+/// long as the submission that holds it needs that buffer to stay alive, which is
+/// the handoff the module docs above record as step 9's.
+pub(crate) struct Finished {
+    encoder: Encoder,
+}
+
+impl Finished {
+    /// Returns the command buffer the submission must name.
+    pub(crate) const fn command_buffer(&self) -> vk::CommandBuffer {
+        self.encoder.command_buffer()
+    }
+}
+
+impl core::fmt::Debug for Finished {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Finished")
+            .field("command_buffer", &self.command_buffer())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for Encoder {

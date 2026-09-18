@@ -163,3 +163,8 @@ pub(crate) mod command;
 /// `Vulkan` copy records, with the alignment, bounds and layer checks repeated at
 /// the boundary that reaches the driver.
 pub(crate) mod copy;
+
+/// Step 9's first half: one unsignaled fence per execution, one submit on logical
+/// queue 0, and the completion state machine over `common`'s disposition and
+/// lifetime rules, with accepted-unknown work quarantined rather than released.
+pub(crate) mod submission;
