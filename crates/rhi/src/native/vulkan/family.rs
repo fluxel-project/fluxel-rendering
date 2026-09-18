@@ -1,14 +1,16 @@
 //! W2's family wiring: `VulkanDevice` as the graphics, copy, compute and
-//! storage-buffer families' provider.
+//! storage-role families' provider.
 //!
 //! The common layer's contract says a device *negotiates* a family and receives a
 //! handle that already borrows the device and the ledger that proved it (plan
 //! section 11). This module is the first real backend to do that: `VulkanDevice`
-//! implements [`Provides<Graphics>`], [`Provides<Copy>`], [`Provides<Compute>`] and
-//! [`Provides<StorageBuffer>`] and hands out [`GraphicsRecording`], [`CopyRecording`],
-//! [`ComputeRecording`] and [`StorageBufferBindings`], which implement [`FamilyApi`]
-//! and their own family's trait over the device's own resource table -- and, for the
-//! three command families, over one recording from the device's own command pool.
+//! implements [`Provides<Graphics>`], [`Provides<Copy>`], [`Provides<Compute>`],
+//! [`Provides<StorageBuffer>`] and [`Provides<StorageTexture>`] and hands out
+//! [`GraphicsRecording`], [`CopyRecording`], [`ComputeRecording`],
+//! [`StorageBufferBindings`] and [`StorageTextureBindings`], which implement
+//! [`FamilyApi`] and their own family's trait over the device's own resource table --
+//! and, for the three command families, over one recording from the device's own
+//! command pool.
 //!
 //! # One recording owner, one handle type per family
 //!
@@ -19,10 +21,12 @@
 //! a family verb does not re-ask the ledger once a handle exists -- so the type, not a
 //! run-time check, is what keeps one family's vocabulary out of another's call site.
 //!
-//! [`StorageBufferBindings`] is a *resource role* rather than a command domain, so it
-//! owns no recording at all: it resolves a `BufferId` through the table and builds a
-//! validated range. That is the one place the four families differ structurally rather
-//! than only in their verbs, and it is stated by the type having no `Recording` field.
+//! [`StorageBufferBindings`] and [`StorageTextureBindings`] are *resource roles* rather
+//! than command domains, so they own no recording at all: each resolves a base
+//! resource id through the table and builds a value the graph's own bind-group step
+//! places at a binding number. That is the one place the five families differ
+//! structurally rather than only in their verbs, and it is stated by those types
+//! having no `Recording` field.
 //!
 //! Each command handle is therefore its own recording context, which the contract
 //! permits (plan section 21: negotiation and recording context need not remain the
@@ -69,11 +73,13 @@ use std::ops::Range;
 
 use fluxel_rendergraph::{
     BufferCopyRegion, BufferRange, BufferUsageKind, IndexFormat, RasterPassDescriptor,
-    ResourceAccessState, ScissorRect, TextureCopyRegion, TextureRange, Viewport,
+    ResourceAccessState, ScissorRect, TextureCopyRegion, TextureFormat, TextureRange, Viewport,
 };
 
-use crate::common::api::families::{ComputeApi, CopyApi, StorageBufferApi};
-use crate::common::api::family::{Compute, Copy, Graphics, StorageBuffer};
+use crate::common::api::families::{ComputeApi, CopyApi, StorageBufferApi, StorageTextureApi};
+use crate::common::api::family::{
+    Compute, Copy, Graphics, StorageBuffer, StorageTexture,
+};
 use crate::common::api::graphics::GraphicsApi;
 use crate::common::api::handle::FamilyApi;
 use crate::common::api::negotiate::Provides;
@@ -87,7 +93,7 @@ use super::format;
 use super::framebuffer::{Framebuffer, FramebufferError};
 use super::pipeline::{ComputePipeline, RasterPipeline};
 use super::render_pass::{self, PassError};
-use super::storage::{self, StorageBufferBinding};
+use super::storage::{self, StorageBufferBinding, StorageTextureBinding};
 
 /// Why a graphics command was refused.
 ///
@@ -938,6 +944,125 @@ impl core::fmt::Debug for StorageBufferBindings<'_> {
     }
 }
 
+/// Why a storage-texture binding was refused.
+///
+/// Each variant is a value returned before the driver is reached, and the family keeps
+/// its own sentences rather than reusing [`StorageError`]'s: the two roles are separate
+/// families, so a texture-shaped refusal has no buffer-shaped sentence to borrow.
+/// [`Self::UnknownTexture`] is the handle's own -- the id lookup -- and the other four
+/// are [`storage::StorageTextureRuleError`]'s carried rather than restated, because
+/// "the description names more levels than this vocabulary addresses", "the texture was
+/// not declared for storage", "nothing examined its format" and "its format missed the
+/// direction it declared" are four different fixes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StorageTextureError {
+    /// The id names no live texture of this device generation.
+    UnknownTexture,
+    /// The description declares more than one mip level.
+    MultiLevel {
+        /// The level count the description declared.
+        levels: u32,
+    },
+    /// The texture was created without a storage usage.
+    UsageNotDeclared,
+    /// Nothing examined the texture's `(format, sample count)` pair.
+    FormatUnproved {
+        /// The format the texture was created with.
+        format: TextureFormat,
+        /// The sample count the texture was created with.
+        sample_count: u32,
+    },
+    /// The pair was examined and the declared direction is not supported.
+    DirectionUnproved {
+        /// The direction the declared usage named.
+        direction: storage::StorageDirection,
+        /// The format that failed to prove it.
+        format: TextureFormat,
+    },
+}
+
+/// The storage-texture family's handle on one `Vulkan` device.
+///
+/// The texture-shaped sibling of [`StorageBufferBindings`], and the same kind of value:
+/// a resource role records nothing, so this handle owns no encoder and its whole
+/// contract is a table lookup and a validated binding. What it borrows is the device
+/// whose table answers whether a texture exists, what it was declared for, and -- from
+/// the device's own [`FormatTable`](crate::common::formats::FormatTable) -- which
+/// storage directions its format proved.
+///
+/// It is a distinct type from every other family's handle for the reason the buffer
+/// role states: a family verb does not re-ask the ledger once a handle exists, so only
+/// the type keeps one family's vocabulary out of another's call site. A caller that
+/// negotiated `StorageTexture` therefore cannot build a storage *buffer* binding, and a
+/// caller that negotiated nothing cannot build either.
+pub(crate) struct StorageTextureBindings<'d> {
+    /// The device whose table and format facts every fact this family checks come from.
+    device: &'d VulkanDevice,
+}
+
+impl<'d> StorageTextureBindings<'d> {
+    /// Wraps one device generation without touching the driver.
+    fn new(device: &'d VulkanDevice) -> Self {
+        Self { device }
+    }
+}
+
+impl FamilyApi for StorageTextureBindings<'_> {
+    fn stamp(&self) -> DeviceStamp {
+        self.device.stamp()
+    }
+}
+
+impl StorageTextureApi for StorageTextureBindings<'_> {
+    type Error = StorageTextureError;
+    type Binding = StorageTextureBinding;
+
+    fn create_storage_binding(
+        &mut self,
+        texture: TextureId,
+    ) -> Result<Self::Binding, Self::Error> {
+        // Every fact comes from the device and none from the driver: the description
+        // and the declared usage are the values the graph's own checks saw, and the
+        // format facts are what discovery recorded for exactly this pair.
+        let table = self.device.table();
+        let desc = table
+            .texture_desc(texture)
+            .ok_or(StorageTextureError::UnknownTexture)?;
+        let usage = table
+            .texture_usage(texture)
+            .ok_or(StorageTextureError::UnknownTexture)?;
+        let facts = self.device.formats().get(desc.format, desc.sample_count);
+        storage::check_storage_texture(&desc, usage, facts).map_err(|error| match error {
+            storage::StorageTextureRuleError::MultiLevel { levels } => {
+                StorageTextureError::MultiLevel { levels }
+            }
+            storage::StorageTextureRuleError::UsageNotDeclared => {
+                StorageTextureError::UsageNotDeclared
+            }
+            storage::StorageTextureRuleError::FormatUnproved {
+                format,
+                sample_count,
+            } => StorageTextureError::FormatUnproved {
+                format,
+                sample_count,
+            },
+            storage::StorageTextureRuleError::DirectionUnproved { direction, format } => {
+                StorageTextureError::DirectionUnproved { direction, format }
+            }
+        })?;
+        Ok(StorageTextureBinding::new(texture))
+    }
+}
+
+impl core::fmt::Debug for StorageTextureBindings<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("StorageTextureBindings")
+            .field("device", &self.device.stamp())
+            .finish_non_exhaustive()
+    }
+}
+
 /// The graphics family's provider.
 ///
 /// Implementing this is what makes the family *expressible* here; whether a device
@@ -998,6 +1123,24 @@ impl Provides<StorageBuffer> for VulkanDevice {
 
     fn provide(&self) -> StorageBufferBindings<'_> {
         StorageBufferBindings::new(self)
+    }
+}
+
+/// The storage-texture family's provider, beside the storage-buffer one.
+///
+/// A separate impl, for the reason [`Provides<StorageBuffer>`] states: the handle type
+/// bounds a caller's vocabulary, and a resource role is no exception -- a caller that
+/// negotiated no storage family has no way to build a storage binding. The row this
+/// negotiation proves is `Capability::StorageImage`, which `device::ledger` records
+/// only where the device was created with the shader-store pair **and** the format
+/// table proved a format with both storage directions, so a device without it has the
+/// vocabulary and still refuses the negotiation -- the two refusals the design keeps
+/// apart.
+impl Provides<StorageTexture> for VulkanDevice {
+    type Api<'d> = StorageTextureBindings<'d>;
+
+    fn provide(&self) -> StorageTextureBindings<'_> {
+        StorageTextureBindings::new(self)
     }
 }
 
@@ -1659,6 +1802,71 @@ mod tests {
             .expect("a device-local storage buffer")
     }
 
+    /// A device-local texture created for shader storage, or `None` where no format
+    /// this backend maps proved both storage directions on this board.
+    fn storage_texture(opened: &mut open::OpenedVulkan, mip_levels: u32) -> Option<TextureId> {
+        let format = opened
+            .device
+            .formats()
+            .iter()
+            .find(|facts| facts.storage_read && facts.storage_write)
+            .map(|facts| facts.format)?;
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        Some(
+            opened
+                .device
+                .table_mut()
+                .create_texture(
+                    TextureDesc {
+                        dimension: TextureDimension::D2,
+                        extent: Extent3d {
+                            width: 8,
+                            height: 8,
+                            depth: 1,
+                        },
+                        mip_levels,
+                        array_layers: 1,
+                        sample_count: 1,
+                        format,
+                    },
+                    TextureUsage::from_kinds([
+                        TextureUsageKind::StorageRead,
+                        TextureUsageKind::StorageWrite,
+                    ]),
+                    &memory_types,
+                    memory::MemoryPurpose::DeviceLocal,
+                )
+                .expect("a device-local storage texture"),
+        )
+    }
+
+    /// A device-local texture created for sampling, which is what a storage binding
+    /// must refuse by name.
+    fn sampled_texture(opened: &mut open::OpenedVulkan) -> TextureId {
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        opened
+            .device
+            .table_mut()
+            .create_texture(
+                TextureDesc {
+                    dimension: TextureDimension::D2,
+                    extent: Extent3d {
+                        width: 8,
+                        height: 8,
+                        depth: 1,
+                    },
+                    mip_levels: 1,
+                    array_layers: 1,
+                    sample_count: 1,
+                    format: TextureFormat::Rgba8Unorm,
+                },
+                TextureUsage::from_kinds([TextureUsageKind::Sampled]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local sampled texture")
+    }
+
     #[test]
     fn a_negotiated_storage_binding_is_validated_against_the_device_table() {
         // Step 13's storage-buffer family against the real driver: `require` yields the
@@ -1735,6 +1943,67 @@ mod tests {
         assert_eq!(
             api.create_storage_binding(foreign, 0, 4),
             Err(StorageError::UnknownBuffer)
+        );
+    }
+
+    #[test]
+    fn a_negotiated_storage_texture_binding_reads_the_table_and_the_format_facts() {
+        // Step 13's storage-texture role against the real driver: `require` yields the
+        // handle, the handle reads the texture's description and declared usage from the
+        // device's own table and the `(format, sample count)` facts from the device's own
+        // format table, and every refusal is a value returned before a view or a
+        // descriptor is touched. Skips where no adapter exists, where the adapter cannot
+        // serve the family, and where no mapped format proved both storage directions.
+        let Some(mut opened) = device() else {
+            return;
+        };
+        if !opened.device.ledger().supports(Capability::StorageImage) {
+            return;
+        }
+        let Some(storage) = storage_texture(&mut opened, 1) else {
+            return;
+        };
+        let Some(multi_level) = storage_texture(&mut opened, 2) else {
+            return;
+        };
+        let sampled = sampled_texture(&mut opened);
+
+        let mut api = require::<_, StorageTexture>(&opened.device)
+            .expect("a device whose format table proved a storage format proves the row");
+        assert_eq!(
+            api.stamp(),
+            opened.device.stamp(),
+            "the handle reports the generation it was negotiated on"
+        );
+
+        let binding = api
+            .create_storage_binding(storage)
+            .expect("a texture whose usage and format facts admit a storage binding");
+        assert_eq!(binding.texture(), storage);
+        // The value carries base identity, never the driver's view, and reaches a bind
+        // group at whatever number the layout declares -- which the family never saw.
+        let entry = binding.at(2);
+        assert_eq!(entry.binding, 2);
+        assert_eq!(entry.resource, BindingResource::Texture(storage));
+
+        // Every refusal is its own sentence, and none of them reached the driver.
+        assert_eq!(
+            api.create_storage_binding(sampled),
+            Err(StorageTextureError::UsageNotDeclared),
+            "the texture step's mapping never widens, so a sampled texture is not a storage one"
+        );
+        assert_eq!(
+            api.create_storage_binding(multi_level),
+            Err(StorageTextureError::MultiLevel { levels: 2 }),
+            "the table's view spans every declared level, which this vocabulary cannot name"
+        );
+        let foreign = TextureId::new(
+            opened.device.stamp().next_generation(),
+            PhysicalResourceIdentity::new(1),
+        );
+        assert_eq!(
+            api.create_storage_binding(foreign),
+            Err(StorageTextureError::UnknownTexture)
         );
     }
 

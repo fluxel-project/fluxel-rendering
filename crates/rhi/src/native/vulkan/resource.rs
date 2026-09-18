@@ -117,12 +117,21 @@ struct BufferRecord {
     usage: BufferUsage,
 }
 
-/// One live texture: its image, the view it is sampled through, and its memory.
+/// One live texture: its image, the view it is sampled through, its memory, and what
+/// it was declared for.
+///
+/// The declared usage is kept for the same reason the description is: a binding built
+/// after creation must be checked against what the caller declared rather than
+/// against what the driver happens to allow. The storage-texture role reads exactly
+/// these two facts -- the declared storage direction and the `(format, sample count)`
+/// pair it was admitted against -- so recovering either from the driver would let a
+/// binding be admitted against a weaker fact than the one that admitted the texture.
 struct TextureRecord {
     image: vk::Image,
     view: vk::ImageView,
     allocation: gpu_allocator::vulkan::Allocation,
     desc: TextureDesc,
+    usage: TextureUsage,
 }
 
 /// Every resource one device generation owns, over one allocator.
@@ -211,6 +220,16 @@ impl ResourceTable {
     /// rather than recovered from the driver.
     pub(crate) fn texture_desc(&self, id: TextureId) -> Option<TextureDesc> {
         self.texture(id).map(|record| record.desc)
+    }
+
+    /// Returns the usage a live texture was created with, or `None` for a stale id.
+    ///
+    /// The *declared* usage, not a reading of the driver's create-info: it is the same
+    /// value the graph's own capability check saw, so a binding built later cannot be
+    /// admitted against a weaker fact than the one that admitted the texture. It is
+    /// the texture-shaped counterpart of [`Self::buffer_usage`].
+    pub(crate) fn texture_usage(&self, id: TextureId) -> Option<TextureUsage> {
+        self.texture(id).map(|record| record.usage)
     }
 
     /// Returns the handle for a live sampler, or `None` for a stale id.
@@ -360,6 +379,7 @@ impl ResourceTable {
                 view,
                 allocation,
                 desc,
+                usage,
             },
         );
         Ok(id)
@@ -639,10 +659,12 @@ mod tests {
         );
 
         let described = texture_desc(TextureFormat::Rgba8Unorm, 1);
+        let declared_usage =
+            texture_usage(&[TextureUsageKind::Sampled, TextureUsageKind::CopyDestination]);
         let texture = table
             .create_texture(
                 described,
-                texture_usage(&[TextureUsageKind::Sampled, TextureUsageKind::CopyDestination]),
+                declared_usage,
                 &memory_types,
                 MemoryPurpose::DeviceLocal,
             )
@@ -650,6 +672,11 @@ mod tests {
 
         assert_eq!(table.texture_count(), 1);
         assert_eq!(table.texture_desc(texture), Some(described));
+        assert_eq!(
+            table.texture_usage(texture),
+            Some(declared_usage),
+            "the declared usage is kept beside the description, not recovered from the driver"
+        );
         assert!(
             table.texture_image(texture).is_some(),
             "a live texture has an image"
@@ -677,6 +704,7 @@ mod tests {
         assert_eq!(table.texture_count(), 0);
         assert_eq!(table.texture_view(texture), None);
         assert_eq!(table.texture_image(texture), None);
+        assert_eq!(table.texture_usage(texture), None);
         assert_eq!(
             table.destroy_texture(texture),
             Err(ResourceError::Unknown)
