@@ -17,17 +17,23 @@
 //! check refuses the graph that needed it. Selecting here and deciding there keeps
 //! one rule in one place.
 //!
-//! # What is deliberately not enabled
+//! # Which features are enabled, and why so few
 //!
-//! No device features, and no device extension on the headless path. Every feature
-//! a step needs is enabled by that step, and enabling one without recording the
-//! fact it establishes would put an unproved claim into the ledger.
-//! `VK_KHR_swapchain` belongs to step 10, so it is enabled only by
-//! [`open_with_swapchain`] -- and only after the physical device's own extension
-//! inventory was read and positively contained it. A device opened for headless work
-//! enables nothing, which is why the two entry points are separate rather than one
-//! function with a flag: [`SwapchainDevice`] is the witness that the extension is
-//! there, and a headless [`VulkanDevice`] cannot reach a swapchain call at all.
+//! One step of eleven needs a device feature so far, and this is where it is
+//! enabled: the shader-store pair [`super::features`] requests, which is what proves
+//! the storage-buffer row. Every other feature a step needs will be enabled by that
+//! step, because enabling one without recording the fact it establishes would put an
+//! unproved claim into the ledger -- and enabling one the adapter never reported is
+//! not a soft failure but a `vkCreateDevice` error, so the requested set is always
+//! the adapter's own report narrowed to what this backend has been taught.
+//!
+//! No device extension is enabled on the headless path. `VK_KHR_swapchain` belongs
+//! to step 10, so it is enabled only by [`open_with_swapchain`] -- and only after
+//! the physical device's own extension inventory was read and positively contained
+//! it. A device opened for headless work enables no extension, which is why the two
+//! entry points are separate rather than one function with a flag:
+//! [`SwapchainDevice`] is the witness that the extension is there, and a headless
+//! [`VulkanDevice`] cannot reach a swapchain call at all.
 
 use std::ffi::{CStr, c_char};
 
@@ -38,6 +44,7 @@ use crate::common::caps::{
     AdapterLimits, Capability, CapabilityEvidence, CapabilityFact, CapabilityLedger, OperationProbe,
 };
 
+use super::features::{self, StoreFeatures};
 use super::instance::{SurfaceInstance, ValidationInstance};
 use super::inventory::{EnumerationError, enumerate_device_extensions};
 
@@ -156,6 +163,7 @@ pub(crate) struct VulkanDevice {
     device: ash::Device,
     queue: vk::Queue,
     selected: SelectedQueue,
+    stores: StoreFeatures,
     ledger: CapabilityLedger,
     stamp: DeviceStamp,
 }
@@ -174,6 +182,16 @@ impl VulkanDevice {
     /// Returns the family and queue index the device was created with.
     pub(crate) const fn selected_queue(&self) -> SelectedQueue {
         self.selected
+    }
+
+    /// Returns the shader-store features this device was created with.
+    ///
+    /// The *enabled* facts, not a second reading of the adapter's report: this is
+    /// the value the storage-buffer row was recorded from, so a caller comparing the
+    /// two is comparing the ledger with its own input rather than with what the
+    /// driver would say now.
+    pub(crate) const fn stores(&self) -> StoreFeatures {
+        self.stores
     }
 
     /// Returns this device generation's stamp.
@@ -200,9 +218,7 @@ impl crate::common::api::negotiate::CapabilitySource for VulkanDevice {
 
 /// Records what creating this device proved, and nothing else.
 ///
-/// Five rows are established here, and each is proved by a fact that was already
-/// read rather than by a new query -- which is why no feature is enabled and no
-/// device-extension structure is consulted:
+/// Every row is proved by a fact that was already read rather than by a command:
 ///
 /// - **Graphics** by the fact that a device was created on a family whose flags
 ///   contain graphics. That is the evidence an explicit API offers; it is not a
@@ -222,12 +238,21 @@ impl crate::common::api::negotiate::CapabilitySource for VulkanDevice {
 /// - **TimestampQuery** only where the family's `timestamp_valid_bits` report is
 ///   non-zero. That fact was read with the same `queue_family_properties` call the
 ///   selection already made, so the row costs no query of its own.
+/// - **StorageBuffer** only where the device was created with the shader-store pair
+///   [`StoreFeatures::proves_storage_buffers`] names. The row describes a buffer a
+///   shader may read *and* write, and `Vulkan` gates the write half per stage, so a
+///   device created with one feature of the pair serves one stage and not the other
+///   -- which is a refusal, not half a row.
 ///
 /// Every other row is absent, because nothing has proved it. Absence is the
 /// rejecting value, so no unproved domain can be entered by accident -- and each
 /// row is added by the step that actually proves it. The rows that are owed and
 /// deliberately absent here are named in the module's step 11 entry.
-pub(crate) fn ledger(selected: SelectedQueue, limits: &AdapterLimits) -> CapabilityLedger {
+pub(crate) fn ledger(
+    selected: SelectedQueue,
+    limits: &AdapterLimits,
+    stores: StoreFeatures,
+) -> CapabilityLedger {
     let mut ledger = CapabilityLedger::default();
     ledger.record(
         Capability::Graphics,
@@ -285,6 +310,24 @@ pub(crate) fn ledger(selected: SelectedQueue, limits: &AdapterLimits) -> Capabil
             },
         );
     }
+    if stores.proves_storage_buffers() {
+        ledger.record(
+            Capability::StorageBuffer,
+            CapabilityFact {
+                evidence: Some(CapabilityEvidence::Core),
+                // The binding size the driver reported is the row's numeric floor: a
+                // device whose maximum storage-buffer range is zero can bind none,
+                // and the ledger must not record a reachable domain on numbers that
+                // reject it.
+                limits_satisfied: limits.max_storage_buffer_binding_size != 0,
+                // Structural: the device was created with both write features
+                // enabled, and a feature enabled at creation is not something a
+                // conformant driver refuses per command. A run-time probe would be a
+                // second proof of a fact the create-info already states.
+                operation_probe: OperationProbe::NotRequired,
+            },
+        );
+    }
     ledger
 }
 
@@ -302,6 +345,7 @@ impl core::fmt::Debug for VulkanDevice {
         formatter
             .debug_struct("VulkanDevice")
             .field("selected_queue", &self.selected)
+            .field("stores", &self.stores)
             .finish_non_exhaustive()
     }
 }
@@ -371,6 +415,17 @@ fn create(
     let families = unsafe { instance.get_physical_device_queue_family_properties(adapter) };
     let selected = select_queue_family(&families)?;
 
+    // SAFETY: the adapter belongs to this instance, which is still live; the call
+    // creates nothing and reports the adapter's own feature set.
+    let reported_features = unsafe { instance.get_physical_device_features(adapter) };
+    // The requested set is the adapter's report narrowed to the features this
+    // backend has been taught. It is bound here rather than inline because the
+    // create-info borrows it, and the facts the ledger reads are read off the
+    // *requested* value so the row cannot be recorded from a second reading of the
+    // adapter.
+    let requested_features = features::request(&reported_features);
+    let stores = features::store(&requested_features);
+
     let priorities = [1.0_f32];
     let queue_info = vk::DeviceQueueCreateInfo::default()
         .queue_family_index(selected.family)
@@ -383,17 +438,21 @@ fn create(
         .iter()
         .map(|name| name.as_ptr())
         .collect();
-    let mut create_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_infos);
+    let mut create_info = vk::DeviceCreateInfo::default()
+        .queue_create_infos(&queue_infos)
+        .enabled_features(&requested_features);
     if !extension_pointers.is_empty() {
         create_info = create_info.enabled_extension_names(&extension_pointers);
     }
 
-    // SAFETY: `create_info` and everything it points at -- the queue info and the
-    // extension name array -- are locals that outlive the call; the caller has
-    // verified every enabled extension name against the physical device's own
-    // inventory; and no allocation callbacks are supplied, which asks for the
-    // driver's default. The returned value is the loaded device itself, not a bare
-    // handle: `ash` resolves the device-level entry points as part of creation.
+    // SAFETY: `create_info` and everything it points at -- the queue info, the
+    // extension name array and the feature set -- are locals that outlive the call;
+    // the caller has verified every enabled extension name against the physical
+    // device's own inventory; the feature set contains only features the adapter
+    // reported, so the driver cannot refuse it with `FEATURE_NOT_PRESENT`; and no
+    // allocation callbacks are supplied, which asks for the driver's default. The
+    // returned value is the loaded device itself, not a bare handle: `ash` resolves
+    // the device-level entry points as part of creation.
     let device = unsafe { instance.create_device(adapter, &create_info, None) }
         .map_err(DeviceError::Creation)?;
 
@@ -405,7 +464,8 @@ fn create(
         device,
         queue,
         selected,
-        ledger: ledger(selected, limits),
+        stores,
+        ledger: ledger(selected, limits, stores),
         // The first generation of a freshly identified device. Identity comes from
         // the crate's monotonic counter, which is unique among live devices; the
         // generation advances only when a device is replaced, which this backend
@@ -555,14 +615,31 @@ mod tests {
         }
     }
 
-    /// Adapter limits whose compute floors are satisfied.
+    /// Adapter limits whose compute and storage floors are satisfied.
     fn computing_limits() -> AdapterLimits {
         AdapterLimits {
             max_texture_dimension_2d: 8192,
             max_compute_workgroups_per_dimension: [65535, 65535, 65535],
             max_compute_workgroup_size: [1024, 1024, 64],
             max_compute_invocations_per_workgroup: 1024,
+            max_storage_buffer_binding_size: 128 * 1024 * 1024,
             ..AdapterLimits::unavailable()
+        }
+    }
+
+    /// The feature facts of an adapter that reported no shader stores.
+    fn no_stores() -> StoreFeatures {
+        StoreFeatures {
+            fragment: false,
+            vertex: false,
+        }
+    }
+
+    /// The feature facts of a device created with both shader-store features.
+    fn all_stores() -> StoreFeatures {
+        StoreFeatures {
+            fragment: true,
+            vertex: true,
         }
     }
 
@@ -570,7 +647,7 @@ mod tests {
     fn a_created_device_proves_copy_without_a_command() {
         // Copy is the API version's own guarantee on a graphics family, so the
         // proof is structural and no probe was owed.
-        let ledger = ledger(selected(false, 0), &computing_limits());
+        let ledger = ledger(selected(false, 0), &computing_limits(), no_stores());
         assert!(ledger.supports(Capability::Copy));
         assert_eq!(
             ledger.fact(Capability::Copy).map(|fact| fact.operation_probe),
@@ -587,11 +664,11 @@ mod tests {
     fn indirect_dispatch_arrives_only_beside_a_proved_compute_row() {
         // Without compute the row is not merely disabled, it was never examined --
         // which is the difference the ledger keeps for diagnostics.
-        let without = ledger(selected(false, 0), &computing_limits());
+        let without = ledger(selected(false, 0), &computing_limits(), no_stores());
         assert!(!without.supports(Capability::IndirectDispatch));
         assert_eq!(without.fact(Capability::IndirectDispatch), None);
 
-        let with = ledger(selected(true, 0), &computing_limits());
+        let with = ledger(selected(true, 0), &computing_limits(), no_stores());
         assert!(with.supports(Capability::IndirectDispatch));
     }
 
@@ -599,14 +676,14 @@ mod tests {
     fn an_unsatisfied_compute_floor_leaves_indirect_dispatch_disabled_too() {
         // An indirect dispatch is a dispatch: it keeps the compute row's floor
         // rather than a floor of its own, so the two cannot disagree.
-        let ledger = ledger(selected(true, 0), &AdapterLimits::unavailable());
+        let ledger = ledger(selected(true, 0), &AdapterLimits::unavailable(), no_stores());
         assert!(!ledger.supports(Capability::Compute));
         assert!(!ledger.supports(Capability::IndirectDispatch));
     }
 
     #[test]
     fn a_timestamp_row_arrives_only_from_a_non_zero_valid_bit_report() {
-        let silent = ledger(selected(false, 0), &computing_limits());
+        let silent = ledger(selected(false, 0), &computing_limits(), no_stores());
         assert!(!silent.supports(Capability::TimestampQuery));
         assert_eq!(
             silent.fact(Capability::TimestampQuery),
@@ -614,24 +691,79 @@ mod tests {
             "a family that reported nothing was never examined for timestamps"
         );
 
-        let reporting = ledger(selected(false, 64), &computing_limits());
+        let reporting = ledger(selected(false, 64), &computing_limits(), no_stores());
         assert!(reporting.supports(Capability::TimestampQuery));
     }
 
     #[test]
+    fn the_storage_buffer_row_arrives_only_with_both_store_features() {
+        // The row describes a buffer a shader may read and write, and `Vulkan` gates
+        // the write half per stage, so each half alone is a partial proof that the
+        // domain cannot report.
+        let neither = ledger(selected(true, 0), &computing_limits(), no_stores());
+        assert!(!neither.supports(Capability::StorageBuffer));
+        assert_eq!(
+            neither.fact(Capability::StorageBuffer),
+            None,
+            "an adapter that reported no store feature was never examined for storage"
+        );
+
+        for partial in [
+            StoreFeatures {
+                fragment: true,
+                vertex: false,
+            },
+            StoreFeatures {
+                fragment: false,
+                vertex: true,
+            },
+        ] {
+            let ledger = ledger(selected(true, 0), &computing_limits(), partial);
+            assert!(
+                !ledger.supports(Capability::StorageBuffer),
+                "{partial:?} serves one stage's write, not the domain"
+            );
+            assert_eq!(ledger.fact(Capability::StorageBuffer), None);
+        }
+
+        let both = ledger(selected(true, 0), &computing_limits(), all_stores());
+        assert!(both.supports(Capability::StorageBuffer));
+        assert_eq!(
+            both.fact(Capability::StorageBuffer)
+                .map(|fact| fact.operation_probe),
+            Some(OperationProbe::NotRequired),
+            "the create-info's own feature set is the proof, so no command was owed"
+        );
+    }
+
+    #[test]
+    fn a_zero_storage_binding_size_leaves_the_row_disabled() {
+        // The pair is enabled, so the row is examined; the driver's own binding-size
+        // report is the floor, and a zero report is a device that can bind none.
+        let limits = AdapterLimits {
+            max_storage_buffer_binding_size: 0,
+            ..computing_limits()
+        };
+        let ledger = ledger(selected(true, 0), &limits, all_stores());
+        assert!(!ledger.supports(Capability::StorageBuffer));
+        assert_eq!(
+            ledger.fact(Capability::StorageBuffer).map(|fact| fact.limits_satisfied),
+            Some(false),
+            "examined and refused is a different sentence from never asked"
+        );
+    }
+
+    #[test]
     fn the_feature_gated_and_preserved_rows_stay_unproved() {
-        // These are absent for three different reasons, and all three are stated:
-        // the step that can prove each one is the step that enables the feature,
-        // reads the per-format facts, or narrows the family's parameter space.
-        let ledger = ledger(selected(true, 64), &computing_limits());
+        // These are absent for different reasons, and each is stated: the step that
+        // can prove one is the step that reads the per-format fact, narrows the
+        // family's parameter space, or enables the feature. The store features are
+        // enabled here on purpose, so the storage-buffer row's absence from this list
+        // is a fact about the row rather than about the fixture.
+        let ledger = ledger(selected(true, 64), &computing_limits(), all_stores());
         for row in [
-            // Needs a device feature this backend does not enable: fragment and
-            // vertex shader stores are gated by `fragmentStoresAndAtomics` and
-            // `vertexPipelineStoresAndAtomics`, which `VkPhysicalDeviceFeatures`
-            // leaves disabled.
-            Capability::StorageBuffer,
-            // Same feature pair, plus a per-format storage fact this call does not
-            // consult.
+            // Same store pair as the buffer row, plus a per-format storage fact this
+            // call has no format table to read.
             Capability::StorageImage,
             // The `IndirectDrawApi` family takes a draw count, and a count above one
             // is the `MultiDrawIndirect` capability -- so claiming this row would
@@ -716,12 +848,29 @@ mod tests {
             "timestamp disagreement: queue={selected:?}"
         );
         assert!(
-            !device.ledger().supports(Capability::StorageBuffer),
-            "nothing has proved storage buffers on this device yet"
-        );
-        assert!(
             !device.ledger().supports(Capability::IndirectDraw),
             "the family's count names MultiDrawIndirect, which this device enables no feature for"
+        );
+
+        // The storage-buffer row against the real driver, in both directions. The
+        // adapter's report is read again and put through the same pure request the
+        // creation path used, so this asserts that the device was created with
+        // exactly what the rule decided -- not merely that the ledger agrees with
+        // itself. A feature the adapter did not report stays disabled, and a device
+        // created with both features proves the row.
+        // SAFETY: the adapter belongs to the instance, which is still live, and the
+        // call creates nothing and reports only the adapter's own facts.
+        let reported = unsafe { instance.instance().get_physical_device_features(adapters[index]) };
+        let expected = features::store(&features::request(&reported));
+        assert_eq!(
+            device.stores(),
+            expected,
+            "the device's enabled feature set is the pure rule applied to the adapter's report"
+        );
+        assert_eq!(
+            device.ledger().supports(Capability::StorageBuffer),
+            expected.proves_storage_buffers(),
+            "the row is exactly the store pair this device was created with: {expected:?}"
         );
     }
 

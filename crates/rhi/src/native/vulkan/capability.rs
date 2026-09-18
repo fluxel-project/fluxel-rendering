@@ -17,12 +17,13 @@
 //!
 //! # The ledger is the capability input, not a second copy of the facts
 //!
-//! The queue-family rows, the optional command rows and the timestamp row are read
-//! from the same [`CapabilityLedger`] that `require` negotiates from, rather than
-//! re-derived from the queue family and the limits. That is what keeps one
-//! discovery answer: a row this backend has not recorded is a domain nothing has
-//! proved, and the lowering reports the rejecting value for it automatically -- and
-//! starts reporting the fact the moment the step that proves the row records it.
+//! The queue-family rows, the optional command rows, the buffer-storage row and
+//! the timestamp row are read from the same [`CapabilityLedger`] that `require`
+//! negotiates from, rather than re-derived from the queue family and the limits.
+//! That is what keeps one discovery answer: a row this backend has not recorded is
+//! a domain nothing has proved, and the lowering reports the rejecting value for it
+//! automatically -- and starts reporting the fact the moment the step that proves
+//! the row records it.
 //!
 //! # The queue's flags are the ledger's answer, not a second opinion
 //!
@@ -651,6 +652,15 @@ mod tests {
             capabilities.buffers.indirect_read,
             ledger.supports(Capability::IndirectDispatch),
             "the indirect buffer flag is the ledger's row, not a second derivation"
+        );
+        assert_eq!(
+            capabilities.buffers.storage_read,
+            ledger.supports(Capability::StorageBuffer),
+            "the storage half of the buffer row is the ledger's row too"
+        );
+        assert_eq!(
+            capabilities.buffers.storage_write, capabilities.buffers.storage_read,
+            "one ledger row serves both storage directions"
         );
         assert_eq!(
             capabilities.timestamps == TimestampCapabilities::PassBoundaries,

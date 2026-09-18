@@ -129,6 +129,13 @@ pub(crate) mod format_facts;
 /// what discovery proved, so the remaining ledger rows are what widens it.
 pub(crate) mod capability;
 
+/// Step 11's storage half: the two shader-store device features the
+/// `StorageBuffer` row needs, requested only where the adapter reported them, and
+/// the fact that a device created with both proves the row. A feature the adapter
+/// did not report stays disabled, because enabling it would fail device creation
+/// rather than leave the row unproved.
+pub(crate) mod features;
+
 /// Step 3''s second half: suballocation and binding memory to a handle.
 pub(crate) mod allocator;
 
