@@ -656,8 +656,18 @@ single submission is recorded through -- one command buffer, every pass target t
 recording names, and the whole composed command surface this backend records -- and the
 graphics, copy and compute handles delegate to it rather than each owning a private copy
 of the same state machine, so a graph execution that names several families reaches the
-driver as the one submission `Vulkan` requires. Still owed by step 14: the RHI-facing
-device that opens this backend, the staging upload path, the fixed-artifact pipeline and
+driver as the one submission `Vulkan` requires. Step 14's RHI-facing piece followed:
+`native::vulkan::rhi` lowers the device's own discovery -- the adapter's numeric report
+and the per-format evidence table step 11 recorded -- onto the public
+`HardwareCapabilities`, `open::OpenedVulkan` carries that value beside the hardware
+identity, and `rhi::open` is the open entry point in the public `OpenError` vocabulary
+(a missing validation facility and an absent adapter index keep their exact public
+sentences, and every other failure keeps its own diagnostic). Its facts half is pure and
+asks the driver nothing; its owning half chains the already-verified entry point and
+creates nothing of its own. It deliberately does not swap the route `crate::imp::open`
+takes, because the borrowed path still serves the frozen oracle until the execution
+verbs speak this backend. Still owed by step 14: that route swap and the portable
+baseline limit check it needs, the staging upload path, the fixed-artifact pipeline and
 binding construction over this table, validation diagnostics capture, and the public
 `Device` / execution wiring.
 Clippy is clean

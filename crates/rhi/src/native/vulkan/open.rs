@@ -25,7 +25,7 @@ use ash::vk;
 
 use crate::Validation;
 use crate::common::caps::AdapterLimits;
-use crate::HardwareInfo;
+use crate::{HardwareCapabilities, HardwareInfo};
 
 use super::adapter::{self, AdapterError};
 use super::device::{self, DeviceError, VulkanDevice};
@@ -46,12 +46,24 @@ pub(crate) struct OpenedVulkan {
     pub limits: AdapterLimits,
     /// How many adapters the instance reported, so an absent index can be explained.
     pub adapter_count: usize,
+    /// The same discovery lowered onto the RHI-facing hardware facts, so the one
+    /// value a caller opens a device from carries both public fact sets.
+    ///
+    /// Read from the *device's own* format table beside the limit set the queue
+    /// family was selected against, so this value and the ledger the device recorded
+    /// cannot be two discoveries of one adapter.
+    pub capabilities: HardwareCapabilities,
 }
 
 impl OpenedVulkan {
     /// Returns the adapter's facts, as the public facade reports them.
     pub(crate) fn hardware(&self) -> &HardwareInfo {
         &self.hardware
+    }
+
+    /// Returns the adapter's capability facts, as the public facade reports them.
+    pub(crate) const fn capabilities(&self) -> HardwareCapabilities {
+        self.capabilities
     }
 
     /// Returns whether validation was positively verified for this open.
@@ -65,6 +77,7 @@ impl core::fmt::Debug for OpenedVulkan {
         formatter
             .debug_struct("OpenedVulkan")
             .field("hardware", &self.hardware)
+            .field("capabilities", &self.capabilities)
             .field("adapter_count", &self.adapter_count)
             .field("validation_enabled", &self.validation_enabled())
             .finish_non_exhaustive()
@@ -95,6 +108,10 @@ pub(crate) fn open(
     // Read once: these facts both select the queue family and build the ledger.
     let facts = adapter::describe(instance.instance(), adapter);
     let device = device::open(&instance, adapter, &facts.limits).map_err(OpenVulkanError::Device)?;
+    // The RHI-facing capability facts are lowered from the same limit set and the
+    // *device's own* format table, so the public facts and the ledger the device
+    // recorded are one discovery rather than two readings of one adapter.
+    let capabilities = super::rhi::capabilities(&facts.limits, device.formats());
 
     Ok(OpenedVulkan {
         device,
@@ -103,6 +120,7 @@ pub(crate) fn open(
         hardware: facts.hardware,
         limits: facts.limits,
         adapter_count: adapters.len(),
+        capabilities,
     })
 }
 

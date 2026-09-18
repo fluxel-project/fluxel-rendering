@@ -161,9 +161,16 @@
 //!     [`recording::Recorder`], the one recording context a single submission is
 //!     recorded through. The family handles now delegate to it, so the composition the
 //!     module docs of step 13 kept deferring -- several families reaching the driver as
-//!     one command buffer -- exists and is proven against a real driver. Still owed:
-//!     the RHI-facing device that opens this backend, the staging upload path (which is
-//!     the consumer the buffer/image copy routes were deferred to in step 8), the
+//!     one command buffer -- exists and is proven against a real driver. The
+//!     RHI-facing open followed: [`rhi`] lowers this device's own discovery onto the
+//!     public `HardwareCapabilities`, [`open::OpenedVulkan`] carries that value beside
+//!     the hardware identity, and [`rhi::open`] is the entry point in the public
+//!     `OpenError` vocabulary, so opening this backend no longer requires the caller to
+//!     know this module's own error types. Still owed: the route swap that makes the
+//!     public `Device` open this backend (the borrowed `wgpu-hal` path still serves
+//!     `Backend::Vulkan` for the frozen oracle), the portable baseline limit check that
+//!     refuses an adapter below the RHI's floor, the staging upload path (which is the
+//!     consumer the buffer/image copy routes were deferred to in step 8), the
 //!     fixed-artifact pipeline and binding construction over this table, validation
 //!     diagnostics capture, and the public `Device`/execution wiring.
 //!
@@ -403,3 +410,11 @@ pub(crate) mod test_support;
 /// private copy of the same state machine, which is plan section 3's rule applied where
 /// the third consumer appeared.
 pub(crate) mod recording;
+
+/// Step 14's RHI-facing piece: this device's own discovery lowered onto the public
+/// `HardwareCapabilities`, and the open entry point that answers in the public
+/// `OpenError` vocabulary rather than in this module's own error types. It performs no
+/// FFI of its own and creates nothing: [`rhi::capabilities`] is pure, and [`rhi::open`]
+/// chains the verified entry point in [`open`] and lowers its refusal. The route swap
+/// that makes the public `Device` open this backend is deliberately not here.
+pub(crate) mod rhi;
