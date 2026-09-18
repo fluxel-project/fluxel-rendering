@@ -650,6 +650,15 @@ family reports compute, records the graph's transition, the compute bracket, a r
 pipeline and a real `vkCmdDispatchIndirect` whose counts were written by a real
 transfer, and submits to `Complete`; the two table sentences, the usage refusal, a
 misaligned offset and an out-of-bounds read are each refused by name as values that
-leave the recording usable. The execution-layer migration remains owed by step 13.
+leave the recording usable. The execution-layer migration is now step 14, and its first
+piece is landed: `native::vulkan::recording` holds `Recorder`, the one recording context a
+single submission is recorded through -- one command buffer, every pass target the
+recording names, and the whole composed command surface this backend records -- and the
+graphics, copy and compute handles delegate to it rather than each owning a private copy
+of the same state machine, so a graph execution that names several families reaches the
+driver as the one submission `Vulkan` requires. Still owed by step 14: the RHI-facing
+device that opens this backend, the staging upload path, the fixed-artifact pipeline and
+binding construction over this table, validation diagnostics capture, and the public
+`Device` / execution wiring.
 Clippy is clean
 under `-D warnings` for all-features and no-default-features.
