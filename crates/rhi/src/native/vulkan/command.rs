@@ -14,28 +14,42 @@
 //! `before == after` transition is still a barrier -- in one place: the recorder has
 //! no `before == after` branch, so it cannot have gained one.
 //!
-//! # The raster bracket is explicit state, and commands illegal inside a pass refuse
+//! # One pass slot, two brackets
 //!
 //! [`Encoder::begin_raster`] records `vkCmdBeginRenderPass` for a
 //! [`Framebuffer`](super::framebuffer::Framebuffer), which owns the render pass and
 //! the clear value its attachment states, and [`Encoder::end_raster`] records
-//! `vkCmdEndRenderPass`. The encoder tracks whether a pass is open, and the state is
-//! what refuses the commands `Vulkan` does not allow inside one: a barrier and a copy
-//! answer [`RecordError::PassOpen`], a second `begin_raster` answers
-//! [`RecordError::PassAlreadyOpen`], and an `end_raster` with no pass open answers
-//! [`RecordError::NoPass`]. Ending the recording with a pass open is the same
-//! refusal, because `vkEndCommandBuffer` requires no active render pass.
+//! `vkCmdEndRenderPass`. [`Encoder::begin_compute`] and [`Encoder::end_compute`]
+//! bracket the same slot for a compute recording; `Vulkan` has no compute-pass
+//! command, so that bracket is this layer's own and its whole effect is which verbs
+//! the encoder admits -- and, for `set_bindings`, which bind point it names. The two
+//! brackets share one slot, which is the GL family's model: a pass is open or it is
+//! not, and a second begin of either kind answers [`RecordError::PassAlreadyOpen`].
 //!
-//! # The raster verbs belong to the open pass
+//! The state is what refuses the commands `Vulkan` does not allow inside a pass: a
+//! barrier and a copy answer [`RecordError::PassOpen`], and ending the recording with
+//! either bracket open is the same refusal, because `vkEndCommandBuffer` requires no
+//! active render pass and the graph's own order records transitions, then the pass,
+//! then transitions. A bracket of the wrong kind answers [`RecordError::NoPass`], and
+//! `end_compute` with no compute pass open answers [`RecordError::NoComputePass`] --
+//! the one close that names its kind, because a close wants a boundary rather than a
+//! pass to record into.
 //!
-//! The pipeline, the bindings, the vertex and index buffers, the dynamic viewport
-//! and scissor and the two draws are recorded only while a pass is open, and answer
-//! [`RecordError::NoPass`] otherwise. `Vulkan` permits most of them outside a render
-//! pass, but it treats them as command-buffer state the *next* pass inherits, and
-//! this backend's execution model has no such state to inherit: a pass begins with
-//! exactly the state its own commands set. Refusing is the fail-closed direction, and
-//! it is the same sentence the bracket already uses for an `end_raster` with nothing
-//! open.
+//! # The raster and compute verbs belong to their own open pass
+//!
+//! The pipeline, the bindings, the vertex and index buffers, the dynamic viewport and
+//! scissor and the two draws are recorded only while a raster pass is open, and
+//! answer [`RecordError::NoPass`] otherwise; the compute pipeline, the compute
+//! bindings and the dispatch are recorded only while a compute pass is open, for the
+//! same reason. `Vulkan` permits most of them outside a render pass, but it treats
+//! them as command-buffer state the *next* pass inherits, and this backend's
+//! execution model has no such state to inherit: a pass begins with exactly the state
+//! its own commands set. Refusing is the fail-closed direction, and it is the same
+//! sentence the bracket already uses for an `end_raster` with nothing open.
+//!
+//! The dispatch's workgroup counts are lowered by [`compute`] rather than spelled
+//! here, so the one rule that command owns -- no zero dimension -- stays provable
+//! without a device.
 //!
 //! Every raster value is lowered by [`draw`] rather than spelled here: the viewport's
 //! Y flip, the scissor's signed offset, the index type and the count computed from a
@@ -71,8 +85,10 @@ use fluxel_rendergraph::{
     TextureRange, Viewport,
 };
 
-use super::pipeline::RasterPipeline;
-use super::{barrier, bind_group::BindGroup, copy, draw, format, framebuffer::Framebuffer};
+use super::pipeline::{ComputePipeline, RasterPipeline};
+use super::{
+    barrier, bind_group::BindGroup, compute, copy, draw, format, framebuffer::Framebuffer,
+};
 
 /// Why a command pool or an encoder could not be created or used.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,19 +109,32 @@ pub(crate) enum RecordError {
     End(vk::Result),
     /// The encoder is not recording, so there is nothing to record into or to end.
     NotRecording,
-    /// A raster pass is already open, so a second begin is a caller mistake rather
-    /// than a nested pass.
+    /// A pass is already open, so a second begin is a caller mistake rather than a
+    /// nested pass.
+    ///
+    /// Kind-neutral on purpose: a raster and a compute bracket share one slot (see
+    /// the module docs), so naming one kind would make the refusal wrong for the
+    /// caller that needed the other.
     PassAlreadyOpen,
-    /// No raster pass is open, so there is none to end, and no pass for a raster
-    /// verb to belong to.
+    /// No pass of the kind this verb needs is open, so there is none to end and no
+    /// pass for the verb to belong to.
     ///
     /// Refused rather than accepted idempotently for the same reason a second `end`
     /// is: silently accepting it would hide the caller's mistake until submission.
     NoPass,
-    /// A raster pass is still open, so this command may not be recorded here.
+    /// `end_compute` was called with no compute pass open.
+    ///
+    /// A sentence of its own rather than [`Self::NoPass`], and the reason is narrow:
+    /// [`Self::NoPass`] must stay kind-neutral because shared verbs reach it, while
+    /// this one is reached by the compute close alone. What it adds is what the
+    /// caller is missing -- a close wants a boundary to close, not a pass to record
+    /// into -- so a caller that closed twice or never opened can tell which.
+    NoComputePass,
+    /// A pass is still open, so this command may not be recorded here.
     ///
     /// A barrier, a copy and the end of a recording are all illegal inside a render
-    /// pass, and the encoder refuses them while one is open rather than recording a
+    /// pass, and the graph's own order records transitions outside every bracket, so
+    /// the encoder refuses them while either pass is open rather than recording a
     /// command the driver would reject.
     PassOpen,
     /// The state names an access this backend has not been taught how to order, or
@@ -121,6 +150,9 @@ pub(crate) enum RecordError {
     /// is carried rather than flattened: a viewport whose numbers are wrong, a
     /// scissor whose shape is wrong and an inverted range are different mistakes.
     Draw(draw::DrawError),
+    /// The dispatch's workgroup counts are not ones this backend records, and the
+    /// reason carries the whole triple rather than only the offending axis.
+    Dispatch(compute::DispatchError),
     /// The id names no live buffer of this device generation.
     UnknownBuffer,
     /// The id names no live texture of this device generation.
@@ -214,7 +246,7 @@ impl CommandPool {
             pool: self.pool,
             command_buffer,
             recording: true,
-            pass_open: false,
+            pass: None,
         })
     }
 }
@@ -255,12 +287,27 @@ pub(crate) struct Encoder {
     pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     recording: bool,
-    /// Whether a raster pass is open on this recording.
+    /// The pass bracket open on this recording, if any.
     ///
+    /// One slot holds either kind rather than one flag each, because `Vulkan` has no
+    /// nested passes and the GL family's adapter already models the slot this way.
     /// It is state rather than a comment because the commands `Vulkan` forbids inside
-    /// a render pass are refused from it, and because the matching `end_raster` is
-    /// what clears it.
-    pass_open: bool,
+    /// a render pass are refused from it, because it decides which bind point
+    /// `set_bindings` names, and because the matching `end_*` is what clears it.
+    pass: Option<PassKind>,
+}
+
+/// Which pass bracket a recording has open.
+///
+/// Private, and deliberately not shared with `common`: which bracket is open is a
+/// recording-context fact, not capability vocabulary, and section 21 of the plan
+/// keeps the two from being frozen into one object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PassKind {
+    /// A raster pass begun by [`Encoder::begin_raster`].
+    Raster,
+    /// A compute pass begun by [`Encoder::begin_compute`].
+    Compute,
 }
 
 impl Encoder {
@@ -277,16 +324,18 @@ impl Encoder {
         self.recording
     }
 
-    /// The guard every raster verb shares: the encoder is recording an open pass.
+    /// The guard every pass verb shares: the encoder is recording `kind`'s pass.
     ///
     /// The two refusals stay distinct because they are different sentences -- an
-    /// ended encoder and an encoder with no pass open -- and the module docs state
-    /// why a raster verb belongs to an open pass at all.
-    fn check_pass(&self) -> Result<(), RecordError> {
+    /// ended encoder and an encoder whose open pass is the wrong kind or absent --
+    /// and the module docs state why a raster or compute verb belongs to an open pass
+    /// at all. It takes the kind rather than reading one field, so a verb cannot be
+    /// admitted into the other family's bracket by accident.
+    fn check_pass(&self, kind: PassKind) -> Result<(), RecordError> {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if !self.pass_open {
+        if self.pass != Some(kind) {
             return Err(RecordError::NoPass);
         }
         Ok(())
@@ -307,7 +356,7 @@ impl Encoder {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if self.pass_open {
+        if self.pass.is_some() {
             return Err(RecordError::PassOpen);
         }
         let before_scope =
@@ -349,7 +398,7 @@ impl Encoder {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if self.pass_open {
+        if self.pass.is_some() {
             return Err(RecordError::PassOpen);
         }
         let is_depth = format::is_depth(image_format);
@@ -397,7 +446,7 @@ impl Encoder {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if self.pass_open {
+        if self.pass.is_some() {
             return Err(RecordError::PassOpen);
         }
         let lowered = copy::buffer_copy(source_size, destination_size, region)
@@ -430,7 +479,7 @@ impl Encoder {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if self.pass_open {
+        if self.pass.is_some() {
             return Err(RecordError::PassOpen);
         }
         // The mapped format is what the copy record needs, and it is also the
@@ -466,12 +515,14 @@ impl Encoder {
     ///
     /// A second begin while a pass is open is refused rather than nested: `Vulkan`
     /// has no nested render passes, and a caller that reached one has a bug the type
-    /// of a single bracket should have caught.
+    /// of a single bracket should have caught. The refusal is
+    /// [`RecordError::PassAlreadyOpen`], which is kind-neutral because a compute
+    /// bracket's begin answers it too.
     pub(crate) fn begin_raster(&mut self, framebuffer: &Framebuffer) -> Result<(), RecordError> {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if self.pass_open {
+        if self.pass.is_some() {
             return Err(RecordError::PassAlreadyOpen);
         }
         let clear_values = [framebuffer.clear_value()];
@@ -491,26 +542,64 @@ impl Encoder {
             self.device
                 .cmd_begin_render_pass(self.command_buffer, &info, vk::SubpassContents::INLINE);
         }
-        self.pass_open = true;
+        self.pass = Some(PassKind::Raster);
         Ok(())
     }
 
     /// Records the end of the raster pass this encoder began.
     ///
-    /// An `end_raster` with no pass open is refused rather than treated as
+    /// An `end_raster` with no raster pass open is refused rather than treated as
     /// idempotent, for the same reason a second `end` is: the caller's mistake would
-    /// otherwise be hidden until the recording is submitted.
+    /// otherwise be hidden until the recording is submitted. A compute bracket open
+    /// instead answers the same sentence, because there is no raster pass to close.
     pub(crate) fn end_raster(&mut self) -> Result<(), RecordError> {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if !self.pass_open {
+        if self.pass != Some(PassKind::Raster) {
             return Err(RecordError::NoPass);
         }
-        // SAFETY: the command buffer is recording with a pass open, which is the only
-        // state in which `vkCmdEndRenderPass` is legal.
+        // SAFETY: the command buffer is recording with a raster pass open, which is
+        // the only state in which `vkCmdEndRenderPass` is legal.
         unsafe { self.device.cmd_end_render_pass(self.command_buffer) };
-        self.pass_open = false;
+        self.pass = None;
+        Ok(())
+    }
+
+    /// Opens the compute pass the compute verbs record into.
+    ///
+    /// `Vulkan` has no compute-pass command: a dispatch is legal outside every render
+    /// pass, so this bracket creates no driver state. It is still state here, because
+    /// the compute verbs belong to *their* open pass exactly as the raster verbs do,
+    /// and because the two brackets sharing one slot is what keeps a raster pass from
+    /// being open at the same time. The alternative -- admitting a dispatch with no
+    /// bracket -- would make the family's `begin_compute`/`end_compute` vocabulary a
+    /// pair of no-ops that promise a boundary nothing enforces.
+    ///
+    /// A second begin of either kind answers [`RecordError::PassAlreadyOpen`].
+    pub(crate) fn begin_compute(&mut self) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        if self.pass.is_some() {
+            return Err(RecordError::PassAlreadyOpen);
+        }
+        self.pass = Some(PassKind::Compute);
+        Ok(())
+    }
+
+    /// Closes the compute pass this encoder began.
+    ///
+    /// A close with no compute pass open answers [`RecordError::NoComputePass`], the
+    /// one bracket close that names its kind, because this verb alone reaches it.
+    pub(crate) fn end_compute(&mut self) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        if self.pass != Some(PassKind::Compute) {
+            return Err(RecordError::NoComputePass);
+        }
+        self.pass = None;
         Ok(())
     }
 
@@ -523,7 +612,7 @@ impl Encoder {
         &mut self,
         pipeline: &RasterPipeline,
     ) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
         // SAFETY: the command buffer is recording inside a render pass, and the
         // pipeline is a live handle this device created, kept alive by the caller.
         unsafe {
@@ -536,28 +625,99 @@ impl Encoder {
         Ok(())
     }
 
-    /// Binds the descriptor set `group` names at the set index it fills.
+    /// Binds a descriptor set for the draws recorded in the open raster pass.
     ///
     /// The group carries the `VkPipelineLayout` its set was allocated against, so the
     /// binding and the layout cannot be told different things and `Vulkan`'s
     /// compatibility rule is satisfied by construction. The caller keeps the group and
     /// the layout's owner alive for the recording, exactly as it keeps a pipeline and
     /// a vertex buffer alive.
+    ///
+    /// The compute family's binding is [`Self::set_compute_bindings`]: the bind point
+    /// is a fact about the open bracket, so the two families keep one method each
+    /// rather than a parameter a caller could set against its own pass.
     pub(crate) fn set_bindings(&mut self, group: &BindGroup) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
+        self.bind_descriptor_sets(group, vk::PipelineBindPoint::GRAPHICS);
+        Ok(())
+    }
+
+    /// Binds a descriptor set for the dispatches recorded in the open compute pass.
+    ///
+    /// The same shared body as [`Self::set_bindings`]; only the bind point differs,
+    /// and it comes from the bracket the guard just proved rather than from the
+    /// caller. `Vulkan` requires a compute pipeline's set to be bound through
+    /// `COMPUTE`, so recording a compute binding through the graphics point would
+    /// produce a dispatch that reads nothing.
+    pub(crate) fn set_compute_bindings(&mut self, group: &BindGroup) -> Result<(), RecordError> {
+        self.check_pass(PassKind::Compute)?;
+        self.bind_descriptor_sets(group, vk::PipelineBindPoint::COMPUTE);
+        Ok(())
+    }
+
+    /// Records one `vkCmdBindDescriptorSets` at `bind_point`.
+    ///
+    /// Private because the bind point is what distinguishes the two families' verbs:
+    /// a public parameter would let a caller name the other family's point, which is
+    /// exactly what the one-handle-type-per-family rule exists to make impossible.
+    fn bind_descriptor_sets(&mut self, group: &BindGroup, bind_point: vk::PipelineBindPoint) {
         let sets = [group.set()];
-        // SAFETY: the command buffer is recording inside a render pass; both handles
-        // are live objects this device created and the caller keeps them alive; and no
-        // bind-time dynamic offsets exist, because a bind group cannot be created for a
-        // layout that declares one (`bind_group::validate` refuses it).
+        // SAFETY: the caller's guard proved a pass of the bind point's own kind is
+        // open; both handles are live objects this device created and the caller keeps
+        // them alive; and no bind-time dynamic offsets exist, because a bind group
+        // cannot be created for a layout that declares one (`bind_group::validate`
+        // refuses it).
         unsafe {
             self.device.cmd_bind_descriptor_sets(
                 self.command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
+                bind_point,
                 group.pipeline_layout(),
                 group.set_index(),
                 &sets,
                 &[],
+            );
+        }
+    }
+
+    /// Binds a compute pipeline for the dispatches recorded in the open compute pass.
+    ///
+    /// The pipeline owns the layout it was created over, so the layout stays alive
+    /// for as long as this binding can be used; the caller keeps the pipeline alive
+    /// for the recording, exactly as it keeps a raster pipeline alive.
+    pub(crate) fn set_compute_pipeline(
+        &mut self,
+        pipeline: &ComputePipeline,
+    ) -> Result<(), RecordError> {
+        self.check_pass(PassKind::Compute)?;
+        // SAFETY: the command buffer is recording inside a compute pass, and the
+        // pipeline is a live handle this device created, kept alive by the caller.
+        unsafe {
+            self.device.cmd_bind_pipeline(
+                self.command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline.handle(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Records one `vkCmdDispatch` over `groups` workgroups per axis.
+    ///
+    /// The counts are lowered by [`compute::dispatch_groups`], which refuses a zero
+    /// dimension before the driver is reached; `Vulkan` would accept it as a legal
+    /// no-op, and a caller's mistake would then look like a dispatch that did nothing.
+    pub(crate) fn dispatch(&mut self, groups: [u32; 3]) -> Result<(), RecordError> {
+        self.check_pass(PassKind::Compute)?;
+        let lowered = compute::dispatch_groups(groups).map_err(RecordError::Dispatch)?;
+        // SAFETY: the command buffer is recording inside a compute pass with a
+        // pipeline bound by the caller's recorded order, and the three counts are the
+        // driver's own arguments.
+        unsafe {
+            self.device.cmd_dispatch(
+                self.command_buffer,
+                lowered[0],
+                lowered[1],
+                lowered[2],
             );
         }
         Ok(())
@@ -568,7 +728,7 @@ impl Encoder {
     /// The value is lowered by [`draw::viewport`], which keeps the borrowed path's
     /// Y flip and refuses a viewport the driver would reject.
     pub(crate) fn set_viewport(&mut self, viewport: Viewport) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
         let lowered = draw::viewport(viewport).map_err(RecordError::Draw)?;
         // SAFETY: the command buffer is recording inside a render pass, and the
         // slice is a local that outlives the call.
@@ -581,7 +741,7 @@ impl Encoder {
 
     /// Records the dynamic scissor rectangle the open pass draws through.
     pub(crate) fn set_scissor(&mut self, scissor: ScissorRect) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
         let lowered = draw::scissor(scissor).map_err(RecordError::Draw)?;
         // SAFETY: the command buffer is recording inside a render pass, and the
         // slice is a local that outlives the call.
@@ -604,7 +764,7 @@ impl Encoder {
         buffer: vk::Buffer,
         offset: u64,
     ) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
         // SAFETY: the command buffer is recording inside a render pass, the buffer
         // is a live handle of this device, and both slices are locals that outlive
         // the call and have the same length.
@@ -625,7 +785,7 @@ impl Encoder {
         offset: u64,
         format: IndexFormat,
     ) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
         // SAFETY: the command buffer is recording inside a render pass, and the
         // buffer is a live handle this device created, kept alive by the caller.
         unsafe {
@@ -646,7 +806,7 @@ impl Encoder {
         vertices: Range<u32>,
         instance_count: u32,
     ) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
         let (first_vertex, vertex_count) = draw::range(vertices).map_err(RecordError::Draw)?;
         // SAFETY: the command buffer is recording inside a render pass with a
         // pipeline bound by the caller's recorded order.
@@ -671,7 +831,7 @@ impl Encoder {
         indices: Range<u32>,
         instance_count: u32,
     ) -> Result<(), RecordError> {
-        self.check_pass()?;
+        self.check_pass(PassKind::Raster)?;
         let (first_index, index_count) = draw::range(indices).map_err(RecordError::Draw)?;
         // SAFETY: the command buffer is recording inside a render pass with a
         // pipeline and an index buffer bound by the caller's recorded order.
@@ -692,14 +852,15 @@ impl Encoder {
     ///
     /// A second call is refused rather than treated as idempotent: "end an encoder
     /// that is not recording" is a caller mistake, and silently accepting it would
-    /// hide the mistake until submission. A recording with a raster pass still open
+    /// hide the mistake until submission. A recording with either bracket still open
     /// is refused for the same reason: `vkEndCommandBuffer` requires no active render
-    /// pass, and the caller's matching `end_raster` is what closes it.
+    /// pass, the graph's own order closes its bracket before the recording ends, and
+    /// the caller's matching `end_raster` / `end_compute` is what closes it.
     pub(crate) fn end(&mut self) -> Result<(), RecordError> {
         if !self.recording {
             return Err(RecordError::NotRecording);
         }
-        if self.pass_open {
+        if self.pass.is_some() {
             return Err(RecordError::PassOpen);
         }
         // SAFETY: the command buffer is recording and belongs to this encoder.
@@ -778,8 +939,9 @@ mod tests {
 
     use super::*;
     use crate::Validation;
-    use crate::native::vulkan::pipeline::{create_layout, create_raster};
+    use crate::native::vulkan::pipeline::{create_compute, create_layout, create_raster};
     use crate::native::vulkan::resource::ResourceTable;
+    use crate::native::vulkan::shader::MINIMAL_COMPUTE_SPIRV;
     use crate::native::vulkan::test_support::{
         colour_only_state, colour_target_pass, position_stream, raster_shaders,
     };
@@ -1586,5 +1748,106 @@ mod tests {
             .expect("the encoder is usable after the refusals");
         encoder.end_raster().expect("the pass closes");
         encoder.end().expect("the recording ends");
+    }
+
+    #[test]
+    fn a_real_encoder_records_a_real_compute_dispatch() {
+        // W2's compute family against the real driver: one bracket, one real compute
+        // pipeline over an empty layout and one real `vkCmdDispatch`, submitted and
+        // reported complete. Skips where no adapter exists.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let pipeline = create_compute(
+            opened.device.device(),
+            create_layout(opened.device.device(), Vec::new()).expect("an empty layout"),
+            &MINIMAL_COMPUTE_SPIRV,
+            c"main",
+        )
+        .expect("a compute pipeline over the retained kernel");
+
+        let mut encoder = pool.begin().expect("a recording encoder");
+        encoder.begin_compute().expect("the compute pass opens");
+        encoder
+            .set_compute_pipeline(&pipeline)
+            .expect("the pipeline binds");
+        encoder.dispatch([1, 1, 1]).expect("a dispatch records");
+        encoder.end_compute().expect("the compute pass closes");
+
+        let finished = encoder.finish().expect("the recording ends");
+        let mut submission =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submission.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "a recorded compute dispatch runs to completion"
+        );
+        assert!(submission.is_terminal());
+    }
+
+    #[test]
+    fn the_compute_bracket_refuses_the_wrong_state_without_poisoning_the_recording() {
+        // The compute verbs belong to the open compute pass and nowhere else, the two
+        // closes name their own kind, and every refusal is a value. The contract says
+        // the executor still ends a recording after a callback error, so a refused
+        // dispatch must leave the pass usable.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let pipeline = create_compute(
+            opened.device.device(),
+            create_layout(opened.device.device(), Vec::new()).expect("an empty layout"),
+            &MINIMAL_COMPUTE_SPIRV,
+            c"main",
+        )
+        .expect("a compute pipeline over the retained kernel");
+        let mut encoder = pool.begin().expect("a recording encoder");
+
+        // No pass is open yet: the compute verbs answer `NoPass`, and the closes name
+        // their own kind rather than borrowing it.
+        assert_eq!(
+            encoder.set_compute_pipeline(&pipeline),
+            Err(RecordError::NoPass)
+        );
+        assert_eq!(encoder.dispatch([1, 1, 1]), Err(RecordError::NoPass));
+        assert_eq!(encoder.end_compute(), Err(RecordError::NoComputePass));
+        assert_eq!(encoder.end_raster(), Err(RecordError::NoPass));
+
+        encoder.begin_compute().expect("the compute pass opens");
+        // A second begin of either kind is the one kind-neutral sentence.
+        assert_eq!(encoder.begin_compute(), Err(RecordError::PassAlreadyOpen));
+        // A raster verb belongs to a raster pass, so it is refused inside this one.
+        assert_eq!(encoder.draw(0..3, 1), Err(RecordError::NoPass));
+        // A zero group dimension is the dispatch's own sentence rather than the legal
+        // driver no-op it would otherwise become.
+        assert_eq!(
+            encoder.dispatch([1, 0, 1]),
+            Err(RecordError::Dispatch(compute::DispatchError::ZeroGroups([
+                1, 0, 1
+            ])))
+        );
+        // A barrier and the end of the recording are outside every bracket, so the
+        // open compute pass refuses them too; the handle is never read, which is why
+        // a null one is the honest fixture here.
+        assert_eq!(
+            encoder.transition_buffer(
+                vk::Buffer::null(),
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::VertexRead,
+            ),
+            Err(RecordError::PassOpen)
+        );
+        assert_eq!(encoder.end(), Err(RecordError::PassOpen));
+
+        // A refused value does not poison the pass or the recording.
+        encoder
+            .set_compute_pipeline(&pipeline)
+            .expect("the encoder is usable after the refusals");
+        encoder.dispatch([64, 1, 1]).expect("a real dispatch records");
+        encoder.end_compute().expect("the pass closes");
+        encoder.end().expect("the recording ends");
+        assert_eq!(encoder.end_compute(), Err(RecordError::NotRecording));
     }
 }

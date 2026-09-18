@@ -1,18 +1,19 @@
-//! W2's family wiring: `VulkanDevice` as the graphics and copy families' provider.
+//! W2's family wiring: `VulkanDevice` as the graphics, copy and compute families'
+//! provider.
 //!
 //! The common layer's contract says a device *negotiates* a family and receives a
 //! handle that already borrows the device and the ledger that proved it (plan
 //! section 11). This module is the first real backend to do that: `VulkanDevice`
-//! implements [`Provides<Graphics>`] and [`Provides<Copy>`] and hands out
-//! [`GraphicsRecording`] and [`CopyRecording`], which implement [`FamilyApi`] and
-//! their own family's trait over the device's own resource table and one recording
-//! from the device's own command pool.
+//! implements [`Provides<Graphics>`], [`Provides<Copy>`] and [`Provides<Compute>`]
+//! and hands out [`GraphicsRecording`], [`CopyRecording`] and [`ComputeRecording`],
+//! which implement [`FamilyApi`] and their own family's trait over the device's own
+//! resource table and one recording from the device's own command pool.
 //!
 //! # One recording owner, one handle type per family
 //!
-//! [`Recording`] is the machinery both handles share: the recording begun by the
+//! [`Recording`] is the machinery the handles share: the recording begun by the
 //! first command that needs one, and the three states that recording can be in. The
-//! handles are distinct types on purpose. A single type implementing both family
+//! handles are distinct types on purpose. A single type implementing several family
 //! traits would let a caller that negotiated only `Copy` reach a draw, because a
 //! family verb does not re-ask the ledger once a handle exists -- so the type, not a
 //! run-time check, is what keeps one family's vocabulary out of another's call site.
@@ -65,8 +66,8 @@ use fluxel_rendergraph::{
     ScissorRect, TextureCopyRegion, TextureRange, Viewport,
 };
 
-use crate::common::api::families::CopyApi;
-use crate::common::api::family::{Copy, Graphics};
+use crate::common::api::families::{ComputeApi, CopyApi};
+use crate::common::api::family::{Compute, Copy, Graphics};
 use crate::common::api::graphics::GraphicsApi;
 use crate::common::api::handle::FamilyApi;
 use crate::common::api::negotiate::Provides;
@@ -78,7 +79,7 @@ use super::command::{Encoder, Finished, RecordError};
 use super::device::VulkanDevice;
 use super::format;
 use super::framebuffer::{Framebuffer, FramebufferError};
-use super::pipeline::RasterPipeline;
+use super::pipeline::{ComputePipeline, RasterPipeline};
 use super::render_pass::{self, PassError};
 
 /// Why a graphics command was refused.
@@ -128,6 +129,22 @@ pub(crate) enum CopyError {
     UnknownBuffer,
     /// The id names no live texture of this device generation.
     UnknownTexture,
+}
+
+/// Why a compute command was refused.
+///
+/// One layer can refuse: the recording, whose refusals -- not recording, no compute
+/// pass open, a second begin, a dispatch with a zero group dimension -- are carried
+/// from [`RecordError`] rather than restated. There is no id lookup here, because
+/// every `ComputeApi` verb either takes a value the caller already holds ([`BindGroup`],
+/// [`ComputePipeline`]) or takes none at all. The family keeps its own error type
+/// anyway, per the convention section 11.9 fixes: a backend that later needs a
+/// compute-specific refusal has a place to put it without widening every other
+/// family's sentence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ComputeError {
+    /// The recording itself refused the command.
+    Recording(RecordError),
 }
 
 /// One handle's recording, as the three states it can be in.
@@ -651,6 +668,108 @@ impl core::fmt::Debug for CopyRecording<'_> {
     }
 }
 
+/// The compute family's handle on one `Vulkan` device.
+///
+/// A third distinct type, for the reason [`CopyRecording`] states: a family verb does
+/// not re-ask the ledger once a handle exists, so a handle must not be able to reach a
+/// verb whose row was never proved. `ComputeApi`'s pipe is the same shape as
+/// `GraphicsApi`'s -- a bracket, a pipeline, a binding set and the command that does
+/// the work -- but its bracket is [`super::command::Encoder::begin_compute`], which
+/// `Vulkan` has no driver command for, and its binding is recorded through the
+/// `COMPUTE` bind point.
+///
+/// # What it deliberately does not carry
+///
+/// No transitions: a dispatch that reads a storage buffer needs its barrier, but the
+/// bindings a compute recipe declares are the storage-role families
+/// (`StorageBufferApi` / `StorageTextureApi`), and those are not wired yet. The
+/// transitions arrive with them, exactly as they arrived with the copy family when
+/// its own verbs first named a transfer layout. What is here is the negotiation and
+/// the recording bracket the compute row already proves.
+pub(crate) struct ComputeRecording<'d> {
+    /// The recording this handle records into, begun by the first compute command.
+    recording: Recording<'d>,
+}
+
+impl<'d> ComputeRecording<'d> {
+    /// Wraps one device generation without touching the driver.
+    ///
+    /// Infallible, which is what `Provides::provide` requires: the recording itself
+    /// is begun by the first verb that needs it.
+    fn new(device: &'d VulkanDevice) -> Self {
+        Self {
+            recording: Recording::new(device),
+        }
+    }
+
+    /// Returns the live recording, in this family's sentence.
+    fn encoder(&mut self) -> Result<&mut Encoder, ComputeError> {
+        self.recording.encoder().map_err(ComputeError::Recording)
+    }
+
+    /// Ends the recording and hands it to submission.
+    ///
+    /// Not family vocabulary, for the reason [`GraphicsRecording::finish`] states:
+    /// the common contract has no submission verb yet, so this is how the piece that
+    /// owns submission takes the ended command buffer.
+    pub(crate) fn finish(&mut self) -> Result<Finished, ComputeError> {
+        self.recording.finish().map_err(ComputeError::Recording)
+    }
+}
+
+impl FamilyApi for ComputeRecording<'_> {
+    fn stamp(&self) -> DeviceStamp {
+        self.recording.device().stamp()
+    }
+}
+
+impl ComputeApi for ComputeRecording<'_> {
+    type Error = ComputeError;
+    type Pipeline = ComputePipeline;
+    type Bindings = BindGroup;
+
+    fn begin_compute(&mut self) -> Result<(), Self::Error> {
+        // The recording is begun here, not in `provide`, because allocating a command
+        // buffer can fail and this is the first verb that can report it.
+        self.encoder()?
+            .begin_compute()
+            .map_err(ComputeError::Recording)
+    }
+
+    fn end_compute(&mut self) -> Result<(), Self::Error> {
+        self.encoder()?
+            .end_compute()
+            .map_err(ComputeError::Recording)
+    }
+
+    fn set_compute_pipeline(&mut self, pipeline: &Self::Pipeline) -> Result<(), Self::Error> {
+        self.encoder()?
+            .set_compute_pipeline(pipeline)
+            .map_err(ComputeError::Recording)
+    }
+
+    fn set_bindings(&mut self, bindings: &Self::Bindings) -> Result<(), Self::Error> {
+        self.encoder()?
+            .set_compute_bindings(bindings)
+            .map_err(ComputeError::Recording)
+    }
+
+    fn dispatch(&mut self, groups: [u32; 3]) -> Result<(), Self::Error> {
+        self.encoder()?
+            .dispatch(groups)
+            .map_err(ComputeError::Recording)
+    }
+}
+
+impl core::fmt::Debug for ComputeRecording<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ComputeRecording")
+            .field("recording", &self.recording)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The graphics family's provider.
 ///
 /// Implementing this is what makes the family *expressible* here; whether a device
@@ -682,6 +801,21 @@ impl Provides<Copy> for VulkanDevice {
     }
 }
 
+/// The compute family's provider, beside the graphics and copy ones.
+///
+/// A separate impl, for the reason [`Provides<Copy>`] states: the handle type bounds a
+/// caller's vocabulary. The row this negotiation proves is `Capability::Compute`,
+/// which `device::ledger` records only where the selected queue family reports compute
+/// -- so a device created on a graphics family without it has the vocabulary and still
+/// refuses the negotiation, the two refusals the design keeps apart.
+impl Provides<Compute> for VulkanDevice {
+    type Api<'d> = ComputeRecording<'d>;
+
+    fn provide(&self) -> ComputeRecording<'_> {
+        ComputeRecording::new(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::time::Duration;
@@ -695,7 +829,9 @@ mod tests {
     use super::*;
     use crate::Validation;
     use crate::common::api::negotiate::require;
-    use crate::native::vulkan::pipeline::{create_layout, create_raster};
+    use crate::native::vulkan::compute::DispatchError;
+    use crate::native::vulkan::pipeline::{create_compute, create_layout, create_raster};
+    use crate::native::vulkan::shader::MINIMAL_COMPUTE_SPIRV;
     use crate::native::vulkan::test_support::{colour_only_state, position_stream, raster_shaders};
     use crate::native::vulkan::{memory, open, submission};
     use ash::vk;
@@ -1207,6 +1343,114 @@ mod tests {
                 },
             ),
             Err(CopyError::Recording(RecordError::NotRecording))
+        );
+    }
+
+    /// A compute pipeline over an empty pipeline layout, which is the shape the
+    /// retained kernel declares: it reads no bindings, so the layout names no set
+    /// layouts and the dispatch is the whole recording.
+    fn compute_pipeline(opened: &open::OpenedVulkan) -> ComputePipeline {
+        create_compute(
+            opened.device.device(),
+            create_layout(opened.device.device(), Vec::new()).expect("an empty layout"),
+            &MINIMAL_COMPUTE_SPIRV,
+            c"main",
+        )
+        .expect("a compute pipeline over the retained kernel")
+    }
+
+    #[test]
+    fn a_negotiated_compute_handle_records_a_dispatch_the_driver_completes() {
+        // W2's third family wiring against the real driver: `require` yields the
+        // compute handle, the handle records the bracket, a real pipeline and a real
+        // dispatch, and the recording is submitted to completion. Skips where no
+        // adapter exists.
+        let Some(opened) = device() else {
+            return;
+        };
+        let pipeline = compute_pipeline(&opened);
+
+        let mut api = require::<_, Compute>(&opened.device)
+            .expect("a device whose selected family reports compute proves the row");
+        assert_eq!(
+            api.stamp(),
+            opened.device.stamp(),
+            "the handle reports the generation it was negotiated on"
+        );
+
+        api.begin_compute().expect("the compute pass opens");
+        api.set_compute_pipeline(&pipeline)
+            .expect("the pipeline binds");
+        api.dispatch([1, 1, 1]).expect("a non-zero dispatch records");
+        api.end_compute().expect("the compute pass closes");
+
+        let finished = api.finish().expect("the recording ends");
+        let mut submission =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submission.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "a dispatch recorded through the family handle runs to completion"
+        );
+        assert!(submission.is_terminal());
+        // The handle is still alive here, so the pipeline and layout outlived the
+        // submission that named them. It is released only now, when nothing executes.
+        drop(api);
+    }
+
+    #[test]
+    fn a_refused_compute_command_is_a_value_and_leaves_the_recording_usable() {
+        // Every compute refusal is the recording's own sentence, carried rather than
+        // restated, and the contract says the executor still ends a recording after a
+        // callback error -- so a refused dispatch must not poison the pass.
+        let Some(opened) = device() else {
+            return;
+        };
+        let pipeline = compute_pipeline(&opened);
+        let mut api = require::<_, Compute>(&opened.device).expect("compute is proved");
+
+        // With no compute pass open every verb that needs one answers `NoPass`, and
+        // the close answers its own sentence rather than borrowing `NoPass`.
+        assert_eq!(
+            api.set_compute_pipeline(&pipeline),
+            Err(ComputeError::Recording(RecordError::NoPass))
+        );
+        assert_eq!(
+            api.dispatch([1, 1, 1]),
+            Err(ComputeError::Recording(RecordError::NoPass))
+        );
+        assert_eq!(
+            api.end_compute(),
+            Err(ComputeError::Recording(RecordError::NoComputePass))
+        );
+
+        api.begin_compute().expect("the compute pass opens");
+        // A second begin is a caller mistake rather than a nested pass.
+        assert_eq!(
+            api.begin_compute(),
+            Err(ComputeError::Recording(RecordError::PassAlreadyOpen))
+        );
+        // A zero dimension is the dispatch's own sentence, not a driver no-op.
+        assert_eq!(
+            api.dispatch([1, 0, 1]),
+            Err(ComputeError::Recording(RecordError::Dispatch(
+                DispatchError::ZeroGroups([1, 0, 1])
+            )))
+        );
+
+        // The refused values did not poison the pass: a real dispatch still records
+        // and the recording still ends.
+        api.set_compute_pipeline(&pipeline)
+            .expect("the recording is usable");
+        api.dispatch([1, 1, 1]).expect("a real dispatch records");
+        api.end_compute().expect("the pass closes");
+        api.finish().expect("the recording ends");
+        // A finished handle must not begin a second recording the caller never asked
+        // for and would never submit.
+        assert_eq!(
+            api.dispatch([1, 1, 1]),
+            Err(ComputeError::Recording(RecordError::NotRecording))
         );
     }
 }

@@ -114,16 +114,20 @@
 //! 13. **The family wiring.** `VulkanDevice` owns the resource table and the one
 //!     command pool and implements the family providers this backend can serve,
 //!     handing out one handle type per family: `Provides<Graphics>` yields
-//!     [`family::GraphicsRecording`] (`FamilyApi` + `GraphicsApi`) and
-//!     `Provides<Copy>` yields [`family::CopyRecording`] (`FamilyApi` + `CopyApi`),
-//!     each over that table and its own recording. The handles are distinct types so
-//!     a caller that negotiated one family cannot reach another's verbs, and each is
-//!     its own recording context, which the contract permits (plan section 21).
-//!     Composing two families into one submission is the execution-layer migration's
-//!     decision and is deliberately not invented here. This step was added when the
-//!     list above was exhausted, which is section 23.1's rule moving to the W2 work
-//!     package; it is what makes `require::<_, Graphics>(&device)` and
-//!     `require::<_, Copy>(&device)` compile and run against this backend.
+//!     [`family::GraphicsRecording`] (`FamilyApi` + `GraphicsApi`), `Provides<Copy>`
+//!     yields [`family::CopyRecording`] (`FamilyApi` + `CopyApi`) and
+//!     `Provides<Compute>` yields [`family::ComputeRecording`] (`FamilyApi` +
+//!     `ComputeApi`), each over that table and its own recording. The handles are
+//!     distinct types so a caller that negotiated one family cannot reach another's
+//!     verbs, and each is its own recording context, which the contract permits
+//!     (plan section 21). The compute bracket is this layer's own -- `Vulkan` has no
+//!     compute-pass command -- and the one recording encoder tracks it in the same
+//!     single pass slot the raster bracket uses. Composing two families into one
+//!     submission is the execution-layer migration's decision and is deliberately not
+//!     invented here. This step was added when the list above was exhausted, which is
+//!     section 23.1's rule moving to the W2 work package; it is what makes
+//!     `require::<_, Graphics>(&device)`, `require::<_, Copy>(&device)` and
+//!     `require::<_, Compute>(&device)` compile and run against this backend.
 //!
 //! # Acceptance
 //!
@@ -245,13 +249,21 @@ pub(crate) mod framebuffer;
 /// with that extension on a `Vulkan` 1.0 device.
 pub(crate) mod draw;
 
-/// Step 13: the family wiring. `VulkanDevice` implements `Provides<Graphics>` and
-/// `Provides<Copy>`, handing out [`family::GraphicsRecording`] and
-/// [`family::CopyRecording`], which implement `FamilyApi` and their own family's
-/// trait over the device's own resource table and their own recording. The two
-/// handles are distinct types so one family's verbs cannot be reached from the
-/// other's call site, and both `require::<_, Graphics>(&device)` and
-/// `require::<_, Copy>(&device)` are the real negotiation path for this backend
+/// W2's compute family, pure half: the workgroup counts one `vkCmdDispatch` takes,
+/// with every zero dimension refused before the driver is reached because `Vulkan`
+/// would accept it as a legal no-op. The bracket and the commands that use it live
+/// on [`command::Encoder`]; the family handle that negotiates them lives in
+/// [`family`].
+pub(crate) mod compute;
+
+/// Step 13: the family wiring. `VulkanDevice` implements `Provides<Graphics>`,
+/// `Provides<Copy>` and `Provides<Compute>`, handing out
+/// [`family::GraphicsRecording`], [`family::CopyRecording`] and
+/// [`family::ComputeRecording`], which implement `FamilyApi` and their own family's
+/// trait over the device's own resource table and their own recording. The handles
+/// are distinct types so one family's verbs cannot be reached from the other's call
+/// site, and `require::<_, Graphics>(&device)`, `require::<_, Copy>(&device)` and
+/// `require::<_, Compute>(&device)` are the real negotiation path for this backend
 /// rather than only a contract test.
 pub(crate) mod family;
 
