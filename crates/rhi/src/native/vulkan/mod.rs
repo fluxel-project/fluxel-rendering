@@ -79,10 +79,22 @@
 //!     already reads: occlusion is a core query type on the graphics family the
 //!     device was created on, and elapsed is that family's own timestamp-valid-bit
 //!     report, because an elapsed interval on `Vulkan` is two timestamp writes and
-//!     their difference rather than a separate query type. Still owed by this step
-//!     are the draw-parameter rows (`BaseVertex`, `FirstInstance`), which arrive
-//!     with the draw verbs whose parameter space they gate and with the family
-//!     markers that would let a caller require them.
+//!     their difference rather than a separate query type. Every row this step can
+//!     prove is proved; the rows that stay absent do so for the reasons `device`'s
+//!     ledger function records, and the two draw-parameter rows (`BaseVertex`,
+//!     `FirstInstance`) belong to step 12, because they arrive with the draw verbs
+//!     whose parameter space they gate.
+//!
+//! 12. **Raster recording.** The pass bracket on the recording encoder, the
+//!     framebuffer an admitted [`render_pass`] description needs, and the draw
+//!     verbs: pipeline and binding selection, vertex and index buffers, the dynamic
+//!     viewport and scissor, and the non-indexed and indexed draws. This is the step
+//!     the two draw-parameter rows step 11 owes arrive with -- they are families
+//!     whose parameter space `GraphicsApi`'s draw verbs deliberately cannot name
+//!     (plan section 20.1) -- and it is what lets `VulkanDevice` implement
+//!     `Provides<Graphics>`, which `device`'s real-device test still records as not
+//!     compiling. Its first bounded piece landed ahead of the verbs: the pure
+//!     [`render_pass`] lowering declared below.
 //!
 //! # Acceptance
 //!
@@ -174,6 +186,14 @@ pub(crate) mod descriptor;
 /// and the raster pipeline lowered from the common fixed-function vocabulary, with
 /// each shader module destroyed as soon as creation has read it.
 pub(crate) mod pipeline;
+
+/// The raster pass the draw path begins: the portable attachment set admitted under
+/// plan section 4's one-colour-at-index-zero / no-depth-stencil rule and lowered onto
+/// the `VkRenderPass` description the recording pass is built from. The colour
+/// attachment's description is shared with [`pipeline`]'s creation pass, because
+/// `Vulkan` compares two render passes by exactly those facts. Pure: it creates
+/// nothing, and its owning half lands with the draw verbs.
+pub(crate) mod render_pass;
 
 /// Step 6: the retained WGSL artifact lowered to SPIR-V with Naga's `spv-out`, with
 /// the dialect, entry-point, stage and profile checks decided before the driver is

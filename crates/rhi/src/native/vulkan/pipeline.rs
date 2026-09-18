@@ -90,6 +90,7 @@ use crate::shader_contract::ShaderStage;
 
 use super::descriptor::SetLayout;
 use super::format;
+use super::render_pass;
 use super::sampler;
 use super::shader::{self, Module, ShaderError};
 
@@ -541,19 +542,16 @@ impl RenderPass {
                     .attachment(attachments.len() as u32)
                     .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
             );
-            attachments.push(
-                vk::AttachmentDescription::default()
-                    .format(*format)
-                    .samples(signature.samples)
-                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
-                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
-                    // Ignored for a colour format, and stated anyway so the field
-                    // is never left at whatever `ash` happens to default to.
-                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                    .initial_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-            );
+            // The one place a colour attachment's description is written, so the
+            // creation pass and the recording pass cannot disagree about the format
+            // or sample count `Vulkan` compares two passes by. Their contents
+            // operations differ deliberately: creation performs nothing.
+            attachments.push(render_pass::color_description(
+                *format,
+                signature.samples,
+                vk::AttachmentLoadOp::DONT_CARE,
+                vk::AttachmentStoreOp::DONT_CARE,
+            ));
         }
         let depth_stencil = signature.depth_stencil.map(|format| {
             let reference = vk::AttachmentReference::default()
