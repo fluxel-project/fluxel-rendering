@@ -21,11 +21,21 @@
 //!
 //! One step of eleven needs a device feature so far, and this is where it is
 //! enabled: the shader-store pair [`super::features`] requests, which is what proves
-//! the storage-buffer row. Every other feature a step needs will be enabled by that
+//! the two storage rows. Every other feature a step needs will be enabled by that
 //! step, because enabling one without recording the fact it establishes would put an
 //! unproved claim into the ledger -- and enabling one the adapter never reported is
 //! not a soft failure but a `vkCreateDevice` error, so the requested set is always
 //! the adapter's own report narrowed to what this backend has been taught.
+//!
+//! # The device owns the format table its storage-image row reads
+//!
+//! The storage-image row needs a per-format fact beside the feature pair, so
+//! [`create`] queries every format this backend maps through
+//! [`super::format_facts::record_mapped`] and stores the resulting table beside the
+//! ledger. Reading it here rather than leaving it to a caller is what lets the row
+//! be recorded at all: the ledger is captured at creation and never recomputed, so a
+//! fact discovered later could not reach it. It also keeps one discovery -- the
+//! format evidence the capability lowering folds is the same table the ledger read.
 //!
 //! No device extension is enabled on the headless path. `VK_KHR_swapchain` belongs
 //! to step 10, so it is enabled only by [`open_with_swapchain`] -- and only after
@@ -43,8 +53,10 @@ use crate::common::base::stamp::DeviceStamp;
 use crate::common::caps::{
     AdapterLimits, Capability, CapabilityEvidence, CapabilityFact, CapabilityLedger, OperationProbe,
 };
+use crate::common::formats::FormatTable;
 
 use super::features::{self, StoreFeatures};
+use super::format_facts::{self, FormatError};
 use super::instance::{SurfaceInstance, ValidationInstance};
 use super::inventory::{EnumerationError, enumerate_device_extensions};
 
@@ -129,6 +141,12 @@ pub(crate) enum DeviceError {
     MissingExtension(MissingDeviceExtension),
     /// The driver refused to create the device.
     Creation(vk::Result),
+    /// A format this backend maps could not be queried or recorded.
+    ///
+    /// The per-format evidence the storage-image row is read from is discovered
+    /// before `vkCreateDevice` is reached, so a driver that cannot answer for a
+    /// mapped format refuses the open with nothing created.
+    Format(FormatError),
 }
 
 /// Selects the one queue family the retained execution model uses.
@@ -164,6 +182,7 @@ pub(crate) struct VulkanDevice {
     queue: vk::Queue,
     selected: SelectedQueue,
     stores: StoreFeatures,
+    formats: FormatTable,
     ledger: CapabilityLedger,
     stamp: DeviceStamp,
 }
@@ -192,6 +211,15 @@ impl VulkanDevice {
     /// driver would say now.
     pub(crate) const fn stores(&self) -> StoreFeatures {
         self.stores
+    }
+
+    /// Returns the per-format evidence this device's discovery recorded.
+    ///
+    /// This is the same table the ledger's storage-image row was read from and the
+    /// same one the capability lowering folds, so a caller has one discovery answer
+    /// rather than a second query to keep in step with it.
+    pub(crate) const fn formats(&self) -> &FormatTable {
+        &self.formats
     }
 
     /// Returns this device generation's stamp.
@@ -243,6 +271,13 @@ impl crate::common::api::negotiate::CapabilitySource for VulkanDevice {
 ///   shader may read *and* write, and `Vulkan` gates the write half per stage, so a
 ///   device created with one feature of the pair serves one stage and not the other
 ///   -- which is a refusal, not half a row.
+/// - **StorageImage** only where that same pair was enabled **and** the format table
+///   proved a format with both storage directions. The pair is the stage half of the
+///   proof; the resource half is the per-format answer, because whether a format may
+///   be used through a storage image at all is what the driver reports per format.
+///   That fact is this row's numeric floor, so a device created with the pair on an
+///   adapter whose formats none support storage is *examined and refused* rather
+///   than left unexamined -- a difference the ledger keeps for diagnostics.
 ///
 /// Every other row is absent, because nothing has proved it. Absence is the
 /// rejecting value, so no unproved domain can be entered by accident -- and each
@@ -252,6 +287,7 @@ pub(crate) fn ledger(
     selected: SelectedQueue,
     limits: &AdapterLimits,
     stores: StoreFeatures,
+    formats: &FormatTable,
 ) -> CapabilityLedger {
     let mut ledger = CapabilityLedger::default();
     ledger.record(
@@ -324,6 +360,28 @@ pub(crate) fn ledger(
                 // enabled, and a feature enabled at creation is not something a
                 // conformant driver refuses per command. A run-time probe would be a
                 // second proof of a fact the create-info already states.
+                operation_probe: OperationProbe::NotRequired,
+            },
+        );
+    }
+    // The same stage-gated pair gates the image row; what differs is its resource
+    // half. `Vulkan`'s store features are about storage *operations* rather than
+    // about buffers, so the image row reuses the pair and takes its numeric floor
+    // from the per-format fact the format table proved.
+    if stores.proves_storage_buffers() {
+        ledger.record(
+            Capability::StorageImage,
+            CapabilityFact {
+                evidence: Some(CapabilityEvidence::Core),
+                // The resource floor, not a size limit: a device whose formats none
+                // support storage has no image to bind through this domain, and the
+                // ledger must not record a reachable domain on a fact that rejects
+                // it. A table that proved nothing leaves the floor unsatisfied for
+                // the same reason a zero binding size does.
+                limits_satisfied: formats.has_storage_read_write(),
+                // Structural, like the buffer row: an enabled feature and a format
+                // the driver reported are not facts a conformant driver contradicts
+                // per command, so a run-time probe would be a second proof.
                 operation_probe: OperationProbe::NotRequired,
             },
         );
@@ -426,6 +484,13 @@ fn create(
     let requested_features = features::request(&reported_features);
     let stores = features::store(&requested_features);
 
+    // The per-format evidence the storage-image row's floor is read from. It is read
+    // before `vkCreateDevice` is reached -- the query needs only the physical device
+    // -- so a driver that cannot answer for a mapped format refuses the open with
+    // nothing created, the same fail-closed order the validation probe uses.
+    let mut formats = FormatTable::default();
+    format_facts::record_mapped(instance, adapter, &mut formats).map_err(DeviceError::Format)?;
+
     let priorities = [1.0_f32];
     let queue_info = vk::DeviceQueueCreateInfo::default()
         .queue_family_index(selected.family)
@@ -465,7 +530,8 @@ fn create(
         queue,
         selected,
         stores,
-        ledger: ledger(selected, limits, stores),
+        ledger: ledger(selected, limits, stores, &formats),
+        formats,
         // The first generation of a freshly identified device. Identity comes from
         // the crate's monotonic counter, which is unique among live devices; the
         // generation advances only when a device is replaced, which this backend
@@ -643,11 +709,42 @@ mod tests {
         }
     }
 
+    /// A format table nothing was recorded in: no format proves storage.
+    fn no_formats() -> FormatTable {
+        FormatTable::default()
+    }
+
+    /// A format table holding one format with exactly the storage facts stated.
+    ///
+    /// Built through the real per-format lowering so the fixture is a driver answer
+    /// this backend could actually receive rather than a hand-written row.
+    fn formats_with(storage_read: bool, storage_write: bool) -> FormatTable {
+        let mut facts = format_facts::capabilities(
+            fluxel_rendergraph::TextureFormat::Rgba8Unorm,
+            &vk::FormatProperties {
+                optimal_tiling_features: vk::FormatFeatureFlags::STORAGE_IMAGE,
+                ..Default::default()
+            },
+        );
+        facts.storage_read = storage_read;
+        facts.storage_write = storage_write;
+        let mut table = FormatTable::default();
+        table
+            .record(facts)
+            .expect("a probed storage fact is recordable");
+        table
+    }
+
+    /// A format table holding one format a shader may both read and write.
+    fn stored_formats() -> FormatTable {
+        formats_with(true, true)
+    }
+
     #[test]
     fn a_created_device_proves_copy_without_a_command() {
         // Copy is the API version's own guarantee on a graphics family, so the
         // proof is structural and no probe was owed.
-        let ledger = ledger(selected(false, 0), &computing_limits(), no_stores());
+        let ledger = ledger(selected(false, 0), &computing_limits(), no_stores(), &no_formats());
         assert!(ledger.supports(Capability::Copy));
         assert_eq!(
             ledger.fact(Capability::Copy).map(|fact| fact.operation_probe),
@@ -664,11 +761,11 @@ mod tests {
     fn indirect_dispatch_arrives_only_beside_a_proved_compute_row() {
         // Without compute the row is not merely disabled, it was never examined --
         // which is the difference the ledger keeps for diagnostics.
-        let without = ledger(selected(false, 0), &computing_limits(), no_stores());
+        let without = ledger(selected(false, 0), &computing_limits(), no_stores(), &no_formats());
         assert!(!without.supports(Capability::IndirectDispatch));
         assert_eq!(without.fact(Capability::IndirectDispatch), None);
 
-        let with = ledger(selected(true, 0), &computing_limits(), no_stores());
+        let with = ledger(selected(true, 0), &computing_limits(), no_stores(), &no_formats());
         assert!(with.supports(Capability::IndirectDispatch));
     }
 
@@ -676,14 +773,14 @@ mod tests {
     fn an_unsatisfied_compute_floor_leaves_indirect_dispatch_disabled_too() {
         // An indirect dispatch is a dispatch: it keeps the compute row's floor
         // rather than a floor of its own, so the two cannot disagree.
-        let ledger = ledger(selected(true, 0), &AdapterLimits::unavailable(), no_stores());
+        let ledger = ledger(selected(true, 0), &AdapterLimits::unavailable(), no_stores(), &no_formats());
         assert!(!ledger.supports(Capability::Compute));
         assert!(!ledger.supports(Capability::IndirectDispatch));
     }
 
     #[test]
     fn a_timestamp_row_arrives_only_from_a_non_zero_valid_bit_report() {
-        let silent = ledger(selected(false, 0), &computing_limits(), no_stores());
+        let silent = ledger(selected(false, 0), &computing_limits(), no_stores(), &no_formats());
         assert!(!silent.supports(Capability::TimestampQuery));
         assert_eq!(
             silent.fact(Capability::TimestampQuery),
@@ -691,7 +788,7 @@ mod tests {
             "a family that reported nothing was never examined for timestamps"
         );
 
-        let reporting = ledger(selected(false, 64), &computing_limits(), no_stores());
+        let reporting = ledger(selected(false, 64), &computing_limits(), no_stores(), &no_formats());
         assert!(reporting.supports(Capability::TimestampQuery));
     }
 
@@ -700,7 +797,7 @@ mod tests {
         // The row describes a buffer a shader may read and write, and `Vulkan` gates
         // the write half per stage, so each half alone is a partial proof that the
         // domain cannot report.
-        let neither = ledger(selected(true, 0), &computing_limits(), no_stores());
+        let neither = ledger(selected(true, 0), &computing_limits(), no_stores(), &no_formats());
         assert!(!neither.supports(Capability::StorageBuffer));
         assert_eq!(
             neither.fact(Capability::StorageBuffer),
@@ -718,7 +815,7 @@ mod tests {
                 vertex: true,
             },
         ] {
-            let ledger = ledger(selected(true, 0), &computing_limits(), partial);
+            let ledger = ledger(selected(true, 0), &computing_limits(), partial, &no_formats());
             assert!(
                 !ledger.supports(Capability::StorageBuffer),
                 "{partial:?} serves one stage's write, not the domain"
@@ -726,7 +823,7 @@ mod tests {
             assert_eq!(ledger.fact(Capability::StorageBuffer), None);
         }
 
-        let both = ledger(selected(true, 0), &computing_limits(), all_stores());
+        let both = ledger(selected(true, 0), &computing_limits(), all_stores(), &no_formats());
         assert!(both.supports(Capability::StorageBuffer));
         assert_eq!(
             both.fact(Capability::StorageBuffer)
@@ -744,7 +841,7 @@ mod tests {
             max_storage_buffer_binding_size: 0,
             ..computing_limits()
         };
-        let ledger = ledger(selected(true, 0), &limits, all_stores());
+        let ledger = ledger(selected(true, 0), &limits, all_stores(), &no_formats());
         assert!(!ledger.supports(Capability::StorageBuffer));
         assert_eq!(
             ledger.fact(Capability::StorageBuffer).map(|fact| fact.limits_satisfied),
@@ -754,17 +851,103 @@ mod tests {
     }
 
     #[test]
+    fn the_storage_image_row_needs_the_store_pair_and_a_storage_format() {
+        // The row's two halves fail in different ledger fields, and the difference is
+        // the sentence a caller gets: without the stage pair nothing examined the row,
+        // while with it the row is examined and refused by its resource floor.
+        let without_pair = ledger(
+            selected(true, 0),
+            &computing_limits(),
+            no_stores(),
+            &stored_formats(),
+        );
+        assert!(!without_pair.supports(Capability::StorageImage));
+        assert_eq!(
+            without_pair.fact(Capability::StorageImage),
+            None,
+            "the pair is the route, so without it nothing proved this backend has one"
+        );
+
+        // With the pair enabled, every shape that lacks the resource half is
+        // examined and refused rather than left unexamined.
+        for storage in [
+            (false, false),
+            // One direction is half the domain, and nothing may imply the other.
+            (true, false),
+            (false, true),
+        ] {
+            let ledger = ledger(
+                selected(true, 0),
+                &computing_limits(),
+                all_stores(),
+                &formats_with(storage.0, storage.1),
+            );
+            assert!(
+                !ledger.supports(Capability::StorageImage),
+                "read={} write={} is not the read-and-write domain",
+                storage.0,
+                storage.1
+            );
+            assert_eq!(
+                ledger
+                    .fact(Capability::StorageImage)
+                    .map(|fact| fact.limits_satisfied),
+                Some(false),
+                "the pair exists, so the row was examined and its floor refused it"
+            );
+        }
+
+        for partial in [
+            StoreFeatures {
+                fragment: true,
+                vertex: false,
+            },
+            StoreFeatures {
+                fragment: false,
+                vertex: true,
+            },
+        ] {
+            let ledger = ledger(
+                selected(true, 0),
+                &computing_limits(),
+                partial,
+                &stored_formats(),
+            );
+            assert!(
+                !ledger.supports(Capability::StorageImage),
+                "{partial:?} serves one stage's store, not the domain"
+            );
+            assert_eq!(
+                ledger.fact(Capability::StorageImage),
+                None,
+                "and a partial pair is not a route, so the row stays unexamined"
+            );
+        }
+
+        let both = ledger(
+            selected(true, 0),
+            &computing_limits(),
+            all_stores(),
+            &stored_formats(),
+        );
+        assert!(both.supports(Capability::StorageImage));
+        assert_eq!(
+            both.fact(Capability::StorageImage)
+                .map(|fact| fact.operation_probe),
+            Some(OperationProbe::NotRequired),
+            "an enabled feature and a driver-reported format are the whole proof"
+        );
+    }
+
+    #[test]
     fn the_feature_gated_and_preserved_rows_stay_unproved() {
         // These are absent for different reasons, and each is stated: the step that
-        // can prove one is the step that reads the per-format fact, narrows the
-        // family's parameter space, or enables the feature. The store features are
-        // enabled here on purpose, so the storage-buffer row's absence from this list
-        // is a fact about the row rather than about the fixture.
-        let ledger = ledger(selected(true, 64), &computing_limits(), all_stores());
+        // can prove one narrows the family's parameter space or enables the feature.
+        // The store features are enabled here on purpose and the format table is
+        // empty, so the two storage rows' absence from this list is a fact about the
+        // rows rather than about the fixture.
+        let ledger = ledger(selected(true, 64), &computing_limits(), all_stores(), &no_formats());
         for row in [
-            // Same store pair as the buffer row, plus a per-format storage fact this
-            // call has no format table to read.
-            Capability::StorageImage,
             // The `IndirectDrawApi` family takes a draw count, and a count above one
             // is the `MultiDrawIndirect` capability -- so claiming this row would
             // claim a capability the device did not enable a feature for.
@@ -871,6 +1054,21 @@ mod tests {
             device.ledger().supports(Capability::StorageBuffer),
             expected.proves_storage_buffers(),
             "the row is exactly the store pair this device was created with: {expected:?}"
+        );
+
+        // The storage-image row is the same pair plus a per-format fact, so the
+        // assertion reads the device's *own* format table rather than querying again:
+        // one discovery answer, and the row is exactly the two halves this device was
+        // opened with.
+        assert_eq!(
+            device.formats().iter().count(),
+            crate::native::vulkan::format::MAPPED.len(),
+            "the device queried every format this backend maps"
+        );
+        assert_eq!(
+            device.ledger().supports(Capability::StorageImage),
+            expected.proves_storage_buffers() && device.formats().has_storage_read_write(),
+            "the image row is the stage pair and the per-format resource fact together"
         );
     }
 

@@ -624,17 +624,16 @@ mod tests {
         use crate::Validation;
         use crate::common::api::negotiate::CapabilitySource;
         use crate::native::vulkan::format::MAPPED;
-        use crate::native::vulkan::{format_facts, open};
+        use crate::native::vulkan::open;
 
         let Ok(opened) = open::open(Validation::Disabled, 0) else {
             return;
         };
-        let mut formats = FormatTable::default();
-        format_facts::record_mapped(opened.instance.instance(), opened.adapter, &mut formats)
-            .expect("every mapped format is one the driver can report on");
-
+        // The device owns the per-format discovery now, so the lowering folds the
+        // same table the storage-image row was read from rather than a second
+        // recording of the same driver answers.
         let ledger = opened.device.ledger();
-        let capabilities = capabilities(ledger, &opened.limits, &formats);
+        let capabilities = capabilities(ledger, &opened.limits, opened.device.formats());
 
         assert_eq!(capabilities.queues.len(), 1, "one queue is reported");
         let queue = capabilities.queues[0];

@@ -190,6 +190,23 @@ impl FormatTable {
     pub(crate) fn iter(&self) -> impl Iterator<Item = FormatCapabilities> + '_ {
         self.entries.iter().copied()
     }
+
+    /// Whether at least one recorded row proves read **and** write storage access.
+    ///
+    /// This is the per-format half of a device-level storage-image capability: the
+    /// capability is the domain, and one format a shader may both read and write
+    /// through a storage image is what the domain needs. A row proving one direction
+    /// alone does not satisfy it, because [`FormatCapabilities`] keeps the two split
+    /// and neither implies the other.
+    ///
+    /// The evidence is deliberately not re-checked here. [`Self::record`] refuses a
+    /// storage fact that arrived without an operation probe, so a check here would be
+    /// a second definition of a rule the table already owns.
+    pub(crate) fn has_storage_read_write(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|facts| facts.storage_read && facts.storage_write)
+    }
 }
 
 #[cfg(test)]
@@ -342,5 +359,41 @@ mod tests {
         assert!(!read_back.sampled);
         assert_eq!(read_back.evidence, FormatEvidence::OperationProbed);
         assert_eq!(table.get(TextureFormat::Bgra8Unorm, 1), None);
+    }
+
+    #[test]
+    fn only_a_row_that_proves_both_storage_directions_satisfies_the_query() {
+        // This query is the per-format half of a device-level storage-image
+        // capability, so each direction alone has to leave it unsatisfied: a
+        // read-only row describes half the domain the capability names.
+        assert!(
+            !FormatTable::default().has_storage_read_write(),
+            "a table nothing was recorded in proves no storage format"
+        );
+
+        for (read, write) in [(true, false), (false, true)] {
+            let mut table = FormatTable::default();
+            let mut facts = row(TextureFormat::Rgba8Unorm, 1);
+            // A storage fact is the one fact the table demands was probed.
+            facts.evidence = FormatEvidence::OperationProbed;
+            facts.storage_read = read;
+            facts.storage_write = write;
+            assert_eq!(table.record(facts), Ok(()));
+            assert!(
+                !table.has_storage_read_write(),
+                "read={read} write={write} is one direction, not the domain"
+            );
+        }
+
+        let mut table = FormatTable::default();
+        let mut facts = row(TextureFormat::Depth32Float, 1);
+        facts.evidence = FormatEvidence::OperationProbed;
+        facts.storage_read = true;
+        facts.storage_write = true;
+        assert_eq!(table.record(facts), Ok(()));
+        assert!(
+            table.has_storage_read_write(),
+            "one row proving both directions satisfies the query"
+        );
     }
 }

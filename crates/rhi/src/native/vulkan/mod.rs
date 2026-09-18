@@ -70,7 +70,10 @@
 //!     `blendable`, `storage_read`, `storage_write`, `copy_source`,
 //!     `copy_destination`) that the GL family already models and that W9 will
 //!     unify. A format fact is recorded only where
-//!     `vkGetPhysicalDeviceFormatProperties` proved it.
+//!     `vkGetPhysicalDeviceFormatProperties` proved it. The device owns that table,
+//!     because the storage-image row's resource half is read from it when the ledger
+//!     is recorded -- the ledger is captured at creation and never recomputed, so a
+//!     fact discovered later could not reach it.
 //!
 //! # Acceptance
 //!
