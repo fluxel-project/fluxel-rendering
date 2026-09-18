@@ -101,6 +101,7 @@
 
 pub(crate) mod api;
 pub(crate) mod base;
+pub(crate) mod binding;
 pub(crate) mod caps;
 pub(crate) mod sampler;
 pub(crate) mod vertex;

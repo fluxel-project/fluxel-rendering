@@ -18,11 +18,15 @@
 //!
 //! # What the layout carries today, and what it will carry
 //!
-//! No descriptor set layouts and no push constant ranges yet. The set-layout slice
-//! is already a parameter, so the descriptor increment fills it rather than changing
-//! this call, and an empty slice is the honest description of a pipeline whose
-//! shader declares no bindings. A push constant range would claim a mechanism no
-//! retained recipe uses: the borrowed path being replaced passes an immediate-data
+//! The descriptor set layouts are owned by the pipeline layout rather than borrowed
+//! from the caller. `Vulkan` requires every set layout referenced by a pipeline
+//! layout to outlive it, so the only shape that cannot be misused is the
+//! longer-lived object containing the shorter ones: [`PipelineLayout`] holds the
+//! [`SetLayout`]s it was created over, and field order destroys the pipeline layout
+//! before them. Pass an empty vector for a shader that declares no bindings.
+//!
+//! No push constant ranges yet: a push constant range would claim a mechanism no
+//! retained recipe uses. The borrowed path being replaced passes an immediate-data
 //! size of zero, which is "no push constants" here.
 //!
 //! # A failed creation is not partially usable
@@ -39,6 +43,7 @@ use ash::vk;
 
 use crate::shader_contract::ShaderStage;
 
+use super::descriptor::SetLayout;
 use super::shader::{self, Module, ShaderError};
 
 /// Why a pipeline layout or a pipeline could not be created.
@@ -56,6 +61,13 @@ pub(crate) enum PipelineError {
 pub(crate) struct PipelineLayout {
     device: ash::Device,
     handle: vk::PipelineLayout,
+    /// The descriptor set layouts this pipeline layout refers to at bind time.
+    ///
+    /// Owned, not borrowed: `Vulkan` requires a set layout to outlive every pipeline
+    /// layout that names it, and the declaration order here is what destroys the
+    /// pipeline layout before them. An empty vector is a shader declaring no
+    /// bindings and claims nothing.
+    set_layouts: Vec<SetLayout>,
 }
 
 impl PipelineLayout {
@@ -70,6 +82,8 @@ impl Drop for PipelineLayout {
         // SAFETY: the handle was created by this device and is destroyed once here.
         // The device outlives this layout because the caller that created it holds
         // both, and every pipeline created against this layout is destroyed first.
+        // The set layouts are released by field order *after* this body, which is
+        // the order Vulkan requires: the pipeline layout names them, not the reverse.
         unsafe { self.device.destroy_pipeline_layout(self.handle, None) };
     }
 }
@@ -79,6 +93,7 @@ impl core::fmt::Debug for PipelineLayout {
         formatter
             .debug_struct("PipelineLayout")
             .field("handle", &self.handle)
+            .field("set_layout_count", &self.set_layouts.len())
             .finish_non_exhaustive()
     }
 }
@@ -122,23 +137,28 @@ impl core::fmt::Debug for ComputePipeline {
 
 /// Creates a pipeline layout over `set_layouts`.
 ///
-/// An empty slice is legal and is what the retained compute artifacts use today:
-/// their bindings are not expressible until the binding vocabulary lands. The slice
-/// is borrowed only for the call, because `Vulkan` copies the handles into the
-/// layout it creates -- so the descriptor set layouts themselves must still outlive
-/// every pipeline created against this layout.
+/// The set layouts are consumed rather than borrowed because the resulting pipeline
+/// layout names them and they must outlive it; see the module docs. An empty vector
+/// is legal and is what a shader that declares no bindings asks for.
 pub(crate) fn create_layout(
     device: &ash::Device,
-    set_layouts: &[vk::DescriptorSetLayout],
+    set_layouts: Vec<SetLayout>,
 ) -> Result<PipelineLayout, PipelineError> {
-    let info = vk::PipelineLayoutCreateInfo::default().set_layouts(set_layouts);
+    // The create-info borrows handles for the duration of the call only: `Vulkan`
+    // copies them into the layout it creates. The owners are moved into the
+    // returned value, which is what keeps the handles alive.
+    let handles: Vec<vk::DescriptorSetLayout> =
+        set_layouts.iter().map(SetLayout::handle).collect();
+    let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&handles);
     // SAFETY: the device is live; every set layout is a live handle this device
-    // created, and the slice outlives the call.
+    // created and is moved into the returned value, and the handle slice outlives
+    // the call.
     let handle = unsafe { device.create_pipeline_layout(&info, None) }
         .map_err(PipelineError::Layout)?;
     Ok(PipelineLayout {
         device: device.clone(),
         handle,
+        set_layouts,
     })
 }
 
@@ -190,8 +210,49 @@ pub(crate) fn create_compute(
 mod tests {
     use super::*;
     use crate::Validation;
+    use crate::common::binding::{
+        BindGroupLayout, BindGroupLayoutEntry, BindingKind, BufferBindingType, SamplerBindingType,
+        ShaderVisibility, TextureSampleType, ViewDimension,
+    };
+    use crate::native::vulkan::descriptor;
     use crate::native::vulkan::open;
     use crate::native::vulkan::shader::MINIMAL_COMPUTE_SPIRV;
+
+    /// The exact bind-group layout the linear-clamp raster artifact declares.
+    fn textured_frame() -> BindGroupLayout {
+        let entry = |binding, visibility, kind| BindGroupLayoutEntry {
+            binding,
+            visibility,
+            kind,
+        };
+        BindGroupLayout {
+            entries: vec![
+                entry(
+                    0,
+                    ShaderVisibility::VERTEX_FRAGMENT,
+                    BindingKind::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(80),
+                    },
+                ),
+                entry(
+                    1,
+                    ShaderVisibility::FRAGMENT,
+                    BindingKind::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: ViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    2,
+                    ShaderVisibility::FRAGMENT,
+                    BindingKind::Sampler(SamplerBindingType::Filtering),
+                ),
+            ],
+        }
+    }
 
     #[test]
     fn a_real_compute_pipeline_is_created_from_a_spirv_module_on_this_machine() {
@@ -202,7 +263,7 @@ mod tests {
             return;
         };
         let layout =
-            create_layout(opened.device.device(), &[]).expect("an empty pipeline layout");
+            create_layout(opened.device.device(), Vec::new()).expect("an empty pipeline layout");
         let pipeline = create_compute(
             opened.device.device(),
             layout,
@@ -217,14 +278,42 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_that_is_not_spirv_is_refused_before_the_driver_is_reached() {
-        // The refusal happens inside `create_compute`, before a pipeline exists, and
-        // the layout it consumed is released with it rather than leaked.
+    fn a_pipeline_layout_owns_the_descriptor_set_layouts_it_names() {
+        // The dependency `Vulkan` enforces is set layout -> pipeline layout ->
+        // pipeline, and the owner chain states it as fields rather than as a comment.
+        // Dropping the pipeline releases all three handles in that order, so a
+        // layout that outlived its set layouts cannot be written here.
         let Ok(opened) = open::open(Validation::Disabled, 0) else {
             return;
         };
-        let layout =
-            create_layout(opened.device.device(), &[]).expect("an empty pipeline layout");
+        let set = descriptor::create_set_layout(opened.device.device(), &textured_frame())
+            .expect("a valid descriptor set layout");
+        let layout = create_layout(opened.device.device(), vec![set])
+            .expect("a pipeline layout over one set layout");
+        let pipeline = create_compute(
+            opened.device.device(),
+            layout,
+            &MINIMAL_COMPUTE_SPIRV,
+            c"main",
+        )
+        .expect("a compute pipeline over a real descriptor set layout");
+        assert_ne!(pipeline.handle(), vk::Pipeline::null());
+        drop(pipeline);
+    }
+
+    #[test]
+    fn a_payload_that_is_not_spirv_is_refused_before_the_driver_is_reached() {
+        // The refusal happens inside `create_compute`, before a pipeline exists, and
+        // the layout it consumed is released with it rather than leaked. A real
+        // descriptor set layout is consumed too, which is what proves the release
+        // walks the whole owner chain.
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let set = descriptor::create_set_layout(opened.device.device(), &textured_frame())
+            .expect("a valid descriptor set layout");
+        let layout = create_layout(opened.device.device(), vec![set])
+            .expect("a pipeline layout over one set layout");
         let refused = create_compute(opened.device.device(), layout, &[0x0000_0001], c"main");
         assert_eq!(
             refused.err(),

@@ -135,6 +135,10 @@ pub(crate) mod resource;
 /// Step 5's shader half: a SPIR-V module and the pipeline stage that names it.
 pub(crate) mod shader;
 
+/// Step 5's descriptor half: the descriptor set layout, lowered from the common
+/// bind-group layout vocabulary and owned by the pipeline layout built over it.
+pub(crate) mod descriptor;
+
 /// Step 5's pipeline half: the pipeline layout and the compute pipeline built over
 /// it, with the shader module destroyed as soon as creation has read it.
 pub(crate) mod pipeline;
