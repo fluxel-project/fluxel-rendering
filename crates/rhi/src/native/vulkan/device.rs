@@ -336,6 +336,13 @@ impl crate::common::api::negotiate::CapabilitySource for VulkanDevice {
 ///   That fact is this row's numeric floor, so a device created with the pair on an
 ///   adapter whose formats none support storage is *examined and refused* rather
 ///   than left unexamined -- a difference the ledger keeps for diagnostics.
+/// - **BaseVertex** and **FirstInstance** from the core `Vulkan` 1.0 draw
+///   parameters: an indexed draw's `vertexOffset` and a draw's `firstInstance` are
+///   part of `vkCmdDraw` / `vkCmdDrawIndexed` rather than a device feature, and step
+///   12 records both commands on the graphics family this device was created on.
+///   The `drawIndirectFirstInstance` feature gates only the *indirect* form, which
+///   the unproved `IndirectDraw` row would name, so neither row claims it. Like copy
+///   and occlusion, neither has a numeric floor of its own.
 ///
 /// Every other row is absent, because nothing has proved it. Absence is the
 /// rejecting value, so no unproved domain can be entered by accident -- and each
@@ -371,6 +378,21 @@ pub(crate) fn ledger(
             operation_probe: OperationProbe::NotRequired,
         },
     );
+    // The two draw-parameter rows are the same structural proof copy has: the base
+    // offset and the first instance are core `Vulkan` 1.0 parameters of the draw
+    // commands step 12 records, not device features. They are recorded as two rows
+    // because they are two families (plan section 20.1) -- one device may prove one
+    // without the other -- and neither borrows a numeric floor it does not read.
+    for row in [Capability::BaseVertex, Capability::FirstInstance] {
+        ledger.record(
+            row,
+            CapabilityFact {
+                evidence: Some(CapabilityEvidence::Core),
+                limits_satisfied: true,
+                operation_probe: OperationProbe::NotRequired,
+            },
+        );
+    }
     // Occlusion is a core `Vulkan` 1.0 query type on a graphics queue, and the row
     // describes the *imprecise* answer -- "did any sample pass" -- which is the
     // answer the core type gives. The exact sample count is the
@@ -887,6 +909,33 @@ mod tests {
     }
 
     #[test]
+    fn the_draw_parameter_rows_are_proved_by_the_core_draw_commands() {
+        // Both are core `Vulkan` 1.0 draw parameters rather than features, so they
+        // are proved in a ledger whose every reported number is absent -- the
+        // discriminating shape for a floor that is trivially satisfied instead of
+        // borrowed from a neighbouring limit.
+        let bare = ledger(
+            selected(false, 0),
+            &AdapterLimits::unavailable(),
+            no_stores(),
+            &no_formats(),
+        );
+        for row in [Capability::BaseVertex, Capability::FirstInstance] {
+            assert!(bare.supports(row), "{row:?} is a core draw parameter");
+            assert_eq!(
+                bare.fact(row).map(|fact| fact.operation_probe),
+                Some(OperationProbe::NotRequired),
+                "{row:?} needs no probe: the parameter is part of the draw command"
+            );
+            assert_eq!(
+                bare.fact(row).map(|fact| fact.limits_satisfied),
+                Some(true),
+                "{row:?} has no numeric floor, so nothing can leave it unsatisfied"
+            );
+        }
+    }
+
+    #[test]
     fn indirect_dispatch_arrives_only_beside_a_proved_compute_row() {
         // Without compute the row is not merely disabled, it was never examined --
         // which is the difference the ledger keeps for diagnostics.
@@ -1221,6 +1270,14 @@ mod tests {
             device.ledger().supports(Capability::ElapsedQuery),
             selected.supports_timestamps(),
             "an elapsed interval is the timestamp facility used twice"
+        );
+        assert!(
+            device.ledger().supports(Capability::BaseVertex),
+            "vkCmdDrawIndexed's vertexOffset is core 1.0 on the graphics family"
+        );
+        assert!(
+            device.ledger().supports(Capability::FirstInstance),
+            "vkCmdDraw's firstInstance is core 1.0 on the graphics family"
         );
         assert!(
             !device.ledger().supports(Capability::IndirectDraw),

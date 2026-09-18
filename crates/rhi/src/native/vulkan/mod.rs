@@ -93,7 +93,7 @@
 //!     whose parameter space `GraphicsApi`'s draw verbs deliberately cannot name
 //!     (plan section 20.1) -- and it is what lets `VulkanDevice` implement
 //!     `Provides<Graphics>`, which `device`'s real-device test still records as not
-//!     compiling. Four bounded pieces have landed: the pure [`render_pass`]
+//!     compiling. Five bounded pieces have landed: the pure [`render_pass`]
 //!     lowering; [`framebuffer`] with the [`command::Encoder`] bracket
 //!     (`begin_raster` / `end_raster`) that owns the render pass and framebuffer a
 //!     recorded pass needs, refusing a barrier, a copy or an `end` while a pass is
@@ -104,9 +104,13 @@
 //!     `VK_KHR_maintenance1`; and [`bind_group`] with the [`command::Encoder`]
 //!     `set_bindings` verb, which owns the `VkDescriptorPool` and `VkDescriptorSet`
 //!     the retained textured layout fills and refuses a dynamic binding this
-//!     vocabulary cannot supply. What step 12 still owes is the two draw-parameter
-//!     rows (`BaseVertex`, `FirstInstance`) step 11 handed to it; the verbs they gate
-//!     deliberately fix both at zero until those rows are proved.
+//!     vocabulary cannot supply; and the two draw-parameter rows (`BaseVertex`,
+//!     `FirstInstance`) step 11 handed to it, recorded from the core `Vulkan` 1.0
+//!     draw parameters -- an indexed draw's `vertexOffset` and a draw's
+//!     `firstInstance` -- with the family markers that let a graph require them.
+//!     `GraphicsApi`'s draw verbs keep both at zero, because a non-zero value is a
+//!     separate family's parameter space (plan section 20.1) and the verbs that name
+//!     it arrive with a consumer. Step 12 is complete.
 //!
 //! # Acceptance
 //!

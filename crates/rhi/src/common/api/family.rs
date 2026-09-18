@@ -95,6 +95,36 @@ impl CapabilityFamily for Multiview {
     const ROW: Capability = Capability::Multiview;
 }
 
+/// The base-vertex family: an indexed draw that adds a base offset to each index.
+///
+/// A marker without a trait, like [`Multiview`]: `GraphicsApi`'s indexed draw
+/// deliberately fixes the base vertex at zero (plan section 20.1 -- a base family's
+/// parameter space must not be able to name another family's capability), and no
+/// retained recipe declares a non-zero one, so there is no verb to write yet and
+/// section 20.4 forbids adding vocabulary ahead of its consumer. What the marker
+/// buys is what every marker buys: a graph states the requirement in family terms,
+/// and a device that never proved the row refuses the graph instead of reaching a
+/// draw whose parameter this layer cannot name.
+///
+/// It is a family of its own rather than a parameter of [`FirstInstance`] because
+/// the two are independently negotiable -- one ledger row per family, section
+/// 20.1 -- so a device may prove a base offset without proving a non-zero first
+/// instance.
+pub(crate) struct BaseVertex;
+impl CapabilityFamily for BaseVertex {
+    const ROW: Capability = Capability::BaseVertex;
+}
+
+/// The first-instance family: a draw that starts at a non-zero instance.
+///
+/// A marker without a trait, for [`BaseVertex`]'s reason, and a separate family
+/// from it for the same reason: the two rows are distinct facts rather than one
+/// "advanced draw" row.
+pub(crate) struct FirstInstance;
+impl CapabilityFamily for FirstInstance {
+    const ROW: Capability = Capability::FirstInstance;
+}
+
 /// Which of the ledger's conditions left a requirement unmet.
 ///
 /// The three are reported separately because they are different sentences to a
@@ -327,6 +357,50 @@ mod tests {
             requirement.satisfied_by(&ledger),
             Err(UnsupportedCapability {
                 row: Capability::Compute,
+                reason: UnmetReason::NotExamined,
+            })
+        );
+    }
+
+    #[test]
+    fn the_draw_parameter_families_name_distinct_rows() {
+        // One row per family (section 20.1): a device that proved a base offset has
+        // proved nothing about a non-zero first instance, so neither requirement may
+        // be satisfied by the other's row. The two directions are asserted
+        // separately because "distinct rows" alone would not catch a `ROW` that
+        // pointed at a third row both requirements happened to share.
+        assert_ne!(BaseVertex::ROW, FirstInstance::ROW);
+
+        let base_only = proved_ledger(Capability::BaseVertex);
+        assert_eq!(
+            Requirement::none()
+                .requiring::<BaseVertex>()
+                .satisfied_by(&base_only),
+            Ok(())
+        );
+        assert_eq!(
+            Requirement::none()
+                .requiring::<FirstInstance>()
+                .satisfied_by(&base_only),
+            Err(UnsupportedCapability {
+                row: Capability::FirstInstance,
+                reason: UnmetReason::NotExamined,
+            })
+        );
+
+        let instance_only = proved_ledger(Capability::FirstInstance);
+        assert_eq!(
+            Requirement::none()
+                .requiring::<FirstInstance>()
+                .satisfied_by(&instance_only),
+            Ok(())
+        );
+        assert_eq!(
+            Requirement::none()
+                .requiring::<BaseVertex>()
+                .satisfied_by(&instance_only),
+            Err(UnsupportedCapability {
+                row: Capability::BaseVertex,
                 reason: UnmetReason::NotExamined,
             })
         );

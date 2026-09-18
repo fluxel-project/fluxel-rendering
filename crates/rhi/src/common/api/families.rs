@@ -45,6 +45,16 @@
 //! and the execution model is one queue. Writing their methods now would be
 //! vocabulary for work nobody has asked for, and the markers already let a caller
 //! state the requirement.
+//!
+//! `BaseVertex` and `FirstInstance` join that list for the same shape of reason.
+//! Their ledger rows are proved on a `Vulkan` 1.0 device, because the base offset
+//! and the first instance are core parameters of the draw commands rather than
+//! features, and the markers let a graph require them. The verbs that name the two
+//! parameters are separate families by plan section 20.1 -- [`GraphicsApi`]'s draw
+//! verbs fix both at zero -- and no retained recipe declares either, so they arrive
+//! with the consumer that needs them rather than here.
+//!
+//! [`GraphicsApi`]: super::graphics::GraphicsApi
 
 use fluxel_rendergraph::{BufferCopyRegion, TextureCopyRegion};
 
