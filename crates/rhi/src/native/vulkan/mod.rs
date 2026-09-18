@@ -139,6 +139,7 @@ pub(crate) mod shader;
 /// bind-group layout vocabulary and owned by the pipeline layout built over it.
 pub(crate) mod descriptor;
 
-/// Step 5's pipeline half: the pipeline layout and the compute pipeline built over
-/// it, with the shader module destroyed as soon as creation has read it.
+/// Step 5's pipeline half: the pipeline layout, the compute pipeline built over it,
+/// and the raster pipeline lowered from the common fixed-function vocabulary, with
+/// each shader module destroyed as soon as creation has read it.
 pub(crate) mod pipeline;

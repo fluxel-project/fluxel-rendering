@@ -41,11 +41,13 @@ pub(crate) enum FilterMode {
     Linear,
 }
 
-/// A comparison a shadow sampler performs per sample.
+/// One of the eight orderings a comparison can apply.
 ///
-/// The full ordering is stated because a comparison sampler is the one case where
-/// every variant is meaningful; only the *presence* of the comparison is optional,
-/// and that optionality lives on [`SamplerDescriptor::compare`].
+/// Two consumers share it, which is why it is one enum rather than two spellings:
+/// a shadow sampler's per-sample comparison, and a pipeline's depth test
+/// ([`super::pipeline::DepthStencilState::depth_compare`]). In both, every variant
+/// is meaningful; only a sampler can *lack* a comparison, and that optionality
+/// lives on [`SamplerDescriptor::compare`] rather than in this enum.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum CompareFunction {
     /// The comparison never passes.
