@@ -117,6 +117,12 @@ pub(crate) mod buffer;
 /// Step 4's pure half: portable formats lowered onto Vulkan image formats.
 pub(crate) mod format;
 
+/// Step 11's per-format half: the portable format lowered onto the facts one
+/// `vkGetPhysicalDeviceFormatProperties` answer proves, and the common evidence
+/// table those facts are recorded in. A format fact is recorded only where the
+/// driver was asked about that format.
+pub(crate) mod format_facts;
+
 /// Step 3''s second half: suballocation and binding memory to a handle.
 pub(crate) mod allocator;
 

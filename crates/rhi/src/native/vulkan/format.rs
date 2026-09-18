@@ -23,6 +23,23 @@
 use ash::vk;
 use fluxel_rendergraph::TextureFormat;
 
+/// The portable formats this backend maps, in the portable enum's declaration
+/// order.
+///
+/// [`TextureFormat`] is `#[non_exhaustive]` and offers no variant iterator, so the
+/// list has to be written out. Keeping it here, beside the mapping it describes,
+/// means the format-evidence query iterates the same set this module lowers -- a
+/// format added upstream is simply not in the list and is refused by
+/// [`image_format`]'s `None` rather than guessed at. A test pins what *is*
+/// checkable: that every entry maps, and that the list has no duplicate.
+pub(crate) const MAPPED: [TextureFormat; 5] = [
+    TextureFormat::Rgba8Unorm,
+    TextureFormat::Rgba8UnormSrgb,
+    TextureFormat::Bgra8Unorm,
+    TextureFormat::Rgba16Float,
+    TextureFormat::Depth32Float,
+];
+
 /// The `Vulkan` format for one portable format, or `None` where this backend has
 /// no equivalent.
 pub(crate) fn image_format(format: TextureFormat) -> Option<vk::Format> {
@@ -53,15 +70,6 @@ pub(crate) fn is_depth(format: vk::Format) -> bool {
 mod tests {
     use super::*;
 
-    /// Every portable format, listed once.
-    const ALL: [TextureFormat; 5] = [
-        TextureFormat::Rgba8Unorm,
-        TextureFormat::Rgba8UnormSrgb,
-        TextureFormat::Bgra8Unorm,
-        TextureFormat::Rgba16Float,
-        TextureFormat::Depth32Float,
-    ];
-
     fn mapped(format: TextureFormat) -> vk::Format {
         image_format(format).expect("a portable format this backend maps")
     }
@@ -82,16 +90,32 @@ mod tests {
     }
 
     #[test]
+    fn every_mapped_format_is_taught_and_listed_once() {
+        // The list is what the format-evidence query iterates, so a format missing
+        // from it would be silently unexamined, and a duplicate would be queried
+        // twice. Neither is expressible in the type, so both are asserted.
+        for (index, format) in MAPPED.iter().enumerate() {
+            assert!(
+                image_format(*format).is_some(),
+                "{format:?} is listed but not mapped"
+            );
+            for other in &MAPPED[index + 1..] {
+                assert_ne!(format, other, "{format:?} is listed twice");
+            }
+        }
+    }
+
+    #[test]
     fn the_mapping_is_injective() {
         // A copy-paste in the match above would break this and nothing else.
-        let mapped_all: Vec<vk::Format> = ALL.iter().copied().map(mapped).collect();
+        let mapped_all: Vec<vk::Format> = MAPPED.iter().copied().map(mapped).collect();
         for (index, format) in mapped_all.iter().enumerate() {
             for (other_index, other) in mapped_all.iter().enumerate() {
                 if index != other_index {
                     assert_ne!(
                         format, other,
                         "{:?} and {:?} share a Vulkan format",
-                        ALL[index], ALL[other_index]
+                        MAPPED[index], MAPPED[other_index]
                     );
                 }
             }
@@ -110,7 +134,7 @@ mod tests {
 
     #[test]
     fn only_the_depth_format_is_depth() {
-        for format in ALL {
+        for format in MAPPED {
             assert_eq!(
                 is_depth(mapped(format)),
                 format == TextureFormat::Depth32Float,
