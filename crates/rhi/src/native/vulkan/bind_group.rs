@@ -64,6 +64,7 @@ use super::descriptor::{self, SetLayout};
 use super::format;
 use super::pipeline::PipelineLayout;
 use super::resource::ResourceTable;
+use super::storage;
 
 /// Why a bind group could not be created.
 ///
@@ -280,8 +281,9 @@ pub(crate) fn image_layout(kind: &BindingKind, is_depth: bool) -> Option<vk::Ima
 /// The buffer descriptor one binding writes, with its range checked at the boundary.
 ///
 /// The layout's minimum is checked first because it is a fact of the description; the
-/// buffer's own size is checked with the end computed in checked arithmetic, so an
-/// offset that would wrap is an overrun rather than a range that passes.
+/// buffer's own size is then checked by [`storage::check_range`], which is the same
+/// rule the storage-buffer family builds its binding with, so the two refuse exactly
+/// the same ranges rather than each keeping a spelling of the arithmetic.
 pub(crate) fn buffer_info(
     binding: u32,
     min_binding_size: Option<u64>,
@@ -298,11 +300,13 @@ pub(crate) fn buffer_info(
             return Err(BindGroupError::RangeTooSmall { binding, required });
         }
     }
-    let fits = offset
-        .checked_add(size)
-        .is_some_and(|end| end <= buffer_size);
-    if !fits {
-        return Err(BindGroupError::RangeOutOfBounds { binding });
+    if let Err(error) = storage::check_range(offset, size, buffer_size) {
+        return Err(match error {
+            // The empty range was answered above with the same sentence the family
+            // verb gives it; this arm keeps the mapping total.
+            storage::RangeError::Zero => BindGroupError::ZeroRange { binding },
+            storage::RangeError::OutOfBounds => BindGroupError::RangeOutOfBounds { binding },
+        });
     }
     Ok(vk::DescriptorBufferInfo::default()
         .buffer(buffer)

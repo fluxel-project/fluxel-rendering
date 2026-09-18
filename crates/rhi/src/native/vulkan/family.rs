@@ -1,27 +1,33 @@
-//! W2's family wiring: `VulkanDevice` as the graphics, copy and compute families'
-//! provider.
+//! W2's family wiring: `VulkanDevice` as the graphics, copy, compute and
+//! storage-buffer families' provider.
 //!
 //! The common layer's contract says a device *negotiates* a family and receives a
 //! handle that already borrows the device and the ledger that proved it (plan
 //! section 11). This module is the first real backend to do that: `VulkanDevice`
-//! implements [`Provides<Graphics>`], [`Provides<Copy>`] and [`Provides<Compute>`]
-//! and hands out [`GraphicsRecording`], [`CopyRecording`] and [`ComputeRecording`],
-//! which implement [`FamilyApi`] and their own family's trait over the device's own
-//! resource table and one recording from the device's own command pool.
+//! implements [`Provides<Graphics>`], [`Provides<Copy>`], [`Provides<Compute>`] and
+//! [`Provides<StorageBuffer>`] and hands out [`GraphicsRecording`], [`CopyRecording`],
+//! [`ComputeRecording`] and [`StorageBufferBindings`], which implement [`FamilyApi`]
+//! and their own family's trait over the device's own resource table -- and, for the
+//! three command families, over one recording from the device's own command pool.
 //!
 //! # One recording owner, one handle type per family
 //!
-//! [`Recording`] is the machinery the handles share: the recording begun by the
-//! first command that needs one, and the three states that recording can be in. The
-//! handles are distinct types on purpose. A single type implementing several family
-//! traits would let a caller that negotiated only `Copy` reach a draw, because a
-//! family verb does not re-ask the ledger once a handle exists -- so the type, not a
+//! [`Recording`] is the machinery the command handles share: the recording begun by
+//! the first command that needs one, and the three states that recording can be in.
+//! The handles are distinct types on purpose. A single type implementing several
+//! family traits would let a caller that negotiated only `Copy` reach a draw, because
+//! a family verb does not re-ask the ledger once a handle exists -- so the type, not a
 //! run-time check, is what keeps one family's vocabulary out of another's call site.
 //!
-//! Each handle is therefore its own recording context, which the contract permits
-//! (plan section 21: negotiation and recording context need not remain the same
-//! object). A graph execution that names two families negotiates two handles and so
-//! produces two recordings; composing them into one submission is the
+//! [`StorageBufferBindings`] is a *resource role* rather than a command domain, so it
+//! owns no recording at all: it resolves a `BufferId` through the table and builds a
+//! validated range. That is the one place the four families differ structurally rather
+//! than only in their verbs, and it is stated by the type having no `Recording` field.
+//!
+//! Each command handle is therefore its own recording context, which the contract
+//! permits (plan section 21: negotiation and recording context need not remain the
+//! same object). A graph execution that names two families negotiates two handles and
+//! so produces two recordings; composing them into one submission is the
 //! execution-layer migration's decision and is deliberately not invented here.
 //!
 //! # The encoder is private, and the recording is begun lazily
@@ -62,12 +68,12 @@
 use std::ops::Range;
 
 use fluxel_rendergraph::{
-    BufferCopyRegion, BufferRange, IndexFormat, RasterPassDescriptor, ResourceAccessState,
-    ScissorRect, TextureCopyRegion, TextureRange, Viewport,
+    BufferCopyRegion, BufferRange, BufferUsageKind, IndexFormat, RasterPassDescriptor,
+    ResourceAccessState, ScissorRect, TextureCopyRegion, TextureRange, Viewport,
 };
 
-use crate::common::api::families::{ComputeApi, CopyApi};
-use crate::common::api::family::{Compute, Copy, Graphics};
+use crate::common::api::families::{ComputeApi, CopyApi, StorageBufferApi};
+use crate::common::api::family::{Compute, Copy, Graphics, StorageBuffer};
 use crate::common::api::graphics::GraphicsApi;
 use crate::common::api::handle::FamilyApi;
 use crate::common::api::negotiate::Provides;
@@ -81,6 +87,7 @@ use super::format;
 use super::framebuffer::{Framebuffer, FramebufferError};
 use super::pipeline::{ComputePipeline, RasterPipeline};
 use super::render_pass::{self, PassError};
+use super::storage::{self, StorageBufferBinding};
 
 /// Why a graphics command was refused.
 ///
@@ -133,18 +140,21 @@ pub(crate) enum CopyError {
 
 /// Why a compute command was refused.
 ///
-/// One layer can refuse: the recording, whose refusals -- not recording, no compute
-/// pass open, a second begin, a dispatch with a zero group dimension -- are carried
-/// from [`RecordError`] rather than restated. There is no id lookup here, because
-/// every `ComputeApi` verb either takes a value the caller already holds ([`BindGroup`],
-/// [`ComputePipeline`]) or takes none at all. The family keeps its own error type
-/// anyway, per the convention section 11.9 fixes: a backend that later needs a
-/// compute-specific refusal has a place to put it without widening every other
-/// family's sentence.
+/// The recording's refusals -- not recording, no compute pass open, a second begin, a
+/// dispatch with a zero group dimension -- are carried from [`RecordError`] rather
+/// than restated, and the two id sentences are the handle's own, because a transition
+/// resolves its resource through the table before the recorder is reached. The family
+/// keeps its own error type, per the convention section 11.9 fixes: a backend that
+/// later needs a compute-specific refusal has a place to put it without widening every
+/// other family's sentence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ComputeError {
     /// The recording itself refused the command.
     Recording(RecordError),
+    /// The id names no live buffer of this device generation.
+    UnknownBuffer,
+    /// The id names no live texture of this device generation.
+    UnknownTexture,
 }
 
 /// One handle's recording, as the three states it can be in.
@@ -678,14 +688,15 @@ impl core::fmt::Debug for CopyRecording<'_> {
 /// `Vulkan` has no driver command for, and its binding is recorded through the
 /// `COMPUTE` bind point.
 ///
-/// # What it deliberately does not carry
+/// # What it carries beyond the family trait, and why
 ///
-/// No transitions: a dispatch that reads a storage buffer needs its barrier, but the
-/// bindings a compute recipe declares are the storage-role families
-/// (`StorageBufferApi` / `StorageTextureApi`), and those are not wired yet. The
-/// transitions arrive with them, exactly as they arrived with the copy family when
-/// its own verbs first named a transfer layout. What is here is the negotiation and
-/// the recording bracket the compute row already proves.
+/// The graph's own transitions, as crate-private methods. A dispatch that reads or
+/// writes a storage binding needs that buffer or image ordered into the shader-storage
+/// state first, and the barriers belong in the recording the dispatch is in -- so they
+/// arrived with the storage-buffer family rather than with this one, exactly as
+/// [`CopyRecording`]'s arrived with the copy verbs that first named a transfer layout.
+/// They are not `ComputeApi` verbs, because a pipeline barrier is a backend mechanism
+/// and the common contract carries none (plan section 1).
 pub(crate) struct ComputeRecording<'d> {
     /// The recording this handle records into, begun by the first compute command.
     recording: Recording<'d>,
@@ -705,6 +716,69 @@ impl<'d> ComputeRecording<'d> {
     /// Returns the live recording, in this family's sentence.
     fn encoder(&mut self) -> Result<&mut Encoder, ComputeError> {
         self.recording.encoder().map_err(ComputeError::Recording)
+    }
+
+    /// Records the barrier one portable buffer transition requires.
+    ///
+    /// Deliberately not a `ComputeApi` verb: a pipeline barrier is a backend
+    /// mechanism and the common contract carries none (plan section 1). It arrived
+    /// with the storage-buffer family, because a dispatch that reads or writes a
+    /// storage binding is the first compute command whose resources need ordering --
+    /// the same reason [`CopyRecording::transition_buffer`] exists, and the reason
+    /// this family had no transitions until now. It resolves the id exactly as the
+    /// other handles do.
+    pub(crate) fn transition_buffer(
+        &mut self,
+        buffer: BufferId,
+        range: BufferRange,
+        before: ResourceAccessState,
+        after: ResourceAccessState,
+    ) -> Result<(), ComputeError> {
+        let handle = self
+            .recording
+            .device()
+            .table()
+            .buffer_handle(buffer)
+            .ok_or(ComputeError::UnknownBuffer)?;
+        self.recording
+            .encoder()
+            .map_err(ComputeError::Recording)?
+            .transition_buffer(handle, range, before, after)
+            .map_err(ComputeError::Recording)
+    }
+
+    /// Records the barrier one portable texture transition requires.
+    ///
+    /// The mapped `Vulkan` format is read from the texture's own description, so the
+    /// one layout whose answer depends on the format -- a sampled read, and whether it
+    /// is a depth layout -- keeps the single source of truth
+    /// [`super::barrier::image_state`] already uses.
+    pub(crate) fn transition_texture(
+        &mut self,
+        texture: TextureId,
+        range: TextureRange,
+        before: ResourceAccessState,
+        after: ResourceAccessState,
+    ) -> Result<(), ComputeError> {
+        let desc = self
+            .recording
+            .device()
+            .table()
+            .texture_desc(texture)
+            .ok_or(ComputeError::UnknownTexture)?;
+        let image = self
+            .recording
+            .device()
+            .table()
+            .texture_image(texture)
+            .ok_or(ComputeError::UnknownTexture)?;
+        let mapped = format::image_format(desc.format)
+            .ok_or(ComputeError::Recording(RecordError::UnsupportedFormat))?;
+        self.recording
+            .encoder()
+            .map_err(ComputeError::Recording)?
+            .transition_image(image, mapped, range, before, after)
+            .map_err(ComputeError::Recording)
     }
 
     /// Ends the recording and hands it to submission.
@@ -770,6 +844,100 @@ impl core::fmt::Debug for ComputeRecording<'_> {
     }
 }
 
+/// Why a storage-role binding was refused.
+///
+/// Every variant is a value returned before the driver is reached. Two are the
+/// handle's own -- the id lookup and the usage check -- and the other two are
+/// [`storage::RangeError`]'s sentences carried rather than restated, because "this
+/// range is empty" and "this range does not fit" are different fixes.
+///
+/// [`Self::UsageNotDeclared`] is the check this family adds over the bind-group step,
+/// and it is the buffer step's own rule applied at the point a binding is built: the
+/// portable usage mapping never widens (section 18 of the lead 3F plan), so a storage
+/// binding over a buffer the graph created for vertices would be an operation no
+/// retained access declared.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StorageError {
+    /// The id names no live buffer of this device generation.
+    UnknownBuffer,
+    /// The buffer was created without a storage usage, so no storage binding may name
+    /// it.
+    UsageNotDeclared,
+    /// The binding's range is zero bytes.
+    ZeroRange,
+    /// The binding's range does not fit inside the buffer it names.
+    RangeOutOfBounds,
+}
+
+/// The storage-buffer family's handle on one `Vulkan` device.
+///
+/// A *resource role* rather than a command domain: it gates how a binding is built and
+/// records nothing, so unlike the three command families' handles it owns no encoder
+/// and its `finish` does not exist. What it borrows is the device whose table answers
+/// whether a buffer exists, how large it is and what it was declared for.
+///
+/// It is a distinct type from every other family's handle for the reason
+/// [`CopyRecording`] states: a family verb does not re-ask the ledger once a handle
+/// exists, so only the type keeps one family's vocabulary out of another's call site.
+/// A caller that negotiated `StorageBuffer` therefore cannot reach a draw, and a
+/// caller that negotiated nothing cannot build a storage binding at all.
+pub(crate) struct StorageBufferBindings<'d> {
+    /// The device whose table every fact this family checks comes from.
+    device: &'d VulkanDevice,
+}
+
+impl<'d> StorageBufferBindings<'d> {
+    /// Wraps one device generation without touching the driver.
+    fn new(device: &'d VulkanDevice) -> Self {
+        Self { device }
+    }
+}
+
+impl FamilyApi for StorageBufferBindings<'_> {
+    fn stamp(&self) -> DeviceStamp {
+        self.device.stamp()
+    }
+}
+
+impl StorageBufferApi for StorageBufferBindings<'_> {
+    type Error = StorageError;
+    type Binding = StorageBufferBinding;
+
+    fn create_storage_binding(
+        &mut self,
+        buffer: BufferId,
+        offset: u64,
+        size: u64,
+    ) -> Result<Self::Binding, Self::Error> {
+        // Every fact comes from the device's table and none from the driver: the
+        // created size and the declared usage are the values the graph's own checks
+        // saw, so a binding cannot be admitted against a weaker fact than the buffer
+        // was.
+        let table = self.device.table();
+        let buffer_size = table.buffer_size(buffer).ok_or(StorageError::UnknownBuffer)?;
+        let usage = table.buffer_usage(buffer).ok_or(StorageError::UnknownBuffer)?;
+        let storage = usage.contains(BufferUsageKind::StorageRead)
+            || usage.contains(BufferUsageKind::StorageWrite);
+        if !storage {
+            return Err(StorageError::UsageNotDeclared);
+        }
+        storage::check_range(offset, size, buffer_size).map_err(|error| match error {
+            storage::RangeError::Zero => StorageError::ZeroRange,
+            storage::RangeError::OutOfBounds => StorageError::RangeOutOfBounds,
+        })?;
+        Ok(StorageBufferBinding::new(buffer, offset, size))
+    }
+}
+
+impl core::fmt::Debug for StorageBufferBindings<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("StorageBufferBindings")
+            .field("device", &self.device.stamp())
+            .finish_non_exhaustive()
+    }
+}
+
 /// The graphics family's provider.
 ///
 /// Implementing this is what makes the family *expressible* here; whether a device
@@ -816,6 +984,23 @@ impl Provides<Compute> for VulkanDevice {
     }
 }
 
+/// The storage-buffer family's provider, beside the three command families'.
+///
+/// A separate impl, for the reason [`Provides<Copy>`] states: the handle type bounds a
+/// caller's vocabulary, and a resource role is no exception -- a caller that
+/// negotiated no storage family has no way to build a storage binding. The row this
+/// negotiation proves is `Capability::StorageBuffer`, which `device::ledger` records
+/// only where the device was created with the shader-store pair every declared stage's
+/// write half needs, so a device without it has the vocabulary and still refuses the
+/// negotiation -- the two refusals the design keeps apart.
+impl Provides<StorageBuffer> for VulkanDevice {
+    type Api<'d> = StorageBufferBindings<'d>;
+
+    fn provide(&self) -> StorageBufferBindings<'_> {
+        StorageBufferBindings::new(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::time::Duration;
@@ -828,7 +1013,9 @@ mod tests {
 
     use super::*;
     use crate::Validation;
-    use crate::common::api::negotiate::require;
+    use crate::common::api::negotiate::{CapabilitySource, require};
+    use crate::common::binding::BindingResource;
+    use crate::common::caps::Capability;
     use crate::native::vulkan::compute::DispatchError;
     use crate::native::vulkan::pipeline::{create_compute, create_layout, create_raster};
     use crate::native::vulkan::shader::MINIMAL_COMPUTE_SPIRV;
@@ -1452,5 +1639,183 @@ mod tests {
             api.dispatch([1, 1, 1]),
             Err(ComputeError::Recording(RecordError::NotRecording))
         );
+    }
+
+    /// A device-local buffer created for shader storage.
+    fn storage_buffer(opened: &mut open::OpenedVulkan, size: u64) -> BufferId {
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        opened
+            .device
+            .table_mut()
+            .create_buffer(
+                size,
+                declared_buffer(&[
+                    BufferUsageKind::StorageRead,
+                    BufferUsageKind::StorageWrite,
+                ]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local storage buffer")
+    }
+
+    #[test]
+    fn a_negotiated_storage_binding_is_validated_against_the_device_table() {
+        // Step 13's storage-buffer family against the real driver: `require` yields the
+        // handle, the handle reads the buffer's created size and declared usage from
+        // the device's own table, and every refusal is a value returned before a
+        // descriptor exists. Skips where no adapter exists, and where the adapter
+        // cannot serve the family -- a device created without the shader-store pair is
+        // not this test's subject.
+        let Some(mut opened) = device() else {
+            return;
+        };
+        if !opened.device.ledger().supports(Capability::StorageBuffer) {
+            return;
+        }
+        let storage = storage_buffer(&mut opened, 256);
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let vertices = opened
+            .device
+            .table_mut()
+            .create_buffer(
+                256,
+                declared_buffer(&[BufferUsageKind::Vertex]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local vertex buffer");
+
+        let mut api = require::<_, StorageBuffer>(&opened.device)
+            .expect("a device created with the shader-store pair proves the row");
+        assert_eq!(
+            api.stamp(),
+            opened.device.stamp(),
+            "the handle reports the generation it was negotiated on"
+        );
+
+        let binding = api
+            .create_storage_binding(storage, 0, 256)
+            .expect("a range that fits the buffer");
+        assert_eq!(binding.buffer(), storage);
+        assert_eq!(binding.offset(), 0);
+        assert_eq!(binding.size(), 256);
+
+        // The value carries base identity, never a driver handle, and reaches a bind
+        // group at whatever number the layout declares -- which the family never saw.
+        let entry = binding.at(1);
+        assert_eq!(entry.binding, 1);
+        assert_eq!(
+            entry.resource,
+            BindingResource::Buffer {
+                buffer: storage,
+                offset: 0,
+                size: 256,
+            }
+        );
+
+        // Every refusal is its own sentence, and none of them reached the driver.
+        assert_eq!(
+            api.create_storage_binding(storage, 0, 0),
+            Err(StorageError::ZeroRange)
+        );
+        assert_eq!(
+            api.create_storage_binding(storage, 128, 256),
+            Err(StorageError::RangeOutOfBounds)
+        );
+        assert_eq!(
+            api.create_storage_binding(vertices, 0, 4),
+            Err(StorageError::UsageNotDeclared),
+            "the buffer step's mapping never widens, so a vertex buffer is not a storage one"
+        );
+        let foreign = BufferId::new(
+            opened.device.stamp().next_generation(),
+            PhysicalResourceIdentity::new(1),
+        );
+        assert_eq!(
+            api.create_storage_binding(foreign, 0, 4),
+            Err(StorageError::UnknownBuffer)
+        );
+    }
+
+    #[test]
+    fn a_compute_handle_orders_a_storage_binding_before_its_dispatch() {
+        // The transitions the compute family gained with the storage-role family: the
+        // graph's own barrier orders the buffer into the state its dispatch reads and
+        // writes, and the whole recording is work the driver executes.
+        let Some(mut opened) = device() else {
+            return;
+        };
+        if !opened.device.ledger().supports(Capability::StorageBuffer) {
+            return;
+        }
+        let storage = storage_buffer(&mut opened, 256);
+        let pipeline = compute_pipeline(&opened);
+
+        let mut api = require::<_, Compute>(&opened.device).expect("compute is proved");
+        api.transition_buffer(
+            storage,
+            BufferRange::Whole,
+            ResourceAccessState::Undefined,
+            ResourceAccessState::ShaderStorageReadWrite,
+        )
+        .expect("the storage buffer enters the state the dispatch reads and writes");
+        api.begin_compute().expect("the compute pass opens");
+        api.set_compute_pipeline(&pipeline).expect("the pipeline binds");
+        api.dispatch([1, 1, 1]).expect("a non-zero dispatch records");
+        api.end_compute().expect("the compute pass closes");
+
+        let finished = api.finish().expect("the recording ends");
+        let mut submission =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submission.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "a dispatch ordered behind a storage transition runs to completion"
+        );
+        assert!(submission.is_terminal());
+    }
+
+    #[test]
+    fn a_refused_compute_transition_is_a_value_and_leaves_the_recording_usable() {
+        // The two id sentences are the handle's own; the contract says the executor
+        // still ends a recording after a callback error, so neither may poison it.
+        let Some(opened) = device() else {
+            return;
+        };
+        let mut api = require::<_, Compute>(&opened.device).expect("compute is proved");
+        let foreign = TextureId::new(
+            opened.device.stamp().next_generation(),
+            PhysicalResourceIdentity::new(1),
+        );
+        assert_eq!(
+            api.transition_texture(
+                foreign,
+                TextureRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::ShaderStorageRead,
+            ),
+            Err(ComputeError::UnknownTexture)
+        );
+        assert_eq!(
+            api.transition_buffer(
+                BufferId::new(foreign.stamp(), foreign.identity()),
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::ShaderStorageRead,
+            ),
+            Err(ComputeError::UnknownBuffer)
+        );
+
+        // The refused transitions did not poison the recording: a real pass still
+        // records and still ends.
+        let pipeline = compute_pipeline(&opened);
+        api.begin_compute().expect("the compute pass opens");
+        api.set_compute_pipeline(&pipeline)
+            .expect("the recording is usable");
+        api.dispatch([1, 1, 1]).expect("a real dispatch records");
+        api.end_compute().expect("the pass closes");
+        api.finish().expect("the recording ends");
     }
 }

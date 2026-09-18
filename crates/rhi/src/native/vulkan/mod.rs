@@ -115,19 +115,30 @@
 //!     command pool and implements the family providers this backend can serve,
 //!     handing out one handle type per family: `Provides<Graphics>` yields
 //!     [`family::GraphicsRecording`] (`FamilyApi` + `GraphicsApi`), `Provides<Copy>`
-//!     yields [`family::CopyRecording`] (`FamilyApi` + `CopyApi`) and
+//!     yields [`family::CopyRecording`] (`FamilyApi` + `CopyApi`),
 //!     `Provides<Compute>` yields [`family::ComputeRecording`] (`FamilyApi` +
-//!     `ComputeApi`), each over that table and its own recording. The handles are
-//!     distinct types so a caller that negotiated one family cannot reach another's
-//!     verbs, and each is its own recording context, which the contract permits
-//!     (plan section 21). The compute bracket is this layer's own -- `Vulkan` has no
-//!     compute-pass command -- and the one recording encoder tracks it in the same
-//!     single pass slot the raster bracket uses. Composing two families into one
-//!     submission is the execution-layer migration's decision and is deliberately not
-//!     invented here. This step was added when the list above was exhausted, which is
-//!     section 23.1's rule moving to the W2 work package; it is what makes
-//!     `require::<_, Graphics>(&device)`, `require::<_, Copy>(&device)` and
-//!     `require::<_, Compute>(&device)` compile and run against this backend.
+//!     `ComputeApi`) and `Provides<StorageBuffer>` yields
+//!     [`family::StorageBufferBindings`] (`FamilyApi` + `StorageBufferApi`), each
+//!     over that table and -- for the three command families -- its own recording.
+//!     The handles are distinct types so a caller that negotiated one family cannot
+//!     reach another's verbs, and each is its own recording context, which the
+//!     contract permits (plan section 21). The compute bracket is this layer's own --
+//!     `Vulkan` has no compute-pass command -- and the one recording encoder tracks it
+//!     in the same single pass slot the raster bracket uses. Composing two families
+//!     into one submission is the execution-layer migration's decision and is
+//!     deliberately not invented here.
+//!
+//!     The storage-buffer family is the first *resource role* wired, and it is where
+//!     the compute handle's transitions arrive: a dispatch that reads or writes a
+//!     storage binding is the first compute command whose resources need ordering, so
+//!     [`family::ComputeRecording::transition_buffer`] /
+//!     [`family::ComputeRecording::transition_texture`] land beside it. The
+//!     storage-texture family, the indirect-dispatch family and the execution-layer
+//!     migration remain owed by this step. This step was added when the list above
+//!     was exhausted, which is section 23.1's rule moving to the W2 work package; it
+//!     is what makes `require::<_, Graphics>(&device)`, `require::<_, Copy>(&device)`,
+//!     `require::<_, Compute>(&device)` and `require::<_, StorageBuffer>(&device)`
+//!     compile and run against this backend.
 //!
 //! # Acceptance
 //!
@@ -257,15 +268,22 @@ pub(crate) mod draw;
 pub(crate) mod compute;
 
 /// Step 13: the family wiring. `VulkanDevice` implements `Provides<Graphics>`,
-/// `Provides<Copy>` and `Provides<Compute>`, handing out
-/// [`family::GraphicsRecording`], [`family::CopyRecording`] and
-/// [`family::ComputeRecording`], which implement `FamilyApi` and their own family's
-/// trait over the device's own resource table and their own recording. The handles
-/// are distinct types so one family's verbs cannot be reached from the other's call
-/// site, and `require::<_, Graphics>(&device)`, `require::<_, Copy>(&device)` and
-/// `require::<_, Compute>(&device)` are the real negotiation path for this backend
-/// rather than only a contract test.
+/// `Provides<Copy>`, `Provides<Compute>` and `Provides<StorageBuffer>`, handing out
+/// [`family::GraphicsRecording`], [`family::CopyRecording`],
+/// [`family::ComputeRecording`] and [`family::StorageBufferBindings`], which implement
+/// [`FamilyApi`](crate::common::api::handle::FamilyApi) and their own family's trait
+/// over the device's own resource table and (where the family records) their own
+/// recording. The handles are distinct types so one family's verbs cannot be reached
+/// from the other's call site, and `require::<_, Graphics>(&device)`,
+/// `require::<_, Copy>(&device)`, `require::<_, Compute>(&device)` and
+/// `require::<_, StorageBuffer>(&device)` are the real negotiation path for this
+/// backend rather than only a contract test.
 pub(crate) mod family;
+
+/// Step 13's storage-buffer half, pure: the range one storage binding names, checked
+/// against the buffer's own declared size before any descriptor exists. It creates
+/// nothing, and the family handle that builds the binding lives in [`family`].
+pub(crate) mod storage;
 
 /// Step 6: the retained WGSL artifact lowered to SPIR-V with Naga's `spv-out`, with
 /// the dialect, entry-point, stage and profile checks decided before the driver is

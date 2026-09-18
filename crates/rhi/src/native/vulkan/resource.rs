@@ -102,11 +102,19 @@ pub(crate) enum ResourceError {
     Memory,
 }
 
-/// One live buffer: its handle, its memory, and how large it is.
+/// One live buffer: its handle, its memory, how large it is and what it was declared
+/// for.
+///
+/// The declared usage is kept beside the size for the same reason the size is: a
+/// binding built after creation must be checked against what the caller declared, not
+/// against what the driver happens to allow. The buffer step's rule is that the
+/// mapping never widens (section 18 of the lead 3F plan), so a storage binding over a
+/// buffer created for vertices is a claim the graph never made.
 struct BufferRecord {
     handle: vk::Buffer,
     allocation: gpu_allocator::vulkan::Allocation,
     size: u64,
+    usage: BufferUsage,
 }
 
 /// One live texture: its image, the view it is sampled through, and its memory.
@@ -172,6 +180,15 @@ impl ResourceTable {
     /// Returns the created size of a live buffer, or `None` for a stale id.
     pub(crate) fn buffer_size(&self, id: BufferId) -> Option<u64> {
         self.buffer(id).map(|record| record.size)
+    }
+
+    /// Returns the usage a live buffer was created with, or `None` for a stale id.
+    ///
+    /// The *declared* usage, not a reading of the driver's create-info: it is the
+    /// same value the graph's own capability check saw, so a binding built later
+    /// cannot be checked against a weaker fact than the one that admitted the buffer.
+    pub(crate) fn buffer_usage(&self, id: BufferId) -> Option<BufferUsage> {
+        self.buffer(id).map(|record| record.usage)
     }
 
     /// Returns the image handle for a live texture, or `None` for a stale id.
@@ -258,6 +275,7 @@ impl ResourceTable {
                 handle,
                 allocation,
                 size,
+                usage,
             },
         );
         Ok(id)
