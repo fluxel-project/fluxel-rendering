@@ -1,5 +1,5 @@
-//! Shared scaffolding for the Vulkan tests that need a real window or a real
-//! surface.
+//! Shared scaffolding for the Vulkan tests that need a real window, a real surface,
+//! or a retained raster recipe.
 //!
 //! Several step 10 modules are only provable against a real window: the surface
 //! handle, the facts it reports, and the swapchain created over it. The Win32
@@ -7,12 +7,24 @@
 //! written once here rather than copied into each of their test modules, which is
 //! also what keeps the window's lifetime rule in one place.
 //!
+//! Step 12's recorder tests need the same minimal raster recipe the pipeline tests
+//! create against -- the position-only vertex stream, the colour-only fixed-function
+//! state, and the two Naga-emitted SPIR-V modules -- so those are written once here
+//! too. A second copy in `command`'s tests could drift from the pipeline's, and the
+//! two would then be testing different recipes while both compiling.
+//!
 //! Compiled under `cfg(test)` only: nothing here is part of the backend.
 
 use ash::vk;
+use fluxel_rendergraph::TextureFormat;
 use raw_window_handle::{RawWindowHandle, Win32WindowHandle};
 
+use super::pipeline::RasterShaders;
 use super::presentation::{Surface, SurfaceFacts};
+use crate::common::pipeline::{ColorTargetState, ColorWriteMask, PipelineState, PrimitiveState};
+use crate::common::vertex::{
+    VertexAttribute, VertexBufferLayout, VertexFormat, VertexLayout, VertexStepMode,
+};
 
 #[link(name = "user32")]
 unsafe extern "system" {
@@ -122,3 +134,110 @@ pub(crate) fn presenting_adapter(
         (!facts.formats.is_empty()).then_some((*adapter, facts))
     })
 }
+
+/// The retained colour-only raster state: one `Rgba8Unorm` target written in full,
+/// one sample, triangle lists and no culling.
+pub(crate) fn colour_only_state() -> PipelineState {
+    PipelineState {
+        primitive: PrimitiveState::triangle_list(),
+        depth_stencil: None,
+        sample_count: 1,
+        color_targets: vec![ColorTargetState {
+            format: TextureFormat::Rgba8Unorm,
+            write_mask: ColorWriteMask::ALL,
+        }],
+    }
+}
+
+/// The position-only vertex stream of the retained `Float32x3` recipes.
+pub(crate) fn position_stream() -> VertexLayout {
+    VertexLayout {
+        buffers: vec![VertexBufferLayout {
+            slot: 0,
+            stride: 12,
+            step_mode: VertexStepMode::Vertex,
+        }],
+        attributes: vec![VertexAttribute {
+            location: 0,
+            buffer_slot: 0,
+            format: VertexFormat::Float32x3,
+            offset: 0,
+        }],
+    }
+}
+
+/// The vertex and fragment modules a minimal raster pipeline is created from.
+pub(crate) fn raster_shaders() -> RasterShaders<'static> {
+    RasterShaders {
+        vertex: &MINIMAL_RASTER_VERTEX_SPIRV,
+        vertex_entry: c"main",
+        fragment: &MINIMAL_RASTER_FRAGMENT_SPIRV,
+        fragment_entry: c"main",
+    }
+}
+
+/// The vertex module of a minimal drawable raster recipe.
+///
+/// Emitted once by Naga 30's `spv-out` for exactly this WGSL, targeting SPIR-V 1.0:
+///
+/// ```text
+/// @vertex
+/// fn main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+///     return vec4<f32>(position, 1.0);
+/// }
+/// ```
+///
+/// It is a fixed payload independent of the Naga lowering path, exactly as
+/// [`MINIMAL_COMPUTE_SPIRV`](super::shader::MINIMAL_COMPUTE_SPIRV) is for the compute
+/// half: the pipeline and recorder tests exercise creation and recording rather than
+/// [`super::wgsl`]. Because Naga emitted it, the words are valid SPIR-V without a
+/// second assembler in this repository.
+pub(crate) const MINIMAL_RASTER_VERTEX_SPIRV: [u32; 129] = [
+    0x0723_0203, 0x0001_0000, 0x0000_001c, 0x0000_0017, 0x0000_0000, 0x0002_0011,
+    0x0000_0001, 0x0006_000b, 0x0000_0001, 0x4c53_4c47, 0x6474_732e, 0x3035_342e,
+    0x0000_0000, 0x0003_000e, 0x0000_0000, 0x0000_0001, 0x0007_000f, 0x0000_0000,
+    0x0000_000c, 0x6e69_616d, 0x0000_0000, 0x0000_0007, 0x0000_000a, 0x0005_0005,
+    0x0000_0007, 0x6973_6f70, 0x6e6f_6974, 0x0000_0000, 0x0004_0005, 0x0000_000c,
+    0x6e69_616d, 0x0000_0000, 0x0004_0047, 0x0000_0007, 0x0000_001e, 0x0000_0000,
+    0x0004_0047, 0x0000_000a, 0x0000_000b, 0x0000_0000, 0x0002_0013, 0x0000_0002,
+    0x0003_0016, 0x0000_0004, 0x0000_0020, 0x0004_0017, 0x0000_0003, 0x0000_0004,
+    0x0000_0003, 0x0004_0017, 0x0000_0005, 0x0000_0004, 0x0000_0004, 0x0004_0020,
+    0x0000_0008, 0x0000_0001, 0x0000_0003, 0x0004_003b, 0x0000_0008, 0x0000_0007,
+    0x0000_0001, 0x0004_0020, 0x0000_000b, 0x0000_0003, 0x0000_0005, 0x0004_003b,
+    0x0000_000b, 0x0000_000a, 0x0000_0003, 0x0003_0021, 0x0000_000d, 0x0000_0002,
+    0x0004_002b, 0x0000_0004, 0x0000_000e, 0x3f80_0000, 0x0004_0020, 0x0000_0011,
+    0x0000_0003, 0x0000_0004, 0x0004_0015, 0x0000_0013, 0x0000_0020, 0x0000_0000,
+    0x0004_002b, 0x0000_0013, 0x0000_0012, 0x0000_0001, 0x0005_0036, 0x0000_0002,
+    0x0000_000c, 0x0000_0000, 0x0000_000d, 0x0002_00f8, 0x0000_0006, 0x0004_003d,
+    0x0000_0003, 0x0000_0009, 0x0000_0007, 0x0002_00f9, 0x0000_000f, 0x0002_00f8,
+    0x0000_000f, 0x0005_0050, 0x0000_0005, 0x0000_0010, 0x0000_0009, 0x0000_000e,
+    0x0003_003e, 0x0000_000a, 0x0000_0010, 0x0005_0041, 0x0000_0011, 0x0000_0014,
+    0x0000_000a, 0x0000_0012, 0x0004_003d, 0x0000_0004, 0x0000_0015, 0x0000_0014,
+    0x0004_007f, 0x0000_0004, 0x0000_0016, 0x0000_0015, 0x0003_003e, 0x0000_0014,
+    0x0000_0016, 0x0001_00fd, 0x0001_0038,
+];
+
+/// The fragment module of the same minimal recipe, from this WGSL:
+///
+/// ```text
+/// @fragment
+/// fn main() -> @location(0) vec4<f32> {
+///     return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+/// }
+/// ```
+pub(crate) const MINIMAL_RASTER_FRAGMENT_SPIRV: [u32; 84] = [
+    0x0723_0203, 0x0001_0000, 0x0000_001c, 0x0000_000e, 0x0000_0000, 0x0002_0011,
+    0x0000_0001, 0x0006_000b, 0x0000_0001, 0x4c53_4c47, 0x6474_732e, 0x3035_342e,
+    0x0000_0000, 0x0003_000e, 0x0000_0000, 0x0000_0001, 0x0006_000f, 0x0000_0004,
+    0x0000_0008, 0x6e69_616d, 0x0000_0000, 0x0000_0006, 0x0003_0010, 0x0000_0008,
+    0x0000_0007, 0x0004_0005, 0x0000_0008, 0x6e69_616d, 0x0000_0000, 0x0004_0047,
+    0x0000_0006, 0x0000_001e, 0x0000_0000, 0x0002_0013, 0x0000_0002, 0x0003_0016,
+    0x0000_0004, 0x0000_0020, 0x0004_0017, 0x0000_0003, 0x0000_0004, 0x0000_0004,
+    0x0004_0020, 0x0000_0007, 0x0000_0003, 0x0000_0003, 0x0004_003b, 0x0000_0007,
+    0x0000_0006, 0x0000_0003, 0x0003_0021, 0x0000_0009, 0x0000_0002, 0x0004_002b,
+    0x0000_0004, 0x0000_000a, 0x3f80_0000, 0x0004_002b, 0x0000_0004, 0x0000_000b,
+    0x0000_0000, 0x0007_002c, 0x0000_0003, 0x0000_000c, 0x0000_000a, 0x0000_000b,
+    0x0000_000b, 0x0000_000a, 0x0005_0036, 0x0000_0002, 0x0000_0008, 0x0000_0000,
+    0x0000_0009, 0x0002_00f8, 0x0000_0005, 0x0002_00f9, 0x0000_000d, 0x0002_00f8,
+    0x0000_000d, 0x0003_003e, 0x0000_0006, 0x0000_000c, 0x0001_00fd, 0x0001_0038,
+];

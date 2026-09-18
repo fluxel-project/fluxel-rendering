@@ -26,6 +26,24 @@
 //! [`RecordError::NoPass`]. Ending the recording with a pass open is the same
 //! refusal, because `vkEndCommandBuffer` requires no active render pass.
 //!
+//! # The raster verbs belong to the open pass
+//!
+//! The pipeline, the bindings, the vertex and index buffers, the dynamic viewport
+//! and scissor and the two draws are recorded only while a pass is open, and answer
+//! [`RecordError::NoPass`] otherwise. `Vulkan` permits most of them outside a render
+//! pass, but it treats them as command-buffer state the *next* pass inherits, and
+//! this backend's execution model has no such state to inherit: a pass begins with
+//! exactly the state its own commands set. Refusing is the fail-closed direction, and
+//! it is the same sentence the bracket already uses for an `end_raster` with nothing
+//! open.
+//!
+//! Every raster value is lowered by [`draw`] rather than spelled here: the viewport's
+//! Y flip, the scissor's signed offset, the index type and the count computed from a
+//! half-open range all come from that module, so the checks that keep the driver from
+//! seeing an invalid value live in one place. A refused value is a
+//! [`RecordError::Draw`] and, like every other refusal here, leaves the recording
+//! usable.
+//!
 //! # Refusals happen before the driver, and the encoder stays usable
 //!
 //! A state this backend has not been taught, a state of the wrong resource kind, a
@@ -45,12 +63,16 @@
 //! finished buffer alive until its fence signals, and this module's note is the
 //! reminder that the ownership changes there.
 
+use std::ops::Range;
+
 use ash::vk;
 use fluxel_rendergraph::{
-    BufferCopyRegion, BufferRange, ResourceAccessState, TextureCopyRegion, TextureRange,
+    BufferCopyRegion, BufferRange, IndexFormat, ResourceAccessState, ScissorRect, TextureCopyRegion,
+    TextureRange, Viewport,
 };
 
-use super::{barrier, copy, format, framebuffer::Framebuffer};
+use super::pipeline::RasterPipeline;
+use super::{barrier, copy, draw, format, framebuffer::Framebuffer};
 
 /// Why a command pool or an encoder could not be created or used.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,7 +96,8 @@ pub(crate) enum RecordError {
     /// A raster pass is already open, so a second begin is a caller mistake rather
     /// than a nested pass.
     PassAlreadyOpen,
-    /// No raster pass is open, so there is none to end.
+    /// No raster pass is open, so there is none to end, and no pass for a raster
+    /// verb to belong to.
     ///
     /// Refused rather than accepted idempotently for the same reason a second `end`
     /// is: silently accepting it would hide the caller's mistake until submission.
@@ -94,6 +117,10 @@ pub(crate) enum RecordError {
     /// carried rather than flattened: a misaligned buffer range and an
     /// out-of-bounds texture box are different mistakes to fix.
     Region(copy::CopyRegionError),
+    /// The raster state or range is not one the driver would accept, and the reason
+    /// is carried rather than flattened: a viewport whose numbers are wrong, a
+    /// scissor whose shape is wrong and an inverted range are different mistakes.
+    Draw(draw::DrawError),
     /// The id names no live buffer of this device generation.
     UnknownBuffer,
     /// The id names no live texture of this device generation.
@@ -248,6 +275,21 @@ impl Encoder {
     /// Returns whether this encoder is still recording.
     pub(crate) const fn is_recording(&self) -> bool {
         self.recording
+    }
+
+    /// The guard every raster verb shares: the encoder is recording an open pass.
+    ///
+    /// The two refusals stay distinct because they are different sentences -- an
+    /// ended encoder and an encoder with no pass open -- and the module docs state
+    /// why a raster verb belongs to an open pass at all.
+    fn check_pass(&self) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        if !self.pass_open {
+            return Err(RecordError::NoPass);
+        }
+        Ok(())
     }
 
     /// Records the barrier one semantic buffer transition requires.
@@ -472,6 +514,153 @@ impl Encoder {
         Ok(())
     }
 
+    /// Binds a raster pipeline for the draws recorded in the open pass.
+    ///
+    /// The pipeline owns the layout it was created over, so the layout stays alive
+    /// for as long as this binding can be used; the caller keeps the pipeline alive
+    /// for the recording, exactly as it keeps a framebuffer's view alive.
+    pub(crate) fn set_raster_pipeline(
+        &mut self,
+        pipeline: &RasterPipeline,
+    ) -> Result<(), RecordError> {
+        self.check_pass()?;
+        // SAFETY: the command buffer is recording inside a render pass, and the
+        // pipeline is a live handle this device created, kept alive by the caller.
+        unsafe {
+            self.device.cmd_bind_pipeline(
+                self.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.handle(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Records the dynamic viewport the open pass draws through.
+    ///
+    /// The value is lowered by [`draw::viewport`], which keeps the borrowed path's
+    /// Y flip and refuses a viewport the driver would reject.
+    pub(crate) fn set_viewport(&mut self, viewport: Viewport) -> Result<(), RecordError> {
+        self.check_pass()?;
+        let lowered = draw::viewport(viewport).map_err(RecordError::Draw)?;
+        // SAFETY: the command buffer is recording inside a render pass, and the
+        // slice is a local that outlives the call.
+        unsafe {
+            self.device
+                .cmd_set_viewport(self.command_buffer, 0, &[lowered]);
+        }
+        Ok(())
+    }
+
+    /// Records the dynamic scissor rectangle the open pass draws through.
+    pub(crate) fn set_scissor(&mut self, scissor: ScissorRect) -> Result<(), RecordError> {
+        self.check_pass()?;
+        let lowered = draw::scissor(scissor).map_err(RecordError::Draw)?;
+        // SAFETY: the command buffer is recording inside a render pass, and the
+        // slice is a local that outlives the call.
+        unsafe {
+            self.device
+                .cmd_set_scissor(self.command_buffer, 0, &[lowered]);
+        }
+        Ok(())
+    }
+
+    /// Binds the vertex buffer that occupies `slot`.
+    ///
+    /// `buffer` is a handle the caller resolved from the resource table, and the
+    /// table keeps it alive for the recording -- the same ownership rule the copy
+    /// verbs state. The stride and the attribute formats are the pipeline's, so
+    /// nothing about the stream's shape is repeated here.
+    pub(crate) fn set_vertex_buffer(
+        &mut self,
+        slot: u32,
+        buffer: vk::Buffer,
+        offset: u64,
+    ) -> Result<(), RecordError> {
+        self.check_pass()?;
+        // SAFETY: the command buffer is recording inside a render pass, the buffer
+        // is a live handle of this device, and both slices are locals that outlive
+        // the call and have the same length.
+        unsafe {
+            self.device
+                .cmd_bind_vertex_buffers(self.command_buffer, slot, &[buffer], &[offset]);
+        }
+        Ok(())
+    }
+
+    /// Binds the index buffer subsequent indexed draws read.
+    ///
+    /// The portable format is lowered by [`draw::index_type`], which is exhaustive
+    /// over this workspace's closed format enum.
+    pub(crate) fn set_index_buffer(
+        &mut self,
+        buffer: vk::Buffer,
+        offset: u64,
+        format: IndexFormat,
+    ) -> Result<(), RecordError> {
+        self.check_pass()?;
+        // SAFETY: the command buffer is recording inside a render pass, and the
+        // buffer is a live handle this device created, kept alive by the caller.
+        unsafe {
+            self.device
+                .cmd_bind_index_buffer(self.command_buffer, buffer, offset, draw::index_type(format));
+        }
+        Ok(())
+    }
+
+    /// Records a non-indexed draw over `vertices`, `instance_count` times.
+    ///
+    /// The first instance is fixed at zero, because the family's verbs take an
+    /// instance *count* rather than a range (plan section 20.1): a non-zero first
+    /// instance is the `FirstInstance` capability, which this backend does not
+    /// record.
+    pub(crate) fn draw(
+        &mut self,
+        vertices: Range<u32>,
+        instance_count: u32,
+    ) -> Result<(), RecordError> {
+        self.check_pass()?;
+        let (first_vertex, vertex_count) = draw::range(vertices).map_err(RecordError::Draw)?;
+        // SAFETY: the command buffer is recording inside a render pass with a
+        // pipeline bound by the caller's recorded order.
+        unsafe {
+            self.device.cmd_draw(
+                self.command_buffer,
+                vertex_count,
+                instance_count,
+                first_vertex,
+                0,
+            );
+        }
+        Ok(())
+    }
+
+    /// Records an indexed draw over `indices`, `instance_count` times.
+    ///
+    /// The base vertex is fixed at zero for [`draw`](Self::draw)'s reason: it is the
+    /// `BaseVertex` capability, which this backend does not record.
+    pub(crate) fn draw_indexed(
+        &mut self,
+        indices: Range<u32>,
+        instance_count: u32,
+    ) -> Result<(), RecordError> {
+        self.check_pass()?;
+        let (first_index, index_count) = draw::range(indices).map_err(RecordError::Draw)?;
+        // SAFETY: the command buffer is recording inside a render pass with a
+        // pipeline and an index buffer bound by the caller's recorded order.
+        unsafe {
+            self.device.cmd_draw_indexed(
+                self.command_buffer,
+                index_count,
+                instance_count,
+                first_index,
+                0,
+                0,
+            );
+        }
+        Ok(())
+    }
+
     /// Ends recording.
     ///
     /// A second call is refused rather than treated as idempotent: "end an encoder
@@ -558,13 +747,18 @@ impl core::fmt::Debug for Encoder {
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+
     use super::*;
     use crate::Validation;
+    use crate::native::vulkan::pipeline::{create_layout, create_raster};
     use crate::native::vulkan::resource::ResourceTable;
-    use crate::native::vulkan::{allocator::GpuAllocator, memory, open};
+    use crate::native::vulkan::test_support::{colour_only_state, position_stream, raster_shaders};
+    use crate::native::vulkan::{allocator::GpuAllocator, memory, open, render_pass, submission};
     use fluxel_rendergraph::{
-        BufferUsage, BufferUsageKind, Extent3d, TextureDesc, TextureDimension, TextureFormat,
-        TextureUsage, TextureUsageKind,
+        AttachmentOps, BufferUsage, BufferUsageKind, CompletionStatus, Extent3d, LoadOp,
+        RasterColorAttachment, StoreOp, TextureDesc, TextureDimension, TextureFormat, TextureUsage,
+        TextureUsageKind, WriteCoverage,
     };
 
     /// Opens a headless device and a real command pool, or returns `None` where no
@@ -1146,5 +1340,274 @@ mod tests {
             "a destroyed id resolves to no handle"
         );
         assert_eq!(table.buffer_size(buffer), None);
+    }
+
+    /// A real colour target and the framebuffer a raster pass begins over it.
+    ///
+    /// Returns the framebuffer, the image a transition must move into the pass's
+    /// initial layout, and that image's mapped format.
+    fn colour_target_pass(
+        opened: &open::OpenedVulkan,
+        table: &mut ResourceTable,
+        memory_types: &[vk::MemoryType],
+    ) -> (Framebuffer, vk::Image, vk::Format) {
+        let target = table
+            .create_texture(
+                TextureDesc {
+                    dimension: TextureDimension::D2,
+                    extent: Extent3d {
+                        width: 16,
+                        height: 8,
+                        depth: 1,
+                    },
+                    mip_levels: 1,
+                    array_layers: 1,
+                    sample_count: 1,
+                    format: TextureFormat::Rgba8Unorm,
+                },
+                declared_texture(&[TextureUsageKind::ColorAttachment]),
+                memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local colour target");
+        let colors = [RasterColorAttachment {
+            index: 0,
+            texture: &target,
+            range: TextureRange::Whole,
+            operations: AttachmentOps {
+                load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                store: StoreOp::Store,
+                write_coverage: WriteCoverage::Full,
+            },
+        }];
+        let admitted = render_pass::admit(&colors, None).expect("one colour at index zero");
+        let resolved = table
+            .texture_desc(*admitted.texture)
+            .expect("a live texture");
+        let view = table.texture_view(*admitted.texture).expect("a live view");
+        let image = table.texture_image(*admitted.texture).expect("a live image");
+        let mapped = format::image_format(resolved.format).expect("a mapped format");
+        let framebuffer = Framebuffer::create(opened.device.device(), admitted, &resolved, view)
+            .expect("a render pass and framebuffer for a real colour target");
+        (framebuffer, image, mapped)
+    }
+
+    #[test]
+    fn a_real_encoder_records_a_real_raster_pass_with_both_draws() {
+        // Step 12's state and draw verbs against the real driver: a real pipeline, the
+        // dynamic viewport and scissor, a vertex buffer and an index buffer, and both
+        // draws, recorded inside a real pass and submitted to completion. Skips where
+        // no adapter exists.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        let (framebuffer, image, mapped) =
+            colour_target_pass(&opened, &mut table, &memory_types);
+
+        // The pipeline the draws record through, over the shared minimal recipe whose
+        // vertex stream is exactly `position_stream`.
+        let layout = create_layout(opened.device.device(), Vec::new()).expect("an empty layout");
+        let pipeline = create_raster(
+            opened.device.device(),
+            layout,
+            &raster_shaders(),
+            &position_stream(),
+            &colour_only_state(),
+        )
+        .expect("a raster pipeline over the retained recipe");
+
+        // The two buffers the draws read. Their contents are never written, which is
+        // deliberate: what this test records is the draw's shape and its execution,
+        // not its pixels, so a device-local buffer the driver has not been handed any
+        // data for is the honest fixture.
+        let vertices = table
+            .create_buffer(
+                256,
+                declared_buffer(&[BufferUsageKind::Vertex]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local vertex buffer");
+        let indices = table
+            .create_buffer(
+                256,
+                declared_buffer(&[BufferUsageKind::Index]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local index buffer");
+        let vertex_handle = table.buffer_handle(vertices).expect("a live vertex buffer");
+        let index_handle = table.buffer_handle(indices).expect("a live index buffer");
+
+        let mut encoder = pool.begin().expect("a recording encoder");
+        // The graph's own order: the transition the pass's initial layout needs, then
+        // the bracket, then the state and the draws, then the close.
+        encoder
+            .transition_image(
+                image,
+                mapped,
+                TextureRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::ColorAttachmentWrite,
+            )
+            .expect("undefined to a colour attachment");
+        encoder.begin_raster(&framebuffer).expect("the pass opens");
+        encoder
+            .set_raster_pipeline(&pipeline)
+            .expect("the pipeline binds");
+        encoder
+            .set_viewport(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 8.0,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            })
+            .expect("the viewport sets");
+        encoder
+            .set_scissor(ScissorRect {
+                x: 0,
+                y: 0,
+                width: 16,
+                height: 8,
+            })
+            .expect("the scissor sets");
+        encoder
+            .set_vertex_buffer(0, vertex_handle, 0)
+            .expect("the vertex buffer binds");
+        encoder
+            .set_index_buffer(index_handle, 0, IndexFormat::Uint16)
+            .expect("the index buffer binds");
+        encoder.draw(0..3, 1).expect("a non-indexed draw records");
+        encoder
+            .draw_indexed(0..3, 1)
+            .expect("an indexed draw records");
+        encoder.end_raster().expect("the pass closes");
+
+        let finished = encoder.finish().expect("the recording ends");
+        let mut submission =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submission.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "a recorded raster pass with both draws runs to completion"
+        );
+        // The framebuffer, the pipeline and both buffers are still alive here, so the
+        // terminal submission above is the one that released the recording.
+        assert!(submission.is_terminal());
+    }
+
+    #[test]
+    fn the_raster_verbs_refuse_outside_a_pass_and_a_bad_value_without_poisoning_it() {
+        // Two different sentences: a verb with no pass open is `NoPass`, and a value
+        // the lowering refuses is `Draw`. Both are values returned before the driver,
+        // and a refused call leaves the recording usable, which the contract requires
+        // because the executor still ends an encoder after a recording error.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let mut encoder = pool.begin().expect("a recording encoder");
+
+        // No pass is open yet, so every raster verb answers with the same sentence.
+        assert_eq!(
+            encoder.set_viewport(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 8.0,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            }),
+            Err(RecordError::NoPass)
+        );
+        assert_eq!(
+            encoder.set_scissor(ScissorRect {
+                x: 0,
+                y: 0,
+                width: 16,
+                height: 8,
+            }),
+            Err(RecordError::NoPass)
+        );
+        assert_eq!(encoder.draw(0..3, 1), Err(RecordError::NoPass));
+        assert_eq!(encoder.draw_indexed(0..3, 1), Err(RecordError::NoPass));
+
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+        let (framebuffer, image, mapped) =
+            colour_target_pass(&opened, &mut table, &memory_types);
+        encoder
+            .transition_image(
+                image,
+                mapped,
+                TextureRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::ColorAttachmentWrite,
+            )
+            .expect("undefined to a colour attachment");
+        encoder.begin_raster(&framebuffer).expect("the pass opens");
+
+        // With a pass open the guard lets the call through and the lowering refuses
+        // the value, each as its own sentence.
+        assert_eq!(
+            encoder.set_viewport(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 0.0,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            }),
+            Err(RecordError::Draw(draw::DrawError::Viewport))
+        );
+        assert_eq!(
+            encoder.set_scissor(ScissorRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 8,
+            }),
+            Err(RecordError::Draw(draw::DrawError::Scissor))
+        );
+        // The ends are locals rather than literals because a literal reversed range is
+        // what `clippy::reversed_empty_ranges` forbids; the draw only lowers it.
+        let (start, end) = (3u32, 2u32);
+        assert_eq!(
+            encoder.draw(start..end, 1),
+            Err(RecordError::Draw(draw::DrawError::Range))
+        );
+
+        // A refused value does not poison the pass or the recording.
+        encoder
+            .set_viewport(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 8.0,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            })
+            .expect("the encoder is usable after the refusals");
+        encoder.end_raster().expect("the pass closes");
+        encoder.end().expect("the recording ends");
     }
 }

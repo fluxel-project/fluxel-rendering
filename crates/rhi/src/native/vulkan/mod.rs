@@ -93,11 +93,16 @@
 //!     whose parameter space `GraphicsApi`'s draw verbs deliberately cannot name
 //!     (plan section 20.1) -- and it is what lets `VulkanDevice` implement
 //!     `Provides<Graphics>`, which `device`'s real-device test still records as not
-//!     compiling. Two bounded pieces have landed ahead of the verbs: the pure
-//!     [`render_pass`] lowering, and [`framebuffer`] with the
-//!     [`command::Encoder`] bracket (`begin_raster` / `end_raster`) that owns the
-//!     render pass and framebuffer a recorded pass needs, refusing a barrier, a copy
-//!     or an `end` while a pass is open. The draw verbs are still owed.
+//!     compiling. Three bounded pieces have landed: the pure [`render_pass`]
+//!     lowering; [`framebuffer`] with the [`command::Encoder`] bracket
+//!     (`begin_raster` / `end_raster`) that owns the render pass and framebuffer a
+//!     recorded pass needs, refusing a barrier, a copy or an `end` while a pass is
+//!     open; and the raster state and draw verbs (`set_raster_pipeline`,
+//!     `set_vertex_buffer`, `set_index_buffer`, `set_viewport`, `set_scissor`,
+//!     `draw`, `draw_indexed`) lowered through [`draw`], which also records the Y
+//!     flip the borrowed path preserves and is why the device verifies and enables
+//!     `VK_KHR_maintenance1`. Binding selection (`set_bindings`, which needs the
+//!     descriptor sets) is still owed.
 //!
 //! # Acceptance
 //!
@@ -205,6 +210,13 @@ pub(crate) mod render_pass;
 /// cannot carry before the driver is reached, and the recording bracket that begins it
 /// lives on [`command::Encoder`].
 pub(crate) mod framebuffer;
+
+/// Step 12's pure half: the dynamic viewport and scissor, the index-buffer format
+/// and the half-open vertex and index ranges lowered onto the commands the raster
+/// recorder issues. The viewport keeps the borrowed path's Y flip, which is why the
+/// device enables `VK_KHR_maintenance1`: a negative viewport height is legal only
+/// with that extension on a `Vulkan` 1.0 device.
+pub(crate) mod draw;
 
 /// Step 6: the retained WGSL artifact lowered to SPIR-V with Naga's `spv-out`, with
 /// the dialect, entry-point, stage and profile checks decided before the driver is

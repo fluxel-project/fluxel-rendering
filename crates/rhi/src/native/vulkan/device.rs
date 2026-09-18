@@ -37,13 +37,27 @@
 //! fact discovered later could not reach it. It also keeps one discovery -- the
 //! format evidence the capability lowering folds is the same table the ledger read.
 //!
-//! No device extension is enabled on the headless path. `VK_KHR_swapchain` belongs
-//! to step 10, so it is enabled only by [`open_with_swapchain`] -- and only after
-//! the physical device's own extension inventory was read and positively contained
-//! it. A device opened for headless work enables no extension, which is why the two
-//! entry points are separate rather than one function with a flag:
-//! [`SwapchainDevice`] is the witness that the extension is there, and a headless
-//! [`VulkanDevice`] cannot reach a swapchain call at all.
+//! # Which device extensions are enabled
+//!
+//! `VK_KHR_swapchain` belongs to step 10, so it is enabled only by
+//! [`open_with_swapchain`] -- and only after the physical device's own extension
+//! inventory was read and positively contained it. That is why the two entry points
+//! are separate rather than one function with a flag: [`SwapchainDevice`] is the
+//! witness that the extension is there, and a headless [`VulkanDevice`] cannot reach
+//! a swapchain call at all.
+//!
+//! The one extension **both** paths enable is `VK_KHR_maintenance1`, and it is not a
+//! convenience: step 12 lowers the dynamic viewport with the borrowed path's Y flip
+//! (`y + height`, a negative height), and a negative viewport height is a validation
+//! error on a `Vulkan` 1.0 device unless that extension is enabled. The instance
+//! this backend requests is 1.0, so the extension is the only route to the geometry
+//! the frozen oracle renders. Every other extension still arrives with the step that
+//! proves a row with it.
+//!
+//! Both are verified against the physical device's report before `vkCreateDevice`,
+//! for the reason the validation probe already states: enabling an extension the
+//! adapter never reported is a creation failure with no diagnosis, while a refusal
+//! names the missing facility.
 
 use std::ffi::{CStr, c_char};
 
@@ -74,11 +88,26 @@ pub(crate) const SWAPCHAIN: &str = "VK_KHR_swapchain";
 /// spell the same name, which is the one drift the type system cannot express here.
 const SWAPCHAIN_C: &CStr = c"VK_KHR_swapchain";
 
+/// The device extension that makes a negative viewport height legal.
+///
+/// Non-NUL-terminated for the same reason [`SWAPCHAIN`] is: this is the value the
+/// inventory comparison reads, while the loader is handed the `CStr` below.
+pub(crate) const MAINTENANCE1: &str = "VK_KHR_maintenance1";
+
+/// The same name, NUL-terminated for the loader.
+///
+/// A `c"..."` literal rather than `MAINTENANCE1.as_ptr()`, because `str::as_ptr`
+/// does **not** hand the loader a NUL-terminated name. A test asserts the two still
+/// spell the same name, which is the one drift the type system cannot express here.
+const MAINTENANCE1_C: &CStr = c"VK_KHR_maintenance1";
+
 /// Which device extension a physical device did not report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MissingDeviceExtension {
     /// `VK_KHR_swapchain` was not reported.
     Swapchain,
+    /// `VK_KHR_maintenance1` was not reported.
+    Maintenance1,
 }
 
 /// Verifies that a physical device's extension inventory can serve a swapchain.
@@ -94,6 +123,23 @@ pub(crate) fn verify_device_extensions(
         Ok(())
     } else {
         Err(MissingDeviceExtension::Swapchain)
+    }
+}
+
+/// Verifies that a physical device's extension inventory carries
+/// `VK_KHR_maintenance1`.
+///
+/// The same exact, case-sensitive comparison as the swapchain check, and for the
+/// same reason: the extension is what makes the negative viewport height step 12
+/// records legal, so a near miss is a different extension and enabling it would make
+/// device creation fail rather than name the missing facility.
+pub(crate) fn verify_maintenance1(
+    extensions: &[String],
+) -> Result<(), MissingDeviceExtension> {
+    if extensions.iter().any(|name| name == MAINTENANCE1) {
+        Ok(())
+    } else {
+        Err(MissingDeviceExtension::Maintenance1)
     }
 }
 
@@ -135,7 +181,11 @@ pub(crate) enum DeviceError {
     QueueFamilies(vk::Result),
     /// No reported family can rasterize, so no usable device exists.
     NoGraphicsQueue,
-    /// The swapchain path was asked for and the extension names could not be read.
+    /// The extension names could not be read from the physical device.
+    ///
+    /// Both entry points read the inventory -- the swapchain path to verify
+    /// `VK_KHR_swapchain`, the headless path to verify `VK_KHR_maintenance1` -- so
+    /// an enumeration failure is not specific to one of them.
     ExtensionEnumeration(EnumerationError),
     /// The physical device does not report `VK_KHR_swapchain`.
     MissingExtension(MissingDeviceExtension),
@@ -471,13 +521,19 @@ impl SwapchainDevice {
 ///
 /// `limits` is the adapter's already-read limit set: the caller has it from step
 /// 2's first half, and re-reading the properties here would be a second query for
-/// one fact.
+/// one fact. `VK_KHR_maintenance1` is read from the adapter's own inventory and
+/// verified **before** [`create`] is reached, so an adapter that cannot make the
+/// draw path's negative viewport height legal is refused with nothing created.
 pub(crate) fn open(
     instance: &ValidationInstance,
     adapter: vk::PhysicalDevice,
     limits: &AdapterLimits,
 ) -> Result<VulkanDevice, DeviceError> {
-    create(instance.instance(), adapter, limits, &[])
+    let instance = instance.instance();
+    let extensions = enumerate_device_extensions(instance, adapter)
+        .map_err(DeviceError::ExtensionEnumeration)?;
+    verify_maintenance1(&extensions).map_err(DeviceError::MissingExtension)?;
+    create(instance, adapter, limits, &[MAINTENANCE1_C])
 }
 
 /// Creates the logical device with `VK_KHR_swapchain` verified and enabled.
@@ -485,9 +541,11 @@ pub(crate) fn open(
 /// The order is the behavior, exactly as it is for the validation probe: the
 /// physical device's own extension inventory is read and checked **before**
 /// `create_device` is reached, so a device that cannot present is refused without
-/// having created anything. The instance is a [`SurfaceInstance`] because this path
-/// only makes sense beside a surface, and that witness already proves the surface
-/// extensions were enabled.
+/// having created anything. `VK_KHR_maintenance1` is verified against the same
+/// inventory and enabled beside it, because the draw path's viewport needs it on
+/// every device this backend opens. The instance is a [`SurfaceInstance`] because
+/// this path only makes sense beside a surface, and that witness already proves the
+/// surface extensions were enabled.
 pub(crate) fn open_with_swapchain(
     instance: &SurfaceInstance,
     adapter: vk::PhysicalDevice,
@@ -497,7 +555,14 @@ pub(crate) fn open_with_swapchain(
     let extensions = enumerate_device_extensions(instance, adapter)
         .map_err(DeviceError::ExtensionEnumeration)?;
     verify_device_extensions(&extensions).map_err(DeviceError::MissingExtension)?;
-    create(instance, adapter, limits, &[SWAPCHAIN_C]).map(SwapchainDevice)
+    verify_maintenance1(&extensions).map_err(DeviceError::MissingExtension)?;
+    create(
+        instance,
+        adapter,
+        limits,
+        &[SWAPCHAIN_C, MAINTENANCE1_C],
+    )
+    .map(SwapchainDevice)
 }
 
 /// The shared order: read the families, select one, create the device and its queue.
@@ -681,6 +746,31 @@ mod tests {
         // system: the loader is handed a NUL-terminated `CStr`, while the probe
         // compares an owned `String`.
         assert_eq!(SWAPCHAIN_C.to_str().expect("ASCII name"), SWAPCHAIN);
+        assert_eq!(
+            MAINTENANCE1_C.to_str().expect("ASCII name"),
+            MAINTENANCE1
+        );
+    }
+
+    #[test]
+    fn a_device_without_maintenance1_is_refused_by_name() {
+        // The extension is what makes step 12's negative viewport height legal, so
+        // an adapter that cannot report it cannot serve the draw path at all. A near
+        // miss is a different extension, exactly as for the swapchain name.
+        let without = vec![SWAPCHAIN.to_owned()];
+        assert_eq!(
+            verify_maintenance1(&without),
+            Err(MissingDeviceExtension::Maintenance1)
+        );
+        let with = vec![MAINTENANCE1.to_owned()];
+        assert_eq!(verify_maintenance1(&with), Ok(()));
+        for near_miss in ["vk_khr_maintenance1", "VK_KHR_maintenance1_extra"] {
+            assert_eq!(
+                verify_maintenance1(&[near_miss.to_owned()]),
+                Err(MissingDeviceExtension::Maintenance1),
+                "{near_miss} is a different extension"
+            );
+        }
     }
 
     #[test]
@@ -1076,6 +1166,17 @@ mod tests {
             "a usable adapter reports a texture extent"
         );
 
+        // `VK_KHR_maintenance1` is now part of what a usable device is: step 12's
+        // viewport flip needs it on a 1.0 device. An adapter that cannot report it is
+        // a fact about the machine rather than a failure of this module -- the frozen
+        // oracle's borrowed path hides such an adapter too -- so the test returns
+        // where the extension is absent rather than failing.
+        let extensions = enumerate_device_extensions(instance.instance(), adapters[index])
+            .expect("an adapter's extension inventory");
+        if verify_maintenance1(&extensions).is_err() {
+            return;
+        }
+
         let device = open(&instance, adapters[index], &facts.limits).expect("a graphics family exists");
         let selected = device.selected_queue();
         assert!(
@@ -1190,6 +1291,10 @@ mod tests {
         if !extensions.iter().any(|name| name == SWAPCHAIN) {
             // A physical device without the extension is not this test's subject;
             // its refusal is covered by the pure test above.
+            return;
+        }
+        if verify_maintenance1(&extensions).is_err() {
+            // The same for a device that cannot serve the draw path's viewport.
             return;
         }
         let facts = adapter::describe(instance, adapters[index]);
