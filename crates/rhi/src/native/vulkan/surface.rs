@@ -1,5 +1,5 @@
-//! Step 10's pure half: the fixed presentation contract lowered from what a
-//! surface reports.
+//! Step 10's pure halves: the instance extensions the surface path needs, and the
+//! fixed presentation contract lowered from what a surface reports.
 //!
 //! `Vulkan` answers "what can this window present?" with three lists -- the
 //! supported [`vk::SurfaceFormatKHR`] pairs, the supported
@@ -8,6 +8,17 @@
 //! contract is among them, and to lower that decision into the
 //! [`vk::SwapchainCreateInfoKHR`] the driver is handed. It creates nothing and
 //! owns nothing, so every branch of the decision is provable without a window.
+//!
+//! # The surface instance extensions are verified, not assumed
+//!
+//! A surface needs two instance extensions to exist at all: `VK_KHR_surface`,
+//! which defines the handle, and the platform extension that turns a window into
+//! one -- `VK_KHR_win32_surface` on this target. Requesting an extension the
+//! loader did not report is a creation failure with no diagnosis, so
+//! [`verify_surface_extensions`] checks the exact names against the same
+//! enumeration `Validation::Required` reads, and names *which* of the two is
+//! missing. It is the same fail-closed direction as the validation probe: a
+//! surface-capable instance is only created on an inventory that can satisfy it.
 //!
 //! # The contract is fixed, and a refusal is a value
 //!
@@ -61,10 +72,71 @@
 //! - **No swapchain, no acquire, no present.** Those are the owning half of step
 //!   10, and this module is what they lower from.
 
+use std::ffi::CStr;
+
 use ash::vk;
 use fluxel_rendergraph::TextureUsage;
 
 use super::texture;
+use super::validation::InstanceInventory;
+
+/// The instance extension that defines [`vk::SurfaceKHR`].
+///
+/// Non-NUL-terminated for the same reason [`super::validation::REQUIRED_LAYER`] is:
+/// this is the value the inventory comparison reads, and `CStr` is the value the
+/// loader is handed.
+pub(crate) const SURFACE: &str = "VK_KHR_surface";
+
+/// The platform instance extension that turns this target's window into a surface.
+pub(crate) const WIN32_SURFACE: &str = "VK_KHR_win32_surface";
+
+/// The instance extensions a surface-capable instance enables, NUL-terminated for
+/// the loader.
+///
+/// These are `c"..."` literals rather than `as_ptr` of the `&str` names above,
+/// because `str::as_ptr` does **not** hand the loader a NUL-terminated name; a test
+/// asserts each literal still spells the name the probe compares, which is the one
+/// drift the type system cannot express here.
+pub(crate) const SURFACE_EXTENSIONS: [&CStr; 2] = [c"VK_KHR_surface", c"VK_KHR_win32_surface"];
+
+/// Which surface instance extension an inventory did not report.
+///
+/// The two are separate sentences because they need different fixes: a loader
+/// without `VK_KHR_surface` cannot present at all, while one without the platform
+/// extension is presenting through a different window system.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MissingSurfaceExtension {
+    /// `VK_KHR_surface` was not reported.
+    Surface,
+    /// `VK_KHR_surface` is present and `VK_KHR_win32_surface` is not.
+    Win32,
+}
+
+/// Verifies that an instance's inventory can serve a surface on this target.
+///
+/// The comparison is exact and ordered: Vulkan extension names are case-sensitive,
+/// and the base extension is checked first because it is the facility itself --
+/// reporting the platform extension missing when neither is present would name the
+/// smaller of two problems.
+pub(crate) fn verify_surface_extensions(
+    inventory: &InstanceInventory<'_>,
+) -> Result<(), MissingSurfaceExtension> {
+    if !inventory
+        .instance_extensions
+        .iter()
+        .any(|name| name == SURFACE)
+    {
+        return Err(MissingSurfaceExtension::Surface);
+    }
+    if !inventory
+        .instance_extensions
+        .iter()
+        .any(|name| name == WIN32_SURFACE)
+    {
+        return Err(MissingSurfaceExtension::Win32);
+    }
+    Ok(())
+}
 
 /// The `Vulkan` image format the fixed presentation contract presents.
 ///
@@ -707,5 +779,67 @@ mod tests {
         assert_eq!(info.image_array_layers, 1);
         assert_ne!(info.clipped, 0);
         assert_eq!(info.old_swapchain, vk::SwapchainKHR::null());
+    }
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn inventory<'a>(extensions: &'a [String]) -> InstanceInventory<'a> {
+        InstanceInventory {
+            layers: &[],
+            instance_extensions: extensions,
+        }
+    }
+
+    #[test]
+    fn the_enabled_extension_names_still_spell_the_names_the_probe_compares() {
+        // The same drift guard `instance` states for the validation names: the
+        // loader is handed `CStr`, while the probe compares owned `String`s.
+        assert_eq!(
+            SURFACE_EXTENSIONS[0].to_str().expect("ASCII name"),
+            SURFACE
+        );
+        assert_eq!(
+            SURFACE_EXTENSIONS[1].to_str().expect("ASCII name"),
+            WIN32_SURFACE
+        );
+    }
+
+    #[test]
+    fn both_surface_extensions_satisfy_the_requirement() {
+        let reported = names(&["VK_KHR_get_physical_device_properties2", SURFACE, WIN32_SURFACE]);
+        assert_eq!(verify_surface_extensions(&inventory(&reported)), Ok(()));
+    }
+
+    #[test]
+    fn the_base_extension_is_reported_before_the_platform_one() {
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            verify_surface_extensions(&inventory(&none)),
+            Err(MissingSurfaceExtension::Surface)
+        );
+        let base_only = names(&[SURFACE]);
+        assert_eq!(
+            verify_surface_extensions(&inventory(&base_only)),
+            Err(MissingSurfaceExtension::Win32)
+        );
+    }
+
+    #[test]
+    fn a_near_miss_on_either_name_does_not_satisfy_the_requirement() {
+        // Names are case-sensitive and exact: a differently-cased or prefixed
+        // extension is a different extension, and accepting it would enable a name
+        // the loader did not offer.
+        let wrong_case = names(&["vk_khr_surface", WIN32_SURFACE]);
+        assert_eq!(
+            verify_surface_extensions(&inventory(&wrong_case)),
+            Err(MissingSurfaceExtension::Surface)
+        );
+        let prefixed = names(&[SURFACE, "VK_KHR_win32_surface2"]);
+        assert_eq!(
+            verify_surface_extensions(&inventory(&prefixed)),
+            Err(MissingSurfaceExtension::Win32)
+        );
     }
 }

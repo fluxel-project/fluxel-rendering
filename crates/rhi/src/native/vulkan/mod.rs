@@ -169,10 +169,15 @@ pub(crate) mod copy;
 /// lifetime rules, with accepted-unknown work quarantined rather than released.
 pub(crate) mod submission;
 
-/// Step 10's pure half: the fixed presentation contract decided against one
-/// surface's reported formats, present modes and capabilities, and lowered into
-/// the swapchain create-info the driver is handed. It creates and owns nothing, so
-/// every refusal is provable without a window; the surface handle, the swapchain,
-/// the acquire lease and the unpresented-acquire quarantine are step 10's owning
-/// half.
+/// Step 10's pure halves: the instance extensions the surface path verifies before
+/// creating anything, and the fixed presentation contract decided against one
+/// surface's reported formats, present modes and capabilities, lowered into the
+/// swapchain create-info the driver is handed. It creates and owns nothing, so
+/// every refusal is provable without a window.
 pub(crate) mod surface;
+
+/// Step 10's owning half: the `VkSurfaceKHR` created from and bound to a host
+/// window through a surface-capable instance, with the parent/child order stated as
+/// a borrow. The swapchain, the acquire lease, present, reconfigure and the
+/// unpresented-acquire quarantine remain owed by step 10.
+pub(crate) mod presentation;

@@ -28,19 +28,22 @@
 //!
 //! # What this deliberately does not do yet
 //!
-//! It requests API version 1.0 and enables no extension other than the validation
-//! one. Raising the version and the device/instance feature set belongs to the
-//! steps that need them, which is also when the facts they enable must be recorded
-//! in the capability ledger rather than assumed. Surface extensions belong to
-//! step 10.
+//! It requests API version 1.0 and enables no extension beyond the ones the caller
+//! asked for: the validation extension on the `Required` path, and the surface
+//! extensions on the [`open_with_surface`] path. Raising the device/instance feature
+//! set belongs to the steps that need them, which is also when the facts they enable
+//! must be recorded in the capability ledger rather than assumed.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char};
 
 use ash::vk;
 
 use crate::Validation;
 
 use super::inventory::{Enumeration, EnumerationError, enumerate, load_entry};
+use super::surface::{
+    MissingSurfaceExtension, SURFACE_EXTENSIONS, verify_surface_extensions,
+};
 use super::validation::{MissingValidation, verify_required};
 
 /// The validation layer name, NUL-terminated for the loader.
@@ -98,11 +101,47 @@ impl core::fmt::Debug for ValidationInstance {
     }
 }
 
+/// An instance created with the surface instance extensions verified and enabled.
+///
+/// A distinct type rather than a flag on [`ValidationInstance`], because the
+/// surface entry points (`vkCreateWin32SurfaceKHR` among them) exist only when the
+/// extension was enabled: `ash` substitutes a panicking stub for a function the
+/// loader did not resolve, so "create a surface on an instance that never enabled
+/// `VK_KHR_win32_surface`" must not be expressible. Only [`open_with_surface`]
+/// produces this value.
+pub(crate) struct SurfaceInstance(ValidationInstance);
+
+impl SurfaceInstance {
+    /// Returns the underlying instance.
+    pub(crate) fn instance(&self) -> &ValidationInstance {
+        &self.0
+    }
+
+    /// Returns whether validation was positively verified for this open.
+    ///
+    /// Delegated so a caller holding the surface witness does not have to reach
+    /// through it to ask the same question.
+    pub(crate) const fn validation_enabled(&self) -> bool {
+        self.0.validation_enabled()
+    }
+}
+
+impl core::fmt::Debug for SurfaceInstance {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SurfaceInstance")
+            .field("validation_enabled", &self.validation_enabled())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Why an instance could not be opened.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InstanceError {
     /// The loader or its instance-level names could not be read.
     Enumeration(EnumerationError),
+    /// The surface path was asked for and the loader offers no surface facility.
+    SurfaceExtension(MissingSurfaceExtension),
     /// `Validation::Required` was asked for and could not be verified.
     ValidationMissing(MissingValidation),
     /// The loader refused to create the instance.
@@ -112,23 +151,46 @@ pub(crate) enum InstanceError {
 /// Loads a loader, reads its inventory, verifies `validation`, and creates the
 /// instance.
 pub(crate) fn open(validation: Validation) -> Result<ValidationInstance, InstanceError> {
+    open_with(validation, false)
+}
+
+/// Loads a loader, reads its inventory, verifies the surface extensions, and
+/// creates an instance a `VkSurfaceKHR` can be created from.
+///
+/// This is the instance half of the surface path: the extensions the surface needs
+/// are verified against the inventory **before** creation, exactly as
+/// `Validation::Required` is, so a loader that cannot present is refused without
+/// having created anything.
+pub(crate) fn open_with_surface(validation: Validation) -> Result<SurfaceInstance, InstanceError> {
+    open_with(validation, true).map(SurfaceInstance)
+}
+
+/// The shared order: enumerate, verify what was asked for, create.
+fn open_with(validation: Validation, surface: bool) -> Result<ValidationInstance, InstanceError> {
     // SAFETY: loading a Vulkan loader is the platform contract of this module;
     // failure is reported as a value rather than assumed away.
     let entry = unsafe { load_entry() }.map_err(InstanceError::Enumeration)?;
     let inventory = enumerate(&entry).map_err(InstanceError::Enumeration)?;
-    create(entry, validation, &inventory)
+    create(entry, validation, &inventory, surface)
 }
 
 /// Creates the instance for one already-read inventory.
 ///
-/// Split from [`open`] so the ordering rule is visible in one function: the
+/// Split from [`open`] so the ordering rule is visible in one function: every
 /// verification happens before `create_instance` is reached, and the `?` is what
-/// guarantees no instance exists on the refusal path.
+/// guarantees no instance exists on a refusal path. The surface extensions are the
+/// caller's explicit request for this path, so they are checked first.
 fn create(
     entry: ash::Entry,
     validation: Validation,
     inventory: &Enumeration,
+    surface: bool,
 ) -> Result<ValidationInstance, InstanceError> {
+    if surface {
+        verify_surface_extensions(&inventory.inventory())
+            .map_err(InstanceError::SurfaceExtension)?;
+    }
+
     let verify = matches!(validation, Validation::Required);
     if verify {
         verify_required(&inventory.inventory()).map_err(InstanceError::ValidationMissing)?;
@@ -142,15 +204,23 @@ fn create(
     // Both arrays and the pNext chain must outlive `create_instance`, so they are
     // locals the builder borrows for the duration of the call.
     let layer_names = [REQUIRED_LAYER_C.as_ptr()];
-    let extension_names = [REQUIRED_FEATURE_EXTENSION_C.as_ptr()];
+    let mut extension_names: Vec<*const c_char> = Vec::new();
+    if surface {
+        extension_names.extend(SURFACE_EXTENSIONS.iter().map(|name| name.as_ptr()));
+    }
+    if verify {
+        extension_names.push(REQUIRED_FEATURE_EXTENSION_C.as_ptr());
+    }
     let mut validation_features = vk::ValidationFeaturesEXT::default()
         .enabled_validation_features(&[vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION]);
 
     let mut create_info = vk::InstanceCreateInfo::default().application_info(&application_info);
+    if !extension_names.is_empty() {
+        create_info = create_info.enabled_extension_names(&extension_names);
+    }
     if verify {
         create_info = create_info
             .enabled_layer_names(&layer_names)
-            .enabled_extension_names(&extension_names)
             .push_next(&mut validation_features);
     }
 
@@ -199,11 +269,29 @@ mod tests {
         let Ok(entry) = (unsafe { load_entry() }) else {
             return;
         };
-        let error = create(entry, Validation::Required, &empty)
+        let error = create(entry, Validation::Required, &empty, false)
             .expect_err("an empty inventory cannot satisfy Required");
         assert_eq!(
             error,
             InstanceError::ValidationMissing(MissingValidation::Layer)
+        );
+    }
+
+    #[test]
+    fn a_surface_open_refuses_before_validation_is_even_asked() {
+        // The surface extensions are verified first because they are this path's
+        // explicit request, and both verifications precede creation. An empty
+        // inventory therefore names the surface facility rather than validation.
+        let empty = Enumeration::default();
+        // SAFETY: as above.
+        let Ok(entry) = (unsafe { load_entry() }) else {
+            return;
+        };
+        let error = create(entry, Validation::Required, &empty, true)
+            .expect_err("an empty inventory offers no surface extension");
+        assert_eq!(
+            error,
+            InstanceError::SurfaceExtension(MissingSurfaceExtension::Surface)
         );
     }
 
@@ -214,12 +302,29 @@ mod tests {
         let Ok(entry) = (unsafe { load_entry() }) else {
             return;
         };
-        match create(entry, Validation::Disabled, &empty) {
+        match create(entry, Validation::Disabled, &empty, false) {
             Ok(instance) => assert!(!instance.validation_enabled()),
             // A driver without Vulkan, or an exhausted loader, is not this test's
             // subject; the subject is that validation is never the reason.
             Err(InstanceError::Creation(_)) => {}
             Err(other) => panic!("a disabled open must not fail on validation: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_surface_capable_instance_opens_with_the_verified_extensions() {
+        // A real loader and a real instance on this machine. A loader that cannot
+        // present on this target is a fact about the machine rather than this
+        // module, and its refusal names the extension; creation failing *after* the
+        // extensions were verified is the one outcome that would mean this module
+        // enabled something it did not check.
+        match open_with_surface(Validation::Disabled) {
+            Ok(instance) => assert!(!instance.validation_enabled()),
+            Err(InstanceError::SurfaceExtension(_)) | Err(InstanceError::Enumeration(_)) => {}
+            Err(InstanceError::Creation(result)) => {
+                panic!("surface extensions were verified yet creation failed: {result:?}")
+            }
+            Err(other) => panic!("unexpected surface-open failure: {other:?}"),
         }
     }
 }
