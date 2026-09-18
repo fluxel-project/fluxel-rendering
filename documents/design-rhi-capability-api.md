@@ -311,7 +311,7 @@ layer is private (`crates/rhi/src/common/`), and ADR-0006/0007 continue to hold.
 | `api::{family, handle, negotiate}` | implemented, tested |
 | `api::{graphics, families}` | vocabulary complete; no backend implements them yet |
 | `vertex`, `sampler`, `binding`, `pipeline` | implemented, tested |
-| Vulkan (`native::vulkan`) | steps 1-3 done and proven on real hardware; format/dimension/usage lowering, real buffer and image handles, and the resource table that owns buffer handles, texture handles (image plus the view sampled through it) and sampler handles over one allocator done; **step 4 complete**; **step 5 complete** — shader module, pipeline layout, descriptor set layout, compute pipeline and raster pipeline landed and proven against a real driver, the raster pipeline lowered from the common fixed-function vocabulary with the render pass that creation needs owned only for the call; **step 6 complete** — the retained WGSL lowered to SPIR-V with Naga's `wgsl-in` + `spv-out`, with the dialect, entry-point, stage and SPIR-V 1.0 profile checks decided before the driver is reached and the writer options pinned field by field (SPIR-V passthrough remains the other route); **step 7 complete** — the semantic access states lowered onto pipeline-stage/access masks and image layouts, and one command pool plus the one recording encoder that records those barriers, with `before == after` still a barrier; steps 8-11 not started |
+| Vulkan (`native::vulkan`) | steps 1-3 done and proven on real hardware; format/dimension/usage lowering, real buffer and image handles, and the resource table that owns buffer handles, texture handles (image plus the view sampled through it) and sampler handles over one allocator done; **step 4 complete**; **step 5 complete** — shader module, pipeline layout, descriptor set layout, compute pipeline and raster pipeline landed and proven against a real driver, the raster pipeline lowered from the common fixed-function vocabulary with the render pass that creation needs owned only for the call; **step 6 complete** — the retained WGSL lowered to SPIR-V with Naga's `wgsl-in` + `spv-out`, with the dialect, entry-point, stage and SPIR-V 1.0 profile checks decided before the driver is reached and the writer options pinned field by field (SPIR-V passthrough remains the other route); **step 7 complete** — the semantic access states lowered onto pipeline-stage/access masks and image layouts, and one command pool plus the one recording encoder that records those barriers, with `before == after` still a barrier; **step 8 complete** — the two copy routes this family owns, `vkCmdCopyBuffer` and `vkCmdCopyImage`, lowered from the portable regions with the alignment and range checks repeated at the driver boundary and the image aspect derived from the mapped format, recorded and proven against a real driver (`vkCmdCopyBufferToImage` / `vkCmdCopyImageToBuffer` stay with the staging path that needs them); steps 9-11 not started |
 | DX12, Metal | not started; both are 0.16 |
 | GL family, browser WebGPU, compressed formats | **0.17**, not 0.16 |
 
@@ -332,5 +332,12 @@ buffer and image barriers driven by the portable access states, and the pure bar
 lowering is covered on its own: every named state lowers to a non-empty stage mask,
 a texture-only state is refused for a buffer and a buffer-only state for an image,
 the sampled-read layout follows the mapped format, and a same-state transition is
-still a barrier. Clippy is clean under `-D warnings` for all-features and
-no-default-features.
+still a barrier. Step 8 adds both copy routes to that recording: a real
+`vkCmdCopyBuffer` between two device-local buffers and a real `vkCmdCopyImage`
+between two device-local images, recorded over their transfer transitions, with the
+pure copy lowering covered on its own — the field-for-field buffer record, the
+zero/misaligned/overflow/out-of-bounds refusals by name, the same four for textures
+plus the differing-format, unknown-mip, zero-extent, layer-origin and layer-count
+refusals, the mip-halved bounds, the depth aspect a depth format selects without
+being named, and the one-layer subresource the record writes. Clippy is clean under
+`-D warnings` for all-features and no-default-features.

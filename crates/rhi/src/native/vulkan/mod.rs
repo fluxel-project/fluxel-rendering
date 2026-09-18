@@ -158,3 +158,8 @@ pub(crate) mod barrier;
 /// Step 7's owning half: the command pool on the device's selected queue family and
 /// the one recording encoder, which records exactly the barriers [`barrier`] builds.
 pub(crate) mod command;
+
+/// Step 8's pure half: the portable buffer and texture copy regions lowered onto
+/// `Vulkan` copy records, with the alignment, bounds and layer checks repeated at
+/// the boundary that reaches the driver.
+pub(crate) mod copy;

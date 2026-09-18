@@ -34,9 +34,11 @@
 //! reminder that the ownership changes there.
 
 use ash::vk;
-use fluxel_rendergraph::{BufferRange, ResourceAccessState, TextureRange};
+use fluxel_rendergraph::{
+    BufferCopyRegion, BufferRange, ResourceAccessState, TextureCopyRegion, TextureRange,
+};
 
-use super::{barrier, format};
+use super::{barrier, copy, format};
 
 /// Why a command pool or an encoder could not be created or used.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +64,17 @@ pub(crate) enum RecordError {
     UnsupportedState(ResourceAccessState),
     /// The subresource range is not one a barrier may name.
     UnsupportedRange,
+    /// The copy region is not one the driver would accept, and the reason is
+    /// carried rather than flattened: a misaligned buffer range and an
+    /// out-of-bounds texture box are different mistakes to fix.
+    Region(copy::CopyRegionError),
+    /// The id names no live buffer of this device generation.
+    UnknownBuffer,
+    /// The id names no live texture of this device generation.
+    UnknownTexture,
+    /// The texture's format is one this backend has not been taught, so the copy
+    /// record cannot name the image's aspect or check the two formats agree.
+    UnsupportedFormat,
 }
 
 /// The one command pool of one device generation.
@@ -280,6 +293,77 @@ impl Encoder {
                 &[],
                 &[],
                 &[memory_barrier],
+            );
+        }
+        Ok(())
+    }
+
+    /// Records one buffer-to-buffer copy.
+    ///
+    /// The region is lowered and refused by value before the driver is reached, and
+    /// the two sizes it is checked against are the sizes the buffers were *created*
+    /// with -- read from the table by the caller -- rather than sizes recovered
+    /// from the driver, because the creation size is what the graph's own check
+    /// used.
+    pub(crate) fn copy_buffer(
+        &mut self,
+        source: vk::Buffer,
+        source_size: u64,
+        destination: vk::Buffer,
+        destination_size: u64,
+        region: BufferCopyRegion,
+    ) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        let lowered = copy::buffer_copy(source_size, destination_size, region)
+            .map_err(RecordError::Region)?;
+        // SAFETY: the command buffer is recording, both handles were created by the
+        // device this encoder belongs to and are alive for the recording's lifetime
+        // because the table owns them, and `lowered` is a validated region.
+        unsafe {
+            self.device
+                .cmd_copy_buffer(self.command_buffer, source, destination, &[lowered]);
+        }
+        Ok(())
+    }
+
+    /// Records one image-to-image copy.
+    ///
+    /// Both descriptions are the ones the images were created from and `format` is
+    /// the mapped `Vulkan` format they both carry; the aspect and the layer rule are
+    /// derived from those in [`copy`], so this method spells no aspect itself.
+    /// Differing formats are refused by name rather than reaching a driver that
+    /// would report a malformed copy.
+    pub(crate) fn copy_texture(
+        &mut self,
+        source: vk::Image,
+        source_desc: &fluxel_rendergraph::TextureDesc,
+        destination: vk::Image,
+        destination_desc: &fluxel_rendergraph::TextureDesc,
+        region: TextureCopyRegion,
+    ) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        // The mapped format is what the copy record needs, and it is also the
+        // cheapest honest answer to "is this a format this backend was taught": a
+        // portable format with no equivalent cannot be copied through.
+        let mapped = format::image_format(source_desc.format).ok_or(RecordError::UnsupportedFormat)?;
+        let lowered = copy::image_copy(source_desc, destination_desc, region, mapped)
+            .map_err(RecordError::Region)?;
+        // SAFETY: the command buffer is recording, both handles were created by the
+        // device this encoder belongs to and are alive for the recording's lifetime
+        // because the table owns them, and `lowered` is a validated box whose
+        // subresources exist on the images those descriptions created.
+        unsafe {
+            self.device.cmd_copy_image(
+                self.command_buffer,
+                source,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                destination,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[lowered],
             );
         }
         Ok(())
@@ -559,8 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ended_encoder_refuses_further_recording() {
-        let Some((opened, pool)) = pool() else {
+    fn an_ended_encoder_refuses_further_recording() {        let Some((opened, pool)) = pool() else {
             return;
         };
         let allocator =
@@ -598,5 +681,323 @@ mod tests {
             ),
             Err(RecordError::NotRecording)
         );
+    }
+
+    #[test]
+    fn the_copy_alignment_is_the_portable_alignment() {
+        // The safe layer enforces `COPY_BUFFER_ALIGNMENT` before the native
+        // boundary; this backend repeats the number at the boundary itself. The
+        // two live in different modules, so a change to either one would silently
+        // move the other unless something states that they are the same fact.
+        assert_eq!(
+            copy::COPY_BUFFER_ALIGNMENT,
+            wgpu_types::COPY_BUFFER_ALIGNMENT
+        );
+    }
+
+    #[test]
+    fn a_real_encoder_records_a_real_buffer_and_image_copy() {
+        // Step 8 against the real driver: one recording that copies a buffer to a
+        // buffer and one image of a texture to another image, each through the
+        // table's handles and the lowered region. Skips where no adapter exists.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        let source = table
+            .create_buffer(
+                256,
+                declared_buffer(&[BufferUsageKind::CopySource]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local copy source");
+        let destination = table
+            .create_buffer(
+                256,
+                declared_buffer(&[BufferUsageKind::CopyDestination]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local copy destination");
+
+        let described = TextureDesc {
+            dimension: TextureDimension::D2,
+            extent: Extent3d {
+                width: 16,
+                height: 8,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            sample_count: 1,
+            format: TextureFormat::Rgba8Unorm,
+        };
+        let source_texture = table
+            .create_texture(
+                described,
+                declared_texture(&[TextureUsageKind::CopySource]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local copy source texture");
+        let destination_texture = table
+            .create_texture(
+                described,
+                declared_texture(&[TextureUsageKind::CopyDestination]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local copy destination texture");
+
+        let (source_handle, source_size) = (
+            table.buffer_handle(source).expect("a live buffer"),
+            table.buffer_size(source).expect("a created size"),
+        );
+        let (destination_handle, destination_size) = (
+            table.buffer_handle(destination).expect("a live buffer"),
+            table.buffer_size(destination).expect("a created size"),
+        );
+        let source_image = table.texture_image(source_texture).expect("a live image");
+        let destination_image = table
+            .texture_image(destination_texture)
+            .expect("a live image");
+
+        let mut encoder = pool.begin().expect("a recording encoder");
+        // The transactions the copy commands require: a source is read through the
+        // transfer stage and a destination is written through it, and an image is
+        // in a transfer layout while that happens.
+        encoder
+            .transition_buffer(
+                source_handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopySource,
+            )
+            .expect("the source is readable");
+        encoder
+            .transition_buffer(
+                destination_handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the destination is writable");
+        encoder
+            .transition_image(
+                source_image,
+                vk::Format::R8G8B8A8_UNORM,
+                TextureRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopySource,
+            )
+            .expect("the source image is readable");
+        encoder
+            .transition_image(
+                destination_image,
+                vk::Format::R8G8B8A8_UNORM,
+                TextureRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the destination image is writable");
+
+        encoder
+            .copy_buffer(
+                source_handle,
+                source_size,
+                destination_handle,
+                destination_size,
+                BufferCopyRegion {
+                    source_offset: 0,
+                    destination_offset: 64,
+                    size: 128,
+                },
+            )
+            .expect("a real buffer copy records");
+        encoder
+            .copy_texture(
+                source_image,
+                &described,
+                destination_image,
+                &described,
+                TextureCopyRegion {
+                    source_origin: [0, 0, 0],
+                    destination_origin: [4, 2, 0],
+                    extent: [8, 4, 1],
+                    source_mip_level: 0,
+                    destination_mip_level: 0,
+                },
+            )
+            .expect("a real image copy records");
+
+        encoder.end().expect("recording ends");
+        assert!(!encoder.is_recording());
+    }
+
+    #[test]
+    fn a_refused_copy_is_a_value_and_the_encoder_stays_usable() {
+        // Every copy refusal happens before the driver is reached, and the contract
+        // says the executor still ends an encoder after a recording error. The
+        // table's handles are what make the stale-id cases answerable at all.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+        let buffer = table
+            .create_buffer(
+                64,
+                declared_buffer(&[BufferUsageKind::CopySource]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local buffer");
+        let handle = table.buffer_handle(buffer).expect("a live buffer");
+        let size = table.buffer_size(buffer).expect("a created size");
+
+        let described = TextureDesc {
+            dimension: TextureDimension::D2,
+            extent: Extent3d {
+                width: 8,
+                height: 8,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            sample_count: 1,
+            format: TextureFormat::Rgba8Unorm,
+        };
+        let texture = table
+            .create_texture(
+                described,
+                declared_texture(&[TextureUsageKind::CopySource]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local texture");
+        let image = table.texture_image(texture).expect("a live image");
+
+        let mut encoder = pool.begin().expect("a recording encoder");
+
+        // A misaligned buffer region, an out-of-bounds texture box and a differing
+        // texture format are three different mistakes, and each keeps its own
+        // sentence.
+        assert_eq!(
+            encoder.copy_buffer(
+                handle,
+                size,
+                handle,
+                size,
+                BufferCopyRegion {
+                    source_offset: 0,
+                    destination_offset: 2,
+                    size: 4,
+                },
+            ),
+            Err(RecordError::Region(copy::CopyRegionError::Misaligned))
+        );
+        assert_eq!(
+            encoder.copy_texture(
+                image,
+                &described,
+                image,
+                &described,
+                TextureCopyRegion {
+                    source_origin: [7, 0, 0],
+                    destination_origin: [0, 0, 0],
+                    extent: [2, 1, 1],
+                    source_mip_level: 0,
+                    destination_mip_level: 0,
+                },
+            ),
+            Err(RecordError::Region(copy::CopyRegionError::OutOfBounds))
+        );
+        let mut other = described;
+        other.format = TextureFormat::Bgra8Unorm;
+        assert_eq!(
+            encoder.copy_texture(
+                image,
+                &described,
+                image,
+                &other,
+                TextureCopyRegion {
+                    source_origin: [0, 0, 0],
+                    destination_origin: [0, 0, 0],
+                    extent: [1, 1, 1],
+                    source_mip_level: 0,
+                    destination_mip_level: 0,
+                },
+            ),
+            Err(RecordError::Region(copy::CopyRegionError::FormatMismatch))
+        );
+
+        // The already-recorded state and the still-open recording are unaffected.
+        encoder
+            .copy_buffer(
+                handle,
+                size,
+                handle,
+                size,
+                BufferCopyRegion {
+                    source_offset: 0,
+                    destination_offset: 0,
+                    size: 64,
+                },
+            )
+            .expect("a refused copy does not poison the encoder");
+        encoder.end().expect("the encoder still ends");
+    }
+
+    #[test]
+    fn a_stale_id_is_refused_by_the_table_rather_than_reaching_the_driver() {
+        // The caller resolves an id to a handle before recording, so a destroyed
+        // resource answers `None` and a copy call with it is never reached. This is
+        // the shape that keeps a stale generation from becoming a driver call, and
+        // it is asserted here rather than only in the table's own tests because the
+        // copy path is a caller that depends on it.
+        let Some((opened, _pool)) = pool() else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+        let buffer = table
+            .create_buffer(
+                64,
+                declared_buffer(&[BufferUsageKind::CopySource]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local buffer");
+        table.destroy_buffer(buffer).expect("the buffer is released");
+        assert_eq!(
+            table.buffer_handle(buffer),
+            None,
+            "a destroyed id resolves to no handle"
+        );
+        assert_eq!(table.buffer_size(buffer), None);
     }
 }
