@@ -123,6 +123,12 @@ pub(crate) mod format;
 /// driver was asked about that format.
 pub(crate) mod format_facts;
 
+/// Step 11's lowering half: the discovery results this backend owns -- the ledger
+/// `require` reads, the adapter's numeric facts and [`format_facts`]'s evidence
+/// table -- lowered onto `fluxel_rendergraph::DeviceCapabilities`. It reports only
+/// what discovery proved, so the remaining ledger rows are what widens it.
+pub(crate) mod capability;
+
 /// Step 3''s second half: suballocation and binding memory to a handle.
 pub(crate) mod allocator;
 

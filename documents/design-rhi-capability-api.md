@@ -395,5 +395,18 @@ discovery accepted and changing nothing. The pure half covers each optimal-tilin
 its own fact, a flag the table does not model (`BLIT_SRC`) lowering to none, the two attachment
 kinds reaching one `renderable` fact, the single `STORAGE_IMAGE` bit proving both storage
 directions, a storage fact passing the table's probe rule, and a driver answer with no flags being a
-proved negative the table keeps rather than an absent row. Clippy is clean
+proved negative the table keeps rather than an absent row. Step 11's lowering half
+adds `native::vulkan::capability`: the ledger `require` reads, the adapter's limits and that
+evidence table are lowered onto `fluxel_rendergraph::DeviceCapabilities`, reading the
+optional-domain rows from the ledger rather than re-deriving them, and reporting the recording and
+transition facts this backend's command-buffer model implies. On a real adapter the lowering
+reports one raster/copy queue whose compute row is the ledger's, the adapter's colour count and
+uniform-offset alignment, the workgroup dimensions only where compute was proved, no surface (this
+is the headless half), and exactly the mapped formats in table order — `R8G8B8A8_UNORM` sampled,
+linearly filterable, a colour attachment at one sample and copyable both ways, and `D32_SFLOAT` a
+depth-stencil attachment rather than a colour one and copyable both ways. The pure half covers the
+fail-closed floor (no optional row, the workgroup dimensions left at zero), both storage directions
+from one storage row, each indirect row reaching the buffer flag, the backend's own
+recording/transition shape, the attachment-side split, the sample-count fold, the
+absent-versus-recorded pair and the report order. Clippy is clean
 under `-D warnings` for all-features and no-default-features.
