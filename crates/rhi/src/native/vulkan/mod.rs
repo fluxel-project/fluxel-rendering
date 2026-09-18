@@ -143,3 +143,9 @@ pub(crate) mod descriptor;
 /// and the raster pipeline lowered from the common fixed-function vocabulary, with
 /// each shader module destroyed as soon as creation has read it.
 pub(crate) mod pipeline;
+
+/// Step 6: the retained WGSL artifact lowered to SPIR-V with Naga's `spv-out`, with
+/// the dialect, entry-point, stage and profile checks decided before the driver is
+/// reached. Caller-supplied SPIR-V stays a passthrough and meets this path in
+/// [`wgsl::create_module`].
+pub(crate) mod wgsl;

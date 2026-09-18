@@ -27,8 +27,9 @@
 //! Both are refused with a sentence before the driver is reached, for the reason
 //! every refusal in this backend exists: a driver validation error is a worse answer
 //! than a reason the caller can act on. Nothing here decodes the instruction stream.
-//! That belongs to the step that *produces* the words (step 6, Naga `spv-out`), and
-//! a second partial parser here would be a second truth about the same bytes.
+//! That belongs to the step that *produces* the words ([`super::wgsl`], Naga
+//! `spv-out`), and a second partial parser here would be a second truth about the
+//! same bytes.
 //!
 //! # One stage, one entry point, no specialization
 //!
@@ -190,8 +191,9 @@ pub(crate) fn stage(
 /// OpFunctionEnd
 /// ```
 ///
-/// It stands in for the retained artifacts until step 6 lowers their WGSL with Naga;
-/// only tests read it, which is why it is gated rather than shipped as vocabulary.
+/// It is a fixed payload independent of the Naga lowering path, so a test that
+/// creates a module exercises creation itself rather than [`super::wgsl`]; only tests
+/// read it, which is why it is gated rather than shipped as vocabulary.
 #[cfg(test)]
 pub(crate) const MINIMAL_COMPUTE_SPIRV: [u32; 35] = [
     0x0723_0203, 0x0001_0000, 0x0007_0000, 0x0000_0005, 0x0000_0000, 0x0002_0011, 0x0000_0001,

@@ -19,7 +19,7 @@ khronos-egl = { version = "=6.0.0", features = ["dynamic"], optional = true }
 [features]
 default = ["dx12", "vulkan"]
 dx12 = ["wgpu-hal/dx12", "dep:windows"]
-vulkan = ["wgpu-hal/vulkan", "dep:ash", "dep:gpu-allocator"]
+vulkan = ["wgpu-hal/vulkan", "dep:ash", "dep:gpu-allocator", "naga/spv-out"]
 # Platform-neutral GL-family API/state contracts. Provider-specific features
 # will add only their own Layer 1 dependencies; this feature owns no window or
 # event loop.

@@ -1256,10 +1256,10 @@ mod tests {
     /// }
     /// ```
     ///
-    /// It stands in for the retained artifacts until step 6 lowers their WGSL with
-    /// Naga, exactly as [`MINIMAL_COMPUTE_SPIRV`] does for the compute half.
-    /// Because Naga emitted it, the words are valid SPIR-V without a second
-    /// assembler in this repository.
+    /// It is a fixed payload independent of the Naga lowering path, exactly as
+    /// [`MINIMAL_COMPUTE_SPIRV`] is for the compute half: a pipeline test exercises
+    /// creation rather than `super::wgsl`. Because Naga emitted it, the words are
+    /// valid SPIR-V without a second assembler in this repository.
     const MINIMAL_RASTER_VERTEX_SPIRV: [u32; 129] = [
         0x0723_0203, 0x0001_0000, 0x0000_001c, 0x0000_0017, 0x0000_0000, 0x0002_0011,
         0x0000_0001, 0x0006_000b, 0x0000_0001, 0x4c53_4c47, 0x6474_732e, 0x3035_342e,

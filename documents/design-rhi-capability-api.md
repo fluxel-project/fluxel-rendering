@@ -311,7 +311,7 @@ layer is private (`crates/rhi/src/common/`), and ADR-0006/0007 continue to hold.
 | `api::{family, handle, negotiate}` | implemented, tested |
 | `api::{graphics, families}` | vocabulary complete; no backend implements them yet |
 | `vertex`, `sampler`, `binding`, `pipeline` | implemented, tested |
-| Vulkan (`native::vulkan`) | steps 1-3 done and proven on real hardware; format/dimension/usage lowering, real buffer and image handles, and the resource table that owns buffer handles, texture handles (image plus the view sampled through it) and sampler handles over one allocator done; **step 4 complete**; **step 5 complete** — shader module, pipeline layout, descriptor set layout, compute pipeline and raster pipeline landed and proven against a real driver, the raster pipeline lowered from the common fixed-function vocabulary with the render pass that creation needs owned only for the call; steps 6-11 not started |
+| Vulkan (`native::vulkan`) | steps 1-3 done and proven on real hardware; format/dimension/usage lowering, real buffer and image handles, and the resource table that owns buffer handles, texture handles (image plus the view sampled through it) and sampler handles over one allocator done; **step 4 complete**; **step 5 complete** — shader module, pipeline layout, descriptor set layout, compute pipeline and raster pipeline landed and proven against a real driver, the raster pipeline lowered from the common fixed-function vocabulary with the render pass that creation needs owned only for the call; **step 6 complete** — the retained WGSL lowered to SPIR-V with Naga's `wgsl-in` + `spv-out`, with the dialect, entry-point, stage and SPIR-V 1.0 profile checks decided before the driver is reached and the writer options pinned field by field (SPIR-V passthrough remains the other route); steps 7-11 not started |
 | DX12, Metal | not started; both are 0.16 |
 | GL family, browser WebGPU, compressed formats | **0.17**, not 0.16 |
 
@@ -322,8 +322,10 @@ comparison sampler and the disabled-comparison lowering a filtering sampler need
 the resource table that owns buffers plus textures and their views plus samplers,
 the real `VkShaderModule` and `VkComputePipeline` a compute pipeline is built
 from, a real `VkDescriptorSetLayout` created from the common bind-group layout
-vocabulary and owned by the pipeline layout that names it, and a real
+vocabulary and owned by the pipeline layout that names it, a real
 `VkGraphicsPipeline` for both the colour-only and the depth-attached fixed-function
 descriptions, created against a render pass built from the same attachment
-signature. Clippy is clean under `-D warnings` for all-features and
+signature, and the retained WGSL artifacts lowered to SPIR-V by Naga and handed to
+the driver as real modules (one retained vertex artifact and one retained compute
+artifact). Clippy is clean under `-D warnings` for all-features and
 no-default-features.
