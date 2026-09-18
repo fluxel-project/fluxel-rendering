@@ -13,21 +13,28 @@
 //! and, for the command families, over one recording from the device's own command
 //! pool.
 //!
-//! # One recording owner, one handle type per family
+//! # One recording engine, one handle type per family
 //!
-//! [`Recording`] is the machinery the command handles share: the recording begun by
-//! the first command that needs one, and the three states that recording can be in.
-//! The handles are distinct types on purpose. A single type implementing several
+//! [`Recorder`] is the machinery the command handles share: the recording begun by the
+//! first command that needs one, the three states that recording can be in, and the
+//! pass targets a raster bracket names. It moved into its own module when the
+//! execution layer became the consumer that must record several families into **one**
+//! submission -- see [`super::recording`] -- and the handles below are now thin
+//! wrappers over it.
+//!
+//! The handles stay distinct types on purpose. A single type implementing several
 //! family traits would let a caller that negotiated only `Copy` reach a draw, because
 //! a family verb does not re-ask the ledger once a handle exists -- so the type, not a
 //! run-time check, is what keeps one family's vocabulary out of another's call site.
+//! What each handle keeps is exactly that: the type that decides which verbs a caller
+//! can name, plus the id resolution and the family-shaped refusals that go with it.
 //!
 //! [`StorageBufferBindings`] and [`StorageTextureBindings`] are *resource roles* rather
 //! than command domains, so they own no recording at all: each resolves a base
 //! resource id through the table and builds a value the graph's own bind-group step
 //! places at a binding number. That is one place the wired families differ
 //! structurally rather than only in their verbs, and it is stated by those types
-//! having no `Recording` field.
+//! having no `Recorder` field.
 //!
 //! [`IndirectDispatchRecording`] is the other. An indirect dispatch is a compute
 //! command, so its handle wraps [`ComputeRecording`] rather than owning a second
@@ -41,9 +48,9 @@
 //! The graphics, copy and compute handles are each their own recording context, which
 //! the contract permits (plan section 21: negotiation and recording context need not
 //! remain the same object); the indirect handle shares the compute one because its
-//! command is a compute command. A graph execution that names two recordings
-//! negotiates two handles and so produces two submissions; composing them into one is
-//! the execution-layer migration's decision and is deliberately not invented here.
+//! command is a compute command. A capability-oriented caller therefore negotiates one
+//! handle per family, while a *submission* that names several families records them
+//! into one [`Recorder`] -- the composition [`super::recording`] lands.
 //!
 //! # The encoder is private, and the recording is begun lazily
 //!
@@ -100,11 +107,12 @@ use crate::common::base::resource::{BufferId, TextureId};
 use crate::common::base::stamp::DeviceStamp;
 
 use super::bind_group::BindGroup;
-use super::command::{Encoder, Finished, RecordError};
+use super::command::{Finished, RecordError};
 use super::device::VulkanDevice;
 use super::format;
 use super::framebuffer::{Framebuffer, FramebufferError};
 use super::pipeline::{ComputePipeline, RasterPipeline};
+use super::recording::Recorder;
 use super::render_pass::{self, PassError};
 use super::storage::{self, StorageBufferBinding, StorageTextureBinding};
 
@@ -176,109 +184,14 @@ pub(crate) enum ComputeError {
     UnknownTexture,
 }
 
-/// One handle's recording, as the three states it can be in.
-///
-/// The state is a value rather than a bool pair because the three are genuinely
-/// different sentences: `Fresh` begins a recording on demand, `Recording` is the
-/// live one, and `Finished` refuses every further command -- a handle whose
-/// recording was already handed to submission must not silently begin a second one,
-/// which is what an `Option` alone would allow.
-///
-/// The recording is boxed because an [`Encoder`] carries a loaded device function
-/// table and is far larger than the other two variants; the indirection is one
-/// allocation per recording, which is nothing beside the driver calls it enables.
-enum Stage {
-    /// Negotiated but nothing recorded yet; the first command begins the recording.
-    Fresh,
-    /// The live recording.
-    Recording(Box<Encoder>),
-    /// The handle's `finish` took the recording.
-    Finished,
-}
-
-/// The recording one family handle owns, in whichever state it is in.
-///
-/// This is the machinery the graphics and copy handles share; it is deliberately not
-/// itself a family handle. Only a concrete `Provides<F>::Api` type implements a
-/// family trait, and keeping this type out of that position is what makes "a handle
-/// negotiated for `Copy` cannot reach a draw" a fact of the type system.
-struct Recording<'d> {
-    device: &'d VulkanDevice,
-    stage: Stage,
-}
-
-impl<'d> Recording<'d> {
-    /// Wraps one device generation without touching the driver.
-    fn new(device: &'d VulkanDevice) -> Self {
-        Self {
-            device,
-            stage: Stage::Fresh,
-        }
-    }
-
-    /// Returns the device this recording belongs to.
-    ///
-    /// The returned reference carries the handle's own `'d` rather than a borrow of
-    /// `self`, so a family verb can resolve its ids through the device's table and
-    /// then take the recording mutably without the two borrows being entangled.
-    fn device(&self) -> &'d VulkanDevice {
-        self.device
-    }
-
-    /// Returns the live recording, beginning it if this is the first command.
-    ///
-    /// A finished handle refuses even though it could allocate another command
-    /// buffer: recording past the handoff would be a second recording the caller
-    /// never asked for and would never submit.
-    fn encoder(&mut self) -> Result<&mut Encoder, RecordError> {
-        if let Stage::Finished = self.stage {
-            return Err(RecordError::NotRecording);
-        }
-        if matches!(self.stage, Stage::Fresh) {
-            let encoder = self.device.pool().begin()?;
-            self.stage = Stage::Recording(Box::new(encoder));
-        }
-        match &mut self.stage {
-            Stage::Recording(encoder) => Ok(encoder),
-            // `Fresh` was replaced just above and `Finished` returned above, so this
-            // arm is not reachable; it is a value rather than a panic for the same
-            // reason every other impossible shape in this backend is.
-            Stage::Fresh | Stage::Finished => Err(RecordError::NotRecording),
-        }
-    }
-
-    /// Ends the recording and hands it to submission.
-    ///
-    /// A handle that never recorded has nothing to hand over, and one that already
-    /// finished has nothing left; both answer the same sentence, and neither is a
-    /// reason to begin a recording.
-    fn finish(&mut self) -> Result<Finished, RecordError> {
-        match core::mem::replace(&mut self.stage, Stage::Finished) {
-            Stage::Recording(encoder) => (*encoder).finish(),
-            Stage::Fresh | Stage::Finished => Err(RecordError::NotRecording),
-        }
-    }
-}
-
-impl core::fmt::Debug for Recording<'_> {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("Recording")
-            .field("recording", &matches!(self.stage, Stage::Recording(_)))
-            .field("finished", &matches!(self.stage, Stage::Finished))
-            .finish_non_exhaustive()
-    }
-}
-
 /// The graphics family's handle on one `Vulkan` device.
 ///
 /// It borrows the device -- so it cannot outlive the ledger that proved the family
-/// -- and owns the one recording it records into and every pass target that
-/// recording names. The targets are kept for the handle's whole life rather than
-/// released at `end_raster`, because a recorded `vkCmdBeginRenderPass` refers to its
-/// framebuffer until the commands that name it complete; the caller keeps the handle
-/// alive until submission reports terminal, exactly as the borrowed path's recording
-/// does.
+/// -- and owns the one [`Recorder`] it records into. The recorder retains every pass
+/// target the recording names rather than releasing them at `end_raster`, because a
+/// recorded `vkCmdBeginRenderPass` refers to its framebuffer until the commands that
+/// name it complete; the caller keeps the handle alive until submission reports
+/// terminal, exactly as the borrowed path's recording does.
 pub(crate) struct GraphicsRecording<'d> {
     /// The recording this handle records into, begun by the first command that
     /// needs one.
@@ -287,9 +200,7 @@ pub(crate) struct GraphicsRecording<'d> {
     /// cannot report a failure and allocating a command buffer can fail; it is begun
     /// by *any* command rather than only by `begin_raster` because the graph records
     /// its transitions before it opens the pass.
-    recording: Recording<'d>,
-    /// Every pass target this recording names, kept alive for its lifetime.
-    targets: Vec<Framebuffer>,
+    recorder: Recorder<'d>,
 }
 
 impl<'d> GraphicsRecording<'d> {
@@ -299,14 +210,8 @@ impl<'d> GraphicsRecording<'d> {
     /// is begun by the first verb that needs it.
     fn new(device: &'d VulkanDevice) -> Self {
         Self {
-            recording: Recording::new(device),
-            targets: Vec::new(),
+            recorder: Recorder::new(device),
         }
-    }
-
-    /// Returns the live recording, in this family's sentence.
-    fn encoder(&mut self) -> Result<&mut Encoder, GraphicsError> {
-        self.recording.encoder().map_err(GraphicsError::Recording)
     }
 
     /// Records the barrier one portable buffer transition requires.
@@ -323,12 +228,12 @@ impl<'d> GraphicsRecording<'d> {
         after: ResourceAccessState,
     ) -> Result<(), GraphicsError> {
         let handle = self
-            .recording
+            .recorder
             .device()
             .table()
             .buffer_handle(buffer)
             .ok_or(GraphicsError::UnknownBuffer)?;
-        self.encoder()?
+        self.recorder
             .transition_buffer(handle, range, before, after)
             .map_err(GraphicsError::Recording)
     }
@@ -347,19 +252,19 @@ impl<'d> GraphicsRecording<'d> {
         after: ResourceAccessState,
     ) -> Result<(), GraphicsError> {
         let desc = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_desc(texture)
             .ok_or(GraphicsError::UnknownTexture)?;
         let image = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_image(texture)
             .ok_or(GraphicsError::UnknownTexture)?;
         let mapped = format::image_format(desc.format).ok_or(GraphicsError::UnsupportedFormat)?;
-        self.encoder()?
+        self.recorder
             .transition_image(image, mapped, range, before, after)
             .map_err(GraphicsError::Recording)
     }
@@ -369,20 +274,20 @@ impl<'d> GraphicsRecording<'d> {
     /// Not family vocabulary: the common contract has no submission verb yet, so
     /// this is how the piece that owns submission takes the ended command buffer. It
     /// takes `&mut self` rather than `self` on purpose -- the pass targets stay in
-    /// the handle, and the caller must keep the handle alive until the submission
+    /// the recorder, and the caller must keep the handle alive until the submission
     /// that names them reports terminal.
     ///
     /// A handle that never recorded has nothing to hand over, and one that already
     /// finished has nothing left; both answer the same sentence, and neither is a
     /// reason to begin a recording.
     pub(crate) fn finish(&mut self) -> Result<Finished, GraphicsError> {
-        self.recording.finish().map_err(GraphicsError::Recording)
+        self.recorder.finish().map_err(GraphicsError::Recording)
     }
 }
 
 impl FamilyApi for GraphicsRecording<'_> {
     fn stamp(&self) -> DeviceStamp {
-        self.recording.device().stamp()
+        self.recorder.device().stamp()
     }
 }
 
@@ -396,8 +301,12 @@ impl GraphicsApi for GraphicsRecording<'_> {
         descriptor: &RasterPassDescriptor<'_, TextureId>,
     ) -> Result<(), Self::Error> {
         // The recording is begun here, not in `provide`, because allocating a
-        // command buffer can fail and this is the first verb that can report it.
-        self.encoder()?;
+        // command buffer can fail and this is the first verb that can report it --
+        // and it is begun *before* the attachment set is admitted, so a pool failure
+        // is named before a target is built.
+        self.recorder
+            .ensure_recording()
+            .map_err(GraphicsError::Recording)?;
 
         // The preserved attachment rule runs first, before any id is resolved: a
         // pass with no pipeline that could run in it is refused for that reason
@@ -406,41 +315,40 @@ impl GraphicsApi for GraphicsRecording<'_> {
             .map_err(GraphicsError::Pass)?;
         let texture = *admitted.texture;
         let desc = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_desc(texture)
             .ok_or(GraphicsError::UnknownTexture)?;
         let view = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_view(texture)
             .ok_or(GraphicsError::UnknownTexture)?;
-        let framebuffer = Framebuffer::create(self.recording.device().device(), admitted, &desc, view)
+        let framebuffer = Framebuffer::create(self.recorder.device().device(), admitted, &desc, view)
             .map_err(GraphicsError::Target)?;
         // Only a target the driver accepted is kept: a refused begin leaves the
         // framebuffer to its own drop, so the recording names nothing that was
-        // released.
-        self.encoder()?
-            .begin_raster(&framebuffer)
-            .map_err(GraphicsError::Recording)?;
-        self.targets.push(framebuffer);
-        Ok(())
+        // released. The recorder is what retains it, because the target outlives the
+        // bracket and composed recordings must keep exactly what they name.
+        self.recorder
+            .begin_raster(framebuffer)
+            .map_err(GraphicsError::Recording)
     }
 
     fn end_raster(&mut self) -> Result<(), Self::Error> {
-        self.encoder()?.end_raster().map_err(GraphicsError::Recording)
+        self.recorder.end_raster().map_err(GraphicsError::Recording)
     }
 
     fn set_raster_pipeline(&mut self, pipeline: &Self::Pipeline) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .set_raster_pipeline(pipeline)
             .map_err(GraphicsError::Recording)
     }
 
     fn set_bindings(&mut self, bindings: &Self::Bindings) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .set_bindings(bindings)
             .map_err(GraphicsError::Recording)
     }
@@ -452,12 +360,12 @@ impl GraphicsApi for GraphicsRecording<'_> {
         offset: u64,
     ) -> Result<(), Self::Error> {
         let handle = self
-            .recording
+            .recorder
             .device()
             .table()
             .buffer_handle(buffer)
             .ok_or(GraphicsError::UnknownBuffer)?;
-        self.encoder()?
+        self.recorder
             .set_vertex_buffer(slot, handle, offset)
             .map_err(GraphicsError::Recording)
     }
@@ -469,30 +377,30 @@ impl GraphicsApi for GraphicsRecording<'_> {
         index_format: IndexFormat,
     ) -> Result<(), Self::Error> {
         let handle = self
-            .recording
+            .recorder
             .device()
             .table()
             .buffer_handle(buffer)
             .ok_or(GraphicsError::UnknownBuffer)?;
-        self.encoder()?
+        self.recorder
             .set_index_buffer(handle, offset, index_format)
             .map_err(GraphicsError::Recording)
     }
 
     fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .set_viewport(viewport)
             .map_err(GraphicsError::Recording)
     }
 
     fn set_scissor(&mut self, scissor: ScissorRect) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .set_scissor(scissor)
             .map_err(GraphicsError::Recording)
     }
 
     fn draw(&mut self, vertices: Range<u32>, instance_count: u32) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .draw(vertices, instance_count)
             .map_err(GraphicsError::Recording)
     }
@@ -502,7 +410,7 @@ impl GraphicsApi for GraphicsRecording<'_> {
         indices: Range<u32>,
         instance_count: u32,
     ) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .draw_indexed(indices, instance_count)
             .map_err(GraphicsError::Recording)
     }
@@ -512,8 +420,7 @@ impl core::fmt::Debug for GraphicsRecording<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("GraphicsRecording")
-            .field("recording", &self.recording)
-            .field("targets", &self.targets.len())
+            .field("recorder", &self.recorder)
             .finish_non_exhaustive()
     }
 }
@@ -528,7 +435,7 @@ impl core::fmt::Debug for GraphicsRecording<'_> {
 /// justified it.
 pub(crate) struct CopyRecording<'d> {
     /// The recording this handle records into, begun by the first copy.
-    recording: Recording<'d>,
+    recorder: Recorder<'d>,
 }
 
 impl<'d> CopyRecording<'d> {
@@ -538,7 +445,7 @@ impl<'d> CopyRecording<'d> {
     /// is begun by the first copy that needs it.
     fn new(device: &'d VulkanDevice) -> Self {
         Self {
-            recording: Recording::new(device),
+            recorder: Recorder::new(device),
         }
     }
 
@@ -548,7 +455,7 @@ impl<'d> CopyRecording<'d> {
     /// the common contract has no submission verb yet, so this is how the piece that
     /// owns submission takes the ended command buffer.
     pub(crate) fn finish(&mut self) -> Result<Finished, CopyError> {
-        self.recording.finish().map_err(CopyError::Recording)
+        self.recorder.finish().map_err(CopyError::Recording)
     }
 
     /// Records the barrier one portable buffer transition requires.
@@ -566,14 +473,12 @@ impl<'d> CopyRecording<'d> {
         after: ResourceAccessState,
     ) -> Result<(), CopyError> {
         let handle = self
-            .recording
+            .recorder
             .device()
             .table()
             .buffer_handle(buffer)
             .ok_or(CopyError::UnknownBuffer)?;
-        self.recording
-            .encoder()
-            .map_err(CopyError::Recording)?
+        self.recorder
             .transition_buffer(handle, range, before, after)
             .map_err(CopyError::Recording)
     }
@@ -594,13 +499,13 @@ impl<'d> CopyRecording<'d> {
         after: ResourceAccessState,
     ) -> Result<(), CopyError> {
         let desc = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_desc(texture)
             .ok_or(CopyError::UnknownTexture)?;
         let image = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_image(texture)
@@ -608,9 +513,7 @@ impl<'d> CopyRecording<'d> {
         let mapped = format::image_format(desc.format).ok_or(CopyError::Recording(
             RecordError::UnsupportedFormat,
         ))?;
-        self.recording
-            .encoder()
-            .map_err(CopyError::Recording)?
+        self.recorder
             .transition_image(image, mapped, range, before, after)
             .map_err(CopyError::Recording)
     }
@@ -618,7 +521,7 @@ impl<'d> CopyRecording<'d> {
 
 impl FamilyApi for CopyRecording<'_> {
     fn stamp(&self) -> DeviceStamp {
-        self.recording.device().stamp()
+        self.recorder.device().stamp()
     }
 }
 
@@ -634,7 +537,7 @@ impl CopyApi for CopyRecording<'_> {
         // Both handles and both declared sizes come from the device's table. The
         // sizes are the ones the buffers were created with -- the same values the
         // graph's own check used -- rather than sizes recovered from the driver.
-        let table = self.recording.device().table();
+        let table = self.recorder.device().table();
         let source_handle = table.buffer_handle(source).ok_or(CopyError::UnknownBuffer)?;
         let source_size = table.buffer_size(source).ok_or(CopyError::UnknownBuffer)?;
         let destination_handle = table
@@ -643,9 +546,7 @@ impl CopyApi for CopyRecording<'_> {
         let destination_size = table
             .buffer_size(destination)
             .ok_or(CopyError::UnknownBuffer)?;
-        self.recording
-            .encoder()
-            .map_err(CopyError::Recording)?
+        self.recorder
             .copy_buffer(
                 source_handle,
                 source_size,
@@ -665,7 +566,7 @@ impl CopyApi for CopyRecording<'_> {
         // The image and the description it was created from, for both sides: the
         // aspect, the mip bounds, the layer rule and the format check are all derived
         // from those descriptions in `copy`, so this call spells none of them.
-        let table = self.recording.device().table();
+        let table = self.recorder.device().table();
         let source_image = table.texture_image(source).ok_or(CopyError::UnknownTexture)?;
         let source_desc = table.texture_desc(source).ok_or(CopyError::UnknownTexture)?;
         let destination_image = table
@@ -674,9 +575,7 @@ impl CopyApi for CopyRecording<'_> {
         let destination_desc = table
             .texture_desc(destination)
             .ok_or(CopyError::UnknownTexture)?;
-        self.recording
-            .encoder()
-            .map_err(CopyError::Recording)?
+        self.recorder
             .copy_texture(
                 source_image,
                 &source_desc,
@@ -692,7 +591,7 @@ impl core::fmt::Debug for CopyRecording<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("CopyRecording")
-            .field("recording", &self.recording)
+            .field("recorder", &self.recorder)
             .finish_non_exhaustive()
     }
 }
@@ -718,7 +617,7 @@ impl core::fmt::Debug for CopyRecording<'_> {
 /// and the common contract carries none (plan section 1).
 pub(crate) struct ComputeRecording<'d> {
     /// The recording this handle records into, begun by the first compute command.
-    recording: Recording<'d>,
+    recorder: Recorder<'d>,
 }
 
 impl<'d> ComputeRecording<'d> {
@@ -728,13 +627,8 @@ impl<'d> ComputeRecording<'d> {
     /// is begun by the first verb that needs it.
     fn new(device: &'d VulkanDevice) -> Self {
         Self {
-            recording: Recording::new(device),
+            recorder: Recorder::new(device),
         }
-    }
-
-    /// Returns the live recording, in this family's sentence.
-    fn encoder(&mut self) -> Result<&mut Encoder, ComputeError> {
-        self.recording.encoder().map_err(ComputeError::Recording)
     }
 
     /// Records the barrier one portable buffer transition requires.
@@ -754,14 +648,12 @@ impl<'d> ComputeRecording<'d> {
         after: ResourceAccessState,
     ) -> Result<(), ComputeError> {
         let handle = self
-            .recording
+            .recorder
             .device()
             .table()
             .buffer_handle(buffer)
             .ok_or(ComputeError::UnknownBuffer)?;
-        self.recording
-            .encoder()
-            .map_err(ComputeError::Recording)?
+        self.recorder
             .transition_buffer(handle, range, before, after)
             .map_err(ComputeError::Recording)
     }
@@ -780,22 +672,20 @@ impl<'d> ComputeRecording<'d> {
         after: ResourceAccessState,
     ) -> Result<(), ComputeError> {
         let desc = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_desc(texture)
             .ok_or(ComputeError::UnknownTexture)?;
         let image = self
-            .recording
+            .recorder
             .device()
             .table()
             .texture_image(texture)
             .ok_or(ComputeError::UnknownTexture)?;
         let mapped = format::image_format(desc.format)
             .ok_or(ComputeError::Recording(RecordError::UnsupportedFormat))?;
-        self.recording
-            .encoder()
-            .map_err(ComputeError::Recording)?
+        self.recorder
             .transition_image(image, mapped, range, before, after)
             .map_err(ComputeError::Recording)
     }
@@ -806,24 +696,24 @@ impl<'d> ComputeRecording<'d> {
     /// the common contract has no submission verb yet, so this is how the piece that
     /// owns submission takes the ended command buffer.
     pub(crate) fn finish(&mut self) -> Result<Finished, ComputeError> {
-        self.recording.finish().map_err(ComputeError::Recording)
+        self.recorder.finish().map_err(ComputeError::Recording)
     }
 
     /// The recording context, for the sibling handle that shares it.
     ///
     /// [`IndirectDispatchRecording`] wraps this type rather than owning a second
-    /// `Recording`, so a compute bracket and an indirect dispatch recorded through
+    /// [`Recorder`], so a compute bracket and an indirect dispatch recorded through
     /// one handle share one command buffer. The accessor exists so the field stays
     /// private to this type while the sibling can still reach the table and the
     /// recorder through it.
-    fn recording_mut(&mut self) -> &mut Recording<'d> {
-        &mut self.recording
+    fn recorder_mut(&mut self) -> &mut Recorder<'d> {
+        &mut self.recorder
     }
 }
 
 impl FamilyApi for ComputeRecording<'_> {
     fn stamp(&self) -> DeviceStamp {
-        self.recording.device().stamp()
+        self.recorder.device().stamp()
     }
 }
 
@@ -835,31 +725,29 @@ impl ComputeApi for ComputeRecording<'_> {
     fn begin_compute(&mut self) -> Result<(), Self::Error> {
         // The recording is begun here, not in `provide`, because allocating a command
         // buffer can fail and this is the first verb that can report it.
-        self.encoder()?
+        self.recorder
             .begin_compute()
             .map_err(ComputeError::Recording)
     }
 
     fn end_compute(&mut self) -> Result<(), Self::Error> {
-        self.encoder()?
-            .end_compute()
-            .map_err(ComputeError::Recording)
+        self.recorder.end_compute().map_err(ComputeError::Recording)
     }
 
     fn set_compute_pipeline(&mut self, pipeline: &Self::Pipeline) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .set_compute_pipeline(pipeline)
             .map_err(ComputeError::Recording)
     }
 
     fn set_bindings(&mut self, bindings: &Self::Bindings) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .set_compute_bindings(bindings)
             .map_err(ComputeError::Recording)
     }
 
     fn dispatch(&mut self, groups: [u32; 3]) -> Result<(), Self::Error> {
-        self.encoder()?
+        self.recorder
             .dispatch(groups)
             .map_err(ComputeError::Recording)
     }
@@ -869,7 +757,7 @@ impl core::fmt::Debug for ComputeRecording<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ComputeRecording")
-            .field("recording", &self.recording)
+            .field("recorder", &self.recorder)
             .finish_non_exhaustive()
     }
 }
@@ -930,7 +818,7 @@ fn from_compute(error: ComputeError) -> IndirectDispatchError {
 ///   that negotiated only `Compute` still cannot name the indirect form.
 ///
 /// It is a wrapper rather than a second recording implementation for the reason
-/// [`Recording`] exists: the bracket, the pipeline, the bindings and the transitions
+/// [`Recorder`] exists: the bracket, the pipeline, the bindings and the transitions
 /// are the compute family's own body, and a second copy would be the "second spelling
 /// of one shape" the plan keeps refusing.
 pub(crate) struct IndirectDispatchRecording<'d> {
@@ -1043,8 +931,8 @@ impl IndirectDispatchApi for IndirectDispatchRecording<'_> {
         // created size and the declared usage are the values the graph's own checks
         // saw, so the read cannot be admitted against a weaker fact than the buffer
         // was.
-        let recording = self.compute.recording_mut();
-        let table = recording.device().table();
+        let recorder = self.compute.recorder_mut();
+        let table = recorder.device().table();
         let handle = table
             .buffer_handle(commands)
             .ok_or(IndirectDispatchError::UnknownBuffer)?;
@@ -1057,9 +945,7 @@ impl IndirectDispatchApi for IndirectDispatchRecording<'_> {
         if !usage.contains(BufferUsageKind::Indirect) {
             return Err(IndirectDispatchError::UsageNotDeclared);
         }
-        recording
-            .encoder()
-            .map_err(IndirectDispatchError::Recording)?
+        recorder
             .dispatch_indirect(handle, size, offset)
             .map_err(IndirectDispatchError::Recording)
     }

@@ -147,14 +147,25 @@
 //!     command-buffer read and the declared `Indirect` usage are checked: its handle
 //!     wraps the compute recording rather than owning a second one, because an
 //!     indirect dispatch needs a compute pipeline bound in the same buffer, and it
-//!     implements `ComputeApi` beside `IndirectDispatchApi` for that reason. The
-//!     execution-layer migration remains owed by this step. This step was added when
-//!     the list above was exhausted, which is section
+//!     implements `ComputeApi` beside `IndirectDispatchApi` for that reason. This step
+//!     was added when the list above was exhausted, which is section
 //!     23.1's rule moving to the W2 work package; it is what makes
 //!     `require::<_, Graphics>(&device)`, `require::<_, Copy>(&device)`,
 //!     `require::<_, Compute>(&device)`, `require::<_, IndirectDispatch>(&device)`,
 //!     `require::<_, StorageBuffer>(&device)` and
 //!     `require::<_, StorageTexture>(&device)` compile and run against this backend.
+//!
+//! 14. **The execution-layer migration.** The adapter that lets the frozen oracle run
+//!     on this backend. Its first piece has landed: [`recording`] extracts the state
+//!     machine the three command handles had each owned and adds
+//!     [`recording::Recorder`], the one recording context a single submission is
+//!     recorded through. The family handles now delegate to it, so the composition the
+//!     module docs of step 13 kept deferring -- several families reaching the driver as
+//!     one command buffer -- exists and is proven against a real driver. Still owed:
+//!     the RHI-facing device that opens this backend, the staging upload path (which is
+//!     the consumer the buffer/image copy routes were deferred to in step 8), the
+//!     fixed-artifact pipeline and binding construction over this table, validation
+//!     diagnostics capture, and the public `Device`/execution wiring.
 //!
 //! # Acceptance
 //!
@@ -382,3 +393,13 @@ pub(crate) mod swapchain;
 /// Test-only scaffolding shared by the modules that need a real window or surface.
 #[cfg(test)]
 pub(crate) mod test_support;
+
+/// Step 14: the composition seat the execution layer records into. One [`recording::Recorder`]
+/// owns one command buffer and every pass target the recording names, and exposes the
+/// whole composed command surface this backend records -- barriers, the raster and
+/// compute brackets, the draws and the copy routes -- so a graph execution that names
+/// several capability families reaches the driver as the one submission `Vulkan`
+/// requires. The family handles in [`family`] delegate to it rather than each owning a
+/// private copy of the same state machine, which is plan section 3's rule applied where
+/// the third consumer appeared.
+pub(crate) mod recording;
