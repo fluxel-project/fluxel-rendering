@@ -135,6 +135,10 @@ mod tests {
             ledger.supports(Capability::Compute),
             opened.device.selected_queue().supports_compute
         );
+        assert!(
+            ledger.supports(Capability::Copy),
+            "the created device proves Copy from the API version alone"
+        );
     }
 
     #[test]

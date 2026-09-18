@@ -85,6 +85,28 @@ pub(crate) struct SelectedQueue {
     pub family: u32,
     /// Whether that family also supports compute dispatches.
     pub supports_compute: bool,
+    /// The family's own timestamp-valid-bit report.
+    ///
+    /// The specification fixes this as either zero or a value in `36..=64`, so a
+    /// non-zero report is exactly "this family can write timestamps" and a zero one
+    /// is exactly "it cannot". It is kept as the driver's number rather than as a
+    /// boolean so the fact stays the report it is, and it is carried beside
+    /// [`Self::supports_compute`] because it is a fact about the same family rather
+    /// than a second query.
+    pub timestamp_valid_bits: u32,
+}
+
+impl SelectedQueue {
+    /// Whether this family's timestamp-valid-bit report proves the query row.
+    ///
+    /// `> 0` rather than `>= 36`: the specification defines no value between one and
+    /// thirty-five, so the two spellings agree on every conformant driver while the
+    /// `> 0` form also refuses a driver that reported a non-zero value it never
+    /// defined. The borrowed `Vulkan` path being replaced spells the same rule as
+    /// `timestamp_valid_bits >= 36`.
+    pub(crate) const fn supports_timestamps(&self) -> bool {
+        self.timestamp_valid_bits != 0
+    }
 }
 
 /// Why the logical device could not be created.
@@ -105,9 +127,12 @@ pub(crate) enum DeviceError {
 /// Selects the one queue family the retained execution model uses.
 ///
 /// The first family whose flags contain `GRAPHICS` is chosen, and its `COMPUTE`
-/// bit is reported alongside. `queue_count` is not consulted: the family is the
-/// unit the rule is about, and a family reporting zero queues is not something a
-/// conformant driver does -- if it did, device creation would fail and report it.
+/// bit and `timestamp_valid_bits` report are carried alongside. Those two are
+/// **reported, not required**: the selection rule is only "this family rasterizes",
+/// and a fact this family happens to report is what the ledger records rather than
+/// something the choice depends on. `queue_count` is not consulted: the family is
+/// the unit the rule is about, and a family reporting zero queues is not something
+/// a conformant driver does -- if it did, device creation would fail and report it.
 pub(crate) fn select_queue_family(
     families: &[vk::QueueFamilyProperties],
 ) -> Result<SelectedQueue, DeviceError> {
@@ -118,6 +143,7 @@ pub(crate) fn select_queue_family(
         .map(|(index, family)| SelectedQueue {
             family: index as u32,
             supports_compute: family.queue_flags.contains(vk::QueueFlags::COMPUTE),
+            timestamp_valid_bits: family.timestamp_valid_bits,
         })
         .ok_or(DeviceError::NoGraphicsQueue)
 }
@@ -174,7 +200,9 @@ impl crate::common::api::negotiate::CapabilitySource for VulkanDevice {
 
 /// Records what creating this device proved, and nothing else.
 ///
-/// Two rows are established here:
+/// Five rows are established here, and each is proved by a fact that was already
+/// read rather than by a new query -- which is why no feature is enabled and no
+/// device-extension structure is consulted:
 ///
 /// - **Graphics** by the fact that a device was created on a family whose flags
 ///   contain graphics. That is the evidence an explicit API offers; it is not a
@@ -183,10 +211,22 @@ impl crate::common::api::negotiate::CapabilitySource for VulkanDevice {
 ///   family without it leaves the row unexamined rather than negative, so the
 ///   requirement check reports "no route on this device" instead of pretending a
 ///   failed probe.
+/// - **Copy** from the API version itself: `Vulkan` 1.0 guarantees
+///   `vkCmdCopyBuffer` and `vkCmdCopyImage` on a graphics family, step 8 records
+///   both routes, and no device feature gates either. The same structural proof as
+///   graphics, and the same `NotRequired` probe outcome.
+/// - **IndirectDispatch** only beside a proved compute row. `vkCmdDispatchIndirect`
+///   is core `Vulkan` 1.0 and the borrowed path being replaced calls it
+///   unconditionally, so its proof is structural too -- but an indirect dispatch is
+///   still a dispatch, so it keeps the compute row's own numeric floor.
+/// - **TimestampQuery** only where the family's `timestamp_valid_bits` report is
+///   non-zero. That fact was read with the same `queue_family_properties` call the
+///   selection already made, so the row costs no query of its own.
 ///
-/// Every other row is absent, because nothing has queried for it yet. Absence is
-/// the rejecting value, so no unproved domain can be entered by accident -- and
-/// each row is added by the step that actually proves it.
+/// Every other row is absent, because nothing has proved it. Absence is the
+/// rejecting value, so no unproved domain can be entered by accident -- and each
+/// row is added by the step that actually proves it. The rows that are owed and
+/// deliberately absent here are named in the module's step 11 entry.
 pub(crate) fn ledger(selected: SelectedQueue, limits: &AdapterLimits) -> CapabilityLedger {
     let mut ledger = CapabilityLedger::default();
     ledger.record(
@@ -201,6 +241,17 @@ pub(crate) fn ledger(selected: SelectedQueue, limits: &AdapterLimits) -> Capabil
             operation_probe: OperationProbe::NotRequired,
         },
     );
+    // Copy has no numeric floor of its own -- the API version is the whole proof --
+    // so its floor is trivially satisfied rather than borrowed from a neighbouring
+    // limit, which would tie the row to a fact it does not depend on.
+    ledger.record(
+        Capability::Copy,
+        CapabilityFact {
+            evidence: Some(CapabilityEvidence::Core),
+            limits_satisfied: true,
+            operation_probe: OperationProbe::NotRequired,
+        },
+    );
     if selected.supports_compute {
         ledger.record(
             Capability::Compute,
@@ -209,6 +260,27 @@ pub(crate) fn ledger(selected: SelectedQueue, limits: &AdapterLimits) -> Capabil
                 limits_satisfied: limits.supports_compute(),
                 // Structural, like graphics: the queue family reported compute and
                 // a device was created on it.
+                operation_probe: OperationProbe::NotRequired,
+            },
+        );
+        ledger.record(
+            Capability::IndirectDispatch,
+            CapabilityFact {
+                evidence: Some(CapabilityEvidence::Core),
+                // The compute row's floor, not a second one: an indirect dispatch
+                // is a dispatch whose count arrives from a buffer, so the numbers a
+                // direct dispatch needs are the numbers this needs too.
+                limits_satisfied: limits.supports_compute(),
+                operation_probe: OperationProbe::NotRequired,
+            },
+        );
+    }
+    if selected.supports_timestamps() {
+        ledger.record(
+            Capability::TimestampQuery,
+            CapabilityFact {
+                evidence: Some(CapabilityEvidence::Core),
+                limits_satisfied: true,
                 operation_probe: OperationProbe::NotRequired,
             },
         );
@@ -354,6 +426,17 @@ mod tests {
         }
     }
 
+    /// The same, with the family's timestamp-valid-bit report stated.
+    fn family_reporting(
+        flags: vk::QueueFlags,
+        timestamp_valid_bits: u32,
+    ) -> vk::QueueFamilyProperties {
+        vk::QueueFamilyProperties {
+            timestamp_valid_bits,
+            ..family(flags)
+        }
+    }
+
     #[test]
     fn a_graphics_family_behind_a_transfer_family_is_still_selected() {
         // The decoy is the point: selecting by index would create a device that
@@ -366,7 +449,8 @@ mod tests {
             select_queue_family(&families),
             Ok(SelectedQueue {
                 family: 1,
-                supports_compute: true
+                supports_compute: true,
+                timestamp_valid_bits: 0,
             })
         );
     }
@@ -378,9 +462,24 @@ mod tests {
             select_queue_family(&families),
             Ok(SelectedQueue {
                 family: 0,
-                supports_compute: false
+                supports_compute: false,
+                timestamp_valid_bits: 0,
             })
         );
+    }
+
+    #[test]
+    fn the_family_timestamp_report_is_carried_rather_than_consulted() {
+        // The selection rule is "this family rasterizes"; the timestamp report is a
+        // fact the ledger records, and a family with a zero report is still selected.
+        let families = [family_reporting(vk::QueueFlags::GRAPHICS, 64)];
+        let selected = select_queue_family(&families).expect("a graphics family exists");
+        assert_eq!(selected.timestamp_valid_bits, 64);
+        assert!(selected.supports_timestamps());
+
+        let silent = [family_reporting(vk::QueueFlags::GRAPHICS, 0)];
+        let selected = select_queue_family(&silent).expect("a graphics family exists");
+        assert!(!selected.supports_timestamps());
     }
 
     #[test]
@@ -447,6 +546,113 @@ mod tests {
         );
     }
 
+    /// The selected-queue value the ledger tests build from.
+    fn selected(supports_compute: bool, timestamp_valid_bits: u32) -> SelectedQueue {
+        SelectedQueue {
+            family: 0,
+            supports_compute,
+            timestamp_valid_bits,
+        }
+    }
+
+    /// Adapter limits whose compute floors are satisfied.
+    fn computing_limits() -> AdapterLimits {
+        AdapterLimits {
+            max_texture_dimension_2d: 8192,
+            max_compute_workgroups_per_dimension: [65535, 65535, 65535],
+            max_compute_workgroup_size: [1024, 1024, 64],
+            max_compute_invocations_per_workgroup: 1024,
+            ..AdapterLimits::unavailable()
+        }
+    }
+
+    #[test]
+    fn a_created_device_proves_copy_without_a_command() {
+        // Copy is the API version's own guarantee on a graphics family, so the
+        // proof is structural and no probe was owed.
+        let ledger = ledger(selected(false, 0), &computing_limits());
+        assert!(ledger.supports(Capability::Copy));
+        assert_eq!(
+            ledger.fact(Capability::Copy).map(|fact| fact.operation_probe),
+            Some(OperationProbe::NotRequired),
+        );
+        assert_eq!(
+            ledger.fact(Capability::Copy).map(|fact| fact.limits_satisfied),
+            Some(true),
+            "copy has no numeric floor, so nothing can leave it unsatisfied"
+        );
+    }
+
+    #[test]
+    fn indirect_dispatch_arrives_only_beside_a_proved_compute_row() {
+        // Without compute the row is not merely disabled, it was never examined --
+        // which is the difference the ledger keeps for diagnostics.
+        let without = ledger(selected(false, 0), &computing_limits());
+        assert!(!without.supports(Capability::IndirectDispatch));
+        assert_eq!(without.fact(Capability::IndirectDispatch), None);
+
+        let with = ledger(selected(true, 0), &computing_limits());
+        assert!(with.supports(Capability::IndirectDispatch));
+    }
+
+    #[test]
+    fn an_unsatisfied_compute_floor_leaves_indirect_dispatch_disabled_too() {
+        // An indirect dispatch is a dispatch: it keeps the compute row's floor
+        // rather than a floor of its own, so the two cannot disagree.
+        let ledger = ledger(selected(true, 0), &AdapterLimits::unavailable());
+        assert!(!ledger.supports(Capability::Compute));
+        assert!(!ledger.supports(Capability::IndirectDispatch));
+    }
+
+    #[test]
+    fn a_timestamp_row_arrives_only_from_a_non_zero_valid_bit_report() {
+        let silent = ledger(selected(false, 0), &computing_limits());
+        assert!(!silent.supports(Capability::TimestampQuery));
+        assert_eq!(
+            silent.fact(Capability::TimestampQuery),
+            None,
+            "a family that reported nothing was never examined for timestamps"
+        );
+
+        let reporting = ledger(selected(false, 64), &computing_limits());
+        assert!(reporting.supports(Capability::TimestampQuery));
+    }
+
+    #[test]
+    fn the_feature_gated_and_preserved_rows_stay_unproved() {
+        // These are absent for three different reasons, and all three are stated:
+        // the step that can prove each one is the step that enables the feature,
+        // reads the per-format facts, or narrows the family's parameter space.
+        let ledger = ledger(selected(true, 64), &computing_limits());
+        for row in [
+            // Needs a device feature this backend does not enable: fragment and
+            // vertex shader stores are gated by `fragmentStoresAndAtomics` and
+            // `vertexPipelineStoresAndAtomics`, which `VkPhysicalDeviceFeatures`
+            // leaves disabled.
+            Capability::StorageBuffer,
+            // Same feature pair, plus a per-format storage fact this call does not
+            // consult.
+            Capability::StorageImage,
+            // The `IndirectDrawApi` family takes a draw count, and a count above one
+            // is the `MultiDrawIndirect` capability -- so claiming this row would
+            // claim a capability the device did not enable a feature for.
+            Capability::IndirectDraw,
+            // Needs the `multiDrawIndirect` feature.
+            Capability::MultiDrawIndirect,
+            // Needs the `samplerAnisotropy` feature.
+            Capability::AnisotropicFiltering,
+            // Preserved closed by plan section 4 while its attach path is unproved.
+            Capability::Multiview,
+            // One queue, so neither a second compute queue nor a transfer queue was
+            // ever created.
+            Capability::AsyncCompute,
+            Capability::TransferQueue,
+        ] {
+            assert!(!ledger.supports(row), "{row:?} must stay unproved");
+            assert_eq!(ledger.fact(row), None, "{row:?} was never examined");
+        }
+    }
+
     #[test]
     fn a_real_device_opens_on_the_first_adapter_this_machine_reports() {
         // End-to-end smoke test for step 2: instance, adapter enumeration, queue
@@ -496,8 +702,26 @@ mod tests {
             facts.limits
         );
         assert!(
+            device.ledger().supports(Capability::Copy),
+            "Vulkan 1.0 guarantees copies on the graphics family this device was created on"
+        );
+        assert_eq!(
+            device.ledger().supports(Capability::IndirectDispatch),
+            selected.supports_compute,
+            "an indirect dispatch arrives with the compute row it is a form of"
+        );
+        assert_eq!(
+            device.ledger().supports(Capability::TimestampQuery),
+            selected.supports_timestamps(),
+            "timestamp disagreement: queue={selected:?}"
+        );
+        assert!(
             !device.ledger().supports(Capability::StorageBuffer),
             "nothing has proved storage buffers on this device yet"
+        );
+        assert!(
+            !device.ledger().supports(Capability::IndirectDraw),
+            "the family's count names MultiDrawIndirect, which this device enables no feature for"
         );
     }
 

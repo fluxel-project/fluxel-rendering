@@ -15,14 +15,24 @@
 //! thing to the compiler, so a capability description that could error would only
 //! move that sameness into a second place.
 //!
-//! # The ledger is the optional-domain input, not a second copy of the facts
+//! # The ledger is the capability input, not a second copy of the facts
 //!
-//! The compute, storage-buffer and indirect rows are read from the same
-//! [`CapabilityLedger`] that `require` negotiates from, rather than re-derived from
-//! the queue family and the limits. That is what keeps one discovery answer: a row
-//! this backend has not recorded is a domain nothing has proved, and the lowering
-//! reports the rejecting value for it automatically -- and starts reporting the
-//! fact the moment the step that proves the row records it.
+//! The queue-family rows, the optional command rows and the timestamp row are read
+//! from the same [`CapabilityLedger`] that `require` negotiates from, rather than
+//! re-derived from the queue family and the limits. That is what keeps one
+//! discovery answer: a row this backend has not recorded is a domain nothing has
+//! proved, and the lowering reports the rejecting value for it automatically -- and
+//! starts reporting the fact the moment the step that proves the row records it.
+//!
+//! # The queue's flags are the ledger's answer, not a second opinion
+//!
+//! `raster`, `compute` and `copy` are the `Graphics`, `Compute` and `Copy` rows.
+//! The queue physically exists because a device was created on a graphics family,
+//! but what it may execute is the ledger's answer, so a row nothing proved leaves
+//! its flag false instead of being assumed from the queue's existence. `copy` in
+//! particular used to be a constant written here, which made the lowering claim a
+//! capability the ledger did not carry; it is now the same kind of read as the
+//! other two.
 //!
 //! # Four fields are decisions rather than copies
 //!
@@ -35,13 +45,15 @@
 //!   graph's semantic access states onto `vkCmdPipelineBarrier` (step 7), so a
 //!   graph transition *is* a backend operation here. The GL family keeps them
 //!   backend-managed because its `compat` layer mirrors state instead.
-//! - **Copy is a queue fact, and it is core.** `Vulkan` 1.0 guarantees buffer and
-//!   image copies on a graphics queue, and step 8 records both routes, so no probe
-//!   had to establish this. The GL lowering states the same fact the same way.
 //! - **The compute workgroup count is reported only where compute was proved.** A
 //!   driver reports a non-zero count on every device, so copying it unconditionally
 //!   would name a dispatch dimension for a device whose ledger refused the compute
 //!   row. This is the same shape the GL lowering reads out of its own limits.
+//! - **Timestamps are pass boundaries, and only where the row was proved.** The
+//!   `TimestampQuery` row comes from the selected family's own
+//!   `timestamp_valid_bits` report (step 2), so an unproved row keeps
+//!   [`TimestampCapabilities::Unsupported`] rather than naming a placement the
+//!   family never reported.
 //!
 //! # What is deliberately not claimed
 //!
@@ -83,7 +95,9 @@ pub(crate) fn capabilities(
     adapter: &AdapterLimits,
     formats: &FormatTable,
 ) -> DeviceCapabilities {
+    let raster = ledger.supports(Capability::Graphics);
     let compute = ledger.supports(Capability::Compute);
+    let copy = ledger.supports(Capability::Copy);
     let storage = ledger.supports(Capability::StorageBuffer);
     // One indirect command reads its parameters from a buffer, so any of the three
     // indirect rows proves the buffer half. They are separate rows because they
@@ -91,14 +105,20 @@ pub(crate) fn capabilities(
     let indirect = ledger.supports(Capability::IndirectDraw)
         || ledger.supports(Capability::IndirectDispatch)
         || ledger.supports(Capability::MultiDrawIndirect);
+    // The one placement this backend can offer is a timestamp written at a pass
+    // boundary, and only a proved row may name it.
+    let timestamps = if ledger.supports(Capability::TimestampQuery) {
+        TimestampCapabilities::PassBoundaries
+    } else {
+        TimestampCapabilities::Unsupported
+    };
 
     let mut builder = DeviceCapabilities::builder()
         .queue(QueueDescriptor::new(
             QueueId::new(0),
-            // Raster is the family the device was created on and copy is the API
-            // version's own guarantee; compute is the ledger's answer. Present is
-            // false: this is the headless lowering.
-            QueueCapabilities::new(true, compute, true, false),
+            // Every flag but present is the ledger's answer; present is false
+            // because this is the headless lowering.
+            QueueCapabilities::new(raster, compute, copy, false),
         ))
         .recording(RecordingCapabilities::new(
             RecordingModel::DeferredCommandBuffers,
@@ -106,7 +126,7 @@ pub(crate) fn capabilities(
         ))
         .transitions(TransitionCapabilities::GraphManagedExplicit)
         .synchronization(SynchronizationCapabilities::SingleQueueOrdering)
-        .timestamps(TimestampCapabilities::Unsupported)
+        .timestamps(timestamps)
         .transient_resources(TransientResourceCapabilities::new(false, false, false))
         .limits(limits(adapter, compute))
         .buffers(BufferCapabilities::new(storage, storage, indirect));
@@ -325,12 +345,21 @@ mod tests {
 
         assert_eq!(capabilities.queues.len(), 1, "one queue is created, one reported");
         let queue = capabilities.queues[0];
-        assert!(queue.capabilities.raster && queue.capabilities.copy);
+        assert!(queue.capabilities.raster, "the Graphics row was proved");
+        assert!(
+            !queue.capabilities.copy,
+            "no Copy row was proved, so the queue's copy flag stays at the rejecting value"
+        );
         assert!(
             !queue.capabilities.compute,
             "the ledger proved no compute, so the queue cannot execute any"
         );
         assert!(!queue.capabilities.present);
+        assert_eq!(
+            capabilities.timestamps,
+            TimestampCapabilities::Unsupported,
+            "no TimestampQuery row was proved"
+        );
         assert_eq!(
             capabilities.buffers,
             BufferCapabilities::new(false, false, false),
@@ -356,6 +385,39 @@ mod tests {
             capabilities.limits.max_compute_workgroups_per_dimension,
             adapter().max_compute_workgroups_per_dimension,
             "a proved dispatch reports the adapter's queried dimension"
+        );
+    }
+
+    #[test]
+    fn a_proved_copy_row_reports_the_queue_copy_flag() {
+        // The flag is the ledger's row rather than a constant written beside the
+        // queue, so the discriminating pair is a ledger with and without it.
+        let without = capabilities(
+            &ledger_with(&[Capability::Graphics]),
+            &adapter(),
+            &FormatTable::default(),
+        );
+        assert!(!without.queues[0].capabilities.copy);
+
+        let with = capabilities(
+            &ledger_with(&[Capability::Graphics, Capability::Copy]),
+            &adapter(),
+            &FormatTable::default(),
+        );
+        assert!(with.queues[0].capabilities.copy);
+    }
+
+    #[test]
+    fn a_proved_timestamp_row_reports_pass_boundaries() {
+        let capabilities = capabilities(
+            &ledger_with(&[Capability::Graphics, Capability::TimestampQuery]),
+            &adapter(),
+            &FormatTable::default(),
+        );
+        assert_eq!(
+            capabilities.timestamps,
+            TimestampCapabilities::PassBoundaries,
+            "a proved row may name the one placement this backend offers"
         );
     }
 
@@ -575,11 +637,25 @@ mod tests {
 
         assert_eq!(capabilities.queues.len(), 1, "one queue is reported");
         let queue = capabilities.queues[0];
-        assert!(queue.capabilities.raster && queue.capabilities.copy);
+        assert!(queue.capabilities.raster);
+        assert!(
+            queue.capabilities.copy,
+            "the created device proves Copy from the API version, so the flag is set"
+        );
         assert_eq!(
             queue.capabilities.compute,
             ledger.supports(Capability::Compute),
             "the queue and the ledger read the same fact"
+        );
+        assert_eq!(
+            capabilities.buffers.indirect_read,
+            ledger.supports(Capability::IndirectDispatch),
+            "the indirect buffer flag is the ledger's row, not a second derivation"
+        );
+        assert_eq!(
+            capabilities.timestamps == TimestampCapabilities::PassBoundaries,
+            opened.device.selected_queue().supports_timestamps(),
+            "timestamps are reported exactly where the family reported valid bits"
         );
         assert!(!queue.capabilities.present);
         assert_eq!(capabilities.surface, None);
