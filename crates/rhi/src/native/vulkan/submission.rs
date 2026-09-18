@@ -79,8 +79,10 @@ pub(crate) const fn failure_of(result: vk::Result) -> CompletionFailure {
 /// `u64::MAX` is the specification's "wait forever", so a duration too large to be
 /// named in nanoseconds is clamped to it rather than wrapped -- a wrapped value
 /// would turn a long wait into a short one, which is the unsafe direction for a
-/// completion wait.
-fn timeout_nanos(timeout: Duration) -> u64 {
+/// completion wait. The acquire wait (`vkAcquireNextImageKHR`'s timeout) takes the
+/// same encoding and the same clamp, so it shares this function rather than
+/// restating the rule.
+pub(crate) fn timeout_nanos(timeout: Duration) -> u64 {
     u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX)
 }
 

@@ -185,12 +185,19 @@ pub(crate) mod surface;
 /// step 10.
 pub(crate) mod presentation;
 
+/// Step 10's acquire half, pure: what `vkAcquireNextImageKHR`'s answer means, and
+/// the quarantine rule an unpresented acquire enforces. The lease that owns the
+/// acquired image and its semaphore lives beside the swapchain that produced it.
+pub(crate) mod acquire;
+
 /// Step 10's swapchain half: the `VkSwapchainKHR` created from the fixed contract
 /// over a surface, and the images `Vulkan` creates with it. It is reachable only
 /// through [`device::SwapchainDevice`], the device that verified and enabled
 /// `VK_KHR_swapchain`, and it checks the selected queue family's presentation
-/// support before the driver is reached. The acquire lease, present, reconfigure and
-/// the unpresented-acquire quarantine remain owed by step 10.
+/// support before the driver is reached. The acquire lease is landed beside it: a
+/// real `vkAcquireNextImageKHR` whose unpresented drop poisons the surface and
+/// retains the acquire semaphore. Present, reconfigure and the recovery of a
+/// poisoned surface remain owed by step 10.
 pub(crate) mod swapchain;
 
 /// Test-only scaffolding shared by the modules that need a real window or surface.

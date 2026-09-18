@@ -48,13 +48,18 @@
 //!
 //! # What is deliberately not here
 //!
-//! - **No swapchain, no acquire, no present.** Those are the next pieces of step
-//!   10, and they lower from [`super::surface::swapchain_create_info`] over the
-//!   handle this module owns and the facts it reads.
+//! - **No swapchain and no present.** Those lower from
+//!   [`super::surface::swapchain_create_info`] over the handle this module owns and
+//!   the facts it reads; the swapchain object is [`super::swapchain`]'s and the
+//!   present call is still owed by step 10. What this module does own beyond the
+//!   handle is the surface's quarantine state, because plan section 4 quarantines the
+//!   surface an unpresented acquire could not prove reusable.
 //! - **No decision about a family that cannot present.** The query reports the
 //!   fact; acting on it -- changing step 2's selection rule so the device is
 //!   created on a family that can present -- is the swapchain-owning step's
 //!   decision, because it is the step that first needs a presentable queue.
+
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ash::{khr, vk};
 use raw_window_handle::RawWindowHandle;
@@ -133,6 +138,15 @@ pub(crate) enum SurfaceQueryError {
 /// The instance field is held for that binding rather than read: it is what makes
 /// "destroy the instance before the surface" a compile error, which `Vulkan`'s
 /// object model requires.
+///
+/// The poison flag is the surface's own state rather than a swapchain's, because
+/// what plan section 4 quarantines is the **surface**: an acquired image that is
+/// neither presented nor discarded leaves an acquire semaphore the presentation
+/// engine may still signal, so no later acquire -- and, once it exists, no
+/// reconfigure -- may guess that the surface is reusable. Placing the flag on the
+/// surface is what lets a reconfigure read the same fact the acquire path wrote,
+/// rather than a second opinion about it living on a swapchain that reconfigure is
+/// about to replace.
 pub(crate) struct Surface<'a> {
     /// The instance that created this surface and must outlive it.
     instance: &'a SurfaceInstance,
@@ -140,6 +154,8 @@ pub(crate) struct Surface<'a> {
     loader: khr::surface::Instance,
     /// The handle itself.
     handle: vk::SurfaceKHR,
+    /// Whether an unpresented acquired image quarantined this surface.
+    poisoned: AtomicBool,
 }
 
 impl Surface<'_> {
@@ -219,6 +235,28 @@ impl Surface<'_> {
         }
         .map_err(SurfaceQueryError::PresentationSupport)
     }
+
+    /// Whether an unpresented acquired image has quarantined this surface.
+    ///
+    /// This is read before an acquire creates anything, so a quarantined surface is
+    /// refused rather than handed to a driver whose acquire semaphore cannot be
+    /// proven reusable.
+    pub(crate) fn is_poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::Acquire)
+    }
+
+    /// Quarantines this surface because an acquired image was neither presented nor
+    /// discarded.
+    ///
+    /// The flag is set rather than reset by anything: nothing in this backend can
+    /// establish when the presentation engine is done with the semaphore the
+    /// unpresented acquire handed it, so the state is permanent until the surface
+    /// itself is replaced. That is the preserved semantic of plan section 4 and the
+    /// borrowed path's behavior, which retains the whole native bundle for process
+    /// lifetime.
+    pub(crate) fn poison(&self) {
+        self.poisoned.store(true, Ordering::Release);
+    }
 }
 
 impl Drop for Surface<'_> {
@@ -268,6 +306,7 @@ pub(crate) fn create<'a>(
         instance,
         loader,
         handle,
+        poisoned: AtomicBool::new(false),
     })
 }
 
