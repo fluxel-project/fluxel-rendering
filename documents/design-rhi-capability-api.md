@@ -311,7 +311,7 @@ layer is private (`crates/rhi/src/common/`), and ADR-0006/0007 continue to hold.
 | `api::{family, handle, negotiate}` | implemented, tested |
 | `api::{graphics, families}` | vocabulary complete; no backend implements them yet |
 | `vertex`, `sampler` | implemented, tested |
-| Vulkan (`native::vulkan`) | steps 1-3 done and proven on real hardware; format/dimension/usage lowering, real buffer and image handles, and the resource table that owns buffer handles, texture handles (image plus the view sampled through it) and sampler handles over one allocator done; **step 4 complete**; steps 5-11 not started |
+| Vulkan (`native::vulkan`) | steps 1-3 done and proven on real hardware; format/dimension/usage lowering, real buffer and image handles, and the resource table that owns buffer handles, texture handles (image plus the view sampled through it) and sampler handles over one allocator done; **step 4 complete**; step 5's shader module, pipeline layout and compute pipeline landed and proven against a real driver, with descriptor set layouts and the raster pipeline still owed; steps 6-11 not started |
 | DX12, Metal | not started; both are 0.16 |
 | GL family, browser WebGPU, compressed formats | **0.17**, not 0.16 |
 
@@ -319,6 +319,7 @@ Test evidence: `common::` and `native::` hold 110+ unit tests, and the Vulkan te
 that open a real instance, adapter and `VkDevice` on this machine now cover memory
 selection, suballocation, buffer and image handles, sampler handles (including a
 comparison sampler and the disabled-comparison lowering a filtering sampler needs),
-and the resource table that owns buffers plus textures and their views plus
-samplers. Clippy is clean under `-D warnings` for all-features and
+the resource table that owns buffers plus textures and their views plus samplers,
+and the real `VkShaderModule` and `VkComputePipeline` a compute pipeline is built
+from. Clippy is clean under `-D warnings` for all-features and
 no-default-features.

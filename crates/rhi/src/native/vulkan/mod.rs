@@ -131,3 +131,10 @@ pub(crate) mod sampler;
 /// the views sampled through them and samplers), allocations and identities together
 /// so memory cannot be freed through the wrong allocator.
 pub(crate) mod resource;
+
+/// Step 5's shader half: a SPIR-V module and the pipeline stage that names it.
+pub(crate) mod shader;
+
+/// Step 5's pipeline half: the pipeline layout and the compute pipeline built over
+/// it, with the shader module destroyed as soon as creation has read it.
+pub(crate) mod pipeline;
