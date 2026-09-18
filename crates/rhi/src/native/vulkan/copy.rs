@@ -1,15 +1,17 @@
 //! Step 8's pure half: the portable copy regions lowered onto `Vulkan` copy
 //! records, with the boundary checks repeated where the driver is reached.
 //!
-//! # Two routes, and only the two this layer owns
+//! # The routes this module lowers
 //!
-//! `Vulkan` spells the two routes this family uses as `vkCmdCopyBuffer` and
-//! `vkCmdCopyImage`. The buffer/image routes (`vkCmdCopyBufferToImage` and
-//! `vkCmdCopyImageToBuffer`) belong to the RHI's own staging upload and readback
-//! path, and neither one has vocabulary in
-//! [`CopyApi`](crate::common::api::families::CopyApi) yet, so a record for them
-//! here would be a second truth about a call nobody can make. They land with the
-//! step that first needs them.
+//! `Vulkan` spells the four copy routes as `vkCmdCopyBuffer`, `vkCmdCopyImage`,
+//! `vkCmdCopyBufferToImage` and `vkCmdCopyImageToBuffer`. The first two are the
+//! [`CopyApi`](crate::common::api::families::CopyApi) family's own and lower from the
+//! portable regions RenderGraph already owns. The two buffer-image routes belong to
+//! the RHI's own staging upload and readback path rather than to a graph, so they
+//! lower from [`crate::common::copy::BufferImageRegion`] -- the texel-copy footprint
+//! that vocabulary lives in `common` because no graph may name it. Both directions
+//! share one lowering here, because a buffer-to-image and an image-to-buffer record
+//! are the same value and only the recorded command differs.
 //!
 //! # Why the checks live here rather than only in `imp`
 //!
@@ -31,6 +33,10 @@
 //!   defined between compatible formats and the portable layer already requires
 //!   equality.
 //!
+//! The per-box half of those rules is stated once, in
+//! [`crate::common::copy::check_image_region`], and both the image-to-image and the
+//! buffer-image route lower through it.
+//!
 //! # The two places this module decides something the shared vocabulary cannot
 //!
 //! [`TextureCopyRegion`] carries no aspect, and that is right: the aspect a copy
@@ -51,7 +57,9 @@
 //! which layer it addresses.
 
 use ash::vk;
-use fluxel_rendergraph::{BufferCopyRegion, TextureCopyRegion, TextureDesc, TextureDimension};
+use fluxel_rendergraph::{BufferCopyRegion, TextureCopyRegion, TextureDesc};
+
+use crate::common::copy::{BufferImageRegion, ImageRegionError, check_image_region};
 
 /// The alignment a buffer copy's offsets and size share.
 ///
@@ -105,27 +113,23 @@ pub(crate) enum CopyRegionError {
     LayerCount,
 }
 
-/// The axis limits one mip of `desc` offers a copy box.
+/// Lowers a refusal from the shared footprint rule into this module's own taxonomy.
 ///
-/// The x and y limits are the mip's own extent, each axis halved per level and
-/// floored at one, which is the shape the texture lowering already floors the
-/// declared extent to. The z limit is the extent's z axis as the texture was
-/// created: for a depth-addressable image that is its depth, and for every other
-/// image it is the array layer count, which is what
-/// [`super::texture::image_create_info`] writes for a depth greater than one. A
-/// region only ever names one layer here, so this limit is what keeps a box from
-/// addressing an axis the image does not have.
-fn mip_extent(desc: &TextureDesc, mip_level: u32) -> [u32; 3] {
-    let depth = if desc.dimension == TextureDimension::D3 {
-        desc.extent.depth
-    } else {
-        desc.array_layers
-    };
-    [
-        (desc.extent.width >> mip_level).max(1),
-        (desc.extent.height >> mip_level).max(1),
-        (depth >> mip_level).max(1),
-    ]
+/// Total, and deliberately a mapping rather than a second set of checks: the rule
+/// itself lives in [`crate::common::copy::check_image_region`], so the image-to-image
+/// route and the buffer-image route cannot disagree about what a valid box is. The
+/// variants keep their names through the mapping, because a caller fixes the same
+/// mistake either way.
+impl From<ImageRegionError> for CopyRegionError {
+    fn from(error: ImageRegionError) -> Self {
+        match error {
+            ImageRegionError::ZeroExtent => Self::ZeroExtent,
+            ImageRegionError::UnknownMipLevel => Self::UnknownMipLevel,
+            ImageRegionError::LayerOrigin => Self::LayerOrigin,
+            ImageRegionError::LayerCount => Self::LayerCount,
+            ImageRegionError::OutOfBounds => Self::OutOfBounds,
+        }
+    }
 }
 
 /// Lowers one portable buffer copy region, or refuses it by value.
@@ -172,6 +176,10 @@ pub(crate) fn buffer_copy(
 /// aspect is derived from it in [`super::texture::aspect`] rather than guessed
 /// from the portable format. `source` and `destination` are the descriptions the
 /// two images were created from, which is what the bounds are checked against.
+///
+/// Each side's box is checked by the shared footprint rule, so the image-to-image and
+/// buffer-image routes cannot disagree about what a valid box is; the format equality
+/// is this route's own, because only a two-image copy has two formats to compare.
 pub(crate) fn image_copy(
     source: &TextureDesc,
     destination: &TextureDesc,
@@ -181,48 +189,18 @@ pub(crate) fn image_copy(
     if source.format != destination.format {
         return Err(CopyRegionError::FormatMismatch);
     }
-    if region.extent.contains(&0) {
-        return Err(CopyRegionError::ZeroExtent);
-    }
-    if region.source_mip_level >= source.mip_levels
-        || region.destination_mip_level >= destination.mip_levels
-    {
-        return Err(CopyRegionError::UnknownMipLevel);
-    }
-
-    // Both z halves of the region are refused unless they are the single layer at
-    // layer zero this backend records, which is the same refusal the shared layer
-    // states and the shape the borrowed native path writes.
-    for origin in [region.source_origin, region.destination_origin] {
-        if origin[2] != 0 {
-            return Err(CopyRegionError::LayerOrigin);
-        }
-    }
-    if region.extent[2] != 1 {
-        return Err(CopyRegionError::LayerCount);
-    }
-
-    for (origin, extent, limit) in [
-        (
-            region.source_origin,
-            region.extent,
-            mip_extent(source, region.source_mip_level),
-        ),
-        (
-            region.destination_origin,
-            region.extent,
-            mip_extent(destination, region.destination_mip_level),
-        ),
-    ] {
-        for axis in 0..3 {
-            if origin[axis]
-                .checked_add(extent[axis])
-                .is_none_or(|end| end > limit[axis])
-            {
-                return Err(CopyRegionError::OutOfBounds);
-            }
-        }
-    }
+    check_image_region(
+        source,
+        region.source_mip_level,
+        region.source_origin,
+        region.extent,
+    )?;
+    check_image_region(
+        destination,
+        region.destination_mip_level,
+        region.destination_origin,
+        region.extent,
+    )?;
 
     let aspect = super::texture::aspect(format);
     let subresource = |mip_level: u32, origin: [u32; 3]| vk::ImageSubresourceLayers {
@@ -237,6 +215,57 @@ pub(crate) fn image_copy(
         dst_subresource: subresource(region.destination_mip_level, region.destination_origin),
         dst_offset: offset(region.destination_origin),
         extent: vk::Extent3D {
+            width: region.extent[0],
+            height: region.extent[1],
+            depth: region.extent[2],
+        },
+    })
+}
+
+/// Lowers one buffer-image transfer footprint, or refuses it by value.
+///
+/// Both routes use this: a buffer-to-image copy and an image-to-buffer copy take the
+/// same record, so the only thing that differs between them is which command is
+/// recorded and which side supplies the bytes. That is why there is one function here
+/// rather than two that could drift apart.
+///
+/// The box is checked against the image's own description by the shared footprint
+/// rule, and the buffer offset by the four-byte multiple a buffer-image region
+/// requires of it -- which is the same alignment [`buffer_copy`] enforces, so it uses
+/// the same constant rather than a second literal that could move independently.
+///
+/// What is deliberately **not** checked here is the byte range the layout addresses.
+/// Computing it needs the format's texel block size, and the portable format
+/// vocabulary has no compressed format yet, so a size this layer derived would be a
+/// second opinion about bytes the caller that created the staging buffer already
+/// computed.
+pub(crate) fn buffer_image_copy(
+    desc: &TextureDesc,
+    region: BufferImageRegion,
+    format: vk::Format,
+) -> Result<vk::BufferImageCopy, CopyRegionError> {
+    if !region.buffer.offset.is_multiple_of(COPY_BUFFER_ALIGNMENT) {
+        return Err(CopyRegionError::Misaligned);
+    }
+    check_image_region(
+        desc,
+        region.image.mip_level,
+        region.image.origin,
+        region.extent,
+    )?;
+
+    Ok(vk::BufferImageCopy {
+        buffer_offset: region.buffer.offset,
+        buffer_row_length: region.buffer.row_length,
+        buffer_image_height: region.buffer.image_height,
+        image_subresource: vk::ImageSubresourceLayers {
+            aspect_mask: super::texture::aspect(format),
+            mip_level: region.image.mip_level,
+            base_array_layer: region.image.origin[2],
+            layer_count: 1,
+        },
+        image_offset: offset(region.image.origin),
+        image_extent: vk::Extent3D {
             width: region.extent[0],
             height: region.extent[1],
             depth: region.extent[2],
@@ -263,7 +292,7 @@ fn offset(origin: [u32; 3]) -> vk::Offset3D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluxel_rendergraph::{Extent3d, TextureFormat};
+    use fluxel_rendergraph::{Extent3d, TextureDimension, TextureFormat};
 
     fn buffer_region(source_offset: u64, destination_offset: u64, size: u64) -> BufferCopyRegion {
         BufferCopyRegion {
@@ -600,6 +629,134 @@ mod tests {
             )
             .is_ok(),
             "the first layer of a volume still copies"
+        );
+    }
+
+    fn footprint(offset: u64, row_length: u32, image_height: u32) -> BufferImageRegion {
+        BufferImageRegion {
+            buffer: crate::common::copy::TexelCopyLayout {
+                offset,
+                row_length,
+                image_height,
+            },
+            image: crate::common::copy::TexelCopyBase {
+                mip_level: 0,
+                origin: [0, 0, 0],
+            },
+            extent: [8, 8, 1],
+        }
+    }
+
+    #[test]
+    fn a_valid_buffer_image_footprint_lowers_field_for_field() {
+        let described = desc(TextureFormat::Rgba8Unorm, 8, 8, 1);
+        let mut padded = footprint(256, 10, 12);
+        padded.image.origin = [2, 3, 0];
+        padded.extent = [4, 5, 1];
+        let copy = buffer_image_copy(&described, padded, vk::Format::R8G8B8A8_UNORM)
+            .expect("a valid footprint");
+        // A padded layout reaches the driver as the texel counts it was written with,
+        // not as a derived tight one: 0 means tightly packed and any other value is
+        // the caller's own packing.
+        assert_eq!(copy.buffer_offset, 256);
+        assert_eq!(copy.buffer_row_length, 10);
+        assert_eq!(copy.buffer_image_height, 12);
+        assert_eq!(copy.image_offset.x, 2);
+        assert_eq!(copy.image_offset.y, 3);
+        assert_eq!(copy.image_offset.z, 0);
+        assert_eq!(copy.image_extent.width, 4);
+        assert_eq!(copy.image_extent.height, 5);
+        assert_eq!(copy.image_extent.depth, 1);
+        assert_eq!(copy.image_subresource.mip_level, 0);
+        assert_eq!(copy.image_subresource.aspect_mask, vk::ImageAspectFlags::COLOR);
+        assert_eq!(copy.image_subresource.layer_count, 1);
+        assert_eq!(copy.image_subresource.base_array_layer, 0);
+    }
+
+    #[test]
+    fn a_tightly_packed_footprint_keeps_the_zeroes_that_mean_tight() {
+        let described = desc(TextureFormat::Rgba8Unorm, 8, 8, 1);
+        let copy = buffer_image_copy(&described, footprint(0, 0, 0), vk::Format::R8G8B8A8_UNORM)
+            .expect("a tight footprint");
+        assert_eq!(copy.buffer_row_length, 0, "zero is the tight spelling");
+        assert_eq!(copy.buffer_image_height, 0, "zero is the tight spelling");
+    }
+
+    #[test]
+    fn a_depth_footprint_takes_the_depth_aspect() {
+        let described = desc(TextureFormat::Depth32Float, 8, 8, 1);
+        let copy = buffer_image_copy(&described, footprint(0, 0, 0), vk::Format::D32_SFLOAT)
+            .expect("a valid footprint");
+        assert_eq!(copy.image_subresource.aspect_mask, vk::ImageAspectFlags::DEPTH);
+    }
+
+    #[test]
+    fn a_misaligned_or_ill_shaped_footprint_is_refused_by_name() {
+        let described = desc(TextureFormat::Rgba8Unorm, 8, 8, 1);
+        // The driver requires a buffer-image region's offset to be a four-byte
+        // multiple, so it is refused here rather than at `vkCmdCopyBufferToImage`.
+        assert_eq!(
+            buffer_image_copy(&described, footprint(2, 0, 0), vk::Format::R8G8B8A8_UNORM).err(),
+            Some(CopyRegionError::Misaligned)
+        );
+        // The box half is the shared rule's, and each refusal keeps its name through
+        // the mapping.
+        let mut zero = footprint(0, 0, 0);
+        zero.extent = [0, 8, 1];
+        assert_eq!(
+            buffer_image_copy(&described, zero, vk::Format::R8G8B8A8_UNORM).err(),
+            Some(CopyRegionError::ZeroExtent)
+        );
+        let mut beyond_mip = footprint(0, 0, 0);
+        beyond_mip.image.mip_level = 1;
+        assert_eq!(
+            buffer_image_copy(&described, beyond_mip, vk::Format::R8G8B8A8_UNORM).err(),
+            Some(CopyRegionError::UnknownMipLevel)
+        );
+        let mut layered = footprint(0, 0, 0);
+        layered.image.origin = [0, 0, 1];
+        assert_eq!(
+            buffer_image_copy(&described, layered, vk::Format::R8G8B8A8_UNORM).err(),
+            Some(CopyRegionError::LayerOrigin)
+        );
+        let mut multi_layer = footprint(0, 0, 0);
+        multi_layer.extent = [8, 8, 2];
+        assert_eq!(
+            buffer_image_copy(&described, multi_layer, vk::Format::R8G8B8A8_UNORM).err(),
+            Some(CopyRegionError::LayerCount)
+        );
+        let mut past_the_mip = footprint(0, 0, 0);
+        past_the_mip.extent = [9, 8, 1];
+        assert_eq!(
+            buffer_image_copy(&described, past_the_mip, vk::Format::R8G8B8A8_UNORM).err(),
+            Some(CopyRegionError::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn both_routes_lower_the_same_footprint_to_the_same_record() {
+        // The one function exists because the two commands take the same value: an
+        // image-to-buffer and a buffer-to-image region differ in which side supplies
+        // the bytes, not in the record. This pins that the lowering has no direction
+        // in it, so a future split into two functions would be a behaviour change
+        // rather than a refactor.
+        let described = desc(TextureFormat::Rgba8Unorm, 8, 8, 1);
+        let region = footprint(0, 8, 8);
+        let first = buffer_image_copy(&described, region, vk::Format::R8G8B8A8_UNORM)
+            .expect("a valid footprint");
+        let second = buffer_image_copy(&described, region, vk::Format::R8G8B8A8_UNORM)
+            .expect("a valid footprint");
+        // `ash` derives no `PartialEq` for `BufferImageCopy`, so the fields are
+        // compared rather than the whole value.
+        assert_eq!(first.buffer_offset, second.buffer_offset);
+        assert_eq!(first.buffer_row_length, second.buffer_row_length);
+        assert_eq!(first.buffer_image_height, second.buffer_image_height);
+        assert_eq!(first.image_extent.width, second.image_extent.width);
+        assert_eq!(first.image_extent.height, second.image_extent.height);
+        assert_eq!(first.image_extent.depth, second.image_extent.depth);
+        assert_eq!(
+            first.image_subresource.aspect_mask,
+            second.image_subresource.aspect_mask
         );
     }
 }

@@ -100,6 +100,19 @@ pub(crate) enum ResourceError {
     /// The allocation failed, or could not be released. Carried separately because
     /// it is not a `vk::Result`.
     Memory,
+    /// The buffer has no host mapping, so the host cannot write to it.
+    ///
+    /// A different sentence from [`Self::Memory`]: the allocation succeeded, and the
+    /// mistake is that this buffer was not created for host access at all.
+    NotHostVisible,
+    /// The buffer is host-visible but not coherent, so a host write would need a
+    /// flush this path does not perform.
+    ///
+    /// Refused rather than written, because a non-coherent write without a flush
+    /// reaches the GPU with mangled bytes and no error anywhere.
+    NotCoherent,
+    /// The write leaves the buffer it names.
+    OutOfBounds,
 }
 
 /// One live buffer: its handle, its memory, how large it is and what it was declared
@@ -298,6 +311,63 @@ impl ResourceTable {
             },
         );
         Ok(id)
+    }
+
+    /// Writes `bytes` into a host-visible buffer at `offset`.
+    ///
+    /// This is the staging side of an upload: a buffer created for
+    /// [`MemoryPurpose::UploadStaging`] is host-visible and coherent, so the bytes
+    /// reach the driver without a flush. The two refusals are different sentences
+    /// because they are different fixes -- a buffer with no mapping was never meant
+    /// for the host, while a mapped but non-coherent one is the wrong *kind* of host
+    /// memory for a write path that does not flush. Writing through a mapping that
+    /// cannot carry the write would mangle an upload with no error anywhere, which is
+    /// exactly the failure this layer exists to turn into a value.
+    ///
+    /// The allocation is mapped for the whole of its lifetime by the allocator, so
+    /// this neither maps nor unmaps: the mapping is a property of the memory type, and
+    /// mapping it again here would be a second answer about when the host may touch a
+    /// resource.
+    ///
+    /// The range is checked against the size the buffer was **created** with, which
+    /// is the same number the graph's own checks saw rather than a size recovered from
+    /// the driver. The end is computed in checked arithmetic, so an offset near
+    /// `u64::MAX` is a refusal rather than a wrapped range that passes.
+    pub(crate) fn write_buffer(
+        &mut self,
+        id: BufferId,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), ResourceError> {
+        let record = self.buffers.get_mut(&id).ok_or(ResourceError::Unknown)?;
+        let end = offset
+            .checked_add(bytes.len() as u64)
+            .ok_or(ResourceError::OutOfBounds)?;
+        if end > record.size {
+            return Err(ResourceError::OutOfBounds);
+        }
+        // The mapping is asked for first because it is the fundamental fact here: a
+        // device-local allocation is usually neither host-visible nor coherent, and
+        // "this buffer was never meant for the host" is the more useful sentence.
+        if record.allocation.mapped_ptr().is_none() {
+            return Err(ResourceError::NotHostVisible);
+        }
+        if !record
+            .allocation
+            .memory_properties()
+            .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+        {
+            return Err(ResourceError::NotCoherent);
+        }
+        let mapped = record
+            .allocation
+            .mapped_slice_mut()
+            .ok_or(ResourceError::NotHostVisible)?;
+        // The allocation is at least as large as the size this buffer was created
+        // with -- `gpu-allocator` allocates the driver's reported requirements -- and
+        // `end` was just checked against that created size, so this slice is in range.
+        mapped[offset as usize..end as usize].copy_from_slice(bytes);
+        Ok(())
     }
 
     /// Creates a texture and the view it is sampled through, and binds memory to it.
@@ -516,10 +586,13 @@ mod tests {
     use super::*;
     use crate::Validation;
     use crate::common::base::stamp::StampMismatch;
+    use crate::common::copy::{BufferImageRegion, TexelCopyBase, TexelCopyLayout};
     use crate::common::sampler::{CompareFunction, SamplerDescriptor};
-    use crate::native::vulkan::{memory, open};
+    use crate::native::vulkan::command::CommandPool;
+    use crate::native::vulkan::{memory, open, submission};
     use fluxel_rendergraph::{
-        BufferUsageKind, Extent3d, TextureDimension, TextureFormat, TextureUsageKind,
+        BufferRange, BufferUsageKind, CompletionStatus, Extent3d, ResourceAccessState,
+        TextureDimension, TextureFormat, TextureRange, TextureUsageKind,
     };
 
     fn declared(kinds: &[BufferUsageKind]) -> BufferUsage {
@@ -845,5 +918,237 @@ mod tests {
             Err(ResourceError::InvalidSampler)
         );
         assert_eq!(table.sampler_count(), 0);
+    }
+
+    #[test]
+    fn a_real_staging_write_round_trips_through_an_image() {
+        // The staging upload path's whole shape against the real driver: a host write
+        // into a coherent staging buffer, a buffer-to-image copy, an image-to-buffer
+        // copy into a second coherent buffer, and the bytes read back exactly. It
+        // lives here rather than in `command`'s tests because this module owns the
+        // mapping the host writes and reads through; the commands themselves are
+        // `command`'s subject, and the skip where no adapter exists matches every
+        // other real-driver test in this file.
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+        let pool = CommandPool::new(
+            opened.device.device(),
+            opened.device.selected_queue().family,
+        )
+        .expect("a command pool on an opened device");
+
+        let described = texture_desc(TextureFormat::Rgba8Unorm, 1);
+        let image = table
+            .create_texture(
+                described,
+                texture_usage(&[
+                    TextureUsageKind::CopySource,
+                    TextureUsageKind::CopyDestination,
+                ]),
+                &memory_types,
+                MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local transfer image");
+        let staging = table
+            .create_buffer(
+                512,
+                declared(&[BufferUsageKind::CopySource]),
+                &memory_types,
+                MemoryPurpose::UploadStaging,
+            )
+            .expect("a host-visible staging buffer");
+        // The readback destination is created for upload-staging purposes rather than
+        // readback ones on purpose: this test reads the mapped bytes directly, and the
+        // *coherent* host type that purpose requires is what makes the read valid
+        // without the invalidate the real readback path will own.
+        let readback = table
+            .create_buffer(
+                512,
+                declared(&[BufferUsageKind::CopyDestination]),
+                &memory_types,
+                MemoryPurpose::UploadStaging,
+            )
+            .expect("a host-visible readback buffer");
+
+        // The image is 16x8 Rgba8Unorm, so one tightly packed layer is 16 * 8 * 4
+        // bytes. The pattern is not constant, so a copy that returned zeroes or a
+        // shifted range would fail rather than pass.
+        let bytes: Vec<u8> = (0..512u32)
+            .map(|value| (value.wrapping_mul(7).wrapping_add(3)) as u8)
+            .collect();
+        table
+            .write_buffer(staging, 0, &bytes)
+            .expect("a host write into coherent staging");
+        assert_eq!(
+            &table
+                .buffers
+                .get(&staging)
+                .expect("a live staging buffer")
+                .allocation
+                .mapped_slice()
+                .expect("mapped staging")[..bytes.len()],
+            &bytes[..],
+            "the host write landed in the mapped memory"
+        );
+
+        let region = BufferImageRegion {
+            buffer: TexelCopyLayout {
+                offset: 0,
+                row_length: 0,
+                image_height: 0,
+            },
+            image: TexelCopyBase {
+                mip_level: 0,
+                origin: [0, 0, 0],
+            },
+            extent: [16, 8, 1],
+        };
+        let mapped_format =
+            crate::native::vulkan::format::image_format(TextureFormat::Rgba8Unorm)
+                .expect("a mapped format");
+        let image_handle = table.texture_image(image).expect("a live image");
+        let staging_handle = table.buffer_handle(staging).expect("a live buffer");
+        let readback_handle = table.buffer_handle(readback).expect("a live buffer");
+
+        let mut encoder = pool.begin().expect("a recording encoder");
+        encoder
+            .transition_buffer(
+                staging_handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopySource,
+            )
+            .expect("the staging buffer is readable");
+        encoder
+            .transition_image(
+                image_handle,
+                mapped_format,
+                TextureRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the image is writable");
+        encoder
+            .copy_buffer_to_image(staging_handle, image_handle, &described, region)
+            .expect("a real buffer-to-image copy records");
+        encoder
+            .transition_image(
+                image_handle,
+                mapped_format,
+                TextureRange::Whole,
+                ResourceAccessState::CopyDestination,
+                ResourceAccessState::CopySource,
+            )
+            .expect("the image is readable");
+        encoder
+            .transition_buffer(
+                readback_handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the readback buffer is writable");
+        encoder
+            .copy_image_to_buffer(image_handle, &described, readback_handle, region)
+            .expect("a real image-to-buffer copy records");
+
+        let finished = encoder.finish().expect("the recording ends");
+        let mut submitted =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submitted.wait(core::time::Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "the upload and the readback run to completion"
+        );
+
+        // The bytes survived the round trip exactly, which is the fact the two copy
+        // routes exist to produce -- and the staging size is what proves the whole
+        // 128-byte region moved rather than a prefix of it.
+        assert_eq!(
+            &table
+                .buffers
+                .get(&readback)
+                .expect("a live readback buffer")
+                .allocation
+                .mapped_slice()
+                .expect("mapped readback")[..bytes.len()],
+            &bytes[..],
+            "the image carried the staging bytes back out unchanged"
+        );
+    }
+
+    #[test]
+    fn a_host_write_refuses_the_wrong_kind_of_buffer_and_a_range_that_leaves_it() {
+        // Three different sentences: a buffer with no mapping was never meant for the
+        // host, a range that leaves it is a bad length, and a stale id names nothing.
+        // The `NotCoherent` branch is deliberately not asserted here: whether the
+        // adapter reports a host-visible non-coherent type is a fact about the machine,
+        // so the test asserts only what is deterministic.
+        let Ok(opened) = open::open(Validation::Disabled, 0) else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        let device_local = table
+            .create_buffer(
+                64,
+                declared(&[BufferUsageKind::Vertex]),
+                &memory_types,
+                MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local buffer");
+        let staging = table
+            .create_buffer(
+                64,
+                declared(&[BufferUsageKind::CopySource]),
+                &memory_types,
+                MemoryPurpose::UploadStaging,
+            )
+            .expect("a host-visible staging buffer");
+
+        let bytes = [1u8, 2, 3, 4];
+        assert_eq!(
+            table.write_buffer(device_local, 0, &bytes),
+            Err(ResourceError::NotHostVisible),
+            "a device-local buffer has no host mapping"
+        );
+        assert_eq!(
+            table.write_buffer(staging, 61, &bytes),
+            Err(ResourceError::OutOfBounds),
+            "four bytes at offset sixty-one leave a sixty-four byte buffer"
+        );
+        assert_eq!(
+            table.write_buffer(staging, u64::MAX - 3, &bytes),
+            Err(ResourceError::OutOfBounds),
+            "the end is computed in checked arithmetic, so it wraps into a refusal"
+        );
+        // The boundary itself is inside: 60 + 4 == 64.
+        assert_eq!(table.write_buffer(staging, 60, &bytes), Ok(()));
+
+        table.destroy_buffer(device_local).expect("released");
+        assert_eq!(
+            table.write_buffer(device_local, 0, &bytes),
+            Err(ResourceError::Unknown),
+            "a destroyed id names no buffer"
+        );
     }
 }

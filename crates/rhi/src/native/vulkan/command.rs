@@ -84,8 +84,10 @@ use std::ops::Range;
 use ash::vk;
 use fluxel_rendergraph::{
     BufferCopyRegion, BufferRange, IndexFormat, ResourceAccessState, ScissorRect, TextureCopyRegion,
-    TextureRange, Viewport,
+    TextureDesc, TextureRange, Viewport,
 };
+
+use crate::common::copy::BufferImageRegion;
 
 use super::pipeline::{ComputePipeline, RasterPipeline};
 use super::{
@@ -506,6 +508,101 @@ impl Encoder {
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 destination,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[lowered],
+            );
+        }
+        Ok(())
+    }
+
+    /// Records one buffer-to-image copy.
+    ///
+    /// This is the upload half of the RHI's own staging path: a host-written buffer
+    /// becomes an image's contents. The destination image is named at
+    /// `TRANSFER_DST_OPTIMAL`, which is the layout [`barrier::image_state`] gives
+    /// `CopyDestination`, so a caller that transitioned through that state is
+    /// consistent with the copy it records -- and the graph records the transition,
+    /// not this command.
+    ///
+    /// The footprint is lowered by [`copy::buffer_image_copy`] from the shared
+    /// vocabulary, and the mapped format is asked of the description rather than
+    /// passed in, so a portable format this backend cannot map is refused as
+    /// [`RecordError::UnsupportedFormat`] before the driver is reached and the aspect
+    /// keeps the single source of truth [`format::is_depth`] gives it.
+    pub(crate) fn copy_buffer_to_image(
+        &mut self,
+        buffer: vk::Buffer,
+        destination: vk::Image,
+        destination_desc: &TextureDesc,
+        region: BufferImageRegion,
+    ) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        if self.pass.is_some() {
+            return Err(RecordError::PassOpen);
+        }
+        let mapped =
+            format::image_format(destination_desc.format).ok_or(RecordError::UnsupportedFormat)?;
+        let lowered = copy::buffer_image_copy(destination_desc, region, mapped)
+            .map_err(RecordError::Region)?;
+        // SAFETY: the command buffer is recording and outside every pass; the buffer
+        // and the image were created by the device this encoder belongs to and are
+        // alive for the recording because the table owns them; and `lowered` is a
+        // validated footprint whose box exists on the image that description created,
+        // with the destination named at the layout its own transition left it in.
+        unsafe {
+            self.device.cmd_copy_buffer_to_image(
+                self.command_buffer,
+                buffer,
+                destination,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[lowered],
+            );
+        }
+        Ok(())
+    }
+
+    /// Records one image-to-buffer copy.
+    ///
+    /// The readback counterpart of [`Self::copy_buffer_to_image`]: an image's
+    /// contents become a buffer's bytes for the host to read. The source image is
+    /// named at `TRANSFER_SRC_OPTIMAL`, which is the layout
+    /// [`barrier::image_state`] gives `CopySource`, and the same footprint lowering
+    /// and mapped-format rule apply, so the two directions cannot disagree about
+    /// what a region is.
+    ///
+    /// What this call does *not* do is make the bytes visible to the CPU: a readback
+    /// destination whose memory is not coherent needs an invalidate after completion,
+    /// and that belongs to the read path that owns the mapping, not to the command
+    /// that fills it.
+    pub(crate) fn copy_image_to_buffer(
+        &mut self,
+        source: vk::Image,
+        source_desc: &TextureDesc,
+        buffer: vk::Buffer,
+        region: BufferImageRegion,
+    ) -> Result<(), RecordError> {
+        if !self.recording {
+            return Err(RecordError::NotRecording);
+        }
+        if self.pass.is_some() {
+            return Err(RecordError::PassOpen);
+        }
+        let mapped =
+            format::image_format(source_desc.format).ok_or(RecordError::UnsupportedFormat)?;
+        let lowered =
+            copy::buffer_image_copy(source_desc, region, mapped).map_err(RecordError::Region)?;
+        // SAFETY: the command buffer is recording and outside every pass; both handles
+        // were created by the device this encoder belongs to and are alive for the
+        // recording because the table owns them; and `lowered` is a validated footprint
+        // whose box exists on the image that description created, with the source named
+        // at the layout its own transition left it in.
+        unsafe {
+            self.device.cmd_copy_image_to_buffer(
+                self.command_buffer,
+                source,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                buffer,
                 &[lowered],
             );
         }
@@ -979,6 +1076,7 @@ mod tests {
 
     use super::*;
     use crate::Validation;
+    use crate::common::copy::{TexelCopyBase, TexelCopyLayout};
     use crate::native::vulkan::pipeline::{create_compute, create_layout, create_raster};
     use crate::native::vulkan::resource::ResourceTable;
     use crate::native::vulkan::shader::MINIMAL_COMPUTE_SPIRV;
@@ -1535,6 +1633,161 @@ mod tests {
             )
             .expect("a refused copy does not poison the encoder");
         encoder.end().expect("the encoder still ends");
+    }
+
+    #[test]
+    fn a_real_encoder_records_both_buffer_image_routes() {
+        // The staging path's two copy commands against the real driver: a real
+        // buffer-to-image copy and the image-to-buffer copy back out, each over the
+        // transitions they require, submitted and reported complete. The byte-exact
+        // half of this path lives in `resource`'s tests, because that module owns the
+        // host mapping a readback needs. Skips where no adapter exists.
+        let Some((opened, pool)) = pool() else {
+            return;
+        };
+        let allocator =
+            GpuAllocator::new(opened.instance.instance(), &opened.device, opened.adapter)
+                .expect("an allocator for an opened device");
+        let memory_types = memory::types(opened.instance.instance(), opened.adapter);
+        let mut table = ResourceTable::new(
+            opened.device.device(),
+            opened.device.stamp(),
+            allocator,
+        );
+
+        let described = TextureDesc {
+            dimension: TextureDimension::D2,
+            extent: Extent3d {
+                width: 16,
+                height: 8,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            sample_count: 1,
+            format: TextureFormat::Rgba8Unorm,
+        };
+        let image = table
+            .create_texture(
+                described,
+                declared_texture(&[
+                    TextureUsageKind::CopySource,
+                    TextureUsageKind::CopyDestination,
+                ]),
+                &memory_types,
+                memory::MemoryPurpose::DeviceLocal,
+            )
+            .expect("a device-local transfer image");
+        let staging = table
+            .create_buffer(
+                512,
+                declared_buffer(&[BufferUsageKind::CopySource]),
+                &memory_types,
+                memory::MemoryPurpose::UploadStaging,
+            )
+            .expect("a host-visible staging buffer");
+        let readback = table
+            .create_buffer(
+                512,
+                declared_buffer(&[BufferUsageKind::CopyDestination]),
+                &memory_types,
+                memory::MemoryPurpose::ReadbackStaging,
+            )
+            .expect("a host-visible readback buffer");
+
+        let image_handle = table.texture_image(image).expect("a live image");
+        let staging_handle = table.buffer_handle(staging).expect("a live buffer");
+        let readback_handle = table.buffer_handle(readback).expect("a live buffer");
+        let mapped_format =
+            format::image_format(TextureFormat::Rgba8Unorm).expect("a mapped format");
+        let footprint = |offset: u64, extent: [u32; 3]| BufferImageRegion {
+            buffer: TexelCopyLayout {
+                offset,
+                row_length: 0,
+                image_height: 0,
+            },
+            image: TexelCopyBase {
+                mip_level: 0,
+                origin: [0, 0, 0],
+            },
+            extent,
+        };
+
+        let mut encoder = pool.begin().expect("a recording encoder");
+        // The alignment rule and the shared footprint rule each answer with their own
+        // sentence, and neither reaches the driver.
+        assert_eq!(
+            encoder.copy_buffer_to_image(
+                staging_handle,
+                image_handle,
+                &described,
+                footprint(2, [16, 8, 1]),
+            ),
+            Err(RecordError::Region(copy::CopyRegionError::Misaligned))
+        );
+        assert_eq!(
+            encoder.copy_image_to_buffer(
+                image_handle,
+                &described,
+                readback_handle,
+                footprint(0, [17, 8, 1]),
+            ),
+            Err(RecordError::Region(copy::CopyRegionError::OutOfBounds))
+        );
+
+        // A refused command does not poison the recording, so both real routes record
+        // after them and the submission proves the driver runs them.
+        encoder
+            .transition_buffer(
+                staging_handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopySource,
+            )
+            .expect("the staging buffer is readable");
+        encoder
+            .transition_image(
+                image_handle,
+                mapped_format,
+                TextureRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the image is writable");
+        encoder
+            .copy_buffer_to_image(staging_handle, image_handle, &described, footprint(0, [16, 8, 1]))
+            .expect("a real buffer-to-image copy records");
+        encoder
+            .transition_image(
+                image_handle,
+                mapped_format,
+                TextureRange::Whole,
+                ResourceAccessState::CopyDestination,
+                ResourceAccessState::CopySource,
+            )
+            .expect("the image is readable");
+        encoder
+            .transition_buffer(
+                readback_handle,
+                BufferRange::Whole,
+                ResourceAccessState::Undefined,
+                ResourceAccessState::CopyDestination,
+            )
+            .expect("the readback buffer is writable");
+        encoder
+            .copy_image_to_buffer(image_handle, &described, readback_handle, footprint(0, [16, 8, 1]))
+            .expect("a real image-to-buffer copy records");
+
+        let finished = encoder.finish().expect("the recording ends");
+        let mut submitted =
+            submission::submit(opened.device.device(), opened.device.queue(), finished)
+                .expect("the driver accepts one submission");
+        assert_eq!(
+            submitted.wait(Duration::from_secs(10)),
+            Ok(CompletionStatus::Complete),
+            "both buffer-image routes are work the driver executes"
+        );
+        assert!(submitted.is_terminal());
     }
 
     #[test]

@@ -55,7 +55,11 @@
 //!    no-op.
 //! 8. **Copies.** `vkCmdCopyBuffer` / `vkCmdCopyBufferToImage` /
 //!    `vkCmdCopyImageToBuffer` / `vkCmdCopyImage`, with the alignment and range
-//!    checks the safe layer already performs repeated at the boundary.
+//!    checks the safe layer already performs repeated at the boundary. Step 8
+//!    landed the two routes the [`CopyApi`](crate::common::api::families::CopyApi)
+//!    family owns; the two buffer-image routes belong to the RHI's own staging
+//!    upload and readback path and landed in step 14, lowering from the
+//!    [`crate::common::copy`] footprint rather than from a graph region.
 //! 9. **Submission and completion.** Fences, one submit per graph execution on
 //!    logical queue 0, and the completion state machine
 //!    ([`crate::common::base::lifetime`], [`crate::common::base::submission`]).
@@ -166,13 +170,21 @@
 //!     public `HardwareCapabilities`, [`open::OpenedVulkan`] carries that value beside
 //!     the hardware identity, and [`rhi::open`] is the entry point in the public
 //!     `OpenError` vocabulary, so opening this backend no longer requires the caller to
-//!     know this module's own error types. Still owed: the route swap that makes the
-//!     public `Device` open this backend (the borrowed `wgpu-hal` path still serves
-//!     `Backend::Vulkan` for the frozen oracle), the portable baseline limit check that
-//!     refuses an adapter below the RHI's floor, the staging upload path (which is the
-//!     consumer the buffer/image copy routes were deferred to in step 8), the
-//!     fixed-artifact pipeline and binding construction over this table, validation
-//!     diagnostics capture, and the public `Device`/execution wiring.
+//!     know this module's own error types. The portable baseline limit check followed:
+//!     [`limits`] restates the floor the borrowed path applied through
+//!     `wgt::Limits::default()`, and [`open::open`] applies it before `vkCreateDevice`.
+//!     Step 8's deferred buffer-image routes followed as the first half of the staging
+//!     path: [`copy::buffer_image_copy`] lowers the [`crate::common::copy`] footprint,
+//!     [`command::Encoder::copy_buffer_to_image`] and
+//!     [`command::Encoder::copy_image_to_buffer`] record the two commands, and
+//!     [`resource::ResourceTable::write_buffer`] is the host write that feeds them, so a
+//!     host-written staging buffer round-trips through an image and back byte for byte.
+//!     Still owed: the route swap that makes the public `Device` open this backend (the
+//!     borrowed `wgpu-hal` path still serves `Backend::Vulkan` for the frozen oracle),
+//!     the rest of the staging upload path (the non-coherent invalidate a readback needs,
+//!     and the orchestration that retains staging through submission), the fixed-artifact
+//!     pipeline and binding construction over this table, validation diagnostics capture,
+//!     and the public `Device`/execution wiring.
 //!
 //! # Acceptance
 //!
@@ -250,7 +262,9 @@ pub(crate) mod sampler;
 
 /// Step 4's owning half: the resource table, which holds handles (buffers, images,
 /// the views sampled through them and samplers), allocations and identities together
-/// so memory cannot be freed through the wrong allocator.
+/// so memory cannot be freed through the wrong allocator. Step 14 added the host write
+/// the staging upload path needs, which is the one operation that reaches a resource's
+/// mapped memory and therefore belongs where the allocation is owned.
 pub(crate) mod resource;
 
 /// Step 5's shader half: a SPIR-V module and the pipeline stage that names it.
@@ -343,11 +357,16 @@ pub(crate) mod barrier;
 
 /// Step 7's owning half: the command pool on the device's selected queue family and
 /// the one recording encoder, which records exactly the barriers [`barrier`] builds.
+/// Step 14 added the two buffer-image copy commands beside the two step 8 landed, each
+/// naming the transfer layout the graph's own barrier leaves its image in.
 pub(crate) mod command;
 
-/// Step 8's pure half: the portable buffer and texture copy regions lowered onto
-/// `Vulkan` copy records, with the alignment, bounds and layer checks repeated at
-/// the boundary that reaches the driver.
+/// Step 8's pure half, and step 14's staging half: the portable buffer and texture copy
+/// regions lowered onto `Vulkan` copy records, with the alignment, bounds and layer
+/// checks repeated at the boundary that reaches the driver. Step 8's two routes lower
+/// from RenderGraph's own regions; step 14's two buffer-image routes lower from
+/// [`crate::common::copy`]'s texel footprint, which no graph may name, and share the
+/// footprint rule with the image-to-image route.
 pub(crate) mod copy;
 
 /// Step 9's first half: one unsignaled fence per execution, one submit on logical
