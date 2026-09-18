@@ -275,23 +275,13 @@ pub(crate) fn create<'a>(
 mod tests {
     use super::*;
 
-    use std::num::NonZeroIsize;
-
-    use raw_window_handle::{Win32WindowHandle, XlibWindowHandle};
+    use raw_window_handle::XlibWindowHandle;
 
     use crate::Validation;
     use crate::native::vulkan::instance;
+    use crate::native::vulkan::test_support::{TestWindow, presenting_adapter, win32};
     use crate::native::vulkan::{adapter, surface};
     use fluxel_rendergraph::{TextureUsage, TextureUsageKind};
-
-    /// A fabricated Win32 handle pair, for the pure lowering tests only.
-    fn win32(hwnd: isize, hinstance: Option<isize>) -> RawWindowHandle {
-        let mut handle = Win32WindowHandle::new(
-            NonZeroIsize::new(hwnd).expect("the test's hwnd is non-zero"),
-        );
-        handle.hinstance = hinstance.and_then(NonZeroIsize::new);
-        RawWindowHandle::Win32(handle)
-    }
 
     #[test]
     fn a_win32_window_lowers_field_for_field() {
@@ -327,89 +317,6 @@ mod tests {
 
     // --- the real driver ---
 
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn CreateWindowExW(
-            ex_style: u32,
-            class_name: *const u16,
-            window_name: *const u16,
-            style: u32,
-            x: i32,
-            y: i32,
-            width: i32,
-            height: i32,
-            parent: isize,
-            menu: isize,
-            instance: isize,
-            param: *mut core::ffi::c_void,
-        ) -> isize;
-        fn DestroyWindow(hwnd: isize) -> i32;
-    }
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetModuleHandleW(module_name: *const u16) -> isize;
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    /// A hidden top-level window, destroyed when dropped.
-    struct TestWindow {
-        hwnd: isize,
-        hinstance: isize,
-    }
-
-    impl TestWindow {
-        /// Creates a hidden `STATIC` window, or `None` where the session has no
-        /// window station that can back one.
-        ///
-        /// `STATIC` is a system class, so no class registration is needed; the
-        /// window is never shown and exists only to have a real `HWND`.
-        fn open() -> Option<Self> {
-            let class = wide("STATIC");
-            let title = wide("fluxel-rhi surface test");
-            // SAFETY: both are the documented Win32 contract. The null module name
-            // asks for this process's own module, and the two string pointers are
-            // NUL-terminated locals that outlive the call.
-            let hinstance = unsafe { GetModuleHandleW(core::ptr::null()) };
-            if hinstance == 0 {
-                return None;
-            }
-            // SAFETY: as above; the window's parent and menu are null, so no other
-            // object is referenced.
-            let hwnd = unsafe {
-                CreateWindowExW(
-                    0,
-                    class.as_ptr(),
-                    title.as_ptr(),
-                    0x00CF_0000, // WS_OVERLAPPEDWINDOW, never shown
-                    0,
-                    0,
-                    64,
-                    64,
-                    0,
-                    0,
-                    hinstance,
-                    core::ptr::null_mut(),
-                )
-            };
-            (hwnd != 0).then_some(Self { hwnd, hinstance })
-        }
-
-        fn raw(&self) -> RawWindowHandle {
-            win32(self.hwnd, Some(self.hinstance))
-        }
-    }
-
-    impl Drop for TestWindow {
-        fn drop(&mut self) {
-            // SAFETY: this is the only owner of the handle `open` created.
-            unsafe { DestroyWindow(self.hwnd) };
-        }
-    }
-
     #[test]
     fn a_real_window_yields_a_real_surface_owned_by_its_instance() {
         // Skips where no loader, no adapter or no window station exists: none of
@@ -425,24 +332,6 @@ mod tests {
         assert_ne!(surface.handle(), vk::SurfaceKHR::null());
         // Drop order is the borrow's: the surface is destroyed before the instance
         // and before the window that backs it.
-    }
-
-    /// The physical device that actually owns this surface, with the facts it
-    /// reported, or `None` where no enumerated adapter reports a presentable
-    /// surface.
-    ///
-    /// A multi-adapter machine can enumerate an adapter the window is not attached
-    /// to; `Vulkan` answers that with an empty format list rather than a driver
-    /// error, so the first adapter that reports a format is the one this surface is
-    /// on.
-    fn presenting_adapter(
-        surface: &Surface<'_>,
-        adapters: &[vk::PhysicalDevice],
-    ) -> Option<(vk::PhysicalDevice, SurfaceFacts)> {
-        adapters.iter().find_map(|adapter| {
-            let facts = surface.facts(*adapter).ok()?;
-            (!facts.formats.is_empty()).then_some((*adapter, facts))
-        })
     }
 
     #[test]

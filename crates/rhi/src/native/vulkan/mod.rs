@@ -180,7 +180,19 @@ pub(crate) mod surface;
 /// window through a surface-capable instance, with the parent/child order stated as
 /// a borrow; and the facts that surface reports -- the capabilities, formats and
 /// present modes the pure contract decides against, plus the per-family
-/// presentation-support answer step 2's queue rule has to be told. The swapchain,
-/// the acquire lease, present, reconfigure and the unpresented-acquire quarantine
-/// remain owed by step 10.
+/// presentation-support answer step 2's queue rule has to be told. The acquire
+/// lease, present, reconfigure and the unpresented-acquire quarantine remain owed by
+/// step 10.
 pub(crate) mod presentation;
+
+/// Step 10's swapchain half: the `VkSwapchainKHR` created from the fixed contract
+/// over a surface, and the images `Vulkan` creates with it. It is reachable only
+/// through [`device::SwapchainDevice`], the device that verified and enabled
+/// `VK_KHR_swapchain`, and it checks the selected queue family's presentation
+/// support before the driver is reached. The acquire lease, present, reconfigure and
+/// the unpresented-acquire quarantine remain owed by step 10.
+pub(crate) mod swapchain;
+
+/// Test-only scaffolding shared by the modules that need a real window or surface.
+#[cfg(test)]
+pub(crate) mod test_support;

@@ -52,6 +52,8 @@ pub(crate) enum EnumerationError {
     Layers(vk::Result),
     /// The loader refused to enumerate instance extensions.
     Extensions(vk::Result),
+    /// The loader refused to enumerate one physical device's extensions.
+    DeviceExtensions(vk::Result),
     /// A reported name was not NUL-terminated or not UTF-8.
     MalformedName,
 }
@@ -93,6 +95,29 @@ pub(crate) fn enumerate(entry: &ash::Entry) -> Result<Enumeration, EnumerationEr
                 .map(vk::ExtensionProperties::extension_name_as_c_str),
         )?,
     })
+}
+
+/// Reads the device-level extension names one physical device reports.
+///
+/// This is step 10's device half. `VK_KHR_swapchain` must be positively observed
+/// **before** a device creation enables it, exactly as the validation and surface
+/// names must be before an instance enables them; a device created with an
+/// extension the physical device never reported is a creation failure with no
+/// diagnosis rather than a refusal that names the missing facility. It creates
+/// nothing, so the refusal happens before any device exists.
+pub(crate) fn enumerate_device_extensions(
+    instance: &ash::Instance,
+    adapter: vk::PhysicalDevice,
+) -> Result<Vec<String>, EnumerationError> {
+    // SAFETY: `instance` is live and `adapter` was enumerated from it; the call
+    // only enumerates that device's extension names and creates nothing.
+    let extensions = unsafe { instance.enumerate_device_extension_properties(adapter) }
+        .map_err(EnumerationError::DeviceExtensions)?;
+    collect_names(
+        extensions
+            .iter()
+            .map(vk::ExtensionProperties::extension_name_as_c_str),
+    )
 }
 
 /// Converts the loader's NUL-padded name buffers into owned strings.

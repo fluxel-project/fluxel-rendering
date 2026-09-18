@@ -60,11 +60,10 @@
 //!
 //! # What is deliberately not here
 //!
-//! - **No `pre_transform` decision.** A swapchain's `pre_transform` must be a
-//!   transform the surface reports as supported; requiring it is a claim this
-//!   increment does not need yet, and the caller of
-//!   [`swapchain_create_info`] owns that field until the swapchain-owning step
-//!   states which transform it selected.
+//! - **No `pre_transform` negotiation.** The contract presents at the borrowed
+//!   path's fixed [`PRESENT_TRANSFORM`], and a surface that does not report it is
+//!   refused by name. There is no search for another transform, because the image
+//!   must be shown exactly as the graph rendered it.
 //! - **No presentation-support decision.** Whether a queue family can present to a
 //!   surface is read by [`super::presentation::Surface::supports_presentation`], but
 //!   *acting* on it is not here: step 2's queue rule chooses a family without a
@@ -165,6 +164,18 @@ pub(crate) const PRESENT_MODE: vk::PresentModeKHR = vk::PresentModeKHR::FIFO;
 /// it makes the result depend on the window system rather than on the image.
 pub(crate) const COMPOSITE_ALPHA: vk::CompositeAlphaFlagsKHR = vk::CompositeAlphaFlagsKHR::OPAQUE;
 
+/// The `Vulkan` surface transform the fixed presentation contract presents at.
+///
+/// `IDENTITY` is the transform the borrowed path being replaced configures
+/// (`crates/wgpu-hal`, `vulkan/swapchain/native.rs`: `.pre_transform(IDENTITY)`), so
+/// the swapchain this backend creates is the one the frozen oracle was measured
+/// against. It is also the only transform that shows the image exactly as it was
+/// rendered; rotating here would trade a `Vulkan`-side transform for geometry the
+/// graph did not author. A surface that does not report it is refused by name rather
+/// than transformed into a different presentation.
+pub(crate) const PRESENT_TRANSFORM: vk::SurfaceTransformFlagsKHR =
+    vk::SurfaceTransformFlagsKHR::IDENTITY;
+
 /// How many swapchain images this backend asks for.
 ///
 /// One more than the borrowed path's maximum frame latency of two
@@ -200,6 +211,8 @@ pub(crate) struct Presentation {
     pub(crate) present_mode: vk::PresentModeKHR,
     /// The composite alpha selected, always [`COMPOSITE_ALPHA`].
     pub(crate) composite_alpha: vk::CompositeAlphaFlagsKHR,
+    /// The surface transform selected, always [`PRESENT_TRANSFORM`].
+    pub(crate) pre_transform: vk::SurfaceTransformFlagsKHR,
     /// The swapchain image count, clamped into the driver's own range.
     pub(crate) image_count: u32,
     /// Every usage the swapchain images must carry, which always includes
@@ -231,6 +244,8 @@ pub(crate) enum PresentationError {
     PresentModeUnsupported,
     /// The surface cannot composite `OPAQUE`.
     CompositeAlphaUnsupported,
+    /// The surface does not report [`PRESENT_TRANSFORM`].
+    TransformUnsupported,
     /// The surface cannot be a colour attachment.
     UsageUnsupported,
     /// The lowered `requested_usage` names an operation this surface does not
@@ -259,6 +274,13 @@ pub(crate) fn supports_present_mode(modes: &[vk::PresentModeKHR]) -> bool {
 /// Whether the surface can composite `OPAQUE`.
 pub(crate) fn supports_composite_alpha(capabilities: &vk::SurfaceCapabilitiesKHR) -> bool {
     capabilities.supported_composite_alpha.contains(COMPOSITE_ALPHA)
+}
+
+/// Whether the surface can present at the contract's fixed transform.
+pub(crate) fn supports_transform(capabilities: &vk::SurfaceCapabilitiesKHR) -> bool {
+    capabilities
+        .supported_transforms
+        .contains(PRESENT_TRANSFORM)
 }
 
 /// Whether the surface's driver can present to a queue family that can also
@@ -354,6 +376,9 @@ pub(crate) fn contract(
     if !supports_composite_alpha(capabilities) {
         return Err(PresentationError::CompositeAlphaUnsupported);
     }
+    if !supports_transform(capabilities) {
+        return Err(PresentationError::TransformUnsupported);
+    }
     let extent = choose_extent(capabilities, requested).ok_or(PresentationError::ExtentUnsupported)?;
 
     let usage = texture::usage_flags(requested_usage) | REQUIRED_USAGE;
@@ -377,6 +402,7 @@ pub(crate) fn contract(
         extent,
         present_mode: PRESENT_MODE,
         composite_alpha: COMPOSITE_ALPHA,
+        pre_transform: PRESENT_TRANSFORM,
         image_count: clamp_image_count(capabilities),
         usage,
     })
@@ -384,14 +410,18 @@ pub(crate) fn contract(
 
 /// Lowers a decision into the create-info the driver is handed.
 ///
-/// The one field this leaves to its caller is `pre_transform`, which must name a
-/// transform the surface reports as supported and is therefore the swapchain-owning
-/// step's decision rather than a default invented here. Everything else is written,
-/// including the fields whose defaults would silently claim something: `clipped` is
-/// true (the implementation may ignore obscured pixels, which the specification
-/// permits and the borrowed path does), `image_array_layers` is one (this contract
-/// presents one 2-D image), and `old_swapchain` is null (this is a fresh creation,
-/// and a reconfigure passes its own predecessor through the field).
+/// Every field is written, including the ones whose defaults would silently claim
+/// something: `clipped` is true (the implementation may ignore obscured pixels,
+/// which the specification permits and the borrowed path does),
+/// `image_array_layers` is one (this contract presents one 2-D image), and
+/// `old_swapchain` is null (this is a fresh creation, and a reconfigure passes its
+/// own predecessor through the field).
+///
+/// `pre_transform` was the one field this function used to leave to its caller,
+/// because the transform a surface reports as supported had not been read yet. Step
+/// 10's swapchain half reads it, so it is now part of [`Presentation`] and refused by
+/// name in [`contract`] rather than defaulted here: a swapchain created at a
+/// transform the surface does not report is the bug that deferral existed to avoid.
 ///
 /// `surface` is borrowed rather than owned: the swapchain refers to it, so the
 /// caller that owns the surface must outlive the swapchain created from this value,
@@ -400,7 +430,6 @@ pub(crate) fn contract(
 pub(crate) fn swapchain_create_info(
     surface: vk::SurfaceKHR,
     presentation: &Presentation,
-    pre_transform: vk::SurfaceTransformFlagsKHR,
 ) -> vk::SwapchainCreateInfoKHR<'static> {
     vk::SwapchainCreateInfoKHR::default()
         .surface(surface)
@@ -411,7 +440,7 @@ pub(crate) fn swapchain_create_info(
         .image_array_layers(1)
         .image_usage(presentation.usage)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .pre_transform(pre_transform)
+        .pre_transform(presentation.pre_transform)
         .composite_alpha(presentation.composite_alpha)
         .present_mode(presentation.present_mode)
         .clipped(true)
@@ -502,6 +531,10 @@ mod tests {
         assert_eq!(PRESENT_COLOR_SPACE, vk::ColorSpaceKHR::SRGB_NONLINEAR);
         assert_eq!(PRESENT_MODE, vk::PresentModeKHR::FIFO);
         assert_eq!(COMPOSITE_ALPHA, vk::CompositeAlphaFlagsKHR::OPAQUE);
+        assert_eq!(
+            PRESENT_TRANSFORM,
+            vk::SurfaceTransformFlagsKHR::IDENTITY
+        );
         assert_eq!(IMAGE_COUNT, 3);
         assert_eq!(REQUIRED_USAGE, vk::ImageUsageFlags::COLOR_ATTACHMENT);
     }
@@ -534,6 +567,7 @@ mod tests {
         assert_eq!(accepted.color_space, PRESENT_COLOR_SPACE);
         assert_eq!(accepted.present_mode, PRESENT_MODE);
         assert_eq!(accepted.composite_alpha, COMPOSITE_ALPHA);
+        assert_eq!(accepted.pre_transform, PRESENT_TRANSFORM);
         assert_eq!(accepted.extent, requested());
         assert_eq!(accepted.image_count, IMAGE_COUNT);
         assert_eq!(accepted.usage, REQUIRED_USAGE);
@@ -661,6 +695,18 @@ mod tests {
         );
         assert_eq!(no_alpha, Err(PresentationError::CompositeAlphaUnsupported));
 
+        let no_transform = contract(
+            &vk::SurfaceCapabilitiesKHR {
+                supported_transforms: vk::SurfaceTransformFlagsKHR::ROTATE_90,
+                ..capabilities()
+            },
+            &formats(),
+            &modes(),
+            requested(),
+            surface_usage(),
+        );
+        assert_eq!(no_transform, Err(PresentationError::TransformUnsupported));
+
         let no_attachment = contract(
             &vk::SurfaceCapabilitiesKHR {
                 supported_usage_flags: vk::ImageUsageFlags::SAMPLED,
@@ -713,6 +759,7 @@ mod tests {
         assert!(supports_format(&formats()));
         assert!(supports_present_mode(&modes()));
         assert!(supports_composite_alpha(&capabilities()));
+        assert!(supports_transform(&capabilities()));
         assert!(supports_extent(&capabilities(), accepted.extent));
 
         assert!(!supports_format(&formats()[..0]));
@@ -757,13 +804,9 @@ mod tests {
     }
 
     #[test]
-    fn the_create_info_states_the_contract_and_leaves_the_transform_to_its_caller() {
+    fn the_create_info_states_the_whole_contract() {
         let presentation = accepted();
-        let info = swapchain_create_info(
-            vk::SurfaceKHR::from_raw(0x1234),
-            &presentation,
-            vk::SurfaceTransformFlagsKHR::IDENTITY,
-        );
+        let info = swapchain_create_info(vk::SurfaceKHR::from_raw(0x1234), &presentation);
         assert_eq!(info.surface, vk::SurfaceKHR::from_raw(0x1234));
         assert_eq!(info.min_image_count, presentation.image_count);
         assert_eq!(info.image_format, presentation.format);
@@ -772,10 +815,9 @@ mod tests {
         assert_eq!(info.image_usage, presentation.usage);
         assert_eq!(info.present_mode, presentation.present_mode);
         assert_eq!(info.composite_alpha, presentation.composite_alpha);
-        assert_eq!(
-            info.pre_transform,
-            vk::SurfaceTransformFlagsKHR::IDENTITY
-        );
+        // The transform is the contract's own now, not the caller's argument.
+        assert_eq!(info.pre_transform, PRESENT_TRANSFORM);
+        assert_eq!(info.pre_transform, presentation.pre_transform);
         assert_eq!(info.image_sharing_mode, vk::SharingMode::EXCLUSIVE);
         // The three fields whose defaults would claim something.
         assert_eq!(info.image_array_layers, 1);
