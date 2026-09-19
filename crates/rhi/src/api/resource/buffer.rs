@@ -607,16 +607,6 @@ impl BufferUsage {
     }
 }
 
-impl BufferSupportQuery {
-    /// Writes this query's canonical bytes.
-    ///
-    /// The usage mask is the whole key: section 12.1 keeps the size out of it, so
-    /// there is nothing else to write.
-    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
-        self.usage.encode_into(out);
-    }
-}
-
 impl BufferSupport {
     /// Writes this answer as a tag, followed by the ceiling when there is one.
     ///

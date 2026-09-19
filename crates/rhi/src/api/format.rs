@@ -874,41 +874,6 @@ impl FormatFacts {
     }
 }
 
-impl TextureSupportQuery {
-    /// Writes this query's canonical bytes.
-    ///
-    /// The alternate view formats are sorted here rather than assumed sorted. The
-    /// field is a `Vec` the caller extended through
-    /// [`Self::with_view_format`], so its order is the caller's order, and two
-    /// callers asking the same question with the same formats listed in different
-    /// orders must intern to the same contract. Sorting the *encoded* forms rather
-    /// than the values keeps this consistent with how the outer sections sort, and
-    /// needs no `Ord` on [`TextureFormat`], which does not have one.
-    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
-        self.dimension.encode_into(out);
-        self.format.encode_into(out);
-        self.usage.encode_into(out);
-        out.extend_from_slice(&self.sample_count.to_le_bytes());
-
-        let mut formats: Vec<Vec<u8>> = self
-            .view_formats
-            .iter()
-            .map(|format| {
-                let mut bytes = Vec::new();
-                format.encode_into(&mut bytes);
-                bytes
-            })
-            .collect();
-        formats.sort_unstable();
-        out.extend_from_slice(&(formats.len() as u32).to_le_bytes());
-        for format in &formats {
-            out.extend_from_slice(format);
-        }
-
-        self.view_compatibility.encode_into(out);
-    }
-}
-
 impl TextureSupport {
     /// Writes this answer as a tag, followed by the maxima when there are any.
     ///

@@ -33,31 +33,68 @@
 //! "presentation capabilities" value would be the degenerate form section 7
 //! rules out, because one device can serve two targets with different answers.
 //!
-//! # Two completeness rules, and they differ
+//! # Four shapes of answer, and the rule that chooses between two of them
 //!
-//! [`EnabledCapabilities::format`] answers `Option<FormatFacts>`, and `None` is a
-//! real answer: the format is unavailable to this contract. Section 7.2 gives the
-//! case that makes the distinction load-bearing — a WebGPU adapter may report a
-//! format as available while the created device reports it as unavailable, and
-//! that is legal as long as the device was created without enabling the format's
-//! required semantics.
+//! The accessors below do not all treat "enumeration did not record this" the same
+//! way, and the difference is not taste. The rule is:
 //!
-//! The remaining queries answer a support *enum* whose negative variant is the
-//! real answer. For those there is no `None`, so an absent entry is not a fact at
-//! all: it means enumeration never asked. Answering `Supported` would be a lie and
-//! answering `Unsupported` would be a different lie, so the query panics and names
-//! the query. A backend that leaves a hole in its snapshot has produced a bug, and
-//! the rule that a portable defect may not be left for a driver to discover cuts
-//! the same way here.
+//! > **A recorded key must be drawn from a space a backend can walk in full.**
+//! > Where it is, an absent entry is a hole in enumeration. Where it is not, an
+//! > absent entry is an answer.
 //!
-//! A third shape exists, and it is neither of those. [`EnabledCapabilities::supports_feature`]
-//! and [`EnabledCapabilities::texture_view_format_compatible`] answer membership in
-//! a set, so an absent entry *is* the honest negative — a feature the device did
-//! not enable is not enabled, and a format pair enumeration did not list is not
-//! compatible. Both relations are recorded positively and exhaustively, which is
-//! what makes the default sound rather than a silent guess. The direction matters
-//! too: this negative refuses an operation, so a hole in enumeration costs a
-//! capability rather than permitting something a driver would reject.
+//! It is worth stating why that is the rule rather than "always be conservative".
+//! A hole and an answer are different failures: a hole costs a capability and is
+//! found by whoever needed it, while a hole read as `Supported` permits an
+//! operation the device cannot perform and is found by a driver, later, somewhere
+//! else. Only one of those is recoverable, so where the two cannot be told apart
+//! the answer must be the conservative one — but where they *can* be told apart,
+//! collapsing them would delete a bug detector that costs nothing to keep.
+//!
+//! The four shapes, in the order they appear below:
+//!
+//! 1. **`Option<V>`, where `None` is a real answer.** [`EnabledCapabilities::format`]
+//!    answers `Option<FormatFacts>`. Section 7.2 gives the case that makes the
+//!    distinction load-bearing — a WebGPU adapter may report a format as available
+//!    while the created device reports it as unavailable, and that is legal as long
+//!    as the device was created without enabling the format's required semantics.
+//! 2. **Membership in a recorded relation.** [`EnabledCapabilities::supports_feature`]
+//!    and [`EnabledCapabilities::texture_view_format_compatible`] answer membership,
+//!    so an absent entry *is* the honest negative: a feature the device did not
+//!    enable is not enabled, and a format pair enumeration did not list is not
+//!    compatible. Both relations are recorded positively, and the direction is the
+//!    safe one — this negative refuses an operation, so a hole here costs a
+//!    capability rather than permitting something a driver would reject.
+//! 3. **A negative-variant answer over an enumerable key.** [`EnabledCapabilities::buffer_support`]
+//!    answers a support enum, and its key space is [`BufferUsage`]'s sixty-four
+//!    masks — a set a backend can record in full. So an absent entry here is not an
+//!    answer to anything: it means enumeration never asked. Answering `Supported`
+//!    would be a lie and answering `Unsupported` would be a *different* lie that
+//!    nobody would ever trace back to enumeration, so the query panics and names
+//!    itself. A backend that leaves a hole in this snapshot has a bug, and section
+//!    6.9's rule that a portable defect may not be left for a driver to discover
+//!    cuts the same way.
+//! 4. **The same, over a key space no backend can walk.** [`EnabledCapabilities::texture_support`],
+//!    [`EnabledCapabilities::binding_support`], and [`EnabledCapabilities::route`]
+//!    also answer support enums, but their keys carry a `Vec` of view formats, a
+//!    [`crate::api::binding::BindingCount::Fixed`] resource count, and a sample
+//!    count respectively — none of which has a last element a backend could stop
+//!    at. There is no enumeration that could have been complete, so an absent entry
+//!    cannot be a hole, and the query answers its negative instead of panicking.
+//!
+//! # What shape 4 costs, and what is done about it
+//!
+//! Shape 4 trades a bug detector for a correct answer, and it is worth naming the
+//! price instead of leaving it implied: a backend that neglects to record a texture
+//! format will not panic anywhere, it will refuse textures in that format, and the
+//! symptom will look like a driver limitation.
+//!
+//! Two things keep that from being guesswork. The view-formats field — the one
+//! unbounded component that is a *list* rather than a number — is not in the key at
+//! all: the recorded key type drops it, and the query answers it from the
+//! pairwise relation of shape 2, which is already recorded and already has the
+//! right default. And the mock backend's conformance suite records a full snapshot,
+//! so a fill that is incomplete in a way that matters shows up as a mock-versus-
+//! native disagreement rather than as a mystery on one machine.
 //!
 //! # Why the snapshot is data rather than `unimplemented!()`
 //!
@@ -75,8 +112,9 @@ use std::sync::{LazyLock, Mutex};
 use crate::api::binding::{BindingLimitClass, BindingSupport, BindingSupportQuery};
 use crate::api::format::{FormatFacts, TextureFormat, TextureSupport, TextureSupportQuery};
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
-use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery};
+use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteQuery, RouteSupport};
+use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
 use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderStage};
 use crate::api::submission::SubmissionCapabilities;
 use crate::base::digest::sha256;
@@ -160,6 +198,64 @@ impl DeviceLimits {
 /// compatibility id and fingerprint, and reaches submission and shader-artifact
 /// facts that an adapter cannot answer.
 ///
+/// The recorded key for one texture support question.
+///
+/// [`TextureSupportQuery`] is not its own key, and the difference is exactly one
+/// field. `view_formats` is a `Vec`, so a table keyed on the whole query could
+/// never be complete — and worse, it would be asking the wrong question: whether a
+/// list of alternate views is legal is not a fact about one format, it is the
+/// conjunction of facts about several, and section 8.2 already places it with
+/// TextureView validation rather than with the format facts. So it is not in the
+/// key, and [`CapabilityFacts`] answers it from the pairwise
+/// [`CapabilityFacts::view_compatibility`] relation it already holds.
+///
+/// Everything left is bounded: three enums, a bitmask, and a small integer. The
+/// first four are what a backend's own probe takes as its arguments — DX12's
+/// `CheckFormatSupport` is asked about a format *and* a resource dimension *and* a
+/// usage — so this key is not a decomposition invented for storage, it is the
+/// question the hardware is actually asked.
+///
+/// Private to this module: nothing outside the capability database needs to name
+/// it, and the public `record_texture_support` takes the query a caller has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TextureSupportKey {
+    dimension: TextureDimension,
+    format: TextureFormat,
+    usage: TextureUsage,
+    sample_count: u32,
+    view_compatibility: TextureViewCompatibility,
+}
+
+impl TextureSupportKey {
+    /// The part of `query` that a backend can record an answer for.
+    fn of(query: &TextureSupportQuery) -> Self {
+        Self {
+            dimension: query.dimension(),
+            format: query.format(),
+            usage: query.usage(),
+            sample_count: query.sample_count(),
+            view_compatibility: query.view_compatibility(),
+        }
+    }
+
+    /// Writes this key's canonical bytes, field by field in declaration order.
+    ///
+    /// Every field is written, for the reason [`CapabilityFacts::canonical_bytes`]
+    /// gives: two keys that differ anywhere are two different questions, and a
+    /// texture the device can create with one sample count is not thereby
+    /// creatable with another. `view_compatibility` is written even though most
+    /// devices will answer the same for both of its values — section 13.2 makes it
+    /// a creation-time fact, and a contract that ignored it would intern two
+    /// devices whose cube-view behaviour differs.
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.dimension.encode_into(out);
+        self.format.encode_into(out);
+        self.usage.encode_into(out);
+        out.extend_from_slice(&self.sample_count.to_le_bytes());
+        self.view_compatibility.encode_into(out);
+    }
+}
+
 /// Crate-private, but a named type rather than an anonymous storage shape,
 /// because a backend has to be able to hand one back: `DeviceBackend` cannot
 /// return a private field bundle, and the portable layer must not accept a
@@ -170,8 +266,10 @@ pub(crate) struct CapabilityFacts {
     features: HashSet<OptionalFeature>,
     limits: DeviceLimits,
     formats: HashMap<TextureFormat, FormatFacts>,
-    buffer_support: HashMap<BufferSupportQuery, BufferSupport>,
-    texture_support: HashMap<TextureSupportQuery, TextureSupport>,
+    buffer_support: HashMap<BufferUsage, BufferSupport>,
+    /// Keyed on [`TextureSupportKey`], which is *not* the whole query. See that
+    /// type for which field is left out and why the answer is still complete.
+    texture_support: HashMap<TextureSupportKey, TextureSupport>,
     binding_support: HashMap<BindingSupportQuery, BindingSupport>,
     binding_limits: HashMap<(ShaderStage, BindingLimitClass), u32>,
     routes: HashMap<RouteQuery, RouteSupport>,
@@ -308,8 +406,8 @@ impl CapabilityFacts {
             &mut out,
             self.buffer_support
                 .iter()
-                .map(|(query, support)| {
-                    encode_entry(|out| query.encode_into(out), |out| support.encode_into(out))
+                .map(|(usage, support)| {
+                    encode_entry(|out| usage.encode_into(out), |out| support.encode_into(out))
                 })
                 .collect(),
         );
@@ -317,8 +415,8 @@ impl CapabilityFacts {
             &mut out,
             self.texture_support
                 .iter()
-                .map(|(query, support)| {
-                    encode_entry(|out| query.encode_into(out), |out| support.encode_into(out))
+                .map(|(key, support)| {
+                    encode_entry(|out| key.encode_into(out), |out| support.encode_into(out))
                 })
                 .collect(),
         );
@@ -376,11 +474,13 @@ impl CapabilityFacts {
         out
     }
 
-    /// Answers a support query that must have been recorded.
+    /// Answers a support query whose key space a backend can record in full.
     ///
-    /// See the module docs for why an absent entry panics instead of defaulting:
-    /// neither `Supported` nor `Unsupported` is an honest answer to a question
-    /// enumeration never asked.
+    /// An absent entry is a hole in enumeration, and the module documentation
+    /// explains at length why that is a panic rather than a negative. The short
+    /// form: answering `Supported` would permit an operation the device cannot
+    /// perform, and answering `Unsupported` would hide a backend bug behind a
+    /// driver-shaped symptom. Only the panic is recoverable.
     fn recorded<V: Copy>(answer: Option<V>, query: &str) -> V {
         match answer {
             Some(value) => value,
@@ -389,6 +489,23 @@ impl CapabilityFacts {
                  enumeration must record an answer for every query a caller can ask"
             ),
         }
+    }
+
+    /// Answers a support query whose key space no backend can record in full.
+    ///
+    /// The mirror of [`Self::recorded`], and the difference is the whole reason
+    /// both exist. A [`TextureSupportQuery`] carries an unbounded sample count, a
+    /// [`BindingSupportQuery`] a
+    /// [`crate::api::binding::BindingCount::Fixed`] element count, and a
+    /// [`RouteQuery`] a sample count — so "every key in the space" is not a set
+    /// anybody can walk, no enumeration could have been complete, and an absent
+    /// entry therefore cannot be a hole. It is the honest negative.
+    ///
+    /// `negative` is passed by the caller rather than produced here because only
+    /// the answer type knows which of its variants is the refusing one, and a
+    /// helper that guessed would be a second, invisible statement of that fact.
+    fn not_enumerable<V: Copy>(answer: Option<V>, negative: V) -> V {
+        answer.unwrap_or(negative)
     }
 }
 
@@ -452,15 +569,20 @@ impl CapabilityFacts {
             reason = "the DX12 capability port is what fills these, and it has not landed yet"
         )
     )]
-    pub(crate) fn record_buffer_support(
-        &mut self,
-        query: BufferSupportQuery,
-        support: BufferSupport,
-    ) {
-        self.buffer_support.insert(query, support);
+    pub(crate) fn record_buffer_support(&mut self, usage: BufferUsage, support: BufferSupport) {
+        self.buffer_support.insert(usage, support);
     }
 
     /// Records the answer to a texture support query.
+    ///
+    /// Takes the whole query and keys on [`TextureSupportKey::of`] of it, so that a
+    /// caller records the question it has rather than reconstructing the key by
+    /// hand. Two queries that differ only in their alternate view formats therefore
+    /// land on one entry, and the *second* recording wins — which is consistent
+    /// rather than lossy, because the answer no longer depends on that field: the
+    /// accessor applies it as a predicate. A backend that recorded contradictory
+    /// answers for one key would be stating that its own probe is unstable, and no
+    /// shape of table can repair that.
     #[cfg_attr(
         not(test),
         expect(
@@ -470,10 +592,11 @@ impl CapabilityFacts {
     )]
     pub(crate) fn record_texture_support(
         &mut self,
-        query: TextureSupportQuery,
+        query: &TextureSupportQuery,
         support: TextureSupport,
     ) {
-        self.texture_support.insert(query, support);
+        self.texture_support
+            .insert(TextureSupportKey::of(query), support);
     }
 
     /// Records the answer to a binding support query.
@@ -539,6 +662,94 @@ impl CapabilityFacts {
     }
 }
 
+/// The four support questions, answered once for both snapshots.
+///
+/// [`AvailableCapabilities`] and [`EnabledCapabilities`] expose the same four
+/// verbs, and every rule in them is a rule about *facts* rather than about which
+/// snapshot is asking — so the bodies live here and each type delegates. Writing
+/// them twice would be two chances for the rule to drift, and the pair they would
+/// drift across is exactly the pair section 7.2 requires a caller to be able to
+/// compare: an adapter that answered `Supported` where its device answers
+/// `Unsupported` is legal only when the difference is feature enablement, and an
+/// accidental difference here would be indistinguishable from that.
+impl CapabilityFacts {
+    /// Whether, and within what ceiling, the described buffer can be created.
+    ///
+    /// Keyed on [`BufferUsage`], whose space is sixty-four masks, so this is shape
+    /// 3 of the module documentation: enumeration can be complete and a hole is a
+    /// bug.
+    fn buffer_support(&self, query: &BufferSupportQuery) -> BufferSupport {
+        Self::recorded(
+            self.buffer_support.get(&query.usage()).copied(),
+            "buffer query",
+        )
+    }
+
+    /// Whether, and within what maxima, the described texture can be created.
+    ///
+    /// Two questions in one, and the module documentation is where the split is
+    /// argued. The recorded key answers the shape question; the alternate view
+    /// formats are answered here, from the pairwise relation, because a list of
+    /// formats is not a fact a table can be keyed on and section 8.2 places its
+    /// legality with view validation anyway.
+    ///
+    /// The conjunction is ordered so that the shape answer short-circuits: a format
+    /// the device cannot create at all is not made creatable by listing views for
+    /// it, and asking the pairwise relation first would report a missing view
+    /// format for a texture that was never creatable — a diagnostic that names the
+    /// wrong cause.
+    fn texture_support(&self, query: &TextureSupportQuery) -> TextureSupport {
+        let support = Self::not_enumerable(
+            self.texture_support
+                .get(&TextureSupportKey::of(query))
+                .copied(),
+            TextureSupport::Unsupported,
+        );
+        if !support.is_supported() {
+            return support;
+        }
+        let views_are_permitted = query
+            .view_formats()
+            .iter()
+            .all(|view| self.view_compatibility.contains(&(query.format(), *view)));
+        if views_are_permitted {
+            support
+        } else {
+            TextureSupport::Unsupported
+        }
+    }
+
+    /// Whether, and how, the described binding can be satisfied.
+    ///
+    /// Shape 4: [`crate::api::binding::BindingCount::Fixed`] carries a `u32`, so no
+    /// enumeration could have recorded every count a caller might ask about, and a
+    /// miss answers the negative.
+    ///
+    /// The count is deliberately *not* checked against
+    /// [`Self::binding_limit`]. Section 20.4 puts the two questions in different
+    /// places on purpose — a count a device cannot reach is a limit, which
+    /// `binding_limit` answers per stage and class — and re-deriving it here would
+    /// give one fact two sources, which section 7.3 forbids. This accessor answers
+    /// whether the *kind* of binding is expressible; the ceiling is asked
+    /// separately.
+    fn binding_support(&self, query: &BindingSupportQuery) -> BindingSupport {
+        Self::not_enumerable(
+            self.binding_support.get(query).copied(),
+            BindingSupport::Unsupported,
+        )
+    }
+
+    /// Whether, and with what capabilities, the described route exists.
+    ///
+    /// Shape 4 again: the two texture-to-texture routes carry sample counts, which
+    /// are `u32`. Section 9.4 makes `Unsupported` here a refusal to invent a route
+    /// rather than a statement about hardware, which is why the negative is the
+    /// answer a caller that asked about something absurd should get.
+    fn route(&self, query: &RouteQuery) -> RouteSupport {
+        Self::not_enumerable(self.routes.get(query).copied(), RouteSupport::Unsupported)
+    }
+}
+
 /// The domain separator every canonical encoding begins with.
 ///
 /// The trailing version is load-bearing. A change to the encoding rules — a new
@@ -547,14 +758,15 @@ impl CapabilityFacts {
 /// equal to one recorded after it while describing something else. Bumping this
 /// string is what makes that true, and it is the one step of an encoding change
 /// that a compiler cannot be made to insist on.
-const ENCODING_DOMAIN: &[u8] = b"fluxel-rhi/capability-facts/v1";
+const ENCODING_DOMAIN: &[u8] = b"fluxel-rhi/capability-facts/v2";
 
 /// Encodes one section entry: the key's length, the key, then the value.
 ///
 /// The key is length-prefixed because it is not always fixed-width — a
-/// [`TextureSupportQuery`] carries a `Vec` of alternate view formats — and without
-/// the prefix the key/value boundary would depend on the reader already knowing
-/// how long the key is. The value needs no prefix: every value encoding is
+/// [`BindingSupportQuery`] carries a [`crate::api::binding::BindingKind`] with a
+/// payload, and a [`RouteQuery`]'s variants are different sizes — and without the
+/// prefix the key/value boundary would depend on the reader already knowing how
+/// long the key is. The value needs no prefix: every value encoding is
 /// self-delimiting once the key is known, and the entry's own length bounds it.
 ///
 /// A section with no value — a feature, a view-compatibility pair — passes a
@@ -694,27 +906,30 @@ impl AvailableCapabilities {
     /// Whether, and within what ceiling, the adapter can create the described
     /// buffer.
     pub fn buffer_support(&self, query: &BufferSupportQuery) -> BufferSupport {
-        CapabilityFacts::recorded(
-            self.facts.buffer_support.get(query).copied(),
-            "buffer query",
-        )
+        self.facts.buffer_support(query)
     }
 
     /// Whether, and within what maxima, the adapter can create the described
     /// texture.
+    ///
+    /// The answer accounts for the query's alternate view formats as well as its
+    /// shape. Whether a list of views is legal is not a fact about one format but
+    /// the conjunction of facts about several, so it is answered from the same
+    /// pairwise relation that backs
+    /// [`EnabledCapabilities::texture_view_format_compatible`] rather than from a
+    /// table keyed on the list — a list has no last element to stop at.
     pub fn texture_support(&self, query: &TextureSupportQuery) -> TextureSupport {
-        CapabilityFacts::recorded(
-            self.facts.texture_support.get(query).copied(),
-            "texture query",
-        )
+        self.facts.texture_support(query)
     }
 
     /// Whether, and how, the adapter can satisfy the described binding.
+    ///
+    /// A binding count beyond what the adapter can express answers
+    /// [`BindingSupport::Unsupported`] rather than panicking, because its key is
+    /// not a space enumeration could have covered. The count *ceiling* for one
+    /// stage and class is [`Self::binding_limit`]'s question, not this one's.
     pub fn binding_support(&self, query: &BindingSupportQuery) -> BindingSupport {
-        CapabilityFacts::recorded(
-            self.facts.binding_support.get(query).copied(),
-            "binding query",
-        )
+        self.facts.binding_support(query)
     }
 
     /// The adapter's binding-count ceiling for one shader stage and resource
@@ -728,8 +943,14 @@ impl AvailableCapabilities {
     }
 
     /// Whether, and with what capabilities, the described transfer route exists.
+    ///
+    /// A route the adapter has no recorded answer for answers
+    /// [`RouteSupport::Unsupported`] rather than panicking, for the reason given on
+    /// [`Self::binding_support`]: section 9.4 makes "no direct route exists" a
+    /// refusal to invent one, so the negative is an answer here and not a
+    /// placeholder for one.
     pub fn route(&self, query: &RouteQuery) -> RouteSupport {
-        CapabilityFacts::recorded(self.facts.routes.get(query).copied(), "route query")
+        self.facts.route(query)
     }
 }
 
@@ -865,27 +1086,29 @@ impl EnabledCapabilities {
     /// Whether, and within what ceiling, the device can create the described
     /// buffer.
     pub fn buffer_support(&self, query: &BufferSupportQuery) -> BufferSupport {
-        CapabilityFacts::recorded(
-            self.facts.buffer_support.get(query).copied(),
-            "buffer query",
-        )
+        self.facts.buffer_support(query)
     }
 
     /// Whether, and within what maxima, the device can create the described
     /// texture.
+    ///
+    /// The answer accounts for the query's alternate view formats as well as its
+    /// shape, so a texture whose declared views the device cannot form answers
+    /// [`TextureSupport::Unsupported`] here rather than at view creation. Section
+    /// 13.2 makes the view intent a creation-time fact, which is what puts it in
+    /// this question.
     pub fn texture_support(&self, query: &TextureSupportQuery) -> TextureSupport {
-        CapabilityFacts::recorded(
-            self.facts.texture_support.get(query).copied(),
-            "texture query",
-        )
+        self.facts.texture_support(query)
     }
 
     /// Whether, and how, the device can satisfy the described binding.
+    ///
+    /// A count beyond what the device can express answers
+    /// [`BindingSupport::Unsupported`] rather than panicking; the ceiling itself is
+    /// [`Self::binding_limit`]'s question, kept separate by section 20.4 and by
+    /// section 7.3's rule that a fact has one canonical source.
     pub fn binding_support(&self, query: &BindingSupportQuery) -> BindingSupport {
-        CapabilityFacts::recorded(
-            self.facts.binding_support.get(query).copied(),
-            "binding query",
-        )
+        self.facts.binding_support(query)
     }
 
     /// The device's binding-count ceiling for one shader stage and resource class.
@@ -902,7 +1125,7 @@ impl EnabledCapabilities {
 
     /// Whether, and with what capabilities, the described transfer route exists.
     pub fn route(&self, query: &RouteQuery) -> RouteSupport {
-        CapabilityFacts::recorded(self.facts.routes.get(query).copied(), "route query")
+        self.facts.route(query)
     }
 
     /// The device's logical submission lanes and what each one guarantees.

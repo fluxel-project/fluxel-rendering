@@ -27,19 +27,17 @@
 //!   wants a device with facts asks for them by name
 //!   ([`MockDevice::with_capabilities`]), so the contract under examination is
 //!   visible in the test rather than implied by a default.
-//! - **Not yet complete where a query key is unbounded, and this is a real gap.**
-//!   `buffer_support`, `texture_support`, `binding_support`, and `route` answer by
-//!   exact key lookup and *panic* on a key enumeration did not record — see
-//!   [`crate::api::capability::CapabilityFacts::recorded`] — and a
-//!   [`crate::api::format::TextureSupportQuery`] carries a `Vec` of view formats,
-//!   so no backend can record an entry for every query that type admits. Deciding
-//!   whether those four should be tables or decision procedures over bounded facts
-//!   is the next block of this series, and it is a question about the capability
-//!   model rather than about this mock. Until it is settled this backend records
-//!   nothing there, and the four accessors panic with a message that says so.
-//!   Nothing in the tree calls them yet: `Device::capabilities` was
-//!   `unimplemented!()` until the contract could be interned at all, so every call
-//!   site that exists today is new, and none of them is one of these four.
+//! - **It records no support answers at all, and what that costs is not uniform.**
+//!   This backend probes nothing, so its support tables are empty, and the four
+//!   accessors answer an empty table in the two ways
+//!   [`crate::api::capability::CapabilityFacts`] documents. `buffer_support` —
+//!   keyed on the sixty-four usage masks, a space enumeration could have covered —
+//!   panics, which is the correct reading: a mock that was asked to be a device
+//!   and recorded nothing is a broken mock. `texture_support`, `binding_support`,
+//!   and `route` carry an unbounded component in their keys and answer
+//!   `Unsupported`. A test that needs any of the four wants
+//!   [`MockDevice::with_capabilities`] and a table it states itself, which is the
+//!   same thing that makes the contract under test visible.
 //! - **It does not lower anything that creates a resource.** Buffer, texture,
 //!   view, sampler, shader, binding, pipeline, recorder, submission, and
 //!   presentation seams do not exist yet; when they do, this backend grows the

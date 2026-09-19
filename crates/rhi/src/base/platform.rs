@@ -141,12 +141,22 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// what it saw; deciding what that description is *called* is not its job.
     ///
     /// Section 7.2's completeness rule makes this a demanding method rather than a
-    /// courtesy. `CapabilityFacts` answers a query it holds no entry for by
-    /// panicking, because neither `Supported` nor `Unsupported` is an honest answer
-    /// to a question enumeration never asked, and the caller cannot tell a missing
-    /// entry from a real refusal. So this must account for every query a caller can
-    /// put to [`crate::api::capability::EnabledCapabilities`] — not a
-    /// representative sample of them.
+    /// courtesy, and it is worth being precise about how demanding, because the
+    /// answer is not "record everything".
+    /// [`crate::api::capability::CapabilityFacts`] has two lookup rules and the
+    /// difference between them is whether the query's key space is one a backend
+    /// can walk in full. Where it is — [`crate::api::resource::buffer::BufferUsage`]'s
+    /// sixty-four masks — an absent entry is a hole in enumeration and the query
+    /// panics, so this must record all of them. Where it is not — a texture's
+    /// sample count, a binding's element count, a route's sample count — no
+    /// enumeration could have been complete, an absent entry answers the negative,
+    /// and what this owes is a faithful table rather than an exhaustive one.
+    ///
+    /// The distinction matters in both directions. A backend that reads "record
+    /// everything" as licence to skip the enumerable families will panic the first
+    /// time a caller asks about a buffer; a backend that reads it as licence to
+    /// skip the others will silently refuse textures, and the symptom will look
+    /// like a driver limitation rather than like a gap.
     ///
     /// Like [`Self::adapter_info`], this must answer even on a device whose
     /// provider does not enumerate: it describes the device that exists, not the

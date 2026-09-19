@@ -488,17 +488,24 @@ pub(crate) struct Dx12Device {
     /// live device is the next block of this series; until it lands, the only
     /// honest thing this backend can say is that it has asked nothing.
     ///
-    /// What that costs, precisely, so it is not discovered later: the four
-    /// accessors that answer by exact key lookup —
-    /// [`crate::api::capability::EnabledCapabilities::buffer_support`],
-    /// `texture_support`, `binding_support`, and `route` — panic on a query this
-    /// table holds no entry for, because
-    /// [`crate::api::capability::CapabilityFacts::recorded`] refuses to guess
-    /// between `Supported` and `Unsupported`. The feature, limit, format, and
-    /// submission accessors answer correctly from this table; they simply answer
-    /// "no" and "none", which for an unenumerated device is under-reporting rather
-    /// than a false claim. Nothing in the tree calls the four yet, so this is a gap
-    /// waiting for its first caller rather than a live defect.
+    /// What that costs, precisely, so it is not discovered later. The feature,
+    /// limit, format, and submission accessors answer correctly from this table;
+    /// for an unenumerated device they answer "no" and "none", which is
+    /// under-reporting rather than a false claim. The four support accessors split,
+    /// and the split is [`crate::api::capability::CapabilityFacts`]'s:
+    ///
+    /// - `buffer_support` panics. Its key is `BufferUsage`'s sixty-four masks, so
+    ///   enumeration could have been complete and an empty table is a hole rather
+    ///   than a statement. This is the one live landmine here, and it is honest:
+    ///   a device that was asked and recorded nothing is a broken device, not a
+    ///   device without buffers.
+    /// - `texture_support`, `binding_support`, and `route` answer `Unsupported`.
+    ///   Their keys carry a sample count, an element count, and a sample count,
+    ///   so no enumeration could have been complete and a miss is the negative.
+    ///
+    /// Nothing in the tree calls the four yet, so this is a gap waiting for its
+    /// first caller rather than a live defect — and the block that gives it one is
+    /// the one that fills this table.
     facts: CapabilityFacts,
     /// The lanes this device offers.
     submission: SubmissionCapabilities,

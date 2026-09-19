@@ -81,34 +81,152 @@ fn a_format_available_on_the_adapter_can_be_unavailable_on_the_device() {
     );
 }
 
-/// The two completeness rules from the module docs, side by side: an absent
-/// *format* is a fact, an absent *support* record is a snapshot bug.
+/// The shapes of an absent record, side by side.
+///
+/// This is the review instrument for the rule in the module documentation, and it
+/// is deliberately one test rather than three: the difference between the shapes
+/// *is* the rule, and a reader who meets only one of them in isolation will read
+/// the other two as inconsistencies in the code rather than as a decision.
 #[test]
-fn an_absent_format_is_an_answer_and_an_absent_support_record_is_not() {
+fn an_absent_record_answers_according_to_whether_its_key_space_is_enumerable() {
     let enabled = enabled_capabilities();
 
-    // Absent format: an answer. `FormatFacts` is opaque and carries no
-    // `PartialEq`, so the question is asked as "is it there", not "does it equal".
+    // `format` answers `Option`, and `None` is a real answer. `FormatFacts` is
+    // opaque and carries no `PartialEq`, so the question is asked as "is it
+    // there", not "does it equal".
     assert!(enabled.format(TextureFormat::R8Unorm).is_none());
 
-    // Absent route record: not an answer, and neither variant would be honest.
+    // `buffer_support` is keyed on the sixty-four usage masks, so enumeration can
+    // be complete, so an absent entry is a hole in it — and a hole has no honest
+    // answer. Answering `Supported` would permit an operation the device cannot
+    // perform and answering `Unsupported` would hide the bug behind a
+    // driver-shaped symptom, so neither variant is produced and the query says so.
     let outcome = std::panic::catch_unwind(|| {
-        let _ = enabled.route(&RouteQuery::BufferToBuffer);
+        let _ = enabled.buffer_support(&BufferSupportQuery::new(BufferUsage::STORAGE));
     });
     assert!(
         outcome.is_err(),
-        "a route query enumeration never answered must not produce a value"
+        "a buffer query over an enumerable key space must not invent an answer"
+    );
+
+    // The other three carry an unbounded component in their key, so no
+    // enumeration could have been complete and an absent entry cannot be a hole.
+    // Each answers its own negative.
+    assert!(
+        !enabled
+            .texture_support(&TextureSupportQuery::new(
+                TextureDimension::D2,
+                TextureFormat::R8Unorm,
+                TextureUsage::SAMPLED,
+                1,
+            ))
+            .is_supported()
+    );
+    assert_eq!(
+        enabled.binding_support(&BindingSupportQuery {
+            visibility: ShaderStages::FRAGMENT,
+            kind: BindingKind::Sampler {
+                kind: crate::api::binding::SamplerKind::Filtering,
+            },
+            count: BindingCount::One,
+            dynamic_offset: false,
+        }),
+        BindingSupport::Unsupported
+    );
+    assert!(!enabled.route(&RouteQuery::BufferToBuffer).is_supported());
+}
+
+/// The price of the unbounded-key shape, asserted rather than left implied.
+///
+/// Where the key space cannot be enumerated, a backend that forgot to record a
+/// route and a device that genuinely lacks it produce the same answer. That is the
+/// trade the module documentation states, and this test exists so that it stays a
+/// stated trade: if a future change makes the two distinguishable again — by
+/// narrowing the key until it *is* enumerable — this test fails and the change
+/// gets read as the improvement it would be.
+#[test]
+fn a_recorded_negative_and_an_unrecorded_question_are_one_answer_where_the_key_is_unbounded() {
+    let mut facts = CapabilityFacts::empty();
+    facts.record_route(RouteQuery::BufferToBuffer, RouteSupport::Unsupported);
+    let recorded = enabled_from(facts);
+    let unrecorded = enabled_capabilities();
+
+    assert!(!recorded.route(&RouteQuery::BufferToBuffer).is_supported());
+    assert!(!unrecorded.route(&RouteQuery::BufferToBuffer).is_supported());
+}
+
+/// A texture is supported only when its shape *and* its declared views are.
+///
+/// The two halves of the answer come from different places — the recorded table
+/// and the pairwise relation — so this is the test that would catch one of them
+/// being dropped from the conjunction.
+#[test]
+fn a_texture_answer_is_the_conjunction_of_its_shape_and_its_views() {
+    let shape = TextureSupportQuery::new(
+        TextureDimension::D2,
+        TextureFormat::R8Unorm,
+        TextureUsage::SAMPLED,
+        1,
+    );
+    let mut facts = CapabilityFacts::empty();
+    facts.record_texture_support(
+        &shape,
+        TextureSupport::Supported(TextureSupportLimits::new(Extent3d::d1(4096), 1, 1)),
+    );
+    facts.record_view_compatibility(TextureFormat::R8Unorm, TextureFormat::R8Uint);
+    let enabled = enabled_from(facts);
+
+    // Shape alone: supported.
+    assert!(enabled.texture_support(&shape).is_supported());
+
+    // A declared view format the pairwise relation does not list takes the whole
+    // answer down, rather than being reported separately: section 13.2 makes the
+    // view intent a creation-time fact, so a texture that cannot be viewed as
+    // asked is a texture that cannot be created as asked.
+    assert!(
+        !enabled
+            .texture_support(&shape.clone().with_view_format(TextureFormat::Rgba8Unorm))
+            .is_supported()
+    );
+
+    // A declared view format the relation does list leaves it standing.
+    assert!(
+        enabled
+            .texture_support(&shape.with_view_format(TextureFormat::R8Uint))
+            .is_supported()
     );
 }
 
-/// A recorded negative answer is distinguishable from an unrecorded question.
+/// A sample count the device did not record is an answer, not an absent fact.
+///
+/// The count is a `u32`, so it is the clearest case of why the texture key cannot
+/// be enumerated: no backend can record a row for every integer a caller might
+/// name. `texture_support` is where the number lives, and it must refuse rather
+/// than panic.
 #[test]
-fn a_recorded_negative_route_is_answered_without_panicking() {
+fn an_unrecorded_sample_count_is_refused_rather_than_asserted() {
     let mut facts = CapabilityFacts::empty();
-    facts.record_route(RouteQuery::BufferToBuffer, RouteSupport::Unsupported);
+    facts.record_texture_support(
+        &TextureSupportQuery::new(
+            TextureDimension::D2,
+            TextureFormat::R8Unorm,
+            TextureUsage::SAMPLED,
+            1,
+        ),
+        TextureSupport::Supported(TextureSupportLimits::new(Extent3d::d1(4096), 1, 1)),
+    );
     let enabled = enabled_from(facts);
 
-    assert!(!enabled.route(&RouteQuery::BufferToBuffer).is_supported());
+    assert!(
+        !enabled
+            .texture_support(&TextureSupportQuery::new(
+                TextureDimension::D2,
+                TextureFormat::R8Unorm,
+                TextureUsage::SAMPLED,
+                7,
+            ))
+            .is_supported()
+    );
 }
 
 /// A recorded positive answer carries its facts back out, so a caller that asked
@@ -139,7 +257,7 @@ fn a_recorded_positive_texture_answer_carries_its_maxima() {
 
     let mut facts = CapabilityFacts::empty();
     facts.record_texture_support(
-        query.clone(),
+        &query,
         TextureSupport::Supported(TextureSupportLimits::new(Extent3d::d1(8192), 1, 1)),
     );
     let enabled = enabled_from(facts);
@@ -159,7 +277,7 @@ fn a_buffer_query_can_be_recorded_as_unsupported() {
     let query = BufferSupportQuery::new(BufferUsage::STORAGE);
 
     let mut facts = CapabilityFacts::empty();
-    facts.record_buffer_support(query, BufferSupport::Unsupported);
+    facts.record_buffer_support(query.usage(), BufferSupport::Unsupported);
     let enabled = enabled_from(facts);
 
     assert!(!enabled.buffer_support(&query).is_supported());
@@ -366,16 +484,15 @@ fn a_difference_anywhere_in_the_facts_yields_a_different_id() {
     );
     assert_ne!(
         baseline,
-        differ(&|facts| facts.record_buffer_support(
-            BufferSupportQuery::new(BufferUsage::STORAGE),
-            BufferSupport::Unsupported
-        )),
+        differ(
+            &|facts| facts.record_buffer_support(BufferUsage::STORAGE, BufferSupport::Unsupported)
+        ),
         "a buffer support answer"
     );
     assert_ne!(
         baseline,
         differ(&|facts| facts.record_texture_support(
-            TextureSupportQuery::new(
+            &TextureSupportQuery::new(
                 TextureDimension::D2,
                 TextureFormat::R8Unorm,
                 TextureUsage::SAMPLED,
@@ -455,8 +572,17 @@ fn two_queries_differing_only_inside_a_key_yield_different_ids() {
 /// `view_formats` are a `Vec` the caller builds, so two callers asking the same
 /// question with the same formats in different orders are asking the same
 /// question. This is the same property as the first test above, one level down.
+/// A query's alternate view formats are not part of what enumeration records, so
+/// two queries that differ only in that list describe one contract.
+///
+/// This replaces a test that asserted the *encoder* sorted the list. That sort
+/// existed because the whole query was the recorded key and a `Vec` in a key makes
+/// two spellings of one question compare unequal; the field is not in the key any
+/// more, so the property holds by construction and there is no sort left to test.
+/// What is worth asserting is the property itself, and it is asserted from the
+/// outside — through the id — rather than by reading the key type.
 #[test]
-fn a_keys_own_collection_is_order_independent() {
+fn a_queries_view_format_list_does_not_reach_the_contract() {
     let query = |first: TextureFormat, second: TextureFormat| {
         TextureSupportQuery::new(
             TextureDimension::D2,
@@ -467,22 +593,43 @@ fn a_keys_own_collection_is_order_independent() {
         .with_view_format(first)
         .with_view_format(second)
     };
-    let id_of = |query: TextureSupportQuery| {
+    let id_of = |query: &TextureSupportQuery| {
         let mut facts = CapabilityFacts::empty();
         facts.record_texture_support(query, TextureSupport::Unsupported);
         enabled_from(facts).compatibility_id()
     };
+    let without = {
+        let mut facts = CapabilityFacts::empty();
+        facts.record_texture_support(
+            &TextureSupportQuery::new(
+                TextureDimension::D2,
+                TextureFormat::R8Unorm,
+                TextureUsage::SAMPLED,
+                1,
+            ),
+            TextureSupport::Unsupported,
+        );
+        enabled_from(facts).compatibility_id()
+    };
 
     assert_eq!(
-        id_of(query(
+        id_of(&query(
             TextureFormat::Rgba8Unorm,
             TextureFormat::Rgba8UnormSrgb
         )),
-        id_of(query(
+        id_of(&query(
             TextureFormat::Rgba8UnormSrgb,
             TextureFormat::Rgba8Unorm
         )),
         "the same two view formats in the other order are the same question"
+    );
+    assert_eq!(
+        id_of(&query(
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb
+        )),
+        without,
+        "declaring view formats asks the same shape question as declaring none"
     );
 }
 
