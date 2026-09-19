@@ -4,81 +4,29 @@ version.workspace = true
 edition = "2024"
 rust-version = "1.87"
 license = "MIT OR Apache-2.0"
-description = "DX12/Vulkan fixed GPU execution, a three-layer GL-family path, and closed WebGL2/WebGPU adapters for Fluxel"
+description = "Fluxel's portable RHI: capability-layered GPU execution for native and browser backends"
 repository = "https://github.com/fluxel-project/fluxel-rendering"
-readme = "README.md"
 
-[dependencies]
-fluxel-rendergraph = { path = "../rendergraph", version = "0.15.0" }
-glow = { version = "=0.18.0", optional = true }
-raw-window-handle = "0.6.2"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-khronos-egl = { version = "=6.0.0", features = ["dynamic"], optional = true }
-
+# Feature names are carried over from the pre-rewrite manifest because sibling
+# crates and examples select a backend through them, and a name that disappears
+# breaks their manifests rather than their code. Each backend's lowering lands
+# under `src/backend/<name>`; until it does, a feature selects nothing and the
+# API tree deliberately compiles with none of them enabled. A feature is not a
+# support claim: `08-governance-freeze-checklist.md` section 60 requires the
+# capability matrix and the evidence before a backend may be described as
+# supported.
 [features]
 default = ["dx12", "vulkan"]
-dx12 = ["wgpu-hal/dx12", "dep:windows"]
-vulkan = ["wgpu-hal/vulkan", "dep:ash", "dep:gpu-allocator", "naga/spv-out"]
-# Platform-neutral GL-family API/state contracts. Provider-specific features
-# will add only their own Layer 1 dependencies; this feature owns no window or
-# event loop.
+dx12 = []
+vulkan = []
 gl-family = []
-# Native provider slices consume Host-supplied raw handles; they do not create
-# a window or own an event loop.
-native-gl-wgl = ["gl-family", "dep:glow", "dep:glutin_wgl_sys"]
-native-gles-egl = ["gl-family", "dep:glow", "dep:khronos-egl"]
-# The browser executor is deliberately separate from the Windows HAL path.
-# It is meaningful only for wasm32 and keeps WebGL objects private to RHI.
-webgl2 = ["gl-family", "dep:glow", "dep:js-sys", "dep:web-sys"]
-# The WebGPU executor is a wasm-only, closed browser seam.  It intentionally
-# uses the browser WebGPU bindings rather than introducing wgpu as a second
-# public RHI. Browser objects are kept behind the private wasm executor.
-webgpu = ["dep:js-sys", "dep:web-sys", "dep:wasm-bindgen-futures"]
-# Enables doc-hidden native conformance observation helpers for sibling-crate
-# hardware fixtures. It does not expose mapping, command, or HAL APIs.
+native-gl-wgl = ["gl-family"]
+native-gles-egl = ["gl-family"]
+webgl2 = ["gl-family"]
+webgpu = []
 test-support = []
 
-[target.'cfg(windows)'.dependencies]
-# Patched wgpu-hal 30.0.1 (upstream fix gfx-rs/wgpu#10221 for DX12 validation
-# error #1361). A path dependency inside this repository, not a root
-# `[patch.crates-io]`: a patch only applies where it is declared, so it never
-# reached consumers that depend on this crate through Git.
-wgpu-hal = { package = "fluxel-wgpu-hal", path = "../wgpu-hal", version = "30.0.1", default-features = false }
-wgpu-types = { version = "=30.0.0", default-features = false, features = ["std"] }
-windows = { version = "=0.62.2", optional = true, features = ["Win32_Graphics_Direct3D12"] }
-ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
-# Suballocation for the owned native backends (lead 3F, decision E). Not a
-# wgpu-family crate: it binds `ash` and the Direct3D 12 API directly, which is why
-# it is reused rather than written here. Declared with no default features and
-# enabled per backend through this crate's own features, exactly as the borrowed
-# layer above does.
-gpu-allocator = { version = "0.28", optional = true, default-features = false }
-glutin_wgl_sys = { version = "=0.6.1", optional = true }
-log = "0.4"
-naga = { version = "=30.0.1", features = ["wgsl-in"] }
-# wgpu-hal 30 permits ordered-float 5.x, but 5.5 raised its MSRV to 1.90.
-# Keep the workspace's declared 1.87 contract until upstream narrows that range.
-ordered-float = "=5.1.0"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = { version = "0.3.77", optional = true }
-wasm-bindgen = "0.2.100"
-wasm-bindgen-futures = { version = "0.4.50", optional = true }
-web-sys = { version = "0.3.77", optional = true, features = [
-    "Window", "Document", "HtmlCanvasElement", "WebGl2RenderingContext", "WebGlBuffer",
-    "WebGlFramebuffer", "WebGlSampler", "WebGlTexture",
-    "WebGlProgram", "WebGlShader", "WebGlSync", "WebGlUniformLocation",
-    "WebGlVertexArrayObject", "WebGlContextEvent", "console",
-    # Typed surfaces for the Layer 1 browser command domains: query objects
-    # (occlusion), active-resource reflection, and context-attribute evidence.
-    "WebGlQuery", "WebGlActiveInfo", "WebGlContextAttributes",
-    # The browser's monotonic clock.  The measurement workload takes its clock
-    # from its caller rather than reaching for one, because `std::time::Instant`
-    # does not exist on `wasm32-unknown-unknown` -- it panics -- and this is what
-    # the browser surface hands it instead.
-    "Performance",
-] }
+[dependencies]
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"

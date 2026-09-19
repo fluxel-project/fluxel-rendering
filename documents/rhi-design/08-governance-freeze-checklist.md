@@ -384,6 +384,11 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] Receipt provides both overall completion and `completion_for(PlanPoint)`.
 - [x] A backend lacking fine-grained completion may let multiple PlanPoints share a more conservative token.
 - [x] After a successful submission, ReadbackTicket binds the corresponding point completion.
+      The portable half is in place: `ReadbackTicket::completion()` returns
+      `Option<CompletionPoint>`, and a crate-private `set_completion` records the point once,
+      first-write-wins, before the status advances. The call that performs the binding belongs
+      to the submit path, which is not built yet — so the *binding* is unwitnessed until a
+      backend port lands, while the contract and the accessor are frozen.
 - [x] RHI retirement may depend on the completion of the last batch actually used, without forcing whole-plan completion.
 - [x] Pending completion must become terminal after DeviceLost, not remain Pending forever.
 - [x] P0 provides no blocking completion wait; `wait_idle` remains only for shutdown/diagnostics.

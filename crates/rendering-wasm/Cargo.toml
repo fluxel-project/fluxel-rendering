@@ -14,8 +14,21 @@ crate-type = ["cdylib", "rlib"]
 # The browser bridge owns the AssetStore the renderer's residency keys on, so it
 # takes the same pinned asset revision the renderer's `gpu-residency` does.
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "22c4eb0e199575aa71b59f3abc6ec3f72d934b9a", version = "=0.13.4" }
-fluxel-renderer = { path = "../renderer", features = ["gpu-upload", "gpu-residency", "webgl2-residency"] }
-fluxel-rhi = { path = "../rhi", default-features = false, features = ["webgl2", "webgpu"] }
+# TEMPORARILY DISABLED 2026-09-20 — RHI contract-first rewrite (0.16-plan.md
+# section 0.3: the whole `crates/rhi` was renamed to `crates/rhi-old` and rebuilt
+# from the specification, with no backend lowered yet). The renderer's
+# `gpu-upload` path and this crate's WebGL2 bridge are written against the old
+# RHI surface and cannot compile until the backend ports land. The dependency is
+# commented out rather than removed — restoring these two lines is the whole
+# change once steps 2-6 of the rewrite are done.
+#
+# The reason this crate's manifest is the lever: a crate that compiles to nothing
+# on the host target (`#![cfg(target_arch = "wasm32")]` in src/lib.rs) still
+# participates in workspace feature unification, so leaving these features on
+# would keep `cargo check --workspace` red on Windows for the entire rewrite.
+# fluxel-renderer = { path = "../renderer", features = ["gpu-upload", "gpu-residency", "webgl2-residency"] }
+fluxel-renderer = { path = "../renderer" }
+# fluxel-rhi = { path = "../rhi", default-features = false, features = ["webgl2", "webgpu"] }
 js-sys = "0.3.77"
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
