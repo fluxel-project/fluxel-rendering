@@ -43,6 +43,9 @@ windows = { version = "=0.62.2", optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    # `D3D_FEATURE_LEVEL`, which `D3D12CreateDevice` takes. It lives in the
+    # Direct3D module even though the call is a Direct3D 12 one.
+    "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D12",
 ] }
 

@@ -42,14 +42,19 @@
 //!
 //! # Where this tree stands, stated plainly
 //!
-//! **Only the native boundary ([`ffi`]) is written.** There is no provider, no
-//! device, and no resource lowering yet, and no claim of DX12 support exists
-//! until the shared contract suite and a real Windows run close on one revision.
+//! **The native boundary ([`ffi`]) and the provider ([`provider`]) are written.**
+//! There is no resource, shader, pipeline, command or presentation lowering yet,
+//! and no claim of DX12 support exists until the shared contract suite and a real
+//! Windows run close on one revision.
+//!
 //! The order the rest arrives in is fixed by a dependency rather than by
-//! preference: DX12 answers every capability question (`CheckFeatureSupport`,
+//! preference. DX12 answers every capability question (`CheckFeatureSupport`,
 //! format support, sampler feedback, resource-binding tiers) through a live
-//! device, so device creation has to land before adapter enumeration can report
-//! honest instance data — a provider that enumerated first would have to invent
-//! the facts it reported.
+//! device, and an `AdapterInfo` carries a capability snapshot that must have no
+//! holes in it, so **device creation comes before capability enumeration, and
+//! capability enumeration comes before adapter enumeration** — which is why
+//! `ProviderBackend::enumerate_adapters` refuses today while `request_device`
+//! works (see the note in [`provider`]).
 
 mod ffi;
+mod provider;

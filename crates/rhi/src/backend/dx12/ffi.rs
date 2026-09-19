@@ -117,13 +117,6 @@ impl NativeFailure {
 /// away the `HRESULT` has thrown away the only thing that distinguishes "the
 /// driver refused this root signature" from "the driver refused this heap", and
 /// re-deriving it later is not possible.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the DX12 provider that calls this is not written; see the status note in `super`"
-    )
-)]
 pub(super) fn to_rhi(error: &WinError, operation: &'static str) -> RhiError {
     let failure = NativeFailure::classify(error);
     RhiError::new(
@@ -144,13 +137,6 @@ pub(super) fn to_rhi(error: &WinError, operation: &'static str) -> RhiError {
 /// the first NUL and the whole buffer is used when there is none — the
 /// alternative, trusting the terminator, reads past the driver's text on exactly
 /// the adapters with the longest names.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the DX12 provider's adapter enumeration is what calls this, and it is not written"
-    )
-)]
 pub(super) fn adapter_name(description: &[u16]) -> String {
     let end = description
         .iter()

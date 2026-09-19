@@ -147,11 +147,16 @@ pub struct ObjectId(u64);
 
 impl ObjectId {
     /// Mints the process-local ID of a newly created object.
+    ///
+    /// Its callers today are the contract tests and the DX12 provider's device
+    /// counter. The expectation below is gated on `all(not(test), not(feature =
+    /// "dx12"))` — on both, because the tests are callers too: with the provider
+    /// compiled out *and* no test build, nothing reaches this at all.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "called by the contract tests; the object-creating operations that mint one are not written"
+            reason = "the only callers are the contract tests and the DX12 provider's device counter; with that backend compiled out, the object-creating operations that will mint most ids are not written either"
         )
     )]
     pub(crate) fn new(value: u64) -> Self {

@@ -323,4 +323,39 @@ impl DeviceRequirements {
     pub fn required_route_support(&self) -> &[RouteQuery] {
         &self.required_routes
     }
+
+    /// Whether this asks for nothing at all.
+    ///
+    /// The one question a backend may ask about a requirement set without
+    /// answering it. A backend that cannot yet compare requirements against
+    /// device facts must be able to tell "nothing was required, so there is
+    /// nothing to check" apart from "something was required and I did not look" —
+    /// and it must refuse the second rather than proceed. Preferred features are
+    /// included: they do not fail a request, but a request that asks for them and
+    /// gets a device that was never asked is still an unanswered request.
+    ///
+    /// Crate-private, because a public `is_empty` would invite a caller to treat
+    /// an empty requirement set as a meaningful portable state rather than as the
+    /// degenerate case it is.
+    ///
+    /// The expectation is gated on `dx12` being *off*, and on the feature alone:
+    /// the DX12 provider's device request is the only caller in any build, so a
+    /// test build reaches this no more than a library build does. The
+    /// requirement-versus-facts comparison that would read it is not written.
+    #[cfg_attr(
+        not(feature = "dx12"),
+        expect(
+            dead_code,
+            reason = "the only non-test caller is the DX12 provider's device request; with that backend compiled out, the requirement-versus-facts comparison that will also read it is not written"
+        )
+    )]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.required_features.is_empty()
+            && self.preferred_features.is_empty()
+            && self.limit_requirements.is_empty()
+            && self.required_buffers.is_empty()
+            && self.required_textures.is_empty()
+            && self.required_bindings.is_empty()
+            && self.required_routes.is_empty()
+    }
 }

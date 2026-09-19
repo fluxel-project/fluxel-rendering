@@ -87,15 +87,51 @@ impl AdapterId {
     ///
     /// Crate-private: section 3 forbids a caller constructing a token, and only
     /// the provider that owns the adapter can know either half.
+    ///
+    /// The DX12 provider's snapshot construction and the contract tests are its
+    /// callers, so the expectation is gated on `all(not(test), not(feature =
+    /// "dx12"))`: it is absent whenever either kind of caller can exist. See
+    /// `backend::dx12::provider` for why neither half is sufficient alone.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "called by the contract tests; adapter enumeration is what mints one"
+            reason = "the only callers are the contract tests and the DX12 provider's snapshot construction; with that backend compiled out, adapter enumeration is what will publish one"
         )
     )]
     pub(crate) fn new(provider: u64, serial: u64) -> Self {
         Self { provider, serial }
+    }
+
+    /// The provider-chosen serial, for the backend that must map it back.
+    ///
+    /// This is the lowering channel and nothing else: it exists because a backend
+    /// holding an adapter it enumerated has to recognize the id it minted for
+    /// that adapter, and section 5.4 forbids the id itself being the native
+    /// handle. The provider half is *not* reachable this way — a backend is not
+    /// entitled to decide whether an id belongs to it, because section 3.1 puts
+    /// that check in the portable layer before any backend call.
+    ///
+    /// The DX12 provider's adapter selection is its caller. What makes the
+    /// expectation below true is not whether a caller *exists* but whether it is
+    /// *compiled*: with `dx12` off, the provider is not built and nothing reaches
+    /// this.
+    ///
+    /// The gate here names the feature alone, unlike the four items beside it,
+    /// and the difference is not an oversight: the contract tests call those four
+    /// and deliberately do not call this one. It is a lowering channel, and a test
+    /// that exercised it would be asserting against the encoding the provider and
+    /// the portable layer agreed on — which is the provider's business, not the
+    /// portable layer's.
+    #[cfg_attr(
+        not(feature = "dx12"),
+        expect(
+            dead_code,
+            reason = "the only non-test caller is the DX12 provider's adapter selection; with that backend compiled out, nothing reaches this"
+        )
+    )]
+    pub(crate) fn serial(self) -> u64 {
+        self.serial
     }
 }
 
@@ -124,11 +160,16 @@ impl AdapterInfo {
     ///
     /// Crate-private: snapshots come from a provider's enumeration, and a
     /// caller-built one would describe hardware that was never probed.
+    ///
+    /// A real backend is now among its callers — the DX12 provider assembles one
+    /// from an adapter it actually selected — but the provider still does not
+    /// *publish* it, so the expectation stands, gated on that backend being
+    /// compiled out and the build not being a test one.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "a real backend's enumeration is what mints a snapshot; the only caller today is the test-build mock backend"
+            reason = "the only callers are the contract tests and the DX12 provider, which never publishes the snapshot; with that backend compiled out, adapter enumeration is what will"
         )
     )]
     pub(crate) fn new(
@@ -348,7 +389,27 @@ impl PlatformProvider {
     ///
     /// Returns a [`DeviceRequest`] rather than a device, because creation may be
     /// genuinely asynchronous on the platforms this crate serves.
+    ///
+    /// # Errors
+    ///
+    /// [`RhiErrorKind::InvalidUsage`] when the descriptor names an adapter that
+    /// belongs to a different provider. That check is made here rather than in
+    /// the backend for the reason section 3.1 gives for every identity check:
+    /// it must be O(1) and it must precede any native call. A backend left to
+    /// notice would have to compare a serial against its own adapters, and the
+    /// serials of two providers are independent counters — a foreign id could
+    /// match one of them and quietly select a *different* adapter than the one
+    /// the caller meant.
     pub fn request_device(&self, desc: DeviceRequestDescriptor) -> RhiResult<DeviceRequest> {
+        if let AdapterSelection::Explicit(adapter) = desc.selection() {
+            if adapter.provider != self.state.instance.as_u64() {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "adapter belongs to a different provider",
+                )
+                .at("PlatformProvider::request_device"));
+            }
+        }
         let native = self.state.native.request_device(&desc)?;
         Ok(DeviceRequest::new(self.clone(), native))
     }

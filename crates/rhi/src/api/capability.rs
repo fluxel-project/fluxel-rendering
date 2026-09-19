@@ -241,11 +241,22 @@ impl AvailableCapabilities {
     /// Crate-private: a caller may not fabricate capability facts, because a
     /// fabricated snapshot would let a caller bypass the very device query
     /// section 7.2 requires correctness to read.
+    ///
+    /// Its caller is the DX12 provider, and note what that call site does *not*
+    /// do with the result: it never publishes this snapshot, because an empty one
+    /// would panic the first time a caller asked it anything. See the note in
+    /// `backend::dx12::provider`.
+    ///
+    /// The expectation is absent whenever *any* caller could exist, and the
+    /// contract tests are callers too: it is gated on `all(not(test), not(feature
+    /// = "dx12"))` rather than on either alone. See `backend::dx12::provider` for
+    /// why a `not(test)` expectation on an item the provider references would sit
+    /// unfulfilled whenever that backend is compiled.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "filled by adapter enumeration when the backend port lands"
+            reason = "the only callers are the contract tests and the DX12 provider; with that backend compiled out, adapter enumeration is what will publish one"
         )
     )]
     pub(crate) fn new() -> Self {
