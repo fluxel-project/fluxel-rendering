@@ -92,6 +92,10 @@ use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::platform::{AdapterId, AdapterInfo, BackendKind, DeviceLossInfo, DeviceStatus};
 use crate::api::presentation::PresentationTarget;
+use crate::api::submission::{
+    LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
+    SubmissionLaneInfo,
+};
 use crate::base::platform::{
     DeviceBackend, DeviceRequestBackend, ProviderBackend, RequestProgress,
 };
@@ -305,10 +309,31 @@ impl Dx12Provider {
             .at("Dx12Provider::request_device")
         })?;
 
+        // One lane, because Direct3D 12 gives a device exactly one direct command
+        // queue that the portable layer can name before the fact enumeration
+        // exists: several logical lanes do not promise hardware overlap (section
+        // 10.3), and reporting more than one would be claiming a scheduling
+        // structure this backend has not established.
+        //
+        // `COMPUTE` is deliberately absent. A direct queue does accept dispatches,
+        // but the fact table beside this cannot say whether the `Compute` feature
+        // is enabled — it records nothing yet — and a lane accepting compute work
+        // on a device whose own contract denies the feature is the exact
+        // half-consistency section 7.2's base guarantee is written against.
+        // Under-reporting a domain costs a refusal a caller can restructure around;
+        // the bit goes in when the enumeration that justifies it lands.
+        let submission = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
+            SubmissionLaneId::new(0),
+            SubmissionLaneClass::General,
+            LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+        )]);
+
         Ok(Arc::new(Dx12Device {
             adapter: deferred_adapter_info(&candidate, self.instance),
             object: next_object(),
             _device: device,
+            facts: CapabilityFacts::empty(),
+            submission,
             liveness: Mutex::new(Liveness {
                 status: DeviceStatus::Active,
                 loss: None,
@@ -453,6 +478,30 @@ pub(crate) struct Dx12Device {
     /// the reason the exemption is correct here is the paragraph above.
     _device: ID3D12Device,
     liveness: Mutex<Liveness>,
+    /// The contract this device reports.
+    ///
+    /// # The gap, stated where it is created
+    ///
+    /// Empty, and that is not a placeholder for "no capabilities" — it is "not
+    /// enumerated yet". D3D12 answers every one of these questions through
+    /// `CheckFeatureSupport` and the format-support tables, and reading them off a
+    /// live device is the next block of this series; until it lands, the only
+    /// honest thing this backend can say is that it has asked nothing.
+    ///
+    /// What that costs, precisely, so it is not discovered later: the four
+    /// accessors that answer by exact key lookup —
+    /// [`crate::api::capability::EnabledCapabilities::buffer_support`],
+    /// `texture_support`, `binding_support`, and `route` — panic on a query this
+    /// table holds no entry for, because
+    /// [`crate::api::capability::CapabilityFacts::recorded`] refuses to guess
+    /// between `Supported` and `Unsupported`. The feature, limit, format, and
+    /// submission accessors answer correctly from this table; they simply answer
+    /// "no" and "none", which for an unenumerated device is under-reporting rather
+    /// than a false claim. Nothing in the tree calls the four yet, so this is a gap
+    /// waiting for its first caller rather than a live defect.
+    facts: CapabilityFacts,
+    /// The lanes this device offers.
+    submission: SubmissionCapabilities,
 }
 
 impl Dx12Device {
@@ -490,6 +539,14 @@ impl DeviceBackend for Dx12Device {
 
     fn adapter_info(&self) -> &AdapterInfo {
         &self.adapter
+    }
+
+    fn capability_facts(&self) -> CapabilityFacts {
+        self.facts.clone()
+    }
+
+    fn submission_capabilities(&self) -> SubmissionCapabilities {
+        self.submission.clone()
     }
 
     fn object_id(&self) -> ObjectId {
@@ -557,6 +614,14 @@ impl DeviceBackend for ArcDevice {
 
     fn adapter_info(&self) -> &AdapterInfo {
         self.0.adapter_info()
+    }
+
+    fn capability_facts(&self) -> CapabilityFacts {
+        self.0.capability_facts()
+    }
+
+    fn submission_capabilities(&self) -> SubmissionCapabilities {
+        self.0.submission_capabilities()
     }
 
     fn object_id(&self) -> ObjectId {

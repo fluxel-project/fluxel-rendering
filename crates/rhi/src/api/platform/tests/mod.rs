@@ -15,15 +15,20 @@
 
 use std::sync::Arc;
 
+use crate::api::capability::{CapabilityFacts, EnabledCapabilities};
 use crate::api::error::RhiErrorKind;
 use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
-use crate::api::platform::requirements::{DeviceRequirements, LimitKey};
+use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{
-    AdapterId, AdapterSelection, BackendKind, Device, DeviceLossInfo, DeviceRequestDescriptor,
-    DeviceStatus, PlatformProvider,
+    AdapterId, AdapterSelection, BackendKind, Device, DeviceLossInfo, DeviceRequest,
+    DeviceRequestDescriptor, DeviceStatus, PlatformProvider, RequestStatus,
 };
 use crate::api::presentation::PresentationTarget;
 use crate::api::resource::buffer::{BufferDescriptor, BufferUsage};
+use crate::api::submission::{
+    LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
+    SubmissionLaneInfo,
+};
 use crate::base::mock::{MockDevice, MockEnumeration, MockProvider};
 
 /// A device identity under the instance/generation pair section 3 defines.
@@ -56,7 +61,11 @@ fn provider() -> PlatformProvider {
 /// without its own handle could not mark anything lost.
 fn live_device() -> (Device, Arc<MockDevice>) {
     let native = MockDevice::new(BackendKind::Dx12, mock_provider().adapter());
-    (Device::new(identity(1, 1), native.clone()), native)
+    (
+        Device::new(identity(1, 1), native.clone())
+            .expect("the mock backend offers a lane accepting raster and copy work"),
+        native,
+    )
 }
 
 /// A headless request descriptor with no requirements.
@@ -297,6 +306,123 @@ fn a_device_reports_backend_facts() {
         first,
         "two devices must not share a process-local object ID"
     );
+}
+
+/// The whole chain, end to end: a backend's enumeration becomes the contract a
+/// portable device reports.
+///
+/// This is the test that section 7.1's interning rule is *reachable* through, and
+/// reachability is the part worth asserting: before this block, every path from a
+/// caller to [`Device::capabilities`] ended at a documented `unimplemented!()`, so
+/// the id, the fingerprint, and the fact table were all unreachable from outside
+/// the crate no matter how well tested they were in isolation.
+///
+/// The id is checked against an independently interned contract rather than
+/// against a number. Section 7.1 makes the id the interning of the canonical
+/// semantics, so the property that matters is *equal contracts intern together*
+/// — and a golden integer would pin the encoding without checking that, which is
+/// the mistake `api::tests::capability` explains in its own header.
+#[test]
+fn a_created_device_reports_the_contract_its_backend_enumerated() {
+    let mut request = request_over(declared_facts(), declared_submission());
+    let RequestStatus::Ready(device) = request.poll().expect("the first poll resolves") else {
+        panic!("the mock provider needs no further polls");
+    };
+
+    let capabilities = device.capabilities();
+    assert!(
+        capabilities.supports_feature(OptionalFeature::Compute),
+        "the feature the backend recorded is the feature the device reports"
+    );
+    assert_eq!(capabilities.limit(LimitKey::MaxBufferSize), Some(1 << 28));
+    assert_eq!(capabilities.submission().lanes().len(), 2);
+
+    // The same contract, interned a second time. Equality here is the property a
+    // `CompiledGraph` keys reuse on, so it is asserted against a *fresh* interning
+    // rather than against an id the device is already holding — the latter would
+    // pass even if the device reported a constant.
+    let expected = EnabledCapabilities::from_facts(declared_facts(), declared_submission());
+    assert_eq!(capabilities.compatibility_id(), expected.compatibility_id());
+    assert_eq!(capabilities.fingerprint(), expected.fingerprint());
+}
+
+/// Section 7.2's base guarantee is checked where both halves of the enumeration are
+/// in hand, and a backend that violates it produces no device at all.
+///
+/// `BackendFailure` rather than `Unsupported`, and the difference is the point:
+/// every device is required to have a lane accepting `RASTER | COPY`, so a snapshot
+/// without one is a defect in the enumeration rather than a capability a caller may
+/// not use. Section 6.9 is what makes refusing it here the right place — a portable
+/// defect must not be handed down for a driver or a validation layer to discover.
+#[test]
+fn a_device_whose_enumeration_violates_the_base_guarantee_is_refused() {
+    // A lane that takes raster work and nothing else: no lane accepts the
+    // `RASTER | COPY` pair the guarantee requires.
+    let lanes_without_copy = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
+        SubmissionLaneId::new(0),
+        SubmissionLaneClass::Graphics,
+        LaneWorkDomains::RASTER,
+    )]);
+
+    let mut defective = request_over(declared_facts(), lanes_without_copy);
+    let error = defective
+        .poll()
+        .expect_err("the base guarantee is violated, so no device may be published");
+    assert_eq!(error.kind(), RhiErrorKind::BackendFailure);
+    assert!(
+        error.message().contains("raster and copy"),
+        "the error names which half of the guarantee was violated: {}",
+        error.message()
+    );
+
+    // The request is retired by the failure, exactly as it is by a backend that
+    // reports an error: section 5.9's diagram has two terminal outcomes, and a
+    // request left looking in-flight would invite a caller to poll a request that
+    // has already given up.
+    assert_eq!(
+        defective.poll().expect_err("completed").kind(),
+        RhiErrorKind::InvalidUsage
+    );
+}
+
+/// A device request over a mock provider that enumerates `facts` and `lanes`.
+fn request_over(facts: CapabilityFacts, lanes: SubmissionCapabilities) -> DeviceRequest {
+    let instance = DeviceInstanceId::new(1);
+    PlatformProvider::new(
+        BackendKind::Dx12,
+        instance,
+        mock_provider()
+            .with_capability_facts(facts)
+            .with_submission_capabilities(lanes)
+            .shared(),
+    )
+    .request_device(headless_request())
+    .expect("the mock provider starts a request")
+}
+
+/// The facts the contract test has the provider enumerate, built a second time so
+/// the test can intern them independently.
+fn declared_facts() -> CapabilityFacts {
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(OptionalFeature::Compute);
+    facts.record_limit(LimitKey::MaxBufferSize, 1 << 28);
+    facts
+}
+
+/// The lanes that test has the provider enumerate.
+fn declared_submission() -> SubmissionCapabilities {
+    SubmissionCapabilities::new(vec![
+        SubmissionLaneInfo::new(
+            SubmissionLaneId::new(0),
+            SubmissionLaneClass::General,
+            LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+        ),
+        SubmissionLaneInfo::new(
+            SubmissionLaneId::new(1),
+            SubmissionLaneClass::Compute,
+            LaneWorkDomains::COMPUTE,
+        ),
+    ])
 }
 
 /// A clone is the same execution domain; a second request is not.

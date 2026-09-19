@@ -57,6 +57,7 @@
 //! the 0.16 plan: the definition site is the owner, and a file follows the meaning
 //! of a type rather than the chapter number that happens to state it.
 
+use crate::api::capability::{encode_entry, write_section};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 
 pub mod builder;
@@ -92,15 +93,27 @@ impl SubmissionLaneId {
     /// Crate-private: a lane exists because a device reported it, so only the
     /// enumeration path may name one. A caller that could mint a lane ID could
     /// ask for work on a lane the device never offered.
+    ///
+    /// The expectation is gated on `all(not(test), not(feature = "dx12"))` rather
+    /// than on either alone, for the reason `api::capability` records on
+    /// `AvailableCapabilities::from_facts`: with the DX12 backend compiled out, the
+    /// only remaining enumeration is the mock's, which lives in the test build —
+    /// so a `not(test)` expectation would sit unfulfilled as soon as `dx12` is on,
+    /// and an ungated constructor is a hard error in the lib when both are off.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "minted by device enumeration when the backend port lands"
+            reason = "minted by the two backends that enumerate lanes: the DX12 provider and the test-build mock"
         )
     )]
     pub(crate) fn new(value: u16) -> Self {
         Self(value)
+    }
+
+    /// Writes this identity into a canonical encoding.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0.to_le_bytes());
     }
 }
 
@@ -121,6 +134,24 @@ pub enum SubmissionLaneClass {
     Compute,
     /// Classified for copy work.
     Transfer,
+}
+
+impl SubmissionLaneClass {
+    /// Writes this class into a canonical encoding.
+    ///
+    /// A tag byte rather than a discriminant read back out of the type: the enum
+    /// is `#[non_exhaustive]`, so a reader that cast the value to an integer would
+    /// be encoding a number this crate does not promise. The wildcard-free match
+    /// makes a new variant a compile error here, which is what keeps the encoding
+    /// injective as the vocabulary grows.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(match self {
+            Self::General => 0,
+            Self::Graphics => 1,
+            Self::Compute => 2,
+            Self::Transfer => 3,
+        });
+    }
 }
 
 /// The execution domains a unit of recorded work contains or a lane accepts.
@@ -165,6 +196,11 @@ impl LaneWorkDomains {
     /// are reported rather than being treated as a valid empty set.
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// Writes this domain set into a canonical encoding.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(self.0);
     }
 }
 
@@ -213,11 +249,13 @@ impl SubmissionLaneInfo {
     ///
     /// Crate-private: a lane's domains are a device answer, and a caller-built
     /// one would be a claim about hardware nobody asked.
+    ///
+    /// Gated on the same pair as [`SubmissionLaneId::new`], for the same reason.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "filled by device enumeration when the backend port lands"
+            reason = "assembled by the two backends that enumerate lanes: the DX12 provider and the test-build mock"
         )
     )]
     pub(crate) fn new(
@@ -246,6 +284,20 @@ impl SubmissionLaneInfo {
     /// the one section 40.1 requires a batch to respect.
     pub fn domains(&self) -> LaneWorkDomains {
         self.domains
+    }
+
+    /// Writes this lane's whole fact set into a canonical encoding.
+    ///
+    /// All three fields, including the class. The class is explicitly *not* a
+    /// legality answer (see [`SubmissionLaneClass`]), so it cannot change what a
+    /// batch is allowed to do — and encoding it anyway is deliberate. Two devices
+    /// that agree on every domain set but classify their lanes differently are two
+    /// different device models, and a fingerprint that compared them equal would be
+    /// describing a contract it does not hold.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        self.id.encode_into(out);
+        self.class.encode_into(out);
+        self.domains.encode_into(out);
     }
 }
 
@@ -284,6 +336,21 @@ pub enum LaneDependencyRoute {
     /// the order restructures — a single lane always exists (the base guarantee
     /// below) — or observes completion on the host first.
     Unsupported,
+}
+
+impl LaneDependencyRoute {
+    /// Writes this route into a canonical encoding.
+    ///
+    /// Tagged by variant rather than by a stored integer, for the reason given on
+    /// [`SubmissionLaneClass::encode_into`].
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(match self {
+            Self::Ordered => 0,
+            Self::Gpu => 1,
+            Self::Collapse => 2,
+            Self::Unsupported => 3,
+        });
+    }
 }
 
 /// The lanes one device offers, and how they can be ordered against each other.
@@ -329,16 +396,19 @@ impl SubmissionCapabilities {
     /// its facts in. A caller may not fabricate either, because a fabricated lane
     /// set would let a caller name a lane the device never offered.
     ///
-    /// The expectation is `not(test)`, because its callers today are the contract
-    /// tests that pass an empty lane set to
-    /// `EnabledCapabilities::from_facts` and the shape test that reaches
-    /// `submission()`. It has no non-test caller in any configuration yet: the
-    /// device-request path is what will assemble a real lane set here, and that
-    /// path is portable rather than DX12-specific, so the gate names no backend
-    /// feature.
+    /// Its callers are the backends, each describing the lanes it actually offers:
+    /// the mock backend's default and the DX12 direct queue. A backend that
+    /// assembled the lane set itself and then reported a feature the lanes do not
+    /// match is refused at [`crate::api::platform::Device::new`], which is the one
+    /// place both halves are in hand.
+    ///
+    /// Gated on the same pair as [`SubmissionLaneId::new`], for the same reason.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "filled when a device request completes")
+        all(not(test), not(feature = "dx12")),
+        expect(
+            dead_code,
+            reason = "assembled by the two backends that enumerate lanes: the DX12 provider and the test-build mock"
+        )
     )]
     pub(crate) fn new(lanes: Vec<SubmissionLaneInfo>) -> Self {
         Self {
@@ -428,13 +498,6 @@ impl SubmissionCapabilities {
     /// produced it rather than a capability a caller may not use. Reporting it at
     /// enumeration time is what keeps root section 4's rule — a portable defect
     /// may not be handed down for a driver to discover — true for lanes.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the device request path calls this when the backend port lands"
-        )
-    )]
     pub(crate) fn validate_base_guarantee(&self, compute_enabled: bool) -> RhiResult<()> {
         let base = LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY);
         if !self.lanes.iter().any(|lane| lane.domains.contains(base)) {
@@ -456,6 +519,48 @@ impl SubmissionCapabilities {
             ));
         }
         Ok(())
+    }
+
+    /// Writes this snapshot into a canonical encoding.
+    ///
+    /// Two sections, both sorted by their encoded bytes, because neither carries an
+    /// order the contract depends on: [`Self::lanes`] reports the order the backend
+    /// enumerated in, and [`Self::record_dependency_route`] appends in the order
+    /// routes were discovered. A lane's *identity* is [`SubmissionLaneId`], so two
+    /// devices reporting the same lanes in a different order offer the same
+    /// contract and must encode to the same bytes.
+    ///
+    /// The routes are written as one entry per `(from, to, route)` rather than as a
+    /// matrix, because that is the shape the facts are held in and a matrix would
+    /// write an entry for every pair the backend never answered — turning "no route
+    /// was reported" into a recorded [`LaneDependencyRoute::Unsupported`], which is
+    /// a different and stronger statement.
+    ///
+    /// See [`crate::api::capability::CapabilityFacts::canonical_bytes`] for the rules
+    /// this contributes to.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        write_section(
+            out,
+            self.lanes
+                .iter()
+                .map(|lane| encode_entry(|out| lane.encode_into(out), |_| {}))
+                .collect(),
+        );
+        write_section(
+            out,
+            self.routes
+                .iter()
+                .map(|(from, to, route)| {
+                    encode_entry(
+                        |out| {
+                            from.encode_into(out);
+                            to.encode_into(out);
+                        },
+                        |out| route.encode_into(out),
+                    )
+                })
+                .collect(),
+        );
     }
 }
 

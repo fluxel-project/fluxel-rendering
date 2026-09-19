@@ -18,18 +18,28 @@
 //!
 //! # Scope limits, recorded rather than implied
 //!
-//! Two things this backend deliberately does not yet do, so that neither is
-//! mistaken for an omission:
+//! Where its capability table answers completely and where it does not, so that
+//! neither reading is left to be guessed:
 //!
-//! - **It does not supply a capability table.** [`DeviceBackend`] here has no
-//!   `capabilities` method because building one is a separate design question:
-//!   `EnabledCapabilities` panics on a query it has no recorded answer for
-//!   ("enumeration must record an answer for every query a caller can ask"), so a
-//!   conforming backend has to record the *complete* table, and deciding how that
-//!   table is enumerated and interned is not part of building the seam. Until it
-//!   is decided, `Device::capabilities` keeps its documented `unimplemented!()`
-//!   and no creation verb's validation becomes reachable — which is the honest
-//!   state, not a regression.
+//! - **Complete where an answer is a finite decision.** `supports_feature`,
+//!   `limit`, `limits`, `format`, `submission`, `compatibility_id`, and
+//!   `fingerprint` all answer from a table that a test fills in whole. A test that
+//!   wants a device with facts asks for them by name
+//!   ([`MockDevice::with_capabilities`]), so the contract under examination is
+//!   visible in the test rather than implied by a default.
+//! - **Not yet complete where a query key is unbounded, and this is a real gap.**
+//!   `buffer_support`, `texture_support`, `binding_support`, and `route` answer by
+//!   exact key lookup and *panic* on a key enumeration did not record — see
+//!   [`crate::api::capability::CapabilityFacts::recorded`] — and a
+//!   [`crate::api::format::TextureSupportQuery`] carries a `Vec` of view formats,
+//!   so no backend can record an entry for every query that type admits. Deciding
+//!   whether those four should be tables or decision procedures over bounded facts
+//!   is the next block of this series, and it is a question about the capability
+//!   model rather than about this mock. Until it is settled this backend records
+//!   nothing there, and the four accessors panic with a message that says so.
+//!   Nothing in the tree calls them yet: `Device::capabilities` was
+//!   `unimplemented!()` until the contract could be interned at all, so every call
+//!   site that exists today is new, and none of them is one of these four.
 //! - **It does not lower anything that creates a resource.** Buffer, texture,
 //!   view, sampler, shader, binding, pipeline, recorder, submission, and
 //!   presentation seams do not exist yet; when they do, this backend grows the
@@ -55,6 +65,10 @@ use crate::api::platform::{
     DeviceStatus,
 };
 use crate::api::presentation::PresentationTarget;
+use crate::api::submission::{
+    LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
+    SubmissionLaneInfo,
+};
 use crate::base::platform::{
     DeviceBackend, DeviceRequestBackend, ProviderBackend, RequestProgress,
 };
@@ -106,6 +120,10 @@ pub(crate) struct MockProvider {
     /// How many `poll` calls report `Pending` before the request resolves.
     pending_steps: u32,
     outcome: MockOutcome,
+    /// The contract the device this provider produces will report.
+    facts: CapabilityFacts,
+    /// The lanes that device will offer.
+    submission: SubmissionCapabilities,
 }
 
 impl MockProvider {
@@ -124,7 +142,29 @@ impl MockProvider {
             presents: true,
             pending_steps: 0,
             outcome: MockOutcome::Succeeds,
+            facts: CapabilityFacts::empty(),
+            submission: default_lanes(),
         }
+    }
+
+    /// Makes the device this provider produces report `facts`.
+    ///
+    /// The adapter snapshot this provider hands out keeps its own, separate facts;
+    /// that asymmetry is section 7.2's, not an oversight — `Available` is what the
+    /// adapter offers and `Enabled` is what the device got, and the two are
+    /// deliberately not the same object here.
+    pub(crate) fn with_capability_facts(mut self, facts: CapabilityFacts) -> Self {
+        self.facts = facts;
+        self
+    }
+
+    /// Makes the device this provider produces offer `submission`.
+    pub(crate) fn with_submission_capabilities(
+        mut self,
+        submission: SubmissionCapabilities,
+    ) -> Self {
+        self.submission = submission;
+        self
     }
 
     /// The adapter this provider reports, under this provider's identity.
@@ -202,6 +242,8 @@ impl ProviderBackend for MockProvider {
                 MockOutcome::Succeeds => MockOutcome::Succeeds,
                 MockOutcome::Fails(message) => MockOutcome::Fails(message.clone()),
             },
+            facts: self.facts.clone(),
+            submission: self.submission.clone(),
         }))
     }
 }
@@ -212,6 +254,8 @@ struct MockRequest {
     adapter: AdapterInfo,
     remaining: u32,
     outcome: MockOutcome,
+    facts: CapabilityFacts,
+    submission: SubmissionCapabilities,
 }
 
 impl DeviceRequestBackend for MockRequest {
@@ -221,6 +265,10 @@ impl DeviceRequestBackend for MockRequest {
             return Ok(RequestProgress::Pending);
         }
         match &self.outcome {
+            // The contract is cloned into the device rather than moved, because
+            // this borrows `self` and the request is single-shot by contract: the
+            // portable layer retires a request the moment it reports `Ready`, so
+            // this arm runs at most once and the tables are copied once.
             MockOutcome::Succeeds => Ok(RequestProgress::Ready(Box::new(MockDevice {
                 backend: self.backend,
                 adapter: self.adapter.clone(),
@@ -229,6 +277,8 @@ impl DeviceRequestBackend for MockRequest {
                     status: DeviceStatus::Active,
                     loss: None,
                 }),
+                facts: self.facts.clone(),
+                submission: self.submission.clone(),
             }))),
             MockOutcome::Fails(message) => {
                 Err(RhiError::new(RhiErrorKind::Unsupported, message.clone()))
@@ -243,12 +293,34 @@ struct Liveness {
     loss: Option<DeviceLossInfo>,
 }
 
+/// The lane set a mock device offers unless a test says otherwise.
+///
+/// One lane accepting `RASTER | COPY`, which is the smallest set section 10's base
+/// guarantee accepts. Deliberately not including `COMPUTE`: the guarantee's compute
+/// clause is conditional on the `Compute` feature being enabled, and the default
+/// facts enable no feature — so a default that also accepted compute work would
+/// describe a device more capable than its own fact table says, which is exactly
+/// the kind of half-consistent enumeration
+/// [`crate::api::submission::SubmissionCapabilities::validate_base_guarantee`]
+/// exists to catch.
+fn default_lanes() -> SubmissionCapabilities {
+    SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
+        SubmissionLaneId::new(0),
+        SubmissionLaneClass::General,
+        LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+    )])
+}
+
 /// A device that answers from memory.
 pub(crate) struct MockDevice {
     backend: BackendKind,
     adapter: AdapterInfo,
     object: ObjectId,
     liveness: Mutex<Liveness>,
+    /// What this device reports it can do.
+    facts: CapabilityFacts,
+    /// The lanes it reports offering.
+    submission: SubmissionCapabilities,
 }
 
 impl MockDevice {
@@ -258,7 +330,29 @@ impl MockDevice {
     /// observe a loss has to keep a handle of its own: the portable
     /// [`crate::api::platform::Device`] owns the backend, and the backend — not
     /// the handle — is what observes a native loss.
+    ///
+    /// The capabilities are empty facts over [`default_lanes`], which is the
+    /// honest minimum: this backend performs no lowering and probes no hardware, so
+    /// a device built here genuinely has no optional feature and no limit to
+    /// report. A test that wants a device *with* facts asks for them through
+    /// [`Self::with_capabilities`].
     pub(crate) fn new(backend: BackendKind, adapter: AdapterInfo) -> Arc<Self> {
+        Self::with_capabilities(backend, adapter, CapabilityFacts::empty(), default_lanes())
+    }
+
+    /// The same, with the capability contract a test wants to examine.
+    ///
+    /// A separate constructor rather than a setter, so that a mock device's
+    /// contract is fixed before the portable [`crate::api::platform::Device`] wraps
+    /// it and interns it. Section 7.2 makes an enabled contract immutable; a
+    /// backend that could still change its facts after the id was minted would make
+    /// the id describe something other than the device holds.
+    pub(crate) fn with_capabilities(
+        backend: BackendKind,
+        adapter: AdapterInfo,
+        facts: CapabilityFacts,
+        submission: SubmissionCapabilities,
+    ) -> Arc<Self> {
         Arc::new(Self {
             backend,
             adapter,
@@ -267,6 +361,8 @@ impl MockDevice {
                 status: DeviceStatus::Active,
                 loss: None,
             }),
+            facts,
+            submission,
         })
     }
 
@@ -302,6 +398,14 @@ impl DeviceBackend for MockDevice {
         &self.adapter
     }
 
+    fn capability_facts(&self) -> CapabilityFacts {
+        self.facts.clone()
+    }
+
+    fn submission_capabilities(&self) -> SubmissionCapabilities {
+        self.submission.clone()
+    }
+
     fn object_id(&self) -> ObjectId {
         self.object
     }
@@ -330,12 +434,17 @@ impl DeviceBackend for MockDevice {
 /// because the handle owns the backend and cannot hand it back.
 pub(crate) fn device_for_test(identity: DeviceIdentity) -> Device {
     Device::new(identity, mock_native(BackendKind::Dx12))
+        .expect("the mock backend offers a lane accepting raster and copy work")
 }
 
 /// A portable device handle paired with the backend that owns its liveness.
 pub(crate) fn paired_device_for_test(identity: DeviceIdentity) -> (Device, Arc<MockDevice>) {
     let native = mock_native(BackendKind::Dx12);
-    (Device::new(identity, native.clone()), native)
+    (
+        Device::new(identity, native.clone())
+            .expect("the mock backend offers a lane accepting raster and copy work"),
+        native,
+    )
 }
 
 /// A mock backend for a device, under the DX12 family and one adapter.

@@ -40,6 +40,7 @@ use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, ObjectId};
 use crate::api::platform::provider::{AdapterInfo, BackendKind};
+use crate::api::platform::requirements::OptionalFeature;
 use crate::base::platform::DeviceBackend;
 
 /// Whether a device is still usable.
@@ -117,6 +118,26 @@ pub struct Device {
     /// rule; keeping it on the side that can see the event is what makes the copy
     /// authoritative.
     native: Arc<dyn DeviceBackend>,
+    /// What this device can actually do, built once from the backend's
+    /// enumeration and never rebuilt.
+    ///
+    /// Interned here and nowhere else. Section 7.1 makes the compatibility id the
+    /// interning of the contract's semantics, so the id has to be minted at the one
+    /// moment the whole contract is in hand — which is construction. A device whose
+    /// id were computed per call could answer two different ids for one contract.
+    ///
+    /// Shared rather than owned, because [`Device`] is cloned liberally and a clone
+    /// is the same domain under the same identity (section 6.1): cloning the maps
+    /// would copy a few hundred entries per clone to re-derive an answer that
+    /// cannot have changed. `Arc` makes a clone cheap and keeps the guarantee that
+    /// every clone reports the *same* id, which is what section 7.1's reuse rule
+    /// depends on.
+    ///
+    /// Not a second authority for anything: it is immutable by contract (section
+    /// 7.2), the backend owns no copy of it, and it is never replaced — loss does
+    /// not re-point it, because section 6.5 makes recovery a new request with a new
+    /// identity.
+    capabilities: Arc<EnabledCapabilities>,
 }
 
 impl Device {
@@ -125,8 +146,45 @@ impl Device {
     /// Crate-private: section 6.1 ties identity minting to a completed device
     /// request, and section 6.1's other half is that a backend does not mint its
     /// own — so only the request path that did both may call this.
-    pub(crate) fn new(identity: DeviceIdentity, native: Arc<dyn DeviceBackend>) -> Self {
-        Self { identity, native }
+    ///
+    /// # Why this can fail
+    ///
+    /// It reads the backend's enumeration, interns it, and checks section 7.2's
+    /// base guarantee in one place. That check is a portable rule about a device
+    /// fact, and putting it here rather than in the request path means it holds for
+    /// *every* way a device comes into existence — including the mock backend's
+    /// direct construction, where a test device would otherwise be exempt from the
+    /// contract the tests exist to check.
+    ///
+    /// A failure here is [`RhiErrorKind::BackendFailure`] rather than
+    /// [`RhiErrorKind::Unsupported`]: every device is required to have a lane
+    /// accepting `RASTER | COPY`, so a snapshot without one is a defect in the
+    /// enumeration that produced it, not a capability the caller may not use. The
+    /// device is not published, which is the point — section 6.9 forbids handing a
+    /// portable defect down for a driver or a validation layer to discover later.
+    ///
+    /// # Errors
+    ///
+    /// [`RhiErrorKind::BackendFailure`] when the enumeration violates the base
+    /// guarantee, naming which half of it was violated.
+    pub(crate) fn new(identity: DeviceIdentity, native: Arc<dyn DeviceBackend>) -> RhiResult<Self> {
+        let capabilities = EnabledCapabilities::from_facts(
+            native.capability_facts(),
+            native.submission_capabilities(),
+        );
+        // The `Compute` feature is read back out of the contract that was just
+        // interned rather than asked of the backend separately: section 7.2's rule
+        // is about the *enabled* feature set, and reading it from anywhere else
+        // would let the two answers disagree at exactly the moment the rule is
+        // being checked.
+        capabilities
+            .submission()
+            .validate_base_guarantee(capabilities.supports_feature(OptionalFeature::Compute))?;
+        Ok(Self {
+            identity,
+            native,
+            capabilities: Arc::new(capabilities),
+        })
     }
 
     /// This device's identity.
@@ -169,19 +227,14 @@ impl Device {
     ///
     /// so a feature the adapter reported as available may still be absent here,
     /// and a caller that planned against the adapter would be wrong.
+    ///
+    /// The contract was interned once, at construction, so this is a borrow of
+    /// storage the device already owns rather than a query: two calls, and two
+    /// calls on two clones of one device, return the same
+    /// [`crate::api::capability::CapabilityCompatibilityId`] — which is what
+    /// section 7.1's `CompiledGraph` reuse rule reads.
     pub fn capabilities(&self) -> &EnabledCapabilities {
-        unimplemented!(
-            "the enabled capability table is not built, and the seam does not \
-             carry one yet on purpose. `EnabledCapabilities` panics on a query it \
-             has no recorded answer for, so a conforming backend must record the \
-             *complete* table, and how that table is enumerated and interned is a \
-             design question this crate has not settled. A backend that recorded \
-             only the answers its tests happened to ask for would turn every \
-             unrecorded query into a panic in release code. Until the interning \
-             rule exists, no creation verb's validation is reachable on an active \
-             device: `Device::require_active` and the ownership checks still \
-             answer, and everything downstream of this call does not"
-        )
+        &self.capabilities
     }
 
     /// Whether the device is still usable.

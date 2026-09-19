@@ -132,6 +132,40 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// is why this must answer even on a provider that does not enumerate.
     fn adapter_info(&self) -> &AdapterInfo;
 
+    /// What this device's enumeration observed it can do.
+    ///
+    /// Returned by value rather than borrowed, because the portable layer takes
+    /// ownership of these facts and interns them: section 7.1 makes the
+    /// compatibility id a function of the facts, and a backend that minted its own
+    /// id could hand two domains the same one. The backend's job is to describe
+    /// what it saw; deciding what that description is *called* is not its job.
+    ///
+    /// Section 7.2's completeness rule makes this a demanding method rather than a
+    /// courtesy. `CapabilityFacts` answers a query it holds no entry for by
+    /// panicking, because neither `Supported` nor `Unsupported` is an honest answer
+    /// to a question enumeration never asked, and the caller cannot tell a missing
+    /// entry from a real refusal. So this must account for every query a caller can
+    /// put to [`crate::api::capability::EnabledCapabilities`] — not a
+    /// representative sample of them.
+    ///
+    /// Like [`Self::adapter_info`], this must answer even on a device whose
+    /// provider does not enumerate: it describes the device that exists, not the
+    /// candidates that might have been chosen.
+    fn capability_facts(&self) -> crate::api::capability::CapabilityFacts;
+
+    /// The logical submission lanes this device offers.
+    ///
+    /// Separate from [`Self::capability_facts`] because they are a different kind
+    /// of fact — lanes are what a batch is added to, not what a query is asked
+    /// against — and because section 7.2's base guarantee relates the two: every
+    /// device has a lane accepting `RASTER | COPY`, and one accepting `COMPUTE`
+    /// when that feature is enabled. The portable layer is what checks that
+    /// relation, at the one moment both halves are in hand
+    /// ([`crate::api::submission::SubmissionCapabilities::validate_base_guarantee`]),
+    /// so a backend that reported a compute lane and no `Compute` feature is
+    /// refused rather than published.
+    fn submission_capabilities(&self) -> crate::api::submission::SubmissionCapabilities;
+
     /// This device's process-local object ID.
     ///
     /// Section 3 gives every RHI object an [`ObjectId`] distinct from any native

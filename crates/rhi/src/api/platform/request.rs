@@ -165,10 +165,15 @@ impl DeviceRequest {
                 // looking in-flight.
                 self.complete = true;
                 let identity = self.provider.mint_identity();
+                // `Device::new` reads the backend's enumeration and checks section
+                // 7.2's base guarantee. Its failure is a terminal outcome like any
+                // other, and the request is already retired above, so the `?`
+                // leaves it in the state section 5.9's diagram requires rather than
+                // looking in-flight.
                 Ok(RequestStatus::Ready(Device::new(
                     identity,
                     Arc::from(native),
-                )))
+                )?))
             }
             Err(error) => {
                 // Section 5.9's diagram has exactly two terminal outcomes, so an

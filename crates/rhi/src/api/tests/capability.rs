@@ -27,7 +27,10 @@ use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsag
 use crate::api::resource::route::{RouteCapabilities, RouteQuery, RouteSupport};
 use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
 use crate::api::shader::ShaderStages;
-use crate::api::submission::SubmissionCapabilities;
+use crate::api::submission::{
+    LaneDependencyRoute, LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass,
+    SubmissionLaneId, SubmissionLaneInfo,
+};
 
 /// Both levels answer the same vocabulary, which is what lets a caller write one
 /// comparison instead of two.
@@ -511,6 +514,171 @@ fn the_fingerprint_moves_exactly_when_the_id_does() {
         CapabilityFingerprint([0u8; 32]),
         "an empty contract still has a digest of its own, not a zeroed one"
     );
+}
+
+/// Section 7.1 calls the token the interning of "canonical *EnabledCapabilities*
+/// semantics", and `submission()` is declared on `EnabledCapabilities` and on
+/// nothing else — so a lane layout is part of the contract the id stands for.
+///
+/// The consequence is what makes this worth a test rather than a reading: section
+/// 7.1 keys `CompiledGraph` correctness reuse on the id, and a compiled plan names
+/// the lanes it submits to. Two devices that agreed on every query fact but laid
+/// out lanes differently would otherwise intern to one id, and a plan interned
+/// under the first would be reused against a device that cannot accept its
+/// batches.
+///
+/// The same facts are used on both sides, so the only thing the two ids can differ
+/// by is the lane snapshot.
+#[test]
+fn two_devices_differing_only_in_their_lanes_have_different_ids() {
+    let one_lane = enabled_over(lanes(&[(
+        SubmissionLaneId::new(0),
+        SubmissionLaneClass::General,
+        LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+    )]));
+    let two_lanes = enabled_over(lanes(&[
+        (
+            SubmissionLaneId::new(0),
+            SubmissionLaneClass::General,
+            LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+        ),
+        (
+            SubmissionLaneId::new(1),
+            SubmissionLaneClass::Compute,
+            LaneWorkDomains::COMPUTE,
+        ),
+    ]));
+
+    assert_ne!(
+        one_lane.compatibility_id(),
+        two_lanes.compatibility_id(),
+        "a device offering a second lane is not the same contract as one that does not"
+    );
+    assert_ne!(
+        one_lane.fingerprint(),
+        two_lanes.fingerprint(),
+        "the fingerprint covers the same bytes as the id, so it moves with it"
+    );
+}
+
+/// A lane's *identity* is its [`SubmissionLaneId`], not its position in the list
+/// the backend happened to enumerate in.
+///
+/// `SubmissionCapabilities::lanes` documents itself as reporting "the order it
+/// reported them", so the order is observable — which is exactly why the encoding
+/// must not inherit it. Two devices offering the same lanes in a different
+/// reported order offer the same contract.
+#[test]
+fn lanes_reported_in_a_different_order_intern_to_the_same_id() {
+    let raster = (
+        SubmissionLaneId::new(0),
+        SubmissionLaneClass::General,
+        LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+    );
+    let compute = (
+        SubmissionLaneId::new(1),
+        SubmissionLaneClass::Compute,
+        LaneWorkDomains::COMPUTE,
+    );
+
+    assert_eq!(
+        enabled_over(lanes(&[raster, compute])).compatibility_id(),
+        enabled_over(lanes(&[compute, raster])).compatibility_id(),
+    );
+}
+
+/// The cross-lane routes are a reported fact like any other, and they are not
+/// derivable from the lane list: two lanes say which domains each accepts, not
+/// whether a native dependency primitive exists between them. An id that ignored
+/// them would call a device that cannot order two lanes equivalent to one that can.
+#[test]
+fn a_reported_dependency_route_changes_the_id() {
+    let plain = two_split_lanes();
+    let mut routed = plain.clone();
+    routed.record_dependency_route(
+        SubmissionLaneId::new(0),
+        SubmissionLaneId::new(1),
+        LaneDependencyRoute::Gpu,
+    );
+
+    assert_ne!(
+        enabled_over(plain).compatibility_id(),
+        enabled_over(routed).compatibility_id(),
+    );
+}
+
+/// The mirror of the lane-order test, for the route table.
+///
+/// `record_dependency_route` retains-then-pushes, so the table's order is the
+/// order a backend discovered routes in. That is a discovery artifact like the
+/// lane list's order, and the encoding must not inherit it.
+#[test]
+fn routes_recorded_in_a_different_order_intern_to_the_same_id() {
+    let mut forward = two_split_lanes();
+    forward.record_dependency_route(
+        SubmissionLaneId::new(0),
+        SubmissionLaneId::new(1),
+        LaneDependencyRoute::Gpu,
+    );
+    forward.record_dependency_route(
+        SubmissionLaneId::new(1),
+        SubmissionLaneId::new(0),
+        LaneDependencyRoute::Collapse,
+    );
+
+    let mut backward = two_split_lanes();
+    backward.record_dependency_route(
+        SubmissionLaneId::new(1),
+        SubmissionLaneId::new(0),
+        LaneDependencyRoute::Collapse,
+    );
+    backward.record_dependency_route(
+        SubmissionLaneId::new(0),
+        SubmissionLaneId::new(1),
+        LaneDependencyRoute::Gpu,
+    );
+
+    assert_eq!(
+        enabled_over(forward).compatibility_id(),
+        enabled_over(backward).compatibility_id(),
+    );
+}
+
+/// Two lanes split by domain, with no route recorded between them.
+fn two_split_lanes() -> SubmissionCapabilities {
+    lanes(&[
+        (
+            SubmissionLaneId::new(0),
+            SubmissionLaneClass::Graphics,
+            LaneWorkDomains::RASTER,
+        ),
+        (
+            SubmissionLaneId::new(1),
+            SubmissionLaneClass::Transfer,
+            LaneWorkDomains::COPY,
+        ),
+    ])
+}
+
+/// Builds a lane set from `(id, class, domains)` triples.
+fn lanes(
+    entries: &[(SubmissionLaneId, SubmissionLaneClass, LaneWorkDomains)],
+) -> SubmissionCapabilities {
+    SubmissionCapabilities::new(
+        entries
+            .iter()
+            .map(|(id, class, domains)| SubmissionLaneInfo::new(*id, *class, *domains))
+            .collect(),
+    )
+}
+
+/// An enabled contract over empty facts and the given lanes.
+///
+/// Empty facts on purpose in the lane tests: the question is whether the lane
+/// snapshot reaches the encoding, and holding the query facts at "nothing" is what
+/// makes the lane snapshot the only difference between the two sides.
+fn enabled_over(submission: SubmissionCapabilities) -> EnabledCapabilities {
+    EnabledCapabilities::from_facts(CapabilityFacts::empty(), submission)
 }
 
 // ---------------------------------------------------------------------------

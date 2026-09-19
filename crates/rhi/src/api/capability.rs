@@ -247,11 +247,31 @@ impl CapabilityFacts {
     /// - **The domain string goes first and carries a version.** See
     ///   [`ENCODING_DOMAIN`].
     ///
+    /// # Why the submission snapshot is a parameter
+    ///
+    /// Because the token this feeds is not an id for these facts — it is an id for
+    /// the whole [`EnabledCapabilities`] contract, and section 7.1 says so in as
+    /// many words: it is "produced by RHI through process-wide interning of
+    /// canonical *EnabledCapabilities* semantics". A device's lanes are part of
+    /// those semantics: `submission()` is declared on `EnabledCapabilities` and on
+    /// nothing else, so a lane layout that this encoding ignored is a contract
+    /// difference nothing would record.
+    ///
+    /// The consequence is not academic. Section 7.1 keys `CompiledGraph`
+    /// correctness reuse on the id, and a compiled plan names the lanes it submits
+    /// to. Two devices that agreed on every query fact but laid out lanes
+    /// differently would otherwise intern to one id, and a plan interned under the
+    /// first would be reused against a device that cannot accept its batches.
+    ///
+    /// The section goes last, after every query section, so that the bytes a
+    /// backend can produce without knowing anything about lanes are a prefix of the
+    /// bytes it produces with them.
+    ///
     /// The bytes are compared exactly by [`intern`] and hashed by
     /// [`EnabledCapabilities::from_facts`]. The comparison is what carries
     /// correctness and the hash is what carries provenance, per section 7.1 and
     /// the module documentation above.
-    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
+    pub(crate) fn canonical_bytes(&self, submission: &SubmissionCapabilities) -> Vec<u8> {
         let mut out = Vec::with_capacity(4096);
         out.extend_from_slice(ENCODING_DOMAIN);
 
@@ -350,6 +370,8 @@ impl CapabilityFacts {
                 })
                 .collect(),
         );
+
+        submission.encode_into(&mut out);
 
         out
     }
@@ -538,7 +560,17 @@ const ENCODING_DOMAIN: &[u8] = b"fluxel-rhi/capability-facts/v1";
 /// A section with no value — a feature, a view-compatibility pair — passes a
 /// no-op for `value` rather than a second helper, so that the element's *key* is
 /// still the thing that gets length-prefixed and sorted.
-fn encode_entry(key: impl FnOnce(&mut Vec<u8>), value: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+///
+/// Crate-visible because a capability contract is not only query facts:
+/// [`crate::api::submission::SubmissionCapabilities::encode_into`] contributes the
+/// lane snapshot to the same byte string and sorts its two sections the same way.
+/// The alternative would be a second copy of the two rules that make the encoding
+/// canonical — length-prefix the key, sort the section — in a module that would
+/// then have to keep them in step by hand.
+pub(crate) fn encode_entry(
+    key: impl FnOnce(&mut Vec<u8>),
+    value: impl FnOnce(&mut Vec<u8>),
+) -> Vec<u8> {
     let mut key_bytes = Vec::new();
     key(&mut key_bytes);
     let mut entry = Vec::with_capacity(key_bytes.len() + 8);
@@ -552,7 +584,9 @@ fn encode_entry(key: impl FnOnce(&mut Vec<u8>), value: impl FnOnce(&mut Vec<u8>)
 ///
 /// The sort is what makes the encoding independent of the order a provider
 /// recorded its facts in; see [`CapabilityFacts::canonical_bytes`].
-fn write_section(out: &mut Vec<u8>, mut entries: Vec<Vec<u8>>) {
+///
+/// Crate-visible for the reason given on [`encode_entry`].
+pub(crate) fn write_section(out: &mut Vec<u8>, mut entries: Vec<Vec<u8>>) {
     entries.sort_unstable();
     out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
     for entry in &entries {
@@ -737,21 +771,18 @@ impl EnabledCapabilities {
     /// bytes and the fingerprint hashes them; section 7.1 lets only the first
     /// carry correctness and only the second cross a process boundary.
     ///
-    /// The submission lanes are the caller's, not defaulted here. Section 7.2's
-    /// base lane guarantee is checked by `SubmissionCapabilities`' own validator,
-    /// which the device-request path calls; a constructor that also enforced it
-    /// here would put the rule in two places.
+    /// The submission lanes are the caller's, not defaulted here, and the
+    /// canonical encoding is over both halves — see
+    /// [`CapabilityFacts::canonical_bytes`]. Section 7.2's base lane guarantee is
+    /// checked by `SubmissionCapabilities`' own validator, which
+    /// [`crate::api::platform::Device::new`] calls; a constructor that also
+    /// enforced it here would put the rule in two places.
     ///
-    /// The expectation is `not(test)` rather than gated on a backend feature,
-    /// because no non-test caller exists in any configuration yet: the
-    /// device-request path is what will call this, and that path is portable
-    /// rather than DX12-specific.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "filled when a device request completes")
-    )]
+    /// That caller settles what the two tokens are minted *over*: the id is the
+    /// interning of the whole enabled contract, so it is minted at the one moment
+    /// the whole contract is in hand.
     pub(crate) fn from_facts(facts: CapabilityFacts, submission: SubmissionCapabilities) -> Self {
-        let canonical = facts.canonical_bytes();
+        let canonical = facts.canonical_bytes(&submission);
         let compatibility_id = intern(&canonical);
         let fingerprint = CapabilityFingerprint(sha256(&canonical));
         Self {
