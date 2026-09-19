@@ -78,6 +78,7 @@
 //!
 //! ```text
 //! base/platform   provider, device request, device   (specification module 01)
+//! base/resource   buffer, texture, view, sampler     (specification module 02)
 //! base/mock       the CPU/mock backend
 //! ```
 //!
@@ -87,6 +88,15 @@
 //! not in advance of a consumer.
 
 pub(crate) mod platform;
+
+// The resource chapter's seam. It is a separate module from `platform` because
+// the two seams are reached from different handles and grow for different
+// reasons: a platform backend is asked about the domain, a resource backend
+// carries one native object. The split is not cosmetic — it is what keeps
+// `base/platform.rs` from becoming the file that must know about every resource
+// in the crate, the same argument adjudication A28 makes for keeping
+// `create_buffer` in the resource chapter rather than in `api::platform`.
+pub(crate) mod resource;
 
 // Beside the seam rather than under `api`, because it is crate-private machinery
 // with no portable vocabulary of its own. Its consumer is the capability

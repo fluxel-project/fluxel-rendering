@@ -54,6 +54,7 @@ use crate::api::resource::sampler::{CompareFunction, Sampler, SamplerDescriptor}
 use crate::api::resource::texture::{Texture, TextureDescriptor, TextureUsage};
 use crate::api::resource::view::{TextureView, TextureViewDescriptor, TextureViewDimension};
 use crate::api::shader::ShaderStages;
+use crate::api::tests::fixture;
 
 // ---------------------------------------------------------------------------
 // Fixtures.
@@ -124,7 +125,7 @@ fn generous_limits() -> BindGroupLimits {
 }
 
 fn buffer(id: u64, size: u64, usage: BufferUsage) -> Buffer {
-    Buffer::new(object(id), device(), BufferDescriptor::new(size, usage))
+    fixture::buffer(object(id), device(), BufferDescriptor::new(size, usage))
 }
 
 fn range_of(id: u64, offset: u64, size: u64, usage: BufferUsage) -> BindingResource {

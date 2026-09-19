@@ -86,6 +86,7 @@ use windows::Win32::Graphics::Dxgi::{
 
 use super::facts;
 use super::ffi;
+use super::resource;
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceInstanceId, ObjectId};
@@ -93,6 +94,7 @@ use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::platform::{AdapterId, AdapterInfo, BackendKind, DeviceLossInfo, DeviceStatus};
 use crate::api::presentation::PresentationTarget;
+use crate::api::resource::buffer::BufferDescriptor;
 use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
     SubmissionLaneInfo,
@@ -100,6 +102,7 @@ use crate::api::submission::{
 use crate::base::platform::{
     DeviceBackend, DeviceRequestBackend, ProviderBackend, RequestProgress,
 };
+use crate::base::resource::BufferBackend;
 
 /// Turns a DXGI adapter LUID into the serial half of an [`AdapterId`].
 ///
@@ -338,8 +341,8 @@ impl Dx12Provider {
 
         Ok(Arc::new(Dx12Device {
             adapter: deferred_adapter_info(&candidate, self.instance),
-            object: next_object(),
-            _device: device,
+            object: ObjectId::next(),
+            device,
             facts,
             submission,
             liveness: Mutex::new(Liveness {
@@ -446,17 +449,6 @@ impl ProviderBackend for Dx12Provider {
     }
 }
 
-/// Process-local object IDs for the devices this backend mints.
-///
-/// Section 3 asks an [`ObjectId`] to be opaque, distinct from any native handle,
-/// and never stable across processes; a process-local counter is all three.
-static NEXT_OBJECT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-/// Mints the next process-local object ID.
-fn next_object() -> ObjectId {
-    ObjectId::new(NEXT_OBJECT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
-}
-
 /// A device's liveness, as this backend observes it.
 struct Liveness {
     status: DeviceStatus,
@@ -471,20 +463,18 @@ pub(crate) struct Dx12Device {
     object: ObjectId,
     /// The Direct3D 12 device.
     ///
-    /// Held rather than dropped because every later chapter lowers through it,
-    /// and because dropping it is what releases the adapter. Kept rather than
-    /// removed even while nothing reads it: removing the field would make
-    /// `request_device` create a device and destroy it in the same call, which
-    /// would pass every test here while allocating nothing.
-    ///
-    /// The leading underscore is the honest name for that, not a way to quiet a
-    /// lint. An `#[expect(dead_code)]` here was tried and is wrong in a way the
-    /// gate catches: rustc does not report an unread field while nothing
+    /// Held rather than dropped because every chapter of this backend lowers
+    /// through it, and because dropping it is what releases the adapter. It was
+    /// named `_device` for as long as nothing read it — the underscore was the
+    /// honest name for an allocation that had to outlive the call that made it,
+    /// not a way to quiet a lint — and the name lost its underscore in the round
+    /// that gave it its first reader, [`Self::create_buffer`]. An
+    /// `#[expect(dead_code)]` was tried in that earlier state and is wrong in a
+    /// way the gate catches: rustc does not report an unread field while nothing
     /// constructs the struct at all, so the expectation sits unfulfilled in a
-    /// non-test build while being fulfilled in a test one — no single attribute
-    /// satisfies both. An underscore-prefixed field is exempt by construction, and
-    /// the reason the exemption is correct here is the paragraph above.
-    _device: ID3D12Device,
+    /// non-test build while being fulfilled in a test one, and no single
+    /// attribute satisfies both.
+    device: ID3D12Device,
     liveness: Mutex<Liveness>,
     /// The contract this device reports.
     ///
@@ -538,8 +528,10 @@ impl Dx12Device {
     /// for the whole identity, so there is no matching `mark_active`.
     ///
     /// Crate-private and reached from the failure path that observes a terminal
-    /// `HRESULT`; that path is the resource and command lowering, which is not
-    /// written, so today only the tests call it.
+    /// `HRESULT`. That path is now written for allocation — see
+    /// [`Self::create_buffer`] — and the command lowering will be the next
+    /// caller; until it lands, allocation failures are the only ones that can
+    /// end a device's identity here.
     pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
         let mut liveness = self.liveness();
         liveness.status = DeviceStatus::Lost;
@@ -590,6 +582,39 @@ impl DeviceBackend for Dx12Device {
         // this becomes a fence wait and this comment is the thing that must be
         // deleted — not quietly outlived.
         Ok(())
+    }
+
+    /// Allocates one buffer, and is the only place in this backend that acts on a
+    /// terminal native failure.
+    ///
+    /// The `HRESULT` alone cannot answer the question that matters here: a
+    /// removed device reports that from an arbitrary call, and this one is as
+    /// likely as any other, so a failure that looks like a plain allocation
+    /// refusal may be the device ending. [`ffi::NativeError`] carries the
+    /// classification beside the error so this reads it once rather than
+    /// re-deriving it, and `Terminal` is the only case that is recorded: marking
+    /// a device lost because one allocation ran out of memory would retire a
+    /// usable device on a transient failure, which is the expensive direction of
+    /// the mistake and the same reasoning [`ffi::NativeFailure`] gives for
+    /// treating a hung device as alive.
+    fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
+        match resource::create_buffer(&self.device, descriptor) {
+            Ok(buffer) => Ok(Box::new(buffer) as Box<dyn BufferBackend>),
+            Err(native) => {
+                if native.failure().is_terminal() {
+                    // Built before the error is consumed, because the summary is
+                    // about the same failure the error reports and the port read
+                    // that follows must answer the same thing.
+                    let summary = format!(
+                        "Direct3D 12 reported a terminal failure while allocating a buffer, \
+                         and section 6.5 makes loss terminal for the identity: {}",
+                        native.as_error()
+                    );
+                    self.mark_lost(DeviceLossInfo::new(summary));
+                }
+                Err(native.into_rhi())
+            }
+        }
     }
 }
 
@@ -657,6 +682,14 @@ impl DeviceBackend for ArcDevice {
 
     fn wait_idle(&self) -> RhiResult<()> {
         self.0.wait_idle()
+    }
+
+    /// Forwarded rather than reimplemented, and that is the point of this
+    /// wrapper: a device that reached the portable layer as `ArcDevice` and one
+    /// the tests hold as `Arc<Dx12Device>` must allocate through the same code,
+    /// or the terminal-failure path above would be exercised by nobody.
+    fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
+        self.0.create_buffer(descriptor)
     }
 }
 

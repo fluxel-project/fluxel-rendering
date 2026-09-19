@@ -14,13 +14,16 @@
 //!
 //! Two conventions run through these tests:
 //!
-//! * Capability answers are *built* here rather than probed, because no device
-//!   exists yet. That is exactly why the validators take them as parameters: the
-//!   rule is decidable without a backend, so it is tested without one.
-//! * Objects are assembled through the crate-private constructors the device
-//!   verbs will call, the same way `tests/identity.rs` reaches the token
-//!   constructors. A test that could not name an object could not test what an
-//!   accessor reports about it.
+//! * Most rules here are decidable without a backend, so most capability answers
+//!   are *built* rather than probed and the validators take them as parameters.
+//!   The exception is the creation verb itself: whether a refusal happens *before*
+//!   a backend is touched is a claim about call order, so those tests run over
+//!   `base::mock`, which counts allocations instead of performing them.
+//! * Objects that only a test needs are assembled through `tests::fixture`, and
+//!   objects that a device verb produces are made by asking the mock device for
+//!   them — the same way `tests/identity.rs` reaches the token constructors. A
+//!   test that could not name an object could not test what an accessor reports
+//!   about it.
 
 mod buffer;
 mod route;
@@ -37,6 +40,7 @@ use crate::api::resource::buffer::{
 };
 use crate::api::resource::route::BufferCopyLayoutLimits;
 use crate::api::resource::texture::{Extent3d, Texture, TextureDescriptor, TextureUsage};
+use crate::api::tests::fixture;
 
 fn identity(instance: u64, generation: u64) -> DeviceIdentity {
     DeviceIdentity::new(
@@ -56,9 +60,14 @@ fn device() -> DeviceIdentity {
 
 /// Asserts a validation result is the exact kind the specification's mapping
 /// requires, and prints the message when it is not.
-fn assert_kind(result: RhiResult<()>, expected: RhiErrorKind) {
+///
+/// Generic over the success type so that a *creation* verb — which answers with a
+/// handle rather than with unit — is asserted the same way a validator is. The
+/// success value is deliberately not returned: every caller here is asserting
+/// that there is no success value.
+fn assert_kind<T>(result: RhiResult<T>, expected: RhiErrorKind) {
     match result {
-        Ok(()) => panic!("expected {expected}, but the operation was accepted"),
+        Ok(_) => panic!("expected {expected}, but the operation was accepted"),
         Err(error) => assert_eq!(error.kind(), expected, "{}", error.message()),
     }
 }
@@ -84,7 +93,7 @@ fn simple_texture_descriptor(usage: TextureUsage) -> TextureDescriptor {
 }
 
 fn buffer_with(usage: BufferUsage, size: u64) -> Buffer {
-    Buffer::new(object(1), device(), BufferDescriptor::new(size, usage))
+    fixture::buffer(object(1), device(), BufferDescriptor::new(size, usage))
 }
 
 fn texture_with(descriptor: TextureDescriptor) -> Texture {

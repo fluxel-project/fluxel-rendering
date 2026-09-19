@@ -88,15 +88,12 @@ impl NativeFailure {
     /// Whether this failure ends the producing device's identity.
     ///
     /// The device layer is its caller — the one that must both set a terminal
-    /// status and return the error — and that layer is not written. It is the
-    /// half of this module's split that [`to_rhi`] deliberately does not use.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the DX12 device layer that must set a terminal status is not written"
-        )
-    )]
+    /// status and return the error — and it is the half of this module's split
+    /// that [`to_rhi`] deliberately does not use. This used to carry an
+    /// `expect(dead_code)` because that layer was not written; the buffer
+    /// allocation path is now such a caller, and an expectation that is no longer
+    /// fulfilled is an error, so the attribute is gone rather than left to
+    /// outlive its reason.
     pub(super) fn is_terminal(self) -> bool {
         matches!(self, Self::Terminal)
     }
@@ -111,22 +108,84 @@ impl NativeFailure {
     }
 }
 
+/// One native failure, classified once and not yet reported.
+///
+/// `to_rhi` is enough for a call site that only has to return an error, and most
+/// have only that to do. The allocation path is the exception: it must *also*
+/// ask whether the failure ended the device, because `DXGI_ERROR_DEVICE_REMOVED`
+/// arrives from an arbitrary call rather than from a dedicated notification, so
+/// a failure that reads as an ordinary refusal may be the device ending. This
+/// type is how that call site reads the classification without classifying the
+/// same `HRESULT` twice — or worse, recovering it from the formatted message,
+/// which would make the message part of the API rather than part of the
+/// diagnosis.
+pub(super) struct NativeError {
+    /// The API v1 error, already built so that the message is formatted in one
+    /// place regardless of which of the two callers asks.
+    error: RhiError,
+    /// What the `HRESULT` meant for the device that produced it.
+    failure: NativeFailure,
+}
+
+impl NativeError {
+    /// Classifies `error` and builds the API v1 error for `operation`.
+    pub(super) fn new(error: &WinError, operation: &'static str) -> Self {
+        let failure = NativeFailure::classify(error);
+        Self {
+            // The numeric code is kept in the message: a DX12 diagnosis that has
+            // thrown away the `HRESULT` has thrown away the only thing that
+            // distinguishes "the driver refused this root signature" from "the
+            // driver refused this heap".
+            error: RhiError::new(
+                failure.kind(),
+                format!(
+                    "Direct3D 12 call failed: {error} (HRESULT {:#010x})",
+                    error.code().0
+                ),
+            )
+            .at(operation),
+            failure,
+        }
+    }
+
+    /// A call that claimed success and produced nothing.
+    ///
+    /// `S_OK` with a null out-parameter is a driver contract violation, and there
+    /// is no `HRESULT` to classify precisely because the call reported that it
+    /// worked. It is therefore [`NativeFailure::Refused`] and not `Terminal`: a
+    /// driver that lies about one allocation has not said the device is gone, and
+    /// retiring a usable device on it would be the expensive direction of the
+    /// mistake.
+    pub(super) fn driver_contract_violation(what: &str, operation: &'static str) -> Self {
+        Self {
+            error: RhiError::new(RhiErrorKind::BackendFailure, what.to_string()).at(operation),
+            failure: NativeFailure::Refused,
+        }
+    }
+
+    /// What this failure meant for the device.
+    pub(super) fn failure(&self) -> NativeFailure {
+        self.failure
+    }
+
+    /// The API v1 error, borrowed so a caller can describe the failure before
+    /// reporting it.
+    pub(super) fn as_error(&self) -> &RhiError {
+        &self.error
+    }
+
+    /// The API v1 error.
+    pub(super) fn into_rhi(self) -> RhiError {
+        self.error
+    }
+}
+
 /// Turns a native failure into the API v1 error for `operation`.
 ///
-/// The numeric code is kept in the message. A DX12 diagnosis that has thrown
-/// away the `HRESULT` has thrown away the only thing that distinguishes "the
-/// driver refused this root signature" from "the driver refused this heap", and
-/// re-deriving it later is not possible.
+/// A thin wrapper over [`NativeError::new`], kept because the call sites that
+/// only return an error read better without naming a type they never look at.
 pub(super) fn to_rhi(error: &WinError, operation: &'static str) -> RhiError {
-    let failure = NativeFailure::classify(error);
-    RhiError::new(
-        failure.kind(),
-        format!(
-            "Direct3D 12 call failed: {error} (HRESULT {:#010x})",
-            error.code().0
-        ),
-    )
-    .at(operation)
+    NativeError::new(error, operation).into_rhi()
 }
 
 /// A Direct3D 12 adapter's human-readable name.

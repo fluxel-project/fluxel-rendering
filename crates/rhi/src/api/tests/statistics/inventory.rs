@@ -443,7 +443,7 @@ fn shape_an_inventory_report_names_its_device(service: &DeviceStatistics) -> Inv
 fn the_device_free_estimate_is_the_half_that_can_be_driven_today() {
     let service = DeviceStatistics::new(device());
 
-    let buffer = crate::api::resource::buffer::Buffer::new(
+    let buffer = crate::api::tests::fixture::buffer(
         crate::api::identity::ObjectId::new(9),
         device(),
         crate::api::resource::buffer::BufferDescriptor::new(

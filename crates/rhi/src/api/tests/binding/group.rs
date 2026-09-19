@@ -5,6 +5,7 @@
 //! fixtures.
 
 use super::*;
+use crate::api::tests::fixture;
 
 // ---------------------------------------------------------------------------
 // Section 22: the packet.
@@ -46,7 +47,7 @@ fn a_resource_from_another_device_is_refused() {
     // Section 3.1: identity is compared in O(1) before any other rule, and there is
     // no implicit migration between devices.
     let layout = layout_from(vec![uniform_slot(0, 64)]);
-    let foreign = Buffer::new(
+    let foreign = fixture::buffer(
         object(1),
         identity(2, 1),
         BufferDescriptor::new(256, BufferUsage::UNIFORM),

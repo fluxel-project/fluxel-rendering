@@ -210,4 +210,31 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// waited — discipline 3 in [`crate::base`], applied to a verb where the
     /// substitute would be invisible.
     fn wait_idle(&self) -> RhiResult<()>;
+
+    /// Allocates the native memory behind one buffer.
+    ///
+    /// The division of labour is the one section 3 draws and the reason this
+    /// returns a backend object rather than a [`crate::api::resource::Buffer`]:
+    /// the *portable* layer mints the identity, retains the descriptor, and runs
+    /// every refusal in [`crate::api::resource::buffer::validate_buffer_descriptor`] —
+    /// so by the time this is reached the request is legal and the backend's only
+    /// remaining question is whether the driver will satisfy it. A backend that
+    /// minted its own identity could hand two domains the same one, and a backend
+    /// that returned the handle would be the second place that decides whether a
+    /// size of zero is acceptable.
+    ///
+    /// Nothing about the descriptor is rewritten on the way through: validation is
+    /// a check and not a normalization, so what section 18.8 recovers from the
+    /// handle is what the caller wrote.
+    ///
+    /// `descriptor.memory` is a preference and never a correctness guarantee
+    /// (section 11.2), so a backend is free to place the allocation wherever its
+    /// own API puts it. What it may not do is substitute a different *kind* of
+    /// allocation to make the request succeed — discipline 3, and the reason a
+    /// buffer that could not be placed device-locally is still not silently
+    /// turned into a host-visible one.
+    fn create_buffer(
+        &self,
+        descriptor: &crate::api::resource::buffer::BufferDescriptor,
+    ) -> RhiResult<Box<dyn crate::base::resource::BufferBackend>>;
 }

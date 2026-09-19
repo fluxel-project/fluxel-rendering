@@ -38,10 +38,13 @@
 //!   `Unsupported`. A test that needs any of the four wants
 //!   [`MockDevice::with_capabilities`] and a table it states itself, which is the
 //!   same thing that makes the contract under test visible.
-//! - **It does not lower anything that creates a resource.** Buffer, texture,
-//!   view, sampler, shader, binding, pipeline, recorder, submission, and
-//!   presentation seams do not exist yet; when they do, this backend grows the
-//!   same way the native ones will.
+//! - **It lowers buffer creation and nothing else.** A
+//!   [`crate::base::resource::BufferBackend`] it hands back is a token holding
+//!   the size and usage it was asked for — no memory, no address, no operation —
+//!   which is enough to prove the portable verb reached the backend and not
+//!   enough to prove anything about a GPU. Texture, view, sampler, shader,
+//!   binding, pipeline, recorder, submission, and presentation seams do not exist
+//!   yet; when they do, this backend grows the same way the native ones will.
 //!
 //! # Why it is `cfg(test)` and not behind `test-support`
 //!
@@ -53,7 +56,9 @@
 //! un-fulfilling the `#[expect(dead_code)]` attributes that guard the
 //! constructors it calls, and trading a real diagnostic for a feature name.
 
-use std::sync::{Arc, Mutex, MutexGuard, atomic::AtomicU64, atomic::Ordering};
+use std::any::Any;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -63,6 +68,9 @@ use crate::api::platform::{
     DeviceStatus,
 };
 use crate::api::presentation::PresentationTarget;
+use crate::api::resource::buffer::{
+    BufferDescriptor, BufferSupport, BufferSupportLimits, BufferUsage,
+};
 use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
     SubmissionLaneInfo,
@@ -70,17 +78,7 @@ use crate::api::submission::{
 use crate::base::platform::{
     DeviceBackend, DeviceRequestBackend, ProviderBackend, RequestProgress,
 };
-
-/// Process-local object IDs for everything this backend mints.
-///
-/// A process-local counter is what section 3 asks [`ObjectId`] to be: opaque,
-/// distinct from any native handle, and never stable across processes.
-static NEXT_OBJECT: AtomicU64 = AtomicU64::new(1);
-
-/// Mints the next process-local object ID.
-fn next_object() -> ObjectId {
-    ObjectId::new(NEXT_OBJECT.fetch_add(1, Ordering::Relaxed))
-}
+use crate::base::resource::BufferBackend;
 
 /// What a mock device request eventually reports.
 ///
@@ -270,13 +268,14 @@ impl DeviceRequestBackend for MockRequest {
             MockOutcome::Succeeds => Ok(RequestProgress::Ready(Box::new(MockDevice {
                 backend: self.backend,
                 adapter: self.adapter.clone(),
-                object: next_object(),
+                object: ObjectId::next(),
                 liveness: Mutex::new(Liveness {
                     status: DeviceStatus::Active,
                     loss: None,
                 }),
                 facts: self.facts.clone(),
                 submission: self.submission.clone(),
+                allocations: AtomicUsize::new(0),
             }))),
             MockOutcome::Fails(message) => {
                 Err(RhiError::new(RhiErrorKind::Unsupported, message.clone()))
@@ -309,6 +308,45 @@ fn default_lanes() -> SubmissionCapabilities {
     )])
 }
 
+/// A buffer this backend allocated.
+///
+/// It holds the two facts the portable layer handed over and nothing else, which
+/// is honestly all a backend that allocates no memory has. What it is *for* is
+/// telling "the creation verb reached the backend" apart from "the verb returned
+/// before lowering" — the one thing a mock of this seam can prove, and the thing
+/// that the `unimplemented!` this replaces made unknowable.
+///
+/// Note what it does not hold: an [`ObjectId`]. Section 3 gives the id to the
+/// object that created the resource, and the mutation this struct makes to the
+/// portable layer's design is exactly that the backend is not asked for one.
+pub(crate) struct MockBuffer {
+    size: u64,
+    usage: BufferUsage,
+}
+
+impl MockBuffer {
+    /// The size the portable layer asked for.
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The usage mask the portable layer asked for.
+    ///
+    /// Recorded rather than acted on, because usage is a creation-time
+    /// *correctness* contract (section 11.1) and this backend has no operation
+    /// that could consult it. A test reads it to show that what arrived is what
+    /// the caller stated.
+    pub(crate) fn usage(&self) -> BufferUsage {
+        self.usage
+    }
+}
+
+impl BufferBackend for MockBuffer {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// A device that answers from memory.
 pub(crate) struct MockDevice {
     backend: BackendKind,
@@ -319,6 +357,15 @@ pub(crate) struct MockDevice {
     facts: CapabilityFacts,
     /// The lanes it reports offering.
     submission: SubmissionCapabilities,
+    /// How many allocations have reached this backend.
+    ///
+    /// A counter rather than nothing, because the ordering discipline 1 states —
+    /// portable validation first, the backend second — is not observable from the
+    /// *result* of a refused creation: a backend that was handed an illegal
+    /// descriptor and returned `OutOfMemory` would look the same to a caller as
+    /// one that was never called. Counting is what tells those apart, and the
+    /// count is read by the tests that assert a refusal never arrives here.
+    allocations: AtomicUsize,
 }
 
 impl MockDevice {
@@ -354,14 +401,25 @@ impl MockDevice {
         Arc::new(Self {
             backend,
             adapter,
-            object: next_object(),
+            object: ObjectId::next(),
             liveness: Mutex::new(Liveness {
                 status: DeviceStatus::Active,
                 loss: None,
             }),
             facts,
             submission,
+            allocations: AtomicUsize::new(0),
         })
+    }
+
+    /// How many allocations have reached this backend.
+    ///
+    /// The observable half of discipline 1. A test asserts this is unchanged
+    /// after a refused creation, which is the only way to tell "the portable
+    /// layer refused before lowering" apart from "the backend was asked and
+    /// happened to refuse too".
+    pub(crate) fn allocations(&self) -> usize {
+        self.allocations.load(Ordering::Relaxed)
     }
 
     /// Records that this device is gone, with the reason.
@@ -423,6 +481,20 @@ impl DeviceBackend for MockDevice {
     fn wait_idle(&self) -> RhiResult<()> {
         Ok(())
     }
+
+    fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
+        // No refusal here, and the absence is a decision rather than an
+        // unfinished arm. Every portable rule about this descriptor has already
+        // run in `Device::create_buffer`, and a second opinion here would be
+        // either a duplicate of one of those rules or a new one invented by a
+        // backend — disciplines 2 and 4. A mock that refused nothing is therefore
+        // the correct mock: it has nothing left to refuse.
+        self.allocations.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(MockBuffer {
+            size: descriptor.size,
+            usage: descriptor.usage,
+        }))
+    }
 }
 
 /// A portable device handle over a fresh mock backend.
@@ -438,6 +510,51 @@ pub(crate) fn device_for_test(identity: DeviceIdentity) -> Device {
 /// A portable device handle paired with the backend that owns its liveness.
 pub(crate) fn paired_device_for_test(identity: DeviceIdentity) -> (Device, Arc<MockDevice>) {
     let native = mock_native(BackendKind::Dx12);
+    (
+        Device::new(identity, native.clone())
+            .expect("the mock backend offers a lane accepting raster and copy work"),
+        native,
+    )
+}
+
+/// A portable device whose buffer table answers the whole key space.
+///
+/// [`device_for_test`] reports empty facts, and an empty table is the wrong
+/// answer to a *buffer* query specifically: `BufferUsage`'s sixty-four masks are
+/// a space enumeration could have covered, so a miss is a hole and the query
+/// panics rather than answering "no". A test that creates a buffer therefore
+/// cannot use the default mock, and this is the smallest table that is not a
+/// lie — every non-empty mask supported, up to `max_size`.
+///
+/// `max_size` is the caller's because it is what a test varies: the descriptor
+/// rule `size <= max_size` is only exercised by a device whose ceiling is
+/// reachable.
+///
+/// Returned as a pair for the same reason [`paired_device_for_test`] is: the
+/// handle owns the backend, and the assertions worth making about a *refused*
+/// creation are about what the backend was never asked — see
+/// [`MockDevice::allocations`].
+pub(crate) fn buffers_for_test(
+    identity: DeviceIdentity,
+    max_size: u64,
+) -> (Device, Arc<MockDevice>) {
+    let mut facts = CapabilityFacts::empty();
+    let limits = BufferSupportLimits::new(max_size);
+    for usage in BufferUsage::all() {
+        let support = if usage.is_empty() {
+            BufferSupport::Unsupported
+        } else {
+            BufferSupport::Supported(limits)
+        };
+        facts.record_buffer_support(usage, support);
+    }
+
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
     (
         Device::new(identity, native.clone())
             .expect("the mock backend offers a lane accepting raster and copy work"),

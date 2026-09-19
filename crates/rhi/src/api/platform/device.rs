@@ -67,11 +67,19 @@ impl DeviceLossInfo {
     /// Describes a loss.
     ///
     /// Crate-private: only the code that observed the loss may summarize it.
+    ///
+    /// The DX12 backend's allocation path is now such an observer, so the
+    /// expectation below is gated on the backend feature as well as on the test
+    /// build. A module-scope expectation in that backend makes references *out*
+    /// of it count as live for the items they point at, so with `dx12` on this
+    /// constructor is reached in a non-test build too and a `not(test)`-only
+    /// expectation would sit unfulfilled — the same trap the provider's module
+    /// documentation records for its own callees.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "called by the contract tests; the code that observes a native loss is not written"
+            reason = "called by the contract tests and by the DX12 allocation path; with that backend compiled out, the code that observes a native loss is not written"
         )
     )]
     pub(crate) fn new(message: String) -> Self {
@@ -194,6 +202,22 @@ impl Device {
     /// — in O(1), before a backend is touched.
     pub fn identity(&self) -> DeviceIdentity {
         self.identity
+    }
+
+    /// The native domain this handle lowers through.
+    ///
+    /// Crate-private because section 59 keeps native lowering out of the exported
+    /// surface and because no caller outside this crate may name a backend — the
+    /// traits it returns are `pub(crate)` for the same reason, so this is not a
+    /// leak with a narrow door but the seam's ordinary inside face.
+    ///
+    /// The callers are the creation verbs of the later chapters, which live
+    /// beside the types they produce (adjudication A28) rather than here, and
+    /// therefore need to reach the backend through the handle they were given.
+    /// Reaching it *through* the handle rather than storing a copy is what keeps
+    /// one device from having two authoritative backends.
+    pub(crate) fn native(&self) -> &Arc<dyn DeviceBackend> {
+        &self.native
     }
 
     /// The backend family this device came from.

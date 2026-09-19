@@ -53,6 +53,7 @@ use crate::api::submission::{
     SubmissionLaneInfo, SubmissionPlanBuilder, SubmissionPlanId, SubmissionPoint,
     SubmissionReceipt,
 };
+use crate::api::tests::fixture;
 use crate::base::mock::paired_device_for_test;
 
 // ---------------------------------------------------------------------------
@@ -1416,7 +1417,7 @@ fn compute_work(device: DeviceIdentity, uses: Vec<ResourceUse>) -> RecordedWork 
 
 /// A buffer handle on `device`.
 fn buffer_handle(serial: u64, device: DeviceIdentity) -> Buffer {
-    Buffer::new(
+    fixture::buffer(
         ObjectId::new(serial),
         device,
         BufferDescriptor::new(1024, BufferUsage::STORAGE),
@@ -1446,7 +1447,7 @@ fn buffer_range_use(
     access: AccessMask,
 ) -> ResourceUse {
     ResourceUse::Buffer(BufferUse {
-        buffer: Buffer::new(
+        buffer: fixture::buffer(
             id,
             device,
             BufferDescriptor::new(1024, BufferUsage::STORAGE),

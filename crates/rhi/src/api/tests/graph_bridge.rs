@@ -37,6 +37,7 @@ use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, L
 use crate::api::resource::buffer::{Buffer, BufferDescriptor, BufferRange, BufferUsage};
 use crate::api::resource::subresource::{TextureAspects, TextureSubresourceRange};
 use crate::api::resource::texture::{Texture, TextureDescriptor, TextureUsage};
+use crate::api::tests::fixture;
 
 // ---------------------------------------------------------------------------
 // Fixtures.
@@ -58,7 +59,7 @@ fn object(value: u64) -> ObjectId {
 }
 
 fn buffer(size: u64) -> Buffer {
-    Buffer::new(
+    fixture::buffer(
         object(1),
         device(),
         BufferDescriptor::new(size, BufferUsage::UNIFORM),

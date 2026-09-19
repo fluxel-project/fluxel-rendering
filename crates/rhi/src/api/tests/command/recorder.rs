@@ -5,6 +5,7 @@ use super::*;
 use crate::api::command::RecordedWork;
 use crate::api::graph_bridge::{AccessMask, PipelineScope, ResourceUse};
 use crate::api::submission::LaneWorkDomains;
+use crate::api::tests::fixture;
 
 #[test]
 fn an_empty_recording_is_refused_at_finish() {
@@ -105,7 +106,7 @@ fn an_upload_from_another_device_is_wrong_device() {
         other_device(),
         UploadDescriptor::Buffer(BufferUploadDescriptor {
             label: Label::default(),
-            dst: Buffer::new(
+            dst: fixture::buffer(
                 object(12),
                 other_device(),
                 BufferDescriptor::new(64, BufferUsage::COPY_DST),

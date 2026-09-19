@@ -20,6 +20,7 @@ use crate::api::resource::transfer::{
     ReadbackTicket, TextureUploadDescriptor, UploadDescriptor, UploadJob,
 };
 use crate::api::submission::CompletionPoint;
+use crate::api::tests::fixture;
 use crate::base::mock::{device_for_test, paired_device_for_test};
 
 #[test]
@@ -143,7 +144,7 @@ fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
     // because both return before `Device::capabilities()`, whose body is still
     // `unimplemented!()`. The other is the lost-device refusal, tested below.
     let live = device_for_test(device());
-    let foreign = Buffer::new(
+    let foreign = fixture::buffer(
         object(91),
         identity(9, 9),
         BufferDescriptor::new(64, BufferUsage::COPY_DST),
@@ -185,7 +186,7 @@ fn a_foreign_buffer_stays_wrong_device_even_on_a_lost_device() {
         "the device was lost before the call".to_string(),
     ));
 
-    let foreign = Buffer::new(
+    let foreign = fixture::buffer(
         object(92),
         identity(9, 9),
         BufferDescriptor::new(64, BufferUsage::COPY_DST),

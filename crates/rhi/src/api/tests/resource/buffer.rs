@@ -4,15 +4,17 @@ use super::*;
 use crate::api::error::RhiErrorKind;
 use crate::api::format::TextureFormat;
 use crate::api::identity::Label;
+use crate::api::platform::device::DeviceLossInfo;
 use crate::api::resource::buffer::{
-    Buffer, BufferBinding, BufferDescriptor, BufferRange, BufferSupport, BufferSupportLimits,
-    BufferUsage, ResourceMemoryPreference, validate_buffer_descriptor, validate_buffer_ownership,
+    BufferBinding, BufferDescriptor, BufferRange, BufferSupport, BufferSupportLimits, BufferUsage,
+    ResourceMemoryPreference, validate_buffer_descriptor, validate_buffer_ownership,
     validate_buffer_range,
 };
 use crate::api::resource::texture::{
     Extent3d, TextureDescriptor, TextureDimension, TextureUsage, TextureViewCompatibility,
     mip_ceiling,
 };
+use crate::api::tests::fixture;
 
 #[test]
 fn buffer_usage_bits_are_distinct_and_compose() {
@@ -377,7 +379,7 @@ fn a_buffer_from_another_device_is_wrong_device() {
 #[test]
 fn a_buffer_reports_its_own_id_device_and_descriptor() {
     let descriptor = BufferDescriptor::new(128, BufferUsage::INDEX).with_label("indices");
-    let buffer = Buffer::new(object(7), identity(3, 4), descriptor.clone());
+    let buffer = fixture::buffer(object(7), identity(3, 4), descriptor.clone());
 
     assert_eq!(buffer.id(), object(7));
     assert_eq!(buffer.device_identity(), identity(3, 4));
@@ -451,4 +453,178 @@ fn the_usage_enumeration_covers_every_declared_bit() {
         ),
         "the enumeration must reach the union of every declared bit"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The creation verb, over a device that allocates without a GPU.
+//
+// These are contract tests and not conformance evidence: the backend under them
+// answers from memory, so nothing here shows that a driver accepts anything. What
+// they show is what the portable layer is responsible for — that its refusals
+// happen, what they say, and that a creation which *is* accepted reaches a
+// backend that was handed the caller's own descriptor. The GPU half of the same
+// verb is `backend::dx12::provider::tests`.
+// ---------------------------------------------------------------------------
+
+/// The native side of `buffer`, as the mock backend recorded it.
+///
+/// The downcast is the seam working: only a caller that knows which backend made
+/// this handle can name the type behind it, and this test set is inside the crate
+/// that does.
+fn mock_native(buffer: &Buffer) -> &crate::base::mock::MockBuffer {
+    buffer
+        .native()
+        .as_any()
+        .downcast_ref::<crate::base::mock::MockBuffer>()
+        .expect("a buffer created through the mock device carries the mock allocation")
+}
+
+#[test]
+fn a_created_buffer_reports_the_device_and_the_descriptor_it_was_made_from() {
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let descriptor = BufferDescriptor::new(2048, BufferUsage::VERTEX)
+        .with_label("vertices")
+        .with_memory_preference(ResourceMemoryPreference::DeviceLocalPreferred);
+
+    let buffer = device
+        .create_buffer(&descriptor)
+        .expect("a 2048-byte vertex buffer is legal on this device");
+
+    assert_eq!(
+        buffer.device_identity(),
+        device.identity(),
+        "section 3.3 makes the creating device the only answer to a cross-device use"
+    );
+    assert_eq!(buffer.descriptor().size, 2048);
+    assert_eq!(buffer.descriptor().usage, BufferUsage::VERTEX);
+    assert_eq!(buffer.descriptor().label.as_deref(), Some("vertices"));
+    assert_eq!(
+        buffer.descriptor().memory,
+        ResourceMemoryPreference::DeviceLocalPreferred,
+        "the placement preference is part of what section 18.8 recovers, even \
+         though it is never a correctness guarantee"
+    );
+}
+
+#[test]
+fn two_buffers_from_one_device_have_different_ids() {
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+
+    let first = device
+        .create_buffer(&BufferDescriptor::new(64, BufferUsage::UNIFORM))
+        .expect("a 64-byte uniform buffer is legal");
+    let second = device
+        .create_buffer(&BufferDescriptor::new(64, BufferUsage::UNIFORM))
+        .expect("a 64-byte uniform buffer is legal");
+
+    // `ObjectId`'s own contract is "globally unique within the process", and the
+    // counter behind it is process-global rather than per-backend for exactly
+    // this: `RhiError::object` and every tooling definition name an object by
+    // this id, so a collision would make a diagnostic name the wrong object.
+    assert_ne!(first.id(), second.id());
+    assert_ne!(first.id().as_u64(), 0);
+}
+
+#[test]
+fn a_clone_is_the_same_allocation_and_not_a_second_one() {
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let buffer = device
+        .create_buffer(&BufferDescriptor::new(256, BufferUsage::COPY_DST))
+        .expect("a 256-byte copy destination is legal");
+
+    let clone = buffer.clone();
+
+    assert_eq!(clone.id(), buffer.id());
+    assert_eq!(clone.device_identity(), buffer.device_identity());
+    // Section 18.6: a clone is the same logical object rather than a second
+    // buffer, so the two handles must reach one allocation. Sharing one `Arc` is
+    // that statement in the only form observable without a GPU.
+    assert!(
+        std::sync::Arc::ptr_eq(clone.native(), buffer.native()),
+        "cloning a buffer must share the allocation, not copy it"
+    );
+    assert_eq!(mock_native(&clone).size(), 256);
+}
+
+#[test]
+fn the_backend_receives_the_descriptor_the_caller_wrote() {
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let usage = BufferUsage::STORAGE.union(BufferUsage::COPY_SRC);
+
+    let buffer = device
+        .create_buffer(&BufferDescriptor::new(777, usage))
+        .expect("a storage buffer with a copy source is legal");
+
+    let native = mock_native(&buffer);
+    assert_eq!(native.size(), 777);
+    assert_eq!(
+        native.usage(),
+        usage,
+        "the backend is handed the usage mask the caller wrote, and normalizing \
+         it here would be a second place that decides what a usage means"
+    );
+}
+
+#[test]
+fn a_refused_descriptor_never_reaches_the_backend() {
+    // Discipline 1 in `base`: portable validation runs first, and section 3.1
+    // forbids touching a backend before it has. The claim is not observable from
+    // the *result* — a backend handed an illegal descriptor and answering
+    // `OutOfMemory` would look to a caller just like one that was never called —
+    // so it is observed by counting, which is what `MockDevice::allocations` is
+    // for.
+    let (device, native) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+
+    let refused = device
+        .create_buffer(&BufferDescriptor::new(0, BufferUsage::VERTEX))
+        .expect_err("section 12.3 refuses a zero-byte buffer");
+    assert_eq!(refused.kind(), RhiErrorKind::InvalidUsage);
+    // Named as this verb's, even though the rule was written in
+    // `validate_buffer_descriptor` and the check that runs first lives on the
+    // device: section 4 attaches the operation "as the error crosses each layer,
+    // so the layer closest to the caller names itself", and neither helper can
+    // name one honestly.
+    assert_eq!(refused.operation(), Some("Device::create_buffer"));
+
+    assert_kind(
+        device.create_buffer(&BufferDescriptor::new(4097, BufferUsage::VERTEX)),
+        RhiErrorKind::InvalidUsage,
+    );
+    assert_eq!(
+        native.allocations(),
+        0,
+        "a refused creation is the portable layer's verdict, so the backend must \
+         not have been asked to allocate anything"
+    );
+
+    // The control, without which the count above would be equally consistent with
+    // a device whose backend is never called at all.
+    device
+        .create_buffer(&BufferDescriptor::new(64, BufferUsage::VERTEX))
+        .expect("a 64-byte vertex buffer is legal");
+    assert_eq!(native.allocations(), 1);
+}
+
+#[test]
+fn a_lost_device_refuses_creation_and_never_allocates() {
+    // Section 6.5: loss is terminal, so a verb that would allocate must refuse
+    // rather than ask a dead backend. The check runs before the capability read
+    // and before the allocation, so no buffer is minted and nothing is allocated.
+    let (device, native) = crate::base::mock::paired_device_for_test(identity(2, 1));
+    native.mark_lost(DeviceLossInfo::new(
+        "the host reported that the adapter was removed".to_string(),
+    ));
+
+    let error = device
+        .create_buffer(&BufferDescriptor::new(64, BufferUsage::VERTEX))
+        .expect_err("a lost device cannot create anything");
+
+    assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
+    assert_eq!(error.operation(), Some("Device::create_buffer"));
+    assert!(
+        error.message().contains("adapter was removed"),
+        "section 6.5 requires the recorded summary to survive into the refusal: {}",
+        error.message()
+    );
+    assert_eq!(native.allocations(), 0);
 }

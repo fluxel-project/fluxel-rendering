@@ -42,10 +42,11 @@
 //!
 //! # Where this tree stands, stated plainly
 //!
-//! **The native boundary ([`ffi`]) and the provider ([`provider`]) are written.**
-//! There is no resource, shader, pipeline, command or presentation lowering yet,
-//! and no claim of DX12 support exists until the shared contract suite and a real
-//! Windows run close on one revision.
+//! **The native boundary ([`ffi`]), the provider ([`provider`]), and buffer
+//! allocation ([`resource`]) are written.** There is no texture, shader,
+//! pipeline, command or presentation lowering yet, and no claim of DX12 support
+//! exists until the shared contract suite and a real Windows run close on one
+//! revision.
 //!
 //! The order the rest arrives in is fixed by a dependency rather than by
 //! preference. DX12 answers every capability question (`CheckFeatureSupport`,
@@ -61,7 +62,17 @@
 //! view-compatibility facts are still absent, and seven of the twenty-seven
 //! portable limits have no Direct3D 12 ceiling to cite — and [`facts`]'s module
 //! documentation states which of the three kinds each missing entry is.
+//!
+//! Allocation arrived for buffers only, and it is the smallest lowering this
+//! backend will have: one `CreateCommittedResource` per descriptor, with the
+//! heap, the initial state and the one creation-time flag argued in [`resource`].
+//! It is not yet exercised by anything a caller outside the test set can run —
+//! the command, submission and transfer chapters that would copy into a buffer
+//! and read one back are what turn an allocation into an observable result — so
+//! the allocation is real-GPU evidence about this backend's native path and not
+//! yet about the portable contract.
 
 mod facts;
 mod ffi;
 mod provider;
+mod resource;

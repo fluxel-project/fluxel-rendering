@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::api::resource::transfer::ReadbackRequest;
+use crate::api::tests::fixture;
 
 #[test]
 fn a_readback_from_another_device_is_wrong_device_before_anything_else() {
@@ -10,7 +11,7 @@ fn a_readback_from_another_device_is_wrong_device_before_anything_else() {
     let mut recorder = recorder();
     let request = ReadbackRequest::Buffer {
         label: Label::default(),
-        src: Buffer::new(
+        src: fixture::buffer(
             object(13),
             other_device(),
             BufferDescriptor::new(64, BufferUsage::COPY_SRC),

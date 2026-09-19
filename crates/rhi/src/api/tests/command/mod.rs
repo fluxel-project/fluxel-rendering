@@ -60,6 +60,7 @@ use crate::api::shader::{
     ShaderCode, ShaderInterface, ShaderLocation, ShaderModule, ShaderRequirements, ShaderStage,
     ShaderStages,
 };
+use crate::api::tests::fixture;
 
 fn identity(instance: u64, generation: u64) -> DeviceIdentity {
     DeviceIdentity::new(
@@ -104,7 +105,7 @@ fn buffer_with(usage: BufferUsage, size: u64) -> Buffer {
 /// copy has to name two different identities, which is what the explicit id is
 /// for.
 fn buffer_of(id: u64, usage: BufferUsage, size: u64) -> Buffer {
-    Buffer::new(object(id), device(), BufferDescriptor::new(size, usage))
+    fixture::buffer(object(id), device(), BufferDescriptor::new(size, usage))
 }
 
 /// A byte-range copy that passes every portable check.

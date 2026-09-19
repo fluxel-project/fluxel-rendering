@@ -10,14 +10,31 @@
 //! accessors below.
 //!
 //! The constructors are `pub(crate)` rather than absent. The platform layer has
-//! to mint identities, and a backend has to mint object IDs; hiding the
-//! constructor from *callers* is the requirement, not hiding it from the crate.
+//! to mint identities, and an object-creating verb has to mint an [`ObjectId`];
+//! hiding the constructor from *callers* is the requirement, not hiding it from
+//! the crate. Which side of the seam mints an object id is settled in
+//! [`ObjectId::next`] and is not a per-backend choice.
 //!
 //! `Label` is deliberately not a token. It is diagnostic text, it is
 //! caller-owned, and section 19.8 excludes labels from every canonical hash, so
 //! a public constructor costs nothing.
 
 use core::fmt;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// The one counter every minted [`ObjectId`] is drawn from.
+///
+/// Process-global rather than one per backend, because "globally unique within
+/// the process" is the type's own contract and a counter per backend cannot
+/// satisfy it: DX12's device counter and a mock device's would each start at 1,
+/// and the collision is not cosmetic — [`super::RhiError::object`] and every
+/// tooling definition describe an object by this id, so two objects sharing one
+/// would make a diagnostic name the wrong object.
+///
+/// Reached only from inside the crate, and only through [`ObjectId::next`]; a
+/// caller can compare, hash, and print an id but never mint one, which is what
+/// the `compile_fail` case on [`ObjectId`] pins.
+static NEXT_OBJECT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Opaque identity of one RHI instance within this process.
 ///
@@ -148,17 +165,25 @@ pub struct ObjectId(u64);
 impl ObjectId {
     /// Mints the process-local ID of a newly created object.
     ///
-    /// Its callers today are the contract tests and the DX12 provider's device
-    /// counter. The expectation below is gated on `all(not(test), not(feature =
-    /// "dx12"))` — on both, because the tests are callers too: with the provider
-    /// compiled out *and* no test build, nothing reaches this at all.
-    #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
-        expect(
-            dead_code,
-            reason = "the only callers are the contract tests and the DX12 provider's device counter; with that backend compiled out, the object-creating operations that will mint most ids are not written either"
-        )
-    )]
+    /// The one place an id is drawn from a counter, so the uniqueness the type
+    /// promises holds across every backend rather than within one. A backend that
+    /// kept its own counter would satisfy its own tests and violate the contract
+    /// the moment a second backend existed.
+    ///
+    /// It is reached from the portable layer rather than from a backend on
+    /// purpose: section 3 gives identity to the object that created the resource,
+    /// and two backends minting their own ids is precisely how two domains end up
+    /// sharing one.
+    pub(crate) fn next() -> Self {
+        Self(NEXT_OBJECT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Wraps a chosen value.
+    ///
+    /// Test-only, and that is the difference from [`Self::next`]: a caller that
+    /// picks the number is writing a fixture, not creating an object. Nothing
+    /// outside a test build may reach it.
+    #[cfg(test)]
     pub(crate) fn new(value: u64) -> Self {
         Self(value)
     }

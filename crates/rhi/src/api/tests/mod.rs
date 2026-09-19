@@ -39,3 +39,10 @@ mod presentation;
 mod statistics;
 mod submission;
 mod tooling;
+
+/// Fixtures shared by the chapter test sets.
+///
+/// A small module rather than a `mod.rs` full of helpers: everything here exists
+/// because a handle has a native side that a fixture cannot allocate and a test
+/// does not want to. It grows only when a second chapter needs the same shape.
+pub(crate) mod fixture;

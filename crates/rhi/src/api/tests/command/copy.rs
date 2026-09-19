@@ -7,6 +7,7 @@ use crate::api::command::{
 };
 use crate::api::pipeline::{ComputePipeline, ComputePipelineDescriptor};
 use crate::api::resource::subresource::{Origin3d, TextureAspect, TextureSubresourceLayers};
+use crate::api::tests::fixture;
 
 /// A one-mip, one-layer color selection at the origin.
 fn color_layers(layer_count: u32) -> TextureSubresourceLayers {
@@ -98,7 +99,7 @@ fn a_copy_must_name_a_source_and_a_destination_that_allow_it() {
 fn a_copy_from_another_device_is_wrong_device() {
     let mut recorder = recorder();
     let foreign = BufferCopy {
-        src: Buffer::new(
+        src: fixture::buffer(
             object(11),
             other_device(),
             BufferDescriptor::new(64, BufferUsage::COPY_SRC),

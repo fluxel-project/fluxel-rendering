@@ -8,12 +8,19 @@
 //! on this driver, not that the portable contract holds.
 //!
 //! What they deliberately do not cover, recorded rather than left to be assumed:
-//! nothing is rasterized, dispatched, copied, uploaded or read back, because no
-//! resource or command lowering exists yet. `version-plan.md` section 4 asks for
-//! real headless raster/compute/copy/upload/readback on Windows DX12, and **that
-//! requirement is not met by this module**.
+//! nothing is rasterized, dispatched, copied, uploaded or read back. Buffers are
+//! *allocated* here — that lowering exists and is exercised below — but no
+//! command lowering does, so no byte has ever moved on the GPU through this
+//! crate. `version-plan.md` section 4 asks for real headless
+//! raster/compute/copy/upload/readback on Windows DX12, and **that requirement is
+//! not met by this module**: allocation is a prerequisite for it, not a part of
+//! it.
 
 use std::sync::Arc;
+
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+};
 
 use super::*;
 use crate::api::binding::vocabulary::StorageAccess;
@@ -21,11 +28,14 @@ use crate::api::command::BlitFilter;
 use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{PlatformProvider, RequestStatus};
-use crate::api::resource::buffer::{BufferSupportQuery, BufferUsage};
+use crate::api::resource::buffer::{
+    Buffer, BufferDescriptor, BufferSupportQuery, BufferUsage, ResourceMemoryPreference,
+};
 use crate::api::resource::route::RouteQuery;
 use crate::api::resource::subresource::TextureAspect;
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
 use crate::api::submission::LaneWorkDomains;
+use crate::backend::dx12::resource::Dx12Buffer;
 
 /// A fresh provider instance identity, as host integration would mint.
 fn instance() -> DeviceInstanceId {
@@ -1117,4 +1127,291 @@ fn what_the_texture_enumeration_actually_reported() {
         capabilities.limit(LimitKey::MaxComputeWorkgroupsPerDimension),
         capabilities.limit(LimitKey::MaxComputeWorkgroupStorageSize),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Buffer allocation on real hardware.
+//
+// The portable half of this verb — that a refusal happens before a backend is
+// touched, and what a created handle reports — is asserted over `base::mock` in
+// `api::tests::resource::buffer`. What only this module can show is that the
+// lowering itself works: that Direct3D 12 accepts the descriptors the portable
+// rules admit, that the native description is the one the caller asked for, and
+// that the one creation-time flag this backend sets is set for exactly the usage
+// that requires it.
+//
+// None of this moves a byte. `CopyBufferRegion` needs a command queue, an
+// allocator, a command list and a fence, and those arrive in a later round; until
+// they do, an allocation that nothing reads and nothing writes is a weaker claim
+// than it looks, and the module documentation above says so.
+// ---------------------------------------------------------------------------
+
+/// The native allocation behind `buffer`, as this backend committed it.
+///
+/// The downcast is the seam doing its job: only a caller that knows which backend
+/// produced this handle can name the type behind `dyn BufferBackend`, and the
+/// portable layer above never can.
+fn native_buffer(buffer: &Buffer) -> &Dx12Buffer {
+    buffer
+        .native()
+        .as_any()
+        .downcast_ref::<Dx12Buffer>()
+        .expect("a buffer created through this device carries a DX12 allocation")
+}
+
+/// A descriptor of `size` bytes with exactly one usage bit, so that each case
+/// below isolates one class rather than a combination whose flag could be
+/// explained by either half.
+fn single_usage(size: u64, usage: BufferUsage) -> BufferDescriptor {
+    BufferDescriptor::new(size, usage)
+}
+
+#[test]
+fn a_real_device_allocates_a_buffer_for_every_usage_class() {
+    // Section 11.1's six bits, one at a time. Direct3D 12 expresses five of them
+    // as resource states rather than as creation flags, so all six must be
+    // creatable — an `Unsupported` here would mean the portable capability table
+    // and this lowering disagree about the same device, which is the failure this
+    // test exists to catch.
+    let device = portable_device();
+
+    for usage in [
+        BufferUsage::COPY_SRC,
+        BufferUsage::COPY_DST,
+        BufferUsage::VERTEX,
+        BufferUsage::INDEX,
+        BufferUsage::UNIFORM,
+        BufferUsage::STORAGE,
+    ] {
+        let buffer = device
+            .create_buffer(&single_usage(4096, usage))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Direct3D 12 allocates a {usage} buffer: {}",
+                    error.message()
+                )
+            });
+
+        let native = native_buffer(&buffer);
+        // SAFETY: `GetDesc` writes into a by-value return of a POD struct and
+        // reads nothing but the resource this handle owns.
+        let desc = unsafe { native.resource().GetDesc() };
+
+        assert_eq!(desc.Width, 4096, "the width of a buffer is its byte size");
+        assert_eq!(
+            desc.Dimension, D3D12_RESOURCE_DIMENSION_BUFFER,
+            "a buffer is a buffer, not a texture shaped like one"
+        );
+        // The four fields Direct3D 12 requires a buffer to pin. `D3D12_RESOURCE_DESC`
+        // is one struct for every resource kind, so the fields a buffer does not use
+        // are not "don't care" — they are checked, and `CreateCommittedResource`
+        // fails on a wrong value rather than ignoring it.
+        assert_eq!(desc.Height, 1);
+        assert_eq!(desc.DepthOrArraySize, 1);
+        assert_eq!(desc.MipLevels, 1);
+        assert_eq!(desc.SampleDesc.Count, 1);
+        assert_eq!(desc.SampleDesc.Quality, 0);
+    }
+}
+
+#[test]
+fn a_real_device_grants_unordered_access_to_exactly_the_usage_that_needs_it() {
+    // `D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS` is a creation-time *grant*
+    // rather than a hint: a buffer committed without it can never be a UAV, and no
+    // later barrier or descriptor makes it one. So this is not a preference being
+    // pinned but a correctness contract — section 11.1 makes usage a creation-time
+    // fact for precisely this reason.
+    //
+    // Both directions are asserted. Granting it unconditionally would pass a test
+    // that only checked the storage case, and it would quietly make every buffer a
+    // UAV candidate, relaxing the contract the caller stated.
+    let device = portable_device();
+
+    let storage = device
+        .create_buffer(&single_usage(1024, BufferUsage::STORAGE))
+        .expect("a storage buffer is allocatable on a real device");
+    // SAFETY: `GetDesc` returns a POD struct and reads only this resource.
+    let desc = unsafe { native_buffer(&storage).resource().GetDesc() };
+    assert!(
+        desc.Flags.0 & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS.0 != 0,
+        "a buffer created as STORAGE without the UAV flag could never be a UAV"
+    );
+
+    let vertex = device
+        .create_buffer(&single_usage(1024, BufferUsage::VERTEX))
+        .expect("a vertex buffer is allocatable on a real device");
+    // SAFETY: as above.
+    let desc = unsafe { native_buffer(&vertex).resource().GetDesc() };
+    assert_eq!(
+        desc.Flags.0 & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS.0,
+        0,
+        "a vertex buffer granted unordered access would be a relaxation the caller \
+         never asked for, and one no portable rule could then recover"
+    );
+}
+
+#[test]
+fn a_real_allocation_is_addressable_and_each_one_is_a_different_place() {
+    // A non-zero GPU virtual address is the cheapest real evidence that
+    // `CreateCommittedResource` committed memory rather than returning a handle to
+    // nothing: Direct3D 12 returns zero for a resource with no GPU address, and
+    // `CopyBufferRegion` takes exactly this value as its operand.
+    //
+    // Two allocations are made because one non-zero address proves only that *an*
+    // address exists. Distinct addresses are what show the second call allocated
+    // rather than re-returning the first.
+    let device = portable_device();
+
+    let first = device
+        .create_buffer(&single_usage(65536, BufferUsage::COPY_DST))
+        .expect("a 64 KiB copy destination is allocatable on a real device");
+    let second = device
+        .create_buffer(&single_usage(65536, BufferUsage::COPY_SRC))
+        .expect("a 64 KiB copy source is allocatable on a real device");
+
+    // SAFETY: `GetGPUVirtualAddress` reads one field of this resource and has no
+    // preconditions beyond the handle being live, which the portable `Buffer`
+    // guarantees by holding the allocation.
+    let first_address = unsafe { native_buffer(&first).resource().GetGPUVirtualAddress() };
+    // SAFETY: as above.
+    let second_address = unsafe { native_buffer(&second).resource().GetGPUVirtualAddress() };
+
+    assert_ne!(
+        first_address, 0,
+        "a committed resource has a GPU virtual address; zero means nothing was committed"
+    );
+    assert_ne!(second_address, 0);
+    assert_ne!(
+        first_address, second_address,
+        "two separate creations must be two separate allocations, or the second \
+         creation silently aliased the first"
+    );
+}
+
+#[test]
+fn a_clone_holds_the_one_allocation_rather_than_a_second_copy_of_it() {
+    // Section 18.6's last-owner rule, seen from the native side: the portable
+    // layer shares one `Arc` between clones, so the two handles must resolve to the
+    // same `ID3D12Resource`. If they did not, one of them would be freed while the
+    // other still referred to it — the double-free the rule exists to prevent —
+    // and this is where that would be caught before a copy ever used one.
+    let device = portable_device();
+    let buffer = device
+        .create_buffer(&single_usage(4096, BufferUsage::COPY_SRC))
+        .expect("a 4 KiB copy source is allocatable on a real device");
+
+    let clone = buffer.clone();
+
+    assert!(
+        std::sync::Arc::ptr_eq(clone.native(), buffer.native()),
+        "a clone must share the backend allocation, not allocate a second one"
+    );
+    // SAFETY: both handles are live and `GetGPUVirtualAddress` only reads.
+    let buffer_address = unsafe { native_buffer(&buffer).resource().GetGPUVirtualAddress() };
+    // SAFETY: as above.
+    let clone_address = unsafe { native_buffer(&clone).resource().GetGPUVirtualAddress() };
+    assert_eq!(buffer_address, clone_address);
+}
+
+#[test]
+fn a_real_device_allocates_under_either_placement_preference() {
+    // Section 11.2 makes `ResourceMemoryPreference` a performance hint and never a
+    // correctness guarantee, and both variants lower onto
+    // `D3D12_HEAP_TYPE_DEFAULT` — section 11.2 deleted host-visible buffers, so no
+    // caller-stated preference can select `UPLOAD` or `READBACK`. What this asserts
+    // is the consequence a caller can depend on: the hint is accepted rather than
+    // refused, on either setting, and neither setting changes the descriptor the
+    // driver is handed.
+    let device = portable_device();
+
+    let mut descriptors = Vec::new();
+    for memory in [
+        ResourceMemoryPreference::Automatic,
+        ResourceMemoryPreference::DeviceLocalPreferred,
+    ] {
+        descriptors
+            .push(BufferDescriptor::new(2048, BufferUsage::UNIFORM).with_memory_preference(memory));
+    }
+
+    for descriptor in descriptors {
+        let buffer = device.create_buffer(&descriptor).unwrap_or_else(|error| {
+            panic!(
+                "a {:?} placement is a hint, not a request the device may refuse: {}",
+                descriptor.memory,
+                error.message()
+            )
+        });
+        // SAFETY: `GetDesc` returns a POD struct and reads only this resource.
+        let desc = unsafe { native_buffer(&buffer).resource().GetDesc() };
+        assert_eq!(desc.Width, 2048);
+        assert_eq!(desc.Dimension, D3D12_RESOURCE_DIMENSION_BUFFER);
+    }
+}
+
+#[test]
+fn a_real_device_refuses_a_buffer_that_the_portable_rules_reject() {
+    // The refusal half, and the reason it belongs *here* rather than only in the
+    // mock: this asserts that a device which really can allocate still answers
+    // `InvalidUsage` for a zero-byte buffer, rather than passing it to
+    // `CreateCommittedResource` and reporting whatever the driver says. Section
+    // 12.3 is a portable rule, so its verdict must not depend on the driver's
+    // opinion — and a driver's opinion here is `E_INVALIDARG`, which would be a
+    // `BackendFailure` naming an HRESULT that means nothing to a caller.
+    let device = portable_device();
+
+    let error = device
+        .create_buffer(&single_usage(0, BufferUsage::VERTEX))
+        .expect_err("section 12.3 refuses a zero-byte buffer before any backend sees it");
+
+    assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
+    assert_eq!(error.operation(), Some("Device::create_buffer"));
+}
+
+/// Records what a real allocation actually looked like, for the evidence binding.
+///
+/// Run with `--nocapture`. The values that matter here — the GPU virtual addresses
+/// and the adapter's own buffer ceiling — vary by machine and driver, and
+/// `CLAUDE.md` section 9 forbids asserting a reading that was not taken. The
+/// assertions that do bind are in the tests above.
+///
+/// One reading needs a warning attached, because it looks like a contradiction of
+/// the test above and is not one. Each iteration drops its buffer before the next
+/// is made, so Direct3D 12 is free to hand the next allocation the address the
+/// freed one had — and on this driver it does. A repeated address here therefore
+/// means *the allocator reused a freed region*, not that two live allocations
+/// aliased. The claim that two live allocations have different addresses is the
+/// one asserted in `a_real_allocation_is_addressable_and_each_one_is_a_different_place`,
+/// where both handles are held at once.
+#[test]
+fn what_the_buffer_allocation_actually_reported() {
+    let device = portable_device();
+
+    println!(
+        "dx12 allocation evidence: backend={:?} adapter={:?} max_buffer_size={:?}",
+        device.backend(),
+        device.adapter_info().name(),
+        device.capabilities().limit(LimitKey::MaxBufferSize),
+    );
+
+    for usage in [
+        BufferUsage::COPY_SRC,
+        BufferUsage::COPY_DST,
+        BufferUsage::VERTEX,
+        BufferUsage::INDEX,
+        BufferUsage::UNIFORM,
+        BufferUsage::STORAGE,
+    ] {
+        let Ok(buffer) = device.create_buffer(&single_usage(4096, usage)) else {
+            println!("dx12 allocation {usage}: refused");
+            continue;
+        };
+        let resource = native_buffer(&buffer).resource();
+        // SAFETY: both calls read one field of a live resource and write nothing.
+        let (desc, address) = unsafe { (resource.GetDesc(), resource.GetGPUVirtualAddress()) };
+        println!(
+            "dx12 allocation {usage}: gpu_address=0x{address:016x} dimension={:?} \
+             width={} flags=0x{:x}",
+            desc.Dimension, desc.Width, desc.Flags.0,
+        );
+    }
 }

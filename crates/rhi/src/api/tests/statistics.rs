@@ -53,6 +53,7 @@ use crate::api::resource::texture::{Texture, TextureDescriptor, TextureUsage};
 use crate::api::statistics::{
     DeviceStatistics, MemoryEstimate, MemoryEstimateQuality, StatisticsConfig, StatisticsDetail,
 };
+use crate::api::tests::fixture;
 
 // ---------------------------------------------------------------------------
 // Fixtures.
@@ -84,7 +85,7 @@ fn statistics() -> DeviceStatistics {
 }
 
 fn buffer_on(device: DeviceIdentity, size: u64) -> Buffer {
-    Buffer::new(
+    fixture::buffer(
         object(1),
         device,
         BufferDescriptor::new(size, BufferUsage::UNIFORM),

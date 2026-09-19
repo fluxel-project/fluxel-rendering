@@ -32,10 +32,12 @@
 //! without a backend (root section 4) and testable without a GPU.
 
 use core::fmt;
+use std::sync::Arc;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
+use crate::base::resource::BufferBackend;
 
 /// What a buffer will be used for.
 ///
@@ -325,29 +327,67 @@ pub struct Buffer {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: BufferDescriptor,
+    /// The allocation behind this handle, shared with every clone of it.
+    ///
+    /// Section 18.6 makes a clone the same logical object rather than a second
+    /// buffer, so this is an `Arc` and not a copy of anything: two clones that
+    /// each owned an allocation would be two buffers wearing one identity, and
+    /// the last-owner rule would have no single moment to retire.
+    ///
+    /// Every method here answers from the fields above it, and the backend is
+    /// reached only by the *device* verbs of the later chapters — which is why
+    /// this field is unread from inside this module without being dead: it is
+    /// what [`Self::native`] hands to them.
+    ///
+    /// The expectation sits on that accessor and not here, and that placement was
+    /// measured rather than assumed. rustc reads the field as used because the
+    /// accessor reads it, and an `expect` on the field therefore sits
+    /// unfulfilled; what is genuinely unreached is the accessor, which is where
+    /// the reason is written.
+    native: Arc<dyn BufferBackend>,
 }
 
 impl Buffer {
     /// Assembles a created buffer.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only [`crate::api::platform::Device::create_buffer`] may produce one. That
-    /// verb exists and is the only caller this is written for, but it stops before
-    /// allocating — nothing can mint the identity below until a backend allocator
-    /// does — so nothing calls this yet and the attribute stays.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_buffer calls this once the backend allocator lands and can mint the buffer's identity"
-        )
-    )]
-    pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: BufferDescriptor) -> Self {
+    /// only [`crate::api::platform::Device::create_buffer`] may produce one, and
+    /// the identity is minted there rather than here — a constructor that minted
+    /// its own would give a caller who assembled one directly an object the
+    /// process has never recorded.
+    pub(crate) fn new(
+        id: ObjectId,
+        device: DeviceIdentity,
+        descriptor: BufferDescriptor,
+        native: Arc<dyn BufferBackend>,
+    ) -> Self {
         Self {
             id,
             device,
             descriptor,
+            native,
         }
+    }
+
+    /// The native allocation behind this buffer.
+    ///
+    /// Crate-private for the reason the whole seam is: section 59 keeps native
+    /// types off the exported surface, and a caller never learns the platform in
+    /// order to write correct code. The device verbs of the later chapters reach
+    /// it here and downcast inside their own backend.
+    ///
+    /// The transfer chapter is that caller and is not written, so in a non-test
+    /// build nothing reads this yet. The expectation says so rather than leaving
+    /// the gap to be inferred, and expires the moment a real caller lands.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the copy, upload and readback lowering is the first caller and is not written; until it lands, only the contract tests reach this"
+        )
+    )]
+    pub(crate) fn native(&self) -> &Arc<dyn BufferBackend> {
+        &self.native
     }
 
     /// This buffer's process-local object ID.
@@ -379,10 +419,11 @@ impl Buffer {
 /// Written by hand rather than derived (adjudication A16): descriptors in this
 /// chapter are `#[derive(Clone, Debug)]` and contain a [`Buffer`], so a handle
 /// must be printable, but section 7.1 describes an object by its identity rather
-/// than its contents. The backend port will add a native field that has no
-/// reason to be `Debug`, and printing a native handle into a log would leak it.
-/// `finish_non_exhaustive()` is what makes it honest that the descriptor is not
-/// shown — a caller who needs it calls [`Buffer::descriptor`].
+/// than its contents. The native field added by the backend port has no `Debug`
+/// for the same reason it has no accessor — printing a native handle into a log
+/// would leak it — and `finish_non_exhaustive()` is what makes it honest that
+/// neither the descriptor nor the allocation is shown. A caller who needs the
+/// descriptor calls [`Buffer::descriptor`].
 impl fmt::Debug for Buffer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -409,43 +450,66 @@ impl Device {
     /// verb collected into `api::platform` instead would make that module the one
     /// file that must know about every resource in the crate.
     ///
-    /// The portable refusals happen before the stop, in section 12.3's own order:
-    /// the descriptor's rules first, then the device's answer to the
+    /// The portable refusals happen before the allocation, in section 12.3's own
+    /// order: the descriptor's rules first, then the device's answer to the
     /// [`BufferSupportQuery`] its usage builds. Section 4 forbids handing a defect
     /// portable validation can find to a driver for it to discover, and section
-    /// 3.1 forbids touching a backend before the portable checks have run — so what
-    /// panics here is the allocation, never the validation.
+    /// 3.1 forbids touching a backend before the portable checks have run — so by
+    /// the time the backend is asked, the only question left is whether the driver
+    /// will satisfy a request that is already known to be well-formed.
     ///
     /// The support answer is read from [`Device::capabilities`] rather than
     /// assumed, because a `BufferSupport` built by hand would be a capability claim
     /// about hardware nobody asked — the same reason
     /// [`BufferSupportLimits`] mints its value crate-private.
     ///
+    /// # Where the identity comes from
+    ///
+    /// [`ObjectId::next`], here, and not from the backend. Section 3 gives the id
+    /// to the object that created the resource, and the backend is handed the
+    /// descriptor and nothing else precisely so that there is one place an id is
+    /// minted. See [`crate::base::resource`] for the rest of that division.
+    ///
     /// # Errors
     ///
     /// [`RhiErrorKind::InvalidUsage`] when the descriptor is inconsistent with
     /// itself — a size of zero, an empty usage set, or a size past the ceiling the
-    /// device reports — and [`RhiErrorKind::Unsupported`] when the device cannot
-    /// express the usage combination at all, which is not the caller's mistake.
+    /// device reports — [`RhiErrorKind::Unsupported`] when the device cannot
+    /// express the usage combination at all, which is not the caller's mistake,
+    /// and whatever the backend reports for a native failure of its own —
+    /// [`RhiErrorKind::OutOfMemory`] and [`RhiErrorKind::BackendFailure`] are the
+    /// two a real allocator produces.
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> RhiResult<Buffer> {
-        // Section 6.5: a lost device refuses creation itself. It is also the
-        // first verdict this verb can reach on a tree with no backend port,
-        // because it returns before the capability read below.
-        self.require_active()?;
+        // Section 6.5: a lost device refuses creation itself, and section 3.1
+        // puts it after the ownership verdicts — of which this verb has none,
+        // because the device is its receiver and not one of its arguments.
+        //
+        // Both refusals below are named as this verb's, and the naming is applied
+        // here rather than inside the two helpers that produce them. Neither can
+        // name an operation honestly: `require_active` is the device's liveness
+        // check and is reached from every verb, and `validate_buffer_descriptor`
+        // is a rule about a descriptor and has no verb. Section 4's model attaches
+        // the name "as the error crosses each layer, so the layer closest to the
+        // caller names itself", and this is that layer.
+        self.require_active()
+            .map_err(|error| error.at("Device::create_buffer"))?;
 
         let support = self
             .capabilities()
             .buffer_support(&BufferSupportQuery::new(desc.usage));
-        validate_buffer_descriptor(desc, &support)?;
-        unimplemented!(
-            "Device::create_buffer needs a backend allocator to allocate the {} bytes \
-             this descriptor asks for; the portable contract is fixed and its refusal \
-             paths above are built, but no backend port is built. The capability \
-             snapshot this verb reads its buffer-support answer from is a backend-port \
-             deliverable as well, so on today's tree the call stops inside \
-             Device::capabilities before reaching this point",
-            desc.size
-        )
+        validate_buffer_descriptor(desc, &support)
+            .map_err(|error| error.at("Device::create_buffer"))?;
+
+        // The one backend call, and the last statement that can fail. Everything
+        // above it is a portable verdict about the request; this is the driver's
+        // answer to it.
+        let native = self.native().create_buffer(desc)?;
+        Ok(Buffer::new(
+            ObjectId::next(),
+            self.identity(),
+            desc.clone(),
+            native.into(),
+        ))
     }
 }
 
