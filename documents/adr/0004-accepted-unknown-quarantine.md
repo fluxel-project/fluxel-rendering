@@ -1,6 +1,24 @@
 # ADR-0004: Quarantine accepted-unknown GPU work
 
-**Status:** Accepted
+**Status:** Superseded by the normative [RHI API v1 submission acceptance
+contract](../rhi-design/05-submission-completion-presentation.md#413-devicesubmit-acceptance-contract)
+for 0.16.
+
+**Supersession note.** This ADR preserves the evidence and safety concern from
+the pre-v1 implementation history, but it does not define the 0.16 public API.
+The accepted-unknown quarantine name and its generation-poisoning model are not
+part of the v1 contract.
+
+## Current RHI API v1 replacement
+
+`Device::submit()` returns `Err` only when it guarantees that **zero native
+work from the plan was accepted**. Once any native work has been accepted,
+`Device::submit()` returns `Ok(SubmissionReceipt)`; a later submit failure,
+device loss, presentation failure, or retirement outcome is reported through
+the receipt's terminal `CompletionState` and, where applicable,
+`PresentState`. Those terminal states exclusively own all post-acceptance
+failure and retirement reporting. Accepted work remains retained until that
+terminal lifecycle allows safe retirement.
 
 ## Context
 
@@ -8,7 +26,7 @@ A native submit error may occur after work has been accepted. Treating it as a
 known rejection can release commands, staging memory, resources, or leases
 while the GPU may still reference them.
 
-## Decision
+## Historical decision
 
 Distinguish known pre-submit rejection from accepted-unknown work and terminal
 completion failure. Accepted-unknown work retains/quarantines all referenced

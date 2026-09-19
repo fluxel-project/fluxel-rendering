@@ -1,5 +1,14 @@
 # Fluxel Rendering workspace architecture
 
+> Architecture status: this is the post-foundation workspace/layer target. The
+> active implementation order is [versions 0.16-0.20](version-plan.md), and the
+> sole normative RHI API source is [RHI design](design-rhi.md) together with
+> its `rhi-design` modules. The [foundation interface
+> contract](design-foundation-interfaces.md) is cross-layer only. RHI must be
+> completed on every declared backend before RenderGraph implementation begins;
+> RenderGraph must then be completed before portable capture/replay. New
+> renderer/scene/canvas/runtime work resumes only after the `0.20` gate.
+
 Fluxel Rendering is a layered Rust workspace for turning renderer-selected
 scene data into portable GPU work, then executing that work through a small,
 safe native boundary. The layers are deliberately separate: the renderer
@@ -8,9 +17,34 @@ meaning requires*, and RHI performs *how a selected backend owns and executes
 the work*.
 
 This document is the architectural entry point for the workspace. It describes
-the current system as a whole and its intended extension boundaries. It does
+the stable layer model and the higher-level system to reconnect after the
+foundation train. During `0.16`-`0.20`, higher layers may be explicitly dormant
+while their dependencies are replaced; that temporary build state does not
+change ownership or authorize a second architecture. This document does
 not replace the crate designs, which define each layer in detail, or the ADRs,
 which record why durable choices were made.
+
+## Foundation-first execution mode
+
+The dependency order is also the delivery order:
+
+```text
+0.16-0.17  Portable RHI and all backend/profile evidence
+0.18-0.19  RenderGraph correctness, allocation, scheduling, and trace
+0.20       Portable capture/replay
+after 0.20 reconnect and extend renderer/scene/runtime work
+```
+
+RHI definitions include canonical descriptor/command/submission observation,
+reconstructable shader artifacts, typed identity, readback layout, and external
+input classification from the start. Those are capture prerequisites, not an
+early capture implementation or file-format freeze.
+
+The common public model contains RenderGraph resources, RHI bindings, devices,
+surfaces, submission and completion. Browser/GL objects are backend-private.
+There is no public or internal resource architecture based on browser
+“sessions” or “asset tokens”; the exact RHI identity, lifetime, and retirement
+rules are defined only by the normative RHI API.
 
 ## Goals and non-goals
 
@@ -25,15 +59,16 @@ accident of callback order or one backend's behavior. Its central goals are:
 - evidence that distinguishes CPU protocol tests, compile checks, and real GPU
   conformance.
 
-It is not a general graphics API, a scene/asset database, a shader authoring
-framework, or a presentation runtime. In particular, there is currently no
-general pipeline or bind-group builder, general shader reflection API,
-cross-platform surface abstraction, multi-queue scheduler, transient aliasing
-implementation, or stable public asset/resource handle and cache ABI. The proven
-Windows presentation slice supports DX12 and Vulkan through one narrow RHI
-surface façade. It handles resize/minimize/restore as generation changes and
-independent acquired-frame tickets, while the harness privately proves bounded
-frames-in-flight. It is not a general platform API or public frame scheduler.
+It is not a scene/asset database, shader authoring framework, or host runtime.
+The `0.16`-`0.20` foundation train implements portable RHI/Graph contracts
+without exposing native mechanisms or turning backend features into universal support.
+General material authoring and stable public asset/cache ABI remain outside
+that foundation. The following is retained `0.15` historical evidence only:
+the proven Windows presentation slice supported DX12 and Vulkan through one
+narrow RHI surface façade. It handled resize/minimize/restore as generation
+changes and independent acquired-frame tickets, while the harness privately
+proved bounded frames-in-flight. It was not a general platform API or public
+frame scheduler.
 
 ## Layer model and dependency direction
 
@@ -55,7 +90,7 @@ never become graph concepts.
 | --- | --- | --- |
 | `fluxel-renderer` | Domain inputs, renderer policy, fixed per-device GPU residency, GPU snapshot publication, fixed frame coordination, closed recipes, and the visible fixed-frame transaction | Logical asset loading/cache identity, graph compilation, native handles, barriers, swapchains, or host/window policy |
 | `fluxel-rendergraph` | Logical resources and versions, declared accesses, validation, dependencies, culling, transitions, and immutable execution plans | Scenes, asset handles, shader/pipeline policy, allocation, native handles, queue submission, or readback implementation |
-| `fluxel-rhi` | Device-affine native resources, opaque artifacts/bindings, backend lowering, command recording, submission, completion, native diagnostics, and surface/swapchain presentation | Scene selection, asset policy, host/window ownership, general renderer lowering, or a public general graphics API |
+| `fluxel-rhi` | Device-affine native resources, opaque artifacts/bindings, backend lowering, command recording, submission, completion, diagnostics, and presentation as defined by the normative RHI API | Scene selection, asset policy, host/window ownership, general renderer lowering, or a public general graphics API |
 
 Assets cross a repository boundary without moving platform or GPU policy into
 one shared crate. `fluxel-bases` owns durable logical identity, typed handles,
@@ -72,7 +107,11 @@ containment boundary is recorded in
 [ADR-0002](adr/0002-rhi-unsafe-containment.md).
 
 For layer-specific contracts, see [Renderer design](design-renderer.md),
-[RenderGraph design](design-rendergraph.md), and [RHI design](design-rhi.md).
+[RenderGraph design](design-rendergraph.md), [RHI design](design-rhi.md), and
+[capture/replay design](design-capture-replay.md). [RHI design](design-rhi.md)
+and its `rhi-design` modules are the sole normative RHI API; the
+[foundation interface contract](design-foundation-interfaces.md) records only
+cross-layer invariants and integration boundaries.
 
 ## Frame data flow
 
@@ -85,10 +124,11 @@ application scene/domain data
   -> ordered render packet or closed fixed recipe
   -> acquire one RHI presentable image when presentation is requested
   -> RenderGraph declarations
-  -> compiled immutable ExecutionPlan
-  -> RHI frame resolution and backend lowering
-  -> one serial queue submission
-  -> completion, export state, presentation, and retirement
+  -> target-aware immutable CompiledGraph
+  -> per-frame GraphInstantiation and GraphExecutionPlan
+  -> RHI RecordedWork and SubmissionPlan lowering
+  -> serial-base or capability-routed submission
+  -> completion, export semantic use, presentation, and retirement
 ```
 
 ### Renderer-side selection
@@ -98,16 +138,16 @@ an insertion-ordered `DrawList`. A renderer decides which snapshot generation,
 material behavior, and ordering policy are legal for the frame. Persistent CPU
 data is validated before it enters the asynchronous GPU path.
 
-For the fixed 0.14 residency domains, preparation receives an immutable
+For the retained fixed residency domains, preparation receives an immutable
 `AssetSnapshot` and keys its private entry by `(AssetId, ContentGeneration,
 DeviceIdentity)`. Pending uploads are not drawable; only a committed entry is
 bound as a concrete graph import. Supersession, eviction, or device recreation
 moves an old entry to retirement, where its RHI leases retain it until terminal
 submission completion. A pass never receives `AssetStore`, and neither
 RenderGraph nor the general/native RHI gains an asset/cache handle or a shader
-generalization. The sibling `fluxel-rendering-wasm` adapter alone exposes a
-closed experimental browser-residency seam with opaque tokens; those are not
-graph or native RHI handles.
+generalization. Browser residency is represented by the same private
+device-generation entries and completion-retained leases as other backends; no
+browser token or session becomes a resource model.
 
 The current renderer has deliberately narrow fixed paths: immutable
 indexed mesh, texture, normal, and vertex-color snapshots are published only
@@ -147,42 +187,47 @@ The renderer declares passes rather than recording opaque, unordered native
 work. Each pass states which version and range of each logical buffer or
 texture it reads, writes, samples, attaches, copies, or accesses read/write.
 From those declarations RenderGraph derives the dependency DAG, validity and
-initialization checks, dead-pass culling, required usage, and state/memory
-transition requirements.
+initialization checks, dead-pass culling, required usage, and semantic-use/
+memory-dependency requirements.
 
-Compilation produces an immutable `ExecutionPlan`-backed graph snapshot. The
+Compilation produces an immutable, target-aware `CompiledGraph`. The
 snapshot contains portable semantics, not an encoder, command buffer, queue,
-or native allocation. Imports are stable slots; each frame binds concrete
-resources to them. Exports name roots and carry an outgoing-state contract for
-the next graph or external consumer. More detail is in the
+or native allocation, but it may be specialized to the selected capability and
+opaque allocation-requirements profile. Imports are stable slots; each frame
+binds concrete resources to them. Exports name roots and carry a portable final
+semantic-use contract for the next graph or external consumer. More detail is in the
 [RenderGraph design](design-rendergraph.md).
 
 An import binding identifies a provider-selected physical object and generation,
-its actual incoming state, allowed usage, and a completion-safe lease. The
-executor checks these facts; an export returns its actual outgoing state rather
-than a guessed default. Compatible compiled graphs may privately reuse a
-completed transient allocation, but only for exact whole-resource state
-carry-over. Reuse is segregated by device and compiled-graph generation; graph
-or device invalidation prevents a new checkout while pending or unknown work
+its declared initial semantic use, Fluxel-known history, allowed usage, and a
+completion-safe lease. The executor checks these facts; an export records the
+actual final semantic use established by execution rather than a guessed native
+state. Compatible compiled graphs may privately reuse a
+completed transient allocation only when target allocation requirements,
+logical lifetime, and semantic history allow it. Reuse is segregated by device
+and compiled-graph generation; graph
+or device invalidation prevents a new checkout while non-terminal work
 continues to retain its old-generation lease. It is not public aliasing or a
 caller-visible cache. See [ADR-0009](adr/0009-resource-floor-and-reuse-safety.md).
 
 ### RHI resolution, execution, and completion
 
 RHI resolves plan resources against opaque native resources, verifies device
-identity, descriptors, incoming state, and actual allowed usage, then lowers
-only declared commands. The present implementation uses a serial, one-queue
-correctness path. The execution boundary records transitions/order, commands,
-submission, and completion while retaining every lease required by native work.
+identity, descriptors, declared incoming semantic use against Fluxel-known
+history, and actual allowed usage, then lowers only declared commands. The
+precise resource-use, lane, submission, completion, presentation, and
+retirement semantics are defined by [RHI design](design-rhi.md) and its
+`rhi-design` modules; this overview does not define an alternate RHI state
+machine.
 
-An export reports the actual outgoing state. Readback or a later consumer must
-use that state as its incoming state; it must not silently substitute a more
-convenient state. Submission is not treated as completion. A known rejection,
-accepted-but-unknown submission, successful completion, and terminal failure
-are distinct states with different ownership consequences. Unknown accepted
-work is quarantined rather than releasing objects or publishing guessed state;
-the same conservative rule applies when a completion query itself is `Unknown`.
-See [ADR-0004](adr/0004-accepted-unknown-quarantine.md).
+An export reports the final portable semantic use established by the plan.
+Readback or a later consumer must declare a compatible incoming use and bind it
+against Fluxel-known history; it must not invent a more convenient native state.
+Submission is not treated as completion. The v1 API distinguishes plan
+acceptance, GPU completion, and presentation outcome, and retains ownership
+until the relevant terminal outcome is established. The old
+accepted-unknown/quarantine terminology is retained only as `0.15` historical
+background and is not authority for the v1 API.
 
 The serial lowering is a correctness strategy, not a claim that graph passes
 are tied to one encoder, command buffer, or queue. Multi-queue scheduling,
@@ -203,13 +248,10 @@ The workspace keeps three lifetimes separate.
 An immutable GPU snapshot is the bridge between the first and third rows. It
 encapsulates a concrete native generation plus leases and reported state, but
 does not expose raw native handles. Publication is atomic across the resources
-that make up the snapshot. An owned `RenderPacket` bridges the persistent
-borrowed draw-list input and one graph execution: it is device-affine, owns
-the ready snapshot leases and serialized uniforms, but owns neither a native
-reservation nor a native command. Submission reserves each unique generation
-as one transaction. Before raster acceptance, failure and drop release the
-reservations; after unproven raster acceptance, the generations are poisoned
-rather than reused with unknown native state.
+that make up the snapshot. The retained `0.15` `RenderPacket` baseline bridged
+the persistent borrowed draw-list input and one graph execution through its
+own device-affine reservation and poisoning rules. Those fixed-path rules are
+historical implementation detail, not future RHI semantics.
 
 RHI resources are device-affine and retain the opened native device through
 shared ownership. Cloning a lease extends the resource/native-device lifetime;
@@ -220,7 +262,7 @@ outlive, alias, or misuse a raw native object.
 ## Portable semantics and backend facts
 
 RenderGraph describes portable meaning: resource operations, ranges, ordering,
-initial contents, required usages, and exported final states. It does not
+initial contents, required usages, and exported final semantic uses. It does not
 pretend that portable states are direct DX12 or Vulkan enumerations.
 
 RHI reports backend facts separately: adapter identity, limits, supported
@@ -229,7 +271,7 @@ validation availability. During frame resolution, the portable requirement
 must be a subset of the resource's actual allowed operations. This prevents an
 allocator or import binding from merely echoing what the plan requested.
 
-The same `ExecutionPlan` is intended to execute with the same observable
+The same compatible `GraphExecutionPlan` is intended to execute with the same observable
 semantics on supported backends. Backend lowering may use different barriers,
 resource flags, encoders, or state representations, and a same-state memory
 dependency need not imply an identical native barrier. Those are
@@ -278,11 +320,11 @@ crates/
     src/plan/     immutable plan data and contracts
     src/test_rhi/  deterministic CPU-only execution-protocol backend
   rhi/            safe native resource and execution facade
-    src/resource/ owned resources, uploads, leases, fixed artifacts
-    src/execution/ plan providers, fixed command recording, completion helpers
+    src/resource/ owned resources, uploads, leases, shader artifacts
+    src/execution/ plan providers, command recording, completion helpers
     src/imp/      private HAL/native implementation and platform stubs
 documents/
-  design-*.md     current-state layer designs
+  design-*.md     target layer designs plus explicitly marked historical baselines
   adr/            durable architectural decisions and alternatives
   draft/          local, uncommitted plan/review working material
 ```
@@ -296,7 +338,9 @@ while internal implementation evolves.
 ## Platform boundary
 
 The portable graph and default renderer-domain model are not tied to a native
-API. Native execution is Windows-focused, with headless DX12/Vulkan feature
+API. The remainder of this paragraph records the retained `0.15` baseline, not
+the completion state of the rewritten `0.16`-`0.20` foundation. That baseline's
+native execution is Windows-focused, with headless DX12/Vulkan feature
 selection and a backend-neutral DX12/Vulkan surface-generation/ticket path. The
 Windows proof harness owns its bounded three-slot admission and back-pressure
 policy; RHI only guards native image availability and completion-driven teardown.
@@ -311,16 +355,24 @@ readable storage texture is currently Vulkan-only. DX12 reports its observed
 read limitation and fails closed; WebGPU read is not promised. WebGL2 rejects
 compute and every storage operation with structured capability evidence before
 context/resource side effects, with no emulation. WebGPU separately owns a
-private device-generation/canvas-epoch state machine, opaque per-key resource
-registry, ticket-held leases, asynchronous recovery, and terminal disposal.
+private device-generation/canvas-epoch state machine, per-key resource registry,
+completion-held leases, asynchronous recovery, and terminal disposal.
 In normal browser rendering, a committed resident mesh is reused only for its
-current device generation. Replacing content does not mutate an old token: that
-token remains safe for its own in-flight work within the same generation while
-the replacement uses a new content-generation entry. Generation loss removes
+current device generation. Replacing content does not mutate an old entry: its
+lease remains safe for in-flight work within the same generation while the
+replacement uses a new content-generation entry. Generation loss removes
 old entries from lookup and reuploads retained CPU snapshots for the replacement
 generation. An image registry may exist for the same residency bookkeeping, but
 the legacy-unlit browser path does not claim to sample a resident image; that
 browser-only contract does not broaden native Surface.
+
+The target RHI matrix replaces that implementation description in `0.16` and
+`0.17`: real DX12, Vulkan, and Metal first, followed by browser WebGPU and the
+GL-family desktop GL/GLES/WebGL2 profiles under the single v1 device-identity,
+capability, submission, completion, presentation, and retirement contract. The
+exact API is normative only in [RHI design](design-rhi.md) and its modules; the
+exact gates are in [version-plan.md](version-plan.md), and prior baseline
+evidence is not reused as proof of the replacement.
 
 Windows MSVC is the primary Windows development/native test environment. Linux
 must be tested natively (for example in WSL2/Ubuntu), because it exercises

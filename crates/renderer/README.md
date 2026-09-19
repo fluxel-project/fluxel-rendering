@@ -1,5 +1,18 @@
 # Fluxel Renderer
 
+> `0.15` historical usage guide and post-foundation renderer baseline. Renderer
+> work is paused during `0.16`-`0.20` except for required migration/evidence and
+> may be explicitly dormant while lower layers are replaced. Resume only through
+> [the foundation version plan](../../documents/version-plan.md); do not treat
+> old graph/RHI spellings below as the new contract.
+>
+> **RHI API v1 boundary.** The fixed Stage-1 recipes and all
+> accepted-unknown/quarantine behavior below are retained as `0.15` historical
+> evidence, not as RHI API v1. Future implementation follows
+> [RHI API v1](../../documents/design-rhi.md): once work is accepted,
+> `Device::submit()` returns a `SubmissionReceipt`, and terminal
+> `CompletionState` / `PresentState` owns subsequent failure and retirement.
+
 `fluxel-renderer` defines the user-facing scene inputs `Camera`, `Geometry`,
 `Mesh`, `BasicMaterial`, and insertion-ordered `DrawList`. Its optional
 `gpu-upload` feature also turns validated indexed geometry into an opaque,

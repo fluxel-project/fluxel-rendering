@@ -1,5 +1,16 @@
 # Fluxel Renderer design
 
+> Historical/post-foundation status: this document records the retained `0.15`
+> renderer baseline and the higher-level architecture to reconnect only after
+> the `0.20` foundation gate. During `0.16`-`0.20` renderer code may be
+> explicitly dormant. It is not an RHI or RenderGraph implementation contract;
+> [the foundation interface contract](design-foundation-interfaces.md) is
+> cross-layer only, while all RHI contracts are governed by [RHI API
+> v1](design-rhi.md) and its `rhi-design` modules. Follow the [version
+> plan](version-plan.md). Old `ExecutionPlan`, outgoing-state, serial executor,
+> browser-token, or accepted-unknown wording must not be copied into the new
+> foundation.
+
 ## Purpose
 
 `fluxel-renderer` is the application-facing renderer layer in the
@@ -204,12 +215,18 @@ Ready --reserve--> InFlight --proven complete--> Ready
                          \--uncertain/drop-----> Poisoned
 ```
 
-Only one fixed draw can use a generation at once. A graph/native rejection
-before acceptance releases its reservation; proven completion also releases it.
-An accepted submission whose final outgoing state cannot be proven, or an
-accepted submission dropped before proof, permanently poisons that generation.
-This fail-closed rule prevents later work from assuming a native resource state
+The following is retained `0.15` fixed-renderer behavior only: one fixed draw
+can use a generation at once. A graph/native rejection before acceptance
+releases its reservation; proven completion also releases it. An accepted
+submission whose final outgoing state cannot be proven, or an accepted
+submission dropped before proof, permanently poisons that generation. This
+fail-closed rule prevents later work from assuming a native resource state
 which may be unknown; see [ADR-0004](adr/0004-accepted-unknown-quarantine.md).
+
+It does not define the future RHI contract. Post-foundation renderer policy
+uses a v1 `SubmissionReceipt` and waits for the relevant terminal
+`CompletionState`; when presentation is involved, `PresentState` is a separate
+outcome. It must not recreate accepted-unknown/quarantine state names.
 
 The generation counter is process-local opaque identity, not an asset handle or
 persistence protocol. This crate does not implement hot reload, eviction, or
@@ -368,9 +385,11 @@ retain RHI leases; device clones in the renderer/executor path keep the native
 device alive until dependent work completes.
 
 The mutex-protected gate safely coordinates snapshot clones, but is deliberately
-conservative: it is not a promise of parallel rendering. Native queue
-serialization and accepted-unknown handling are RHI concerns. Renderer code
-never repairs a poisoned snapshot by guessing state.
+conservative: it is not a promise of parallel rendering. The retained `0.15`
+native queue serialization and accepted-unknown handling are historical RHI
+concerns. Future renderer code follows v1 `SubmissionReceipt`, terminal
+`CompletionState`, and, where applicable, `PresentState`; it never repairs a
+snapshot by guessing state.
 
 ## Validation and evidence
 
@@ -395,16 +414,17 @@ Portable unit tests cover domain validation, payload packing, publication,
 reservations, recipe mapping, graph declaration, and failure paths. They do
 not prove DX12/Vulkan correctness.
 
-Windows hardware fixtures run the fixed contracts on both supported native
-backends with required validation and compare readback to CPU oracles. Cases
-distinguish perspective interpolation, integer versus linear sampling, clamp,
-sRGB decode-before-filter, normal-stream binding, Lambert shading,
-separate-slot linear vertex-color interpolation and tint multiplication, and
-pre-accept versus accepted-unknown faults. The legacy-unlit packet fixture also
-uses non-commuting camera and model matrices to compare per-draw placement with
-an independent CPU `projection * view * model` oracle. Unexpected validation
-diagnostics are failures. RHI readback consumes the graph-exported outgoing
-state as its actual incoming state, so it cannot silently repair a wrong export.
+Windows hardware fixtures run the retained `0.15` fixed contracts on both
+supported native backends with required validation and compare readback to CPU
+oracles. Cases distinguish perspective interpolation, integer versus linear
+sampling, clamp, sRGB decode-before-filter, normal-stream binding, Lambert
+shading, separate-slot linear vertex-color interpolation and tint
+multiplication, and pre-accept versus accepted-unknown faults. The legacy-unlit
+packet fixture also uses non-commuting camera and model matrices to compare
+per-draw placement with an independent CPU `projection * view * model` oracle.
+Unexpected validation diagnostics are failures. RHI readback consumes the
+graph-exported outgoing state as its actual incoming state, so it cannot
+silently repair a wrong export.
 
 See [ADR-0005](adr/0005-gpu-conformance-evidence.md) and
 [ADR-0008](adr/0008-native-platform-test-gates.md). Native conformance is
@@ -424,9 +444,11 @@ semantics.
 0.14 adds a private reuse layer only for fixed `MeshAsset`/`Geometry` and
 `ImageAsset`/linear `Rgba8Image` inputs. It is not an application-visible
 asset cache and does not change the existing fixed recipe, general shader,
-general/native RHI, or RenderGraph APIs. The sibling
-`fluxel-rendering-wasm` adapter adds only a closed experimental browser-
-residency seam with opaque tokens; they are not RHI or graph handles. The
+general/native RHI, or RenderGraph APIs. The historical sibling
+`fluxel-rendering-wasm` adapter used a closed experimental browser-residency
+seam. The replacement uses ordinary private device-generation entries and
+completion-retained leases; no token/session becomes an RHI, graph, or backend
+resource model. The
 renderer records residency with the exact key:
 
 ```text
@@ -470,8 +492,8 @@ fixed mesh/image contents are uploaded under the new `DeviceIdentity`. Old
 device entries are not transplanted or guessed safe; they remain retirement
 candidates until their original leases complete. This preserves cross-device
 safety without adding a recovery protocol to the general/native RHI or
-RenderGraph. Browser-specific recovery uses only the sibling adapter's closed
-experimental residency seam and opaque tokens.
+RenderGraph. Browser-specific recovery uses only private device identity,
+generation, presentation epoch, and completion-retained leases.
 
 See [ADR-0010](adr/0010-renderer-private-fixed-asset-residency.md).
 

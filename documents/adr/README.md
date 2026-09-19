@@ -12,13 +12,13 @@ later be marked `Superseded by: ADR-NNNN`.
 ## Index
 
 - [ADR-0011: Build the GL family through three private layers](0011-gl-family-three-layer-boundary.md)
-- [ADR-0010: Keep fixed-asset residency renderer-private](0010-renderer-private-fixed-asset-residency.md)
-- [ADR-0009: Keep the resource floor closed and reuse stateful](0009-resource-floor-and-reuse-safety.md)
+- [ADR-0010: Keep fixed-asset residency renderer-private — RHI semantics superseded by API v1](0010-renderer-private-fixed-asset-residency.md)
+- [ADR-0009: Keep the resource floor closed and reuse stateful — historical 0.12–0.15](0009-resource-floor-and-reuse-safety.md)
 - [ADR-0008: Execute platform-specific test paths natively](0008-native-platform-test-gates.md)
-- [ADR-0007: Keep fixed renderer recipes closed](0007-closed-fixed-renderer-recipes.md)
-- [ADR-0006: Do not expose a general pipeline abstraction yet](0006-no-general-pipeline-yet.md)
+- [ADR-0007: Keep fixed renderer recipes closed — renderer-private only](0007-closed-fixed-renderer-recipes.md)
+- [ADR-0006: Do not expose a general pipeline abstraction yet — superseded by RHI API v1](0006-no-general-pipeline-yet.md)
 - [ADR-0005: Require GPU conformance evidence for native correctness claims](0005-gpu-conformance-evidence.md)
-- [ADR-0004: Quarantine accepted-unknown GPU work](0004-accepted-unknown-quarantine.md)
+- [ADR-0004: Quarantine accepted-unknown GPU work — superseded by RHI API v1 acceptance contract](0004-accepted-unknown-quarantine.md)
 - [ADR-0003: Keep execution lowering serial until evidence justifies more](0003-serial-execution-lowering.md)
 - [ADR-0002: Contain native handles and unsafe in the RHI implementation](0002-rhi-unsafe-containment.md)
 - [ADR-0001: Keep assets and renderer policy outside RenderGraph](0001-assets-outside-rendergraph.md)
@@ -27,6 +27,10 @@ later be marked `Superseded by: ADR-NNNN`.
 
 Newest first. “Confirmed” means a release retained or strengthened an existing
 constraint; it does not create a new ADR.
+
+ADR-0004 and ADR-0006 are historical and superseded as 0.16 RHI API decisions.
+ADR-0007 remains applicable only to renderer-private recipes; none of these
+three ADRs define or constrain the normative RHI API v1 surface.
 
 | Release | ADR decision recorded or confirmed |
 | --- | --- |

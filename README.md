@@ -15,6 +15,11 @@ mini-game adapters drive its WASM form; native hosts drive its library form.
 
 ## Workspace
 
+The table below describes the retained `0.15` workspace. During the
+`0.16`-`0.20` foundation train, individual higher-level targets may be
+explicitly dormant and their old internal interfaces are not the replacement
+contract.
+
 The workspace is organised around four crates:
 
 | Crate | Responsibility |
@@ -58,9 +63,12 @@ release. See [RELEASING.md](RELEASING.md) for the release gate.
 ## Documentation
 
 - [Workspace architecture](documents/design-overview.md)
+- [Foundation cross-layer contract](documents/design-foundation-interfaces.md)
 - [RenderGraph design](documents/design-rendergraph.md)
 - [RHI design](documents/design-rhi.md)
+- [Portable capture/replay design](documents/design-capture-replay.md)
 - [Renderer design](documents/design-renderer.md)
+- [Foundation versions 0.16-0.20](documents/version-plan.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Fluxel ecosystem roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
 - [RenderGraph guide](crates/rendergraph/README.md)
@@ -69,6 +77,9 @@ release. See [RELEASING.md](RELEASING.md) for the release gate.
 ## Quick verification
 
 Rust MSRV is 1.87 (edition 2024).
+
+These commands verify the checked-out baseline; by themselves they do not close
+any future version's real-platform or cross-repository evidence gate.
 
 ```sh
 cargo +1.87.0 test --workspace --all-targets --all-features --locked
@@ -99,7 +110,18 @@ The organization
 only stage/status authority. This README records only the workspace's current
 supported paths and recommended entry points.
 
-Current retained closures are:
+The next five minor versions are a strict foundation train: `0.16` closes the
+native RHI contract/backends, `0.17` closes every declared RHI backend/profile,
+`0.18` and `0.19` close RenderGraph in two correctness-first steps, and `0.20`
+implements portable capture/replay. New high-level renderer/scene/runtime work
+resumes only after all five ecosystem gates pass. The executable breakdown is
+the [foundation version plan](documents/version-plan.md). The sole normative
+RHI API source is [RHI design](documents/design-rhi.md) together with its
+`rhi-design` modules; the [foundation cross-layer
+contract](documents/design-foundation-interfaces.md) defines only cross-layer
+invariants and integration boundaries.
+
+The `0.15` retained historical baseline closures are:
 
 - a fixed resource floor on DX12, Vulkan, WebGPU, and WebGL2;
 - fixed compute plus storage-buffer paths on DX12, Vulkan, and WebGPU;

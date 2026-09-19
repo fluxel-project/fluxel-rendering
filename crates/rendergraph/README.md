@@ -1,5 +1,13 @@
 # fluxel-rendergraph
 
+> `0.15` historical usage guide. Do not copy its `ExecutionPlan`, native-like
+> state, or presentation-token spelling into the `0.18+` graph. The sole
+> normative RHI API authority is [Fluxel RHI API v1](../../documents/design-rhi.md).
+> [Foundation interfaces](../../documents/design-foundation-interfaces.md) are
+> cross-layer architecture, not a second RHI API. Also read the
+> [RenderGraph architecture](../../documents/design-rendergraph.md) and the
+> [version plan](../../documents/version-plan.md).
+
 `fluxel-rendergraph` is a typed, retained render graph for planning GPU work.
 You declare resource accesses during graph setup; the compiler derives pass
 dependencies, validates resource versions and device capabilities, removes dead
@@ -151,11 +159,13 @@ one graph instantiated with distinct frame inputs.
 `FrameResourceProvider`, and a renderer-owned `RenderObjectProvider`. The
 provided `TestRhi` validates protocol order, transitions, binding checks, and
 completion-based retirement; it does not run shaders or emulate GPU memory.
-For a present root, the resource provider resolves an acquired presentable
-image together with an opaque one-shot token. The executor records the graph's
-final `Present` transition and transfers that token, paired with its graph root,
-only to `ExecutionBackend::submit`; native surface and swapchain objects never
-enter graph declarations or pass callbacks.
+For a present root, this historical implementation resolved an acquired image
+with a one-shot adapter value. In v1, an acquired `FrameAttachment` is a
+distinct RHI presentation object, not an imported `Texture` or a token. The
+renderer consumes it through `SubmissionPlanBuilder::present_after`, receives a
+`PresentReceipt`, and explicitly calls `abandon` if the frame is not submitted.
+No browser/session/token concept enters the Graph or RHI resource model. Native
+surface and swapchain objects never enter graph declarations or pass callbacks.
 On Windows, `fluxel-rhi` separately executes the same immutable plan on DX12
 and Vulkan for fixed Raster, Compute, and Copy release fixtures. Its support
 is not a general graph shader surface: a renderer/RHI provider registers opaque

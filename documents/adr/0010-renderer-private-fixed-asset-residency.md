@@ -1,6 +1,9 @@
 # ADR-0010: Keep fixed-asset residency renderer-private
 
-**Status:** Accepted
+**Status:** Accepted for renderer-private residency. The `0.14` browser-token
+implementation detail is historical. All RHI identity, submission, completion,
+presentation, retirement, and loss semantics are defined solely by
+[Fluxel RHI API v1](../design-rhi.md).
 
 ## Context
 
@@ -11,15 +14,16 @@ replaced with new contents, a device may be recreated, and an old GPU upload
 may still be referenced by accepted work.  Reusing an identifier alone would
 therefore permit stale content or resources from another device to be bound.
 
-The existing RHI lease and submission-completion model already establishes
-when native work has terminally completed.  Extending RHI, RenderGraph, or the
+The v1 RHI `SubmissionReceipt` and its `CompletionPoint`s establish when native
+work has terminally completed. Extending RHI, RenderGraph, or the
 closed shader/recipe boundary merely to express residency would duplicate that
 responsibility and broaden unrelated APIs.
 
 ## Decision
 
-0.14 adds a renderer-private residency layer for only these fixed CPU asset
-domains:
+The following 0.14 decision remains renderer-private and compatible with v1;
+it is not an alternative RHI resource contract. It adds a residency layer for
+only these fixed CPU asset domains:
 
 - `MeshAsset` backed by `Geometry`; and
 - `ImageAsset` backed by linear `Rgba8Image`.
@@ -38,29 +42,34 @@ Each entry has the deliberately small lifecycle
 `PendingUpload -> Committed -> RetireCandidate`. A pending upload cannot be
 selected by a draw. A committed entry is the only selectable representation
 for its exact key. Superseded, evicted, or old-device entries become retirement
-candidates; their native resources remain retained until every relevant RHI
-lease reports terminal submission completion. The renderer never infers that
-completion from a frame boundary, a cache replacement, or device loss.
+candidates; their native resources remain retained through the relevant
+`SubmissionReceipt` and last-referencing `CompletionPoint`, until terminal
+completion or terminal device loss. The renderer never infers completion from
+a frame boundary or a cache replacement.
 
 Asset resolution occurs during renderer preparation. Preparation obtains an
 immutable CPU `AssetSnapshot`, resolves or starts the fixed upload, and passes
 only the resulting renderer-owned GPU snapshot/lease into graph declaration. A
-sticky failed or accepted-unknown attempt is explicitly retired before a caller
-prepares a new retry; it is never silently republished as a committed entry.
+failed historical attempt is never silently republished as a committed entry.
+For v1 submission, the renderer associates retirement with the returned receipt
+and terminal completion rather than maintaining an accepted-unknown state.
 A raster pass receives no `AssetStore` and does not discover, load, or choose
 assets. RenderGraph continues to see explicit imports and access states only.
 
-On device recreation, the residency layer retains CPU `AssetSnapshot` values,
-creates entries under the new `DeviceIdentity`, and reuploads their fixed
-contents. It does not transplant old native objects. Old-device entries remain
-retirement candidates and release only through their old RHI leases.
+On terminal device loss, the residency layer retains CPU `AssetSnapshot`
+values, requests a new device, creates entries under the new terminal
+`DeviceIdentity` / `DeviceGeneration` domain, and reuploads their fixed
+contents. It does not transplant old native objects. Old-domain entries remain
+retirement candidates until their receipt points have terminal completion or
+the old domain has terminally lost.
 
 This decision does not expand the general/native RHI, RenderGraph, or general
 shader contract. It adds no public cache API, generic resource residency
 protocol, descriptor model, material system, or configurable shader/pipeline
-path. The only adapter addition is a closed experimental browser-residency seam
-in the sibling `fluxel-rendering-wasm` adapter, with opaque tokens for its fixed
-browser lifecycle; those tokens are not native RHI or RenderGraph handles.
+path. The historical adapter used a closed experimental browser-residency seam.
+The v1-compatible replacement uses renderer-private asset/content generations
+and the terminal `DeviceIdentity` / `DeviceGeneration` domain. No browser
+session/token is a public or backend resource architecture.
 
 ## Alternatives
 
@@ -82,10 +91,9 @@ track a small amount of per-key upload, lease, and retirement state. A changed
 asset or recreated device can temporarily require another upload even when a
 visually similar older resource exists.
 
-The exact key and lease-governed retirement prevent stale-content and
-cross-device binding, and extend the accepted-unknown safety rule to cache
-retirement. Asset selection remains renderer preparation policy, not a graph
-or pass concern.
+The exact key and receipt-governed retirement prevent stale-content and
+cross-device binding. Asset selection remains renderer preparation policy, not
+a graph or pass concern.
 
 This decision reinforces [ADR-0001](0001-assets-outside-rendergraph.md),
 [ADR-0004](0004-accepted-unknown-quarantine.md), and
@@ -93,12 +101,12 @@ This decision reinforces [ADR-0001](0001-assets-outside-rendergraph.md),
 
 ## Evidence
 
-The 0.14 implementation must cover key separation by asset, content
-generation, and device; pending-not-selectable behavior; committed reuse;
-lease-governed retirement after replacement and device recreation; CPU
-snapshot reupload; and proof that preparation, rather than a raster pass,
+The historical 0.14 implementation covered key separation by asset, content
+generation, and device; pending-not-selectable behavior; committed reuse; and
+lease-governed retirement. A v1 implementation must instead verify receipt and
+terminal-completion retirement after replacement and terminal device loss, CPU
+snapshot reupload, and proof that preparation, rather than a raster pass,
 resolves assets. It must also demonstrate that no general/native RHI,
-RenderGraph, or general shader API expansion is required, while covering the
-closed experimental browser-residency seam and its opaque-token lifecycle.
+RenderGraph, or general shader API expansion is required.
 
 See [Renderer design](../design-renderer.md) for the architectural flow.

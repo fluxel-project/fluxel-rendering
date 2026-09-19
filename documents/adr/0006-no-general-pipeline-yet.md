@@ -1,6 +1,14 @@
-# ADR-0006: Do not expose a general pipeline abstraction yet
+# ADR-0006: Superseded — do not use fixed recipes as the RHI pipeline API
 
-**Status:** Accepted
+**Status:** Superseded by the normative RHI API v1 specification for 0.16.
+
+**Supersession note.** The frozen RHI API now defines portable
+`ShaderArtifact`, `BindGroupLayout`, `BindGroup`, `PipelineInterface`,
+`RasterPipeline`, and capability-gated `ComputePipeline` objects with validated
+descriptors and backend-private lowering. These are execution objects, not a
+public material system, render-packet framework, or custom renderer policy.
+This ADR remains historical evidence for the earlier fixed vertical slice and
+must not constrain the 0.16+ public API.
 
 ## Context
 
@@ -9,6 +17,10 @@ and binding combinations. A generic pipeline API would guess at unvalidated
 ownership, reflection, layout, and portability requirements.
 
 ## Decision
+
+This decision is superseded. New code follows the normative RHI API v1
+specification; it must not add closed adapter recipes as a substitute for its
+public shader, binding, pipeline, recorder, or submission vocabulary.
 
 Represent each proven native combination as a closed RHI artifact and binding
 recipe. Renderer-shaped Raster artifacts are exposed only under
@@ -35,5 +47,5 @@ The v0.7.0 workspace release contains discrete indexed, uniform, texture-load,
 UV, sampler, sRGB, Lambert, and vertex-color recipes without broadening them
 into a general API.
 
-See [RHI design](../design-rhi.md) and [Renderer design](../design-renderer.md)
-for the currently supported recipes.
+See [RHI public API v1](../design-rhi.md),
+[RHI design](../design-rhi.md), and [Renderer design](../design-renderer.md).

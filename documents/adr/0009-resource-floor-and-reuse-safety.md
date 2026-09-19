@@ -1,10 +1,11 @@
 # ADR-0009: Keep the resource floor closed and reuse stateful
 
-**Status:** Accepted
+**Status:** Historical (0.12–0.15). Superseded for all RHI semantics by
+[Fluxel RHI API v1](../design-rhi.md).
 
 ## Context
 
-The 0.12 resource closure needs resources to cross frames and, for compatible
+The 0.12 resource closure needed resources to cross frames and, for compatible
 compiled graphs, permits transient allocation reuse. Those two conveniences can
 silently become unsafe if a caller treats a logical name as a physical object,
 forgets a resource's real outgoing state, or frees an object after a submission
@@ -15,9 +16,9 @@ capabilities differ. A portable declaration must report an unsupported
 operation precisely and before it creates browser or native work. None of this
 requires a general shader, descriptor, or pipeline API.
 
-## Decision
+## Historical decision
 
-Keep the 0.12 resource surface a fixed, evidence-backed floor. It consists of
+The 0.12 resource surface was a fixed, evidence-backed floor. It consisted of
 the common fixed resource paths plus only the named closed compute/storage
 recipes. Backend capability reports are observed facts; unsupported semantics
 return structured `UnsupportedCapability` diagnostics and do not fall back to
@@ -36,11 +37,26 @@ or mixed-state resources remain ineligible until the graph has a complete
 subresource-state reuse model. Graph/device invalidation stops future checkout,
 but does not destroy old slots until their work has terminal completion.
 
-Pending and accepted-unknown work is quarantined. In particular, changing a
-device or compiled-graph generation cannot free a slot still owned by pending
-or unknown work. Browser resource registries apply the same rule per opaque
-key and device generation: tickets retain their resource leases until safe
-retirement.
+Pending and accepted-unknown work was quarantined. In particular, changing a
+device or compiled-graph generation could not free a slot still owned by
+pending or unknown work. Browser resource registries applied the same rule per
+opaque key and device generation: tickets retained their resource leases until
+safe retirement.
+
+## v1 interpretation
+
+This ADR no longer defines a resource floor, acceptance state, completion, or
+loss protocol. Those are defined solely by [Fluxel RHI API v1](../design-rhi.md).
+The old fixed floor and accepted-unknown quarantine are historical evidence,
+not APIs that implementations may continue to expose.
+
+For future reuse and retirement, an executor retains an object through the
+relevant `SubmissionReceipt` and its last-referencing `CompletionPoint`, until
+that point reaches terminal completion or the owning device reaches terminal
+loss. Loss terminates the complete `DeviceIdentity` / `DeviceGeneration`
+domain; recovery obtains a new identity/generation domain and never mutates an
+old public device through `generation++`. Compiled-graph generations and reuse
+slot generations remain private executor bookkeeping, not RHI identity.
 
 ## Alternatives
 
@@ -65,14 +81,14 @@ asymmetric: WebGL2 rejects compute and storage with zero side effects, and a
 storage-texture read is not promised on a backend unless that exact closed path
 is supported.
 
-This decision reinforces, rather than replaces,
+Historically, this decision reinforced, rather than replaced,
 [ADR-0004](0004-accepted-unknown-quarantine.md) for unknown completion and
 [ADR-0006](0006-no-general-pipeline-yet.md) for the closed-artifact boundary.
 
 ## Evidence
 
-Portable contract tests cover capability diagnostics, identity/state/lease
-validation, reuse eligibility, carry-over, invalidation, and pending/unknown
-quarantine. Browser and native conformance fixtures are separate tests of the
-implemented fixed paths; they do not turn the resource floor into a general
-graphics API.
+Historical portable contract tests covered capability diagnostics,
+identity/state/lease validation, reuse eligibility, carry-over, invalidation,
+and pending/unknown quarantine. Browser and native conformance fixtures tested
+the implemented fixed paths; they did not turn the resource floor into a
+general graphics API.
