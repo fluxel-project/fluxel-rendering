@@ -54,11 +54,30 @@ impl CompletionFailure {
     /// Describes a failure.
     ///
     /// Crate-private: only the code that observed the failure may describe it.
+    ///
+    /// Every backend raises these — the mock answers a serial it never reported
+    /// with one, and a native backend answers post-commit trouble with one — but
+    /// *only* a backend does, so a build with no backend compiled has no caller
+    /// for this at all. That is a real configuration rather than a hypothetical
+    /// one: `--no-default-features` compiles no native backend and no test mock.
+    ///
+    /// The feature list below is every backend feature the crate declares, not
+    /// just the one that is implemented, so that adding a real Vulkan or WebGPU
+    /// backend does not silently leave this expectation unfulfilled. A new backend
+    /// feature goes on the list (rule 4.6: a matrix that is missing a row gets the
+    /// row, not a patch to the code that needed it).
     #[cfg_attr(
-        not(test),
+        not(any(
+            test,
+            feature = "dx12",
+            feature = "vulkan",
+            feature = "webgpu",
+            feature = "gl-family"
+        )),
         expect(
             dead_code,
-            reason = "raised by the completion path when the backend port lands"
+            reason = "raised by whichever backend observed the failure; a build with no \
+                      backend compiled has nothing that could observe one"
         )
     )]
     pub(crate) fn new(message: impl Into<String>) -> Self {
@@ -153,13 +172,6 @@ impl SubmissionReceipt {
     /// explicitly permits several plan points to share one completion token, and
     /// [`Self::completion_for`] falls back to the overall token for a point it has
     /// no entry for.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "created by Device::submit when the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         plan: SubmissionPlanId,
         device: DeviceIdentity,
@@ -312,11 +324,90 @@ impl Device {
             )
             .at("Device::submit"));
         }
-        unimplemented!(
-            "the rest of Phase A and all of Phase B need the backend: lane and \
-             work-domain legality, the dependency DAG, the in-flight hazard check, and \
-             the native submit; the contract is fixed, none of them is built"
-        )
+
+        // The rest of Phase A. Everything below is decided *before* the backend is
+        // asked to commit, because section 41.3's invariant is that an `Err` from
+        // this function proves no native work was accepted — and a check that ran
+        // after the commit could not make that promise.
+        //
+        // Lane and work-domain legality, the dependency DAG, and the self-plan
+        // hazard analysis are already done: `SubmissionPlanBuilder::build` runs
+        // section 40.5's `validate_plan_graph` and refuses to produce a plan that
+        // fails it. Re-running it here would be a second authority for one rule
+        // (section 65.3), and a plan that exists is a plan that passed.
+        //
+        // What is left is the part `build` could not decide because it is about
+        // *this* moment rather than about the plan: the present relation, and the
+        // external dependencies that point at work already in flight.
+        if !plan.presents().is_empty() {
+            // Refused rather than dropped, and before the backend is reached.
+            // Section 45.5 makes a presentation the independent other half of a
+            // plan's fate, so a plan carrying one but lowered without it would
+            // hand back a receipt whose `presents()` claimed an outcome for a
+            // frame nothing ever touched — discipline 3, in the one direction
+            // where the substitute is a *missing* effect rather than a different
+            // one.
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this plan carries a presentation, and no backend lowering for \
+                 presentation is built: submitting it would execute the work while \
+                 silently dropping the frame. Retry with a plan that presents nothing",
+            )
+            .at("Device::submit"));
+        }
+
+        // Section 40.3's external dependencies are *not* re-checked here, and the
+        // absence is deliberate rather than an omission. Every rule about one —
+        // that the point belongs to this plan, and that the completion token is
+        // this device's — already ran in
+        // `SubmissionPlanBuilder::add_external_dependency`, and a plan only ever
+        // comes from `SubmissionPlanBuilder::build`. Re-deciding them here would
+        // be a second authority for one rule (section 65.3) *and* would describe a
+        // reachable failure the code cannot actually reach, which is worse than
+        // saying nothing. What is genuinely left to this moment is routability:
+        // whether this backend can make the edge happen, which only the backend's
+        // own completion bookkeeping can answer, and which it answers by
+        // refusing the lowering rather than by failing this call.
+
+        // Phase B. Everything from here on is the backend's, and section 41.3's
+        // other half starts applying: once native work is accepted this function
+        // may not return an `Err` that tells the caller nothing happened.
+        //
+        // The borrow of `plan` ends with this call, which is what lets the plan be
+        // dropped on the way out — section 41.9's release path, and the reason
+        // nothing below reads it again.
+        let outcome = {
+            let request = crate::base::command::SubmissionRequest {
+                plan: plan.id(),
+                batches: plan.batches(),
+                dependencies: plan.dependencies(),
+                external_dependencies: plan.external_dependencies(),
+            };
+            self.native().submit(&request)?
+        };
+
+        // Infallible from here. The tokens are wrapped, not derived: the serials
+        // are the backend's numbers and the device half is this layer's, which is
+        // what keeps section 3.1's identity rule on this side of the seam.
+        let identity = self.identity();
+        let overall = CompletionPoint::new(identity, outcome.completion);
+        let points = outcome
+            .points
+            .into_iter()
+            .map(|(point, serial)| (point, CompletionPoint::new(identity, serial)))
+            .collect();
+        let submitted = SubmissionPoint::new(identity, self.serials().next_submission());
+
+        Ok(SubmissionReceipt::new(
+            plan.id(),
+            identity,
+            submitted,
+            overall,
+            points,
+            // Empty by construction: a plan carrying a presentation was refused
+            // above, so there is no receipt to build for one here.
+            Vec::new(),
+        ))
     }
 
     /// The state of one completion point.
@@ -354,9 +445,10 @@ impl Device {
             )
             .at("Device::completion_state"));
         }
-        unimplemented!(
-            "completion state is tracked by the backend as it observes native work; the \
-             contract is fixed, the bookkeeping is not built"
-        )
+
+        // The backend answers by its own serial. Section 41.1 makes this
+        // non-blocking, so nothing below waits: a backend advances its
+        // bookkeeping from `Device::poll` and reports what it has observed.
+        Ok(self.native().completion(point.serial()))
     }
 }

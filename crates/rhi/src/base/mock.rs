@@ -57,7 +57,7 @@
 //! constructors it calls, and trading a real diagnostic for a feature name.
 
 use std::any::Any;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
@@ -276,6 +276,9 @@ impl DeviceRequestBackend for MockRequest {
                 facts: self.facts.clone(),
                 submission: self.submission.clone(),
                 allocations: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                next_completion: AtomicU64::new(1),
+                holding: AtomicBool::new(false),
             }))),
             MockOutcome::Fails(message) => {
                 Err(RhiError::new(RhiErrorKind::Unsupported, message.clone()))
@@ -366,6 +369,39 @@ pub(crate) struct MockDevice {
     /// one that was never called. Counting is what tells those apart, and the
     /// count is read by the tests that assert a refusal never arrives here.
     allocations: AtomicUsize,
+    /// How many plans have reached this backend's submit.
+    ///
+    /// The same observable as `allocations`, one chapter later. Section 41.3's
+    /// Phase A is supposed to have refused a bad plan *before* any native submit,
+    /// and "before" is invisible in the return value: `Device::submit` returning
+    /// `Err` looks identical whether the backend was reached and declined or was
+    /// never called at all. Counting is what separates them, and it is also what
+    /// pins the half of section 41.3 that is easiest to get wrong in the
+    /// direction nobody notices — a preflight that runs *after* the commit.
+    submissions: AtomicUsize,
+    /// The next completion serial this device will report.
+    ///
+    /// Per device rather than process-global, unlike
+    /// [`crate::api::identity::ObjectId`]'s counter, and the difference is the
+    /// point: these serials are never minted into public identity here — the
+    /// portable layer wraps them into a `CompletionPoint` whose device half it
+    /// supplies — so two devices sharing a number is not a collision. It is also
+    /// what makes `completion` checkable: a serial at or above this value was
+    /// never reported, and that is exactly the query a stale token produces.
+    next_completion: AtomicU64,
+    /// Whether reported work is held short of completion.
+    ///
+    /// The one thing this backend cannot otherwise model, and the reason it exists:
+    /// every other answer here is immediate, so an unheld mock reports `Complete`
+    /// the instant a plan is accepted and section 41.8's "it may not remain
+    /// `Pending` forever" is unfalsifiable against it. Holding separates the two
+    /// moments the chapter is built on — acceptance, which stays immediate
+    /// (section 41.7), from completion, which a test can now keep open and then
+    /// close.
+    ///
+    /// Defaults to false so that a test which does not care about the distinction
+    /// sees the old immediate answer.
+    holding: AtomicBool,
 }
 
 impl MockDevice {
@@ -409,6 +445,13 @@ impl MockDevice {
             facts,
             submission,
             allocations: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            // Starts at 1 so that serial 0 is never reported. A zero would make
+            // the "never reported" check below depend on which side of the
+            // counter's first draw a caller landed, and a sentinel that is also
+            // the first real value is not a sentinel.
+            next_completion: AtomicU64::new(1),
+            holding: AtomicBool::new(false),
         })
     }
 
@@ -420,6 +463,38 @@ impl MockDevice {
     /// happened to refuse too".
     pub(crate) fn allocations(&self) -> usize {
         self.allocations.load(Ordering::Relaxed)
+    }
+
+    /// How many plans have reached this backend's `submit`.
+    ///
+    /// The same observable one chapter later. Section 41.3 puts the whole
+    /// preflight before any native submit, so a plan the portable layer refuses
+    /// must leave this at its previous value — and a test that only checked the
+    /// returned `Err` could not tell that from a backend that was called and
+    /// declined.
+    pub(crate) fn submissions(&self) -> usize {
+        self.submissions.load(Ordering::Relaxed)
+    }
+
+    /// Holds every reported completion short, so it answers `Pending`.
+    ///
+    /// Models a device that has accepted work and has not finished it — the state
+    /// section 41.8 forbids a caller's polling loop from being stuck in forever,
+    /// and the state this backend is otherwise unable to produce. Acceptance is
+    /// deliberately *not* affected: a submit while holding still succeeds, because
+    /// section 41.7 makes those two different facts and a mock that conflated them
+    /// would hide the distinction the chapter is about.
+    pub(crate) fn hold_completion(&self) {
+        self.holding.store(true, Ordering::Relaxed);
+    }
+
+    /// Lets held work complete.
+    ///
+    /// One-way, like a fence being signalled. In a real backend the progress would
+    /// arrive from the driver through `poll`; here it is a switch, which is honest
+    /// because this device has no work to actually run and no driver to run it.
+    pub(crate) fn release_completion(&self) {
+        self.holding.store(false, Ordering::Relaxed);
     }
 
     /// Records that this device is gone, with the reason.
@@ -494,6 +569,99 @@ impl DeviceBackend for MockDevice {
             size: descriptor.size,
             usage: descriptor.usage,
         }))
+    }
+
+    /// Accepts the plan, and executes none of it.
+    ///
+    /// The mock has no GPU, so the honest model of it is a device whose work is
+    /// already finished: the serials it reports here are answered
+    /// [`CompletionState::Complete`] by `completion` from the moment they exist,
+    /// unless a test calls [`Self::hold_completion`] to keep them open. That is not
+    /// a shortcut around completion — it is what lets the *portable* half of
+    /// section 41 be tested at all. A caller's polling loop, the receipt's two
+    /// completion levels, and the fallback in `completion_for` are all portable
+    /// logic, and a backend whose only setting were "finished instantly" would
+    /// leave the polling half of it unobservable.
+    ///
+    /// The device's liveness is still consulted on the way out, because the one
+    /// thing this backend must model faithfully is section 41.8: a device that has
+    /// ended accepts nothing, and every serial it ever reported answers
+    /// `DeviceLost`.
+    ///
+    /// No refusal beyond that, and the absence is a decision rather than an
+    /// unfinished arm — the same one `create_buffer` records: every rule about
+    /// this plan has already run in `Device::submit`, so a mock with nothing left
+    /// to refuse refuses nothing.
+    fn submit(
+        &self,
+        request: &crate::base::command::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::base::command::SubmissionOutcome> {
+        if let DeviceStatus::Lost = self.status() {
+            return Err(RhiError::new(
+                RhiErrorKind::DeviceLost,
+                "this device was lost; the plan was not submitted",
+            )
+            .at("MockDevice::submit"));
+        }
+
+        self.submissions.fetch_add(1, Ordering::Relaxed);
+
+        // One serial for the whole plan and one per batch, drawn from the same
+        // counter so that they are distinguishable. The per-batch serials are
+        // reported rather than omitted because this backend *can* be finer, and
+        // section 41.2 makes finer the better answer when it is available: the
+        // point of a per-batch token is that a readback does not have to await the
+        // slowest unrelated batch, and a mock that always fell back to the overall
+        // token would leave that path untested.
+        let mut serial = self.next_completion.fetch_add(1, Ordering::Relaxed);
+        let overall = serial;
+        let mut points = Vec::with_capacity(request.batches.len());
+        for batch in request.batches {
+            serial = self.next_completion.fetch_add(1, Ordering::Relaxed);
+            points.push((batch.point, serial));
+        }
+
+        Ok(crate::base::command::SubmissionOutcome {
+            completion: overall,
+            points,
+        })
+    }
+
+    /// Answers a serial this backend reported.
+    ///
+    /// Loss first, because section 41.8 makes it override everything: after the
+    /// device ends, a serial that was `Complete` stays `Complete` and one that was
+    /// not becomes `DeviceLost` — and the mock has no "not yet" to preserve, so
+    /// every serial moves to `DeviceLost` together.
+    ///
+    /// A serial this backend never reported is a portable-layer bug rather than a
+    /// caller error. It answers `Failed` naming the serial instead of panicking,
+    /// because the alternative would abort a caller that merely raced a loss, and
+    /// because a panic in a query a frame loop polls is worse than a terminal
+    /// state it can branch on.
+    fn completion(&self, serial: u64) -> crate::api::submission::CompletionState {
+        use crate::api::submission::{CompletionFailure, CompletionState};
+
+        if let Some(info) = self.loss_info() {
+            return CompletionState::DeviceLost(info);
+        }
+
+        if serial >= self.next_completion.load(Ordering::Relaxed) {
+            return CompletionState::Failed(CompletionFailure::new(format!(
+                "completion serial {serial} was never reported by this device"
+            )));
+        }
+
+        // Held work, after the two terminal answers above and never before them.
+        // The order is the contract: a lost device answers `DeviceLost` for a held
+        // serial, and a serial this device never minted is a bug in the caller's
+        // token rather than work in flight — reporting either as `Pending` would
+        // be a polling loop that never ends, which is what section 41.8 forbids.
+        if self.holding.load(Ordering::Relaxed) {
+            return CompletionState::Pending;
+        }
+
+        CompletionState::Complete
     }
 }
 

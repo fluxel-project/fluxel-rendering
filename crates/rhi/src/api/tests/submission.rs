@@ -20,14 +20,17 @@
 //! # What these tests cannot reach
 //!
 //! ```text
-//! the accepted-completion bookkeeping of section 41.2   the backend keeps it
-//! a plan's native lowering and acceptance                  the backend performs it
-//! the cross-plan hazard check of section 41.4              needs accepted-work history
+//! a plan's native lowering and acceptance           no backend in this crate does it
+//! the cross-plan hazard check of section 41.4       needs accepted-work history
 //! ```
 //!
-//! [`Device::submit`] on a live device panics for exactly those reasons, so the
-//! tests below exercise only the refusals it makes before that point — a lost
-//! device, and a plan built for another device.
+//! The first row is why the acceptance tests below run against
+//! [`crate::base::mock`]'s device: that backend accepts a plan and executes none of
+//! it, which makes the *portable* half of section 41 — the phase split, the two
+//! completion levels, the polling rule — reachable today. It is evidence about
+//! this crate's logic and not about any GPU; `version-plan.md` section 4 still
+//! requires a real DX12 and Vulkan run over raster, compute, copy, upload and
+//! readback before this chapter is closed.
 
 use crate::api::command::RecordedWork;
 use crate::api::error::{RhiErrorKind, RhiResult};
@@ -55,6 +58,10 @@ use crate::api::submission::{
 };
 use crate::api::tests::fixture;
 use crate::base::mock::paired_device_for_test;
+// The only import here that exists for the backend's own answer rather than the
+// portable layer's: section 41.8's per-point obligation is owed by whoever owns
+// the completion bookkeeping, and on this device that is the mock.
+use crate::base::platform::DeviceBackend;
 
 // ---------------------------------------------------------------------------
 // Section 10 — the lane vocabulary.
@@ -1315,6 +1322,309 @@ fn shape_two_presents_in_one_plan(
         let _ = present.plan_id();
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance and completion, against the mock backend.
+//
+// These are the only tests in this file that reach a backend at all, and what
+// they prove is narrow and worth stating exactly: that the *portable* half of
+// section 41 runs — the phase split of 41.3, the two completion levels of 41.2,
+// the polling rule of 41.8, and the identity checks of 41.1 — over a backend that
+// accepts plans and runs nothing. No GPU is behind any of them, and none of them
+// may be presented as hardware evidence.
+// ---------------------------------------------------------------------------
+
+/// A submitted plan is accepted, reported, and its receipt names per-batch tokens.
+///
+/// The mock is deliberately finer than "everything so far", so the per-batch path
+/// is the one exercised: section 41.2 makes finer the better answer when a backend
+/// can give it, and `completion_for`'s fallback is a separate test below.
+#[test]
+fn a_validated_plan_is_accepted_and_its_receipt_reports_every_batch() {
+    let identity = device_identity(1, 1);
+    let (device, native) = paired_device_for_test(identity);
+
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let first = builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .expect("the mock's lane 0 accepts raster work");
+    let second = builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .expect("the mock's lane 0 accepts raster work");
+    let plan = builder.build().expect("a batch with no edge is acyclic");
+
+    let receipt = device
+        .submit(plan)
+        .expect("the mock backend accepts a plan the portable layer validated");
+
+    assert_eq!(native.submissions(), 1);
+    assert_eq!(receipt.device_identity(), identity);
+    assert!(
+        receipt.presents().is_empty(),
+        "a plan that presents is refused before this point, so no receipt can list one"
+    );
+    // The two tokens are different facts and section 41.7 forbids collapsing them:
+    // `submitted()` is when the RHI accepted the plan, `completion()` is when the
+    // work is done. Both are answered, and both are this device's.
+    assert_eq!(receipt.submitted().device_identity(), identity);
+    assert_eq!(receipt.completion().device_identity(), identity);
+
+    // Two batches, two distinct tokens: the mock can be finer, so it is.
+    let first_token = receipt
+        .completion_for(first)
+        .expect("the point came from this plan's builder");
+    let second_token = receipt
+        .completion_for(second)
+        .expect("the point came from this plan's builder");
+    assert_eq!(receipt.completion_for(first).unwrap(), first_token);
+    assert_ne!(
+        first_token, second_token,
+        "a backend that can distinguish two batches' completion should"
+    );
+    assert_ne!(
+        first_token,
+        receipt.completion(),
+        "the overall token is the plan's, and the mock reports it separately"
+    );
+}
+
+/// Acceptance and completion are separate, and completion is observable as a
+/// state rather than waited for.
+///
+/// This is section 41.7 and 41.10 together: `submit` returning `Ok` says nothing
+/// about the GPU, and the only way to learn more is to poll. Holding the mock's
+/// completion is what makes the distinction decidable at all — an unheld mock
+/// reports `Complete` the instant it accepts, which would let a broken
+/// `completion_state` that always answered `Complete` pass every test here.
+#[test]
+fn completion_is_pending_until_the_device_reports_it() {
+    let identity = device_identity(1, 1);
+    let (device, native) = paired_device_for_test(identity);
+
+    native.hold_completion();
+
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let point = builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let plan = builder.build().unwrap();
+
+    // Section 41.7: acceptance happens *while* the work is unfinished. A submit
+    // that waited for completion here would be the blocking frame-loop call
+    // section 41.10 forbids.
+    let receipt = device
+        .submit(plan)
+        .expect("acceptance does not await completion");
+    let token = receipt.completion_for(point).unwrap();
+    assert!(
+        matches!(
+            device.completion_state(token).unwrap(),
+            CompletionState::Pending
+        ),
+        "held work is not complete, and section 41.1 makes this query the way to see that"
+    );
+    assert!(matches!(
+        device.completion_state(receipt.completion()).unwrap(),
+        CompletionState::Pending
+    ));
+
+    native.release_completion();
+    assert!(matches!(
+        device.completion_state(token).unwrap(),
+        CompletionState::Complete
+    ));
+}
+
+/// A lost device reaches every serial it reported, and never leaves one `Pending`.
+///
+/// Section 41.8's liveness rule, in the direction the mock can decide: work that
+/// was in flight when the device ended becomes terminal through the *same* query a
+/// caller was already polling, so a frame loop that never changes shape still
+/// escapes. The portable layer is excused here rather than exercised — it answers
+/// `DeviceLost` for the whole identity before it asks about the point, which is
+/// why the per-point half is asserted against the backend directly.
+#[test]
+fn device_loss_reaches_every_reported_serial() {
+    let identity = device_identity(1, 1);
+    let (device, native) = paired_device_for_test(identity);
+
+    native.hold_completion();
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let point = builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let plan = builder.build().unwrap();
+    let receipt = device.submit(plan).unwrap();
+    let token = receipt.completion_for(point).unwrap();
+
+    assert!(matches!(
+        device.completion_state(token).unwrap(),
+        CompletionState::Pending
+    ));
+
+    native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+
+    // The per-point answer a backend owes: `Pending` is gone, and it did not take
+    // a `wait_idle` to get there.
+    assert!(matches!(
+        native.completion(token.serial()),
+        CompletionState::DeviceLost(_)
+    ));
+    // And the portable layer's own answer, which is the loss itself. Terminal on
+    // both paths, which is the property section 41.8 exists to guarantee.
+    assert_eq!(
+        device.completion_state(token).unwrap_err().kind(),
+        RhiErrorKind::DeviceLost
+    );
+}
+
+/// A serial the device never reported is terminal, not `Pending`.
+///
+/// The distinction matters because the two are conflated easily and only one of
+/// them is safe to return: `Pending` for a token that names no work is a polling
+/// loop with no exit, and a stale or foreign serial is exactly how a caller
+/// arrives at one.
+#[test]
+fn a_serial_the_device_never_reported_is_terminal() {
+    let identity = device_identity(1, 1);
+    let (device, _native) = paired_device_for_test(identity);
+
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let plan = builder.build().unwrap();
+    let receipt = device.submit(plan).unwrap();
+
+    // A serial above anything this device minted. Constructed through the same
+    // crate-private constructor the portable layer uses, because that is the only
+    // way a token exists at all — the point of the test is the *backend's* answer,
+    // not how a caller could forge one.
+    let stale = CompletionPoint::new(identity, receipt.completion().serial() + 1_000);
+    assert!(matches!(
+        device.completion_state(stale).unwrap(),
+        CompletionState::Failed(_)
+    ));
+}
+
+/// A plan the portable layer refuses never reaches the backend.
+///
+/// Section 41.3's Phase A, made observable. `Err` from `submit` is supposed to
+/// prove that no native work was accepted, and the return value alone cannot prove
+/// it: a backend that was handed the plan and declined looks identical to a caller.
+/// The backend's own counter is what separates them, and it is also what pins the
+/// half of the rule that is easy to get wrong in the direction nobody notices — a
+/// preflight that runs *after* the commit.
+///
+/// Both refusals are checked here because they are different phases of the same
+/// promise: identity is decided before liveness would matter, and the present
+/// refusal is decided after both.
+#[test]
+fn a_refused_plan_never_reaches_the_backend() {
+    let identity = device_identity(1, 1);
+    let other = device_identity(1, 2);
+    let (device, native) = paired_device_for_test(identity);
+
+    // A plan built for another device.
+    let mut builder = builder(other, vec![lane(0, everything())], 1);
+    builder
+        .add_batch(lane_id(0), vec![raster_work(other, Vec::new())])
+        .unwrap();
+    let plan = builder.build().unwrap();
+    let error = device.submit(plan).unwrap_err();
+    assert_eq!(error.kind(), RhiErrorKind::WrongDevice);
+    assert_eq!(
+        native.submissions(),
+        0,
+        "a cross-device plan must be refused by identity, not handed to a driver"
+    );
+
+    // A plan carrying a presentation, on a device that is otherwise fine.
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let point = builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    builder
+        .present_after(acquired_frame(1, identity), point)
+        .expect("the frame is this device's");
+    let plan = builder.build().unwrap();
+    let error = device.submit(plan).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        RhiErrorKind::Unsupported,
+        "no backend lowers presentation yet, and executing the work while dropping \
+         the frame would be the silent substitution discipline 3 forbids"
+    );
+    assert_eq!(error.operation(), Some("Device::submit"));
+    assert_eq!(
+        native.submissions(),
+        0,
+        "a plan that cannot be presented in full must not run at all"
+    );
+
+    // A cross-device external dependency is *not* a case here, and the reason is
+    // worth recording: `add_external_dependency` already refuses one, so a built
+    // plan cannot carry it and `Device::submit` has no such check to exercise.
+    // The refusal's authority is the builder, and this test would be asserting a
+    // reachable failure that does not exist. What follows is the lost-device path,
+    // which is checked first of all.
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let plan = builder.build().unwrap();
+    native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+    let error = device.submit(plan).unwrap_err();
+    assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
+    assert_eq!(native.submissions(), 0);
+}
+
+/// Every plan a device mints has its own identity, and the builder takes it from
+/// the device rather than inventing one.
+///
+/// Section 39.1's uniqueness rule is what makes "a point from another plan is
+/// `InvalidUsage`" decidable, and it can only hold if plan serials come from one
+/// counter per device. A builder that numbered its own plans would collide with
+/// the next builder's first plan, and two live plans would then be
+/// indistinguishable to every check that compares them.
+#[test]
+fn two_plans_on_one_device_are_distinguishable() {
+    let identity = device_identity(1, 1);
+    let (device, _native) = paired_device_for_test(identity);
+
+    let mut first = SubmissionPlanBuilder::new(&device);
+    first
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let first = first.build().unwrap();
+
+    let mut second = SubmissionPlanBuilder::new(&device);
+    second
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let second = second.build().unwrap();
+
+    assert_ne!(first.id(), second.id());
+    assert_eq!(first.device_identity(), identity);
+    assert_eq!(second.device_identity(), identity);
+
+    // And the receipt's per-plan check is real: a point from the second plan is
+    // not answered for by the first plan's receipt.
+    let mut third = SubmissionPlanBuilder::new(&device);
+    let foreign = third
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let third = third.build().unwrap();
+    // Built and then dropped: what the check needs is a point from a plan other
+    // than the receipt's, and section 41.9 makes dropping an unsubmitted plan
+    // legal — it submits nothing and abandons only what it consumed.
+    drop(third);
+    let receipt = device.submit(first).unwrap();
+    assert_eq!(
+        receipt.completion_for(foreign).unwrap_err().kind(),
+        RhiErrorKind::InvalidUsage
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@
 //! section 65.3 rules out.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -146,6 +147,55 @@ pub struct Device {
     /// not re-point it, because section 6.5 makes recovery a new request with a new
     /// identity.
     capabilities: Arc<EnabledCapabilities>,
+    /// The serials this domain hands out.
+    ///
+    /// Shared rather than owned, and for the same reason `native` is: a clone is
+    /// the same domain under the same identity (section 6.1), so two clones that
+    /// each kept their own counter would mint the same plan serial twice. Section
+    /// 39.1 makes a plan serial unique *within the device*, and this is what makes
+    /// "the device" mean the identity rather than the handle.
+    serials: Arc<DomainSerials>,
+}
+
+/// The per-domain serial sources.
+///
+/// One counter per kind rather than one shared, because the two answer different
+/// questions and have different consumers: a plan serial is evidence that two
+/// points came from one builder (section 39.1), and a submission serial is the
+/// order in which this device accepted work (section 41.7). Collapsing them would
+/// make a plan's identity depend on how many plans had been *submitted*, which
+/// section 39.1's "an empty plan still has an identity" would then make visible.
+///
+/// Neither counter is process-global, unlike
+/// [`crate::api::identity::ObjectId`]'s. That one has to be, because "globally
+/// unique within the process" is its own contract; these two are scoped to one
+/// device by section 39.1 and section 41.7 respectively, and widening them would
+/// claim a uniqueness nothing needs.
+pub(crate) struct DomainSerials {
+    plans: AtomicU64,
+    submissions: AtomicU64,
+}
+
+impl DomainSerials {
+    fn new() -> Self {
+        Self {
+            // Both start at 1 for the reason the mock's completion counter does:
+            // a zero would make a zero-initialized token indistinguishable from a
+            // minted one, and neither type has a "never minted" spelling.
+            plans: AtomicU64::new(1),
+            submissions: AtomicU64::new(1),
+        }
+    }
+
+    /// The next plan serial of this domain.
+    pub(crate) fn next_plan(&self) -> u64 {
+        self.plans.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// The next acceptance serial of this domain.
+    pub(crate) fn next_submission(&self) -> u64 {
+        self.submissions.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 impl Device {
@@ -192,7 +242,19 @@ impl Device {
             identity,
             native,
             capabilities: Arc::new(capabilities),
+            serials: Arc::new(DomainSerials::new()),
         })
+    }
+
+    /// The plan and acceptance serials of this domain.
+    ///
+    /// Crate-private, and reached by the two places that mint from it:
+    /// [`crate::api::submission::SubmissionPlanBuilder`] takes a plan serial at
+    /// construction, and [`Self::submit`] takes an acceptance serial once the
+    /// backend has accepted. Nothing else may mint one, which is what section
+    /// 39.1's "a plan identity is minted by the builder that owns it" requires.
+    pub(crate) fn serials(&self) -> &DomainSerials {
+        &self.serials
     }
 
     /// This device's identity.

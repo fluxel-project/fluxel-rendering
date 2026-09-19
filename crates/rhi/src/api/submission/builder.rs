@@ -40,11 +40,17 @@
 //!
 //! # Two constructors
 //!
-//! [`SubmissionPlanBuilder::new`] is the public one and panics, because it needs
-//! two facts that are device state rather than caller input: the device's lane
-//! table (`Device::capabilities` is not built) and a device-scoped plan serial
-//! (nothing mints one yet). Every *rule* in this file is real; only the two facts
-//! that constructor gathers are missing.
+//! [`SubmissionPlanBuilder::new`] is the public one and reads two facts off the
+//! device handle rather than taking them from the caller: the device's lane table
+//! and a device-scoped plan serial. Both are device state — section 40.1 decides
+//! against the first and section 39.1 mints from the second — so a caller that
+//! supplied either could construct a plan the device would never have issued.
+//! The crate-private `with_facts` is the one that actually takes them, and it is
+//! what `new` calls and what the contract tests drive.
+//!
+//! Notably absent from `new`: the plan serial. It is *drawn* from the device, not
+//! taken even implicitly, because section 39.1's uniqueness rule is per device and
+//! can only hold if one counter serves every builder over it.
 
 use crate::api::command::RecordedWork;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -107,20 +113,22 @@ impl SubmissionPlanBuilder {
     /// Opens a builder for one plan on `device`.
     ///
     /// Section 39.1 mints the plan identity here, and section 40.1 needs the
-    /// device's lane table here. Both are device state this layer does not hold:
-    /// [`Device::capabilities`] arrives with the backend port, and nothing mints
-    /// plan serials yet. The rules themselves are built — see
-    /// `Self::with_facts`, which is what this will call once both exist.
+    /// device's lane table here, so this is the one constructor that reads both
+    /// off the device handle. It returns `Self` rather than a `RhiResult` for the
+    /// reason the module note gives: a device that is already lost is refused by
+    /// [`Device::submit`], which is the verb that has an error channel, and a
+    /// builder that refused early would take that decision away from it.
     ///
-    /// Panics until then. Nothing is validated before the panic, because there is
-    /// nothing portable to validate: a device that is already lost is refused by
-    /// `Device::submit`, which is the verb that has an error channel.
+    /// Neither fact is copied from the caller. The serial comes from the device's
+    /// own source, which is what makes section 39.1's "a `PlanPoint` from another
+    /// plan is `InvalidUsage`" checkable at all — a caller-chosen serial would let
+    /// two builders collide, and the private field would then be protecting
+    /// nothing.
     pub fn new(device: &Device) -> Self {
-        let device_identity = device.identity();
-        unimplemented!(
-            "the lane table of {device_identity:?} and a device-scoped plan serial are \
-             device state the backend port owns; the contract is fixed, those two facts \
-             are not built"
+        Self::with_facts(
+            SubmissionPlanId::new(device.identity(), device.serials().next_plan()),
+            device.identity(),
+            device.capabilities().submission().clone(),
         )
     }
 
@@ -132,13 +140,6 @@ impl SubmissionPlanBuilder {
     /// enumeration already decided — a lane the device did not offer cannot be
     /// added here, and a plan identity from another device's serial source is
     /// `add_batch`'s problem to notice, not this constructor's.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by SubmissionPlanBuilder::new when the device port lands"
-        )
-    )]
     pub(crate) fn with_facts(
         plan: SubmissionPlanId,
         device: DeviceIdentity,

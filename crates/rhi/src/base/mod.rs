@@ -98,6 +98,16 @@ pub(crate) mod platform;
 // `create_buffer` in the resource chapter rather than in `api::platform`.
 pub(crate) mod resource;
 
+// The recording and submission chapter's seam. It is separate from `platform`
+// for the reason that one is separate from `resource`: the vocabulary is reached
+// from a different handle and grows for a different reason. A submission request
+// carries a whole validated plan rather than one descriptor, and the types here
+// are what keep `base/platform.rs` from having to name a `RecordedWork`.
+//
+// The two operations that consume them are declared on the device trait in
+// `platform`, and the module documentation of `command` records why.
+pub(crate) mod command;
+
 // Beside the seam rather than under `api`, because it is crate-private machinery
 // with no portable vocabulary of its own. Its consumer is the capability
 // fingerprint (specification section 7.1); the layout and pipeline fingerprints

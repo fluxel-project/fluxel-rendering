@@ -616,6 +616,57 @@ impl DeviceBackend for Dx12Device {
             }
         }
     }
+
+    /// Refuses, because this backend has no command spine to submit through.
+    ///
+    /// A refusal rather than a stub, and the distinction is the whole of
+    /// discipline 3. The tempting shortcut is to accept the plan, hand back a
+    /// serial, and answer it `Complete` — which is what a mock may honestly do
+    /// because a mock models a device with no work to do. This device is not
+    /// that: it has a real `ID3D12Device`, and reporting work as complete that no
+    /// queue ever saw would be a silent substitution of exactly the kind section
+    /// 9.4 names — the caller would believe bytes moved, and nothing would have.
+    ///
+    /// What is missing is concrete and named: no `ID3D12CommandQueue`, no
+    /// allocator, no command list, and no fence exist behind this device yet, so
+    /// there is no object that could be handed a `CopyBufferRegion` and no
+    /// primitive that could report it finished. Section 41.3's Phase B is
+    /// therefore unreachable here, and this says so instead of inventing an
+    /// answer.
+    fn submit(
+        &self,
+        _request: &crate::base::command::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::base::command::SubmissionOutcome> {
+        Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "this device cannot submit yet: the Direct3D 12 command spine — a command queue, \
+             an allocator, a command list, and a fence — is not created behind it, so there is \
+             nothing to lower a batch onto. This is not a statement that the device cannot \
+             execute work",
+        )
+        .at("Dx12Device::submit"))
+    }
+
+    /// Answers `Failed`, because no serial can have come from this device.
+    ///
+    /// Unreachable while [`Self::submit`] refuses — every serial a caller holds
+    /// would have to have been reported by a successful submit, and there is none.
+    /// It is written rather than left as a panic because section 41.8's liveness
+    /// rule is about exactly this shape: a completion query must always produce a
+    /// terminal state a caller can branch on, and a query that aborted the caller
+    /// would be the one outcome that rule rules out.
+    fn completion(&self, serial: u64) -> crate::api::submission::CompletionState {
+        use crate::api::submission::{CompletionFailure, CompletionState};
+
+        if let Some(info) = self.loss_info() {
+            return CompletionState::DeviceLost(info);
+        }
+
+        CompletionState::Failed(CompletionFailure::new(format!(
+            "completion serial {serial} was never reported by this device: nothing can be \
+             submitted to it until the Direct3D 12 command spine exists"
+        )))
+    }
 }
 
 /// A device request that has already produced its device.
@@ -690,6 +741,21 @@ impl DeviceBackend for ArcDevice {
     /// or the terminal-failure path above would be exercised by nobody.
     fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
         self.0.create_buffer(descriptor)
+    }
+
+    /// Forwarded for the same reason `create_buffer` is: a device that reached the
+    /// portable layer as `ArcDevice` and one the tests hold as `Arc<Dx12Device>`
+    /// must submit through the same code, or the terminal-failure path would be
+    /// exercised by nobody.
+    fn submit(
+        &self,
+        request: &crate::base::command::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::base::command::SubmissionOutcome> {
+        self.0.submit(request)
+    }
+
+    fn completion(&self, serial: u64) -> crate::api::submission::CompletionState {
+        self.0.completion(serial)
     }
 }
 

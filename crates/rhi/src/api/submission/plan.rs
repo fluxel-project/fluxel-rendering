@@ -50,13 +50,6 @@ impl SubmissionPlanId {
     /// section 39.1's "a `PlanPoint` from another plan is `InvalidUsage`" rule to
     /// hold — so [`crate::api::submission::SubmissionPlanBuilder::new`] receives
     /// one rather than computing one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "minted by the device's plan-serial source when the device port lands"
-        )
-    )]
     pub(crate) fn new(device: DeviceIdentity, serial: u64) -> Self {
         Self { device, serial }
     }
@@ -164,13 +157,6 @@ impl SubmissionPoint {
     ///
     /// Crate-private: acceptance is something `Device::submit` observes, and the
     /// serial is the order in which that happened.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "minted by Device::submit when the backend port lands"
-        )
-    )]
     pub(crate) fn new(device: DeviceIdentity, serial: u64) -> Self {
         Self { device, serial }
     }
@@ -209,14 +195,6 @@ impl CompletionPoint {
     ///
     /// Crate-private: a completion token exists because work was accepted, and the
     /// RHI is the only entity that knows when that happened.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "minted by Device::submit and by the completion path when the backend \
-                      port lands"
-        )
-    )]
     pub(crate) fn new(device: DeviceIdentity, serial: u64) -> Self {
         Self { device, serial }
     }
@@ -229,6 +207,19 @@ impl CompletionPoint {
     /// wait forever.
     pub fn device_identity(self) -> DeviceIdentity {
         self.device
+    }
+
+    /// The backend-local serial this token names.
+    ///
+    /// Crate-private, and it is the one reader that makes the token useful: a
+    /// backend reports completion by *its* serial
+    /// ([`crate::base::command::SubmissionOutcome`]), the portable layer wraps
+    /// that serial into this token, and asking the backend about the work again
+    /// means handing the serial back. Nothing on the public surface exposes it,
+    /// because section 41.7 forbids reading a completion token as a native fence
+    /// value and a public accessor would invite exactly that.
+    pub(crate) fn serial(self) -> u64 {
+        self.serial
     }
 }
 
@@ -339,41 +330,30 @@ impl SubmissionPlan {
     ///
     /// Crate-private: section 40 describes a plan as opaque, and these are the
     /// facts the backend lowering reads rather than anything a caller asks about.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the backend lowering when the port lands")
-    )]
     pub(crate) fn batches(&self) -> &[PlanBatch] {
         &self.body.batches
     }
 
     /// The explicit batch-to-batch dependencies this plan carries.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the backend lowering when the port lands")
-    )]
     pub(crate) fn dependencies(&self) -> &[(PlanPoint, PlanPoint)] {
         &self.body.dependencies
     }
 
     /// The dependencies from earlier submitted work into this plan.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by Device::submit's cross-plan hazard and route check when the \
-                      backend port lands"
-        )
-    )]
+    ///
+    /// Read by `Device::submit` only to hand the edges to the backend, which is
+    /// the only side that can resolve a serial into something it can wait on. Each
+    /// token's device half is *not* checked there: the builder already refused a
+    /// foreign one, so a plan that exists cannot carry one.
     pub(crate) fn external_dependencies(&self) -> &[(CompletionPoint, PlanPoint)] {
         &self.body.external_dependencies
     }
 
     /// The presentations this plan carries.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the backend lowering when the port lands")
-    )]
+    ///
+    /// Read by `Device::submit` to refuse a plan that carries one: no backend
+    /// lowers presentation yet, and executing the work while dropping the frame
+    /// would be the silent substitution discipline 3 forbids.
     pub(crate) fn presents(&self) -> &[PlanPresent] {
         &self.body.presents
     }

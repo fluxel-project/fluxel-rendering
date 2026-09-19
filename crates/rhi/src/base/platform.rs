@@ -237,4 +237,46 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
         &self,
         descriptor: &crate::api::resource::buffer::BufferDescriptor,
     ) -> RhiResult<Box<dyn crate::base::resource::BufferBackend>>;
+
+    /// Lowers and submits one plan that has passed the portable preflight.
+    ///
+    /// This is Phase B of section 41.3 and the two phases are not symmetric. By
+    /// the time this is reached the portable layer has decided identity, lane and
+    /// work-domain legality, the dependency graph, and the in-flight hazard check
+    /// — everything section 40.5 lists — so a backend has no legality question
+    /// left to ask. What it has is a lowering to perform, and the one thing it
+    /// may not do is fail after accepting: an `Err` here would tell the caller
+    /// "nothing happened" while a native queue had already been fed, which is the
+    /// outcome section 41.3 exists to forbid.
+    ///
+    /// So the division is: `Err` means *nothing was committed*, and it is
+    /// reserved for the cases where that is true — a command this backend cannot
+    /// lower ([`crate::api::RhiErrorKind::Unsupported`], discipline 3 in
+    /// [`crate::base`]), a device that ended before the commit
+    /// ([`crate::api::RhiErrorKind::DeviceLost`]). A problem discovered *after*
+    /// the commit is reported through [`Self::completion`] as a terminal
+    /// [`crate::api::submission::CompletionState::Failed`].
+    ///
+    /// The serials in the returned [`crate::base::command::SubmissionOutcome`]
+    /// are this backend's own numbers. The portable layer wraps each into a
+    /// completion token whose device half only it can mint, which is what keeps
+    /// section 3.1's identity rule on the portable side of the seam.
+    fn submit(
+        &self,
+        request: &crate::base::command::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::base::command::SubmissionOutcome>;
+
+    /// The state of one completion serial this backend reported.
+    ///
+    /// Non-blocking (section 41.10): a frame loop polls this alongside
+    /// [`Self::poll`], and nothing here may wait on the GPU. [`Self::wait_idle`]
+    /// is the only blocking verb in this crate and section 6.7 confines it to
+    /// shutdown, recovery and diagnostics.
+    ///
+    /// Section 41.8's liveness rule is the demanding half. After a device loss
+    /// every serial this backend ever reported must answer
+    /// [`crate::api::submission::CompletionState::DeviceLost`] — not `Pending`,
+    /// and not forever. A backend that answered `Pending` for work whose device
+    /// has ended would hang the caller's loop on work that can never finish.
+    fn completion(&self, serial: u64) -> crate::api::submission::CompletionState;
 }
