@@ -356,3 +356,54 @@ fn the_view_compatibility_set_composes_like_a_bitset() {
         TextureViewCompatibility::CUBE
     );
 }
+
+/// The enumeration the texture capability table is keyed on covers every bit.
+///
+/// The counterpart of `the_usage_enumeration_covers_every_declared_bit` for
+/// buffers, and it matters for the same reason: `TextureUsage` is a mask rather
+/// than an enum, so `all()` cannot be derived and `ALL_BITS` is a hand-written
+/// union. A seventh bit added without extending that union would make every key
+/// containing it unreachable — and for textures the consequence is sharper than
+/// for buffers, because `texture_support`'s key space is *not* enumerable, so an
+/// unrecorded key does not panic: it answers `Unsupported`. The hole would
+/// therefore be silent, and it would refuse a legal texture.
+#[test]
+fn the_texture_usage_enumeration_covers_every_declared_bit() {
+    let declared = [
+        TextureUsage::COPY_SRC,
+        TextureUsage::COPY_DST,
+        TextureUsage::SAMPLED,
+        TextureUsage::STORAGE,
+        TextureUsage::COLOR_ATTACHMENT,
+        TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+    ];
+
+    let enumerated: Vec<TextureUsage> = TextureUsage::all().collect();
+
+    assert_eq!(
+        enumerated.len(),
+        1 << declared.len(),
+        "a six-bit mask has {} combinations; the enumeration walked {}",
+        1 << declared.len(),
+        enumerated.len()
+    );
+
+    for usage in declared {
+        assert!(
+            enumerated.contains(&usage),
+            "{usage} is declared but the enumeration never produces it, so every \
+             capability key containing it answers Unsupported for a texture the \
+             device may well be able to create"
+        );
+    }
+
+    assert!(
+        enumerated.contains(
+            &declared
+                .into_iter()
+                .reduce(|a, b| a.union(b))
+                .expect("declared is not empty")
+        ),
+        "the enumeration must reach the union of every declared bit"
+    );
+}

@@ -511,7 +511,7 @@ impl CapabilityFacts {
 
 /// The fills a backend's enumeration performs on a [`CapabilityFacts`].
 ///
-/// # Why the remaining five carry an expectation and the other four do not
+/// # Why the remaining methods carry an expectation individually
 ///
 /// This block was one expectation over nine methods, on the reasoning that they
 /// were one body of code with one fate and that the expectation going
@@ -526,12 +526,15 @@ impl CapabilityFacts {
 /// about the code that has stopped being true, and it is the failure mode
 /// [`Self::record_feature`]'s own reason string was written to announce.
 ///
-/// The other five still have no caller outside this crate's tests. They are the
-/// ones whose DX12 fill is the *next* block — texture, binding, route and
-/// view-compatibility facts — and they keep an expectation each, because a
-/// block-level one would now be unfulfilled and would have to be deleted even
-/// though five of its nine members are still dead. One expectation per method is
-/// what keeps the signal working when the block splits.
+/// The rest still have no caller outside this crate's tests. They are the ones
+/// whose DX12 fill is the *next* block — binding, route and view-compatibility
+/// facts — and they keep an expectation each, because a block-level one would now
+/// be unfulfilled and would have to be deleted even though most of its members
+/// are still dead. One expectation per method is what keeps the signal working
+/// when the block splits, and this block has now split twice: the second split
+/// deleted [`Self::record_texture_support`]'s expectation in exactly the way the
+/// paragraph above describes, which is the mechanism working rather than a
+/// surprise.
 impl CapabilityFacts {
     /// Records that the contract offers `feature`.
     #[cfg_attr(
@@ -592,10 +595,10 @@ impl CapabilityFacts {
     /// answers for one key would be stating that its own probe is unstable, and no
     /// shape of table can repair that.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn record_texture_support(

@@ -87,6 +87,38 @@ impl TextureUsage {
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
+
+    /// The union of every declared usage bit, in mask order.
+    ///
+    /// Carries no dead-code expectation even though its only reader is gated.
+    /// Rustc counts a constant as live once any function body reads it, without
+    /// asking whether that function is itself live, so an expectation here is
+    /// unfulfilled in the very configuration the gate is for. The same asymmetry
+    /// is documented on `BufferUsage::ALL_BITS`.
+    const ALL_BITS: u32 = Self::COPY_SRC.0
+        | Self::COPY_DST.0
+        | Self::SAMPLED.0
+        | Self::STORAGE.0
+        | Self::COLOR_ATTACHMENT.0
+        | Self::DEPTH_STENCIL_ATTACHMENT.0;
+
+    /// Every usage combination, including the empty one, in mask order.
+    ///
+    /// The counterpart of `BufferUsage::all`, and for the same reason: a backend
+    /// probing which textures a device can create is asked about a usage mask,
+    /// and a capability table keyed on a space the backend can walk in full must
+    /// be filled in full. Section 13.4's P0 set is six bits, so the walk is
+    /// sixty-four masks.
+    #[cfg_attr(
+        all(not(test), not(feature = "dx12")),
+        expect(
+            dead_code,
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+        )
+    )]
+    pub(crate) fn all() -> impl Iterator<Item = Self> {
+        (0..=Self::ALL_BITS).map(Self)
+    }
 }
 
 impl fmt::Display for TextureUsage {

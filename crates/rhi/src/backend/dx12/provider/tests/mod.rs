@@ -17,10 +17,11 @@ use std::sync::Arc;
 
 use super::*;
 use crate::api::binding::vocabulary::StorageAccess;
-use crate::api::format::TextureFormat;
+use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{PlatformProvider, RequestStatus};
 use crate::api::resource::buffer::{BufferSupportQuery, BufferUsage};
+use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
 use crate::api::submission::LaneWorkDomains;
 
 /// A fresh provider instance identity, as host integration would mint.
@@ -480,6 +481,17 @@ fn a_real_device_reports_the_two_limits_it_can_ground() {
         max_buffer >= (1 << 32),
         "a D3D12 device addresses at least 32 bits per resource; got {max_buffer}"
     );
+
+    // Direct3D 12 defines no cap specific to a storage binding, so both keys are
+    // answered by the one address-space reading. Asserting they agree is what
+    // keeps them from drifting into two entries that disagree; the value itself
+    // is a reading and is printed by the evidence test instead.
+    assert_eq!(
+        capabilities.limit(LimitKey::MaxStorageBufferBindingSize),
+        Some(max_buffer),
+        "a storage binding is bounded by the same address space as any other \
+         resource, because Direct3D 12 states no separate cap"
+    );
 }
 
 /// Records what this machine's device enumerated, for the evidence binding.
@@ -516,5 +528,299 @@ fn what_the_capability_enumeration_actually_reported() {
         "dx12 limits: max_buffer_size={:?} max_sampler_anisotropy={:?}",
         capabilities.limit(LimitKey::MaxBufferSize),
         capabilities.limit(LimitKey::MaxSamplerAnisotropy),
+    );
+}
+
+/// A real device answers the texture questions a renderer actually asks.
+///
+/// The assertions are chosen to be about Direct3D 12 rather than about this
+/// machine, so they hold on any conforming device: a format's own attachment
+/// role is a property of the format, and the portable layer's two depth formats
+/// differ in exactly one way that matters here. Anything that varies by driver —
+/// quality levels at sixteen samples, `TEXTURE3D` on a compressed format — is
+/// printed by the evidence test below rather than asserted.
+#[test]
+fn a_real_device_answers_the_texture_questions_a_renderer_asks() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    let queried = |usage, compatibility| {
+        let query =
+            TextureSupportQuery::new(TextureDimension::D2, TextureFormat::Rgba8Unorm, usage, 1)
+                .with_view_compatibility(compatibility);
+        capabilities.texture_support(&query).is_supported()
+    };
+
+    assert!(
+        queried(TextureUsage::SAMPLED, TextureViewCompatibility::NONE),
+        "Rgba8Unorm is the one format every backend must be able to sample"
+    );
+    assert!(
+        queried(
+            TextureUsage::COLOR_ATTACHMENT,
+            TextureViewCompatibility::NONE
+        ),
+        "Rgba8Unorm is the format a color attachment is required to support"
+    );
+    assert!(
+        queried(TextureUsage::COPY_DST, TextureViewCompatibility::NONE),
+        "an upload target is the minimum a renderer needs, and Direct3D 12 \
+         expresses copy as a resource state rather than as a per-format bit"
+    );
+
+    // The empty usage set is deliberately not asserted here. The portable
+    // texture vocabulary has no way to spell it outside `TextureUsage::all()`,
+    // whose walk starts at the empty mask, so a direct query for it is not a
+    // question a caller can ask; the walk below reaches it and checks it there.
+    assert!(
+        !queried(
+            TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+            TextureViewCompatibility::NONE
+        ),
+        "a color format is not a depth attachment, and reporting it as one would \
+         let a caller build a depth pass that cannot work"
+    );
+
+    // The cube intent is a creation-time fact, so it is a different key rather
+    // than a different answer to the same one: Direct3D 12 states cube support
+    // with its own bit, and for Rgba8Unorm it agrees with every other backend.
+    assert!(
+        queried(TextureUsage::SAMPLED, TextureViewCompatibility::CUBE),
+        "Rgba8Unorm in two dimensions is cube-capable on any Direct3D 12 device"
+    );
+
+    // The two portable depth formats are the exception the format table already
+    // records, seen from the texture side: one lowers to a single DXGI format
+    // and the other does not, so one can be asked about and the other cannot.
+    let depth32 = TextureSupportQuery::new(
+        TextureDimension::D2,
+        TextureFormat::Depth32Float,
+        TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+        1,
+    );
+    assert!(
+        capabilities.texture_support(&depth32).is_supported(),
+        "Depth32Float lowers to one DXGI format and is the depth attachment P0 \
+         renderers use"
+    );
+
+    // The dimension cases above all ask about two dimensions. A walk that covered
+    // two of the three and stopped would pass every assertion so far, so the other
+    // two are bound here. The extents asserted are the Direct3D 12 requirements
+    // `D3D12_REQ_TEXTURE{1,2}D_*_DIMENSION` and `D3D12_REQ_TEXTURE3D_*` state,
+    // which are also the API maxima, so they are structural rather than readings
+    // of this adapter.
+    let one = capabilities.texture_support(&TextureSupportQuery::new(
+        TextureDimension::D1,
+        TextureFormat::Rgba8Unorm,
+        TextureUsage::SAMPLED,
+        1,
+    ));
+    assert!(
+        one.is_supported(),
+        "a one-dimensional texture is a separate key, not a separate answer"
+    );
+    assert_eq!(
+        one.limits()
+            .expect("a supported answer carries its maxima")
+            .max_extent()
+            .width,
+        16384,
+        "Direct3D 12 requires 16384 texels in the one dimension a 1D texture has"
+    );
+
+    let three = capabilities.texture_support(&TextureSupportQuery::new(
+        TextureDimension::D3,
+        TextureFormat::Rgba8Unorm,
+        TextureUsage::SAMPLED,
+        1,
+    ));
+    assert!(
+        three.is_supported(),
+        "a three-dimensional texture is a separate key, not a separate answer"
+    );
+    let three_limits = three
+        .limits()
+        .expect("a supported answer carries its maxima");
+    assert_eq!(
+        three_limits.max_extent().depth,
+        2048,
+        "Direct3D 12 requires 2048 texels along the third axis, which is smaller \
+         than the 16384 the first two allow"
+    );
+    assert_eq!(
+        three_limits.max_array_layers(),
+        1,
+        "a volume texture has no array of layers to index"
+    );
+
+    // The multisample answers are the ones that come from the device rather than
+    // from the enumeration shape: each sample count is asked for its quality
+    // levels, and a count with none does not exist. Four is the level Direct3D 12
+    // mandates for a render target, so it is the one count that can be asserted
+    // on any device; the counts above it vary and are printed by the evidence
+    // test instead.
+    let multisampled = |sample_count| {
+        capabilities
+            .texture_support(&TextureSupportQuery::new(
+                TextureDimension::D2,
+                TextureFormat::Rgba8Unorm,
+                TextureUsage::COLOR_ATTACHMENT,
+                sample_count,
+            ))
+            .is_supported()
+    };
+    assert!(
+        multisampled(1) && multisampled(2) && multisampled(4),
+        "Direct3D 12 requires a 4x multisampled render target, and the walk must \
+         have asked the device for its quality levels to record it"
+    );
+}
+
+/// Every legal usage combination is recorded rather than left to the negative.
+///
+/// The texture key space is not one a backend can walk in full, so an absent key
+/// answers the negative rather than panicking — which means this test cannot
+/// detect a hole the way the buffer one does, because a hole and a refusal are
+/// the same value. What it checks instead is the obligation that replaces "fill
+/// everything": the walk reaches all sixty-four masks, and every one of them that
+/// is *legal* for a color format comes back supported. A legal key left
+/// unrecorded would tell a caller that a texture the device can create cannot be
+/// created, and that failure is silent precisely because a negative is a
+/// well-formed answer.
+///
+/// The depth bit is excluded, and the exclusion is part of the claim rather than
+/// a workaround: `Rgba8Unorm` is a color format, so a depth-stencil usage on it
+/// has no legal meaning and refusing it is correct. The earlier test asserts that
+/// refusal directly; this one asserts its complement.
+#[test]
+fn every_legal_usage_combination_is_recorded_rather_than_left_to_the_negative() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    let mut legal_seen = 0usize;
+
+    for usage in TextureUsage::all() {
+        let query =
+            TextureSupportQuery::new(TextureDimension::D2, TextureFormat::Rgba8Unorm, usage, 1);
+        let support = capabilities.texture_support(&query);
+
+        if usage.is_empty() {
+            assert!(
+                !support.is_supported(),
+                "an empty usage set has no legal operation and must be refused"
+            );
+            continue;
+        }
+
+        if usage.contains(TextureUsage::DEPTH_STENCIL_ATTACHMENT) {
+            assert!(
+                !support.is_supported(),
+                "a color format cannot be a depth-stencil attachment, so every mask \
+                 carrying that bit must be refused: {usage}"
+            );
+            continue;
+        }
+
+        legal_seen += 1;
+        assert!(
+            support.is_supported(),
+            "Rgba8Unorm in two dimensions supports {usage}, so leaving the key \
+             unrecorded would refuse a texture the device can create"
+        );
+
+        let limits = support
+            .limits()
+            .expect("a supported answer carries its maxima");
+        assert!(
+            limits.max_extent().width > 0 && limits.max_array_layers() > 0,
+            "a supported answer must carry real maxima: {usage}"
+        );
+    }
+
+    // Half of the sixty-four masks carry the depth bit, and the empty mask is one
+    // more, so thirty-one are legal. Asserted as a count rather than trusted: a
+    // walk that silently stopped early would otherwise pass.
+    assert_eq!(
+        legal_seen, 31,
+        "the walk must reach every legal mask, not merely some of them"
+    );
+}
+
+/// Records the texture table this machine enumerated, for the evidence binding.
+///
+/// Run with `--nocapture`. Only the entries that carry information vary between
+/// devices, so this prints those rather than every recorded key.
+#[test]
+fn what_the_texture_enumeration_actually_reported() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    for dimension in [
+        TextureDimension::D1,
+        TextureDimension::D2,
+        TextureDimension::D3,
+    ] {
+        let query = TextureSupportQuery::new(
+            dimension,
+            TextureFormat::Rgba8Unorm,
+            TextureUsage::SAMPLED,
+            1,
+        );
+        let support = capabilities.texture_support(&query);
+        println!(
+            "dx12 texture {dimension:?} sampled rgba8: supported={} limits={:?}",
+            support.is_supported(),
+            support.limits().map(|limits| (
+                limits.max_extent().width,
+                limits.max_extent().height,
+                limits.max_extent().depth,
+                limits.max_mip_levels(),
+                limits.max_array_layers(),
+            )),
+        );
+    }
+
+    for sample_count in [1u32, 2, 4, 8, 16] {
+        let query = TextureSupportQuery::new(
+            TextureDimension::D2,
+            TextureFormat::Rgba8Unorm,
+            TextureUsage::COLOR_ATTACHMENT,
+            sample_count,
+        );
+        println!(
+            "dx12 texture rgba8 color_attachment at {sample_count} samples: supported={}",
+            capabilities.texture_support(&query).is_supported()
+        );
+    }
+
+    println!(
+        "dx12 texture limits: max_1d={:?} max_2d={:?} max_3d={:?} max_layers={:?} \
+         min_uniform_offset={:?} min_storage_offset={:?} max_uniform_binding={:?} \
+         max_storage_binding={:?}",
+        capabilities.limit(LimitKey::MaxTexture1dDimension),
+        capabilities.limit(LimitKey::MaxTexture2dDimension),
+        capabilities.limit(LimitKey::MaxTexture3dDimension),
+        capabilities.limit(LimitKey::MaxTextureArrayLayers),
+        capabilities.limit(LimitKey::MinUniformBufferOffsetAlignment),
+        capabilities.limit(LimitKey::MinStorageBufferOffsetAlignment),
+        capabilities.limit(LimitKey::MaxUniformBufferBindingSize),
+        capabilities.limit(LimitKey::MaxStorageBufferBindingSize),
+    );
+
+    println!(
+        "dx12 pipeline limits: vertex_buffers={:?} vertex_attributes={:?} stride={:?} \
+         color_attachments={:?} invocations={:?} workgroup=({:?},{:?},{:?}) \
+         workgroups_per_dim={:?} workgroup_storage={:?}",
+        capabilities.limit(LimitKey::MaxVertexBuffers),
+        capabilities.limit(LimitKey::MaxVertexAttributes),
+        capabilities.limit(LimitKey::MaxVertexBufferArrayStride),
+        capabilities.limit(LimitKey::MaxColorAttachments),
+        capabilities.limit(LimitKey::MaxComputeInvocationsPerWorkgroup),
+        capabilities.limit(LimitKey::MaxComputeWorkgroupSizeX),
+        capabilities.limit(LimitKey::MaxComputeWorkgroupSizeY),
+        capabilities.limit(LimitKey::MaxComputeWorkgroupSizeZ),
+        capabilities.limit(LimitKey::MaxComputeWorkgroupsPerDimension),
+        capabilities.limit(LimitKey::MaxComputeWorkgroupStorageSize),
     );
 }

@@ -769,10 +769,10 @@ impl TextureSupportLimits {
     /// Crate-private: limits are a device answer, and a caller-built one would
     /// be a capability claim about hardware nobody asked.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the device façade builds this when it answers a texture query"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn new(max_extent: Extent3d, max_mip_levels: u32, max_array_layers: u32) -> Self {
