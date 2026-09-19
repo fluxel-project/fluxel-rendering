@@ -8,10 +8,15 @@
 //! ([`crate::api::capability`]) — a discovery snapshot answers questions in that
 //! vocabulary without defining it.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::api::capability::AvailableCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId};
 use crate::api::platform::request::{DeviceRequest, DeviceRequestDescriptor};
 use crate::api::presentation::PresentationTarget;
+use crate::base::platform::ProviderBackend;
 
 /// The backend family a provider or device speaks.
 ///
@@ -119,9 +124,12 @@ impl AdapterInfo {
     ///
     /// Crate-private: snapshots come from a provider's enumeration, and a
     /// caller-built one would describe hardware that was never probed.
-    #[expect(
-        dead_code,
-        reason = "nothing calls it: adapter enumeration, the only producer of a snapshot, is not written"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a real backend's enumeration is what mints a snapshot; the only caller today is the test-build mock backend"
+        )
     )]
     pub(crate) fn new(
         id: AdapterId,
@@ -197,17 +205,29 @@ pub enum AdapterSelection {
     Explicit(AdapterId),
 }
 
-/// Backend-private state behind a [`PlatformProvider`].
+/// State behind a [`PlatformProvider`], shared by every clone of it.
 ///
-/// Only the facts the portable rules must decide *without* a backend are kept
-/// here: which family this provider speaks, and which provider an [`AdapterId`]
-/// must belong to in order for a call to be legal. Everything a real provider
-/// holds — the native instance, the enumerated adapters, the device factory —
-/// arrives with the backend port and stays behind this type.
-#[derive(Clone)]
+/// Two halves, and the split is the whole design: the facts the *portable* rules
+/// decide with — which family this provider speaks, which provider an [`AdapterId`]
+/// must belong to, and where the generation counter has got to — are fields here,
+/// and everything native is behind [`ProviderBackend`]. Nothing on this side
+/// names a `IDXGIFactory`, a `VkInstance`, a `MTLDevice`, a GPU object, or a
+/// rendering context.
 struct ProviderState {
     backend: BackendKind,
-    identity: u64,
+    /// This provider's instance identity. Section 3 makes it process-local and
+    /// never derived from a native handle, which is why it is minted by the layer
+    /// that opens the instance rather than read off the thing it opened.
+    instance: DeviceInstanceId,
+    /// The next [`DeviceGeneration`] to mint.
+    ///
+    /// An atomic rather than a `Cell` because [`PlatformProvider`] is `Clone` and
+    /// `request_device` takes `&self`: two clones must hand out different
+    /// generations, and section 3.1's "a standalone `request_device()` always
+    /// yields a new identity" has to hold across them.
+    next_generation: AtomicU64,
+    /// The native instance this provider wraps.
+    native: Arc<dyn ProviderBackend>,
 }
 
 /// One backend family's entry point for adapter discovery and device creation.
@@ -226,7 +246,10 @@ struct ProviderState {
 /// the seam.
 #[derive(Clone)]
 pub struct PlatformProvider {
-    state: ProviderState,
+    /// Shared, not cloned into each handle: two clones are one provider that
+    /// hands out distinct generations, which is only possible if they count in
+    /// the same place.
+    state: Arc<ProviderState>,
 }
 
 impl PlatformProvider {
@@ -241,10 +264,31 @@ impl PlatformProvider {
             reason = "called by the contract tests; the host integration that owns a native instance is not written"
         )
     )]
-    pub(crate) fn new(backend: BackendKind, identity: u64) -> Self {
+    pub(crate) fn new(
+        backend: BackendKind,
+        instance: DeviceInstanceId,
+        native: Arc<dyn ProviderBackend>,
+    ) -> Self {
         Self {
-            state: ProviderState { backend, identity },
+            state: Arc::new(ProviderState {
+                backend,
+                instance,
+                next_generation: AtomicU64::new(0),
+                native,
+            }),
         }
+    }
+
+    /// Mints the identity of the next logical device this provider hands out.
+    ///
+    /// This is the portable half of section 6.1's rule that a completed device
+    /// request is what produces an identity. The backend produces the native
+    /// device and reports that it exists; the pair that names it is composed
+    /// here, so a backend cannot hand two domains the same identity or revive an
+    /// old one by choosing a generation itself.
+    pub(crate) fn mint_identity(&self) -> DeviceIdentity {
+        let generation = self.state.next_generation.fetch_add(1, Ordering::Relaxed);
+        DeviceIdentity::new(self.state.instance, DeviceGeneration::new(generation))
     }
 
     /// The backend family this provider speaks.
@@ -271,10 +315,7 @@ impl PlatformProvider {
     /// only wants a device — the common case — never calls it, which is what
     /// lets a provider that cannot enumerate stay fully usable.
     pub fn enumerate_adapters(&self) -> RhiResult<Option<Vec<AdapterInfo>>> {
-        unimplemented!(
-            "adapter enumeration arrives with the backend port; the contract is \
-             fixed, the probing is not built"
-        )
+        self.state.native.enumerate_adapters()
     }
 
     /// Performs presentation preflight for one of this provider's adapters.
@@ -293,18 +334,14 @@ impl PlatformProvider {
         // the provider that produced it, and section 3.1 requires the portable
         // checks to run in O(1) before any backend call. This one is portable,
         // so it is decided here rather than left for a driver to notice.
-        if adapter.provider != self.state.identity {
+        if adapter.provider != self.state.instance.as_u64() {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 "adapter belongs to a different provider",
             )
             .at("PlatformProvider::supports_presentation"));
         }
-        let _ = target;
-        unimplemented!(
-            "presentation preflight arrives with the backend port; the contract \
-             is fixed, the probing is not built"
-        )
+        self.state.native.supports_presentation(adapter, target)
     }
 
     /// The canonical path to a device.
@@ -312,10 +349,7 @@ impl PlatformProvider {
     /// Returns a [`DeviceRequest`] rather than a device, because creation may be
     /// genuinely asynchronous on the platforms this crate serves.
     pub fn request_device(&self, desc: DeviceRequestDescriptor) -> RhiResult<DeviceRequest> {
-        let _ = desc;
-        unimplemented!(
-            "device creation arrives with the backend port; the contract is \
-             fixed, the lowering is not built"
-        )
+        let native = self.state.native.request_device(&desc)?;
+        Ok(DeviceRequest::new(self.clone(), native))
     }
 }

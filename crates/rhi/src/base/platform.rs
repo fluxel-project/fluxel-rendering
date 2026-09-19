@@ -1,0 +1,169 @@
+//! The platform chapter's seam (specification module 01, sections 5 through 7).
+//!
+//! Three handles in [`crate::api::platform`] reach a native implementation:
+//! [`crate::api::platform::PlatformProvider`] wraps a native instance,
+//! [`crate::api::platform::DeviceRequest`] tracks an asynchronous creation, and
+//! [`crate::api::platform::Device`] is the logical execution domain everything
+//! else is created from. Each has one trait here.
+//!
+//! Read the disciplines in [`crate::base`] first; they apply to every method.
+//!
+//! # What this seam deliberately does not carry
+//!
+//! No type here names a native handle. The provider's `IDXGIFactory`,
+//! `VkInstance`, `MTLDevice`, GPU object, or rendering context stays inside the
+//! backend that owns it, and this trait is how the portable layer asks questions
+//! about it without ever holding one. That is what section 5.1 is protecting when
+//! it keeps the provider constructor off the portable surface.
+
+use crate::api::error::RhiResult;
+use crate::api::identity::ObjectId;
+use crate::api::platform::DeviceLossInfo;
+use crate::api::platform::DeviceStatus;
+use crate::api::platform::provider::{AdapterId, AdapterInfo, BackendKind};
+use crate::api::platform::request::DeviceRequestDescriptor;
+use crate::api::presentation::PresentationTarget;
+
+/// The native instance behind a [`crate::api::platform::PlatformProvider`].
+///
+/// One provider is one backend family (section 5), and it may create more than
+/// one device: section 3.1 permits several independent logical devices of the
+/// same backend, and each request that succeeds receives its own
+/// [`crate::api::identity::DeviceIdentity`].
+pub(crate) trait ProviderBackend: Send + Sync + 'static {
+    /// Enumerates the adapters this provider can expose explicitly.
+    ///
+    /// The two success shapes are distinct and both are legal: `Ok(None)` means
+    /// the provider does not expose portable enumeration at all, which WebGPU and
+    /// adopted-context providers may legitimately be in, and `Ok(Some(vec![]))`
+    /// means it can enumerate and currently has no candidate. Collapsing them
+    /// would tell a caller that a provider with no enumeration "has no adapters",
+    /// which is a different and wrong statement.
+    fn enumerate_adapters(&self) -> RhiResult<Option<Vec<AdapterInfo>>>;
+
+    /// Whether `adapter` has a portable presentation route to `target`.
+    ///
+    /// The portable layer has already established that `adapter` belongs to this
+    /// provider (section 5.4, section 3.1). This answers only the hardware
+    /// question, and its answer is never a substitute for carrying the target in
+    /// the device request: section 5.8 says the device that is finally created is
+    /// what has to present.
+    fn supports_presentation(
+        &self,
+        adapter: AdapterId,
+        target: &PresentationTarget,
+    ) -> RhiResult<bool>;
+
+    /// Starts lowering a device request.
+    ///
+    /// Returning the request's backend rather than a
+    /// [`crate::api::platform::DeviceRequest`] keeps the portable layer in charge
+    /// of the handle: the request's single-shot rule, and the identity the
+    /// resulting device is minted under, are portable contracts and not
+    /// something a backend gets to shape.
+    fn request_device(
+        &self,
+        descriptor: &DeviceRequestDescriptor,
+    ) -> RhiResult<Box<dyn DeviceRequestBackend>>;
+}
+
+/// An in-flight device request's native side (section 5.9).
+///
+/// Single-shot by contract: `poll` is called until it reports
+/// [`RequestProgress::Ready`] or an error, and the portable layer retires the
+/// request at that point. A backend therefore does not need to defend against
+/// being polled after it has answered.
+pub(crate) trait DeviceRequestBackend: Send + Sync + 'static {
+    /// Advances the request one step without blocking.
+    ///
+    /// This is not a place to spin on a native fence. Section 5.9 requires the
+    /// host to keep pumping its own event loop; a backend that blocked here would
+    /// deadlock the very browser or window messages the request depends on.
+    fn poll(&mut self) -> RhiResult<RequestProgress>;
+}
+
+/// What a device request's native side has produced so far.
+///
+/// Only a backend constructs one, and the only backend in the tree today is
+/// compiled for the test build, so in a non-test build both variants are
+/// unconstructed. That expectation expires on its own the moment a native
+/// backend lands: an `expect` that is no longer fulfilled is an error, so the
+/// attribute cannot quietly outlive the reason written on it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "constructed by a backend, and the only backend in the tree is the test-build mock"
+    )
+)]
+pub(crate) enum RequestProgress {
+    /// Still in flight; poll again later.
+    Pending,
+    /// The native device exists.
+    ///
+    /// The portable layer mints the identity and composes the
+    /// [`crate::api::platform::Device`], because section 6.1 ties identity
+    /// minting to a completed request and a backend that chose its own identity
+    /// could hand two domains the same one.
+    Ready(Box<dyn DeviceBackend>),
+}
+
+/// The native device behind a [`crate::api::platform::Device`].
+///
+/// This trait owns the device's liveness, which is why there is no `mark_lost`
+/// on the portable handle: the backend is what observes a native loss, and
+/// section 65.3's rule that each concern has exactly one authority makes the
+/// backend that authority. The portable layer owns the *rules* about loss — that
+/// it is terminal, that the summary is stable, and that a lost device answers
+/// `DeviceLost` only after ownership has been decided — and reads the fact from
+/// here.
+pub(crate) trait DeviceBackend: Send + Sync + 'static {
+    /// The backend family this device came from.
+    ///
+    /// Diagnostics, selection provenance, and tooling UI only. Section 6.3 is
+    /// explicit that this is not a capability oracle: the same family exposes
+    /// different capabilities on different drivers.
+    fn backend_kind(&self) -> BackendKind;
+
+    /// A snapshot of the adapter that was actually selected.
+    ///
+    /// Section 6.3 asks a device to report what it actually got, which is a
+    /// weaker and always-answerable question than listing the candidates — which
+    /// is why this must answer even on a provider that does not enumerate.
+    fn adapter_info(&self) -> &AdapterInfo;
+
+    /// This device's process-local object ID.
+    ///
+    /// Section 3 gives every RHI object an [`ObjectId`] distinct from any native
+    /// handle, and section 7.1 requires tooling to describe what it observes by
+    /// that ID rather than by a pointer.
+    fn object_id(&self) -> ObjectId;
+
+    /// Whether the device is still usable.
+    fn status(&self) -> DeviceStatus;
+
+    /// Why the device was lost, or `None` while it is active.
+    ///
+    /// The summary must stay available rather than being delivered once, which is
+    /// what section 6.5 requires of it: a caller that asks twice, or asks long
+    /// after the loss, gets the same answer.
+    fn loss_info(&self) -> Option<DeviceLossInfo>;
+
+    /// Non-blockingly advances RHI-owned completion, loss, and callback
+    /// bookkeeping.
+    ///
+    /// Section 6.6 requires the host to keep pumping its own loop; a host that
+    /// polled this instead would starve the browser or window messages the RHI
+    /// depends on.
+    fn poll(&self) -> RhiResult<()>;
+
+    /// Blocks until the device is idle.
+    ///
+    /// Shutdown and diagnostics only. Section 6.7 forbids it as a per-frame
+    /// retirement mechanism and as the correctness mechanism of a render loop. A
+    /// backend that cannot wait must return
+    /// [`crate::api::RhiErrorKind::Unsupported`] rather than pretend to have
+    /// waited — discipline 3 in [`crate::base`], applied to a verb where the
+    /// substitute would be invisible.
+    fn wait_idle(&self) -> RhiResult<()>;
+}

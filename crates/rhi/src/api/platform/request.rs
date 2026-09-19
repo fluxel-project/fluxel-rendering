@@ -12,11 +12,14 @@
 //! its event loop, and [`DeviceRequest::poll`] only advances bookkeeping the RHI
 //! itself controls.
 
+use std::sync::Arc;
+
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::platform::device::Device;
-use crate::api::platform::provider::AdapterSelection;
+use crate::api::platform::provider::{AdapterSelection, PlatformProvider};
 use crate::api::platform::requirements::DeviceRequirements;
 use crate::api::presentation::PresentationTarget;
+use crate::base::platform::{DeviceRequestBackend, RequestProgress};
 
 /// A request for a device, before any adapter has been chosen.
 ///
@@ -104,6 +107,24 @@ pub enum RequestStatus<T> {
 pub struct DeviceRequest {
     /// Set once `Ready` or a terminal error has been reported.
     complete: bool,
+    /// The provider that opened this request.
+    ///
+    /// Held so that the request can mint the identity of the device it produces.
+    /// Section 6.1 ties identity minting to a completed request, and the provider
+    /// is where the generation counter for this instance lives — a backend that
+    /// composed its own identity could hand two domains the same one, or revive
+    /// an old one by choosing a generation, and section 3.1 lists both under
+    /// "P0 None".
+    ///
+    /// It also keeps the native instance alive for as long as the request is, so
+    /// a request cannot outlive the provider that would have produced its device.
+    provider: PlatformProvider,
+    /// The request's native side.
+    ///
+    /// Boxed rather than shared because section 5.9 makes a request single-shot:
+    /// one owner is the shape that enforces it, and the backend never needs to be
+    /// reached from anywhere else.
+    native: Box<dyn DeviceRequestBackend>,
 }
 
 impl DeviceRequest {
@@ -112,15 +133,12 @@ impl DeviceRequest {
     /// Crate-private: a request is produced by
     /// [`crate::api::platform::PlatformProvider::request_device`], which is what
     /// gives it a provider to advance against.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by the contract tests; the platform layer that starts a request is not written"
-        )
-    )]
-    pub(crate) fn new() -> Self {
-        Self { complete: false }
+    pub(crate) fn new(provider: PlatformProvider, native: Box<dyn DeviceRequestBackend>) -> Self {
+        Self {
+            complete: false,
+            provider,
+            native,
+        }
     }
 
     /// Non-blockingly observes or advances the request.
@@ -137,22 +155,44 @@ impl DeviceRequest {
             )
             .at("DeviceRequest::poll"));
         }
-        unimplemented!(
-            "advancing the request arrives with the backend port; the contract \
-             is fixed, the stages are not built"
-        )
+
+        match self.native.poll() {
+            Ok(RequestProgress::Pending) => Ok(RequestStatus::Pending),
+            Ok(RequestProgress::Ready(native)) => {
+                // Retire the request before composing the device: the request's
+                // own rule is that the first `Ready` ends it, so a panic or an
+                // early return between here and the answer must not leave it
+                // looking in-flight.
+                self.complete = true;
+                let identity = self.provider.mint_identity();
+                Ok(RequestStatus::Ready(Device::new(
+                    identity,
+                    Arc::from(native),
+                )))
+            }
+            Err(error) => {
+                // Section 5.9's diagram has exactly two terminal outcomes, so an
+                // error ends the request as surely as a device does. Leaving it
+                // pending on error would invite a caller to poll a request whose
+                // backend has already given up.
+                self.complete = true;
+                Err(error)
+            }
+        }
     }
 
     /// Marks the request finished.
     ///
     /// Crate-private: only the code that reports `Ready` or a terminal error may
     /// retire the request, which is what keeps a second `poll` from appearing to
-    /// still be in flight.
+    /// still be in flight. [`Self::poll`] is now that code; this remains part of
+    /// the frozen surface because it is how a contract test reaches the
+    /// already-completed state without a backend that can produce one.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "called by the contract tests; the backend port that reports the request's                       outcome is not written"
+            reason = "called by the contract tests; `poll` retires the request itself once a backend reports its outcome"
         )
     )]
     pub(crate) fn mark_complete(&mut self) {

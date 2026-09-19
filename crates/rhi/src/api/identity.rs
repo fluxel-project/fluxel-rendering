@@ -76,13 +76,6 @@ impl DeviceGeneration {
     /// for a device that was just requested". Nothing in the crate may mint a
     /// generation in order to revive an existing identity — section 3.1 lists
     /// that under "P0 None".
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by the contract tests; a completed device request mints a generation"
-        )
-    )]
     pub(crate) fn new(value: u64) -> Self {
         Self(value)
     }
@@ -116,13 +109,6 @@ pub struct DeviceIdentity {
 
 impl DeviceIdentity {
     /// Composes the identity of one logical device execution domain.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by the contract tests; a completed device request composes one"
-        )
-    )]
     pub(crate) fn new(instance: DeviceInstanceId, generation: DeviceGeneration) -> Self {
         Self {
             instance,

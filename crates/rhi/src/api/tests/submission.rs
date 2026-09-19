@@ -53,6 +53,7 @@ use crate::api::submission::{
     SubmissionLaneInfo, SubmissionPlanBuilder, SubmissionPlanId, SubmissionPoint,
     SubmissionReceipt,
 };
+use crate::base::mock::paired_device_for_test;
 
 // ---------------------------------------------------------------------------
 // Section 10 — the lane vocabulary.
@@ -1209,11 +1210,11 @@ fn submit_refuses_a_foreign_plan_and_a_lost_device() {
         .unwrap();
     let plan = builder.build().unwrap();
 
-    let mut device = Device::new(device_identity_value);
+    let (device, native) = paired_device_for_test(device_identity_value);
     assert_eq!(plan.device_identity(), other);
     // The device is checked after its own liveness, so a lost device answers
     // `DeviceLost` for any plan, foreign or not.
-    device.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+    native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
     let error = device.submit(plan).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
     assert_eq!(error.operation(), Some("Device::submit"));
@@ -1229,14 +1230,14 @@ fn submit_refuses_a_foreign_plan_and_a_lost_device() {
 fn completion_state_refuses_a_foreign_point_and_reports_a_lost_device() {
     let device_identity_value = device_identity(1, 1);
     let other = device_identity(1, 2);
-    let mut device = Device::new(device_identity_value);
+    let (device, native) = paired_device_for_test(device_identity_value);
 
     let error = device
         .completion_state(CompletionPoint::new(other, 1))
         .unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::WrongDevice);
 
-    device.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+    native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
     let error = device
         .completion_state(CompletionPoint::new(device_identity_value, 1))
         .unwrap_err();

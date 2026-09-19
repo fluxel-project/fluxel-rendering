@@ -15,11 +15,32 @@
 //! This module deliberately does not own the capability vocabulary
 //! ([`crate::api::capability`]) or presentation
 //! ([`crate::api::presentation`]); it only hands out handles to them.
+//!
+//! # What is decided here and what is asked elsewhere
+//!
+//! The device holds an [`DeviceIdentity`] and a backend, and nothing else. Every
+//! verb that needs a native fact — provenance, identity, liveness, progress —
+//! asks the backend through the crate-private lowering seam, which section 59 of
+//! `08-governance-freeze-checklist.md` keeps off the public surface and which
+//! this documentation therefore cannot link to. What stays here is the part a
+//! backend must not decide: the identity comparison section 3.1 puts first, the
+//! order in which ownership and liveness are judged, and the structured error a
+//! caller sees.
+//!
+//! Liveness in particular has one home and it is not this one. The backend
+//! observes the loss and holds the fact; this module holds the rules about it —
+//! that it is terminal, that the summary is stable (section 6.5), and that a lost
+//! device answers `DeviceLost` only once ownership has been settled. Caching the
+//! fact here as well would create a second authority for it, which is the thing
+//! section 65.3 rules out.
+
+use std::sync::Arc;
 
 use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, ObjectId};
 use crate::api::platform::provider::{AdapterInfo, BackendKind};
+use crate::base::platform::DeviceBackend;
 
 /// Whether a device is still usable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,15 +83,6 @@ impl DeviceLossInfo {
     }
 }
 
-/// The backend-private execution domain behind a [`Device`].
-///
-/// Reserved. A device's contract is fixed by this module; the native instance,
-/// queue, allocator, and retirement bookkeeping that satisfy it arrive with the
-/// backend port. Keeping the seam as a named private type means the port adds
-/// fields here rather than reshaping `Device`.
-#[derive(Clone)]
-struct DeviceDomain;
-
 /// A shared logical execution domain.
 ///
 /// Cloneable, and cloning is not a new device:
@@ -91,34 +103,30 @@ struct DeviceDomain;
 #[derive(Clone)]
 pub struct Device {
     identity: DeviceIdentity,
-    status: DeviceStatus,
-    loss: Option<DeviceLossInfo>,
-    #[expect(
-        dead_code,
-        reason = "read once the backend port lowers device operations through it"
-    )]
-    domain: DeviceDomain,
+    /// The native execution domain this handle lowers through.
+    ///
+    /// Shared rather than owned, and that is what makes `Clone` mean what
+    /// section 6.1 says it means: a clone is the same domain under the same
+    /// identity, so it must reach the same native device rather than open a
+    /// second one. It is never replaced after construction — loss does not
+    /// re-point it, because section 6.5 makes loss terminal and recovery a new
+    /// request with a new identity.
+    ///
+    /// Liveness lives on the backend rather than beside this field, because the
+    /// backend is what observes a native loss. Keeping one copy is section 65.3's
+    /// rule; keeping it on the side that can see the event is what makes the copy
+    /// authoritative.
+    native: Arc<dyn DeviceBackend>,
 }
 
 impl Device {
     /// Opens a logical execution domain under a freshly minted identity.
     ///
     /// Crate-private: section 6.1 ties identity minting to a completed device
-    /// request, so nothing else may produce the pair.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by the contract tests; a completed device request opens one"
-        )
-    )]
-    pub(crate) fn new(identity: DeviceIdentity) -> Self {
-        Self {
-            identity,
-            status: DeviceStatus::Active,
-            loss: None,
-            domain: DeviceDomain,
-        }
+    /// request, and section 6.1's other half is that a backend does not mint its
+    /// own — so only the request path that did both may call this.
+    pub(crate) fn new(identity: DeviceIdentity, native: Arc<dyn DeviceBackend>) -> Self {
+        Self { identity, native }
     }
 
     /// This device's identity.
@@ -138,10 +146,7 @@ impl Device {
     /// instead of asking the device what it can do is the mistake section 6.3
     /// names.
     pub fn backend(&self) -> BackendKind {
-        unimplemented!(
-            "backend provenance arrives with the backend port; the contract is \
-             fixed, the device state is not built"
-        )
+        self.native.backend_kind()
     }
 
     /// A snapshot of the adapter that was actually selected.
@@ -150,10 +155,7 @@ impl Device {
     /// section 6.3 asks a device to report what it actually got, which is a
     /// weaker and always-answerable question than listing the candidates.
     pub fn adapter_info(&self) -> &AdapterInfo {
-        unimplemented!(
-            "adapter provenance arrives with the backend port; the contract is \
-             fixed, the device state is not built"
-        )
+        self.native.adapter_info()
     }
 
     /// What this device can actually do.
@@ -169,19 +171,32 @@ impl Device {
     /// and a caller that planned against the adapter would be wrong.
     pub fn capabilities(&self) -> &EnabledCapabilities {
         unimplemented!(
-            "enabled capabilities arrive with the backend port; the contract is \
-             fixed, the device state is not built"
+            "the enabled capability table is not built, and the seam does not \
+             carry one yet on purpose. `EnabledCapabilities` panics on a query it \
+             has no recorded answer for, so a conforming backend must record the \
+             *complete* table, and how that table is enumerated and interned is a \
+             design question this crate has not settled. A backend that recorded \
+             only the answers its tests happened to ask for would turn every \
+             unrecorded query into a panic in release code. Until the interning \
+             rule exists, no creation verb's validation is reachable on an active \
+             device: `Device::require_active` and the ownership checks still \
+             answer, and everything downstream of this call does not"
         )
     }
 
     /// Whether the device is still usable.
+    ///
+    /// The answer comes from the backend, which is what observes a loss, and it
+    /// is asked every time rather than cached here: caching it would give the
+    /// crate two places that know whether this device is alive, and section 65.3
+    /// allows exactly one authority per concern.
     pub fn status(&self) -> DeviceStatus {
-        self.status
+        self.native.status()
     }
 
     /// Why the device was lost, or `None` while it is active.
     pub fn loss_info(&self) -> Option<DeviceLossInfo> {
-        self.loss.clone()
+        self.native.loss_info()
     }
 
     /// Non-blockingly advances completion, loss, and callback bookkeeping.
@@ -194,10 +209,7 @@ impl Device {
     /// makes polling the device a way to make progress rather than only to
     /// observe it.
     pub fn poll(&self) -> RhiResult<()> {
-        unimplemented!(
-            "polling arrives with the backend port; the contract is fixed, the \
-             bookkeeping is not built"
-        )
+        self.native.poll()
     }
 
     /// Blocks until the device is idle.
@@ -210,10 +222,7 @@ impl Device {
     /// [`crate::api::error::RhiErrorKind::Unsupported`] rather than pretending to
     /// have waited.
     pub fn wait_idle(&self) -> RhiResult<()> {
-        unimplemented!(
-            "waiting for idle arrives with the backend port; the contract is \
-             fixed, the device state is not built"
-        )
+        self.native.wait_idle()
     }
 
     /// This device's process-local object ID.
@@ -228,10 +237,7 @@ impl Device {
     /// section 7.1 requires tooling to describe objects by one, which is
     /// unreachable if no object can name its own ID.
     pub fn object_id(&self) -> ObjectId {
-        unimplemented!(
-            "object identity arrives with the backend port; the contract is \
-             fixed, the registry is not built"
-        )
+        self.native.object_id()
     }
 
     /// Refuses an operation that would use this device while it is lost.
@@ -273,10 +279,10 @@ impl Device {
     /// that says only "lost" would send every caller back to ask the device a
     /// question this call site already had the answer to.
     pub(crate) fn require_active(&self) -> RhiResult<()> {
-        match self.status {
+        match self.native.status() {
             DeviceStatus::Active => Ok(()),
             DeviceStatus::Lost => {
-                let message = match &self.loss {
+                let message = match &self.native.loss_info() {
                     Some(loss) => format!(
                         "this device is lost and section 6.5 makes loss terminal, so this \
                          operation cannot be performed through it: {}",
@@ -289,22 +295,6 @@ impl Device {
                 Err(RhiError::new(RhiErrorKind::DeviceLost, message))
             }
         }
-    }
-
-    /// Records that this device is gone, with the reason.
-    ///
-    /// Crate-private, and one-way: section 6.5 makes loss terminal for the whole
-    /// identity, so there is no matching `mark_active`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "reached by the backend port that observes the loss"
-        )
-    )]
-    pub(crate) fn mark_lost(&mut self, info: DeviceLossInfo) {
-        self.status = DeviceStatus::Lost;
-        self.loss = Some(info);
     }
 }
 
@@ -322,8 +312,8 @@ impl core::fmt::Debug for Device {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Device")
             .field("identity", &self.identity)
-            .field("status", &self.status)
-            .field("loss", &self.loss)
+            .field("status", &self.native.status())
+            .field("loss", &self.native.loss_info())
             .finish_non_exhaustive()
     }
 }

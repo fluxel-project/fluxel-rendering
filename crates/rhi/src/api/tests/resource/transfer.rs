@@ -4,7 +4,6 @@ use super::*;
 use crate::api::error::RhiErrorKind;
 use crate::api::format::TextureFormat;
 use crate::api::identity::Label;
-use crate::api::platform::Device;
 use crate::api::resource::buffer::{
     BufferRange, BufferSupport, BufferSupportLimits, BufferSupportQuery, BufferUsage,
 };
@@ -21,6 +20,7 @@ use crate::api::resource::transfer::{
     ReadbackTicket, TextureUploadDescriptor, UploadDescriptor, UploadJob,
 };
 use crate::api::submission::CompletionPoint;
+use crate::base::mock::{device_for_test, paired_device_for_test};
 
 #[test]
 fn a_legal_buffer_upload_is_accepted() {
@@ -142,7 +142,7 @@ fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
     // It is one of two refusals on these verbs that are reachable on today's tree,
     // because both return before `Device::capabilities()`, whose body is still
     // `unimplemented!()`. The other is the lost-device refusal, tested below.
-    let live = Device::new(device());
+    let live = device_for_test(device());
     let foreign = Buffer::new(
         object(91),
         identity(9, 9),
@@ -180,8 +180,8 @@ fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
 /// visible from outside the crate.
 #[test]
 fn a_foreign_buffer_stays_wrong_device_even_on_a_lost_device() {
-    let mut lost = Device::new(device());
-    lost.mark_lost(crate::api::platform::DeviceLossInfo::new(
+    let (lost, native) = paired_device_for_test(device());
+    native.mark_lost(crate::api::platform::DeviceLossInfo::new(
         "the device was lost before the call".to_string(),
     ));
 

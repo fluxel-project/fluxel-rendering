@@ -67,3 +67,8 @@
 #![deny(missing_docs)]
 
 pub mod api;
+
+// The backend seam and the machinery the backends share. Crate-private by
+// decision, not by omission: see the module note for why section 59's list of
+// forbidden exports bans a public capability API rather than this.
+pub(crate) mod base;

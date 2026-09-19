@@ -35,6 +35,7 @@ use crate::api::presentation::{
 };
 use crate::api::resource::texture::Extent3d;
 use crate::api::submission::{CompletionPoint, SubmissionPlanId, SubmissionPoint};
+use crate::base::mock::paired_device_for_test;
 
 // ---------------------------------------------------------------------------
 // Section 43 — configuration.
@@ -326,8 +327,8 @@ fn a_lease_keeps_the_frame_it_has_outstanding_and_its_own_identity() {
 /// native is touched.
 #[test]
 fn configure_presentation_on_a_lost_device_is_device_lost() {
-    let mut device = Device::new(device_identity(1, 1));
-    device.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+    let (device, native) = paired_device_for_test(device_identity(1, 1));
+    native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
 
     let target = PresentationTarget::new(ObjectId::new(1));
     let config = PresentationConfiguration::new(TextureFormat::Bgra8Unorm);
@@ -668,7 +669,7 @@ fn a_failed_presentation_carries_its_reason() {
 fn present_state_refuses_a_foreign_receipt_and_reports_a_lost_device() {
     let identity = device_identity(1, 1);
     let other = device_identity(1, 2);
-    let mut device = Device::new(identity);
+    let (device, native) = paired_device_for_test(identity);
 
     assert_eq!(
         device
@@ -679,7 +680,7 @@ fn present_state_refuses_a_foreign_receipt_and_reports_a_lost_device() {
         "another device has no such presentation"
     );
 
-    device.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+    native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
 
     let error = device
         .present_state(PresentReceiptId::new(identity, 1))

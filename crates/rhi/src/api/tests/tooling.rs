@@ -77,6 +77,7 @@ use crate::api::tooling::{
     SemanticEvent, SemanticEventId, SemanticObserver, TOOLING_SPI_VERSION, ToolingAccess,
     ToolingSpiVersion, ToolingSubscription,
 };
+use crate::base::mock::{device_for_test, paired_device_for_test};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -101,13 +102,13 @@ fn event_id(value: u64) -> SemanticEventId {
 }
 
 fn active_device() -> Device {
-    Device::new(identity(1))
+    device_for_test(identity(1))
 }
 
 /// A device that has been lost, with the stable summary section 6.5 requires.
 fn lost_device() -> Device {
-    let mut device = Device::new(identity(2));
-    device.mark_lost(DeviceLossInfo::new(String::from("the adapter was removed")));
+    let (device, native) = paired_device_for_test(identity(2));
+    native.mark_lost(DeviceLossInfo::new(String::from("the adapter was removed")));
     device
 }
 
