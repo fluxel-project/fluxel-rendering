@@ -13,7 +13,12 @@
 //! to mint identities, and an object-creating verb has to mint an [`ObjectId`];
 //! hiding the constructor from *callers* is the requirement, not hiding it from
 //! the crate. Which side of the seam mints an object id is settled in
-//! [`ObjectId::next`] and is not a per-backend choice.
+//! `ObjectId::next` and is not a per-backend choice.
+//!
+//! `ObjectId::next` is named rather than linked because it is crate-private:
+//! a rustdoc link to a private item is an error under the `-D warnings` doc
+//! gate, and the alternative — `--document-private-items` — would publish the
+//! whole private surface to satisfy one link.
 //!
 //! `Label` is deliberately not a token. It is diagnostic text, it is
 //! caller-owned, and section 19.8 excludes labels from every canonical hash, so

@@ -465,10 +465,14 @@ impl Device {
     ///
     /// # Where the identity comes from
     ///
-    /// [`ObjectId::next`], here, and not from the backend. Section 3 gives the id
+    /// `ObjectId::next`, here, and not from the backend. Section 3 gives the id
     /// to the object that created the resource, and the backend is handed the
     /// descriptor and nothing else precisely so that there is one place an id is
-    /// minted. See [`crate::base::resource`] for the rest of that division.
+    /// minted. The backend seam that receives the descriptor is
+    /// `crate::base::resource`, which is crate-private. Both names are written
+    /// rather than linked because a rustdoc link to a private item fails the
+    /// `-D warnings` doc gate, and linking them would mean publishing the private
+    /// surface to satisfy two references.
     ///
     /// # Errors
     ///
