@@ -149,7 +149,7 @@ impl ComputeScope<'_> {
     /// the offset check: section 33 and section 32.3 state "dynamic offsets valid"
     /// once each, and two implementations of one sentence is how they drift. What
     /// that sentence costs is section 22.4's list, which
-    /// [`require_valid_dynamic_offsets`] owns once for both scopes.
+    /// `require_valid_dynamic_offsets` owns once for both scopes.
     pub fn set_bind_group(
         &mut self,
         index: BindGroupIndex,

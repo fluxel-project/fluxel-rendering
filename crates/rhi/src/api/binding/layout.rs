@@ -440,7 +440,7 @@ impl Device {
     /// Creates a layout on this device from a descriptor.
     ///
     /// Section 20.5's list is checked before the stop, through
-    /// [`validate_bind_group_layout_descriptor`]: visibility, the two
+    /// `validate_bind_group_layout_descriptor`: visibility, the two
     /// `MaxBindingsPerGroup` bounds, slot uniqueness, the per-binding kind and
     /// count rules, and the binding-support question for each declared binding.
     ///

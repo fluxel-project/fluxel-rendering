@@ -339,7 +339,7 @@ impl Device {
     /// Compiles an artifact into a module on this device.
     ///
     /// Everything section 19.10 lists is checked before the stop, through
-    /// [`validate_shader_artifact`], including the binding-support question every
+    /// `validate_shader_artifact`, including the binding-support question every
     /// resource in the artifact's interface asks. Nothing portable is left to the
     /// backend: a [`ShaderArtifact`] carries no [`DeviceIdentity`] — it is
     /// producer-side data with a content hash — so there is no wrong-device

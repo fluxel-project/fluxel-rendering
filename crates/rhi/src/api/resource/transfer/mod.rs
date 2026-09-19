@@ -42,8 +42,11 @@
 //!   submission recorded, and `None` before one does, because a ticket must not
 //!   mint a point for work the device has not accepted.
 //! - Retirement bookkeeping. Section 18.6 states the rule — native backing must
-//!   outlive the last logical owner *and* all terminal GPU work — and it is
-//!   enforced by the device, not by a token in this module.
+//!   outlive the last logical owner *and* all terminal GPU work — and it belongs
+//!   to the device, not to a token in this module: a ticket records a completion
+//!   point, and only the device can know when the last logical owner and the last
+//!   terminal GPU work have both passed. The bookkeeping that enforces it arrives
+//!   with the backend port; nothing in this tree enforces it today.
 //!
 //! The two workflows live in their own files — upload in `upload` and
 //! readback in `readback` — because section 17 and section 18 are

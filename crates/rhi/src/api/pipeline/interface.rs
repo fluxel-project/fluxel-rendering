@@ -375,7 +375,7 @@ impl Device {
     ///    agree with each other but belong to another device would validate and
     ///    say nothing about this one.
     /// 2. Section 23.1's aggregate counts, through
-    ///    [`validate_pipeline_interface_descriptor`], against this device's own
+    ///    `validate_pipeline_interface_descriptor`, against this device's own
     ///    limit and binding-count answers.
     ///
     /// Panics until a backend port exists. Both steps above still run first,

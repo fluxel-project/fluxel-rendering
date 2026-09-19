@@ -279,7 +279,7 @@ impl Device {
     /// another device would validate and say nothing about this one.
     ///
     /// The compute gate, the merged-requirement checks and the workgroup limits
-    /// then run, through [`validate_compute_pipeline_descriptor`], against the
+    /// then run, through `validate_compute_pipeline_descriptor`, against the
     /// seven device answers the descriptor-bag carries.
     ///
     /// Panics until a backend port exists. Both steps above still run first,

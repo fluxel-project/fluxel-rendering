@@ -799,7 +799,7 @@ impl Device {
     /// about this one.
     ///
     /// Section 27.3's ten validation blocks then run, through
-    /// [`validate_raster_pipeline_descriptor`], against the seven device answers
+    /// `validate_raster_pipeline_descriptor`, against the seven device answers
     /// the descriptor-bag carries. Those answers are read from this device rather
     /// than passed in by the caller, because section 7.2 makes the device's own
     /// answers — not the adapter's snapshot — the ones that decide legality.

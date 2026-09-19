@@ -855,7 +855,7 @@ impl Device {
     ///    whose layout and resources all belong to another device would validate
     ///    against that device and say nothing about this one.
     /// 2. Section 22.2's canonicality rule and section 22.3's per-resource lists,
-    ///    through [`validate_bind_group_descriptor`], against this device's four
+    ///    through `validate_bind_group_descriptor`, against this device's four
     ///    binding limits and its two per-format answers.
     ///
     /// Panics until a backend port exists. Both steps above still run first,

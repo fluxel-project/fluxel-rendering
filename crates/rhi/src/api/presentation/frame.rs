@@ -696,7 +696,7 @@ impl ConfiguredPresentation {
     /// target or device loss.
     ///
     /// The other refusals section 44.1 lists come from the surface itself, so they
-    /// are answered by [`Self::acquire_from_surface`], which is the backend that can
+    /// are answered by `Self::acquire_from_surface`, which is the backend that can
     /// observe them. The outstanding-frame refusal above it is real, and so is
     /// everything below it: the frame the surface returns is recorded in this lease
     /// and linked to the record its own `Drop` reports its ending to, because section
