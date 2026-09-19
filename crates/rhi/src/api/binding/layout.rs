@@ -75,6 +75,33 @@ impl BindingSlot {
         self.dynamic_offset = enabled;
         self
     }
+
+    /// Writes this declaration's canonical bytes.
+    ///
+    /// Every field is written in declaration order, and none is left out as
+    /// implied by another: `visibility` is not recoverable from `kind`, a buffer
+    /// binding with a dynamic offset is a different contract from the same binding
+    /// without one, and `count` is what makes a scalar and an array of one element
+    /// different declarations (section 22.1).
+    ///
+    /// The destructuring pattern names every field and has no `..`, so a new field
+    /// on [`BindingSlot`] is a compile error here until its encoding is stated.
+    /// That is the point: a declaration field participates in what the layout *is*,
+    /// so it must not be able to join the contract silently.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            slot,
+            visibility,
+            kind,
+            count,
+            dynamic_offset,
+        } = self;
+        slot.encode_into(out);
+        visibility.encode_into(out);
+        kind.encode_into(out);
+        count.encode_into(out);
+        out.push(u8::from(*dynamic_offset));
+    }
 }
 
 /// Device-scoped exact compatibility token for a canonical layout descriptor.
@@ -104,15 +131,9 @@ impl BindGroupLayoutCompatibilityId {
     ///
     /// Crate-private, because section 21.1 says a caller cannot construct it: the
     /// value means "this Device interned this exact descriptor", and only the
-    /// interning Device knows that.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_bind_group_layout mints one through the interning step, \
-                      which needs the backend port"
-        )
-    )]
+    /// interning Device knows that. The one caller is
+    /// [`Device::create_bind_group_layout`], and it passes what
+    /// [`crate::api::platform::Device::interning`] answered.
     pub(crate) fn new(value: u64) -> Self {
         Self(value)
     }
@@ -176,14 +197,6 @@ impl BindGroupLayoutDescriptor {
     /// everything that stores, compares, or interns one stores this form. It sorts
     /// and does nothing else — a duplicate slot is refused by validation before
     /// this is ever called, so there is no merge rule to state here.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_bind_group_layout canonicalizes through this once the \
-                      backend port lands"
-        )
-    )]
     pub(crate) fn canonicalized(&self) -> Self {
         let mut entries = self.entries.clone();
         entries.sort_by_key(|entry| entry.slot.get());
@@ -191,6 +204,27 @@ impl BindGroupLayoutDescriptor {
             label: self.label.clone(),
             entries,
         }
+    }
+
+    /// The canonical bytes section 21.1's interning is keyed on.
+    ///
+    /// The whole descriptor except the label: section 19.8 excludes diagnostics
+    /// from every canonical hash, so two layouts that differ only in what they are
+    /// called are one contract and must intern to one compatibility id.
+    ///
+    /// The entry count is written first so that the encoding is self-delimiting
+    /// even for a descriptor whose entries were never sorted. Both callers pass the
+    /// canonical form — [`Device::create_bind_group_layout`] canonicalizes before
+    /// interning — but an encoder that only round-trips for the ordering one caller
+    /// happens to use would be a trap for the next caller, and writing a length
+    /// costs eight bytes per layout.
+    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(self.entries.len() as u64).to_le_bytes());
+        for entry in &self.entries {
+            entry.encode_into(&mut out);
+        }
+        out
     }
 }
 
@@ -216,13 +250,6 @@ impl BindGroupLayout {
     /// only `Device::create_bind_group_layout` may produce one. It takes the
     /// canonicalized descriptor and the two interned tokens, because both are
     /// outputs of the interning step that the façade owns.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_bind_group_layout calls this once the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,
@@ -448,9 +475,22 @@ impl Device {
     /// so there is no wrong-device argument to refuse here, and the only input the
     /// check needs is this device's own answers.
     ///
-    /// Panics until a backend port exists. The validation above still runs first,
-    /// because a refusal it produces is a statement about the descriptor that a
-    /// caller can act on without any device object having been allocated.
+    /// # Why there is no backend call
+    ///
+    /// This is the one creation verb in module 03 that reaches no lowering, and the
+    /// absence is a fact about Direct3D 12 rather than a deferral: D3D12 has no
+    /// descriptor-set-layout object. Its analogue is the *root signature*, which is
+    /// a property of a pipeline — one PSO has exactly one, built from the whole
+    /// ordered group sequence — so the native work for one layout is zero and the
+    /// lowering that does need layouts reads them from the
+    /// [`crate::api::pipeline::PipelineInterface`] when a pipeline is created.
+    /// Vulkan and WebGPU do have the object and will reach a backend port here;
+    /// `crate::base::binding` records why that trait is not declared yet.
+    ///
+    /// What is left is the interning step section 21.1 requires: canonicalize,
+    /// encode, and take this device's id for those bytes, so that two identical
+    /// canonical descriptors on one device answer one
+    /// [`BindGroupLayoutCompatibilityId`].
     pub fn create_bind_group_layout(
         &self,
         desc: &BindGroupLayoutDescriptor,
@@ -476,12 +516,24 @@ impl Device {
             capabilities.binding_support(query)
         })?;
 
-        unimplemented!(
-            "Device::create_bind_group_layout needs a backend layout builder to allocate a {} \
-             binding layout on device {:?}; the portable contract is fixed, but no backend port \
-             is built",
-            desc.entries.len(),
-            self.identity()
-        )
+        // Section 21.2's canonicalization, then section 21.1's two tokens. Both
+        // are functions of one byte string, and that is deliberate: the fingerprint
+        // is the digest of exactly the bytes the id is keyed on, so a reader
+        // comparing two fingerprints and a reader comparing two ids are looking at
+        // the same fact at two resolutions rather than at two independent facts
+        // that could disagree.
+        let canonical = desc.canonicalized();
+        let bytes = canonical.canonical_bytes();
+        let compatibility_id =
+            BindGroupLayoutCompatibilityId::new(self.interning().intern_layout(&bytes));
+        let fingerprint = LayoutFingerprint(crate::base::digest::sha256(&bytes));
+
+        Ok(BindGroupLayout::new(
+            ObjectId::next(),
+            self.identity(),
+            canonical,
+            compatibility_id,
+            fingerprint,
+        ))
     }
 }

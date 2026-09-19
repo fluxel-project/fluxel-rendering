@@ -38,6 +38,16 @@ impl BindGroupIndex {
     pub fn get(self) -> u32 {
         self.0
     }
+
+    /// Writes this index's canonical bytes.
+    ///
+    /// Four little-endian bytes rather than one: a group index is an unbounded
+    /// logical position a caller chooses, not a bounded enumeration, so a one-byte
+    /// encoding would alias index 256 with index 0 and make two different
+    /// interfaces intern to one compatibility id.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0.to_le_bytes());
+    }
 }
 
 /// The logical slot of one binding within a bind group.
@@ -57,6 +67,12 @@ impl BindingSlotId {
     /// Returns the logical value.
     pub fn get(self) -> u32 {
         self.0
+    }
+
+    /// Writes this slot's canonical bytes, for the same reason as
+    /// [`BindGroupIndex::encode_into`].
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0.to_le_bytes());
     }
 }
 
@@ -101,6 +117,26 @@ impl BindingCount {
         match self {
             Self::One => 1,
             Self::Fixed(elements) => elements,
+        }
+    }
+
+    /// Writes this count's canonical bytes: a tag, then the element count.
+    ///
+    /// The two variants are tagged rather than normalized to their element count,
+    /// because section 22.1 says an array of length one cannot stand in for
+    /// [`Self::One`]: a layout declaring `One` and a layout declaring a
+    /// one-element array are different contracts, so they must not intern to one
+    /// `BindGroupLayoutCompatibilityId`.
+    ///
+    /// No wildcard arm: a third variant must state its encoding before this
+    /// compiles.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::One => out.push(0),
+            Self::Fixed(elements) => {
+                out.push(1);
+                out.extend_from_slice(&elements.to_le_bytes());
+            }
         }
     }
 }

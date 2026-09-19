@@ -278,6 +278,8 @@ impl DeviceRequestBackend for MockRequest {
                 submission: self.submission.clone(),
                 allocations: AtomicUsize::new(0),
                 shader_modules: AtomicUsize::new(0),
+                bind_groups: AtomicUsize::new(0),
+                compute_pipelines: AtomicUsize::new(0),
                 submissions: AtomicUsize::new(0),
                 next_completion: AtomicU64::new(1),
                 holding: AtomicBool::new(false),
@@ -383,6 +385,98 @@ impl crate::base::shader::ShaderModuleBackend for MockShaderModule {
     }
 }
 
+/// A descriptor packet this backend assembled, in the sense that it kept a copy.
+///
+/// There is no native descriptor and no descriptor heap here, so what this proves
+/// is the same thing [`MockBuffer`] proves and no more: that the creation verb
+/// reached the lowerer, and that what arrived is the canonical packet.
+/// [`Self::descriptor`] is that packet, and a test reads it to show that the
+/// entries were in ascending slot order rather than in the order the caller wrote
+/// them — the half of section 22.2 that is otherwise invisible from the outside.
+///
+/// It holds no [`ObjectId`], for the reason [`MockBuffer`]'s note gives.
+pub(crate) struct MockBindGroup {
+    descriptor: crate::api::binding::BindGroupDescriptor,
+}
+
+impl MockBindGroup {
+    /// Keeps `descriptor` as this packet.
+    pub(crate) fn new(descriptor: crate::api::binding::BindGroupDescriptor) -> Self {
+        Self { descriptor }
+    }
+
+    /// The canonical packet the portable layer handed over.
+    pub(crate) fn descriptor(&self) -> &crate::api::binding::BindGroupDescriptor {
+        &self.descriptor
+    }
+}
+
+impl crate::base::binding::BindGroupBackend for MockBindGroup {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// A pipeline state that was never built, because there is no driver to build it.
+///
+/// The counterpart of [`MockShaderModule`], and it stops one step later: this
+/// backend has no native compiler, so it has no verdict on whether the bytes are a
+/// legal program, and it says nothing rather than inventing a refusal. It keeps the
+/// descriptor, which is what lets a test show that the pipeline that arrived is the
+/// one the caller described — in particular that the shader and the interface were
+/// the *same* two objects, since a mock cannot discover a mismatch the way a driver
+/// would.
+pub(crate) struct MockComputePipeline {
+    descriptor: crate::api::pipeline::ComputePipelineDescriptor,
+}
+
+impl MockComputePipeline {
+    /// Keeps `descriptor` as this pipeline's description.
+    pub(crate) fn new(descriptor: crate::api::pipeline::ComputePipelineDescriptor) -> Self {
+        Self { descriptor }
+    }
+
+    /// The descriptor the portable layer handed over.
+    pub(crate) fn descriptor(&self) -> &crate::api::pipeline::ComputePipelineDescriptor {
+        &self.descriptor
+    }
+}
+
+impl crate::base::pipeline::ComputePipelineBackend for MockComputePipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// A bind group backend holding the canonical packet it was handed.
+///
+/// The same shape as [`module_backend_for_test`], one chapter later: a test that
+/// needs a portable `BindGroup` has to supply the backend half, and the honest
+/// backend for a test that is not about lowering is one that holds what it was
+/// given and claims nothing. It is a function rather than a call to
+/// `Arc::new(MockBindGroup::new(..))` at each site so that the *type* the seam
+/// wants — `Arc<dyn BindGroupBackend>` — is named once, where a change to the seam
+/// will be seen.
+pub(crate) fn bind_group_backend_for_test(
+    descriptor: crate::api::binding::BindGroupDescriptor,
+) -> Arc<dyn crate::base::binding::BindGroupBackend> {
+    Arc::new(MockBindGroup::new(descriptor))
+}
+
+/// A compute pipeline backend holding the descriptor it was handed.
+///
+/// [`bind_group_backend_for_test`]'s counterpart, with one difference worth
+/// stating: a pipeline descriptor is *not* canonicalized on the way down — section
+/// 28 has no canonical form to hand over — so the descriptor a test passes here is
+/// the caller's own, and the mock holding it is what lets a test show that the
+/// shader and the interface reaching the backend were the same two objects the
+/// caller named.
+pub(crate) fn compute_pipeline_backend_for_test(
+    descriptor: crate::api::pipeline::ComputePipelineDescriptor,
+) -> Arc<dyn crate::base::pipeline::ComputePipelineBackend> {
+    Arc::new(MockComputePipeline::new(descriptor))
+}
+
 /// A device that answers from memory.
 pub(crate) struct MockDevice {
     backend: BackendKind,
@@ -411,6 +505,20 @@ pub(crate) struct MockDevice {
     /// called. Counting is what separates them, and it is what pins the verdict's
     /// placement against a later edit that moves it past the port.
     shader_modules: AtomicUsize,
+    /// How many descriptor packets have reached this backend.
+    ///
+    /// The same observable, for the half of section 22 that has one: the layout
+    /// match, the range rules and the four binding limits all run inside
+    /// `Device::create_bind_group`, so a packet they refuse must leave this at its
+    /// previous value.
+    bind_groups: AtomicUsize,
+    /// How many compute pipelines have reached this backend.
+    ///
+    /// The same observable again, and here it carries a second meaning: this
+    /// counts the times the *native* pipeline builder was asked, which is the only
+    /// place a driver's verdict on the program can come from. A pipeline the
+    /// portable gate refused must leave this unchanged.
+    compute_pipelines: AtomicUsize,
     /// How many plans have reached this backend's submit.
     ///
     /// The same observable as `allocations`, one chapter later. Section 41.3's
@@ -488,6 +596,8 @@ impl MockDevice {
             submission,
             allocations: AtomicUsize::new(0),
             shader_modules: AtomicUsize::new(0),
+            bind_groups: AtomicUsize::new(0),
+            compute_pipelines: AtomicUsize::new(0),
             submissions: AtomicUsize::new(0),
             // Starts at 1 so that serial 0 is never reported. A zero would make
             // the "never reported" check below depend on which side of the
@@ -515,6 +625,22 @@ impl MockDevice {
     /// at its previous value.
     pub(crate) fn shader_modules(&self) -> usize {
         self.shader_modules.load(Ordering::Relaxed)
+    }
+
+    /// How many descriptor packets have reached this backend.
+    ///
+    /// Section 22.2's canonicality rule and section 22.3's per-resource lists run
+    /// before the port, so a packet they refuse must leave this unchanged.
+    pub(crate) fn bind_groups(&self) -> usize {
+        self.bind_groups.load(Ordering::Relaxed)
+    }
+
+    /// How many compute pipelines have reached this backend.
+    ///
+    /// Section 28's whole creation list runs before the port, so a pipeline it
+    /// refuses must leave this unchanged.
+    pub(crate) fn compute_pipelines(&self) -> usize {
+        self.compute_pipelines.load(Ordering::Relaxed)
     }
 
     /// How many plans have reached this backend's `submit`.
@@ -640,6 +766,43 @@ impl DeviceBackend for MockDevice {
         // wrong when the truth is that nothing ever looked at it.
         self.shader_modules.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(MockShaderModule::new(artifact.clone())))
+    }
+
+    fn create_bind_group(
+        &self,
+        descriptor: &crate::api::binding::BindGroupDescriptor,
+    ) -> RhiResult<Box<dyn crate::base::binding::BindGroupBackend>> {
+        // No refusal here, and the absence is the same decision `create_buffer`
+        // records rather than an unfinished arm: the layout match, every range and
+        // usage rule, the device's four binding limits and the storage-access
+        // question have all been answered portably in `Device::create_bind_group`.
+        //
+        // What this backend cannot model is the part section 22.2 makes
+        // *native* — that a descriptor holds addresses and therefore that the
+        // object returned here must outlive them. There is no address here to
+        // dangle, so keeping the packet is the honest whole of it, and a test that
+        // wants to observe that obligation has to read it off the DX12 backend,
+        // where the `Arc`s are real.
+        self.bind_groups.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(MockBindGroup::new(descriptor.clone())))
+    }
+
+    fn create_compute_pipeline(
+        &self,
+        descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::base::pipeline::ComputePipelineBackend>> {
+        // No refusal here, and the absence matters more here than anywhere else in
+        // this file: this is the one port in the crate whose native call a real
+        // driver *can* refuse for a reason no portable check covers — whether the
+        // bytes are a legal program, and whether they match the interface. A mock
+        // with no compiler has no such verdict to give, and inventing one would be
+        // worse than silence (disciplines 2 and 3).
+        //
+        // The consequence for a test is that a rejected program is only observable
+        // on a backend with a driver behind it. That is not a gap in the mock; it
+        // is the shape of the question.
+        self.compute_pipelines.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(MockComputePipeline::new(descriptor.clone())))
     }
 
     /// Accepts the plan, and executes none of it.

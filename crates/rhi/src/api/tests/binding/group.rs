@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::api::tests::fixture;
+use crate::base::mock::bind_group_backend_for_test;
 
 // ---------------------------------------------------------------------------
 // Section 22: the packet.
@@ -339,7 +340,17 @@ fn a_storage_buffer_binding_is_measured_against_the_storage_limits() {
 #[test]
 fn a_group_reports_its_layout_and_canonical_entries() {
     let (layout, descriptor) = one_uniform_slot();
-    let group = BindGroup::new(object(20), device(), descriptor.canonicalized());
+    // Canonicalized once and handed to both halves, which is what the real
+    // creation verb does: the packet the backend lowers is the packet the handle
+    // describes, and a test that canonicalized twice would be testing two
+    // packets that happen to be equal.
+    let canonical = descriptor.canonicalized();
+    let group = BindGroup::new(
+        object(20),
+        device(),
+        canonical.clone(),
+        bind_group_backend_for_test(canonical),
+    );
 
     assert_eq!(group.id(), object(20));
     assert_eq!(group.device_identity(), device());
@@ -355,7 +366,13 @@ fn a_group_debug_prints_portable_identity_only() {
     // group do derive it. The handle implements `Debug` by hand and prints identity
     // only, so the native field the backend port adds is never printed into a log.
     let (_, descriptor) = one_uniform_slot();
-    let group = BindGroup::new(object(21), device(), descriptor.canonicalized());
+    let canonical = descriptor.canonicalized();
+    let group = BindGroup::new(
+        object(21),
+        device(),
+        canonical.clone(),
+        bind_group_backend_for_test(canonical),
+    );
     let text = format!("{group:?}");
     assert!(text.contains("BindGroup"), "{text}");
     assert!(text.contains("id"), "{text}");

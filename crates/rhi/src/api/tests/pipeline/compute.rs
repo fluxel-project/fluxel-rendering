@@ -6,6 +6,7 @@
 //! is the original section banner.
 
 use super::*;
+use crate::base::mock::compute_pipeline_backend_for_test;
 // ---------------------------------------------------------------------------
 // Section 28: compute pipelines.
 // ---------------------------------------------------------------------------
@@ -121,7 +122,9 @@ fn a_compute_pipeline_shares_the_interface_rules_with_raster() {
 
 #[test]
 fn a_compute_pipeline_debug_prints_portable_identity_only() {
-    let pipeline = ComputePipeline::new(object(52), device(), compute_descriptor());
+    let descriptor = compute_descriptor();
+    let native = compute_pipeline_backend_for_test(descriptor.clone());
+    let pipeline = ComputePipeline::new(object(52), device(), descriptor, native);
     let text = format!("{pipeline:?}");
     assert!(text.contains("ComputePipeline"), "{text}");
     assert!(text.contains("id"), "{text}");

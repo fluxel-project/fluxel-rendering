@@ -41,17 +41,24 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 };
 
-use super::*;
+use super::provider::{Candidate, Dx12Provider};
+use super::request::ArcDevice;
 use crate::api::binding::vocabulary::StorageAccess;
 use crate::api::binding::{
     BindingCount, BindingKind, BindingLimitClass, BindingSupportQuery, BufferBindingAccess,
     TextureSampleType,
 };
 use crate::api::command::{BlitFilter, BufferCopy, RecorderDescriptor};
+use crate::api::error::RhiErrorKind;
 use crate::api::format::{TextureFormat, TextureSupportQuery};
-use crate::api::identity::Label;
+use crate::api::identity::{DeviceInstanceId, Label, ObjectId};
+use crate::api::platform::provider::AdapterSelection;
+use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
-use crate::api::platform::{PlatformProvider, RequestStatus};
+use crate::api::platform::{
+    AdapterId, BackendKind, DeviceLossInfo, DeviceStatus, PlatformProvider, RequestStatus,
+};
+use crate::api::presentation::PresentationTarget;
 use crate::api::resource::buffer::{
     Buffer, BufferDescriptor, BufferRange, BufferSupportQuery, BufferUsage,
     ResourceMemoryPreference,
@@ -70,6 +77,7 @@ use crate::api::submission::{
     CompletionPoint, CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
 };
 use crate::backend::dx12::resource::Dx12Buffer;
+use crate::base::platform::{DeviceBackend, ProviderBackend, RequestProgress};
 
 /// A fresh provider instance identity, as host integration would mint.
 fn instance() -> DeviceInstanceId {
@@ -277,7 +285,7 @@ fn fill_cs_artifact(code: crate::api::shader::ShaderCode) -> ShaderArtifact {
 /// narrower than the paragraph that follows might suggest. The accepted code forms
 /// are a recorded device fact, and for Direct3D 12 that record is *structural* —
 /// there is no `CheckFeatureSupport` question whose answer could be otherwise, and
-/// [`super::super::facts`] records the form for that reason rather than from a
+/// [`super::facts`] records the form for that reason rather than from a
 /// probe. So this test does not check a driver's opinion. What it checks is that
 /// the fact reaches the portable verdict through a real device: the same
 /// `EnabledCapabilities` a caller holds, built from a real `ID3D12Device` by the

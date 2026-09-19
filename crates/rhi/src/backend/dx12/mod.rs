@@ -40,19 +40,45 @@
 //! that is asserted from a trait's presence rather than queried is the exact
 //! failure API v1 exists to prevent.
 //!
+//! # The shape of this tree
+//!
+//! This backend's directories mirror `crate::api`'s: a chapter per subject, each
+//! with a `mod.rs` that declares its files and re-exports the chapter's inside
+//! face, and each file named for the one thing it owns. The correspondence is not
+//! decoration — it is how a reader moves between a portable rule and the lowering
+//! that serves it — and it is not exact either, because Direct3D 12 does not split
+//! its work the way API v1 splits its model:
+//!
+//! - [`platform`] answers API v1's `platform` — the DXGI provider, the logical
+//!   device, the device request, and the capability table that device reports.
+//! - [`resource`] answers `resource`, and today holds only [`resource`]'s buffer
+//!   half.
+//! - [`shader`] answers `shader`, and is the smallest chapter because D3D12 has
+//!   no shader-module object at all.
+//! - [`command`] answers `command` and `submission`: recording, committing and
+//!   observing work.
+//! - [`binding`] answers `binding`, and owns the descriptor heaps and the bind
+//!   groups written into them.
+//! - [`pipeline`] answers `pipeline`, and owns root signatures and state objects
+//!   — the two portable pipeline verbs that D3D12 has no separate object for.
+//! - [`ffi`] answers nothing in API v1: it is the one place a `HRESULT` becomes
+//!   an API v1 error, which is why it sits outside the chapter directories.
+//!
 //! # Where this tree stands, stated plainly
 //!
-//! **The native boundary ([`ffi`]), the provider ([`provider`]), buffer
+//! **The native boundary ([`ffi`]), the platform chapter ([`platform`]), buffer
 //! allocation ([`resource`]), the command spine ([`command`]), and shader entry
-//! points ([`shader`]) are written.** There is no texture, pipeline or
-//! presentation lowering yet, and no claim of DX12 support exists until the shared
-//! contract suite and a real Windows run close on one revision.
+//! points ([`shader`]) are written. [`binding`] and [`pipeline`] are declared and
+//! not written** — the device chapter's two verbs refuse with a list of what is
+//! missing rather than fabricating an object. There is no texture or presentation
+//! lowering yet, and no claim of DX12 support exists until the shared contract
+//! suite and a real Windows run close on one revision.
 //!
-//! [`shader`] is the smallest of those and the one whose size is easiest to
-//! misread: Direct3D 12 has no shader-module object, so preparing an entry point is
-//! keeping bytes alive for `CreateComputePipelineState` and nothing more. A module
-//! that was created has **not** been compiled, and [`shader`] says so at length
-//! because the opposite reading is the natural one.
+//! [`shader`] is the smallest of the written chapters and the one whose size is
+//! easiest to misread: Direct3D 12 has no shader-module object, so preparing an
+//! entry point is keeping bytes alive for `CreateComputePipelineState` and nothing
+//! more. A module that was created has **not** been compiled, and [`shader`] says
+//! so at length because the opposite reading is the natural one.
 //!
 //! The order the rest arrives in is fixed by a dependency rather than by
 //! preference. DX12 answers every capability question (`CheckFeatureSupport`,
@@ -61,13 +87,13 @@
 //! holes in it, so **device creation comes before capability enumeration, and
 //! capability enumeration comes before adapter enumeration** — which is why
 //! `ProviderBackend::enumerate_adapters` refuses today while `request_device`
-//! works (see the note in [`provider`]).
+//! works (see the note in [`platform::provider`]).
 //!
-//! Capability enumeration has started: [`facts`] probes a created device and is
-//! what `request_device` now records. It is not finished — binding and
-//! view-compatibility facts are still absent, and seven of the twenty-seven
-//! portable limits have no Direct3D 12 ceiling to cite — and [`facts`]'s module
-//! documentation states which of the three kinds each missing entry is.
+//! Capability enumeration has started: [`platform::facts`] probes a created device
+//! and is what `request_device` now records. It is not finished — view
+//! compatibility and the last of the binding facts are still absent, and seven of
+//! the twenty-seven portable limits have no Direct3D 12 ceiling to cite — and that
+//! module's documentation states which of the three kinds each missing entry is.
 //!
 //! Allocation arrived for buffers only, and it is the smallest lowering this
 //! backend will have: one `CreateCommittedResource` per descriptor, with the
@@ -81,9 +107,10 @@
 //! in `D3D12_RESOURCE_STATE_COMMON`, which is why there is no persistent resource
 //! state tracker to get out of step with the driver.
 
+mod binding;
 mod command;
-mod facts;
 mod ffi;
-mod provider;
+mod pipeline;
+mod platform;
 mod resource;
 mod shader;

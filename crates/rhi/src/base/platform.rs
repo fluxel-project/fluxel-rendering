@@ -263,6 +263,54 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
         artifact: &crate::api::shader::ShaderArtifact,
     ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>>;
 
+    /// Assembles the native descriptor packet behind one bind group.
+    ///
+    /// The same division of labour as [`Self::create_buffer`]. By the time this is
+    /// reached the layout match, every resource's range and usage, the device's
+    /// `max_*_binding_size` and offset-alignment limits, and the storage-access
+    /// question have all been answered portably in
+    /// [`crate::api::binding::validate_bind_group_descriptor`] — so a backend has
+    /// no legality question left, only a native one: which descriptors to write,
+    /// where, and what to keep alive so that the addresses in them stay valid.
+    ///
+    /// **What the returned object must own.** A native descriptor is a *pointer*
+    /// into an allocation, not an owner of it. A backend that wrote an address and
+    /// kept no reference to the resource behind it would hand the GPU a
+    /// use-after-free the first time the caller dropped its buffer, and nothing
+    /// portable would catch it: section 22.2 makes a bind group a logical owner of
+    /// everything it binds, so the ownership has to be established here, on the
+    /// native side, where the address is taken.
+    ///
+    /// A backend whose native API has no descriptor-packet object — one that
+    /// resolves bindings at draw time from the portable handle — must still answer
+    /// this method, because the portable handle's shape does not depend on it.
+    /// What it may not do is return an object that fails at first use
+    /// (discipline 3: never a silent substitute).
+    fn create_bind_group(
+        &self,
+        descriptor: &crate::api::binding::BindGroupDescriptor,
+    ) -> RhiResult<Box<dyn crate::base::binding::BindGroupBackend>>;
+
+    /// Builds the driver's pipeline state object behind one compute pipeline.
+    ///
+    /// This is the first creation verb in the crate whose native call can fail for
+    /// a reason about the *program* rather than about the descriptor. The bytes a
+    /// producer supplied have passed the portable acceptance rule, which is a
+    /// statement about recorded device facts; whether they are a legal program,
+    /// whether they match the interface the pipeline declares, and whether the
+    /// driver can build state for them are questions only the native compiler and
+    /// driver answer, and this is where they are asked.
+    ///
+    /// A native failure here is therefore reported as it arrives, with its own
+    /// kind, and never folded into a portable one: a driver refusing a shader is
+    /// [`crate::api::RhiErrorKind::BackendFailure`], not `InvalidUsage`, because
+    /// the caller's descriptor had already passed every check this crate can make
+    /// (discipline 4).
+    fn create_compute_pipeline(
+        &self,
+        descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::base::pipeline::ComputePipelineBackend>>;
+
     /// Lowers and submits one plan that has passed the portable preflight.
     ///
     /// This is Phase B of section 41.3 and the two phases are not symmetric. By

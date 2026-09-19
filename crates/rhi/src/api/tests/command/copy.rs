@@ -7,6 +7,7 @@ use crate::api::command::{
 };
 use crate::api::pipeline::{ComputePipeline, ComputePipelineDescriptor};
 use crate::api::tests::fixture;
+use crate::base::mock::compute_pipeline_backend_for_test;
 
 #[test]
 fn begin_compute_stops_at_the_device_capability() {
@@ -51,11 +52,13 @@ fn shape_a_dispatch_states_only_its_workgroups(recorder: &mut CommandRecorder) {
 }
 
 fn compute_pipeline() -> ComputePipeline {
-    ComputePipeline::new(
-        object(57),
-        device(),
-        ComputePipelineDescriptor::new(vertex_module(67), interface_of(uniform_layout(1))),
-    )
+    let descriptor =
+        ComputePipelineDescriptor::new(vertex_module(67), interface_of(uniform_layout(1)));
+    // Section 28 hands the backend the caller's descriptor rather than a
+    // canonical form, so this is one descriptor cloned once, not two packets that
+    // happen to agree.
+    let native = compute_pipeline_backend_for_test(descriptor.clone());
+    ComputePipeline::new(object(57), device(), descriptor, native)
 }
 
 #[test]

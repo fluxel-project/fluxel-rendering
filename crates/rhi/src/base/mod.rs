@@ -80,6 +80,8 @@
 //! base/platform   provider, device request, device   (specification module 01)
 //! base/resource   buffer, texture, view, sampler     (specification module 02)
 //! base/shader     the native entry point             (specification module 03)
+//! base/binding    the native descriptor packet       (specification module 03)
+//! base/pipeline   the native pipeline state          (specification module 03)
 //! base/mock       the CPU/mock backend
 //! ```
 //!
@@ -104,6 +106,21 @@ pub(crate) mod resource;
 // consumes rather than the chapter that created it: a module is created here and
 // read when a pipeline state is built.
 pub(crate) mod shader;
+
+// The bind-group seam. Separate from `resource` because a bind group is not an
+// allocation: it is the packet that points at allocations, it is created from a
+// layout rather than from a descriptor of its own, and its native shape is a
+// descriptor write rather than a memory placement. It has no companion trait for
+// the *layout*, which is a Direct3D 12 fact rather than an oversight — the module
+// documentation records which backends will need one.
+pub(crate) mod binding;
+
+// The pipeline seam. It carries the object a dispatch binds and a draw binds, and
+// it is split from `shader` because the two fail for different reasons: a module
+// is bytes a producer made, while a pipeline is what a driver built out of them and
+// is the first object here whose creation the driver can refuse for a reason about
+// the *program*.
+pub(crate) mod pipeline;
 
 // The recording and submission chapter's seam. It is separate from `platform`
 // for the reason that one is separate from `resource`: the vocabulary is reached

@@ -10,6 +10,7 @@
 //! validator (section 19.7) and are asked through it rather than copied.
 
 use core::fmt;
+use std::sync::Arc;
 
 use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -20,6 +21,8 @@ use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::shader::{
     ArtifactAcceptance, ComputeWorkgroupRequirements, ShaderArtifact, ShaderModule, ShaderStage,
 };
+
+use crate::base::pipeline::ComputePipelineBackend;
 
 use crate::api::shader::validation::validate_compute_workgroup;
 
@@ -71,6 +74,16 @@ pub struct ComputePipeline {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: ComputePipelineDescriptor,
+    /// The driver's pipeline state object, in the same shape
+    /// [`crate::api::resource::Buffer`] holds its allocation: `Arc` so that the
+    /// handle stays `Clone` without the backend cloning a native device, and
+    /// behind `dyn` so that no native type reaches the exported surface (section
+    /// 59).
+    ///
+    /// Nothing portable reads it. A dispatch is lowered by the *device's* backend,
+    /// which downcasts this and the bound groups in one place, which is why
+    /// `crate::base::pipeline` carries no dispatch verb.
+    native: Arc<dyn ComputePipelineBackend>,
 }
 
 impl ComputePipeline {
@@ -78,23 +91,30 @@ impl ComputePipeline {
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
     /// only `Device::create_compute_pipeline` may produce one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_compute_pipeline calls this once the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,
         descriptor: ComputePipelineDescriptor,
+        native: Arc<dyn ComputePipelineBackend>,
     ) -> Self {
         Self {
             id,
             device,
             descriptor,
+            native,
         }
+    }
+
+    /// The driver's pipeline state object.
+    ///
+    /// Crate-private because section 59 keeps native lowering out of the exported
+    /// surface: the returned trait is `pub(crate)`, so this is the seam's ordinary
+    /// inside face. Its caller is the command lowering of the backend that built
+    /// the pipeline, which downcasts to its own type — a pipeline handed to
+    /// another backend's device is refused portably, by device identity, long
+    /// before a downcast is attempted.
+    pub(crate) fn native(&self) -> &Arc<dyn ComputePipelineBackend> {
+        &self.native
     }
 
     /// This pipeline's process-local object ID.
@@ -282,9 +302,18 @@ impl Device {
     /// then run, through `validate_compute_pipeline_descriptor`, against the
     /// seven device answers the descriptor-bag carries.
     ///
-    /// Panics until a backend port exists. Both steps above still run first,
-    /// because each refusal they produce is a statement about the descriptor that
-    /// a caller can act on without any device object having been allocated.
+    /// The backend is asked last, and its failure is *not* wrapped or reworded:
+    /// this is the first verb in the crate whose native call can fail for a reason
+    /// about the program, and a driver refusing to build state for bytes that
+    /// passed every portable check is a fact about the driver. Folding it into
+    /// `InvalidUsage` would tell the caller its descriptor was wrong when the
+    /// portable layer has already said otherwise (discipline 4 in
+    /// `crate::base`).
+    ///
+    /// The descriptor the backend receives is the caller's. Unlike a bind group
+    /// there is no canonical form to hand it — an interface's order is already
+    /// semantic and its groups are already canonical — so the packet validated is
+    /// the packet stored and the packet lowered.
     pub fn create_compute_pipeline(
         &self,
         desc: &ComputePipelineDescriptor,
@@ -349,12 +378,14 @@ impl Device {
             },
         )?;
 
-        unimplemented!(
-            "Device::create_compute_pipeline needs a backend compute pipeline builder to lower \
-             the compute entry point of {} on device {:?}; the portable contract is fixed, but \
-             no backend port is built",
-            desc.label.as_deref().unwrap_or("<unlabelled>"),
-            self.identity()
-        )
+        // The one backend call, and the last statement that can fail.
+        let native = self.native().create_compute_pipeline(desc)?;
+
+        Ok(ComputePipeline::new(
+            ObjectId::next(),
+            identity,
+            desc.clone(),
+            native.into(),
+        ))
     }
 }

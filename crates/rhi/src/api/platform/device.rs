@@ -34,7 +34,9 @@
 //! fact here as well would create a second authority for it, which is the thing
 //! section 65.3 rules out.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::api::capability::EnabledCapabilities;
@@ -155,6 +157,15 @@ pub struct Device {
     /// 39.1 makes a plan serial unique *within the device*, and this is what makes
     /// "the device" mean the identity rather than the handle.
     serials: Arc<DomainSerials>,
+    /// The exact compatibility tokens this domain has minted.
+    ///
+    /// Shared rather than owned, for the reason `serials` is: a clone is the same
+    /// domain under the same identity (section 6.1), so two clones that each kept
+    /// their own table would mint two different
+    /// [`BindGroupLayoutCompatibilityId`](crate::api::binding::BindGroupLayoutCompatibilityId)s
+    /// for one canonical layout. Section 21.1's rule is about the *device*, so the
+    /// table has to hang off the identity rather than off the handle.
+    interning: Arc<DomainInterning>,
 }
 
 /// The per-domain serial sources.
@@ -195,6 +206,109 @@ impl DomainSerials {
     /// The next acceptance serial of this domain.
     pub(crate) fn next_submission(&self) -> u64 {
         self.submissions.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+/// The per-domain interning tables behind module 03's exact compatibility tokens.
+///
+/// Section 21.1 says a `BindGroupLayoutCompatibilityId` is "produced by Device
+/// interning canonical layout descriptors", and section 21.2 says the same of
+/// `PipelineInterfaceCompatibilityId`. Both rules have the same two halves, and
+/// both halves are why this table is here rather than in either chapter:
+///
+/// - *On one device, two equal canonical descriptors intern to one id.* A chapter
+///   could not do this alone — it would have to keep a table, and two chapters
+///   keeping two tables is two places the rule can drift.
+/// - *A caller cannot construct the token.* The id is an opaque `u64` wrapped by
+///   each chapter's own newtype, so the value has to come from somewhere the
+///   caller does not reach. Returning a bare `u64` from here keeps this module
+///   from having to name a type from module 03, which is the layering the
+///   chapter-per-module split exists to preserve: the numbering is minted here,
+///   and what it is *called* is decided next to the type it identifies.
+///
+/// The chapter that interns supplies the canonical bytes. This module never
+/// encodes a descriptor — it does not know what one is, and giving it the
+/// knowledge would make it the second authority on what "canonical" means.
+///
+/// # Two tables rather than one
+///
+/// The two tokens answer different questions and section 25's cache reuse keys on
+/// them separately, so a layout and an interface that happened to encode to the
+/// same bytes must not collide. The keys are the canonical bytes themselves, not a
+/// digest of them, following
+/// [`crate::api::capability`]'s table: a digest would trade a definite comparison
+/// for a probabilistic one and buy nothing, because the entry has to be compared
+/// on hit anyway to return the id.
+///
+/// Ids start at 1, as every other minted id in this crate does, so that a
+/// zero-initialized field is distinguishable from a minted token.
+pub(crate) struct DomainInterning {
+    layouts: Mutex<InternTable>,
+    interfaces: Mutex<InternTable>,
+}
+
+/// One keyed table of canonical bytes to minted ids.
+struct InternTable {
+    ids: HashMap<Vec<u8>, u64>,
+    next: u64,
+}
+
+impl InternTable {
+    fn new() -> Self {
+        Self {
+            ids: HashMap::new(),
+            next: 1,
+        }
+    }
+
+    /// The id already minted for `canonical`, or a fresh one.
+    fn intern(&mut self, canonical: &[u8]) -> u64 {
+        if let Some(existing) = self.ids.get(canonical) {
+            return *existing;
+        }
+        let id = self.next;
+        self.next += 1;
+        self.ids.insert(canonical.to_vec(), id);
+        id
+    }
+}
+
+impl DomainInterning {
+    /// A domain's tables, both empty.
+    pub(crate) fn new() -> Self {
+        Self {
+            layouts: Mutex::new(InternTable::new()),
+            interfaces: Mutex::new(InternTable::new()),
+        }
+    }
+
+    /// Interns one canonical bind-group-layout descriptor (section 21.1).
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: a poisoned lock is recovered rather than propagated, as
+    /// [`crate::api::capability`]'s table does, because the mutex guards a map and
+    /// not an invariant. A panic while holding it cannot have left a half-written
+    /// id behind — every mutation below is a single insert of a complete entry —
+    /// so resuming on the recovered guard is the correct behaviour and refusing to
+    /// intern ever again is not.
+    pub(crate) fn intern_layout(&self, canonical: &[u8]) -> u64 {
+        let mut table = self
+            .layouts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        table.intern(canonical)
+    }
+
+    /// Interns one canonical pipeline-interface descriptor (section 21.2).
+    ///
+    /// The same contract and the same recovery as [`Self::intern_layout`].
+    pub(crate) fn intern_interface(&self, canonical: &[u8]) -> u64 {
+        let mut table = self
+            .interfaces
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        table.intern(canonical)
     }
 }
 
@@ -243,6 +357,7 @@ impl Device {
             native,
             capabilities: Arc::new(capabilities),
             serials: Arc::new(DomainSerials::new()),
+            interning: Arc::new(DomainInterning::new()),
         })
     }
 
@@ -255,6 +370,17 @@ impl Device {
     /// 39.1's "a plan identity is minted by the builder that owns it" requires.
     pub(crate) fn serials(&self) -> &DomainSerials {
         &self.serials
+    }
+
+    /// The exact compatibility tokens this domain has minted.
+    ///
+    /// Crate-private, and reached by the two chapters that mint from it:
+    /// [`crate::api::binding`] interns canonical layout descriptors (section 21.1)
+    /// and [`crate::api::pipeline`] interns canonical interface descriptors
+    /// (section 21.2). Nothing else may mint one, which is what section 21.1's "a
+    /// caller cannot construct it" requires.
+    pub(crate) fn interning(&self) -> &DomainInterning {
+        &self.interning
     }
 
     /// A shared handle to this device's capability snapshot.

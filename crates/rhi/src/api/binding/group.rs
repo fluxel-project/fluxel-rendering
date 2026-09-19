@@ -11,6 +11,7 @@
 //! not this file's (section 22.3).
 
 use core::fmt;
+use std::sync::Arc;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, sample_type};
@@ -24,6 +25,8 @@ use crate::api::resource::sampler::Sampler;
 use crate::api::resource::subresource::TextureAspects;
 use crate::api::resource::texture::TextureUsage;
 use crate::api::resource::view::{TextureView, TextureViewDimension};
+
+use crate::base::binding::BindGroupBackend;
 
 use super::layout::{BindGroupLayout, BindingSlot};
 use super::vocabulary::{
@@ -127,14 +130,6 @@ impl BindGroupDescriptor {
     /// Section 22.2's canonicalization. Duplicate slots are refused by
     /// [`validate_bind_group_descriptor`] before this is called, so the sort has
     /// no tie to break and therefore no choice to make.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_bind_group canonicalizes through this once the backend port \
-                      lands"
-        )
-    )]
     pub(crate) fn canonicalized(&self) -> Self {
         let mut entries = self.entries.clone();
         entries.sort_by_key(|entry| entry.slot.get());
@@ -156,6 +151,22 @@ pub struct BindGroup {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: BindGroupDescriptor,
+    /// The backend's own descriptor packet, in the same shape
+    /// [`crate::api::resource::Buffer`] holds its allocation: `Arc` so that the
+    /// handle stays `Clone` without the backend cloning a native device, and
+    /// behind `dyn` so that no native type reaches the exported surface (section
+    /// 59).
+    ///
+    /// Section 22.2 makes a bind group a logical owner of everything it binds. The
+    /// *logical* half of that is the descriptor above, which holds the resource
+    /// handles; this field is where a backend keeps whatever its own API needs so
+    /// that the addresses in a native descriptor stay valid for as long as the
+    /// packet does — for Direct3D 12, a reference to each resource behind a GPU
+    /// virtual address.
+    ///
+    /// Section 22.2 declares no accessor for it, and it is reached only by a
+    /// command lowering, which downcasts inside its own backend.
+    native: Arc<dyn BindGroupBackend>,
 }
 
 impl BindGroup {
@@ -163,23 +174,30 @@ impl BindGroup {
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
     /// only `Device::create_bind_group` may produce one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_bind_group calls this once the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,
         canonical: BindGroupDescriptor,
+        native: Arc<dyn BindGroupBackend>,
     ) -> Self {
         Self {
             id,
             device,
             descriptor: canonical,
+            native,
         }
+    }
+
+    /// The backend's own descriptor packet.
+    ///
+    /// Crate-private because section 59 keeps native lowering out of the exported
+    /// surface: the returned trait is `pub(crate)`, so this is the seam's ordinary
+    /// inside face rather than a narrow door onto a public one. Its caller is the
+    /// command lowering of the backend that created it, which downcasts to its own
+    /// type — a group handed to another backend's device is refused portably, by
+    /// device identity, long before a downcast is attempted.
+    pub(crate) fn native(&self) -> &Arc<dyn BindGroupBackend> {
+        &self.native
     }
 
     /// This group's process-local object ID.
@@ -858,9 +876,13 @@ impl Device {
     ///    through `validate_bind_group_descriptor`, against this device's four
     ///    binding limits and its two per-format answers.
     ///
-    /// Panics until a backend port exists. Both steps above still run first,
-    /// because each refusal they produce is a statement about the packet that a
-    /// caller can act on without any device object having been allocated.
+    /// The backend is then asked once, and is handed the *canonical* descriptor
+    /// rather than the caller's. The two are the same packet — section 22.2 makes
+    /// ascending slot order part of what a group is, so the sort is a
+    /// normalization and not a change — but passing the canonical form means a
+    /// lowering iterates entries in slot order without having to know that rule,
+    /// and means the packet the backend wrote descriptors from is the packet this
+    /// handle answers from.
     pub fn create_bind_group(&self, desc: &BindGroupDescriptor) -> RhiResult<BindGroup> {
         let layout_device = desc.layout.device_identity();
         if layout_device != self.identity() {
@@ -912,12 +934,19 @@ impl Device {
                 .is_some_and(|facts| facts.storage_access().supports(access))
         })?;
 
-        unimplemented!(
-            "Device::create_bind_group needs a backend descriptor-set builder to bind {} \
-             resource entries on device {:?}; the portable contract is fixed, but no backend \
-             port is built",
-            desc.entries.len(),
-            self.identity()
-        )
+        // The one backend call, and the last statement that can fail. It takes the
+        // canonical packet — see the note above — and is where the ownership
+        // section 22.2 describes becomes concrete: a native descriptor holds
+        // addresses, so the object that owns them must be the object returned here
+        // and not the caller's buffers.
+        let canonical = desc.canonicalized();
+        let native = self.native().create_bind_group(&canonical)?;
+
+        Ok(BindGroup::new(
+            ObjectId::next(),
+            self.identity(),
+            canonical,
+            native.into(),
+        ))
     }
 }

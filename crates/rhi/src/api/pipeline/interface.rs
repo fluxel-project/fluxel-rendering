@@ -43,15 +43,7 @@ impl PipelineInterfaceCompatibilityId {
     ///
     /// Crate-private for the same reason as the layout token: the value means
     /// "this Device interned this exact ordered sequence", and only the interning
-    /// Device knows that.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_pipeline_interface mints one through the interning step, \
-                      which needs the backend port"
-        )
-    )]
+    /// Device knows that. The one caller is [`Device::create_pipeline_interface`].
     pub(crate) fn new(value: u64) -> Self {
         Self(value)
     }
@@ -93,6 +85,29 @@ impl PipelineInterfaceDescriptor {
         self.label = Label(Some(label.into()));
         self
     }
+
+    /// The canonical bytes section 23.2's interning is keyed on.
+    ///
+    /// The ordered group sequence, each group written as the canonical bytes of
+    /// its descriptor behind its own length. The label is excluded, for the reason
+    /// section 19.8 gives, and no group is skipped or reordered — section 23.1
+    /// makes the vector index *be* the [`BindGroupIndex`], so the same two layouts
+    /// in the other order are a different interface and must intern to a different
+    /// id.
+    ///
+    /// Each group arrives already canonical: the descriptor read here is
+    /// [`BindGroupLayout::descriptor`], which answers the canonical form the
+    /// creating device stored rather than what the caller typed.
+    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(self.groups.len() as u64).to_le_bytes());
+        for group in &self.groups {
+            let bytes = group.descriptor().canonical_bytes();
+            out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(&bytes);
+        }
+        out
+    }
 }
 
 /// A created pipeline interface.
@@ -115,13 +130,6 @@ impl PipelineInterface {
     ///
     /// Crate-private: section 3 gives identity to the object that created it, and
     /// both tokens are outcomes of the Device's interning step (section 23.2).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_pipeline_interface calls this once the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,
@@ -378,9 +386,14 @@ impl Device {
     ///    `validate_pipeline_interface_descriptor`, against this device's own
     ///    limit and binding-count answers.
     ///
-    /// Panics until a backend port exists. Both steps above still run first,
-    /// because each refusal they produce is a statement about the descriptor that
-    /// a caller can act on without any device object having been allocated.
+    /// # Why there is no backend call
+    ///
+    /// The same Direct3D 12 fact that keeps
+    /// [`Device::create_bind_group_layout`] off the seam: an interface is an
+    /// ordered sequence of group layouts, and D3D12 has no native object for
+    /// either. The native work of both is done once, at pipeline creation, where
+    /// the whole sequence is lowered into the root signature that is a property of
+    /// that pipeline. Section 23.2's interning is what is left, and it is portable.
     pub fn create_pipeline_interface(
         &self,
         desc: &PipelineInterfaceDescriptor,
@@ -411,12 +424,22 @@ impl Device {
             |stage, class| capabilities.binding_limit(stage, class),
         )?;
 
-        unimplemented!(
-            "Device::create_pipeline_interface needs a backend pipeline-layout builder to \
-             declare {} group layouts on device {:?}; the portable contract is fixed, but no \
-             backend port is built",
-            desc.groups.len(),
-            self.identity()
-        )
+        // Section 23.2's interning, in the same shape section 21.1's is written in
+        // `binding/layout.rs`: one byte string, two tokens derived from it. Every
+        // group read here already passed this device's ownership check above, so a
+        // sequence interned against this device is a sequence of this device's
+        // layouts.
+        let bytes = desc.canonical_bytes();
+        let compatibility_id =
+            PipelineInterfaceCompatibilityId::new(self.interning().intern_interface(&bytes));
+        let fingerprint = LayoutFingerprint(crate::base::digest::sha256(&bytes));
+
+        Ok(PipelineInterface::new(
+            ObjectId::next(),
+            identity,
+            desc.clone(),
+            compatibility_id,
+            fingerprint,
+        ))
     }
 }

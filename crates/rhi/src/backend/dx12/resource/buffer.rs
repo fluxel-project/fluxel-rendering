@@ -52,7 +52,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DE
 use crate::api::resource::buffer::{BufferDescriptor, BufferUsage, ResourceMemoryPreference};
 use crate::base::resource::BufferBackend;
 
-use super::ffi;
+use crate::backend::dx12::ffi;
 
 /// The native one-byte-granular allocation behind a portable buffer.
 pub(crate) struct Dx12Buffer {
@@ -67,7 +67,7 @@ pub(crate) struct Dx12Buffer {
 impl Dx12Buffer {
     /// The committed resource.
     ///
-    /// Reached by the copy and readback lowering in [`super::command`], which
+    /// Reached by the copy and readback lowering in [`crate::backend::dx12::command`], which
     /// downcasts through [`BufferBackend::as_any`] from the device's own backend,
     /// and by the provider's test set, which asserts the native description
     /// against the portable descriptor that produced it.
@@ -98,7 +98,7 @@ impl BufferBackend for Dx12Buffer {
 /// device layer above has one further question about a failure — whether it ended
 /// the device — and only the raw code can answer it. Converting here would throw
 /// that away and leave the caller to recover it from a message.
-pub(super) fn create_buffer(
+pub(crate) fn create_buffer(
     device: &ID3D12Device,
     descriptor: &BufferDescriptor,
 ) -> Result<Dx12Buffer, ffi::NativeError> {
@@ -176,7 +176,7 @@ pub(super) fn create_buffer(
 /// resource be created in, and in which way the barrier rules permit data to
 /// flow. Naming them is what lets each of those three be stated once below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StagingHeap {
+pub(crate) enum StagingHeap {
     /// Written by the CPU and read by the GPU: an upload's source.
     Upload,
     /// Written by the GPU and read by the CPU: a readback's destination.
@@ -198,7 +198,7 @@ impl StagingHeap {
     /// `E_INVALIDARG` for any other state in either of these heaps. It is also
     /// the state the resource must *stay* in — neither heap permits a transition
     /// — which is why the command lowering never names a staging resource in a
-    /// barrier. See [`super::command`], whose closing invariant would otherwise
+    /// barrier. See [`crate::backend::dx12::command`], whose closing invariant would otherwise
     /// have to account for them.
     fn created_state(self) -> D3D12_RESOURCE_STATES {
         match self {
@@ -229,11 +229,11 @@ impl StagingHeap {
 /// # Test reach
 ///
 /// Nothing outside this backend can call this: the portable upload verb that
-/// would reach it through [`super::command`] is not built. It is nevertheless
+/// would reach it through [`crate::backend::dx12::command`] is not built. It is nevertheless
 /// non-test code, because the readback half of the command lowering *is* built
 /// and calls it in every build — which is the difference between this and the
 /// provider, whose whole module is unreachable outside its tests.
-pub(super) fn create_staging(
+pub(crate) fn create_staging(
     device: &ID3D12Device,
     size: u64,
     heap: StagingHeap,

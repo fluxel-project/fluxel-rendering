@@ -70,7 +70,9 @@ use crate::api::shader::{
     ShaderStages,
 };
 use crate::api::tests::fixture;
-use crate::base::mock::{recorder_for_test, recorder_without_facts_for_test};
+use crate::base::mock::{
+    bind_group_backend_for_test, recorder_for_test, recorder_without_facts_for_test,
+};
 
 fn identity(instance: u64, generation: u64) -> DeviceIdentity {
     DeviceIdentity::new(
@@ -409,16 +411,20 @@ fn mismatched_pipeline(layout: BindGroupLayout) -> RasterPipeline {
 
 /// A group that fills slot 0 with a 16-byte uniform range.
 fn uniform_group(layout: BindGroupLayout) -> BindGroup {
-    BindGroup::new(
-        object(70),
-        device(),
-        BindGroupDescriptor::new(layout).with_entry(BindGroupEntry::new(
+    let canonical = BindGroupDescriptor::new(layout)
+        .with_entry(BindGroupEntry::new(
             BindingSlotId::new(0),
             BindingResource::Buffer(BufferBinding::new(
                 buffer_with(BufferUsage::UNIFORM, 64),
                 BufferRange::new(0, 16),
             )),
-        )),
+        ))
+        .canonicalized();
+    BindGroup::new(
+        object(70),
+        device(),
+        canonical.clone(),
+        bind_group_backend_for_test(canonical),
     )
 }
 
