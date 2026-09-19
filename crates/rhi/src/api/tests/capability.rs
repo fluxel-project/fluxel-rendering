@@ -14,9 +14,13 @@
 //! against a golden value. A golden value would pin the encoding without checking
 //! either property, and would be rewritten to match whatever the code did.
 
-use crate::api::binding::{BindingCount, BindingKind, BindingSupport, BindingSupportQuery};
+use crate::api::binding::vocabulary::BindableKind;
+use crate::api::binding::{
+    BindingCount, BindingKind, BindingSupport, BindingSupportQuery, TextureSampleType,
+};
 use crate::api::capability::{
-    AvailableCapabilities, CapabilityFacts, CapabilityFingerprint, EnabledCapabilities,
+    AvailableCapabilities, BindingSupportKey, CapabilityFacts, CapabilityFingerprint,
+    EnabledCapabilities,
 };
 use crate::api::format::{
     FormatFacts, StorageAccessSupport, TextureFormat, TextureSupport, TextureSupportLimits,
@@ -26,6 +30,7 @@ use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteCapabilities, RouteQuery, RouteSupport};
 use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
+use crate::api::resource::view::TextureViewDimension;
 use crate::api::shader::ShaderStages;
 use crate::api::submission::{
     LaneDependencyRoute, LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass,
@@ -505,12 +510,12 @@ fn a_difference_anywhere_in_the_facts_yields_a_different_id() {
     assert_ne!(
         baseline,
         differ(&|facts| facts.record_binding_support(
-            BindingSupportQuery {
+            BindingSupportKey {
                 visibility: ShaderStages::FRAGMENT,
-                kind: BindingKind::Sampler {
+                kind: BindableKind::Sampler {
                     kind: crate::api::binding::SamplerKind::Filtering,
                 },
-                count: BindingCount::One,
+                array: false,
                 dynamic_offset: false,
             },
             BindingSupport::Unsupported
@@ -541,20 +546,24 @@ fn a_difference_anywhere_in_the_facts_yields_a_different_id() {
 
 /// The same, for a difference *inside* a key rather than between keys.
 ///
-/// `min_size` is the case that would be easiest to lose: two queries with the same
-/// visibility, kind tag, and count differ only in a payload field of the kind, and
-/// an encoding that wrote the discriminant and stopped would conflate them. A
-/// device that can express a 64-byte uniform binding is not thereby stating it can
-/// express a 128-byte one.
+/// A key's payload fields are what separate two binding questions that agree on
+/// their shape, and an encoding that wrote the discriminant and stopped would
+/// conflate them. Whether a shader samples a multisampled texture is such a field:
+/// a device that can bind a single-sampled 2D texture is not thereby stating it
+/// can bind a multisampled one.
 #[test]
 fn two_queries_differing_only_inside_a_key_yield_different_ids() {
-    let with_min_size = |min_size: u64| {
+    let with_multisampling = |multisampled: bool| {
         let mut facts = CapabilityFacts::empty();
         facts.record_binding_support(
-            BindingSupportQuery {
+            BindingSupportKey {
                 visibility: ShaderStages::FRAGMENT,
-                kind: BindingKind::UniformBuffer { min_size },
-                count: BindingCount::One,
+                kind: BindableKind::SampledTexture {
+                    dimension: TextureViewDimension::D2,
+                    sample_type: TextureSampleType::Float,
+                    multisampled,
+                },
+                array: false,
                 dynamic_offset: false,
             },
             BindingSupport::Supported,
@@ -562,7 +571,77 @@ fn two_queries_differing_only_inside_a_key_yield_different_ids() {
         enabled_from(facts).compatibility_id()
     };
 
-    assert_ne!(with_min_size(64), with_min_size(128));
+    assert_ne!(with_multisampling(false), with_multisampling(true));
+}
+
+/// A magnitude the query states but the answer does not depend on must not reach
+/// the contract, and this test exists because the encoder used to do the opposite.
+///
+/// `BindingKind::UniformBuffer` carries a `min_size` and `BindingCount::Fixed`
+/// carries an element count, and neither is recorded. That is not an oversight and
+/// the reader who finds it should not "fix" it: each magnitude already has exactly
+/// one owner elsewhere in the specification — a binding's size envelope is the
+/// `MaxUniformBufferBindingSize` limit, checked when a bind group is created, and a
+/// binding's element count is the per-stage-class `binding_limit` ceiling, checked
+/// when a pipeline interface is created. Section 7.3's rule that a fact has one
+/// canonical source is what makes a second entry here a defect rather than extra
+/// safety: two tables that disagree would leave a caller with no way to tell which
+/// one refused it. What the support table answers is whether the *shape* can be
+/// bound at all, and its key is narrowed to exactly that.
+///
+/// So the same visibility, kind, and shape must give one id no matter what
+/// magnitude the caller named. This test asserted the reverse until the narrowing
+/// landed; the reverse was wrong, and it is inverted here rather than deleted so
+/// that the property is stated where the mistake was.
+#[test]
+fn a_magnitude_with_another_owner_does_not_reach_the_contract() {
+    let id_of = |kind: BindingKind, count: BindingCount| {
+        let mut facts = CapabilityFacts::empty();
+        facts.record_binding_support(
+            BindingSupportKey::of(&BindingSupportQuery {
+                visibility: ShaderStages::FRAGMENT,
+                kind,
+                count,
+                dynamic_offset: false,
+            }),
+            BindingSupport::Supported,
+        );
+        enabled_from(facts).compatibility_id()
+    };
+
+    assert_eq!(
+        id_of(
+            BindingKind::UniformBuffer { min_size: 64 },
+            BindingCount::One
+        ),
+        id_of(
+            BindingKind::UniformBuffer { min_size: 128 },
+            BindingCount::One
+        ),
+        "a binding's minimum size belongs to MaxUniformBufferBindingSize, not here"
+    );
+    assert_eq!(
+        id_of(
+            BindingKind::UniformBuffer { min_size: 64 },
+            BindingCount::Fixed(1)
+        ),
+        id_of(
+            BindingKind::UniformBuffer { min_size: 64 },
+            BindingCount::Fixed(4)
+        ),
+        "a binding's element count belongs to binding_limit, not here"
+    );
+    assert_ne!(
+        id_of(
+            BindingKind::UniformBuffer { min_size: 64 },
+            BindingCount::One
+        ),
+        id_of(
+            BindingKind::UniformBuffer { min_size: 64 },
+            BindingCount::Fixed(4)
+        ),
+        "but whether the binding is an array at all is a shape, and stays in the key"
+    );
 }
 
 /// A key's *set-valued* field must not depend on the order the caller listed it

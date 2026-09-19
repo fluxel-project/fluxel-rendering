@@ -20,8 +20,8 @@
 //!
 //! # What is probed, what is structural, and what is still absent
 //!
-//! Being explicit about the three, because "the table is full" and "the table is
-//! complete" are different claims and only one of them is true here.
+//! Being explicit about which is which, because "the table is full" and "the table
+//! is complete" are different claims and only one of them is true here.
 //!
 //! - **Probed.** Per-format storage access comes from
 //!   `D3D12_FEATURE_FORMAT_SUPPORT`. A refusal from `CheckFeatureSupport` on it
@@ -42,16 +42,35 @@
 //!   Recording these as structural facts rather than as unasked questions is what
 //!   keeps a caller from being told a D3D12 device cannot dispatch or cannot
 //!   filter.
-//! - **Absent, and deliberately not guessed.** Binding and view-compatibility
-//!   facts are not recorded yet, and seven of the twenty-seven
+//! - **Structural, with two probed rows.** [`record_binding_support`] fills the
+//!   binding table, and most of it is a claim about Direct3D 12 rather than a
+//!   reading: a buffer's role is decided by the root signature and the resource
+//!   state, not by the resource. The storage-texture rows are the exception — they
+//!   read the same two format-support bits the texture table reads — and the two
+//!   limitations the table *does* record come from the header's own dimension
+//!   enums, which have no multisampled 1D, 3D or cube spelling and no cube UAV
+//!   member at all. See that function for why each negative is a fact instead of a
+//!   hole.
+//! - **Absent, and deliberately not guessed.** View-compatibility facts are not
+//!   recorded yet, and seven of the twenty-seven
 //!   [`crate::api::platform::LimitKey`]s are not either. The seven are the ones
 //!   that name a ceiling Direct3D 12 does not state, and
 //!   [`record_api_shape_limits`] lists them rather than filling them with a
-//!   number borrowed from another API's convention. Texture facts, route facts and
-//!   the other twenty limits *are* recorded. What is left is a real coverage gap
-//!   and it is recorded as one rather than papered over: see [`probe`] for what a
-//!   caller observes while it stands, and [`record_limits`] for why the missing
-//!   limits are a *mapping* problem rather than a probing one.
+//!   number borrowed from another API's convention.
+//!   [`CapabilityFacts::binding_limit`] is absent for a related reason that is
+//!   worth stating where the table is missing rather than where it is read: the
+//!   answer it wants is a *per stage and class* ceiling, Direct3D 12 defines none,
+//!   and the two constants in the neighbourhood — the descriptor-heap tiers and the
+//!   sampler-heap size — are pool sizes shared by every stage and every pipeline.
+//!   Recording one of those as `binding_limit(Vertex, SampledTextures)` would put a
+//!   per-stage rule in the device's mouth. `None` is the spec's "inapplicable"
+//!   answer and the portable layer's "no ceiling to impose", which is what this
+//!   device is; what that costs is stated at [`probe`].
+//!   Texture facts, route facts, binding facts and the other twenty limits *are*
+//!   recorded. What is left is a real coverage gap and it is recorded as one rather
+//!   than papered over: see [`probe`] for what a caller observes while it stands,
+//!   and [`record_limits`] for why the missing limits are a *mapping* problem
+//!   rather than a probing one.
 //!
 //! # The route table, and the one operation it refuses
 //!
@@ -148,7 +167,11 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R32G32B32A32_UINT,
 };
 
-use crate::api::capability::CapabilityFacts;
+use crate::api::binding::vocabulary::BindableKind;
+use crate::api::binding::{
+    BindingSupport, BufferBindingAccess, SamplerKind, StorageAccess, TextureSampleType,
+};
+use crate::api::capability::{BindingSupportKey, CapabilityFacts, visibilities};
 use crate::api::error::RhiResult;
 use crate::api::format::{
     FormatFacts, StorageAccessSupport, TextureFormat, TextureSupport, TextureSupportLimits,
@@ -163,6 +186,7 @@ use crate::api::resource::subresource::{TextureAspect, aspect_bits};
 use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
+use crate::api::resource::view::TextureViewDimension;
 use crate::backend::dx12::ffi;
 
 /// Reads every fact this backend enumerates from `device`.
@@ -177,15 +201,26 @@ use crate::backend::dx12::ffi;
 ///
 /// # What a caller observes while the gaps above stand
 ///
-/// The accessors whose key spaces are not enumerable answer the negative when
-/// their table has no entry, which is
-/// [`crate::api::capability::CapabilityFacts`]'s rule and not a defect here: a
-/// binding or view-compatibility question is answered `Unsupported` rather than
-/// answered wrongly, and `limit` answers `None` for the seven keys with no
-/// Direct3D 12 ceiling to cite. Both are conservative — they refuse work the
-/// hardware can do — and neither is silent, which is the property that matters:
-/// the gap costs throughput, not correctness, and it is recorded here rather
-/// than left to be discovered.
+/// The gaps are now three, and they do not cost the same thing, which is why they
+/// are counted separately rather than gathered under one word.
+///
+/// A **view-compatibility** question is answered `Unsupported` when the relation
+/// has no entry, and a `limit` question is answered `None` for the seven keys with
+/// no Direct3D 12 ceiling to cite. Both are conservative: they refuse work the
+/// hardware can do, and neither is silent, so the gap costs throughput rather than
+/// correctness and is recorded here rather than left to be discovered.
+///
+/// The **binding table is no longer one of them**, and that difference is the one
+/// worth knowing about. A binding answer of `Unsupported` is not conservative the
+/// way those two are: it is a refusal of a legal layout, so an unrecorded legal
+/// binding would silently forbid something the device can do. That is why
+/// [`record_binding_support`] walks every combination rather than recording the
+/// ones a driver happened to make convenient. What remains absent from the
+/// binding chapter is `binding_limit`, whose absence costs the *opposite* — no
+/// per-stage ceiling is imposed, because Direct3D 12 does not state one — and
+/// whose consequence belongs to the layer that does allocate descriptors: a
+/// pipeline interface whose aggregate a real heap cannot hold is refused when the
+/// heap is built, not when the interface is created.
 ///
 /// The route table is no longer one of those gaps, and the difference is worth
 /// being precise about. A route answer of `Unsupported` is not conservative the
@@ -202,6 +237,7 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
     record_features(&mut facts);
     record_limits(&options, &mut facts);
     record_buffer_support(&mut facts);
+    record_binding_support(&mut facts);
     record_texture_limits(&mut facts);
     record_api_shape_limits(&mut facts);
 
@@ -233,6 +269,7 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
         record_format_facts(format, &support, &mut facts);
         record_texture_support(format, &support, &quality, &mut facts);
         record_format_routes(format, &support, &quality, &mut facts);
+        record_storage_texture_bindings(format, &support, &mut facts);
     }
 
     record_buffer_route(&mut facts);
@@ -347,6 +384,227 @@ fn record_buffer_support(facts: &mut CapabilityFacts) {
         };
         facts.record_buffer_support(usage, support);
     }
+}
+
+/// Fills the binding-support table for the families no format decides.
+///
+/// Three of section 20.4's five kinds answer the same way for every device this
+/// backend can describe, and the reason is the same one `record_buffer_support`
+/// gives about usage flags: Direct3D 12 states a binding's role in the root
+/// signature and the resource's state, not in the resource. A constant buffer is a
+/// `D3D12_ROOT_PARAMETER_TYPE_CBV` or a range in a descriptor table, a storage
+/// buffer is the same with UAV visibility, and either is visible to every stage
+/// because every stage of a root signature has the same register spaces. So
+/// "storage buffer in the vertex stage" — section 20.4's own example of a
+/// limitation a device may have — is not one *this* API has, and the walk below
+/// records the positive rather than a plausible-looking negative.
+///
+/// Two limitations this API does have are recorded as the negatives they are, and
+/// both come from the header rather than from a driver reading:
+///
+/// - A sampled texture cannot be multisampled in any dimension but two.
+///   `D3D12_SRV_DIMENSION` has `TEXTURE2DMS` and `TEXTURE2DMSARRAY` and no
+///   multisampled spelling of 1D, 3D or cube — which is section 13.4's rule seen
+///   from the descriptor's side.
+/// - A storage texture cannot be a cube. `D3D12_UAV_DIMENSION` has no cube
+///   member at all, at any resource-binding tier, so there is nothing to probe for
+///   and nothing a tier could change.
+///
+/// The two sample types are not read here and cannot be: whether a float format
+/// may be sampled through a filtering sampler is a pairing of *view* and sampler,
+/// which section 22.3 and pipeline validation decide against `FormatFacts`, not a
+/// property of the binding. Enumerating them anyway is the difference between a
+/// table with holes and a table with answers, and every hole in this table is a
+/// silent refusal of a legal binding.
+fn record_binding_support(facts: &mut CapabilityFacts) {
+    for dynamic_offset in [false, true] {
+        record_bindable(
+            facts,
+            BindableKind::UniformBuffer,
+            dynamic_offset,
+            BindingSupport::Supported,
+        );
+        for access in [
+            BufferBindingAccess::ReadOnly,
+            BufferBindingAccess::ReadWrite,
+        ] {
+            record_bindable(
+                facts,
+                BindableKind::StorageBuffer { access },
+                dynamic_offset,
+                BindingSupport::Supported,
+            );
+        }
+    }
+
+    // Enumerated although the answer does not vary with `sample_type`, for the
+    // reason the walk's documentation gives.
+    for dimension in VIEW_DIMENSIONS {
+        for sample_type in [
+            TextureSampleType::Float,
+            TextureSampleType::UnfilterableFloat,
+            TextureSampleType::Sint,
+            TextureSampleType::Uint,
+            TextureSampleType::Depth,
+        ] {
+            for multisampled in [false, true] {
+                record_bindable(
+                    facts,
+                    BindableKind::SampledTexture {
+                        dimension,
+                        sample_type,
+                        multisampled,
+                    },
+                    false,
+                    sampled_binding_answer(dimension, multisampled),
+                );
+            }
+        }
+    }
+
+    for kind in [
+        SamplerKind::Filtering,
+        SamplerKind::NonFiltering,
+        SamplerKind::Comparison,
+    ] {
+        record_bindable(
+            facts,
+            BindableKind::Sampler { kind },
+            false,
+            BindingSupport::Supported,
+        );
+    }
+}
+
+/// Records one bindable kind's answer across every visibility and array shape.
+///
+/// The sweep is here rather than repeated at each call site so that "every
+/// combination this device can be asked about" is one loop a reader can check,
+/// and so that a call site states only what the device reports.
+///
+/// `dynamic_offset` is a parameter rather than part of the sweep because it is
+/// only a question for the two buffer kinds: section 20.4 makes it "valid only for
+/// UniformBuffer / StorageBuffer", the layout validator refuses it on anything else
+/// before a query is made, and a direct caller who asks anyway is answered the
+/// negative — a binding with a dynamic offset on a texture is not a binding that
+/// exists.
+fn record_bindable(
+    facts: &mut CapabilityFacts,
+    kind: BindableKind,
+    dynamic_offset: bool,
+    answer: BindingSupport,
+) {
+    for visibility in visibilities() {
+        for array in [false, true] {
+            facts.record_binding_support(
+                BindingSupportKey {
+                    visibility,
+                    kind,
+                    array,
+                    dynamic_offset,
+                },
+                answer,
+            );
+        }
+    }
+}
+
+/// Whether a sampled texture can be bound with this view dimension and sample
+/// count.
+///
+/// The sample count is the whole question: `D3D12_SRV_DIMENSION` spells a
+/// multisampled texture in two dimensions and no others, which is section 13.4's
+/// two-dimensional rule stated by the API instead of derived from it. Everything
+/// else about a sampled binding is a pairing the portable layer checks elsewhere,
+/// so there is no second condition to add here.
+fn sampled_binding_answer(dimension: TextureViewDimension, multisampled: bool) -> BindingSupport {
+    if multisampled
+        && !matches!(
+            dimension,
+            TextureViewDimension::D2 | TextureViewDimension::D2Array
+        )
+    {
+        return BindingSupport::Unsupported;
+    }
+    BindingSupport::Supported
+}
+
+/// Records the storage-texture rows for one format.
+///
+/// Per format because the portable key names one: a storage texture binding
+/// declares the format the shader reads and writes, unlike a sampled one, where
+/// the format belongs to the view.
+///
+/// Three questions, in the order that keeps each refusal about the right thing.
+/// Cube first, because it has no answer at any format — `D3D12_UAV_DIMENSION` has
+/// no cube member, so a cube storage texture is not a binding this API can express
+/// whatever the texels are. Then the typed-UAV bit, which says a typed UAV exists
+/// for the format at all. Then the two access bits, which are the same two
+/// `record_format_facts` reads for the texture side of the same fact: one probe,
+/// two consumers, so the two tables cannot disagree about a format.
+fn record_storage_texture_bindings(
+    format: TextureFormat,
+    support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
+    facts: &mut CapabilityFacts,
+) {
+    for dimension in VIEW_DIMENSIONS {
+        for access in [
+            StorageAccess::ReadOnly,
+            StorageAccess::WriteOnly,
+            StorageAccess::ReadWrite,
+        ] {
+            let answer = storage_binding_answer(dimension, support, access);
+            record_bindable(
+                facts,
+                BindableKind::StorageTexture {
+                    dimension,
+                    format,
+                    access,
+                },
+                false,
+                answer,
+            );
+        }
+    }
+}
+
+/// Whether a storage texture can be bound with this view dimension and access.
+///
+/// The access bits are read separately rather than as a three-valued answer,
+/// because Direct3D 12 states two independent facts — a format can be loadable
+/// without being storable — and `ReadWrite` is their conjunction rather than a
+/// third probe.
+fn storage_binding_answer(
+    dimension: TextureViewDimension,
+    support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
+    access: StorageAccess,
+) -> BindingSupport {
+    // `D3D12_UAV_DIMENSION` has TEXTURE1D, TEXTURE1DARRAY, TEXTURE2D,
+    // TEXTURE2DARRAY and TEXTURE3D, and no cube member. Section 20.4 names
+    // `StorageTexture + Cube` as its first example of an independently limited
+    // combination; this is the limitation it is talking about.
+    if matches!(
+        dimension,
+        TextureViewDimension::Cube | TextureViewDimension::CubeArray
+    ) {
+        return BindingSupport::Unsupported;
+    }
+
+    if !has_support1(support, D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) {
+        return BindingSupport::Unsupported;
+    }
+
+    let needs_load = matches!(access, StorageAccess::ReadOnly | StorageAccess::ReadWrite);
+    let needs_store = matches!(access, StorageAccess::WriteOnly | StorageAccess::ReadWrite);
+
+    if needs_load && !has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) {
+        return BindingSupport::Unsupported;
+    }
+    if needs_store && !has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE) {
+        return BindingSupport::Unsupported;
+    }
+
+    BindingSupport::Supported
 }
 
 /// Records one portable format's storage access from its probed support words.
@@ -535,6 +793,21 @@ fn record_texture_limits(facts: &mut CapabilityFacts) {
 /// One is always present, because a single-sampled texture is the degenerate
 /// case of the same question.
 const SAMPLE_COUNTS: [u32; 5] = [1, 2, 4, 8, 16];
+
+/// Every view dimension section 14.2 declares.
+///
+/// The binding walk keys on the *view* dimension rather than the resource
+/// dimension, because that is what a binding declares: a two-dimensional texture
+/// bound as a cube and the same texture bound whole are two different bindings,
+/// and `D3D12_SRV_DIMENSION` distinguishes them the same way.
+const VIEW_DIMENSIONS: [TextureViewDimension; 6] = [
+    TextureViewDimension::D1,
+    TextureViewDimension::D2,
+    TextureViewDimension::D2Array,
+    TextureViewDimension::Cube,
+    TextureViewDimension::CubeArray,
+    TextureViewDimension::D3,
+];
 
 /// Fills the texture-support table for the key space this backend can express.
 ///

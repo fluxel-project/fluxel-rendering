@@ -73,13 +73,19 @@
 //!    itself. A backend that leaves a hole in this snapshot has a bug, and section
 //!    6.9's rule that a portable defect may not be left for a driver to discover
 //!    cuts the same way.
-//! 4. **The same, over a key space no backend can walk.** [`EnabledCapabilities::texture_support`],
-//!    [`EnabledCapabilities::binding_support`], and [`EnabledCapabilities::route`]
-//!    also answer support enums, but their keys carry a `Vec` of view formats, a
-//!    [`crate::api::binding::BindingCount::Fixed`] resource count, and a sample
-//!    count respectively — none of which has a last element a backend could stop
-//!    at. There is no enumeration that could have been complete, so an absent entry
-//!    cannot be a hole, and the query answers its negative instead of panicking.
+//! 4. **A support enum whose answers no single enumeration settles.**
+//!    [`EnabledCapabilities::route`] answers a support enum over keys carrying a
+//!    sample count, which has no last element a backend could stop at; there is no
+//!    enumeration that could have been complete, so an absent entry cannot be a
+//!    hole, and the query answers its negative instead of panicking.
+//!    [`EnabledCapabilities::texture_support`] and
+//!    [`EnabledCapabilities::binding_support`] are here for that reason too, and
+//!    for a second one that outlives it: each is answered at *both* capability
+//!    levels, and an adapter-level snapshot has no device to ask, so its answer is
+//!    the negative whether or not the key space is walkable. The recorded binding
+//!    key is what narrowed the second of those to a finite space; a shape-3 panic
+//!    there would land on every adapter instead of on a backend that forgot to fill
+//!    a table, which is a bug detector pointed at the wrong party.
 //!
 //! # What shape 4 costs, and what is done about it
 //!
@@ -109,13 +115,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
-use crate::api::binding::{BindingLimitClass, BindingSupport, BindingSupportQuery};
+use crate::api::binding::vocabulary::BindableKind;
+use crate::api::binding::{BindingCount, BindingLimitClass, BindingSupport, BindingSupportQuery};
 use crate::api::format::{FormatFacts, TextureFormat, TextureSupport, TextureSupportQuery};
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteQuery, RouteSupport};
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
-use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderStage};
+use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderStage, ShaderStages};
 use crate::api::submission::SubmissionCapabilities;
 use crate::base::digest::sha256;
 
@@ -256,6 +263,118 @@ impl TextureSupportKey {
     }
 }
 
+/// The recorded key for one binding support question.
+///
+/// [`BindingSupportQuery`] is not its own key, for the same reason
+/// [`TextureSupportKey`] is not [`TextureSupportQuery`], and here the reason runs
+/// deeper than table size: two of the query's fields are **magnitudes**, and a
+/// magnitude is not what a support answer is about.
+///
+/// The first is `BindingKind`'s `min_size`, carried by both buffer kinds. Whether
+/// a *range* is within the device's reach is section 22.3's question, measured
+/// against `MaxUniformBufferBindingSize` / `MaxStorageBufferBindingSize` when a
+/// BindGroup is created — and that is already where it is asked. The second is
+/// [`BindingCount::Fixed`]'s element count, which section 23.1 aggregates per
+/// stage and class and compares against `binding_limit(stage, class)`, also
+/// already where it is asked. Section 7.3's closing rule — "a fact can only have
+/// one canonical source" — makes leaving either of them in this key a second
+/// authority for a rule that already has one, and
+/// [`CapabilityFacts::binding_support`] states the same conclusion from the other
+/// end: this accessor answers whether the *kind* of binding is expressible.
+///
+/// So the key keeps what the answer actually depends on. `Fixed(n)` survives as
+/// the boolean "is this an array", which is what section 20.4's "fixed resource
+/// array" limitation is about and what section 7.3 pairs with
+/// [`OptionalFeature::BindingArrays`]; how long the array is belongs to the limit.
+/// `min_size` does not survive at all, because there is no support-shaped question
+/// left in it once its magnitude is section 22.3's.
+///
+/// Everything left is enumerable — a stage set, small enums, and two booleans —
+/// which is what lets a backend record the table in full. The negative-on-absence
+/// behaviour is unchanged and is *not* a consequence of the space being
+/// unenumerable: an adapter-level snapshot has no device to ask, and answering its
+/// negative is the only thing it can honestly do.
+///
+/// Crate-visible rather than module-private, unlike its texture sibling: a backend
+/// records into this table, and the recorder takes a key. The alternative — taking
+/// the whole [`BindingSupportQuery`] and discarding two fields inside — would ask
+/// every backend to name a `min_size` and an array length it has no answer about,
+/// which is a fabricated value in a call the callee immediately throws away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct BindingSupportKey {
+    /// The stages that will see the binding.
+    pub(crate) visibility: ShaderStages,
+    /// The magnitude-free resource semantics.
+    pub(crate) kind: BindableKind,
+    /// Whether the binding is a fixed-length array rather than a single element.
+    pub(crate) array: bool,
+    /// Whether a dynamic offset will be applied. Only ever true for buffer kinds.
+    pub(crate) dynamic_offset: bool,
+}
+
+impl BindingSupportKey {
+    /// The part of `query` that a backend can record an answer for.
+    ///
+    /// [`BindingCount::One`] and every `Fixed(n)` collapse onto `array`, for the
+    /// reason the type's documentation gives.
+    pub(crate) fn of(query: &BindingSupportQuery) -> Self {
+        Self {
+            visibility: query.visibility,
+            kind: BindableKind::of(&query.kind),
+            array: matches!(query.count, BindingCount::Fixed(_)),
+            dynamic_offset: query.dynamic_offset,
+        }
+    }
+
+    /// Writes this key's canonical bytes, field by field in declaration order.
+    ///
+    /// Every field is written, for the reason [`CapabilityFacts::canonical_bytes`]
+    /// gives: two keys that differ anywhere are two different questions. The
+    /// payload inside [`BindableKind`] is written by its own encoder, including
+    /// the fields that most devices will answer the same way for — a contract that
+    /// dropped them would intern two devices whose `multisampled` or
+    /// `dynamic_offset` behaviour differs.
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.visibility.encode_into(out);
+        self.kind.encode_into(out);
+        out.push(u8::from(self.array));
+        out.push(u8::from(self.dynamic_offset));
+    }
+}
+
+/// The non-empty stage sets of section 19.1, in one fixed order.
+///
+/// Here rather than in a backend because it is a property of the *key space* a
+/// capability table has to cover, not of any device: every backend's binding walk
+/// needs the same seven, and a walk that enumerated a different seven would leave
+/// holes in a table whose holes are silent refusals. A function rather than a
+/// `const` because [`ShaderStages::union`] is not a `const fn` — and narrow enough
+/// that making it one for this caller's sake would be a change to a public type's
+/// declared surface for no other reason.
+///
+/// The order is by increasing mask, so that a reader can see the sweep is complete
+/// by inspection: the three singletons, the three pairs, then the whole set.
+#[cfg_attr(
+    not(feature = "dx12"),
+    expect(
+        dead_code,
+        reason = "the DX12 binding walk is the only caller, and it is compiled out without the dx12 feature"
+    )
+)]
+pub(crate) fn visibilities() -> [ShaderStages; 7] {
+    [
+        ShaderStages::VERTEX,
+        ShaderStages::FRAGMENT,
+        ShaderStages::COMPUTE,
+        ShaderStages::VERTEX.union(ShaderStages::FRAGMENT),
+        ShaderStages::VERTEX.union(ShaderStages::COMPUTE),
+        ShaderStages::FRAGMENT.union(ShaderStages::COMPUTE),
+        ShaderStages::VERTEX
+            .union(ShaderStages::FRAGMENT)
+            .union(ShaderStages::COMPUTE),
+    ]
+}
+
 /// Crate-private, but a named type rather than an anonymous storage shape,
 /// because a backend has to be able to hand one back: `DeviceBackend` cannot
 /// return a private field bundle, and the portable layer must not accept a
@@ -270,7 +389,9 @@ pub(crate) struct CapabilityFacts {
     /// Keyed on [`TextureSupportKey`], which is *not* the whole query. See that
     /// type for which field is left out and why the answer is still complete.
     texture_support: HashMap<TextureSupportKey, TextureSupport>,
-    binding_support: HashMap<BindingSupportQuery, BindingSupport>,
+    /// Keyed on [`BindingSupportKey`], which is *not* the whole query. See that
+    /// type for which two fields are left out and why the answer is still an answer.
+    binding_support: HashMap<BindingSupportKey, BindingSupport>,
     binding_limits: HashMap<(ShaderStage, BindingLimitClass), u32>,
     routes: HashMap<RouteQuery, RouteSupport>,
     /// The *compatible* `(base, view)` format pairs, and only those.
@@ -424,8 +545,8 @@ impl CapabilityFacts {
             &mut out,
             self.binding_support
                 .iter()
-                .map(|(query, support)| {
-                    encode_entry(|out| query.encode_into(out), |out| support.encode_into(out))
+                .map(|(key, support)| {
+                    encode_entry(|out| key.encode_into(out), |out| support.encode_into(out))
                 })
                 .collect(),
         );
@@ -619,28 +740,40 @@ impl CapabilityFacts {
             .insert(TextureSupportKey::of(query), support);
     }
 
-    /// Records the answer to a binding support query.
+    /// Records the answer for one binding support key.
+    ///
+    /// Takes the key rather than the query a caller asks with, because two of the
+    /// query's fields are magnitudes no backend has a support answer about — see
+    /// the key's documentation — and a recorder that demanded them anyway would ask
+    /// every backend to invent a value it is then told to ignore. A backend records
+    /// what it knows; the accessor derives the same key from whatever query arrives.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn record_binding_support(
         &mut self,
-        query: BindingSupportQuery,
+        key: BindingSupportKey,
         support: BindingSupport,
     ) {
-        self.binding_support.insert(query, support);
+        self.binding_support.insert(key, support);
     }
 
     /// Records the binding-count ceiling for one stage and class.
+    ///
+    /// Nothing fills this yet, and the reason is not that the work is pending: see
+    /// [`Self::binding_limit`] for why Direct3D 12 states no per-stage-class
+    /// ceiling to record. The test-side callers keep it exercised, and the
+    /// expectation below is what keeps a reader from reading "no caller" as "the
+    /// port forgot".
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "no backend has a per-stage-class ceiling to record yet, which is a fact about the backends rather than an unimplemented port"
         )
     )]
     pub(crate) fn record_binding_limit(
@@ -741,20 +874,27 @@ impl CapabilityFacts {
 
     /// Whether, and how, the described binding can be satisfied.
     ///
-    /// Shape 4: [`crate::api::binding::BindingCount::Fixed`] carries a `u32`, so no
-    /// enumeration could have recorded every count a caller might ask about, and a
-    /// miss answers the negative.
+    /// Shape 4, and the two magnitudes [`BindingSupportKey`] drops are why: a
+    /// `min_size` and a [`crate::api::binding::BindingCount::Fixed`] element count
+    /// are both values no enumeration could have walked to the end of, so a miss
+    /// here answers the negative rather than panicking. After the narrowing the
+    /// recorded space is finite, and the negative stays anyway for a reason that
+    /// has nothing to do with size: an adapter-level snapshot has no device to ask,
+    /// and its honest answer is the same negative.
     ///
-    /// The count is deliberately *not* checked against
-    /// [`Self::binding_limit`]. Section 20.4 puts the two questions in different
-    /// places on purpose — a count a device cannot reach is a limit, which
-    /// `binding_limit` answers per stage and class — and re-deriving it here would
-    /// give one fact two sources, which section 7.3 forbids. This accessor answers
-    /// whether the *kind* of binding is expressible; the ceiling is asked
-    /// separately.
+    /// Neither magnitude is checked here. Section 20.4 puts the two questions in
+    /// different places on purpose — a count a device cannot reach is a limit, which
+    /// `binding_limit` answers per stage and class, and a range beyond the device's
+    /// reach is section 22.3's, answered against `MaxUniformBufferBindingSize` /
+    /// `MaxStorageBufferBindingSize` when a BindGroup is created — and re-deriving
+    /// either here would give one fact two sources, which section 7.3 forbids. This
+    /// accessor answers whether the *kind* of binding is expressible; the ceilings
+    /// are asked separately.
     fn binding_support(&self, query: &BindingSupportQuery) -> BindingSupport {
         Self::not_enumerable(
-            self.binding_support.get(query).copied(),
+            self.binding_support
+                .get(&BindingSupportKey::of(query))
+                .copied(),
             BindingSupport::Unsupported,
         )
     }

@@ -69,11 +69,14 @@ impl BindingSlotId {
 /// [`BindingSupport::Unsupported`] for the whole vocabulary — WebGPU core does
 /// not require it.
 ///
-/// `Hash` is required because a count is part of a [`BindingSupportQuery`], which
-/// is a capability-cache key; the specification's derive list omits it (see
-/// adjudication A25 in this crate's 0.16 series plan).
+/// `Hash` is *not* derived, and it used to be. A count was part of the capability
+/// cache key while the whole [`BindingSupportQuery`] was that key; the key is now
+/// the narrowed `BindingSupportKey`, which records whether a binding is an array
+/// and not how many elements it holds, so nothing asks a count to be hashable. The
+/// specification's derive list omits `Hash` here and the deviation is withdrawn
+/// rather than kept (adjudication A25 in this crate's 0.16 series plan).
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindingCount {
     /// Exactly one resource element.
     One,
@@ -177,8 +180,12 @@ pub enum BufferBindingAccess {
 /// explicitly: if a future requirement needs zero to mean "determined by runtime
 /// binding size", that is a separately designed contract, not a value of this
 /// field.
+///
+/// `Hash` is not derived, for the reason given on [`BindingCount`]: this type is no
+/// longer a capability-cache key. The four payload enums above are — they are
+/// fields of `BindableKind`, which is — see the note there.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BindingKind {
     /// A uniform buffer binding.
     UniformBuffer {
@@ -233,17 +240,21 @@ pub enum BindingKind {
 /// `StorageTexture + ReadWrite`, `StorageBuffer` in the vertex stage, a fixed
 /// resource array, and a dynamic buffer offset each have independent limitations.
 ///
-/// The whole query is the key, which is what makes the answer cacheable and what
-/// keeps the capability surface from growing one boolean per combination.
+/// The whole query used to be the capability cache key, and it is not any more: the
+/// key is `BindingSupportKey`, narrowed to the fields an answer actually depends
+/// on, because the query's two magnitudes have owners elsewhere in the
+/// specification and section 7.3 allows a fact one canonical source. See that
+/// key's doc for why, and for what a caller loses by it — nothing observable, since
+/// the accessor is a function of the query either way.
 ///
-/// `PartialEq`, `Eq`, and `Hash` are required by
-/// [`crate::api::capability::EnabledCapabilities`], which stores its answers in a
-/// `HashMap` keyed by this type; the specification's derive list omits them. The
-/// whole family of deviations this forces — six sibling enums inherit `Hash` from
-/// this type being a map key — is adjudicated together as A25 in this crate's
-/// 0.16 series plan.
+/// `PartialEq` and `Eq` stay: comparing two requirements is a caller need that owes
+/// nothing to the cache, and `Hash` does not, so `Hash` is not derived here and the
+/// deviation the specification's derive list would have been charged with does not
+/// arise. What *is* still derived against that list is `Hash` on the four payload
+/// enums of [`BindingKind`], which `BindableKind` does need; the whole family is
+/// adjudicated together as A25 in this crate's 0.16 series plan.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BindingSupportQuery {
     /// The stages that will see the binding.
     pub visibility: ShaderStages,
@@ -307,6 +318,111 @@ pub(crate) fn binding_kind_class(kind: &BindingKind) -> BindingLimitClass {
         BindingKind::SampledTexture { .. } => BindingLimitClass::SampledTextures,
         BindingKind::StorageTexture { .. } => BindingLimitClass::StorageTextures,
         BindingKind::Sampler { .. } => BindingLimitClass::Samplers,
+    }
+}
+
+/// [`BindingKind`] with its two magnitudes removed.
+///
+/// Lives beside the type it mirrors, and next to [`binding_kind_class`], because
+/// both answer the same shape of question — "what part of a binding kind does
+/// *this* rule care about" — and a mirror kept away from its original is how the
+/// two start to disagree about a variant. No wildcard arm, so a sixth
+/// [`BindingKind`] variant fails to compile here until its magnitudes are
+/// identified.
+///
+/// # Why a mirror rather than a canonicalized [`BindingKind`]
+///
+/// The alternative is to store a `min_size` no caller asked about — the smallest
+/// legal one, say — and a fabricated field in a key is a claim about a query that
+/// the query did not make. Section 20.3 refuses that shape of shortcut for this
+/// very field ("if a future requirement needs zero to mean a different contract …
+/// do not use magic zero"), and the reasoning covers a magic one as well.
+///
+/// # Why the magnitude is not a support question
+///
+/// `min_size`'s *magnitude* is section 22.3's, measured against
+/// `MaxUniformBufferBindingSize` / `MaxStorageBufferBindingSize` when a BindGroup
+/// is created, where the range's actual size is what the rule is about.
+/// [`BindingCount::Fixed`]'s magnitude is section 23.1's, aggregated per stage and
+/// class against `binding_limit(stage, class)`. Both answers already have exactly
+/// one owner, and section 7.3's closing rule — a fact can only have one canonical
+/// source — is what keeps a support table from becoming a second one. The
+/// *kind*-shaped residue is what this type keeps, which is the same line
+/// [`crate::api::capability::CapabilityFacts`] draws when it says its accessor
+/// answers whether the kind of binding is expressible.
+///
+/// # Why four public enums carry `Hash` for a crate-private type's sake
+///
+/// This type is a field of the capability cache key, so it must be hashable, and
+/// so must everything it holds: [`BufferBindingAccess`], [`TextureSampleType`],
+/// [`StorageAccess`], and [`SamplerKind`] — plus `TextureViewDimension` and
+/// `TextureFormat`, which derive it for their own reasons. The specification's
+/// derive lists omit `Hash` on the four, and the deviation is one deviation with
+/// one root rather than four, since a type that must satisfy a declared
+/// containment relation cannot decline the traits the container needs. A25 in this
+/// crate's 0.16 series plan adjudicates the family; the reader who finds a
+/// "surplus" derive should read that entry before removing it, because removing
+/// one of these stops this module compiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum BindableKind {
+    /// A uniform buffer binding, at any declared minimum size.
+    UniformBuffer,
+    /// A storage buffer binding, at any declared minimum size.
+    StorageBuffer {
+        /// The access the shader declares.
+        access: BufferBindingAccess,
+    },
+    /// A sampled texture binding.
+    SampledTexture {
+        /// The dimension the shader views it as.
+        dimension: TextureViewDimension,
+        /// The numeric type the shader samples as.
+        sample_type: TextureSampleType,
+        /// Whether the shader samples a multisampled texture.
+        multisampled: bool,
+    },
+    /// A storage texture binding.
+    StorageTexture {
+        /// The dimension the shader views it as.
+        dimension: TextureViewDimension,
+        /// The format the shader reads and writes.
+        format: TextureFormat,
+        /// What the shader may do to it.
+        access: StorageAccess,
+    },
+    /// A sampler binding.
+    Sampler {
+        /// What the shader expects of the sampler.
+        kind: SamplerKind,
+    },
+}
+
+impl BindableKind {
+    /// The magnitude-free part of `kind`.
+    pub(crate) fn of(kind: &BindingKind) -> Self {
+        match kind {
+            BindingKind::UniformBuffer { .. } => Self::UniformBuffer,
+            BindingKind::StorageBuffer { access, .. } => Self::StorageBuffer { access: *access },
+            BindingKind::SampledTexture {
+                dimension,
+                sample_type,
+                multisampled,
+            } => Self::SampledTexture {
+                dimension: *dimension,
+                sample_type: *sample_type,
+                multisampled: *multisampled,
+            },
+            BindingKind::StorageTexture {
+                dimension,
+                format,
+                access,
+            } => Self::StorageTexture {
+                dimension: *dimension,
+                format: *format,
+                access: *access,
+            },
+            BindingKind::Sampler { kind } => Self::Sampler { kind: *kind },
+        }
     }
 }
 
@@ -407,24 +523,6 @@ fieldless_encoding!(
     BindingLimitClass,
 );
 
-impl BindingCount {
-    /// Writes this count as a tag, then the element count for a fixed array.
-    ///
-    /// `One` is tag 0 and `Fixed(1)` would be tag 1 with a body of 1. They can
-    /// never collide, which is what section 22.1 requires — an array of length one
-    /// is not a stand-in for `One` — and encoding them apart is what keeps the
-    /// id honest about a device that answered one and not the other.
-    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
-        match self {
-            Self::One => out.push(0),
-            Self::Fixed(elements) => {
-                out.push(1);
-                out.extend_from_slice(&elements.to_le_bytes());
-            }
-        }
-    }
-}
-
 impl BindingKind {
     /// Writes this kind as a tag, then its fields in declaration order.
     ///
@@ -476,19 +574,48 @@ impl BindingKind {
     }
 }
 
-impl BindingSupportQuery {
-    /// Writes this query's canonical bytes.
+impl BindableKind {
+    /// Writes this kind's canonical bytes, in [`BindingKind`]'s tag space.
     ///
-    /// The `bool` is written as a byte rather than folded into the tag. A dynamic
-    /// offset is a separate question from the visibility, kind, and count, and
-    /// section 20.4 makes it valid only for two kinds — so a query that asks about
-    /// one and a query that does not are different questions for those two kinds,
-    /// and must not intern alike.
+    /// The three variants both types spell identically are *delegated* rather than
+    /// re-encoded: this pushes tags 2, 3 and 4 by handing a `BindingKind` to the
+    /// encoder above, so the two encodings cannot drift for them. The two buffer
+    /// variants are the only ones written by hand, and only because their payload
+    /// here is shorter by the `min_size` that `BindingKind` writes — the tag is the
+    /// same number and the remaining payload the same order, so a reader comparing
+    /// the two methods sees one vocabulary rather than two.
+    ///
+    /// No wildcard arm: a sixth binding kind must state its magnitude-free
+    /// encoding before this compiles.
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
-        self.visibility.encode_into(out);
-        self.kind.encode_into(out);
-        self.count.encode_into(out);
-        out.push(u8::from(self.dynamic_offset));
+        match self {
+            Self::UniformBuffer => out.push(0),
+            Self::StorageBuffer { access } => {
+                out.push(1);
+                access.encode_into(out);
+            }
+            Self::SampledTexture {
+                dimension,
+                sample_type,
+                multisampled,
+            } => BindingKind::SampledTexture {
+                dimension: *dimension,
+                sample_type: *sample_type,
+                multisampled: *multisampled,
+            }
+            .encode_into(out),
+            Self::StorageTexture {
+                dimension,
+                format,
+                access,
+            } => BindingKind::StorageTexture {
+                dimension: *dimension,
+                format: *format,
+                access: *access,
+            }
+            .encode_into(out),
+            Self::Sampler { kind } => BindingKind::Sampler { kind: *kind }.encode_into(out),
+        }
     }
 }
 

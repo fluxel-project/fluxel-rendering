@@ -34,6 +34,10 @@ use windows::Win32::Graphics::Direct3D12::{
 
 use super::*;
 use crate::api::binding::vocabulary::StorageAccess;
+use crate::api::binding::{
+    BindingCount, BindingKind, BindingLimitClass, BindingSupport, BindingSupportQuery,
+    BufferBindingAccess, TextureSampleType,
+};
 use crate::api::command::{BlitFilter, BufferCopy, RecorderDescriptor};
 use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::identity::Label;
@@ -47,6 +51,8 @@ use crate::api::resource::route::RouteQuery;
 use crate::api::resource::subresource::TextureAspect;
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
 use crate::api::resource::transfer::{BufferUploadDescriptor, ReadbackData, ReadbackRequest};
+use crate::api::resource::view::TextureViewDimension;
+use crate::api::shader::{ShaderStage, ShaderStages};
 use crate::api::submission::{
     CompletionPoint, CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
 };
@@ -1141,6 +1147,407 @@ fn what_the_texture_enumeration_actually_reported() {
         capabilities.limit(LimitKey::MaxComputeWorkgroupSizeZ),
         capabilities.limit(LimitKey::MaxComputeWorkgroupsPerDimension),
         capabilities.limit(LimitKey::MaxComputeWorkgroupStorageSize),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The binding-support table on real hardware.
+//
+// The binding table is the one capability whose *absence* is not conservative.
+// `route`, `texture_support`, `view_compatibility` and `binding_limit` all answer
+// something safe when they have no entry — a refusal costs throughput, or no
+// ceiling is imposed — but a binding answer of `Unsupported` refuses a layout the
+// device can actually bind, and section 9.4 makes that refusal final. So this
+// table is walked rather than sampled, and the tests below check the walk reached
+// the answers rather than checking a handful of convenient ones.
+//
+// What only this module can show: `D3D12_FEATURE_FORMAT_SUPPORT`'s
+// `TYPED_UNORDERED_ACCESS_VIEW` and `D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD/STORE`
+// bits are what the storage answers are derived from, and a mock cannot tell
+// whether this driver sets them.
+// ---------------------------------------------------------------------------
+
+/// Reads a binding answer as the boolean the assertions below are about.
+///
+/// A private extension trait rather than a method on
+/// [`BindingSupport`](crate::api::binding::BindingSupport), and that is a decision
+/// rather than a convenience. Section 20.4 freezes that enum with two members and
+/// no accessors; the three sibling support enums that do carry `is_supported` —
+/// `TextureSupport`, `BufferSupport`, `RouteSupport` — carry it because the
+/// specification gives it to them, and it does not give it here. Adding a public
+/// accessor would be a change to a frozen surface made for a test's benefit, so the
+/// test brings its own reader instead and the surface is left alone. An inherent
+/// method always wins over a trait method, so the sibling enums' own
+/// `is_supported` is unaffected by this being in scope.
+///
+/// Taken by reference, and named as the siblings name it, so that the call sites
+/// read the same as the texture tests above.
+trait BindingAnswer {
+    fn is_supported(&self) -> bool;
+}
+
+impl BindingAnswer for BindingSupport {
+    fn is_supported(&self) -> bool {
+        matches!(self, BindingSupport::Supported)
+    }
+}
+
+/// Builds the query a shader would ask, with the magnitude fields filled in.
+///
+/// The magnitudes vary across the tests below on purpose. Two queries that differ
+/// only in `min_size` or in a `Fixed(n)` count must answer identically, because
+/// neither magnitude reaches the recorded key — a binding's size envelope is
+/// section 22.3's `MaxUniformBufferBindingSize` and a binding's element count is
+/// section 23.1's `binding_limit`. Passing a real value here rather than a token
+/// one is what makes these tests able to fail if that narrowing is ever undone.
+fn binding_query(
+    visibility: ShaderStages,
+    kind: BindingKind,
+    count: BindingCount,
+    dynamic_offset: bool,
+) -> BindingSupportQuery {
+    BindingSupportQuery {
+        visibility,
+        kind,
+        count,
+        dynamic_offset,
+    }
+}
+
+/// The answers a renderer's layouts actually depend on, on this driver.
+#[test]
+fn a_real_device_answers_the_binding_questions_a_renderer_asks() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    let uniform = |count| {
+        binding_query(
+            ShaderStages::FRAGMENT,
+            BindingKind::UniformBuffer { min_size: 256 },
+            count,
+            false,
+        )
+    };
+
+    assert!(
+        capabilities
+            .binding_support(&uniform(BindingCount::One))
+            .is_supported(),
+        "a uniform buffer in the fragment stage is the least exotic binding there \
+         is; a device that refuses it cannot run any renderer"
+    );
+    assert!(
+        capabilities
+            .binding_support(&uniform(BindingCount::Fixed(4)))
+            .is_supported(),
+        "a fixed-length uniform array is what Direct3D 12 calls a descriptor range, \
+         and refusing it would refuse every array-typed layout"
+    );
+
+    // Dynamic offsets are the one shape section 20.4 gates harder than the kind:
+    // they are legal only for buffers, and a root descriptor is what makes them
+    // legal at all.
+    let dynamic = binding_query(
+        ShaderStages::VERTEX,
+        BindingKind::StorageBuffer {
+            min_size: 256,
+            access: BufferBindingAccess::ReadOnly,
+        },
+        BindingCount::One,
+        true,
+    );
+    assert!(
+        capabilities.binding_support(&dynamic).is_supported(),
+        "a dynamically offset storage buffer is how a renderer indexes a transform \
+         array without a descriptor per element"
+    );
+
+    // Every stage must be answered, including the compute stage a dispatch uses.
+    for visibility in [
+        ShaderStages::VERTEX,
+        ShaderStages::FRAGMENT,
+        ShaderStages::COMPUTE,
+    ] {
+        let query = binding_query(
+            visibility,
+            BindingKind::SampledTexture {
+                dimension: TextureViewDimension::D2,
+                sample_type: TextureSampleType::Float,
+                multisampled: false,
+            },
+            BindingCount::One,
+            false,
+        );
+        assert!(
+            capabilities.binding_support(&query).is_supported(),
+            "a 2D sampled texture must be bindable from {visibility:?}"
+        );
+    }
+}
+
+/// The two negatives, asserted where they are decided rather than where they are
+/// convenient.
+///
+/// Both are answers Direct3D 12 gives structurally — one through the absence of a
+/// member in `D3D12_UAV_DIMENSION`, the other through the absence of a
+/// multisampled spelling in `D3D12_SRV_DIMENSION` — and a backend that answered
+/// them from a guess rather than from the enumeration would be indistinguishable
+/// from one that answered them from the device. These tests are here so that the
+/// guess and the reading are not.
+#[test]
+fn a_real_device_refuses_the_two_binding_shapes_direct3d_12_cannot_express() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    for dimension in [TextureViewDimension::Cube, TextureViewDimension::CubeArray] {
+        let query = binding_query(
+            ShaderStages::COMPUTE,
+            BindingKind::StorageTexture {
+                dimension,
+                format: TextureFormat::Rgba8Unorm,
+                access: StorageAccess::ReadWrite,
+            },
+            BindingCount::One,
+            false,
+        );
+        assert!(
+            !capabilities.binding_support(&query).is_supported(),
+            "Direct3D 12 has no cube member in D3D12_UAV_DIMENSION at any resource \
+             binding tier, so a cube storage texture cannot be bound: {dimension:?}"
+        );
+    }
+
+    for dimension in [
+        TextureViewDimension::D1,
+        TextureViewDimension::D3,
+        TextureViewDimension::Cube,
+    ] {
+        let query = binding_query(
+            ShaderStages::FRAGMENT,
+            BindingKind::SampledTexture {
+                dimension,
+                sample_type: TextureSampleType::Float,
+                multisampled: true,
+            },
+            BindingCount::One,
+            false,
+        );
+        assert!(
+            !capabilities.binding_support(&query).is_supported(),
+            "D3D12_SRV_DIMENSION spells multisampling only for 2D and 2D-array \
+             views, so this cannot be sampled: {dimension:?}"
+        );
+    }
+}
+
+/// Every legal binding shape is recorded rather than left to the negative.
+///
+/// This is the obligation that replaces "fill everything": the binding key space
+/// is not enumerable, so an absent key and a refusal are the same value and a hole
+/// cannot be detected the way the buffer test detects one. What can be checked is
+/// that the walk reaches the whole space and that nothing *legal* in it comes back
+/// refused. The count is asserted rather than trusted, because a walk that stopped
+/// early would otherwise pass.
+#[test]
+fn every_legal_binding_shape_is_recorded_rather_than_left_to_the_negative() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    // The shapes a storage texture can legally take on a color format: cube views
+    // are excluded structurally, and a storage texture cannot be multisampled.
+    let dimensions = [
+        TextureViewDimension::D1,
+        TextureViewDimension::D2,
+        TextureViewDimension::D2Array,
+        TextureViewDimension::D3,
+    ];
+    let accesses = [
+        StorageAccess::ReadOnly,
+        StorageAccess::WriteOnly,
+        StorageAccess::ReadWrite,
+    ];
+
+    let mut seen = 0usize;
+    for visibility in [
+        ShaderStages::VERTEX,
+        ShaderStages::FRAGMENT,
+        ShaderStages::COMPUTE,
+    ] {
+        // Buffers, with and without a dynamic offset, as a single element and as
+        // an array — eight keys, of which all eight are legal.
+        for kind in [
+            BindingKind::UniformBuffer { min_size: 64 },
+            BindingKind::StorageBuffer {
+                min_size: 64,
+                access: BufferBindingAccess::ReadOnly,
+            },
+            BindingKind::StorageBuffer {
+                min_size: 64,
+                access: BufferBindingAccess::ReadWrite,
+            },
+        ] {
+            for count in [BindingCount::One, BindingCount::Fixed(4)] {
+                for dynamic_offset in [false, true] {
+                    let query = binding_query(visibility, kind.clone(), count, dynamic_offset);
+                    seen += 1;
+                    assert!(
+                        capabilities.binding_support(&query).is_supported(),
+                        "every buffer shape is expressible as a descriptor range, so \
+                         leaving this key unrecorded would refuse a legal layout: \
+                         {visibility:?} {kind:?} {count:?} dynamic={dynamic_offset}"
+                    );
+                }
+            }
+        }
+
+        // Storage textures over every legal view dimension and access.
+        for dimension in dimensions {
+            for access in accesses {
+                let query = binding_query(
+                    visibility,
+                    BindingKind::StorageTexture {
+                        dimension,
+                        format: TextureFormat::Rgba8Unorm,
+                        access,
+                    },
+                    BindingCount::One,
+                    false,
+                );
+                seen += 1;
+                assert!(
+                    capabilities.binding_support(&query).is_supported(),
+                    "Rgba8Unorm has typed UAV load and store, so a {dimension:?} \
+                     storage texture with {access:?} access is bindable from \
+                     {visibility:?}"
+                );
+            }
+        }
+    }
+
+    // Per stage: three buffer kinds times (two counts times two dynamic-offset
+    // settings) is twelve, plus four view dimensions times three accesses is
+    // twelve — twenty-four. Three stages makes seventy-two. Asserted as a count
+    // rather than trusted: a walk that silently stopped early would otherwise pass.
+    let expected = 3 * (3 * 2 * 2 + 4 * 3);
+    assert_eq!(
+        seen, expected,
+        "the walk must reach every key it claims to have checked"
+    );
+}
+
+/// Records the binding table this machine enumerated, for the evidence binding.
+///
+/// Run with `--nocapture`. The binding answers are almost entirely structural, so
+/// what varies between devices is the storage-texture half — which is a format
+/// question, and therefore the half a driver is free to differ on.
+#[test]
+fn what_the_binding_enumeration_actually_reported() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    for kind in [
+        BindingKind::UniformBuffer { min_size: 64 },
+        BindingKind::StorageBuffer {
+            min_size: 64,
+            access: BufferBindingAccess::ReadOnly,
+        },
+        BindingKind::StorageBuffer {
+            min_size: 64,
+            access: BufferBindingAccess::ReadWrite,
+        },
+    ] {
+        for dynamic_offset in [false, true] {
+            println!(
+                "dx12 binding {kind:?} dynamic={dynamic_offset} one={} array={}",
+                capabilities
+                    .binding_support(&binding_query(
+                        ShaderStages::COMPUTE,
+                        kind.clone(),
+                        BindingCount::One,
+                        dynamic_offset
+                    ))
+                    .is_supported(),
+                capabilities
+                    .binding_support(&binding_query(
+                        ShaderStages::COMPUTE,
+                        kind.clone(),
+                        BindingCount::Fixed(4),
+                        dynamic_offset
+                    ))
+                    .is_supported(),
+            );
+        }
+    }
+
+    for dimension in [
+        TextureViewDimension::D1,
+        TextureViewDimension::D2,
+        TextureViewDimension::D2Array,
+        TextureViewDimension::Cube,
+        TextureViewDimension::CubeArray,
+        TextureViewDimension::D3,
+    ] {
+        print!("dx12 binding storage_texture rgba8 {dimension:?}:");
+        for access in [
+            StorageAccess::ReadOnly,
+            StorageAccess::WriteOnly,
+            StorageAccess::ReadWrite,
+        ] {
+            print!(
+                " {access:?}={}",
+                capabilities
+                    .binding_support(&binding_query(
+                        ShaderStages::COMPUTE,
+                        BindingKind::StorageTexture {
+                            dimension,
+                            format: TextureFormat::Rgba8Unorm,
+                            access,
+                        },
+                        BindingCount::One,
+                        false
+                    ))
+                    .is_supported()
+            );
+        }
+        println!();
+    }
+
+    for multisampled in [false, true] {
+        print!("dx12 binding sampled_texture float multisampled={multisampled}:");
+        for dimension in [
+            TextureViewDimension::D1,
+            TextureViewDimension::D2,
+            TextureViewDimension::D2Array,
+            TextureViewDimension::Cube,
+            TextureViewDimension::CubeArray,
+            TextureViewDimension::D3,
+        ] {
+            print!(
+                " {dimension:?}={}",
+                capabilities
+                    .binding_support(&binding_query(
+                        ShaderStages::FRAGMENT,
+                        BindingKind::SampledTexture {
+                            dimension,
+                            sample_type: TextureSampleType::Float,
+                            multisampled,
+                        },
+                        BindingCount::One,
+                        false
+                    ))
+                    .is_supported()
+            );
+        }
+        println!();
+    }
+
+    // The absence that is a decision rather than a gap, printed where a reader of
+    // the evidence will meet it.
+    println!(
+        "dx12 binding_limit: fragment/uniform={:?} (absent by design: Direct3D 12 \
+         states no per-stage-class ceiling, and the descriptor-heap sizes are pools \
+         shared by every stage and pipeline)",
+        capabilities.binding_limit(ShaderStage::Fragment, BindingLimitClass::UniformBuffers),
     );
 }
 

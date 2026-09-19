@@ -497,32 +497,32 @@ pub(crate) struct Dx12Device {
     liveness: Mutex<Liveness>,
     /// The contract this device reports.
     ///
-    /// # The gap, stated where it is created
+    /// # What is in the table, and what is still missing from it
     ///
-    /// Empty, and that is not a placeholder for "no capabilities" — it is "not
-    /// enumerated yet". D3D12 answers every one of these questions through
-    /// `CheckFeatureSupport` and the format-support tables, and reading them off a
-    /// live device is the next block of this series; until it lands, the only
-    /// honest thing this backend can say is that it has asked nothing.
+    /// Filled by `facts::probe` from the live `ID3D12Device` beside it, which is
+    /// where the per-table detail lives — read that module's doc for what each
+    /// table is derived from and which questions this backend still cannot answer.
+    /// Two things belong here rather than there, because they are about the shape
+    /// of this struct and not about Direct3D 12.
     ///
-    /// What that costs, precisely, so it is not discovered later. The feature,
-    /// limit, format, and submission accessors answer correctly from this table;
-    /// for an unenumerated device they answer "no" and "none", which is
-    /// under-reporting rather than a false claim. The four support accessors split,
-    /// and the split is [`crate::api::capability::CapabilityFacts`]'s:
+    /// The first is why the probe is called *here*. It runs once, in
+    /// `create_device`, next to `CreateCommandQueue` and `CreateFence` and for the
+    /// same reason: these are the native questions a device either answers or does
+    /// not, and a device that cannot be asked is better refused at creation than
+    /// discovered halfway through a frame. A table filled lazily would put the
+    /// first capability answer on whichever call happened to arrive first.
     ///
-    /// - `buffer_support` panics. Its key is `BufferUsage`'s sixty-four masks, so
-    ///   enumeration could have been complete and an empty table is a hole rather
-    ///   than a statement. This is the one live landmine here, and it is honest:
-    ///   a device that was asked and recorded nothing is a broken device, not a
-    ///   device without buffers.
-    /// - `texture_support`, `binding_support`, and `route` answer `Unsupported`.
-    ///   Their keys carry a sample count, an element count, and a sample count,
-    ///   so no enumeration could have been complete and a miss is the negative.
-    ///
-    /// Nothing in the tree calls the four yet, so this is a gap waiting for its
-    /// first caller rather than a live defect — and the block that gives it one is
-    /// the one that fills this table.
+    /// The second is what an absent entry still means, so it is not discovered
+    /// later. The table is a snapshot of *this device*, and where it is incomplete
+    /// the incompleteness is `CapabilityFacts`'s own documented behaviour rather
+    /// than something this backend invents: `route`, `texture_support`,
+    /// `view_compatibility` and `binding_limit` answer conservatively when they
+    /// have no entry, which costs throughput and not correctness. `buffer_support`
+    /// is the exception that panics, and the probe fills its key space completely
+    /// for exactly that reason. `binding_support` is now in the same position
+    /// despite answering rather than panicking, because a binding answer of
+    /// `Unsupported` refuses a legal layout rather than merely declining to
+    /// advertise one — so its key space, too, is filled rather than sampled.
     facts: CapabilityFacts,
     /// The lanes this device offers.
     submission: SubmissionCapabilities,
