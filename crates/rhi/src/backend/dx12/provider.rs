@@ -84,6 +84,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_NOT_FOUND, IDXGIAdapter1, IDXGIFactory1,
 };
 
+use super::facts;
 use super::ffi;
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -309,30 +310,37 @@ impl Dx12Provider {
             .at("Dx12Provider::request_device")
         })?;
 
-        // One lane, because Direct3D 12 gives a device exactly one direct command
-        // queue that the portable layer can name before the fact enumeration
-        // exists: several logical lanes do not promise hardware overlap (section
-        // 10.3), and reporting more than one would be claiming a scheduling
-        // structure this backend has not established.
+        // One lane. Direct3D 12 does expose more than one queue type — a compute
+        // queue and up to three copy queues exist beside the direct queue — but
+        // several *logical* lanes do not promise hardware overlap (section 10.3),
+        // so reporting the extra queues as lanes would claim a scheduling
+        // structure this backend has not established. They arrive when a caller
+        // can ask for one by name, which is a question the submission chapter
+        // owns rather than this one.
         //
-        // `COMPUTE` is deliberately absent. A direct queue does accept dispatches,
-        // but the fact table beside this cannot say whether the `Compute` feature
-        // is enabled — it records nothing yet — and a lane accepting compute work
-        // on a device whose own contract denies the feature is the exact
-        // half-consistency section 7.2's base guarantee is written against.
-        // Under-reporting a domain costs a refusal a caller can restructure around;
-        // the bit goes in when the enumeration that justifies it lands.
+        // `COMPUTE` is present because the fact table beside it now says so.
+        // It was absent while the table recorded nothing, because a lane
+        // accepting compute work on a device whose own contract denied the
+        // `Compute` feature is the half-consistency section 7.2's base guarantee
+        // is written against; `facts::probe` records that feature as a structural
+        // property of Direct3D 12, so the under-report is no longer the only
+        // consistent answer and keeping it would refuse dispatches the device can
+        // run.
+        let facts = facts::probe(&device)?;
+
         let submission = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
             SubmissionLaneId::new(0),
             SubmissionLaneClass::General,
-            LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+            LaneWorkDomains::RASTER
+                .union(LaneWorkDomains::COMPUTE)
+                .union(LaneWorkDomains::COPY),
         )]);
 
         Ok(Arc::new(Dx12Device {
             adapter: deferred_adapter_info(&candidate, self.instance),
             object: next_object(),
             _device: device,
-            facts: CapabilityFacts::empty(),
+            facts,
             submission,
             liveness: Mutex::new(Liveness {
                 status: DeviceStatus::Active,

@@ -206,10 +206,10 @@ impl StorageAccessSupport {
     /// Crate-private: these are probed facts about a device, and a caller-built
     /// answer would describe hardware that was never asked.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the backend port fills this when it answers a format query"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn new(read_only: bool, write_only: bool, read_write: bool) -> Self {
@@ -267,10 +267,10 @@ impl FormatFacts {
     /// Device/Adapter contract", so only the device that probed them may
     /// assemble them.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the device façade assembles this from its format query"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn new(format: TextureFormat, storage_access: StorageAccessSupport) -> Self {
@@ -848,6 +848,73 @@ impl TextureFormat {
     /// 38-arm match that could be edited out of step with the declaration.
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
         out.push(*self as u8);
+    }
+
+    /// Every format in section 8.1's P0 set, in declaration order.
+    ///
+    /// Crate-private, and a backend probing a format table is its caller. Written
+    /// as an explicit list rather than as a range over the discriminants, because
+    /// unlike [`Self::encode_into`] this one *is* a claim about which formats
+    /// exist: a range would silently include a variant nobody meant to probe, and
+    /// a list that falls behind the declaration is caught by the length assertion
+    /// in this module's tests rather than by a capability answer that is quietly
+    /// missing a format.
+    ///
+    /// Every variant appears, including the two depth formats that permit a
+    /// driver to pick a bit layout — [`Self::Depth24Plus`] and
+    /// [`Self::Depth24PlusStencil8`]. They are listed here because the *portable*
+    /// set is what this enumerates; whether a given backend can name a native
+    /// format for one is that backend's answer to give, and narrowing this list
+    /// would move that decision into the format vocabulary.
+    #[cfg_attr(
+        all(not(test), not(feature = "dx12")),
+        expect(
+            dead_code,
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+        )
+    )]
+    pub(crate) fn all() -> impl Iterator<Item = Self> {
+        [
+            Self::R8Unorm,
+            Self::R8Snorm,
+            Self::R8Uint,
+            Self::R8Sint,
+            Self::Rg8Unorm,
+            Self::Rg8Snorm,
+            Self::Rg8Uint,
+            Self::Rg8Sint,
+            Self::Rgba8Unorm,
+            Self::Rgba8UnormSrgb,
+            Self::Rgba8Snorm,
+            Self::Rgba8Uint,
+            Self::Rgba8Sint,
+            Self::Bgra8Unorm,
+            Self::Bgra8UnormSrgb,
+            Self::R16Uint,
+            Self::R16Sint,
+            Self::R16Float,
+            Self::Rg16Uint,
+            Self::Rg16Sint,
+            Self::Rg16Float,
+            Self::Rgba16Uint,
+            Self::Rgba16Sint,
+            Self::Rgba16Float,
+            Self::R32Uint,
+            Self::R32Sint,
+            Self::R32Float,
+            Self::Rg32Uint,
+            Self::Rg32Sint,
+            Self::Rg32Float,
+            Self::Rgba32Uint,
+            Self::Rgba32Sint,
+            Self::Rgba32Float,
+            Self::Depth16Unorm,
+            Self::Depth24Plus,
+            Self::Depth24PlusStencil8,
+            Self::Depth32Float,
+            Self::Depth32FloatStencil8,
+        ]
+        .into_iter()
     }
 }
 

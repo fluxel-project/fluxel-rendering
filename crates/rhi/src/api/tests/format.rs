@@ -443,3 +443,33 @@ fn the_limits_answer_the_question_the_key_deliberately_left_out() {
     assert_eq!(key.dimension(), TextureDimension::D2);
     assert_eq!(key.sample_count(), 1);
 }
+
+/// The format enumeration is the whole declared set, and nothing else.
+///
+/// `TextureFormat::all` is what a backend walks when it fills a format table, so
+/// a variant missing from the list is a format no device ever reports facts for —
+/// and because `format()` answers `Option`, that absence is a legal answer rather
+/// than a panic. It would therefore be found by a caller whose `R8Unorm` textures
+/// inexplicably did not work, on one backend, some time later.
+///
+/// Discriminants are the check rather than a second hand-written count. The list
+/// must contain exactly one entry per discriminant from zero through the highest
+/// one it contains, which fails in both directions: a variant left out lowers the
+/// count below the highest discriminant, and a duplicate raises it above.
+#[test]
+fn the_format_enumeration_covers_every_declared_variant() {
+    let enumerated: Vec<TextureFormat> = TextureFormat::all().collect();
+    let highest = enumerated
+        .iter()
+        .map(|format| *format as usize)
+        .max()
+        .expect("the P0 format set is not empty");
+
+    assert_eq!(
+        enumerated.len(),
+        highest + 1,
+        "TextureFormat::all must list every variant exactly once; it lists {} of {}",
+        enumerated.len(),
+        highest + 1
+    );
+}

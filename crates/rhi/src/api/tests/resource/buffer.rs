@@ -400,3 +400,55 @@ fn a_binding_carries_the_buffer_and_the_range_together() {
     assert_eq!(binding.buffer.id(), buffer.id());
     assert_eq!(binding.buffer.descriptor().size, 256);
 }
+
+/// The enumeration the capability table is keyed on covers every declared bit.
+///
+/// `BufferUsage` is a mask rather than an enum, so `all()` cannot be derived and
+/// `ALL_BITS` is a hand-written union of the six constants. A seventh bit added
+/// without extending that union would be a silent hole in the DX12 support table
+/// — and because membership in an enumerable space is a *panic* rather than an
+/// answer (§8.1, and the four-shape rule in `api::capability`), the hole would
+/// surface as a panic on real hardware for whoever first asked about it. This
+/// test is what makes the union self-checking.
+#[test]
+fn the_usage_enumeration_covers_every_declared_bit() {
+    let declared = [
+        BufferUsage::COPY_SRC,
+        BufferUsage::COPY_DST,
+        BufferUsage::VERTEX,
+        BufferUsage::INDEX,
+        BufferUsage::UNIFORM,
+        BufferUsage::STORAGE,
+    ];
+
+    let enumerated: Vec<BufferUsage> = BufferUsage::all().collect();
+
+    assert_eq!(
+        enumerated.len(),
+        1 << declared.len(),
+        "a six-bit mask has {} combinations; the enumeration walked {}",
+        1 << declared.len(),
+        enumerated.len()
+    );
+
+    for usage in declared {
+        assert!(
+            enumerated.contains(&usage),
+            "{usage} is declared but the enumeration never produces it, so every \
+             capability key containing it is a hole rather than a question"
+        );
+    }
+
+    // The union of the declared bits is the last key the walk reaches, so a
+    // declared bit outside it would be unreachable even though the count above
+    // still matched.
+    assert!(
+        enumerated.contains(
+            &declared
+                .into_iter()
+                .reduce(|a, b| a.union(b))
+                .expect("declared is not empty")
+        ),
+        "the enumeration must reach the union of every declared bit"
+    );
+}

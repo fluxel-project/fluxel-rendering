@@ -16,8 +16,12 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::api::platform::requirements::{DeviceRequirements, LimitKey};
+use crate::api::binding::vocabulary::StorageAccess;
+use crate::api::format::TextureFormat;
+use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{PlatformProvider, RequestStatus};
+use crate::api::resource::buffer::{BufferSupportQuery, BufferUsage};
+use crate::api::submission::LaneWorkDomains;
 
 /// A fresh provider instance identity, as host integration would mint.
 fn instance() -> DeviceInstanceId {
@@ -53,6 +57,27 @@ fn default_candidate(provider: &Dx12Provider) -> Candidate {
     provider
         .select(AdapterSelection::Default)
         .expect("a Windows host with DXGI exposes a usable adapter")
+}
+
+/// A portable device over this machine's default adapter, through the full path.
+///
+/// Built the way host integration builds one — the portable `PlatformProvider`
+/// asked for a device, its request polled to completion — rather than by reaching
+/// for the backend directly, so a test using this observes the capability facts
+/// the *portable* layer would hand a caller. The capability table is filled
+/// during device creation, so anything that wants to examine it has to come
+/// through a created device.
+fn portable_device() -> crate::api::platform::Device {
+    let provider = portable_provider();
+    let mut request = provider
+        .request_device(headless_request(AdapterSelection::Default))
+        .expect("a headless device request must succeed on a machine with DXGI");
+
+    let RequestStatus::Ready(device) = request.poll().expect("the first poll succeeds") else {
+        panic!("the DX12 path is synchronous, so the first poll must be Ready");
+    };
+
+    device
 }
 
 #[test]
@@ -310,4 +335,186 @@ fn what_the_machine_actually_reported() {
         );
     }
     assert_eq!(provider.instance(), instance());
+}
+
+/// The enumerated facts answer the one table that must be complete.
+///
+/// This is the test that closes the landmine `facts`' module documentation names.
+/// Before the enumeration landed, `buffer_support` panicked for every query on a
+/// real DX12 device, because the table was empty and its key space is one a
+/// backend can walk in full. The assertions below therefore do two separate
+/// things: they check the *answers*, and — by the mere fact of returning — they
+/// check that a query against a real device no longer panics.
+#[test]
+fn a_real_device_answers_every_buffer_usage_combination() {
+    let device = portable_device();
+
+    for usage in BufferUsage::all() {
+        let query = BufferSupportQuery::new(usage);
+        let support = device.capabilities().buffer_support(&query);
+
+        if usage.is_empty() {
+            // Section 12.3 refuses to create a buffer with no usage bit at all,
+            // so the honest answer is a refusal rather than a supported entry
+            // with a ceiling nobody can reach.
+            assert!(
+                !support.is_supported(),
+                "an empty usage set has no legal operation and must be refused"
+            );
+            continue;
+        }
+
+        assert!(
+            support.is_supported(),
+            "Direct3D 12 expresses {usage} as resource states rather than as creation \
+             flags, so it must be reported creatable"
+        );
+        assert!(
+            support.limits().is_some_and(|limits| limits.max_size() > 0),
+            "a supported answer must carry a non-zero ceiling: {usage}"
+        );
+    }
+}
+
+/// The three optional features Direct3D 12 answers structurally are reported.
+///
+/// They are recorded without a probe, and the reason is at each call site in
+/// `facts`. What matters for the portable contract is the consequence: a caller
+/// reading this device's enabled capabilities must not be told that a D3D12
+/// device cannot dispatch, cannot filter anisotropically, or cannot use binding
+/// arrays. The lane assertion is the other half of the same fact — section 7.2's
+/// base guarantee relates the `Compute` feature to a lane accepting compute work,
+/// and the two are now consistent rather than deliberately under-reported.
+#[test]
+fn a_real_device_reports_the_features_direct3d_12_mandates() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    for feature in [
+        OptionalFeature::Compute,
+        OptionalFeature::SamplerAnisotropy,
+        OptionalFeature::BindingArrays,
+    ] {
+        assert!(
+            capabilities.supports_feature(feature),
+            "{feature:?} is a property of Direct3D 12 rather than a driver's choice"
+        );
+    }
+
+    let accepts_compute = capabilities
+        .submission()
+        .lanes()
+        .iter()
+        .any(|lane| lane.domains().contains(LaneWorkDomains::COMPUTE));
+
+    assert!(
+        accepts_compute,
+        "section 7.2's base guarantee ties a compute-accepting lane to the Compute feature, \
+         and this device reports both"
+    );
+}
+
+/// A format table that covers the portable set, minus the two it cannot name.
+///
+/// The two omissions are the assertion worth reading: `Depth24Plus` and
+/// `Depth24PlusStencil8` explicitly permit a driver to choose a bit layout, so
+/// there is no single DXGI format that is the answer and `facts` returns none.
+/// The portable accessor answers `Option`, so "not asked" and "asked and refused"
+/// stay distinguishable — and this test pins which of the two a caller sees.
+#[test]
+fn a_real_device_reports_what_each_namable_format_can_do() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    // The two permitted-layout formats are the only ones this backend declines to
+    // answer, and that is asserted as an exact set rather than one format at a
+    // time: a third silent omission is the failure mode worth catching, and
+    // checking only the two known names would not catch it.
+    let unanswered: Vec<TextureFormat> = TextureFormat::all()
+        .filter(|format| capabilities.format(*format).is_none())
+        .collect();
+
+    assert_eq!(
+        unanswered,
+        vec![
+            TextureFormat::Depth24Plus,
+            TextureFormat::Depth24PlusStencil8
+        ],
+        "exactly the two formats whose bit layout Direct3D 12 leaves to the driver \
+         may go unanswered; anything else absent is a hole in the table"
+    );
+
+    // One answered format, read end to end: `None` above is only meaningful if
+    // `Some` carries real facts, and `Rgba8Unorm` is the format every backend
+    // must support for a storage write or the portable P0 set is not viable.
+    let sampled = capabilities
+        .format(TextureFormat::Rgba8Unorm)
+        .expect("Rgba8Unorm is a DXGI format on every device");
+
+    assert!(
+        sampled.storage_access().supports(StorageAccess::ReadOnly),
+        "an Rgba8Unorm texture is readable as a storage resource"
+    );
+}
+
+/// The two limits whose Direct3D 12 source is unambiguous are recorded.
+///
+/// Not a claim that the limit table is complete — it is not, and `facts` records
+/// which twenty-five keys are still unrecorded. This pins the two that are, so
+/// that a later mapping change cannot quietly drop them.
+#[test]
+fn a_real_device_reports_the_two_limits_it_can_ground() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    assert_eq!(
+        capabilities.limit(LimitKey::MaxSamplerAnisotropy),
+        Some(16),
+        "the D3D12 sampler descriptor clamps MaxAnisotropy to 1..=16"
+    );
+
+    let max_buffer = capabilities
+        .limit(LimitKey::MaxBufferSize)
+        .expect("the resource address space is always reported");
+    assert!(
+        max_buffer >= (1 << 32),
+        "a D3D12 device addresses at least 32 bits per resource; got {max_buffer}"
+    );
+}
+
+/// Records what this machine's device enumerated, for the evidence binding.
+///
+/// Run with `--nocapture`. `CLAUDE.md` section 9 forbids recording an observation
+/// that was not made, so this prints rather than asserts a hardware-specific
+/// value; the assertions that do bind are in the tests above.
+#[test]
+fn what_the_capability_enumeration_actually_reported() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    println!(
+        "dx12 capability evidence: backend={:?} adapter={:?} id={:?} fingerprint={:?}",
+        device.backend(),
+        device.adapter_info().name(),
+        capabilities.compatibility_id(),
+        capabilities.fingerprint(),
+    );
+
+    for format in TextureFormat::all() {
+        let Some(facts) = capabilities.format(format) else {
+            continue;
+        };
+        println!(
+            "dx12 format {format:?}: storage read={} write={} read_write={}",
+            facts.storage_access().supports(StorageAccess::ReadOnly),
+            facts.storage_access().supports(StorageAccess::WriteOnly),
+            facts.storage_access().supports(StorageAccess::ReadWrite),
+        );
+    }
+
+    println!(
+        "dx12 limits: max_buffer_size={:?} max_sampler_anisotropy={:?}",
+        capabilities.limit(LimitKey::MaxBufferSize),
+        capabilities.limit(LimitKey::MaxSamplerAnisotropy),
+    );
 }

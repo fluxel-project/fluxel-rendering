@@ -86,6 +86,45 @@ impl BufferUsage {
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
+
+    /// Every bit this type defines, as one mask.
+    ///
+    /// Built from the constants rather than written as `63`: a seventh usage bit
+    /// added above widens this with no second edit, which is what keeps
+    /// [`Self::all`] from silently ceasing to be an enumeration of the space.
+    ///
+    /// Carries no dead-code expectation even though its only reader is gated.
+    /// Rustc counts a constant as live once any function body reads it, without
+    /// asking whether that function is itself live, so an expectation here is
+    /// unfulfilled in the very configuration the gate is for.
+    const ALL_BITS: u32 = Self::COPY_SRC.0
+        | Self::COPY_DST.0
+        | Self::VERTEX.0
+        | Self::INDEX.0
+        | Self::UNIFORM.0
+        | Self::STORAGE.0;
+
+    /// Every usage combination, including the empty one, in mask order.
+    ///
+    /// Crate-private, and a backend enumerating a buffer-support table is its
+    /// caller. That table's completeness rule is a statement about *this key
+    /// space* rather than about any one entry — section 7.2's rule makes an
+    /// absent entry there a hole rather than an answer — so the walk belongs
+    /// beside the layout it walks, where it cannot drift out of step with it.
+    ///
+    /// The empty mask is included. It is a query a caller can construct, so
+    /// leaving it out of the walk would leave it out of whatever table the walk
+    /// fills, which is the one outcome the completeness rule exists to prevent.
+    #[cfg_attr(
+        all(not(test), not(feature = "dx12")),
+        expect(
+            dead_code,
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+        )
+    )]
+    pub(crate) fn all() -> impl Iterator<Item = Self> {
+        (0..=Self::ALL_BITS).map(Self)
+    }
 }
 
 impl fmt::Display for BufferUsage {
@@ -186,10 +225,10 @@ impl BufferSupportLimits {
     /// Crate-private: the number is a probed device answer, and a caller-built
     /// one would be a capability claim about hardware nobody asked.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the device façade builds this when it answers a buffer query"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn new(max_size: u64) -> Self {

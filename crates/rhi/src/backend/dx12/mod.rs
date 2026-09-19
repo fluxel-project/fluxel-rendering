@@ -55,6 +55,13 @@
 //! capability enumeration comes before adapter enumeration** — which is why
 //! `ProviderBackend::enumerate_adapters` refuses today while `request_device`
 //! works (see the note in [`provider`]).
+//!
+//! Capability enumeration has started: [`facts`] probes a created device and is
+//! what `request_device` now records. It is not finished — texture, binding,
+//! route and view-compatibility facts and every portable limit are still absent
+//! — and [`facts`]'s module documentation states which of the three kinds each
+//! missing entry is.
 
+mod facts;
 mod ffi;
 mod provider;

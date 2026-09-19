@@ -511,26 +511,34 @@ impl CapabilityFacts {
 
 /// The fills a backend's enumeration performs on a [`CapabilityFacts`].
 ///
-/// # Why these are one expectation rather than nine
+/// # Why the remaining five carry an expectation and the other four do not
 ///
-/// None of them has a caller outside this crate's tests yet: the DX12 capability
-/// port that will call them is the next block of this series, and it is a large
-/// one because section 7.2's completeness rule means an enumeration has to answer
-/// every query the portable layer can be asked, not a representative sample. Until
-/// it lands, these are dead in every non-test configuration, and one expectation
-/// on the block says so once.
+/// This block was one expectation over nine methods, on the reasoning that they
+/// were one body of code with one fate and that the expectation going
+/// *unfulfilled* when the DX12 fill arrived would be the gate saying "these are
+/// live now, delete the crutch". That is what happened, and it happened in two
+/// parts rather than one — which is the useful part of the story.
 ///
-/// It is deliberately a block-level expectation and not nine method-level ones:
-/// they are one body of code with one fate, deleted together, and the expectation
-/// going *unfulfilled* when the DX12 fill arrives is a useful signal rather than a
-/// nuisance — it is the gate saying "these are live now, delete the crutch".
+/// Four of them ([`Self::record_feature`], [`Self::record_limit`],
+/// [`Self::record_format`], [`Self::record_buffer_support`]) are now reached from
+/// a non-test build by `crate::backend::dx12::facts`, so their expectations were
+/// deleted rather than narrowed: an `expect` that can no longer fail is a claim
+/// about the code that has stopped being true, and it is the failure mode
+/// [`Self::record_feature`]'s own reason string was written to announce.
+///
+/// The other five still have no caller outside this crate's tests. They are the
+/// ones whose DX12 fill is the *next* block — texture, binding, route and
+/// view-compatibility facts — and they keep an expectation each, because a
+/// block-level one would now be unfulfilled and would have to be deleted even
+/// though five of its nine members are still dead. One expectation per method is
+/// what keeps the signal working when the block splits.
 impl CapabilityFacts {
     /// Records that the contract offers `feature`.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn record_feature(&mut self, feature: OptionalFeature) {
@@ -539,10 +547,10 @@ impl CapabilityFacts {
 
     /// Records the value for `key`.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn record_limit(&mut self, key: LimitKey, value: u64) {
@@ -551,10 +559,10 @@ impl CapabilityFacts {
 
     /// Records the facts for `format`.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn record_format(&mut self, format: TextureFormat, facts: FormatFacts) {
@@ -563,10 +571,10 @@ impl CapabilityFacts {
 
     /// Records the answer to a buffer support query.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn record_buffer_support(&mut self, usage: BufferUsage, support: BufferSupport) {
