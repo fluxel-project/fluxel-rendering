@@ -376,3 +376,129 @@ impl RouteSupport {
 fn is_aligned(value: u64, alignment: u64) -> bool {
     alignment == 0 || value.is_multiple_of(alignment)
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because every field read
+// below is private to this module.
+
+impl RouteQuery {
+    /// Writes this query's canonical bytes: a tag, then the variant's fields in
+    /// declaration order.
+    ///
+    /// Every field is written, including the ones a given route kind might seem to
+    /// make redundant. Two keys that differ in any field are two different
+    /// questions, and a route that a device supports for one of them is not
+    /// thereby supported for the other — which is precisely what the id must be
+    /// able to tell apart.
+    ///
+    /// No wildcard arm: a seventh route kind must state its encoding before this
+    /// compiles, the same way `binding_class` has no wildcard so an unclassified
+    /// kind cannot slip through.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::BufferToBuffer => out.push(0),
+            Self::BufferToTexture {
+                dimension,
+                format,
+                aspect,
+            } => {
+                out.push(1);
+                dimension.encode_into(out);
+                format.encode_into(out);
+                aspect.encode_into(out);
+            }
+            Self::TextureToBuffer {
+                dimension,
+                format,
+                aspect,
+            } => {
+                out.push(2);
+                dimension.encode_into(out);
+                format.encode_into(out);
+                aspect.encode_into(out);
+            }
+            Self::TextureToTexture {
+                src_dimension,
+                src_format,
+                src_aspect,
+                src_sample_count,
+                dst_dimension,
+                dst_format,
+                dst_aspect,
+                dst_sample_count,
+            } => {
+                out.push(3);
+                src_dimension.encode_into(out);
+                src_format.encode_into(out);
+                src_aspect.encode_into(out);
+                out.extend_from_slice(&src_sample_count.to_le_bytes());
+                dst_dimension.encode_into(out);
+                dst_format.encode_into(out);
+                dst_aspect.encode_into(out);
+                out.extend_from_slice(&dst_sample_count.to_le_bytes());
+            }
+            Self::Resolve {
+                format,
+                src_sample_count,
+            } => {
+                out.push(4);
+                format.encode_into(out);
+                out.extend_from_slice(&src_sample_count.to_le_bytes());
+            }
+            Self::Blit {
+                src_dimension,
+                src_format,
+                dst_dimension,
+                dst_format,
+                filter,
+            } => {
+                out.push(5);
+                src_dimension.encode_into(out);
+                src_format.encode_into(out);
+                dst_dimension.encode_into(out);
+                dst_format.encode_into(out);
+                filter.encode_into(out);
+            }
+        }
+    }
+}
+
+impl RouteSupport {
+    /// Writes this answer as a tag, followed by the capabilities when there are
+    /// any.
+    ///
+    /// Which layouts are present is part of what a supported route says — and
+    /// their values are part of it too, since an alignment is a fact a caller
+    /// obeys. A route that reports a texel-copy layout and one that reports none
+    /// are different contracts, so an absent layout is tagged rather than encoded
+    /// as a zero alignment, which is a value [`is_aligned`] deliberately reads as
+    /// "no constraint" and would therefore have conflated the two.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Unsupported => out.push(0),
+            Self::Supported(capabilities) => {
+                out.push(1);
+                match capabilities.buffer_copy_layout {
+                    None => out.push(0),
+                    Some(layout) => {
+                        out.push(1);
+                        out.extend_from_slice(&layout.offset_alignment.to_le_bytes());
+                        out.extend_from_slice(&layout.size_alignment.to_le_bytes());
+                    }
+                }
+                match capabilities.texel_copy_layout {
+                    None => out.push(0),
+                    Some(layout) => {
+                        out.push(1);
+                        out.extend_from_slice(&layout.buffer_offset_alignment.to_le_bytes());
+                        out.extend_from_slice(&layout.bytes_per_row_alignment.to_le_bytes());
+                    }
+                }
+            }
+        }
+    }
+}

@@ -305,3 +305,37 @@ pub struct ShaderLocationInterface {
     /// other is not a comparison any backend could act on.
     pub interpolation: Option<ShaderInterpolation>,
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// Defined in this module rather than beside `api::capability`, which is what
+// consumes it, because the fields read here are private to the module that
+// declares the type: gathering every encoding into one central match would mean
+// adding accessors that exist only to be encoded. The rules of the encoding, and
+// what it is for, are stated once in `api::capability::CapabilityFacts`.
+
+impl ShaderStage {
+    /// Writes this stage's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant. That does tie the encoding to
+    /// the declaration order of the variants, which is the honest thing for it to
+    /// be tied to: adding or reordering a variant changes the capability
+    /// vocabulary, so it should change the fingerprint rather than leave one
+    /// standing that was computed for a different set of variants.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}
+
+impl ShaderStages {
+    /// Writes this stage set's canonical byte.
+    ///
+    /// The mask's bits, not a list of members: a set has exactly one bit pattern
+    /// per membership, so the bits are already canonical and no ordering question
+    /// arises.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(self.0);
+    }
+}

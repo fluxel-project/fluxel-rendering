@@ -828,3 +828,105 @@ impl TextureSupport {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because every field read
+// below is private to this module.
+
+impl TextureFormat {
+    /// Writes this format's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant; see
+    /// [`crate::api::shader::ShaderStage::encode_into`] for why that dependency on
+    /// declaration order is the intended one. This is the type on which that
+    /// dependency is most visible — 38 variants, and section 8.1's P0 set is a
+    /// subset of them — which is also why it is written as a cast rather than a
+    /// 38-arm match that could be edited out of step with the declaration.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}
+
+impl FormatFacts {
+    /// Writes these facts' canonical bytes.
+    ///
+    /// The inner format is written even though the map key is already a
+    /// [`TextureFormat`]. A `FormatFacts` whose inner format disagrees with the
+    /// key it was stored under is a provider bug, and dropping the field would
+    /// make two *different* fact maps encode identically — which is the one thing
+    /// an interning id must never do.
+    ///
+    /// The three storage answers go out as one bitmask rather than three bytes or
+    /// a byte per [`StorageAccess`]: they are one probed record, and a bitmask is
+    /// already canonical. `as u8` casts are deliberately avoided in favour of
+    /// `u8::from`, which cannot read as a numeric conversion of a value whose
+    /// numeric meaning would matter.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        self.format.encode_into(out);
+        let access = u8::from(self.storage_access.read_only)
+            | u8::from(self.storage_access.write_only) << 1
+            | u8::from(self.storage_access.read_write) << 2;
+        out.push(access);
+    }
+}
+
+impl TextureSupportQuery {
+    /// Writes this query's canonical bytes.
+    ///
+    /// The alternate view formats are sorted here rather than assumed sorted. The
+    /// field is a `Vec` the caller extended through
+    /// [`Self::with_view_format`], so its order is the caller's order, and two
+    /// callers asking the same question with the same formats listed in different
+    /// orders must intern to the same contract. Sorting the *encoded* forms rather
+    /// than the values keeps this consistent with how the outer sections sort, and
+    /// needs no `Ord` on [`TextureFormat`], which does not have one.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        self.dimension.encode_into(out);
+        self.format.encode_into(out);
+        self.usage.encode_into(out);
+        out.extend_from_slice(&self.sample_count.to_le_bytes());
+
+        let mut formats: Vec<Vec<u8>> = self
+            .view_formats
+            .iter()
+            .map(|format| {
+                let mut bytes = Vec::new();
+                format.encode_into(&mut bytes);
+                bytes
+            })
+            .collect();
+        formats.sort_unstable();
+        out.extend_from_slice(&(formats.len() as u32).to_le_bytes());
+        for format in &formats {
+            out.extend_from_slice(format);
+        }
+
+        self.view_compatibility.encode_into(out);
+    }
+}
+
+impl TextureSupport {
+    /// Writes this answer as a tag, followed by the maxima when there are any.
+    ///
+    /// `Unsupported` carries no body, so it can never encode as `Supported` with
+    /// zeroed maxima. The two say different things — one says the texture cannot
+    /// exist, the other says it exists and may be no larger than zero on some
+    /// axis — and the second is not a spelling of the first.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Unsupported => out.push(0),
+            Self::Supported(limits) => {
+                out.push(1);
+                out.extend_from_slice(&limits.max_extent.width.to_le_bytes());
+                out.extend_from_slice(&limits.max_extent.height.to_le_bytes());
+                out.extend_from_slice(&limits.max_extent.depth.to_le_bytes());
+                out.extend_from_slice(&limits.max_mip_levels.to_le_bytes());
+                out.extend_from_slice(&limits.max_array_layers.to_le_bytes());
+            }
+        }
+    }
+}

@@ -359,3 +359,34 @@ impl DeviceRequirements {
             && self.required_routes.is_empty()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because these two
+// vocabularies are declared here, and the limits map is keyed by one of them.
+
+impl OptionalFeature {
+    /// Writes this feature's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant; see
+    /// [`crate::api::shader::ShaderStage::encode_into`] for why that dependency on
+    /// declaration order is the intended one.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}
+
+impl LimitKey {
+    /// Writes this limit key's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant, which is also what makes the
+    /// limits section of the encoding orderable without `Ord`: section 7.4 fixes
+    /// this type's derive list, and `Ord` is not on it, so the canonical order has
+    /// to come from the encoded bytes rather than from the key.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}

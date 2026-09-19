@@ -369,3 +369,139 @@ pub(crate) fn is_buffer_kind(kind: &BindingKind) -> bool {
         | BindingKind::Sampler { .. } => false,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because every field read
+// below is private to this module.
+
+/// The encoding of the five fieldless vocabularies this module declares.
+///
+/// One macro rather than five hand-written methods: the bodies would be
+/// character-for-character identical, and the only thing distinguishing them is
+/// the type. The doc comment each expansion carries is deliberately generic,
+/// because the reasoning really is the same for all five — a fieldless enum
+/// encodes as its discriminant, and the dependency on declaration order is the
+/// intended one (see [`crate::api::shader::ShaderStage::encode_into`]).
+macro_rules! fieldless_encoding {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl $type {
+                /// Writes this value's canonical byte.
+                pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+                    out.push(*self as u8);
+                }
+            }
+        )+
+    };
+}
+
+fieldless_encoding!(
+    TextureSampleType,
+    BufferBindingAccess,
+    SamplerKind,
+    StorageAccess,
+    BindingLimitClass,
+);
+
+impl BindingCount {
+    /// Writes this count as a tag, then the element count for a fixed array.
+    ///
+    /// `One` is tag 0 and `Fixed(1)` would be tag 1 with a body of 1. They can
+    /// never collide, which is what section 22.1 requires — an array of length one
+    /// is not a stand-in for `One` — and encoding them apart is what keeps the
+    /// id honest about a device that answered one and not the other.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::One => out.push(0),
+            Self::Fixed(elements) => {
+                out.push(1);
+                out.extend_from_slice(&elements.to_le_bytes());
+            }
+        }
+    }
+}
+
+impl BindingKind {
+    /// Writes this kind as a tag, then its fields in declaration order.
+    ///
+    /// Every field is written, including the ones a given variant makes
+    /// interchangeable with a sibling. `UniformBuffer { min_size: 64 }` and
+    /// `UniformBuffer { min_size: 128 }` are different bindings, and a device that
+    /// can express one is not thereby stating it can express the other; a query
+    /// keyed on the first must not intern to the same contract as one keyed on the
+    /// second.
+    ///
+    /// No wildcard arm: a sixth binding kind must state its encoding before this
+    /// compiles.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::UniformBuffer { min_size } => {
+                out.push(0);
+                out.extend_from_slice(&min_size.to_le_bytes());
+            }
+            Self::StorageBuffer { access, min_size } => {
+                out.push(1);
+                access.encode_into(out);
+                out.extend_from_slice(&min_size.to_le_bytes());
+            }
+            Self::SampledTexture {
+                dimension,
+                sample_type,
+                multisampled,
+            } => {
+                out.push(2);
+                dimension.encode_into(out);
+                sample_type.encode_into(out);
+                out.push(u8::from(*multisampled));
+            }
+            Self::StorageTexture {
+                dimension,
+                format,
+                access,
+            } => {
+                out.push(3);
+                dimension.encode_into(out);
+                format.encode_into(out);
+                access.encode_into(out);
+            }
+            Self::Sampler { kind } => {
+                out.push(4);
+                kind.encode_into(out);
+            }
+        }
+    }
+}
+
+impl BindingSupportQuery {
+    /// Writes this query's canonical bytes.
+    ///
+    /// The `bool` is written as a byte rather than folded into the tag. A dynamic
+    /// offset is a separate question from the visibility, kind, and count, and
+    /// section 20.4 makes it valid only for two kinds — so a query that asks about
+    /// one and a query that does not are different questions for those two kinds,
+    /// and must not intern alike.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        self.visibility.encode_into(out);
+        self.kind.encode_into(out);
+        self.count.encode_into(out);
+        out.push(u8::from(self.dynamic_offset));
+    }
+}
+
+impl BindingSupport {
+    /// Writes this answer's canonical byte.
+    ///
+    /// Fieldless, and written as a match rather than a discriminant cast so that a
+    /// third member is a compile error here until it is encoded — the encoding
+    /// carries a meaning, so it should not be inherited by accident.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Unsupported => out.push(0),
+            Self::Supported => out.push(1),
+        }
+    }
+}

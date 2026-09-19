@@ -7,9 +7,16 @@
 //! two vocabularies, and whether the answers section 7.2 makes load-bearing —
 //! `None` for an unavailable format, `None` for an inapplicable binding limit —
 //! are expressible at all.
+//!
+//! The interning tests at the end are a second kind of instrument: they check the
+//! canonical encoding by its two stated properties — equal facts give equal ids,
+//! and *different* facts give different ones — rather than by comparing bytes
+//! against a golden value. A golden value would pin the encoding without checking
+//! either property, and would be rewritten to match whatever the code did.
 
+use crate::api::binding::{BindingCount, BindingKind, BindingSupport, BindingSupportQuery};
 use crate::api::capability::{
-    AvailableCapabilities, CapabilityCompatibilityId, CapabilityFingerprint, EnabledCapabilities,
+    AvailableCapabilities, CapabilityFacts, CapabilityFingerprint, EnabledCapabilities,
 };
 use crate::api::format::{
     FormatFacts, StorageAccessSupport, TextureFormat, TextureSupport, TextureSupportLimits,
@@ -19,19 +26,22 @@ use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteCapabilities, RouteQuery, RouteSupport};
 use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
+use crate::api::shader::ShaderStages;
+use crate::api::submission::SubmissionCapabilities;
 
 /// Both levels answer the same vocabulary, which is what lets a caller write one
 /// comparison instead of two.
 #[test]
 fn available_and_enabled_answer_the_same_questions() {
-    let mut available = AvailableCapabilities::new();
-    let mut enabled = enabled_capabilities();
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(OptionalFeature::Compute);
+    facts.record_limit(LimitKey::MaxBufferSize, 1 << 28);
+    let available = AvailableCapabilities::from_facts(facts);
 
-    available.record_feature(OptionalFeature::Compute);
-    available.record_limit(LimitKey::MaxBufferSize, 1 << 28);
-
-    enabled.record_feature(OptionalFeature::Compute);
-    enabled.record_limit(LimitKey::MaxBufferSize, 1 << 26);
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(OptionalFeature::Compute);
+    facts.record_limit(LimitKey::MaxBufferSize, 1 << 26);
+    let enabled = enabled_from(facts);
 
     assert!(available.supports_feature(OptionalFeature::Compute));
     assert!(enabled.supports_feature(OptionalFeature::Compute));
@@ -50,16 +60,16 @@ fn available_and_enabled_answer_the_same_questions() {
 /// says `None`, and correctness follows the device.
 #[test]
 fn a_format_available_on_the_adapter_can_be_unavailable_on_the_device() {
-    let mut available = AvailableCapabilities::new();
-    let enabled = enabled_capabilities();
-
-    available.record_format(
+    let mut facts = CapabilityFacts::empty();
+    facts.record_format(
         TextureFormat::R8Unorm,
         FormatFacts::new(
             TextureFormat::R8Unorm,
             StorageAccessSupport::new(true, true, true),
         ),
     );
+    let available = AvailableCapabilities::from_facts(facts);
+    let enabled = enabled_capabilities();
 
     assert!(available.format(TextureFormat::R8Unorm).is_some());
     assert!(
@@ -91,8 +101,9 @@ fn an_absent_format_is_an_answer_and_an_absent_support_record_is_not() {
 /// A recorded negative answer is distinguishable from an unrecorded question.
 #[test]
 fn a_recorded_negative_route_is_answered_without_panicking() {
-    let mut enabled = enabled_capabilities();
-    enabled.record_route(RouteQuery::BufferToBuffer, RouteSupport::Unsupported);
+    let mut facts = CapabilityFacts::empty();
+    facts.record_route(RouteQuery::BufferToBuffer, RouteSupport::Unsupported);
+    let enabled = enabled_from(facts);
 
     assert!(!enabled.route(&RouteQuery::BufferToBuffer).is_supported());
 }
@@ -101,11 +112,12 @@ fn a_recorded_negative_route_is_answered_without_panicking() {
 /// once does not have to ask again per size.
 #[test]
 fn a_recorded_positive_route_answer_carries_its_capabilities() {
-    let mut enabled = enabled_capabilities();
-    enabled.record_route(
+    let mut facts = CapabilityFacts::empty();
+    facts.record_route(
         RouteQuery::BufferToBuffer,
         RouteSupport::Supported(RouteCapabilities::new(None, None)),
     );
+    let enabled = enabled_from(facts);
 
     let answer = enabled.route(&RouteQuery::BufferToBuffer);
     assert!(answer.is_supported());
@@ -115,17 +127,19 @@ fn a_recorded_positive_route_answer_carries_its_capabilities() {
 /// The same, for a texture query whose answer is a ceiling.
 #[test]
 fn a_recorded_positive_texture_answer_carries_its_maxima() {
-    let mut enabled = enabled_capabilities();
     let query = TextureSupportQuery::new(
         TextureDimension::D2,
         TextureFormat::R8Unorm,
         TextureUsage::SAMPLED,
         1,
     );
-    enabled.record_texture_support(
+
+    let mut facts = CapabilityFacts::empty();
+    facts.record_texture_support(
         query.clone(),
         TextureSupport::Supported(TextureSupportLimits::new(Extent3d::d1(8192), 1, 1)),
     );
+    let enabled = enabled_from(facts);
 
     let answer = enabled.texture_support(&query);
     assert!(answer.is_supported());
@@ -139,9 +153,11 @@ fn a_recorded_positive_texture_answer_carries_its_maxima() {
 /// negative answer the enum exists to carry.
 #[test]
 fn a_buffer_query_can_be_recorded_as_unsupported() {
-    let mut enabled = enabled_capabilities();
     let query = BufferSupportQuery::new(BufferUsage::STORAGE);
-    enabled.record_buffer_support(query, BufferSupport::Unsupported);
+
+    let mut facts = CapabilityFacts::empty();
+    facts.record_buffer_support(query, BufferSupport::Unsupported);
+    let enabled = enabled_from(facts);
 
     assert!(!enabled.buffer_support(&query).is_supported());
 }
@@ -149,9 +165,10 @@ fn a_buffer_query_can_be_recorded_as_unsupported() {
 /// `limits()` and `limit()` are two views of one set, not two answers.
 #[test]
 fn the_limits_view_agrees_with_the_single_key_query() {
-    let mut enabled = enabled_capabilities();
-    enabled.record_limit(LimitKey::MaxBufferSize, 4096);
-    enabled.record_limit(LimitKey::MinUniformBufferOffsetAlignment, 256);
+    let mut facts = CapabilityFacts::empty();
+    facts.record_limit(LimitKey::MaxBufferSize, 4096);
+    facts.record_limit(LimitKey::MinUniformBufferOffsetAlignment, 256);
+    let enabled = enabled_from(facts);
 
     assert_eq!(enabled.limits().get(LimitKey::MaxBufferSize), Some(4096));
     assert_eq!(
@@ -168,24 +185,42 @@ fn the_compatibility_token_and_the_fingerprint_are_not_interchangeable() {
     let a = enabled_capabilities();
     let b = enabled_capabilities();
 
+    // Note how the equality is obtained: not by both call sites passing the same
+    // constant, but by both handing over facts that encode identically and letting
+    // the interning table decide. The constant form this test used to have would
+    // have passed even if interning did nothing at all.
     assert_eq!(a.compatibility_id(), b.compatibility_id());
+    assert_eq!(a.fingerprint(), b.fingerprint());
 
     // A device created under a different capability contract yields a different
-    // token, and the fingerprint is a separate value no correctness path reads.
-    let c = EnabledCapabilities::new(
-        CapabilityCompatibilityId::new(7),
-        CapabilityFingerprint([9u8; 32]),
-    );
+    // token and a different fingerprint: the two are computed from the same bytes,
+    // so they move together and neither can stand in for the other.
+    let c = enabled_from(a_different_contract());
     assert_ne!(a.compatibility_id(), c.compatibility_id());
-    assert_ne!(c.fingerprint().0, a.fingerprint().0);
+    assert_ne!(c.fingerprint(), a.fingerprint());
 }
 
 /// A device built under a fixed contract, for the tests above.
 fn enabled_capabilities() -> EnabledCapabilities {
-    EnabledCapabilities::new(
-        CapabilityCompatibilityId::new(1),
-        CapabilityFingerprint([0u8; 32]),
-    )
+    enabled_from(CapabilityFacts::empty())
+}
+
+/// A contract that differs from [`enabled_capabilities`] in exactly one fact.
+fn a_different_contract() -> CapabilityFacts {
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(OptionalFeature::Compute);
+    facts
+}
+
+/// Wraps a filled record the way a completed device request would.
+///
+/// The empty lane set is the caller's, not the constructor's: section 7.2's base
+/// lane guarantee is checked by `SubmissionCapabilities`' own validator, which the
+/// device-request path calls, and a constructor that also enforced it would put
+/// the rule in two places. These tests are asking about capability facts, not
+/// about lanes, so they hand over none.
+fn enabled_from(facts: CapabilityFacts) -> EnabledCapabilities {
+    EnabledCapabilities::from_facts(facts, SubmissionCapabilities::new(Vec::new()))
 }
 
 /// Section 8.5's warning, stated as a test: two formats of equal byte size are
@@ -197,7 +232,7 @@ fn enabled_capabilities() -> EnabledCapabilities {
 /// section 3.1 exists to keep in the portable layer.
 #[test]
 fn equal_byte_size_does_not_imply_view_compatibility() {
-    let mut caps = enabled_capabilities();
+    let caps = enabled_capabilities();
 
     assert!(
         !caps.texture_view_format_compatible(
@@ -207,7 +242,9 @@ fn equal_byte_size_does_not_imply_view_compatibility() {
         "an unrecorded pair is not compatible, whatever its texel size"
     );
 
-    caps.record_view_compatibility(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb);
+    let mut facts = CapabilityFacts::empty();
+    facts.record_view_compatibility(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb);
+    let caps = enabled_from(facts);
 
     assert!(
         caps.texture_view_format_compatible(
@@ -224,8 +261,9 @@ fn equal_byte_size_does_not_imply_view_compatibility() {
 /// function would be answering a question enumeration never asked.
 #[test]
 fn recording_one_view_pair_does_not_answer_for_another() {
-    let mut caps = enabled_capabilities();
-    caps.record_view_compatibility(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb);
+    let mut facts = CapabilityFacts::empty();
+    facts.record_view_compatibility(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb);
+    let caps = enabled_from(facts);
 
     assert!(
         caps.texture_view_format_compatible(
@@ -239,6 +277,239 @@ fn recording_one_view_pair_does_not_answer_for_another() {
             TextureFormat::Bgra8UnormSrgb
         ),
         "an unrelated pair must not inherit the first pair's answer"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Interning.
+//
+// Section 7.1 gives the compatibility id two properties, and these are them.
+// They are contract tests with no GPU behind them: passing them says nothing
+// about any backend's enumeration, only about what the portable layer does with
+// the record a backend hands it.
+// ---------------------------------------------------------------------------
+
+/// Insertion order must not reach the id.
+///
+/// This is the property the sort in `CapabilityFacts::canonical_bytes` exists for,
+/// and it is not hypothetical. The facts live in `HashMap`s and `HashSet`s, whose
+/// iteration order is unspecified and differs between runs, so two devices that
+/// recorded exactly the same facts can walk them in different orders. Without the
+/// sort their ids would differ across runs of the *same* program — a failure no
+/// single run can observe, which is why it is tested by construction here rather
+/// than left to a real-device test to happen to catch.
+#[test]
+fn facts_recorded_in_different_orders_intern_to_the_same_id() {
+    let mut forwards = CapabilityFacts::empty();
+    forwards.record_feature(OptionalFeature::Compute);
+    forwards.record_feature(OptionalFeature::SamplerAnisotropy);
+    forwards.record_limit(LimitKey::MaxBufferSize, 4096);
+    forwards.record_limit(LimitKey::MinUniformBufferOffsetAlignment, 256);
+    forwards.record_route(RouteQuery::BufferToBuffer, RouteSupport::Unsupported);
+    forwards.record_view_compatibility(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb);
+
+    let mut backwards = CapabilityFacts::empty();
+    backwards.record_view_compatibility(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb);
+    backwards.record_route(RouteQuery::BufferToBuffer, RouteSupport::Unsupported);
+    backwards.record_limit(LimitKey::MinUniformBufferOffsetAlignment, 256);
+    backwards.record_limit(LimitKey::MaxBufferSize, 4096);
+    backwards.record_feature(OptionalFeature::SamplerAnisotropy);
+    backwards.record_feature(OptionalFeature::Compute);
+
+    assert_eq!(
+        enabled_from(forwards).compatibility_id(),
+        enabled_from(backwards).compatibility_id(),
+        "the id must depend on the facts, not on the order a backend recorded them in"
+    );
+}
+
+/// A difference anywhere in the facts must reach the id.
+///
+/// This is the opposite failure to the one above, and the more dangerous one: an
+/// encoding that drops a field makes two genuinely different contracts
+/// indistinguishable, so a compiled graph keyed on the id runs against a device it
+/// was not compiled for. Each case below differs from the empty contract in
+/// exactly one place, and every section of the record is covered by one of them —
+/// a section nobody exercises is a section whose omission goes unnoticed.
+#[test]
+fn a_difference_anywhere_in_the_facts_yields_a_different_id() {
+    let baseline = enabled_capabilities().compatibility_id();
+    let differ = |mutate: &dyn Fn(&mut CapabilityFacts)| {
+        let mut facts = CapabilityFacts::empty();
+        mutate(&mut facts);
+        enabled_from(facts).compatibility_id()
+    };
+
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_feature(OptionalFeature::Compute)),
+        "a feature"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_limit(LimitKey::MaxBufferSize, 4096)),
+        "a limit value"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_format(
+            TextureFormat::R8Unorm,
+            FormatFacts::new(
+                TextureFormat::R8Unorm,
+                StorageAccessSupport::new(true, false, false)
+            )
+        )),
+        "a format fact"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_buffer_support(
+            BufferSupportQuery::new(BufferUsage::STORAGE),
+            BufferSupport::Unsupported
+        )),
+        "a buffer support answer"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_texture_support(
+            TextureSupportQuery::new(
+                TextureDimension::D2,
+                TextureFormat::R8Unorm,
+                TextureUsage::SAMPLED,
+                1
+            ),
+            TextureSupport::Unsupported
+        )),
+        "a texture support answer"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_binding_support(
+            BindingSupportQuery {
+                visibility: ShaderStages::FRAGMENT,
+                kind: BindingKind::Sampler {
+                    kind: crate::api::binding::SamplerKind::Filtering,
+                },
+                count: BindingCount::One,
+                dynamic_offset: false,
+            },
+            BindingSupport::Unsupported
+        )),
+        "a binding support answer"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_binding_limit(
+            crate::api::shader::ShaderStage::Fragment,
+            crate::api::binding::BindingLimitClass::Samplers,
+            16
+        )),
+        "a binding-count ceiling"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts.record_route(RouteQuery::BufferToBuffer, RouteSupport::Unsupported)),
+        "a recorded negative route, which is a fact and not an absence"
+    );
+    assert_ne!(
+        baseline,
+        differ(&|facts| facts
+            .record_view_compatibility(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb)),
+        "a view-compatible pair"
+    );
+}
+
+/// The same, for a difference *inside* a key rather than between keys.
+///
+/// `min_size` is the case that would be easiest to lose: two queries with the same
+/// visibility, kind tag, and count differ only in a payload field of the kind, and
+/// an encoding that wrote the discriminant and stopped would conflate them. A
+/// device that can express a 64-byte uniform binding is not thereby stating it can
+/// express a 128-byte one.
+#[test]
+fn two_queries_differing_only_inside_a_key_yield_different_ids() {
+    let with_min_size = |min_size: u64| {
+        let mut facts = CapabilityFacts::empty();
+        facts.record_binding_support(
+            BindingSupportQuery {
+                visibility: ShaderStages::FRAGMENT,
+                kind: BindingKind::UniformBuffer { min_size },
+                count: BindingCount::One,
+                dynamic_offset: false,
+            },
+            BindingSupport::Supported,
+        );
+        enabled_from(facts).compatibility_id()
+    };
+
+    assert_ne!(with_min_size(64), with_min_size(128));
+}
+
+/// A key's *set-valued* field must not depend on the order the caller listed it
+/// in either.
+///
+/// `TextureSupportQuery` is the one key that carries a collection, and its
+/// `view_formats` are a `Vec` the caller builds, so two callers asking the same
+/// question with the same formats in different orders are asking the same
+/// question. This is the same property as the first test above, one level down.
+#[test]
+fn a_keys_own_collection_is_order_independent() {
+    let query = |first: TextureFormat, second: TextureFormat| {
+        TextureSupportQuery::new(
+            TextureDimension::D2,
+            TextureFormat::R8Unorm,
+            TextureUsage::SAMPLED,
+            1,
+        )
+        .with_view_format(first)
+        .with_view_format(second)
+    };
+    let id_of = |query: TextureSupportQuery| {
+        let mut facts = CapabilityFacts::empty();
+        facts.record_texture_support(query, TextureSupport::Unsupported);
+        enabled_from(facts).compatibility_id()
+    };
+
+    assert_eq!(
+        id_of(query(
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb
+        )),
+        id_of(query(
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Rgba8Unorm
+        )),
+        "the same two view formats in the other order are the same question"
+    );
+}
+
+/// The fingerprint is a 32-byte digest of the same bytes the id is interned
+/// under, so it changes exactly when the id does.
+///
+/// Stated as a test because the two are easy to accidentally decouple — computing
+/// the fingerprint over a `Debug` rendering, say, or over the facts in iteration
+/// order — and a fingerprint that tracked something other than the contract would
+/// be worse than useless as artifact provenance: it would look authoritative and
+/// be wrong.
+#[test]
+fn the_fingerprint_moves_exactly_when_the_id_does() {
+    let with = |mutate: &dyn Fn(&mut CapabilityFacts)| {
+        let mut facts = CapabilityFacts::empty();
+        mutate(&mut facts);
+        let caps = enabled_from(facts);
+        (caps.compatibility_id(), caps.fingerprint())
+    };
+
+    let plain = with(&|_| {});
+    let featured = with(&|facts| facts.record_feature(OptionalFeature::Compute));
+
+    assert_ne!(plain.0, featured.0);
+    assert_ne!(plain.1, featured.1);
+    assert_eq!(with(&|_| {}), plain, "the same facts give the same pair");
+    assert_ne!(
+        plain.1,
+        CapabilityFingerprint([0u8; 32]),
+        "an empty contract still has a digest of its own, not a zeroed one"
     );
 }
 

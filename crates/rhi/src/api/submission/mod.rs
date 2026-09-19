@@ -328,6 +328,18 @@ impl SubmissionCapabilities {
     /// carries in the window between its creation and the enumeration that fills
     /// its facts in. A caller may not fabricate either, because a fabricated lane
     /// set would let a caller name a lane the device never offered.
+    ///
+    /// The expectation is `not(test)`, because its callers today are the contract
+    /// tests that pass an empty lane set to
+    /// `EnabledCapabilities::from_facts` and the shape test that reaches
+    /// `submission()`. It has no non-test caller in any configuration yet: the
+    /// device-request path is what will assemble a real lane set here, and that
+    /// path is portable rather than DX12-specific, so the gate names no backend
+    /// feature.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "filled when a device request completes")
+    )]
     pub(crate) fn new(lanes: Vec<SubmissionLaneInfo>) -> Self {
         Self {
             lanes,

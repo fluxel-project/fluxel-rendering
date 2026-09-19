@@ -587,3 +587,49 @@ pub(crate) fn validate_buffer_ownership(buffer: &Buffer, target: DeviceIdentity)
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because every field read
+// below is private to this module.
+
+impl BufferUsage {
+    /// Writes this usage mask's bits, little-endian.
+    ///
+    /// The bits rather than the mask's `Debug` rendering, because `Debug` is not a
+    /// stability contract and the fingerprint is compared across processes. The
+    /// mask rather than a member list, because a mask is already canonical.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0.to_le_bytes());
+    }
+}
+
+impl BufferSupportQuery {
+    /// Writes this query's canonical bytes.
+    ///
+    /// The usage mask is the whole key: section 12.1 keeps the size out of it, so
+    /// there is nothing else to write.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        self.usage.encode_into(out);
+    }
+}
+
+impl BufferSupport {
+    /// Writes this answer as a tag, followed by the ceiling when there is one.
+    ///
+    /// `Unsupported` is tag 0 and carries no body. That is not the same encoding as
+    /// `Supported` with a zero ceiling, and the two must never collapse: one says
+    /// the buffer cannot exist, the other says it exists and may be empty.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Unsupported => out.push(0),
+            Self::Supported(limits) => {
+                out.push(1);
+                out.extend_from_slice(&limits.max_size.to_le_bytes());
+            }
+        }
+    }
+}

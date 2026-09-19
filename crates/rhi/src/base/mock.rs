@@ -47,7 +47,7 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, atomic::AtomicU64, atomic::Ordering};
 
-use crate::api::capability::AvailableCapabilities;
+use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::platform::{
@@ -139,7 +139,7 @@ impl MockProvider {
             self.backend,
             None,
             None,
-            AvailableCapabilities::new(),
+            AvailableCapabilities::from_facts(CapabilityFacts::empty()),
         )
     }
 

@@ -438,3 +438,22 @@ pub(crate) fn source_bytes_required(
             + logical_row,
     )
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because the field this reads
+// is private to this module.
+
+impl TextureAspect {
+    /// Writes this aspect's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant; see
+    /// [`crate::api::shader::ShaderStage::encode_into`] for why that dependency on
+    /// declaration order is the intended one.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}

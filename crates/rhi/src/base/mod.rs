@@ -88,6 +88,13 @@
 
 pub(crate) mod platform;
 
+// Beside the seam rather than under `api`, because it is crate-private machinery
+// with no portable vocabulary of its own. Its consumer is the capability
+// fingerprint (specification section 7.1); the layout and pipeline fingerprints
+// of module 03 will be the next ones, and it lands here now because that first
+// consumer exists — not in advance of it.
+pub(crate) mod digest;
+
 // The conformance backend is compiled for this crate's own test build only; its
 // module note records why it is not behind the `test-support` feature yet.
 #[cfg(test)]

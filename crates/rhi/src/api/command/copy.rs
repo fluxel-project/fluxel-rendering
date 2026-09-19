@@ -758,3 +758,23 @@ pub(crate) fn blit_route(blit: &TextureBlit) -> RouteQuery {
         filter: blit.filter,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because this type is declared
+// here, and `RouteQuery::Blit` carries it as a key field.
+
+impl BlitFilter {
+    /// Writes this filter's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant. The two members are not
+    /// interchangeable — section 34.5 makes a filtered blit a different native
+    /// operation from a nearest one — so they must not encode alike, which is
+    /// exactly what a discriminant guarantees and what a `bool` would not have.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}

@@ -44,7 +44,7 @@
 //! was measured rather than reasoned about. A module-scope expectation makes
 //! references out of that module count as live for the modules they point at. So
 //! the portable items this provider calls — `AdapterId::new`, `AdapterId::serial`,
-//! `AdapterInfo::new`, `AvailableCapabilities::new`, `ObjectId::new`,
+//! `AdapterInfo::new`, `AvailableCapabilities::from_facts`, `ObjectId::new`,
 //! `DeviceRequirements::is_empty` — are *not* dead whenever this module is
 //! compiled, and *are* dead whenever it is not.
 //!
@@ -85,7 +85,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 
 use super::ffi;
-use crate::api::capability::AvailableCapabilities;
+use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceInstanceId, ObjectId};
 use crate::api::platform::provider::AdapterSelection;
@@ -330,7 +330,7 @@ fn deferred_adapter_info(candidate: &Candidate, instance: DeviceInstanceId) -> A
         BackendKind::Dx12,
         Some(candidate.vendor),
         Some(candidate.device),
-        AvailableCapabilities::new(),
+        AvailableCapabilities::from_facts(CapabilityFacts::empty()),
     )
 }
 

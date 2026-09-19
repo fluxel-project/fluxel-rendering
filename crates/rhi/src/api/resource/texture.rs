@@ -842,3 +842,48 @@ pub(crate) fn validate_texture_descriptor(
     canonicalize_view_formats(&mut desc.view_formats);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Canonical capability encoding
+// ---------------------------------------------------------------------------
+//
+// The rules of the encoding, and what it is for, are stated once in
+// `api::capability::CapabilityFacts`. It lives here because every field read
+// below is private to this module.
+
+impl TextureDimension {
+    /// Writes this dimension's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant; see
+    /// [`crate::api::shader::ShaderStage::encode_into`] for why that dependency on
+    /// declaration order is the intended one.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}
+
+impl TextureUsage {
+    /// Writes this usage mask's bits, little-endian.
+    ///
+    /// The bits rather than the mask's `Debug` rendering: `Debug` is not a
+    /// stability contract, and a fingerprint that tooling compares across
+    /// processes must not move because a derive's output moved.
+    ///
+    /// The mask rather than a list of members: a mask has exactly one bit pattern
+    /// per combination, so it is already canonical and no ordering question
+    /// arises.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0.to_le_bytes());
+    }
+}
+
+impl TextureViewCompatibility {
+    /// Writes this view-intent mask's bits, little-endian.
+    ///
+    /// Same reasoning as [`TextureUsage::encode_into`]; the two are separate
+    /// methods rather than a shared helper over "the crate's bitmask newtypes"
+    /// because a shared helper would need them to be one type, and they are not.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0.to_le_bytes());
+    }
+}
