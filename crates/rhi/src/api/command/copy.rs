@@ -707,19 +707,46 @@ pub(crate) fn buffer_copy_route() -> RouteQuery {
 
 /// The route key a buffer/texture copy asks about, in the given direction.
 pub(crate) fn buffer_texture_route(copy: &BufferTextureCopy, to_texture: bool) -> RouteQuery {
-    let shape = TextureCopyShape::of(&copy.texture, &copy.texture_subresource);
     if to_texture {
-        RouteQuery::BufferToTexture {
-            dimension: shape.dimension,
-            format: shape.format,
-            aspect: shape.aspect,
-        }
+        buffer_to_texture_route(&copy.texture, &copy.texture_subresource)
     } else {
-        RouteQuery::TextureToBuffer {
-            dimension: shape.dimension,
-            format: shape.format,
-            aspect: shape.aspect,
-        }
+        texture_to_buffer_route(&copy.texture, &copy.texture_subresource)
+    }
+}
+
+/// The route key a buffer-to-texture copy asks about.
+///
+/// Split out from [`buffer_texture_route`] because a readback asks the same
+/// question without holding a [`BufferTextureCopy`]: it carries the texture and
+/// its subresource and nothing about a buffer. Two callers, one mapping from a
+/// texture's shape to a route key — a second copy of those three fields is how
+/// the two would come to disagree about which question they are asking.
+pub(crate) fn buffer_to_texture_route(
+    texture: &Texture,
+    layers: &TextureSubresourceLayers,
+) -> RouteQuery {
+    let shape = TextureCopyShape::of(texture, layers);
+    RouteQuery::BufferToTexture {
+        dimension: shape.dimension,
+        format: shape.format,
+        aspect: shape.aspect,
+    }
+}
+
+/// The route key a texture-to-buffer copy or a texture readback asks about.
+///
+/// The counterpart of [`buffer_to_texture_route`], and shared with
+/// [`ReadbackRequest::Texture`](crate::api::resource::transfer::ReadbackRequest)
+/// for the same reason.
+pub(crate) fn texture_to_buffer_route(
+    texture: &Texture,
+    layers: &TextureSubresourceLayers,
+) -> RouteQuery {
+    let shape = TextureCopyShape::of(texture, layers);
+    RouteQuery::TextureToBuffer {
+        dimension: shape.dimension,
+        format: shape.format,
+        aspect: shape.aspect,
     }
 }
 

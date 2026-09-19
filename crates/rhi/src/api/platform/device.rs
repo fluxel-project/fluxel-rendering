@@ -257,6 +257,18 @@ impl Device {
         &self.serials
     }
 
+    /// A shared handle to this device's capability snapshot.
+    ///
+    /// Distinct from [`Self::capabilities`], which lends the same value: a caller
+    /// that must *store* it needs an owned handle, and copying the snapshot would
+    /// be both wasteful and a second answer to questions section 7.2 makes
+    /// immutable. The one caller is `Device::create_recorder`, whose recorder holds
+    /// the snapshot rather than the device — see that type's documentation for why
+    /// the narrow shape is the one that keeps a recorder unable to lower.
+    pub(crate) fn capabilities_arc(&self) -> Arc<EnabledCapabilities> {
+        Arc::clone(&self.capabilities)
+    }
+
     /// This device's identity.
     ///
     /// Every object the device owns carries the same identity, and section 3.1

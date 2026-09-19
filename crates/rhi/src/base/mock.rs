@@ -737,3 +737,46 @@ fn mock_native(backend: BackendKind) -> Arc<MockDevice> {
         MockProvider::new(backend, DeviceInstanceId::new(1)).adapter(),
     )
 }
+
+/// A recorder over a mock device whose capability snapshot the test states.
+///
+/// The snapshot is the whole reason this exists. A recorder holds the device's
+/// facts rather than the device, so a test that wants a verb to decide *against* a
+/// device answer has to state that answer at construction — and the honest way to
+/// state it is to build the device and let the recorder take its snapshot, rather
+/// than to hand the recorder a table the device never reported.
+///
+/// Built through `Device::create_recorder` rather than through
+/// `CommandRecorder::new`, so a test exercising a verb is also exercising the real
+/// creation path: if that path stopped agreeing with the constructor, these would
+/// stop compiling or stop being about the same thing.
+pub(crate) fn recorder_for_test(
+    identity: DeviceIdentity,
+    facts: CapabilityFacts,
+    lanes: SubmissionCapabilities,
+) -> crate::api::command::CommandRecorder {
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        lanes,
+    );
+    let device = Device::new(identity, native)
+        .expect("the caller states a lane set that satisfies section 10's base guarantee");
+    device
+        .create_recorder(&crate::api::command::RecorderDescriptor::new())
+        .expect("a live device creates a recorder")
+}
+
+/// A recorder over a mock device that reports nothing and therefore refuses every
+/// device-gated verb.
+///
+/// The device-gated verbs are exact: a device with no enabled feature and no
+/// recorded route answers `Unsupported` to each of them, which is the behaviour
+/// tests of that refusal want and is a *steadier* fixture than the panics it
+/// replaces.
+pub(crate) fn recorder_without_facts_for_test(
+    identity: DeviceIdentity,
+) -> crate::api::command::CommandRecorder {
+    recorder_for_test(identity, CapabilityFacts::empty(), default_lanes())
+}

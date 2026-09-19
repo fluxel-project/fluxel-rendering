@@ -85,11 +85,17 @@ pub use geometry::{Color, ColorClearValue, LoadOp, Rect, StoreOp, Viewport};
 pub use raster::RasterScope;
 pub use record::RecordedWork;
 
+use std::sync::Arc;
+
+use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::graph_bridge::{AccessMask, PipelineScope, ResourceUse};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
 use crate::api::resource::buffer::BufferRange;
+use crate::api::resource::transfer::readback::{
+    validate_buffer_readback, validate_texture_readback,
+};
 use crate::api::resource::transfer::{
     ReadbackRequest, ReadbackTicket, UploadDescriptor, UploadJob,
 };
@@ -97,8 +103,8 @@ use crate::api::submission::LaneWorkDomains;
 
 use self::copy::{
     buffer_copy_route, buffer_texture_route, resolve_route, texture_copy_route,
-    validate_buffer_copy, validate_buffer_texture_copy, validate_texture_blit,
-    validate_texture_copy, validate_texture_resolve,
+    texture_to_buffer_route, validate_buffer_copy, validate_buffer_texture_copy,
+    validate_texture_blit, validate_texture_copy, validate_texture_resolve,
 };
 use self::record::{CopyRecord, RecordedCommand, RecordedPayload};
 use self::uses::copy_uses;
@@ -167,11 +173,10 @@ pub(crate) enum RecorderPhase {
     RasterScopeOpen,
     /// A compute scope is open.
     ///
-    /// Reached by `begin_compute` once it can open a scope rather than stopping at
-    /// the device's compute capability. It is declared here rather than added
-    /// later because the state machine is section 29.2's, and half a state machine
-    /// is not one a reader can check.
-    #[expect(dead_code, reason = "begin_compute sets this once it can open a scope")]
+    /// Reached by `begin_compute` once the device's [`OptionalFeature::Compute`]
+    /// is present; a device without it refuses before the phase moves.
+    ///
+    /// [`OptionalFeature::Compute`]: crate::api::platform::requirements::OptionalFeature::Compute
     ComputeScopeOpen,
     /// A failure left the recording unusable.
     Poisoned,
@@ -188,11 +193,28 @@ pub(crate) enum RecorderPhase {
 /// section 29.2's "Drop does not perform a backend finalize that may fail" true:
 /// there is nothing to finalize, so a dropped scope can only mark the recording
 /// unusable, never leave a half-written native command list behind.
+///
+/// What it does hold is the device's capability snapshot, and the choice of *that*
+/// rather than a [`Device`] is the same rule read a second time. Four verbs here
+/// need a device answer — whether compute is enabled, the workgroup ceiling, and
+/// the route plus copy-layout alignment of each copy family — and every one of
+/// those answers is already in the snapshot the device interned at construction.
+/// Holding a whole `Device` would be more than those verbs need, and the excess is
+/// exactly the handle that would let a recorder reach a backend and lower, which
+/// the rule above forbids. So the type makes the rule unfollowable rather than
+/// merely documented.
 pub struct CommandRecorder {
     /// Process-local identity.
     id: ObjectId,
     /// The device every recorded object must belong to.
     device: DeviceIdentity,
+    /// The capability snapshot of that device.
+    ///
+    /// Shared, not copied: `Device` builds it once (section 7.2 makes an enabled
+    /// contract immutable) and this is a second handle on the same value, so a
+    /// recorder can never answer a capability question differently from the device
+    /// that produced it.
+    capabilities: Arc<EnabledCapabilities>,
     /// The descriptor's label, kept for diagnostics and capture.
     label: Label,
     /// Which part of the state machine this recorder is in.
@@ -219,17 +241,20 @@ impl CommandRecorder {
     /// Crate-private: section 3 gives identity to the object that created it, so
     /// only [`Device::create_recorder`] may produce one, and a caller-built
     /// recorder would describe a device that never agreed to record.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_recorder calls this once the backend port is built"
-        )
-    )]
-    pub(crate) fn new(id: ObjectId, device: DeviceIdentity, label: Label) -> Self {
+    ///
+    /// `capabilities` is the device's own snapshot, passed rather than derived so
+    /// that a recorder cannot be built against a different device's facts than the
+    /// identity it carries.
+    pub(crate) fn new(
+        id: ObjectId,
+        device: DeviceIdentity,
+        capabilities: Arc<EnabledCapabilities>,
+        label: Label,
+    ) -> Self {
         Self {
             id,
             device,
+            capabilities,
             label,
             phase: RecorderPhase::Open,
             poison_reason: None,
@@ -242,6 +267,15 @@ impl CommandRecorder {
     /// The device every object in this recording belongs to.
     pub fn device_identity(&self) -> DeviceIdentity {
         self.device
+    }
+
+    /// The device facts a portable verb may decide against.
+    ///
+    /// Crate-private, and deliberately the narrowest thing that works: the four
+    /// verbs that need a device answer ask *this*, so a verb added later that wants
+    /// a backend handle cannot get one from here. See the type's documentation.
+    pub(crate) fn capabilities(&self) -> &EnabledCapabilities {
+        &self.capabilities
     }
 
     /// Finishes the recording and produces the work it describes.
@@ -311,10 +345,10 @@ impl CommandRecorder {
 
     /// Copies a byte range between two buffers.
     ///
-    /// Validated against section 34.1's list, then stopped at the one question that
-    /// is not portable: whether the device supports the buffer-to-buffer route, and
-    /// with what alignment. Section 34.6 permits this command only while no scope is
-    /// open, which is the first thing checked.
+    /// Validated against section 34.1's list, then against the one question that is
+    /// not portable: whether the device supports the buffer-to-buffer route, and
+    /// with what offset and size alignment. Section 34.6 permits this command only
+    /// while no scope is open, which is the first thing checked.
     pub fn copy_buffer(&mut self, copy: &BufferCopy) -> RhiResult<()> {
         self.require_open("copy_buffer")?;
         validate_buffer_copy(copy, self.device)?;
@@ -322,6 +356,11 @@ impl CommandRecorder {
             buffer_copy_route(),
             "copy_buffer",
             CopyRecord::Buffer(copy.clone()),
+            Alignment::Buffer {
+                src_offset: copy.src_offset,
+                dst_offset: copy.dst_offset,
+                size: copy.size,
+            },
         )
     }
 
@@ -333,6 +372,10 @@ impl CommandRecorder {
             buffer_texture_route(copy, true),
             "copy_buffer_to_texture",
             CopyRecord::BufferToTexture(copy.clone()),
+            Alignment::Texel {
+                buffer_offset: copy.buffer_offset,
+                bytes_per_row: copy.bytes_per_row,
+            },
         )
     }
 
@@ -344,6 +387,10 @@ impl CommandRecorder {
             buffer_texture_route(copy, false),
             "copy_texture_to_buffer",
             CopyRecord::TextureToBuffer(copy.clone()),
+            Alignment::Texel {
+                buffer_offset: copy.buffer_offset,
+                bytes_per_row: copy.bytes_per_row,
+            },
         )
     }
 
@@ -355,6 +402,7 @@ impl CommandRecorder {
             texture_copy_route(copy),
             "copy_texture",
             CopyRecord::Texture(copy.clone()),
+            Alignment::None,
         )
     }
 
@@ -366,6 +414,7 @@ impl CommandRecorder {
             resolve_route(resolve),
             "resolve_texture",
             CopyRecord::Resolve(resolve.clone()),
+            Alignment::None,
         )
     }
 
@@ -382,6 +431,7 @@ impl CommandRecorder {
             self::copy::blit_route(blit),
             "blit_texture",
             CopyRecord::Blit(blit.clone()),
+            Alignment::None,
         )
     }
 
@@ -415,13 +465,23 @@ impl CommandRecorder {
 
     /// Encodes a readback request and returns the ticket that will report it.
     ///
-    /// Stops after the O(1) identity step. The rest of section 18.1's list —
+    /// Section 18.1's list, in two halves. Section 3.1's O(1) identity step comes
+    /// first, so a cross-device readback is reported as a cross-device readback
+    /// rather than as whatever the checks after it would have said. The rest —
     /// `COPY_SRC` usage, the range or region, and the copy-layout alignment — is
-    /// [`crate::api::resource::transfer`]'s validator, and that validator takes the
+    /// [`crate::api::resource::transfer`]'s, and its two validators take the
     /// device's [`BufferCopyLayoutLimits`] as a parameter because the same
-    /// alignment rules govern an upload and a readback. A recorder cannot produce
-    /// that parameter, and inventing a permissive one would accept a range the
-    /// device has not agreed to, which section 4 forbids.
+    /// alignment rules govern an upload and a readback. That parameter is the
+    /// reason this verb needed the device snapshot: a permissive stand-in would
+    /// accept a range the device never agreed to, which section 4 forbids.
+    ///
+    /// The order is section 4's discipline ①: every portable rule runs before any
+    /// device question, so a caller's mistake is always reported as the caller's
+    /// mistake rather than as a device limitation. Only then is the route asked —
+    /// and a device that reports none answers `Unsupported` rather than the
+    /// `InvalidUsage` a missing alignment would otherwise produce, which is the
+    /// distinction section 9.4 draws between "this device cannot" and "you
+    /// described it wrongly".
     ///
     /// [`BufferCopyLayoutLimits`]: crate::api::resource::route::BufferCopyLayoutLimits
     pub fn encode_readback(&mut self, request: ReadbackRequest) -> RhiResult<ReadbackTicket> {
@@ -442,13 +502,135 @@ impl CommandRecorder {
             }
         }
 
-        unimplemented!(
-            "encode_readback must check the source's COPY_SRC usage, its range or region, and the \
-             device's texture-to-buffer or buffer-to-buffer copy-layout alignment, then produce a \
-             ReadbackTicket; those checks live in resource::transfer::readback and take the \
-             device's BufferCopyLayoutLimits as a parameter, which a recorder cannot obtain. The \
-             contract is fixed, the device route and limit query is not built"
+        let uses = match &request {
+            ReadbackRequest::Buffer { src, range, .. } => {
+                validate_buffer_readback(src, *range, self.device)?;
+                let limits = self.copy_layout_limits(buffer_copy_route(), "encode_readback")?;
+                limits
+                    .validate(range.offset, range.size)
+                    .map_err(|e| e.at("encode_readback"))?;
+                vec![ResourceUse::Buffer(crate::api::graph_bridge::BufferUse {
+                    buffer: src.clone(),
+                    range: *range,
+                    stages: PipelineScope::COPY,
+                    access: AccessMask::COPY_READ,
+                })]
+            }
+            ReadbackRequest::Texture {
+                src,
+                subresource,
+                origin,
+                extent,
+                ..
+            } => {
+                validate_texture_readback(src, *subresource, *origin, *extent, self.device)?;
+                self.require_route(texture_to_buffer_route(src, subresource), "encode_readback")?;
+                vec![ResourceUse::Texture(crate::api::graph_bridge::TextureUse {
+                    texture: src.clone(),
+                    subresources: crate::api::resource::subresource::TextureSubresourceRange {
+                        aspects: crate::api::resource::subresource::aspect_bits(subresource.aspect),
+                        base_mip: subresource.mip_level,
+                        mip_count: 1,
+                        base_layer: subresource.base_layer,
+                        layer_count: subresource.layer_count,
+                    },
+                    stages: PipelineScope::COPY,
+                    access: AccessMask::COPY_READ,
+                    intent: crate::api::graph_bridge::TextureUseIntent::CopySrc,
+                })]
+            }
+        };
+
+        // The ticket is minted with this device's identity, so a caller that loses
+        // the recorder still holds something that reports its own state. It is
+        // recorded as well, because a readback is GPU work in the recording's
+        // command order: a lowering backend has to see where the read of this
+        // source happens relative to everything that wrote it.
+        let ticket = ReadbackTicket::new(ObjectId::next(), self.device, request);
+        self.record_command(
+            RecordedPayload::Readback(ticket.clone()),
+            uses,
+            LaneWorkDomains::COPY,
+        );
+        Ok(ticket)
+    }
+
+    /// The copy-layout alignment a route imposes, or a refusal.
+    ///
+    /// A route that exists but reports no buffer-copy layout is not a device that
+    /// imposes no alignment — it is a device answering that this route is not this
+    /// kind of copy at all, which is what
+    /// [`RouteCapabilities`](crate::api::resource::route::RouteCapabilities)'s own
+    /// documentation says the `None` means. Treating it as "no constraint" would
+    /// invert the answer, so it is a refusal in the same shape as a missing route.
+    fn copy_layout_limits(
+        &self,
+        route: crate::api::resource::route::RouteQuery,
+        what: &'static str,
+    ) -> RhiResult<crate::api::resource::route::BufferCopyLayoutLimits> {
+        self.capabilities()
+            .route(&route)
+            .capabilities()
+            .and_then(|capabilities| capabilities.buffer_copy_layout())
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    format!(
+                        "this device reports no buffer copy route with a copy layout, so it \
+                         states no alignment a {what} could satisfy"
+                    ),
+                )
+                .at(what)
+            })
+    }
+
+    /// The texel-copy alignment a route imposes, or a refusal.
+    ///
+    /// The counterpart of [`Self::copy_layout_limits`] for the buffer/texture
+    /// routes, and it refuses for the same reason: a route reporting no texel
+    /// layout is stating that it is not a buffer/texture copy, which is not the
+    /// same answer as "no alignment is imposed".
+    fn texel_copy_layout_limits(
+        &self,
+        route: crate::api::resource::route::RouteQuery,
+        what: &'static str,
+    ) -> RhiResult<crate::api::resource::route::TexelCopyLayoutLimits> {
+        self.capabilities()
+            .route(&route)
+            .capabilities()
+            .and_then(|capabilities| capabilities.texel_copy_layout())
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    format!(
+                        "this device reports no buffer/texture route with a texel copy layout, so \
+                         it states no alignment a {what} could satisfy"
+                    ),
+                )
+                .at(what)
+            })
+    }
+
+    /// Refuses a route the device does not report.
+    ///
+    /// Section 9.4: a route that does not exist is `Unsupported`, and no
+    /// substituted path may be recorded in its place.
+    fn require_route(
+        &self,
+        route: crate::api::resource::route::RouteQuery,
+        what: &'static str,
+    ) -> RhiResult<()> {
+        if self.capabilities().route(&route).is_supported() {
+            return Ok(());
+        }
+        Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            format!(
+                "this device reports no direct route for this {what}, and section 9.4 forbids \
+                 substituting one, so it cannot be recorded"
+            ),
         )
+        .at(what))
     }
 
     /// Pushes a label onto the recorder's own debug-group stack.
@@ -541,32 +723,84 @@ impl CommandRecorder {
         self.commands.push(RecordedCommand { payload, uses });
     }
 
-    /// Stops a copy-family verb at the device's route question.
+    /// Answers the device half of a copy-family verb's rule list, then records it.
     ///
     /// Every copy verb does its portable validation and then reaches here, because
-    /// the same missing piece stops all of them: whether the device supports the
-    /// route, and with what copy-layout alignment. The record is written *before*
-    /// this stops, so that everything the specification calls portable is done and
-    /// the only thing left is the lower.
+    /// the same two device facts gate all of them: whether the device supports the
+    /// route, and what alignment that route's native copy accepts. Both come from
+    /// the snapshot the recorder holds, so the answer is the device's own rather
+    /// than one this layer assumed.
     ///
-    /// The route key is built and passed rather than derived here so that a
-    /// backend author reading this sees exactly which question to answer.
+    /// Both refusals happen **before** the command is recorded, and that order is
+    /// the contract rather than a preference. A refused copy must leave the
+    /// recording exactly as it found it: recording first and refusing after would
+    /// put a command the caller was told did not happen into a recording that
+    /// `finish` would hand back as executable work.
+    ///
+    /// The route key is built and passed rather than derived here so that a reader
+    /// sees exactly which question each verb asks.
     fn route_pending(
         &mut self,
         route: crate::api::resource::route::RouteQuery,
         what: &'static str,
         record: CopyRecord,
+        alignment: Alignment,
     ) -> RhiResult<()> {
+        self.require_route(route, what)?;
+
+        // The alignment half of section 12.4. A route that exists but reports no
+        // layout for the kind of copy it was asked about is answering that this is
+        // not that kind of copy on this device — which is a refusal, not a pass.
+        match alignment {
+            Alignment::None => {}
+            Alignment::Buffer {
+                src_offset,
+                dst_offset,
+                size,
+            } => {
+                let limits = self.copy_layout_limits(route, what)?;
+                limits.validate(src_offset, size).map_err(|e| e.at(what))?;
+                limits.validate(dst_offset, size).map_err(|e| e.at(what))?;
+            }
+            Alignment::Texel {
+                buffer_offset,
+                bytes_per_row,
+            } => {
+                let limits = self.texel_copy_layout_limits(route, what)?;
+                limits
+                    .validate(buffer_offset, bytes_per_row)
+                    .map_err(|e| e.at(what))?;
+            }
+        }
+
         let uses = copy_uses(&record);
         self.record_command(RecordedPayload::Copy(record), uses, LaneWorkDomains::COPY);
-        unimplemented!(
-            "{what} must ask the device whether {route:?} is supported and with what \
-             copy-layout alignment, and return Unsupported when it is not; the portable \
-             validation of the copy has already run and the command is recorded, but a recorder \
-             cannot read a device's route table yet. The contract is fixed, the device route \
-             query is not built"
-        )
+        Ok(())
     }
+}
+
+/// What a copy verb must check against the route's own copy layout.
+///
+/// Three shapes rather than one, because the routes genuinely differ: a
+/// buffer-to-buffer copy aligns two offsets and a size, a buffer/texture copy
+/// aligns a buffer offset and a row stride, and a texture-to-texture copy has no
+/// buffer layout to align against at all. Passing the numbers in rather than
+/// extracting them here is what keeps this function from having to know each
+/// descriptor's field layout — and the verb is the side that holds the descriptor.
+enum Alignment {
+    /// No buffer layout applies.
+    None,
+    /// A buffer-to-buffer copy: both ends' offsets, and the shared size.
+    Buffer {
+        src_offset: u64,
+        dst_offset: u64,
+        size: u64,
+    },
+    /// A buffer/texture copy: where the buffer side starts, and its row stride.
+    Texel {
+        buffer_offset: u64,
+        bytes_per_row: u32,
+    },
 }
 
 impl core::fmt::Debug for CommandRecorder {
@@ -602,17 +836,22 @@ impl Device {
     /// Nothing portable happens before the stop. A `RecorderDescriptor` carries only
     /// a label, and the device's identity is already decided by the object this is
     /// called on, so there is no caller-supplied value here that could be wrong.
+    ///
+    /// No backend is reached, and that is not an omission: this chapter's recorder
+    /// holds no native encoder (see its documentation), so there is no native
+    /// command builder to create here and none is created. A backend is first
+    /// reached where the recording is submitted, exactly as the submission chapter
+    /// records — the same shape, one chapter earlier in the caller's hands.
     pub fn create_recorder(&self, desc: &RecorderDescriptor) -> RhiResult<CommandRecorder> {
         // Section 6.5 lists `Recorder` among the handles a lost device refuses.
         self.require_active()?;
 
-        let label = desc.label.as_deref().unwrap_or("<unlabelled>");
-        unimplemented!(
-            "Device::create_recorder needs a backend command builder to bind a recorder to \
-             device {:?}; the portable contract is fixed (recorder {label}), but no backend \
-             port is built",
-            self.identity()
-        )
+        Ok(CommandRecorder::new(
+            ObjectId::next(),
+            self.identity(),
+            self.capabilities_arc(),
+            desc.label.clone(),
+        ))
     }
 }
 

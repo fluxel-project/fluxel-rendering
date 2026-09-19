@@ -6,7 +6,6 @@ use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::resource::buffer::{
     Buffer, BufferRange, BufferUsage, validate_buffer_ownership, validate_buffer_range,
 };
-use crate::api::resource::route::BufferCopyLayoutLimits;
 use crate::api::resource::subresource::{Origin3d, TextureSubresourceLayers};
 use crate::api::resource::texture::{Extent3d, Texture, TextureUsage, validate_texture_ownership};
 use crate::api::submission::CompletionPoint;
@@ -225,14 +224,6 @@ impl ReadbackTicket {
     /// Crate-private: a ticket comes from `CommandRecorder::encode_readback`,
     /// which is the command chapter's verb, so nothing else may produce the pair
     /// of identity and shared state.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "CommandRecorder::encode_readback calls this once a recorder can obtain \
-                      the device's copy-layout limits"
-        )
-    )]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, request: ReadbackRequest) -> Self {
         Self {
             id,
@@ -405,22 +396,22 @@ impl ReadbackTicket {
 }
 /// Checks a buffer readback.
 ///
-/// Section 18.1's buffer list: `COPY_SRC` usage, a valid range, and the
-/// buffer-to-buffer route's alignment. The route's existence is the device's
-/// question, asked by `CommandRecorder::encode_readback`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "CommandRecorder::encode_readback validates through this once a recorder can \
-                  obtain the device's copy-layout limits"
-    )
-)]
+/// Section 18.1's buffer list, portable half: `COPY_SRC` usage and a valid range.
+/// The third item on the list — the buffer-to-buffer route's alignment — is the
+/// device's answer, and it is deliberately *not* taken here. A validator that
+/// took the limits would be deciding a device question inside a portable one, and
+/// the caller would lose the difference between "you described this wrongly" and
+/// "this device cannot do it": an empty device has no limits to pass, so the
+/// alignment branch would have to answer `InvalidUsage` for a request whose
+/// actual problem is that the route does not exist.
+/// [`CommandRecorder::encode_readback`](crate::api::command::CommandRecorder::encode_readback)
+/// asks the route first and then applies the alignment through the same
+/// [`BufferCopyLayoutLimits`](crate::api::resource::route::BufferCopyLayoutLimits)
+/// an upload uses.
 pub(crate) fn validate_buffer_readback(
     src: &Buffer,
     range: BufferRange,
     target: DeviceIdentity,
-    limits: &BufferCopyLayoutLimits,
 ) -> RhiResult<()> {
     validate_buffer_ownership(src, target)?;
     if !src.descriptor().usage.contains(BufferUsage::COPY_SRC) {
@@ -430,8 +421,7 @@ pub(crate) fn validate_buffer_readback(
         )
         .with_object(src.id()));
     }
-    validate_buffer_range(range, src.descriptor().size)?;
-    limits.validate(range.offset, range.size)
+    validate_buffer_range(range, src.descriptor().size)
 }
 /// Checks a texture readback.
 ///
@@ -439,14 +429,6 @@ pub(crate) fn validate_buffer_readback(
 /// valid subresource/origin/extent, and a supported texture-to-buffer route. The
 /// route is the device's question, asked by
 /// `CommandRecorder::encode_readback`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "CommandRecorder::encode_readback validates through this once a recorder can \
-                  obtain the device's copy-layout limits"
-    )
-)]
 pub(crate) fn validate_texture_readback(
     src: &Texture,
     subresource: TextureSubresourceLayers,

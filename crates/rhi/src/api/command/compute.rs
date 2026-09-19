@@ -6,11 +6,13 @@
 //! # What this module does not own
 //!
 //! - Whether the device can compute at all. Section 33 gates the whole chapter on
-//!   [`OptionalFeature::Compute`], which is a device fact the recorder cannot read
-//!   yet; [`CommandRecorder::begin_compute`] says so rather than guessing.
+//!   [`OptionalFeature::Compute`] and that is read from the snapshot the device
+//!   interned, so [`CommandRecorder::begin_compute`] refuses rather than lowering
+//!   when it is absent.
 //! - Whether a workgroup count is within the device's
-//!   `MaxComputeWorkgroupsPerDimension`. Also a device fact, and also named rather
-//!   than guessed at by [`ComputeScope::dispatch`].
+//!   `MaxComputeWorkgroupsPerDimension`. Also a device fact, read from the same
+//!   snapshot, and also a refusal from [`ComputeScope::dispatch`] rather than a
+//!   guessed bound.
 //! - The workgroup *shape* rules — that a shader's `@workgroup_size` matches what a
 //!   pipeline declares. Those belong to the shader artifact's own validator
 //!   (section 19.7) and were already applied when the pipeline was created.
@@ -24,7 +26,7 @@
 //! section 4 forbids.
 
 use crate::api::binding::{BindGroup, BindGroupIndex};
-use crate::api::command::record::{BoundGroup, ComputeDispatch, RecordedPayload};
+use crate::api::command::record::{BoundGroup, ComputeBegin, ComputeDispatch, RecordedPayload};
 use crate::api::command::uses::{
     bound_group_uses, require_valid_dynamic_offsets, validate_bound_groups,
 };
@@ -33,6 +35,7 @@ use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::graph_bridge::ResourceUse;
 use crate::api::identity::Label;
 use crate::api::pipeline::ComputePipeline;
+use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 
 /// The domain bit every compute command contributes.
 const COMPUTE_DOMAIN: crate::api::submission::LaneWorkDomains =
@@ -95,14 +98,41 @@ impl CommandRecorder {
     ) -> RhiResult<ComputeScope<'a>> {
         self.require_open("begin_compute")?;
 
-        let label = desc.label.as_deref().unwrap_or("<unlabelled>");
-        unimplemented!(
-            "begin_compute must refuse a device that has not enabled \
-             OptionalFeature::Compute with Unsupported; the portable contract is fixed \
-             (scope {label}), but a recorder cannot read a device's capability snapshot \
-             yet, so no answer here would be true. The contract is fixed, the device \
-             capability query is not built"
-        )
+        // Section 33's gate, and it is a refusal rather than a lowering: a device
+        // that has not enabled the feature has no compute path at all, so
+        // recording one would produce a recording that cannot be executed. The
+        // answer comes from the snapshot the device interned, which is why the
+        // recorder holds it — section 7.2 makes an enabled contract immutable, so
+        // this cannot disagree with what the device reported at construction.
+        if !self
+            .capabilities()
+            .supports_feature(OptionalFeature::Compute)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device has not enabled compute, so no compute scope can be opened \
+                 on it",
+            )
+            .at("CommandRecorder::begin_compute"));
+        }
+
+        let begin = ComputeBegin {
+            label: desc.label.clone(),
+        };
+        self.record_command(
+            RecordedPayload::ComputeBegin(begin),
+            Vec::new(),
+            COMPUTE_DOMAIN,
+        );
+        self.set_phase(RecorderPhase::ComputeScopeOpen);
+
+        Ok(ComputeScope {
+            recorder: self,
+            pipeline: None,
+            groups: Vec::new(),
+            debug_stack: Vec::new(),
+            ended: false,
+        })
     }
 }
 
@@ -192,11 +222,40 @@ impl ComputeScope<'_> {
     /// legal and means what it says — a dispatch that launches nothing.
     ///
     /// The first two are portable and are decided here. The third is a device limit,
-    /// so this verb stops at it rather than assuming a value: section 4 forbids
-    /// inventing a bound the device has not stated.
+    /// so it is answered from the snapshot the device interned rather than from an
+    /// assumed value — section 4 forbids inventing a bound the device has not
+    /// stated.
+    ///
+    /// The limit is checked *before* the command is recorded, and the order is the
+    /// contract rather than a preference: a dispatch that is refused must leave the
+    /// recording exactly as it found it, or `finish` would hand back work containing
+    /// a dispatch the caller was told did not happen.
     pub fn dispatch(&mut self, x: u32, y: u32, z: u32) -> RhiResult<()> {
         let pipeline = self.bound_pipeline()?;
         validate_bound_groups(pipeline.interface(), &self.groups)?;
+
+        // Section 33's ceiling. `None` is a legal device answer meaning the contract
+        // states no such limit, which is not the same as zero — treating a missing
+        // limit as a refusal would invent a bound, and treating it as unlimited is
+        // what "the contract defines none" says.
+        if let Some(max) = self
+            .recorder
+            .capabilities()
+            .limit(LimitKey::MaxComputeWorkgroupsPerDimension)
+        {
+            for (axis, count) in [("x", x), ("y", y), ("z", z)] {
+                if u64::from(count) > max {
+                    return Err(RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        format!(
+                            "a dispatch of {count} workgroups on the {axis} axis exceeds this \
+                             device's limit of {max}"
+                        ),
+                    )
+                    .at("ComputeScope::dispatch"));
+                }
+            }
+        }
 
         let uses = self.dispatch_uses()?;
         let dispatch = ComputeDispatch {
@@ -210,13 +269,7 @@ impl ComputeScope<'_> {
             COMPUTE_DOMAIN,
         );
 
-        unimplemented!(
-            "dispatch must refuse a workgroup count above the device's \
-             MaxComputeWorkgroupsPerDimension; the portable checks (a pipeline is bound, and \
-             every group its interface uses is bound and layout-compatible) have already run, \
-             but a recorder cannot read a device's limit table yet. The contract is fixed, the \
-             device limit query is not built"
-        )
+        Ok(())
     }
 
     /// Pushes a label onto this scope's own debug-group stack.

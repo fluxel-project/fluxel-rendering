@@ -72,15 +72,33 @@ fn a_poisoned_recorder_refuses_every_verb_and_the_finish() {
 
 #[test]
 fn an_upload_records_a_copy_write_in_the_copy_domain() {
-    let mut recorder = recorder();
-    recorder
+    // Both recorders are built before the first binding shadows the helper they
+    // come from, which is also why they are named `first` and `second` rather
+    // than `recorder`.
+    let mut first = recorder();
+    let mut second = recorder();
+
+    first
+        .encode_upload(&buffer_upload())
+        .expect("a prepared upload is encodable");
+    second
         .encode_upload(&buffer_upload())
         .expect("a prepared upload is encodable");
 
-    let work = recorder.finish().expect("the recording is complete");
+    let work = first.finish().expect("the recording is complete");
     assert_eq!(work.work_domains(), LaneWorkDomains::COPY);
-    assert_eq!(work.id(), object(1));
     assert_eq!(work.device_identity(), device());
+
+    // The id comes from the process-wide counter every object shares, so a literal
+    // cannot be asserted: any other test creating an object concurrently moves it.
+    // What can be asserted is the property that counter exists for, and it is the
+    // one `finish` has to preserve — a recording's id is its own.
+    let other = second.finish().expect("the recording is complete");
+    assert_ne!(
+        work.id(),
+        other.id(),
+        "two recordings are two pieces of work"
+    );
 
     let use_ = work
         .resource_uses()

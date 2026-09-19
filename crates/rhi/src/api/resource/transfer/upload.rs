@@ -313,13 +313,16 @@ impl Device {
             )
         })?;
         validate_buffer_upload(&desc, self.identity(), &limits)?;
+        // Everything decidable here has been decided: the caller's descriptor was
+        // validated against this device's own copy route and its alignment, and
+        // the refusals above are live. What is missing is the staging path that
+        // actually writes the bytes, which is the backend port's work and nothing
+        // this layer can stand in for.
         unimplemented!(
             "Device::create_buffer_upload needs a backend staging path to write the {} \
              retained bytes at offset {} of a buffer on device {:?}; the portable \
-             contract is fixed and its refusal paths above are built, but no backend \
-             port is built. The capability snapshot this verb asks the copy route and \
-             its alignment from is a backend-port deliverable as well, so on today's \
-             tree the call stops inside Device::capabilities before reaching this point",
+             contract is fixed and every refusal path above is built, but the backend \
+             that would retain and stage the bytes is not",
             desc.bytes.len(),
             desc.dst_offset,
             self.identity()
@@ -371,13 +374,13 @@ impl Device {
                  upload into this texture cannot be prepared",
             ));
         }
+        // As above: the route question is answered from this device's own
+        // snapshot and the refusal above is live. Only the staging path is absent.
         unimplemented!(
             "Device::create_texture_upload needs a backend staging path to write the {} \
              retained bytes into a texture region on device {:?}; the portable contract \
-             is fixed and its refusal paths above are built, but no backend port is \
-             built. The capability snapshot this verb asks the copy route from is a \
-             backend-port deliverable as well, so on today's tree the call stops inside \
-             Device::capabilities before reaching this point",
+             is fixed and every refusal path above is built, but the backend that would \
+             retain and stage the bytes is not",
             desc.bytes.len(),
             self.identity()
         )

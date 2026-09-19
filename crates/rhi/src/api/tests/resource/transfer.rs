@@ -140,9 +140,11 @@ fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
     // on a device stating no buffer-to-buffer route — a verdict about the device's
     // routes, handed to a caller whose actual error was passing someone else's buffer.
     //
-    // It is one of two refusals on these verbs that are reachable on today's tree,
-    // because both return before `Device::capabilities()`, whose body is still
-    // `unimplemented!()`. The other is the lost-device refusal, tested below.
+    // It is one of three refusals on these verbs that are reachable on today's
+    // tree: the other two are the lost-device refusal tested below and the two
+    // route refusals, which became reachable once the capability snapshot was
+    // built and this verb could ask a device its own copy route. What still stops
+    // an otherwise-legal upload is the absent backend staging path.
     let live = device_for_test(device());
     let foreign = fixture::buffer(
         object(91),
@@ -371,12 +373,10 @@ fn a_readback_request_names_a_buffer_range_or_a_texture_region() {
 #[test]
 fn a_buffer_readback_needs_copy_source_usage_and_a_valid_range() {
     let src = buffer_with(BufferUsage::COPY_SRC, 64);
-    assert!(
-        validate_buffer_readback(&src, BufferRange::new(0, 64), device(), &copy_limits()).is_ok()
-    );
+    assert!(validate_buffer_readback(&src, BufferRange::new(0, 64), device()).is_ok());
 
     assert_kind(
-        validate_buffer_readback(&src, BufferRange::new(0, 65), device(), &copy_limits()),
+        validate_buffer_readback(&src, BufferRange::new(0, 65), device()),
         RhiErrorKind::InvalidUsage,
     );
 
@@ -384,30 +384,23 @@ fn a_buffer_readback_needs_copy_source_usage_and_a_valid_range() {
     // declared -> cannot use Readback / copy source".
     let write_only = buffer_with(BufferUsage::COPY_DST, 64);
     assert_kind(
-        validate_buffer_readback(
-            &write_only,
-            BufferRange::new(0, 16),
-            device(),
-            &copy_limits(),
-        ),
+        validate_buffer_readback(&write_only, BufferRange::new(0, 16), device()),
         RhiErrorKind::InvalidUsage,
     );
 
-    // Alignment, on both sides.
+    // Ownership, which the O(1) identity step also covers — asserted here as well
+    // because a validator that dropped it would still pass the verb's own test.
     assert_kind(
-        validate_buffer_readback(&src, BufferRange::new(1, 16), device(), &copy_limits()),
-        RhiErrorKind::InvalidUsage,
-    );
-
-    assert_kind(
-        validate_buffer_readback(
-            &src,
-            BufferRange::new(0, 16),
-            identity(3, 3),
-            &copy_limits(),
-        ),
+        validate_buffer_readback(&src, BufferRange::new(0, 16), identity(3, 3)),
         RhiErrorKind::WrongDevice,
     );
+
+    // The third item on section 18.1's list — the route's alignment — is *not*
+    // here, because it is not portable and this function no longer takes a device
+    // layout. `a_readback_whose_range_breaks_the_device_alignment_is_refused` in
+    // the command chapter drives it through the verb, which is where it belongs:
+    // that test states a device answer and gets an answer back, while a fixture
+    // here would only prove the validator can compare two numbers.
 }
 
 #[test]

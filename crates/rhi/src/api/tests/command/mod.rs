@@ -18,10 +18,12 @@
 //! * Objects are assembled through the crate-private constructors the device verbs
 //!   will call, the same way `tests/resource/*` does. A test that could not name an
 //!   object could not test what an accessor reports about it.
-//! * A verb that stops at a device-dependent question is driven until it stops, and
-//!   the stop is asserted by the panic message that names the missing device
-//!   answer. That is the only observable it has, and it is the honest one: the
-//!   portable half of the verb has already run and returned by then.
+//! * A device-dependent question is answered by stating a device answer, not by
+//!   asserting that the verb stopped. [`recorder_reporting`] builds a device that
+//!   reports exactly the facts a test names and hands the recorder *its* snapshot,
+//!   so a refusal here is the verb reading a device's own table. The devices in
+//!   this chapter that report nothing are the ones that make "this device cannot"
+//!   observable as [`RhiErrorKind::Unsupported`].
 
 mod attachment;
 mod copy;
@@ -36,9 +38,11 @@ use crate::api::binding::{
     BindGroupLayoutCompatibilityId, BindGroupLayoutDescriptor, BindingKind, BindingResource,
     BindingSlot, BindingSlotId, LayoutFingerprint,
 };
+use crate::api::capability::CapabilityFacts;
 use crate::api::command::attachment::ColorAttachmentView;
 use crate::api::command::{
-    BufferCopy, ColorAttachment, CommandRecorder, LoadOp, RasterScopeDescriptor, StoreOp,
+    BufferCopy, BufferTextureCopy, ColorAttachment, CommandRecorder, LoadOp, RasterScopeDescriptor,
+    StoreOp,
 };
 use crate::api::error::{RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
@@ -51,7 +55,12 @@ use crate::api::presentation::{AcquiredFrameId, FrameAttachment};
 use crate::api::resource::buffer::{
     Buffer, BufferBinding, BufferDescriptor, BufferRange, BufferUsage,
 };
-use crate::api::resource::subresource::TextureAspects;
+use crate::api::resource::route::{
+    BufferCopyLayoutLimits, RouteCapabilities, RouteQuery, RouteSupport, TexelCopyLayoutLimits,
+};
+use crate::api::resource::subresource::{
+    Origin3d, TextureAspect, TextureAspects, TextureSubresourceLayers,
+};
 use crate::api::resource::texture::{Extent3d, Texture, TextureDescriptor, TextureUsage};
 use crate::api::resource::transfer::{BufferUploadDescriptor, UploadDescriptor, UploadJob};
 use crate::api::resource::view::{TextureView, TextureViewDescriptor, TextureViewDimension};
@@ -61,6 +70,7 @@ use crate::api::shader::{
     ShaderStages,
 };
 use crate::api::tests::fixture;
+use crate::base::mock::{recorder_for_test, recorder_without_facts_for_test};
 
 fn identity(instance: u64, generation: u64) -> DeviceIdentity {
     DeviceIdentity::new(
@@ -90,8 +100,79 @@ fn assert_kind(result: RhiResult<()>, expected: RhiErrorKind) {
 }
 
 /// An open recorder on the test device.
+///
+/// Built through the real creation verb over a mock device that reports no
+/// capability at all, so every device-gated verb in this chapter answers
+/// `Unsupported` here. A test that needs a device answer to be *present* states it
+/// through [`recorder_for_test`], which is also what keeps the fact table a device
+/// answer rather than a value a test invented.
 fn recorder() -> CommandRecorder {
-    CommandRecorder::new(object(1), device(), Label(Some("test".to_string())))
+    recorder_without_facts_for_test(device())
+}
+
+/// A recorder whose device reports exactly the facts the test states.
+///
+/// The device is built first and the recorder takes *its* snapshot, so what a
+/// verb decides against here is a device's own answer rather than a table handed
+/// to the recorder. That distinction is the point of the round that made these
+/// verbs decidable at all: a test could otherwise prove only that the recorder
+/// reads the field it was given.
+fn recorder_reporting(facts: CapabilityFacts) -> CommandRecorder {
+    recorder_for_test(device(), facts, lanes())
+}
+
+/// One lane accepting the three domains the command chapter records.
+///
+/// Wider than `MockDevice`'s default, which deliberately omits `COMPUTE` because
+/// a device reporting no compute feature must not also report a lane that accepts
+/// compute work. A test that states the feature states the lane with it.
+fn lanes() -> crate::api::submission::SubmissionCapabilities {
+    use crate::api::submission::{
+        LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
+        SubmissionLaneInfo,
+    };
+    let mut domains = LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY);
+    domains = domains.union(LaneWorkDomains::COMPUTE);
+    SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
+        SubmissionLaneId::new(0),
+        SubmissionLaneClass::General,
+        domains,
+    )])
+}
+
+/// Facts in which the buffer-to-buffer route exists with a 4-byte alignment.
+///
+/// Section 12.4's alignment half needs a route that *has* a layout to check
+/// against; a device reporting none is answering a different question, so this is
+/// the smallest fact table that makes the alignment rule reachable.
+fn facts_with_buffer_copy_route(offset: u64, size: u64) -> CapabilityFacts {
+    let mut facts = CapabilityFacts::empty();
+    facts.record_route(
+        RouteQuery::BufferToBuffer,
+        RouteSupport::Supported(RouteCapabilities::new(
+            Some(BufferCopyLayoutLimits::new(offset, size)),
+            None,
+        )),
+    );
+    facts
+}
+
+/// Facts in which the buffer/texture route exists with a texel-copy alignment.
+fn facts_with_texel_copy_route(buffer_offset: u64, bytes_per_row: u32) -> CapabilityFacts {
+    let mut facts = CapabilityFacts::empty();
+    let shape = crate::api::resource::route::RouteQuery::BufferToTexture {
+        dimension: crate::api::resource::texture::TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        aspect: crate::api::resource::subresource::TextureAspect::Color,
+    };
+    facts.record_route(
+        shape,
+        RouteSupport::Supported(RouteCapabilities::new(
+            None,
+            Some(TexelCopyLayoutLimits::new(buffer_offset, bytes_per_row)),
+        )),
+    );
+    facts
 }
 
 fn buffer_with(usage: BufferUsage, size: u64) -> Buffer {
@@ -149,6 +230,63 @@ fn renderable_texture(format: TextureFormat) -> Texture {
             TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::COPY_SRC),
         ),
     )
+}
+
+/// A one-mip, one-layer color selection.
+///
+/// Shared by every copy-shaped test rather than owned by one of them: the
+/// subresource and the origin appear in all six copy verbs, and the two facts
+/// they carry — which mip, which layers — are the ones a route key and a region
+/// check both read.
+fn color_layers(layer_count: u32) -> TextureSubresourceLayers {
+    TextureSubresourceLayers {
+        aspect: TextureAspect::Color,
+        mip_level: 0,
+        base_layer: 0,
+        layer_count,
+    }
+}
+
+/// The origin every copy-shaped test starts a region at.
+fn origin() -> Origin3d {
+    Origin3d { x: 0, y: 0, z: 0 }
+}
+
+/// A 4x4 texture that accepts a copy into it.
+///
+/// A different object id from [`renderable_texture`]'s, because the two are
+/// different textures: one is read from and this one is written to, and a test
+/// that named both with one id would be describing a copy to and from one object.
+fn copy_dst_texture(format: TextureFormat) -> Texture {
+    Texture::new(
+        object(24),
+        device(),
+        TextureDescriptor::new_2d(
+            4,
+            4,
+            format,
+            TextureUsage::COPY_DST.union(TextureUsage::COLOR_ATTACHMENT),
+        ),
+    )
+}
+
+/// A 4x4 RGBA8 buffer-to-texture copy inside a 1024-byte buffer.
+///
+/// One row of the region is 4 texels of 4 bytes, so `bytes_per_row` is stated
+/// generously and the *alignment* of that number is what the device checks. The
+/// footprint is `bytes_per_row * rows_per_image`, which is why the buffer is
+/// sized for the generous pitch rather than for the tight one.
+fn buffer_texture_copy(bytes_per_row: u32, buffer_size: u64) -> BufferTextureCopy {
+    BufferTextureCopy {
+        buffer: buffer_with(BufferUsage::COPY_SRC, buffer_size),
+        buffer_offset: 0,
+        bytes_per_row,
+        rows_per_image: 4,
+        texture: copy_dst_texture(TextureFormat::Rgba8Unorm),
+        texture_subresource: color_layers(1),
+        texture_origin: origin(),
+        extent: Extent3d::d2(4, 4),
+    }
 }
 
 /// A multisampled 4x4 renderable texture.

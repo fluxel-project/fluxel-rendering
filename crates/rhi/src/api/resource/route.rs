@@ -263,13 +263,6 @@ impl TexelCopyLayoutLimits {
     /// buffer-texture route. Section 9.2 notes that `rows_per_image` adds no
     /// alignment field of its own: its legality follows from the extent, the
     /// format's block geometry, and the route rules.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the buffer-texture copy route's validation calls this"
-        )
-    )]
     pub(crate) fn validate(&self, buffer_offset: u64, bytes_per_row: u32) -> RhiResult<()> {
         if !is_aligned(buffer_offset, self.buffer_offset_alignment) {
             return Err(RhiError::new(
