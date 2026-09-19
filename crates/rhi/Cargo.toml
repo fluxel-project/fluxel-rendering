@@ -17,7 +17,7 @@ repository = "https://github.com/fluxel-project/fluxel-rendering"
 # supported.
 [features]
 default = ["dx12", "vulkan"]
-dx12 = []
+dx12 = ["dep:windows"]
 vulkan = []
 gl-family = []
 native-gl-wgl = ["gl-family"]
@@ -27,6 +27,24 @@ webgpu = []
 test-support = []
 
 [dependencies]
+
+[target.'cfg(windows)'.dependencies]
+# The owned Direct3D 12 backend's binding, and nothing else uses it: no module
+# outside `src/backend/dx12` may name a `windows` type, which is what keeps
+# `ID3D12Device`, `DXGI_ADAPTER_DESC1`, and every `HRESULT` on the private side
+# of the seam (`01:126-132`: "Backend-private objects must not be returned from
+# the portable API").
+#
+# Pinned exactly rather than ranged. A `windows` minor release adds and renames
+# COM declarations, so a range would let a resolver change which `Dxgi` and
+# `Direct3D12` items exist underneath a frozen spec revision; the same reasoning
+# that pins it in the pre-rewrite manifest applies here.
+windows = { version = "=0.62.2", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D12",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"

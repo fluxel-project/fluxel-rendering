@@ -72,3 +72,8 @@ pub mod api;
 // decision, not by omission: see the module note for why section 59's list of
 // forbidden exports bans a public capability API rather than this.
 pub(crate) mod base;
+
+// Native lowering, one module per backend. Crate-private for the same reason,
+// and feature- and target-gated because a backend that is not being built must
+// contribute no code at all.
+pub(crate) mod backend;
