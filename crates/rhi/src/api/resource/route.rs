@@ -163,10 +163,10 @@ impl BufferCopyLayoutLimits {
     /// Crate-private: the numbers are a probed device answer, and a
     /// caller-built pair would describe hardware that was never asked.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the device façade builds this when it answers a route query"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn new(offset_alignment: u64, size_alignment: u64) -> Self {
@@ -233,10 +233,10 @@ impl TexelCopyLayoutLimits {
     /// Crate-private: the numbers are a probed device answer, and a
     /// caller-built pair would describe hardware that was never asked.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the device façade builds this when it answers a route query"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn new(buffer_offset_alignment: u64, bytes_per_row_alignment: u32) -> Self {
@@ -314,10 +314,10 @@ impl RouteCapabilities {
     /// Crate-private: these are probed device facts, and a caller-built answer
     /// would be a capability claim about hardware nobody asked.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the device façade builds this when it answers a route query"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn new(

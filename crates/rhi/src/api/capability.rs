@@ -516,25 +516,34 @@ impl CapabilityFacts {
 /// This block was one expectation over nine methods, on the reasoning that they
 /// were one body of code with one fate and that the expectation going
 /// *unfulfilled* when the DX12 fill arrived would be the gate saying "these are
-/// live now, delete the crutch". That is what happened, and it happened in two
+/// live now, delete the crutch". That is what happened, and it happened in three
 /// parts rather than one — which is the useful part of the story.
 ///
-/// Four of them ([`Self::record_feature`], [`Self::record_limit`],
-/// [`Self::record_format`], [`Self::record_buffer_support`]) are now reached from
-/// a non-test build by `crate::backend::dx12::facts`, so their expectations were
-/// deleted rather than narrowed: an `expect` that can no longer fail is a claim
-/// about the code that has stopped being true, and it is the failure mode
-/// [`Self::record_feature`]'s own reason string was written to announce.
+/// The form the arrival takes is a *narrowing* rather than a deletion: `not(test)`
+/// becomes `all(not(test), not(feature = "dx12"))`. A build without the `dx12`
+/// feature still compiles these methods with no caller at all, so the expectation
+/// is the true statement about that build rather than a crutch being left behind;
+/// what the arrival deletes is the *claim* that the DX12 fill has not landed, and
+/// that claim lives in the reason string, which is rewritten in the same commit
+/// that gives the method its caller. An `expect` whose reason has stopped being
+/// true is the failure mode [`Self::record_feature`]'s own reason string was
+/// written to announce.
 ///
-/// The rest still have no caller outside this crate's tests. They are the ones
-/// whose DX12 fill is the *next* block — binding, route and view-compatibility
+/// Six of the nine ([`Self::record_feature`], [`Self::record_limit`],
+/// [`Self::record_format`], [`Self::record_buffer_support`],
+/// [`Self::record_texture_support`], [`Self::record_route`]) have made that move:
+/// they are reached from a non-test build by `crate::backend::dx12::facts`.
+///
+/// The other three still have no caller outside this crate's tests. They are the
+/// ones whose DX12 fill is the *next* block — binding and view-compatibility
 /// facts — and they keep an expectation each, because a block-level one would now
 /// be unfulfilled and would have to be deleted even though most of its members
 /// are still dead. One expectation per method is what keeps the signal working
-/// when the block splits, and this block has now split twice: the second split
-/// deleted [`Self::record_texture_support`]'s expectation in exactly the way the
-/// paragraph above describes, which is the mechanism working rather than a
-/// surprise.
+/// when the block splits, and this block has now split three times: the second
+/// narrowed [`Self::record_texture_support`]'s expectation, the third narrowed
+/// [`Self::record_route`]'s, and each time the mechanism worked rather than
+/// surprised anyone — the crutch was still there to be removed a method at a
+/// time, which is exactly what per-method expectations buy.
 impl CapabilityFacts {
     /// Records that the contract offers `feature`.
     #[cfg_attr(
@@ -645,10 +654,10 @@ impl CapabilityFacts {
 
     /// Records the answer to a route query.
     #[cfg_attr(
-        not(test),
+        all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is what fills these, and it has not landed yet"
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
     pub(crate) fn record_route(&mut self, query: RouteQuery, support: RouteSupport) {

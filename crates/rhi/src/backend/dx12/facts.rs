@@ -42,16 +42,39 @@
 //!   Recording these as structural facts rather than as unasked questions is what
 //!   keeps a caller from being told a D3D12 device cannot dispatch or cannot
 //!   filter.
-//! - **Absent, and deliberately not guessed.** Binding, route and
-//!   view-compatibility facts are not recorded yet, and seven of the twenty-seven
+//! - **Absent, and deliberately not guessed.** Binding and view-compatibility
+//!   facts are not recorded yet, and seven of the twenty-seven
 //!   [`crate::api::platform::LimitKey`]s are not either. The seven are the ones
 //!   that name a ceiling Direct3D 12 does not state, and
 //!   [`record_api_shape_limits`] lists them rather than filling them with a
-//!   number borrowed from another API's convention. Texture facts and the other
-//!   twenty limits *are* recorded. What is left is a real coverage gap and it is
-//!   recorded as one rather than papered over: see [`probe`] for what a caller
-//!   observes while it stands, and [`record_limits`] for why the missing limits
-//!   are a *mapping* problem rather than a probing one.
+//!   number borrowed from another API's convention. Texture facts, route facts and
+//!   the other twenty limits *are* recorded. What is left is a real coverage gap
+//!   and it is recorded as one rather than papered over: see [`probe`] for what a
+//!   caller observes while it stands, and [`record_limits`] for why the missing
+//!   limits are a *mapping* problem rather than a probing one.
+//!
+//! # The route table, and the one operation it refuses
+//!
+//! [`record_format_routes`] and [`record_buffer_route`] fill
+//! [`crate::api::resource::route::RouteQuery`]'s table. The key is not one a
+//! backend can walk in full — the two texture-to-texture routes carry a `u32`
+//! sample count on each side — so this table is under the same obligation as the
+//! texture one: record every *legal* key, because an unrecorded legal route is a
+//! refusal to execute an operation the device can perform, and section 9.4 makes
+//! that refusal final rather than advisory.
+//!
+//! The refusals in this table are therefore of two kinds, and they are worth
+//! telling apart. A key naming a plane its format does not have, or a
+//! texture-to-texture pair whose formats differ, is *not a route this device
+//! lacks* — it is not an operation Direct3D 12 offers at all, and it is left to
+//! the negative because there is nothing to record. A **filtered blit** is the
+//! other kind and the more important one: Direct3D 12 has `CopyBufferRegion`,
+//! `CopyTextureRegion`, `CopyResource`, `CopyTiles` and `ResolveSubresource`, and
+//! no filtered or scaled blit at any of them. Recording `Unsupported` for every
+//! blit key would be recording nothing, so the walk records none — and the refusal
+//! is structural, which is what makes it safe to reach by absence. A test asserts
+//! it on a real device so that a later change cannot quietly start promising a
+//! lowering section 9.4 forbids.
 //!
 //! # Which texture keys can be asked and which cannot
 //!
@@ -96,18 +119,19 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_FEATURE_DATA_D3D12_OPTIONS, D3D12_FEATURE_DATA_FORMAT_SUPPORT,
     D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS, D3D12_FEATURE_FORMAT_SUPPORT,
     D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, D3D12_FORMAT_SUPPORT1,
-    D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL, D3D12_FORMAT_SUPPORT1_RENDER_TARGET,
-    D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE, D3D12_FORMAT_SUPPORT1_TEXTURE1D,
-    D3D12_FORMAT_SUPPORT1_TEXTURE2D, D3D12_FORMAT_SUPPORT1_TEXTURE3D,
-    D3D12_FORMAT_SUPPORT1_TEXTURECUBE, D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW,
-    D3D12_FORMAT_SUPPORT2, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD,
-    D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE, D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
-    D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT, D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS,
-    D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT, D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT,
-    D3D12_REQ_MIP_LEVELS, D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES,
-    D3D12_REQ_TEXTURE1D_U_DIMENSION, D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION,
-    D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION, D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION,
-    D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT, ID3D12Device,
+    D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL, D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE,
+    D3D12_FORMAT_SUPPORT1_RENDER_TARGET, D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE,
+    D3D12_FORMAT_SUPPORT1_TEXTURE1D, D3D12_FORMAT_SUPPORT1_TEXTURE2D,
+    D3D12_FORMAT_SUPPORT1_TEXTURE3D, D3D12_FORMAT_SUPPORT1_TEXTURECUBE,
+    D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW, D3D12_FORMAT_SUPPORT2,
+    D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE,
+    D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT,
+    D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS, D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT,
+    D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT, D3D12_REQ_MIP_LEVELS,
+    D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES, D3D12_REQ_TEXTURE1D_U_DIMENSION,
+    D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION, D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION,
+    D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT,
+    D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, ID3D12Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
@@ -128,10 +152,14 @@ use crate::api::capability::CapabilityFacts;
 use crate::api::error::RhiResult;
 use crate::api::format::{
     FormatFacts, StorageAccessSupport, TextureFormat, TextureSupport, TextureSupportLimits,
-    TextureSupportQuery,
+    TextureSupportQuery, format_aspects,
 };
 use crate::api::platform::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportLimits, BufferUsage};
+use crate::api::resource::route::{
+    BufferCopyLayoutLimits, RouteCapabilities, RouteQuery, RouteSupport, TexelCopyLayoutLimits,
+};
+use crate::api::resource::subresource::{TextureAspect, aspect_bits};
 use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
@@ -152,12 +180,21 @@ use crate::backend::dx12::ffi;
 /// The accessors whose key spaces are not enumerable answer the negative when
 /// their table has no entry, which is
 /// [`crate::api::capability::CapabilityFacts`]'s rule and not a defect here: a
-/// binding, route or view-compatibility question is answered `Unsupported`
-/// rather than answered wrongly, and `limit` answers `None` for the seven keys
-/// with no Direct3D 12 ceiling to cite. Both are conservative — they refuse work
-/// the hardware can do — and neither is silent, which is the property that
-/// matters: the gap costs throughput, not correctness, and it is recorded here
-/// rather than left to be discovered.
+/// binding or view-compatibility question is answered `Unsupported` rather than
+/// answered wrongly, and `limit` answers `None` for the seven keys with no
+/// Direct3D 12 ceiling to cite. Both are conservative — they refuse work the
+/// hardware can do — and neither is silent, which is the property that matters:
+/// the gap costs throughput, not correctness, and it is recorded here rather
+/// than left to be discovered.
+///
+/// The route table is no longer one of those gaps, and the difference is worth
+/// being precise about. A route answer of `Unsupported` is not conservative the
+/// way the two above are — section 9.4 makes it final, so an unrecorded route is
+/// an operation the caller will never be able to run. That is why the route walk
+/// records every legal key instead of relying on this rule, and why the one
+/// operation it leaves to the negative (a filtered blit) is the one Direct3D 12
+/// does not offer at any entry point rather than one this port has not got
+/// around to lowering.
 pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
     let options = options(device)?;
 
@@ -185,9 +222,20 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
 
         let support = format_support(device, dxgi)?;
 
+        // The quality levels per sample count, asked once per format rather than
+        // once per table. Two tables key on a sample count — the texture-support
+        // walk and the resolve route — and `NumQualityLevels == 0` is the API's
+        // way of saying the combination does not exist, which both of them need
+        // to know. Asking the driver twice for one fact is how two entries in a
+        // table start to disagree.
+        let quality = quality_levels(device, dxgi)?;
+
         record_format_facts(format, &support, &mut facts);
-        record_texture_support(device, format, dxgi, &support, &mut facts)?;
+        record_texture_support(format, &support, &quality, &mut facts);
+        record_format_routes(format, &support, &quality, &mut facts);
     }
+
+    record_buffer_route(&mut facts);
 
     Ok(facts)
 }
@@ -510,20 +558,11 @@ const SAMPLE_COUNTS: [u32; 5] = [1, 2, 4, 8, 16];
 /// question with an answer — section 13.4 refuses it before any query — and it
 /// is left to the negative rather than recorded as a device fact.
 fn record_texture_support(
-    device: &ID3D12Device,
     format: TextureFormat,
-    dxgi: DXGI_FORMAT,
     support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
+    quality: &SampleQuality,
     facts: &mut CapabilityFacts,
-) -> RhiResult<()> {
-    // The quality levels each sample count has, asked once per count rather than
-    // once per key. `NumQualityLevels == 0` is the API's way of saying the
-    // combination does not exist, which is a different answer from a refusal.
-    let mut quality = [0u32; SAMPLE_COUNTS.len()];
-    for (index, count) in SAMPLE_COUNTS.iter().enumerate() {
-        quality[index] = quality_levels(device, dxgi, *count)?;
-    }
-
+) {
     for dimension in [
         TextureDimension::D1,
         TextureDimension::D2,
@@ -562,8 +601,6 @@ fn record_texture_support(
             }
         }
     }
-
-    Ok(())
 }
 
 /// The answer for one texture key, assembled from the probed words.
@@ -727,30 +764,214 @@ fn has_support1(support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT, bit: D3D12_FORMAT_S
     support.Support1.0 & bit.0 != 0
 }
 
-/// Asks how many quality levels `format` has at `sample_count`.
-fn quality_levels(device: &ID3D12Device, format: DXGI_FORMAT, sample_count: u32) -> RhiResult<u32> {
-    let mut data = D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS {
-        Format: format,
-        SampleCount: sample_count,
-        Flags: D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS(0),
-        NumQualityLevels: 0,
-    };
+/// One format's quality-level count at each of [`SAMPLE_COUNTS`], in that order.
+///
+/// A named type rather than a bare array because two tables read it and the
+/// index is what ties an entry to a sample count: a `[u32; 5]` passed between
+/// them could be reordered without anything failing to compile.
+type SampleQuality = [u32; SAMPLE_COUNTS.len()];
 
-    // SAFETY: `D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS` is defined to fill a
-    // `D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS`, whose `Format`,
-    // `SampleCount` and `Flags` members are the question and whose
-    // `NumQualityLevels` is the answer. The out-parameter points at a live value
-    // of exactly that type and the size handed over is that type's own size.
-    unsafe {
-        device.CheckFeatureSupport(
-            D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
-            (&raw mut data).cast(),
-            size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>() as u32,
-        )
+/// Asks how many quality levels `format` has at each of [`SAMPLE_COUNTS`].
+///
+/// One call per sample count, and `NumQualityLevels == 0` is the API's way of
+/// saying the combination does not exist — a different answer from a refusal,
+/// and the reason both readers of this need the number rather than a boolean.
+fn quality_levels(device: &ID3D12Device, format: DXGI_FORMAT) -> RhiResult<SampleQuality> {
+    let mut levels = [0u32; SAMPLE_COUNTS.len()];
+
+    for (index, sample_count) in SAMPLE_COUNTS.iter().enumerate() {
+        let mut data = D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS {
+            Format: format,
+            SampleCount: *sample_count,
+            Flags: D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS(0),
+            NumQualityLevels: 0,
+        };
+
+        // SAFETY: `D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS` is defined to fill a
+        // `D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS`, whose `Format`,
+        // `SampleCount` and `Flags` members are the question and whose
+        // `NumQualityLevels` is the answer. The out-parameter points at a live
+        // value of exactly that type and the size handed over is that type's own
+        // size.
+        unsafe {
+            device.CheckFeatureSupport(
+                D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+                (&raw mut data).cast(),
+                size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>() as u32,
+            )
+        }
+        .map_err(|error| ffi::to_rhi(&error, "ID3D12Device::CheckFeatureSupport"))?;
+
+        levels[index] = data.NumQualityLevels;
     }
-    .map_err(|error| ffi::to_rhi(&error, "ID3D12Device::CheckFeatureSupport"))?;
 
-    Ok(data.NumQualityLevels)
+    Ok(levels)
+}
+
+/// The dimensions a copy route can name, in portable-vocabulary order.
+const ROUTE_DIMENSIONS: [TextureDimension; 3] = [
+    TextureDimension::D1,
+    TextureDimension::D2,
+    TextureDimension::D3,
+];
+
+/// The aspects a copy route can name, in portable-vocabulary order.
+const ROUTE_ASPECTS: [TextureAspect; 3] = [
+    TextureAspect::Color,
+    TextureAspect::Depth,
+    TextureAspect::Stencil,
+];
+
+/// Records the one route that does not depend on a format.
+///
+/// # Why the buffer copy's alignment is one byte
+///
+/// `CopyBufferRegion` takes two byte offsets and a byte count, and Direct3D 12
+/// states no placement requirement for any of them: the two alignment constants
+/// this backend reads for the *texel* route are the only copy alignments the API
+/// fixes, and they describe a texture footprint rather than a buffer. So the
+/// constraint a buffer copy carries is that a copy starts and ends on a byte
+/// boundary, which is one byte on both axes.
+///
+/// One rather than the zero that `BufferCopyLayoutLimits::validate` reads as "no
+/// constraint imposed": zero is a sentinel a reader has to already know, while
+/// one is the claim itself — every offset satisfies it, and it says what the
+/// device accepts instead of asking the reader to consult a convention.
+fn record_buffer_route(facts: &mut CapabilityFacts) {
+    facts.record_route(
+        RouteQuery::BufferToBuffer,
+        RouteSupport::Supported(RouteCapabilities::new(
+            Some(BufferCopyLayoutLimits::new(1, 1)),
+            None,
+        )),
+    );
+}
+
+/// Records the routes of one format: the two buffer-texture copies, the
+/// texture-to-texture copy, and the resolve.
+///
+/// # What is walked, and why it is the legal combinations rather than all of them
+///
+/// A [`RouteQuery`]'s key space is not one a backend can walk in full — the two
+/// texture-to-texture routes carry a `u32` sample count on each side, so the
+/// cross product is five figures before any format is named — which puts this
+/// table under the same obligation as the texture-support walk next to it: not
+/// "fill everything" but "do not leave a legal combination unrecorded". An
+/// unrecorded legal route is a refusal to execute an operation the device can
+/// perform, and section 9.4 makes that refusal final rather than advisory.
+///
+/// So the walk below is over the combinations Direct3D 12 has a path for, and
+/// the two rules that decide membership are the API's rather than this backend's:
+///
+/// - **A copy covers one plane, and only a plane the format has.** Section 15.3
+///   makes the aspect set a property of the format, so a color format has no
+///   depth route and a depth-only format has no color one. The formats in section
+///   8.1's P0 set that carry a stencil plane are the depth-stencil ones.
+/// - **A texture-to-texture copy does not convert.** `CopyTextureRegion` moves
+///   texels between resources of the same format, dimensionality and sample
+///   count; a differently-typed pair is not a copy that needs a capability, it is
+///   a copy the API does not offer. The sample counts are therefore walked once
+///   and used for both sides rather than crossed with each other.
+fn record_format_routes(
+    format: TextureFormat,
+    support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
+    quality: &SampleQuality,
+    facts: &mut CapabilityFacts,
+) {
+    let aspects = format_aspects(format);
+
+    // A buffer-texture copy is a placed footprint, and the two numbers are the
+    // API's placement requirements: the footprint's offset in the buffer, and the
+    // pitch of one row of texels. Both are `D3D12_*_ALIGNMENT` constants rather
+    // than driver preferences, which is what makes them reportable at all.
+    let texel = RouteCapabilities::new(
+        None,
+        Some(TexelCopyLayoutLimits::new(
+            u64::from(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT),
+            D3D12_TEXTURE_DATA_PITCH_ALIGNMENT,
+        )),
+    );
+
+    // A texture-to-texture copy and a resolve state no alignment, and the empty
+    // pair is how this type says so: a route that reports neither layout is one
+    // that has no copy alignment to declare.
+    let none = RouteCapabilities::new(None, None);
+
+    for dimension in ROUTE_DIMENSIONS {
+        for aspect in ROUTE_ASPECTS {
+            if !aspects.contains(aspect_bits(aspect)) {
+                continue;
+            }
+
+            let supported = RouteSupport::Supported(texel);
+            facts.record_route(
+                RouteQuery::BufferToTexture {
+                    dimension,
+                    format,
+                    aspect,
+                },
+                supported,
+            );
+            facts.record_route(
+                RouteQuery::TextureToBuffer {
+                    dimension,
+                    format,
+                    aspect,
+                },
+                supported,
+            );
+        }
+    }
+
+    for dimension in ROUTE_DIMENSIONS {
+        for src_aspect in ROUTE_ASPECTS {
+            if !aspects.contains(aspect_bits(src_aspect)) {
+                continue;
+            }
+            for dst_aspect in ROUTE_ASPECTS {
+                if !aspects.contains(aspect_bits(dst_aspect)) {
+                    continue;
+                }
+                for sample_count in SAMPLE_COUNTS {
+                    facts.record_route(
+                        RouteQuery::TextureToTexture {
+                            src_dimension: dimension,
+                            src_format: format,
+                            src_aspect,
+                            src_sample_count: sample_count,
+                            dst_dimension: dimension,
+                            dst_format: format,
+                            dst_aspect,
+                            dst_sample_count: sample_count,
+                        },
+                        RouteSupport::Supported(none),
+                    );
+                }
+            }
+        }
+    }
+
+    // Whether the device can resolve this format at all is a probed bit rather
+    // than a rule, and it is the one place in this function where the answer comes
+    // from the hardware instead of from the API's shape. The sample counts are
+    // then narrowed to the ones the format actually exists at, because a resolve
+    // key naming a count the format has no texture for is a `Supported` answer to
+    // a question no caller can act on.
+    if has_support1(support, D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE) {
+        for (index, sample_count) in SAMPLE_COUNTS.iter().enumerate() {
+            if *sample_count == 1 || quality[index] == 0 {
+                continue;
+            }
+
+            facts.record_route(
+                RouteQuery::Resolve {
+                    format,
+                    src_sample_count: *sample_count,
+                },
+                RouteSupport::Supported(none),
+            );
+        }
+    }
 }
 
 /// Records the limits Direct3D 12 fixes for every device.
@@ -887,6 +1108,10 @@ fn record_api_shape_limits(facts: &mut CapabilityFacts) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::api::capability::EnabledCapabilities;
+    use crate::api::command::BlitFilter;
+    use crate::api::submission::SubmissionCapabilities;
 
     /// A support word carrying `first` in the first word and `second` in the
     /// second, for a format whose identity the rules do not consult.
@@ -1156,5 +1381,189 @@ mod tests {
         );
         assert_eq!(max_array_layers(D3D12_FORMAT_SUPPORT1_TEXTURE3D), 1);
         assert_eq!(max_array_layers(D3D12_FORMAT_SUPPORT1_TEXTURE1D), 1);
+    }
+
+    /// Wraps a filled record the way a completed device request would.
+    ///
+    /// The same three lines `api::capability`'s own tests use, repeated rather
+    /// than shared: the rule under test here is a *fill*, and a helper that lived
+    /// in the capability module would be that module asserting about a backend's
+    /// enumeration.
+    fn enabled_from(facts: CapabilityFacts) -> EnabledCapabilities {
+        EnabledCapabilities::from_facts(facts, SubmissionCapabilities::new(Vec::new()))
+    }
+
+    /// A quality-level reading that has every sample count the format can carry.
+    fn every_sample_count() -> SampleQuality {
+        [1u32; SAMPLE_COUNTS.len()]
+    }
+
+    /// Whether the formatted routes include `query`.
+    fn routed(
+        format: TextureFormat,
+        support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
+        quality: &SampleQuality,
+        query: &RouteQuery,
+    ) -> bool {
+        let mut facts = CapabilityFacts::empty();
+        record_format_routes(format, support, quality, &mut facts);
+        enabled_from(facts).route(query).is_supported()
+    }
+
+    /// Section 9.4's refusal, exercised on the one operation Direct3D 12 has no
+    /// path for at all.
+    ///
+    /// This is the case the route table exists for, and it is a *structural*
+    /// negative rather than a probed one: Direct3D 12 has `CopyBufferRegion`,
+    /// `CopyTextureRegion`, `CopyResource`, `CopyTiles` and `ResolveSubresource`,
+    /// and no filtered or scaled blit at any of them. A backend that answered
+    /// `Supported` here would be promising a lowering section 9.4 forbids it to
+    /// perform silently, so the negative is the only honest answer and the walk
+    /// records nothing — every blit key falls to the refusal.
+    #[test]
+    fn a_filtered_blit_has_no_direct_route_and_the_walk_records_none() {
+        let word = support(D3D12_FORMAT_SUPPORT1_TEXTURE2D.0, 0);
+
+        for filter in [BlitFilter::Nearest, BlitFilter::Linear] {
+            assert!(
+                !routed(
+                    TextureFormat::Rgba8Unorm,
+                    &word,
+                    &every_sample_count(),
+                    &RouteQuery::Blit {
+                        src_dimension: TextureDimension::D2,
+                        src_format: TextureFormat::Rgba8Unorm,
+                        dst_dimension: TextureDimension::D2,
+                        dst_format: TextureFormat::Rgba8Unorm,
+                        filter,
+                    },
+                ),
+                "Direct3D 12 has no blit for {filter:?} to lower onto"
+            );
+        }
+    }
+
+    /// The resolve route follows the probed bit rather than the format's name.
+    ///
+    /// A deletion-shaped probe needs a case the device cannot supply: this
+    /// machine's adapter reports `MULTISAMPLE_RESOLVE` for every format the
+    /// portable set names, so removing the bit test would leave every real-device
+    /// assertion green. Handing the rule a support word without the bit is what
+    /// makes that removal visible.
+    #[test]
+    fn a_resolve_route_exists_only_where_the_device_reports_one() {
+        let resolvable = support(
+            D3D12_FORMAT_SUPPORT1_TEXTURE2D.0 | D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE.0,
+            0,
+        );
+        let not_resolvable = support(D3D12_FORMAT_SUPPORT1_TEXTURE2D.0, 0);
+
+        let key = RouteQuery::Resolve {
+            format: TextureFormat::Rgba8Unorm,
+            src_sample_count: 4,
+        };
+
+        assert!(routed(
+            TextureFormat::Rgba8Unorm,
+            &resolvable,
+            &every_sample_count(),
+            &key
+        ));
+        assert!(
+            !routed(
+                TextureFormat::Rgba8Unorm,
+                &not_resolvable,
+                &every_sample_count(),
+                &key
+            ),
+            "a device that does not report MULTISAMPLE_RESOLVE for a format has no \
+             resolve route for it, however the format is named"
+        );
+    }
+
+    /// A resolve key is recorded at the sample counts the format exists at.
+    ///
+    /// The second half of the same rule, and the half a real device hides for the
+    /// same reason: a resolve from a sample count the format cannot be created at
+    /// is a `Supported` answer to a question no caller can act on, so recording
+    /// one would be the table claiming a route the texture query has already
+    /// refused.
+    #[test]
+    fn a_resolve_route_is_recorded_only_at_counts_the_format_has() {
+        let word = support(
+            D3D12_FORMAT_SUPPORT1_TEXTURE2D.0 | D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE.0,
+            0,
+        );
+
+        // Only 1x and 4x exist for this format, which is the shape a device with
+        // partial multisample coverage reports.
+        let mut quality = [0u32; SAMPLE_COUNTS.len()];
+        quality[0] = 1;
+        quality[2] = 1;
+
+        for (index, sample_count) in SAMPLE_COUNTS.iter().enumerate() {
+            let key = RouteQuery::Resolve {
+                format: TextureFormat::Rgba8Unorm,
+                src_sample_count: *sample_count,
+            };
+            let exists = *sample_count > 1 && quality[index] > 0;
+
+            assert_eq!(
+                routed(TextureFormat::Rgba8Unorm, &word, &quality, &key),
+                exists,
+                "{sample_count}x exists for this format: {exists}"
+            );
+        }
+    }
+
+    /// A route names a plane, and only a plane the format has.
+    ///
+    /// Section 15.3 makes the aspect set a property of the format rather than of
+    /// the device, so the walk derives membership from the format name and the
+    /// test asserts it on both sides of the line: a depth-stencil format has a
+    /// stencil route, a colour format does not.
+    #[test]
+    fn a_copy_route_exists_only_for_a_plane_the_format_has() {
+        let word = support(D3D12_FORMAT_SUPPORT1_TEXTURE2D.0, 0);
+        let quality = every_sample_count();
+
+        let stencil_of = |format: TextureFormat, aspect: TextureAspect| {
+            routed(
+                format,
+                &word,
+                &quality,
+                &RouteQuery::TextureToBuffer {
+                    dimension: TextureDimension::D2,
+                    format,
+                    aspect,
+                },
+            )
+        };
+
+        assert!(stencil_of(
+            TextureFormat::Depth24PlusStencil8,
+            TextureAspect::Stencil
+        ));
+        assert!(stencil_of(
+            TextureFormat::Depth24PlusStencil8,
+            TextureAspect::Depth
+        ));
+        assert!(!stencil_of(
+            TextureFormat::Rgba8Unorm,
+            TextureAspect::Stencil
+        ));
+        assert!(!stencil_of(TextureFormat::Rgba8Unorm, TextureAspect::Depth));
+        assert!(stencil_of(TextureFormat::Rgba8Unorm, TextureAspect::Color));
+
+        // A depth-only format is the third case, and the one that separates
+        // "has a stencil" from "is not a colour format".
+        assert!(stencil_of(
+            TextureFormat::Depth32Float,
+            TextureAspect::Depth
+        ));
+        assert!(!stencil_of(
+            TextureFormat::Depth32Float,
+            TextureAspect::Stencil
+        ));
     }
 }

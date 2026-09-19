@@ -57,10 +57,10 @@
 //! works (see the note in [`provider`]).
 //!
 //! Capability enumeration has started: [`facts`] probes a created device and is
-//! what `request_device` now records. It is not finished — texture, binding,
-//! route and view-compatibility facts and every portable limit are still absent
-//! — and [`facts`]'s module documentation states which of the three kinds each
-//! missing entry is.
+//! what `request_device` now records. It is not finished — binding and
+//! view-compatibility facts are still absent, and seven of the twenty-seven
+//! portable limits have no Direct3D 12 ceiling to cite — and [`facts`]'s module
+//! documentation states which of the three kinds each missing entry is.
 
 mod facts;
 mod ffi;

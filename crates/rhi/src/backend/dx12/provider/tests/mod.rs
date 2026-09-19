@@ -17,10 +17,13 @@ use std::sync::Arc;
 
 use super::*;
 use crate::api::binding::vocabulary::StorageAccess;
+use crate::api::command::BlitFilter;
 use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{PlatformProvider, RequestStatus};
 use crate::api::resource::buffer::{BufferSupportQuery, BufferUsage};
+use crate::api::resource::route::RouteQuery;
+use crate::api::resource::subresource::TextureAspect;
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
 use crate::api::submission::LaneWorkDomains;
 
@@ -461,8 +464,8 @@ fn a_real_device_reports_what_each_namable_format_can_do() {
 /// The two limits whose Direct3D 12 source is unambiguous are recorded.
 ///
 /// Not a claim that the limit table is complete — it is not, and `facts` records
-/// which twenty-five keys are still unrecorded. This pins the two that are, so
-/// that a later mapping change cannot quietly drop them.
+/// which seven keys are still unrecorded. This pins the two that are, so that a
+/// later mapping change cannot quietly drop them.
 #[test]
 fn a_real_device_reports_the_two_limits_it_can_ground() {
     let device = portable_device();
@@ -491,6 +494,245 @@ fn a_real_device_reports_the_two_limits_it_can_ground() {
         Some(max_buffer),
         "a storage binding is bounded by the same address space as any other \
          resource, because Direct3D 12 states no separate cap"
+    );
+}
+
+/// The routes a real device answers, including the one it must refuse.
+///
+/// Section 9.4 makes a route answer final: `Unsupported` means the command returns
+/// `Unsupported` rather than the backend quietly lowering a blit into a shader or
+/// a copy into a CPU round-trip. So the blit half of this test is the load-bearing
+/// one — Direct3D 12 has no filtered or scaled blit, and a route table that
+/// answered `Supported` here would be promising a lowering the specification
+/// forbids.
+#[test]
+fn a_real_device_answers_the_routes_a_renderer_asks() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    // The buffer copy is the one route with no format in its key, and the device
+    // imposes nothing on it: `CopyBufferRegion` takes byte offsets and a byte
+    // count.
+    let buffer_copy = capabilities.route(&RouteQuery::BufferToBuffer);
+    assert!(
+        buffer_copy.is_supported(),
+        "a D3D12 device copies one buffer to another"
+    );
+    let layout = buffer_copy
+        .capabilities()
+        .and_then(|capabilities| capabilities.buffer_copy_layout())
+        .expect("a supported buffer copy states its alignment");
+    assert_eq!((layout.offset_alignment(), layout.size_alignment()), (1, 1));
+
+    // A buffer-texture copy is a placed footprint, so the two alignment numbers
+    // are the API's placement constants rather than a driver preference.
+    for query in [
+        RouteQuery::BufferToTexture {
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            aspect: TextureAspect::Color,
+        },
+        RouteQuery::TextureToBuffer {
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            aspect: TextureAspect::Color,
+        },
+    ] {
+        let support = capabilities.route(&query);
+        assert!(
+            support.is_supported(),
+            "{query:?} is a copy Direct3D 12 offers"
+        );
+
+        let texel = support
+            .capabilities()
+            .and_then(|capabilities| capabilities.texel_copy_layout())
+            .expect("a supported texel copy states its alignment");
+        assert_eq!(texel.buffer_offset_alignment(), 512);
+        assert_eq!(texel.bytes_per_row_alignment(), 256);
+    }
+
+    // A texture-to-texture copy does not convert. The same key with a different
+    // format on one side is therefore not a route this device lacks — it is not a
+    // copy the API offers at all, and the negative is the honest answer.
+    let copy = |src_format, dst_format| RouteQuery::TextureToTexture {
+        src_dimension: TextureDimension::D2,
+        src_format,
+        src_aspect: TextureAspect::Color,
+        src_sample_count: 1,
+        dst_dimension: TextureDimension::D2,
+        dst_format,
+        dst_aspect: TextureAspect::Color,
+        dst_sample_count: 1,
+    };
+    assert!(
+        capabilities
+            .route(&copy(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Unorm))
+            .is_supported()
+    );
+    assert!(
+        !capabilities
+            .route(&copy(TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Uint))
+            .is_supported(),
+        "CopyTextureRegion moves texels between like formats; it is not a converter"
+    );
+
+    // A resolve is gated by a probed bit, and this machine's adapter reports it.
+    // The gate itself is exercised without a device in `facts`; what this pins is
+    // that the bit is read and that a 4x resolve is reachable here.
+    assert!(
+        capabilities
+            .route(&RouteQuery::Resolve {
+                format: TextureFormat::Rgba8Unorm,
+                src_sample_count: 4,
+            })
+            .is_supported(),
+        "the adapter reports MULTISAMPLE_RESOLVE for Rgba8Unorm"
+    );
+    assert!(
+        !capabilities
+            .route(&RouteQuery::Resolve {
+                format: TextureFormat::Rgba8Unorm,
+                src_sample_count: 1,
+            })
+            .is_supported(),
+        "a single-sampled source has nothing to resolve"
+    );
+
+    // And the refusal. Direct3D 12 has CopyBufferRegion, CopyTextureRegion,
+    // CopyResource, CopyTiles and ResolveSubresource, and no filtered blit at any
+    // of them.
+    for filter in [BlitFilter::Nearest, BlitFilter::Linear] {
+        for (src, dst) in [
+            (TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Unorm),
+            (TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Uint),
+        ] {
+            assert!(
+                !capabilities
+                    .route(&RouteQuery::Blit {
+                        src_dimension: TextureDimension::D2,
+                        src_format: src,
+                        dst_dimension: TextureDimension::D2,
+                        dst_format: dst,
+                        filter,
+                    })
+                    .is_supported(),
+                "there is no {filter:?} blit for Direct3D 12 to lower onto"
+            );
+        }
+    }
+}
+
+/// The route walk reaches every legal key rather than a sample of them.
+///
+/// Asserted as a count rather than trusted, for the reason the texture walk's
+/// equivalent test gives: a walk that silently stopped early would otherwise pass
+/// every per-key assertion in the test above.
+#[test]
+fn every_legal_route_key_is_recorded_rather_than_left_to_the_negative() {
+    let device = portable_device();
+    let capabilities = device.capabilities();
+
+    let mut legal = 0usize;
+    let mut refused = 0usize;
+
+    // Three formats, one per aspect shape section 8.1's P0 set contains: a colour
+    // format, a depth-only format, and a depth-stencil format. The other two
+    // depth formats are left out deliberately — `Depth24Plus` and
+    // `Depth24PlusStencil8` have no single DXGI format, so this backend has no
+    // route table for them at all, and including one here would be asserting about
+    // an enumeration that was never made.
+    for format in [
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Depth32Float,
+        TextureFormat::Depth32FloatStencil8,
+    ] {
+        for dimension in [
+            TextureDimension::D1,
+            TextureDimension::D2,
+            TextureDimension::D3,
+        ] {
+            for aspect in [
+                TextureAspect::Color,
+                TextureAspect::Depth,
+                TextureAspect::Stencil,
+            ] {
+                let mut has_plane = false;
+                for query in [
+                    RouteQuery::BufferToTexture {
+                        dimension,
+                        format,
+                        aspect,
+                    },
+                    RouteQuery::TextureToBuffer {
+                        dimension,
+                        format,
+                        aspect,
+                    },
+                ] {
+                    if capabilities.route(&query).is_supported() {
+                        legal += 1;
+                        has_plane = true;
+                    } else {
+                        refused += 1;
+                    }
+                }
+
+                // The same format on both sides, which is the only shape a copy
+                // covers, must agree with the two directions above: the plane a
+                // copy can cover is the plane the format has. Asserting the
+                // agreement rather than the value is what makes this a statement
+                // about the walk — a key the walk skipped in one table and not the
+                // other is exactly the silent refusal this test exists to catch.
+                let query = RouteQuery::TextureToTexture {
+                    src_dimension: dimension,
+                    src_format: format,
+                    src_aspect: aspect,
+                    src_sample_count: 1,
+                    dst_dimension: dimension,
+                    dst_format: format,
+                    dst_aspect: aspect,
+                    dst_sample_count: 1,
+                };
+                assert_eq!(
+                    capabilities.route(&query).is_supported(),
+                    has_plane,
+                    "a same-format copy covers the plane the format has: {query:?}"
+                );
+                assert_eq!(
+                    capabilities
+                        .route(&RouteQuery::BufferToTexture {
+                            dimension,
+                            format,
+                            aspect,
+                        })
+                        .is_supported(),
+                    capabilities
+                        .route(&RouteQuery::TextureToBuffer {
+                            dimension,
+                            format,
+                            aspect,
+                        })
+                        .is_supported(),
+                    "the two buffer-texture directions are one path, so they cannot disagree"
+                );
+            }
+        }
+    }
+
+    // The count the rule requires, derived rather than observed. Each of the three
+    // formats has its own planes — colour for one, depth for the next, depth and
+    // stencil for the third — over three dimensions and two directions, so
+    // `3 * (1 + 1 + 2) * 2` keys are legal and the other thirty of the fifty-four
+    // walked name a plane their format does not have. Asserted as a count because a
+    // walk that silently stopped early would satisfy every per-key assertion above.
+    assert_eq!(
+        legal, 24,
+        "the walk must reach every legal key, not merely some"
+    );
+    assert_eq!(
+        refused, 30,
+        "a plane the format does not have is not a refusal by the device"
     );
 }
 
@@ -529,6 +771,58 @@ fn what_the_capability_enumeration_actually_reported() {
         capabilities.limit(LimitKey::MaxBufferSize),
         capabilities.limit(LimitKey::MaxSamplerAnisotropy),
     );
+
+    let buffer_to_buffer = capabilities.route(&RouteQuery::BufferToBuffer);
+    println!(
+        "dx12 route buffer->buffer: supported={} buffer_layout={:?}",
+        buffer_to_buffer.is_supported(),
+        buffer_to_buffer.capabilities().map(|route| route
+            .buffer_copy_layout()
+            .map(|layout| (layout.offset_alignment(), layout.size_alignment()))),
+    );
+
+    let buffer_to_texture = capabilities.route(&RouteQuery::BufferToTexture {
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        aspect: TextureAspect::Color,
+    });
+    println!(
+        "dx12 route buffer->texture rgba8 D2 color: supported={} texel_layout={:?}",
+        buffer_to_texture.is_supported(),
+        buffer_to_texture
+            .capabilities()
+            .map(|route| route.texel_copy_layout().map(|layout| (
+                layout.buffer_offset_alignment(),
+                layout.bytes_per_row_alignment()
+            ))),
+    );
+
+    for sample_count in [1u32, 2, 4, 8] {
+        println!(
+            "dx12 route resolve rgba8 from {sample_count} samples: supported={}",
+            capabilities
+                .route(&RouteQuery::Resolve {
+                    format: TextureFormat::Rgba8Unorm,
+                    src_sample_count: sample_count,
+                })
+                .is_supported()
+        );
+    }
+
+    for filter in [BlitFilter::Nearest, BlitFilter::Linear] {
+        println!(
+            "dx12 route blit rgba8 D2 -> rgba8 D2 {filter:?}: supported={}",
+            capabilities
+                .route(&RouteQuery::Blit {
+                    src_dimension: TextureDimension::D2,
+                    src_format: TextureFormat::Rgba8Unorm,
+                    dst_dimension: TextureDimension::D2,
+                    dst_format: TextureFormat::Rgba8Unorm,
+                    filter,
+                })
+                .is_supported()
+        );
+    }
 }
 
 /// A real device answers the texture questions a renderer actually asks.
