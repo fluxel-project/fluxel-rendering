@@ -350,6 +350,13 @@ impl Device {
     /// because a refusal it produces is a statement about the artifact that a
     /// caller can act on without any device having been touched.
     pub fn create_shader(&self, artifact: &ShaderArtifact) -> RhiResult<ShaderModule> {
+        // Section 6.5 refuses creation through a lost device. There is no
+        // ownership comparison ahead of it here because a `ShaderArtifact`
+        // carries no `DeviceIdentity` — it is producer-side data with a content
+        // hash, as the doc above states — so the device's own liveness is the
+        // first device-side question this verb can ask.
+        self.require_active()?;
+
         let capabilities = self.capabilities();
         validate_shader_artifact(artifact, |query| capabilities.binding_support(query))?;
         unimplemented!(

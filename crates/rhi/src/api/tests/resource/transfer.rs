@@ -139,9 +139,9 @@ fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
     // on a device stating no buffer-to-buffer route — a verdict about the device's
     // routes, handed to a caller whose actual error was passing someone else's buffer.
     //
-    // It is also the only refusal on these verbs that is reachable on today's tree:
-    // it returns before `Device::capabilities()`, whose body is still
-    // `unimplemented!()`. Every other path through these verbs stops there first.
+    // It is one of two refusals on these verbs that are reachable on today's tree,
+    // because both return before `Device::capabilities()`, whose body is still
+    // `unimplemented!()`. The other is the lost-device refusal, tested below.
     let live = Device::new(device());
     let foreign = Buffer::new(
         object(91),
@@ -161,6 +161,48 @@ fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
         error.kind(),
         RhiErrorKind::WrongDevice,
         "{}",
+        error.message()
+    );
+}
+
+/// Ownership is answered before liveness, and the difference is observable.
+///
+/// Section 6.5 asks two different questions about a handle that reaches a
+/// device — "is this yours" and "are you still alive" — and gives two different
+/// answers: `WrongDevice` when the handle is passed to a device that is not its
+/// own, `DeviceLost` when it is used through its lost original. Both are true of
+/// a foreign buffer on a lost device, so the order decides which kind the caller
+/// is handed, and a caller that branches on the kind acts differently.
+///
+/// Section 3.1 settles that order for the wrong-device half: the O(1) identity
+/// comparison is the first thing a public operation does. So this test asserts
+/// the *kind* on the doubly-wrong call, which is the only way the ordering is
+/// visible from outside the crate.
+#[test]
+fn a_foreign_buffer_stays_wrong_device_even_on_a_lost_device() {
+    let mut lost = Device::new(device());
+    lost.mark_lost(crate::api::platform::DeviceLossInfo::new(
+        "the device was lost before the call".to_string(),
+    ));
+
+    let foreign = Buffer::new(
+        object(92),
+        identity(9, 9),
+        BufferDescriptor::new(64, BufferUsage::COPY_DST),
+    );
+    let error = match lost.create_buffer_upload(BufferUploadDescriptor {
+        label: Label::default(),
+        dst: foreign,
+        dst_offset: 0,
+        bytes: vec![0u8; 16].into(),
+    }) {
+        Ok(_) => panic!("a buffer from another device must be refused"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.kind(),
+        RhiErrorKind::WrongDevice,
+        "the caller's mistake is the packet, so the ownership verdict comes first: {}",
         error.message()
     );
 }

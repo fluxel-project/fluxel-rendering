@@ -289,6 +289,11 @@ impl Device {
         // twice costs nothing next to answering a caller with the wrong kind.
         validate_buffer_ownership(&desc.dst, self.identity())?;
 
+        // Section 6.5's liveness verdict, after the ownership comparison and
+        // before the route read. A destination belonging to another device is
+        // `WrongDevice` even when this device is also lost.
+        self.require_active()?;
+
         let route = self.capabilities().route(&RouteQuery::BufferToBuffer);
         let capabilities = match route {
             RouteSupport::Supported(capabilities) => capabilities,
@@ -348,6 +353,11 @@ impl Device {
     /// region, usage, layout, or byte-count violation listed above.
     pub fn create_texture_upload(&self, desc: TextureUploadDescriptor) -> RhiResult<UploadJob> {
         validate_texture_upload(&desc, self.identity())?;
+
+        // Section 6.5's liveness verdict, after the ownership comparison inside
+        // the validator and before the route read.
+        self.require_active()?;
+
         let route = self.capabilities().route(&RouteQuery::BufferToTexture {
             dimension: desc.dst.descriptor().dimension,
             format: desc.dst.descriptor().format,

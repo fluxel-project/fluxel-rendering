@@ -872,6 +872,13 @@ impl Device {
             .with_object(desc.layout.id()));
         }
 
+        // Section 6.5's liveness verdict, after the ownership comparison above
+        // and before any device fact is read. The order is the one section 3.1
+        // and section 6.5 give: a packet whose layout belongs to another device
+        // is `WrongDevice` even when this device is also lost, because the
+        // caller's mistake is the packet.
+        self.require_active()?;
+
         let capabilities = self.capabilities();
 
         // The four limits section 22.3 measures a buffer binding against. An

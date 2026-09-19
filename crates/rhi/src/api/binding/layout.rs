@@ -455,6 +455,11 @@ impl Device {
         &self,
         desc: &BindGroupLayoutDescriptor,
     ) -> RhiResult<BindGroupLayout> {
+        // Section 6.5 refuses creation through a lost device, and a descriptor
+        // names no device-owned object, so there is no ownership comparison for
+        // it to wait behind.
+        self.require_active()?;
+
         let capabilities = self.capabilities();
 
         // Section 20.5 applies `MaxBindingsPerGroup` unconditionally, and this

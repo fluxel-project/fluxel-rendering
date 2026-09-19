@@ -17,7 +17,7 @@
 //! ([`crate::api::presentation`]); it only hands out handles to them.
 
 use crate::api::capability::EnabledCapabilities;
-use crate::api::error::RhiResult;
+use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, ObjectId};
 use crate::api::platform::provider::{AdapterInfo, BackendKind};
 
@@ -232,6 +232,63 @@ impl Device {
             "object identity arrives with the backend port; the contract is \
              fixed, the registry is not built"
         )
+    }
+
+    /// Refuses an operation that would use this device while it is lost.
+    ///
+    /// Section 6.5 states the rule for exactly this case, so it is quoted rather
+    /// than paraphrased: after a loss the handles listed there "must return
+    /// `WrongDevice` when passed to that new Device, and return **`DeviceLost`
+    /// when used through their lost original Device**". Every creation verb is
+    /// such a use, which is why each one calls this.
+    ///
+    /// It is a portable verdict and not something the backend is left to notice.
+    /// Section 6.9 names this case beside the wrong-device one and draws the line
+    /// in the same place for both:
+    ///
+    /// ```text
+    /// wrong device / device lost
+    ///     -> Fluxel RHI structured validation -> Err(WrongDevice | DeviceLost)
+    /// ```
+    ///
+    /// rather than passing a stale handle down and letting a driver, a validation
+    /// layer, or a browser "handle it unpredictably". The reason section 6.9
+    /// gives is the reason this belongs here: native validation may not even be
+    /// enabled in a release environment.
+    ///
+    /// # Why this runs *after* the ownership comparison
+    ///
+    /// Section 3.1 puts the O(1) identity comparison first, and section 6.5 gives
+    /// the two questions different answers. An object handed to a device that is
+    /// not its own is `WrongDevice` even when that device is also lost; if
+    /// liveness were checked first, such a caller would be told `DeviceLost` when
+    /// the actual mistake was the object it passed. So this check sits after
+    /// every portable ownership verdict and before the first device-fact read.
+    ///
+    /// # Errors
+    ///
+    /// [`RhiErrorKind::DeviceLost`], carrying section 6.5's stable loss summary
+    /// when one was recorded. The summary is in the message rather than beside it
+    /// because [`DeviceLossInfo`]'s own accessor is on the device, and an error
+    /// that says only "lost" would send every caller back to ask the device a
+    /// question this call site already had the answer to.
+    pub(crate) fn require_active(&self) -> RhiResult<()> {
+        match self.status {
+            DeviceStatus::Active => Ok(()),
+            DeviceStatus::Lost => {
+                let message = match &self.loss {
+                    Some(loss) => format!(
+                        "this device is lost and section 6.5 makes loss terminal, so this \
+                         operation cannot be performed through it: {}",
+                        loss.message()
+                    ),
+                    None => "this device is lost and section 6.5 makes loss terminal, so this \
+                             operation cannot be performed through it"
+                        .to_string(),
+                };
+                Err(RhiError::new(RhiErrorKind::DeviceLost, message))
+            }
+        }
     }
 
     /// Records that this device is gone, with the reason.

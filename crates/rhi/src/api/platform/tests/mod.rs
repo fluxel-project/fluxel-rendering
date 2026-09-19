@@ -8,13 +8,27 @@
 //! documented message and is covered by shape tests instead.
 
 use crate::api::error::RhiErrorKind;
-use crate::api::identity::ObjectId;
+use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey};
 use crate::api::platform::{
-    AdapterId, AdapterSelection, BackendKind, DeviceRequest, DeviceRequestDescriptor,
-    PlatformProvider,
+    AdapterId, AdapterSelection, BackendKind, Device, DeviceLossInfo, DeviceRequest,
+    DeviceRequestDescriptor, DeviceStatus, PlatformProvider,
 };
 use crate::api::presentation::PresentationTarget;
+use crate::api::resource::buffer::{BufferDescriptor, BufferUsage};
+
+/// A device identity under the instance/generation pair section 3 defines.
+fn identity(instance: u64, generation: u64) -> DeviceIdentity {
+    DeviceIdentity::new(
+        DeviceInstanceId::new(instance),
+        DeviceGeneration::new(generation),
+    )
+}
+
+/// A live device under the identity every other fixture in this file uses.
+fn live_device() -> Device {
+    Device::new(identity(1, 1))
+}
 
 /// An adapter that belongs to a different provider is refused by the façade.
 ///
@@ -93,4 +107,48 @@ fn a_completed_device_request_refuses_a_second_poll() {
         .expect_err("a completed request must not appear to still be in flight");
 
     assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
+}
+
+/// A lost device refuses creation itself, and the refusal carries the reason.
+///
+/// This is the rule section 6.5 states for the handles it lists: they "must
+/// return `WrongDevice` when passed to that new Device, and return `DeviceLost`
+/// when used through their lost original Device". Section 6.9 puts the verdict
+/// here rather than below, and gives the reason — a release environment may not
+/// have native validation on at all, so "let the driver notice" is not a legal
+/// implementation of this rule.
+///
+/// It is reachable on today's tree for a reason worth naming: it returns before
+/// the capability read that still panics. An *active* device stops inside
+/// `Device::capabilities()`, so a lost one is the only state in which this verb
+/// answers at all. The ownership refusals of the verbs that take a handle are
+/// reachable the same way, for the same reason.
+#[test]
+fn a_lost_device_refuses_creation_and_says_why() {
+    let mut device = live_device();
+    device.mark_lost(DeviceLossInfo::new(
+        "the driver reset the adapter".to_string(),
+    ));
+
+    assert_eq!(device.status(), DeviceStatus::Lost);
+    assert_eq!(
+        device.loss_info().map(|loss| loss.message().to_string()),
+        Some("the driver reset the adapter".to_string())
+    );
+
+    let error = device
+        .create_buffer(&BufferDescriptor::new(64, BufferUsage::COPY_DST))
+        .expect_err("a lost device must refuse to create a resource");
+
+    assert_eq!(
+        error.kind(),
+        RhiErrorKind::DeviceLost,
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("the driver reset the adapter"),
+        "the refusal must carry section 6.5's stable loss summary, got: {}",
+        error.message()
+    );
 }

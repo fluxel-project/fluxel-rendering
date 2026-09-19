@@ -836,6 +836,12 @@ impl Device {
             }
         }
 
+        // Section 6.5's liveness verdict, after every ownership comparison above
+        // and before the device's seven answers are read. A descriptor naming a
+        // foreign interface or shader is `WrongDevice` even on a lost device:
+        // section 3.1 puts those comparisons first.
+        self.require_active()?;
+
         let capabilities = self.capabilities();
 
         // Each closure is one of the seven questions `PipelineDeviceFacts` names,

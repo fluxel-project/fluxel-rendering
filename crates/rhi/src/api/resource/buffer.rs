@@ -389,6 +389,11 @@ impl Device {
     /// device reports — and [`RhiErrorKind::Unsupported`] when the device cannot
     /// express the usage combination at all, which is not the caller's mistake.
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> RhiResult<Buffer> {
+        // Section 6.5: a lost device refuses creation itself. It is also the
+        // first verdict this verb can reach on a tree with no backend port,
+        // because it returns before the capability read below.
+        self.require_active()?;
+
         let support = self
             .capabilities()
             .buffer_support(&BufferSupportQuery::new(desc.usage));

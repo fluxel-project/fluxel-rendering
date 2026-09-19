@@ -345,6 +345,11 @@ impl Device {
     ) -> RhiResult<TextureView> {
         validate_texture_ownership(texture, self.identity())?;
         validate_texture_view_descriptor(desc, texture.descriptor())?;
+
+        // Section 6.5's liveness verdict, after the ownership comparison and the
+        // descriptor's own portable checks. A texture belonging to another
+        // device is `WrongDevice` even when this device is also lost.
+        self.require_active()?;
         unimplemented!(
             "Device::create_texture_view needs a backend to bind a native view over a \
              texture on device {:?}; the portable contract is fixed and both checks \

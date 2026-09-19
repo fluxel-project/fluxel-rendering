@@ -318,6 +318,12 @@ impl Device {
     /// ceiling — belong to the anisotropy rule above and cannot be reached yet.
     pub fn create_sampler(&self, desc: &SamplerDescriptor) -> RhiResult<Sampler> {
         validate_sampler_descriptor(desc)?;
+
+        // Section 6.5 refuses creation through a lost device. Placed after the
+        // descriptor's own portable checks, which answer a question about the
+        // descriptor and stay ahead of any question about the device — the same
+        // order every creation verb in this crate uses.
+        self.require_active()?;
         unimplemented!(
             "Device::create_sampler needs a backend to build a native sampler object on \
              device {:?}; the descriptor's portable contract is fixed and validated \

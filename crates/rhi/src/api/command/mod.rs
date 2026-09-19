@@ -603,6 +603,9 @@ impl Device {
     /// a label, and the device's identity is already decided by the object this is
     /// called on, so there is no caller-supplied value here that could be wrong.
     pub fn create_recorder(&self, desc: &RecorderDescriptor) -> RhiResult<CommandRecorder> {
+        // Section 6.5 lists `Recorder` among the handles a lost device refuses.
+        self.require_active()?;
+
         let label = desc.label.as_deref().unwrap_or("<unlabelled>");
         unimplemented!(
             "Device::create_recorder needs a backend command builder to bind a recorder to \

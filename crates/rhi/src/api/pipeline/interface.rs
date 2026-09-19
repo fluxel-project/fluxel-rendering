@@ -397,6 +397,13 @@ impl Device {
             }
         }
 
+        // Section 6.5's liveness verdict, after every group's ownership
+        // comparison and before the device's limit answers are read. Section
+        // 3.1 puts the identity comparisons first; section 6.5 gives them the
+        // more specific answer, so a foreign layout on a lost device is still
+        // `WrongDevice`.
+        self.require_active()?;
+
         let capabilities = self.capabilities();
         validate_pipeline_interface_descriptor(
             desc,

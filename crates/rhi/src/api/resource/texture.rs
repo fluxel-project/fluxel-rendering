@@ -488,6 +488,10 @@ impl Device {
     /// device's ceiling — and [`RhiErrorKind::Unsupported`] when the device cannot
     /// create a texture with this key at all.
     pub fn create_texture(&self, desc: &TextureDescriptor) -> RhiResult<Texture> {
+        // Section 6.5: a lost device refuses creation itself, and this verdict is
+        // reachable before the capability read below even with no backend port.
+        self.require_active()?;
+
         let mut accepted = desc.clone();
         let mut query = TextureSupportQuery::new(
             accepted.dimension,
