@@ -359,13 +359,12 @@ impl ReadbackTicket {
     /// The order is a contract, as in [`Self::publish`]: record the point before
     /// advancing the status to `Pending`, so a caller that observes the submit
     /// also observes the point that covers it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the backend port calls this once the submit path records the point"
-        )
-    )]
+    /// The caller that arrived is `Device::submit`'s readback walk, which runs in
+    /// every build because it is portable code — a backend hands back serials, and
+    /// turning a serial into the token a caller holds is this layer's work. The
+    /// expectation that named "the backend port" as the future caller was
+    /// therefore wrong about *which* layer would call it, which is why the
+    /// attribute is gone rather than gated.
     pub(crate) fn set_completion(&self, point: CompletionPoint) {
         // The only failure is a second call, which is ignored rather than
         // overwritten: the point a caller already observed stays true.
@@ -379,11 +378,26 @@ impl ReadbackTicket {
     /// before touching the payload. A reader that observes `Ready` therefore
     /// also observes the bytes, which is what makes `try_read`'s `Ready` branch
     /// infallible in practice.
+    /// The publisher that arrived is the DX12 command spine, which maps the
+    /// readback staging allocation once the fence reports the batch finished and
+    /// hands the bytes over here. It is still gated on the backend feature list
+    /// rather than ungated, because a build with no backend compiled has no
+    /// device that could complete GPU work in the first place.
     #[cfg_attr(
-        not(test),
+        not(any(
+            test,
+            // The backend features that actually compile a lowering. A feature
+            // that selects nothing must not appear here: it would remove this
+            // expectation in a configuration where the item really is dead, and
+            // the gate would then be silent about it. When Vulkan lands and starts
+            // calling this, its feature joins the list — which is rule 4.6's
+            // "the matrix gets the row" applied to the attribute itself.
+            feature = "dx12"
+        )),
         expect(
             dead_code,
-            reason = "the device publishes this when the readback's GPU work completes"
+            reason = "a backend publishes this when the readback's GPU work completes; a build \
+                      with no backend compiled has no device that could complete any"
         )
     )]
     pub(crate) fn publish(&self, bytes: Vec<u8>, layout: Option<ReadbackTexelLayout>) {

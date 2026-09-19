@@ -7,14 +7,24 @@
 //! substitution too — passing here proves that this backend's native path works
 //! on this driver, not that the portable contract holds.
 //!
-//! What they deliberately do not cover, recorded rather than left to be assumed:
-//! nothing is rasterized, dispatched, copied, uploaded or read back. Buffers are
-//! *allocated* here — that lowering exists and is exercised below — but no
-//! command lowering does, so no byte has ever moved on the GPU through this
-//! crate. `version-plan.md` section 4 asks for real headless
-//! raster/compute/copy/upload/readback on Windows DX12, and **that requirement is
-//! not met by this module**: allocation is a prerequisite for it, not a part of
-//! it.
+//! What they cover, and what they deliberately do not, recorded rather than left
+//! to be assumed:
+//!
+//! - **Copy, upload and readback move bytes on the GPU.** The command spine
+//!   lowers `encode_upload`, `copy_buffer` and `encode_readback` into real
+//!   command lists, `ExecuteCommandLists` runs them, and
+//!   `a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu`
+//!   below compares what the GPU wrote against the pattern the CPU uploaded. That is
+//!   `version-plan.md` section 4's copy/upload/readback requirement met with a
+//!   read-back result rather than with an absence of errors.
+//! - **Nothing is rasterized or dispatched.** `RasterBegin`/`RasterDraw` and
+//!   `ComputeBegin`/`ComputeDispatch` have no lowering — the spine refuses a plan
+//!   containing one rather than skipping it — so section 4's other two
+//!   requirements, real headless raster and compute on Windows DX12, are **not
+//!   met by this module** and no test here may be read as if they were.
+//!
+//! Allocation is exercised below too, and it is a prerequisite for the byte
+//! movement rather than a part of it.
 
 use std::sync::Arc;
 
@@ -24,17 +34,22 @@ use windows::Win32::Graphics::Direct3D12::{
 
 use super::*;
 use crate::api::binding::vocabulary::StorageAccess;
-use crate::api::command::BlitFilter;
+use crate::api::command::{BlitFilter, BufferCopy, RecorderDescriptor};
 use crate::api::format::{TextureFormat, TextureSupportQuery};
+use crate::api::identity::Label;
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{PlatformProvider, RequestStatus};
 use crate::api::resource::buffer::{
-    Buffer, BufferDescriptor, BufferSupportQuery, BufferUsage, ResourceMemoryPreference,
+    Buffer, BufferDescriptor, BufferRange, BufferSupportQuery, BufferUsage,
+    ResourceMemoryPreference,
 };
 use crate::api::resource::route::RouteQuery;
 use crate::api::resource::subresource::TextureAspect;
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
-use crate::api::submission::LaneWorkDomains;
+use crate::api::resource::transfer::{BufferUploadDescriptor, ReadbackData, ReadbackRequest};
+use crate::api::submission::{
+    CompletionPoint, CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
+};
 use crate::backend::dx12::resource::Dx12Buffer;
 
 /// A fresh provider instance identity, as host integration would mint.
@@ -1365,6 +1380,347 @@ fn a_real_device_refuses_a_buffer_that_the_portable_rules_reject() {
 
     assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
     assert_eq!(error.operation(), Some("Device::create_buffer"));
+}
+
+// ---------------------------------------------------------------------------
+// Bytes on the GPU: upload, copy and readback.
+//
+// Everything under this heading executes on the real queue. The command spine
+// records real command lists, `ExecuteCommandLists` runs them, and the
+// assertions read back what the GPU wrote. `CLAUDE.md` section 4.8 is the rule
+// that makes these the only evidence of their kind here: a status code from a
+// mock, or a validation layer that stayed quiet, would say nothing about whether
+// a byte moved.
+// ---------------------------------------------------------------------------
+
+/// The lane of `device` that accepts `COPY` work.
+///
+/// Read out of the portable capability table rather than written as
+/// `SubmissionLaneId::new(0)`, because the id is the device's fact to state: a
+/// test that hard-coded one would keep passing against a device whose lane table
+/// lies, which is exactly what section 40.1's
+/// `lane.domains().contains(work.work_domains())` check exists to prevent.
+fn copy_lane(device: &crate::api::platform::Device) -> SubmissionLaneId {
+    device
+        .capabilities()
+        .submission()
+        .lanes()
+        .iter()
+        .find(|lane| lane.domains().contains(LaneWorkDomains::COPY))
+        .map(|lane| lane.id())
+        .expect("section 7.2's base guarantee requires every device to offer a COPY lane")
+}
+
+/// A pattern no partial or misplaced write could imitate.
+///
+/// Built from a plain LCG so the bytes are reproducible without a dependency,
+/// and with a full 32-bit state reduced to one byte per element, so that no
+/// short-range structure — a repeated word, a ramp, a constant run — would let a
+/// copy that moved the wrong four kilobytes compare equal by accident.
+fn pattern_of(size: usize) -> Vec<u8> {
+    let mut pattern = Vec::with_capacity(size);
+    let mut state: u32 = 0x1234_5678;
+    while pattern.len() < size {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        pattern.push((state >> 24) as u8);
+    }
+    pattern
+}
+
+/// A pattern written on the CPU comes back off the GPU byte for byte.
+///
+/// This is `version-plan.md` section 4's real headless **copy/upload/readback**
+/// requirement on Windows DX12, and the shape is chosen so that each hop is
+/// load-bearing: the pattern reaches the source buffer only through an upload
+/// job, the destination only through a device-side buffer copy, and the CPU only
+/// through a readback ticket. A spine that dropped any one of the three fails the
+/// final comparison — including one that silently aliased the two buffers, which
+/// a copy that did nothing at all would produce, and including one that forgot
+/// the staging copy, which would read back the destination's original contents.
+///
+/// Both buffers carry `COPY_SRC | COPY_DST`, because both roles are used: the
+/// source is written by the upload and read by the copy, and the destination is
+/// written by the copy and read by the readback.
+#[test]
+fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
+    const SIZE: u64 = 4096;
+
+    let device = portable_device();
+    let pattern = pattern_of(SIZE as usize);
+
+    let source = device
+        .create_buffer(&BufferDescriptor::new(
+            SIZE,
+            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
+        ))
+        .expect("a 4 KiB copy source is allocatable on a real device");
+    let destination = device
+        .create_buffer(&BufferDescriptor::new(
+            SIZE,
+            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
+        ))
+        .expect("a 4 KiB copy destination is allocatable on a real device");
+
+    let job = device
+        .create_buffer_upload(BufferUploadDescriptor {
+            label: Label(Some("dx12 end-to-end upload".to_string())),
+            dst: source.clone(),
+            dst_offset: 0,
+            bytes: Arc::from(pattern.as_slice()),
+        })
+        .expect("a 4 KiB upload into a COPY_DST buffer meets section 17.3's list");
+
+    let mut recorder = device
+        .create_recorder(&RecorderDescriptor::new())
+        .expect("a real device opens a recorder");
+    recorder
+        .encode_upload(&job)
+        .expect("a job validated at creation encodes without asking the device anything");
+    recorder
+        .copy_buffer(&BufferCopy {
+            src: source.clone(),
+            src_offset: 0,
+            dst: destination.clone(),
+            dst_offset: 0,
+            size: SIZE,
+        })
+        .expect("the device reports a buffer-to-buffer route this copy meets");
+    let ticket = recorder
+        .encode_readback(ReadbackRequest::Buffer {
+            label: Label(Some("dx12 end-to-end readback".to_string())),
+            src: destination.clone(),
+            range: BufferRange::new(0, SIZE),
+        })
+        .expect("the destination carries COPY_SRC, so section 18.1 permits reading it");
+    let work = recorder.finish().expect("no scope was left open");
+
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let point = builder
+        .add_batch(copy_lane(&device), vec![work])
+        .expect("the lane that accepts COPY accepts a recording whose only domain is COPY");
+    let plan = builder
+        .build()
+        .expect("a single batch has no edge that could be cyclic");
+
+    let receipt = device
+        .submit(plan)
+        .expect("acceptance does not await completion, and section 41.7 forbids it doing so");
+    let token = receipt
+        .completion_for(point)
+        .expect("the point came from this plan's own builder, so the receipt must know it");
+
+    // Section 41.10 makes polling the way a frame loop makes progress and section
+    // 41.7 makes acceptance a separate fact from completion, so this loop is the
+    // caller's only way to learn that the GPU finished. It is bounded on purpose:
+    // an unbounded wait would hang the suite instead of reporting one, and a
+    // bound that trips is a failure here, not a slow machine.
+    let mut terminal = None;
+    for _ in 0..10_000 {
+        device
+            .poll()
+            .expect("a poll on a live device must succeed; section 6.5 requires progress");
+        match device
+            .completion_state(token)
+            .expect("the token came from this device")
+        {
+            CompletionState::Pending => {}
+            // Every terminal state ends the loop, including the two failures:
+            // section 41.8 makes them terminal, so polling through one would spin
+            // forever and report a timeout where the device had already answered.
+            other => {
+                terminal = Some(other);
+                break;
+            }
+        }
+    }
+    let terminal = terminal.expect(
+        "one 4 KiB copy must reach a terminal state; never observing one means the \
+         fence never advanced, which is a spin a bound must report rather than hide",
+    );
+    assert!(
+        matches!(terminal, CompletionState::Complete),
+        "the upload, copy and readback must complete on a live device, but the device \
+         reported {terminal:?}"
+    );
+
+    // The bytes themselves. Section 18.4 makes a ticket the only place they live,
+    // so this is where the GPU's answer becomes comparable to the CPU's input.
+    let data = ticket
+        .try_read()
+        .expect("a completed readback with published bytes is readable, not terminal")
+        .expect("the ticket is Ready once its work reached a terminal Complete state");
+    let ReadbackData::Buffer { bytes } = data else {
+        panic!("the request was a buffer range, so the data must be a buffer range too");
+    };
+    assert_eq!(
+        bytes,
+        pattern.as_slice(),
+        "the bytes the GPU wrote back must be the bytes the CPU uploaded"
+    );
+
+    // The evidence binding, for a `--nocapture` run: `CLAUDE.md` section 5 wants
+    // the adapter, the size and the compared bytes attached to the result, and
+    // printing them here is what makes one run's record reproducible rather than
+    // only its verdict.
+    println!(
+        "dx12 byte-movement evidence: adapter={:?} backend={:?} bytes={} \
+         expected_first8={:?} actual_first8={:?}",
+        device.adapter_info().name(),
+        device.backend(),
+        bytes.len(),
+        &pattern[..8],
+        &bytes[..8],
+    );
+}
+
+/// One upload job encoded twice writes its bytes twice.
+///
+/// Section 17.2 makes a job repeatable rather than one-shot, and the DX12 spine
+/// honours that by allocating staging inside the recording rather than holding it
+/// on the job — so the second encode needs a *second* staging allocation, and the
+/// first batch's must stay alive until its own fence reports it finished. A spine
+/// that shared one staging buffer between the two encodes would have the second
+/// CPU write race the first copy; a spine that freed the first at encode time
+/// would hand the GPU freed memory. Both are invisible to a single-encode test,
+/// and both are what this one is for.
+///
+/// The two destinations make the result checkable: each must hold the pattern,
+/// which a shared staging buffer would still produce, so the assertion that
+/// matters is that both *submissions* succeed and both readbacks compare equal —
+/// a use-after-free here would be a device removal, not a wrong byte.
+#[test]
+fn one_upload_job_encodes_repeatedly_and_each_encoding_writes_its_own_bytes() {
+    const SIZE: u64 = 1024;
+
+    let device = portable_device();
+    let pattern = pattern_of(SIZE as usize);
+
+    let source = device
+        .create_buffer(&BufferDescriptor::new(
+            SIZE,
+            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
+        ))
+        .expect("a 1 KiB copy source is allocatable on a real device");
+    let first = device
+        .create_buffer(&BufferDescriptor::new(
+            SIZE,
+            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
+        ))
+        .expect("a 1 KiB destination is allocatable on a real device");
+    let second = device
+        .create_buffer(&BufferDescriptor::new(
+            SIZE,
+            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
+        ))
+        .expect("a second 1 KiB destination is allocatable on a real device");
+
+    let job = device
+        .create_buffer_upload(BufferUploadDescriptor {
+            label: Label(Some("dx12 repeatable upload".to_string())),
+            dst: source.clone(),
+            dst_offset: 0,
+            bytes: Arc::from(pattern.as_slice()),
+        })
+        .expect("a 1 KiB upload into a COPY_DST buffer meets section 17.3's list");
+
+    let mut tickets = Vec::new();
+    let mut tokens = Vec::new();
+    for destination in [&first, &second] {
+        let mut recorder = device
+            .create_recorder(&RecorderDescriptor::new())
+            .expect("a real device opens a recorder");
+        recorder
+            .encode_upload(&job)
+            .expect("the same job encodes a second time; section 17.2 makes it repeatable");
+        recorder
+            .copy_buffer(&BufferCopy {
+                src: source.clone(),
+                src_offset: 0,
+                dst: destination.clone(),
+                dst_offset: 0,
+                size: SIZE,
+            })
+            .expect("the device reports a buffer-to-buffer route this copy meets");
+        tickets.push(
+            recorder
+                .encode_readback(ReadbackRequest::Buffer {
+                    label: Label(Some("dx12 repeatable upload readback".to_string())),
+                    src: destination.clone(),
+                    range: BufferRange::new(0, SIZE),
+                })
+                .expect("the destination carries COPY_SRC"),
+        );
+
+        let work = recorder.finish().expect("no scope was left open");
+        let mut builder = SubmissionPlanBuilder::new(&device);
+        let point = builder
+            .add_batch(copy_lane(&device), vec![work])
+            .expect("the COPY lane accepts a recording whose only domain is COPY");
+        let plan = builder.build().expect("a single batch has no edge");
+
+        // The two batches are submitted separately rather than in one plan,
+        // because the spine allocates staging per batch: a second plan submitted
+        // while the first is still in flight is the case where a spine that
+        // reused one staging allocation would corrupt the first copy.
+        let receipt = device
+            .submit(plan)
+            .expect("a second submission is accepted while the first may still be running");
+        tokens.push(
+            receipt
+                .completion_for(point)
+                .expect("the point came from this plan's own builder"),
+        );
+    }
+
+    let mut terminal = Vec::new();
+    for token in &tokens {
+        terminal.push(settle(&device, *token));
+    }
+    for state in &terminal {
+        assert!(
+            matches!(state, CompletionState::Complete),
+            "both submissions must complete on a live device, but one reported {state:?}"
+        );
+    }
+
+    for ticket in &tickets {
+        let data = ticket
+            .try_read()
+            .expect("a completed readback with published bytes is readable")
+            .expect("the ticket is Ready once its work completed");
+        let ReadbackData::Buffer { bytes } = data else {
+            panic!("the request was a buffer range, so the data must be a buffer range too");
+        };
+        assert_eq!(
+            bytes,
+            pattern.as_slice(),
+            "each encoding of the job must have written the pattern into its own destination"
+        );
+    }
+}
+
+/// Polls `device` until `token` reaches a terminal state, and returns that state.
+///
+/// The bounded form of the loop the test above spells out inline, factored out
+/// because two callers need the identical rule: section 41.10 forbids a blocking
+/// wait, section 41.7 makes `poll` the only progress verb, and section 41.8 makes
+/// both failure states terminal. The bound is deliberately far longer than any
+/// 4 KiB copy needs, because its purpose is to report a fence that never
+/// advanced, not to measure a slow GPU. Its input is a completion token rather
+/// than a plan point, because turning one into the other is the receipt's job and
+/// a point on its own names work only to the plan that produced it.
+fn settle(device: &crate::api::platform::Device, token: CompletionPoint) -> CompletionState {
+    for _ in 0..10_000 {
+        device.poll().expect("a poll on a live device must succeed");
+        match device
+            .completion_state(token)
+            .expect("the token came from this device")
+        {
+            CompletionState::Pending => {}
+            other => return other,
+        }
+    }
+    panic!("the point never reached a terminal state; the fence is not advancing");
 }
 
 /// Records what a real allocation actually looked like, for the evidence binding.

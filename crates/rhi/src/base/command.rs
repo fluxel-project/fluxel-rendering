@@ -77,22 +77,34 @@ pub(crate) struct SubmissionRequest<'a> {
     // the one on `batches`. The difference was measured rather than reasoned
     // about: these three are read by no backend in any build, so the lint fires
     // in a test build too and a `not(test)`-gated expectation would leave the
-    // test build warning. `batches` is read by the mock, which exists only in a
-    // test build, so its expectation has to be gated or it would sit unfulfilled
-    // there.
+    // test build warning. `batches` is read by the mock and by the DX12 lowering,
+    // and the mock exists only in a test build — so its expectation is gated on
+    // the whole backend feature list, which is the only gate that is fulfilled in
+    // every configuration (rule 4.6: when a configuration turns up that the gate
+    // had no row for, the row is added rather than the code patched).
     #[expect(
         dead_code,
-        reason = "read by the DX12 lowering, which is the first backend to submit; the mock \
-                  models a device with no work to do and needs none of it"
+        reason = "read by a lowering that attributes a submission to the plan it came from; \
+                  DX12 identifies a plan by the serials it hands back in the receipt, and the \
+                  mock models a device with no work to do and needs none of it"
     )]
     pub(crate) plan: SubmissionPlanId,
     /// The batches, in insertion order.
     #[cfg_attr(
-        not(test),
+        not(any(
+            test,
+            // The backend features that actually compile a lowering. A feature
+            // that selects nothing must not appear here: it would remove this
+            // expectation in a configuration where the item really is dead, and
+            // the gate would then be silent about it. When Vulkan lands and starts
+            // calling this, its feature joins the list — which is rule 4.6's
+            // "the matrix gets the row" applied to the attribute itself.
+            feature = "dx12"
+        )),
         expect(
             dead_code,
-            reason = "read by the DX12 lowering; the only backend that reads it today is the \
-                      mock, which exists only in a test build"
+            reason = "read by a backend's command lowering, which is what walks the batches; \
+                      a build with no backend compiled has nothing that could lower one"
         )
     )]
     pub(crate) batches: &'a [PlanBatch],

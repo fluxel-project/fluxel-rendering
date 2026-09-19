@@ -376,14 +376,26 @@ impl Buffer {
     /// order to write correct code. The device verbs of the later chapters reach
     /// it here and downcast inside their own backend.
     ///
-    /// The transfer chapter is that caller and is not written, so in a non-test
-    /// build nothing reads this yet. The expectation says so rather than leaving
-    /// the gap to be inferred, and expires the moment a real caller lands.
+    /// The transfer chapter is that caller, and the DX12 command spine is where it
+    /// arrived: it reads this to reach the buffer's own backend type and record a
+    /// copy against the native resource. The expectation therefore narrowed from
+    /// `not(test)` to the backend feature list rather than being deleted — a build
+    /// with no backend compiled genuinely has nothing on this side of the seam.
     #[cfg_attr(
-        not(test),
+        not(any(
+            test,
+            // The backend features that actually compile a lowering. A feature
+            // that selects nothing must not appear here: it would remove this
+            // expectation in a configuration where the item really is dead, and
+            // the gate would then be silent about it. When Vulkan lands and starts
+            // calling this, its feature joins the list — which is rule 4.6's
+            // "the matrix gets the row" applied to the attribute itself.
+            feature = "dx12"
+        )),
         expect(
             dead_code,
-            reason = "the copy, upload and readback lowering is the first caller and is not written; until it lands, only the contract tests reach this"
+            reason = "read by a backend's own lowering, which is the only code that may \
+                      cross the seam; a build with no backend compiled has none"
         )
     )]
     pub(crate) fn native(&self) -> &Arc<dyn BufferBackend> {

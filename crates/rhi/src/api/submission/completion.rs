@@ -26,10 +26,12 @@
 //! device loss reaches every pending point, and never stays Pending   (41.8)
 //! ```
 
+use crate::api::command::record::RecordedPayload;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::DeviceIdentity;
 use crate::api::platform::{Device, DeviceLossInfo, DeviceStatus};
 use crate::api::presentation::present::PresentReceipt;
+use crate::api::resource::transfer::ReadbackStatus;
 use crate::api::submission::plan::{
     CompletionPoint, PlanPoint, SubmissionPlan, SubmissionPlanId, SubmissionPoint,
 };
@@ -69,10 +71,13 @@ impl CompletionFailure {
     #[cfg_attr(
         not(any(
             test,
-            feature = "dx12",
-            feature = "vulkan",
-            feature = "webgpu",
-            feature = "gl-family"
+            // The backend features that actually compile a lowering. A feature
+            // that selects nothing must not appear here: it would remove this
+            // expectation in a configuration where the item really is dead, and
+            // the gate would then be silent about it. When Vulkan lands and starts
+            // calling this, its feature joins the list — which is rule 4.6's
+            // "the matrix gets the row" applied to the attribute itself.
+            feature = "dx12"
         )),
         expect(
             dead_code,
@@ -391,12 +396,54 @@ impl Device {
         // what keeps section 3.1's identity rule on this side of the seam.
         let identity = self.identity();
         let overall = CompletionPoint::new(identity, outcome.completion);
-        let points = outcome
+        // Annotated rather than inferred: the walk below reads this before the
+        // receipt takes it, so there is no longer a single consumer for the
+        // element type to be inferred from.
+        let points: Vec<(PlanPoint, CompletionPoint)> = outcome
             .points
             .into_iter()
             .map(|(point, serial)| (point, CompletionPoint::new(identity, serial)))
             .collect();
         let submitted = SubmissionPoint::new(identity, self.serials().next_submission());
+
+        // Section 41.5, and the second half of section 41.3's Phase B. Every
+        // readback ticket this plan carried is now bound to the point of *this*
+        // submission that covers it, and moved out of `NotSubmitted` — a ticket
+        // whose work has been accepted may not report that it never was.
+        //
+        // The walk lives here rather than in each backend, and the reason is
+        // section 3.1: what a backend hands back is a *serial*, and turning a
+        // serial into the token a caller holds is exactly the identity work this
+        // layer owns. A backend that did it would need the plan's batches, the
+        // point mapping, and the device identity — three portable facts — to
+        // reproduce one rule, which is the second authority section 65.3 forbids.
+        // It would also mean the mock, whose device has no work to do, had to
+        // repeat the walk to keep the two backends answering alike.
+        //
+        // A batch the backend reported no point for falls back to the overall
+        // token, which section 41.2 permits a coarse backend to make the same
+        // value as every batch's. Nothing is *skipped*: the fallback is still a
+        // point of this submission, and a ticket bound to a coarser answer is
+        // bound correctly.
+        for batch in plan.batches() {
+            let point = points
+                .iter()
+                .find(|(planned, _)| *planned == batch.point)
+                .map(|(_, completion)| *completion)
+                .unwrap_or(overall);
+            for work in &batch.work {
+                for command in work.commands() {
+                    let RecordedPayload::Readback(ticket) = &command.payload else {
+                        continue;
+                    };
+                    // The order is `set_completion`'s own contract: the point
+                    // first, so a caller that observes `Pending` also observes
+                    // the point that covers it.
+                    ticket.set_completion(point);
+                    ticket.set_status(ReadbackStatus::Pending);
+                }
+            }
+        }
 
         Ok(SubmissionReceipt::new(
             plan.id(),
@@ -429,7 +476,15 @@ impl Device {
     /// reports the loss, and the point's own state is what the backend's
     /// bookkeeping answers with once the port lands.
     ///
-    /// Panics until that port exists.
+    /// The port landed with the Direct3D 12 command spine, which answers per
+    /// serial out of its fence. The lost-device answer above is therefore still
+    /// the portable layer's — a *status* check ahead of the port — and that
+    /// ordering is a known gap rather than a settled rule: section 41.8 splits the
+    /// two cases (pending points reach `DeviceLost`, already-complete points stay
+    /// `Complete`), and telling them apart needs the per-serial bookkeeping a
+    /// loss-and-recovery unit will own. Until it exists, a device whose status is
+    /// still `Active` but whose fence has stopped advancing answers from the
+    /// backend only.
     pub fn completion_state(&self, point: CompletionPoint) -> RhiResult<CompletionState> {
         if let DeviceStatus::Lost = self.status() {
             return Err(RhiError::new(

@@ -40,10 +40,12 @@
 use std::any::Any;
 
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_DESC,
-    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-    D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-    ID3D12Device, ID3D12Resource,
+    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE,
+    D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD,
+    D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
+    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_FLAGS,
+    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ,
+    D3D12_RESOURCE_STATES, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, ID3D12Device, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC};
 
@@ -65,24 +67,16 @@ pub(crate) struct Dx12Buffer {
 impl Dx12Buffer {
     /// The committed resource.
     ///
-    /// Reached by the copy and readback lowering, which downcasts through
-    /// [`BufferBackend::as_any`] from the device's own backend, and by the
-    /// provider's test set, which asserts the native description against the
-    /// portable descriptor that produced it.
+    /// Reached by the copy and readback lowering in [`super::command`], which
+    /// downcasts through [`BufferBackend::as_any`] from the device's own backend,
+    /// and by the provider's test set, which asserts the native description
+    /// against the portable descriptor that produced it.
     ///
-    /// Those two callers are the whole list, and the second one only exists in a
-    /// test build, so in a non-test build this is unread — hence the expectation
-    /// rather than a leading underscore. The field is not the thing being
-    /// exempted: dropping `resource` would drop the allocation, so it is held for
-    /// its lifetime and this accessor is what a later chapter will read it
-    /// through.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the copy and readback lowering that reads this is not written yet, so only the provider's test set reaches it"
-        )
-    )]
+    /// This accessor carried an `expect(dead_code)` while the command lowering was
+    /// unwritten and only the test set reached it. The expectation's stated
+    /// reason came true rather than expiring, which is why the attribute is gone
+    /// and the field's name never needed an underscore: `resource` is the
+    /// allocation, and dropping it is what frees the memory.
     pub(crate) fn resource(&self) -> &ID3D12Resource {
         &self.resource
     }
@@ -110,8 +104,8 @@ pub(super) fn create_buffer(
 ) -> Result<Dx12Buffer, ffi::NativeError> {
     let heap = D3D12_HEAP_PROPERTIES {
         Type: heap_type(descriptor.memory),
-        CPUPageProperty: windows::Win32::Graphics::Direct3D12::D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-        MemoryPoolPreference: windows::Win32::Graphics::Direct3D12::D3D12_MEMORY_POOL_UNKNOWN,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
         // One node, visible to one node. Direct3D 12's linked-node adapters are a
         // multi-GPU feature this backend does not expose, and the masks are how a
         // resource says which nodes may touch it; a single-node mask is the
@@ -175,6 +169,131 @@ pub(super) fn create_buffer(
     Ok(Dx12Buffer { resource })
 }
 
+/// Which host-visible heap a staging allocation lives in.
+///
+/// Two variants rather than a bool, because the two are not opposites of one
+/// choice: they differ in the heap, in the state Direct3D 12 requires the
+/// resource be created in, and in which way the barrier rules permit data to
+/// flow. Naming them is what lets each of those three be stated once below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StagingHeap {
+    /// Written by the CPU and read by the GPU: an upload's source.
+    Upload,
+    /// Written by the GPU and read by the CPU: a readback's destination.
+    Readback,
+}
+
+impl StagingHeap {
+    /// The heap type this variant allocates in.
+    fn heap_type(self) -> D3D12_HEAP_TYPE {
+        match self {
+            Self::Upload => D3D12_HEAP_TYPE_UPLOAD,
+            Self::Readback => D3D12_HEAP_TYPE_READBACK,
+        }
+    }
+
+    /// The state Direct3D 12 requires a resource in this heap to be created in.
+    ///
+    /// This is not a choice and not a hint: `CreateCommittedResource` fails with
+    /// `E_INVALIDARG` for any other state in either of these heaps. It is also
+    /// the state the resource must *stay* in — neither heap permits a transition
+    /// — which is why the command lowering never names a staging resource in a
+    /// barrier. See [`super::command`], whose closing invariant would otherwise
+    /// have to account for them.
+    fn created_state(self) -> D3D12_RESOURCE_STATES {
+        match self {
+            // The GPU reads it, so the CPU-side union of read states is what the
+            // API asks for; a copy source is the only use this backend puts it to.
+            Self::Upload => D3D12_RESOURCE_STATE_GENERIC_READ,
+            // The GPU writes it, and `COPY_DEST` is the state it must both be
+            // created in and remain in.
+            Self::Readback => D3D12_RESOURCE_STATE_COPY_DEST,
+        }
+    }
+}
+
+/// Allocates one host-visible staging buffer of `size` bytes.
+///
+/// # Why this is not `create_buffer` with a different argument
+///
+/// A portable [`BufferDescriptor`] cannot name one of these, and that is section
+/// 11.2's decision rather than an omission here: host-visible buffers were
+/// deleted from the portable surface, so the only two mutation paths are upload
+/// and readback, and both are *transfer chapter* staging that the backend
+/// allocates for itself and a caller never names. The portable descriptor's
+/// [`ResourceMemoryPreference`] is a hint about where on the device a resource
+/// should live, not a request for a heap the caller may name — which is why the
+/// two are separate functions with separate signatures rather than one function
+/// reading a field.
+///
+/// # Test reach
+///
+/// Nothing outside this backend can call this: the portable upload verb that
+/// would reach it through [`super::command`] is not built. It is nevertheless
+/// non-test code, because the readback half of the command lowering *is* built
+/// and calls it in every build — which is the difference between this and the
+/// provider, whose whole module is unreachable outside its tests.
+pub(super) fn create_staging(
+    device: &ID3D12Device,
+    size: u64,
+    heap: StagingHeap,
+) -> Result<Dx12Buffer, ffi::NativeError> {
+    let properties = D3D12_HEAP_PROPERTIES {
+        Type: heap.heap_type(),
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+
+    let native = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: size,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        // No creation-time grant, and the absence is deliberate: neither heap can
+        // hold a resource that is an unordered-access target, so the flag would
+        // be refused rather than ignored.
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+
+    let mut resource: Option<ID3D12Resource> = None;
+    // SAFETY: `CreateCommittedResource` reads the two descriptors it is given —
+    // both are locals that outlive the call — and writes one interface pointer
+    // into `resource`, converting only on success. `poptimizedclearvalue` is
+    // `None`, the documented way to say "no optimized clear value", and a buffer
+    // has no clear value to optimize for.
+    unsafe {
+        device
+            .CreateCommittedResource(
+                &properties,
+                D3D12_HEAP_FLAG_NONE,
+                &native,
+                heap.created_state(),
+                None,
+                &mut resource,
+            )
+            .map_err(|error| ffi::NativeError::new(&error, "Dx12Device::submit"))?;
+    }
+
+    let Some(resource) = resource else {
+        return Err(ffi::NativeError::driver_contract_violation(
+            "CreateCommittedResource reported success without producing a staging resource",
+            "Dx12Device::submit",
+        ));
+    };
+
+    Ok(Dx12Buffer { resource })
+}
+
 /// The heap type `preference` lowers onto.
 ///
 /// One answer for both variants, and the module documentation states why: the
@@ -184,9 +303,7 @@ pub(super) fn create_buffer(
 /// rather than lossy. The match is written out rather than collapsed so that
 /// adding a variant to the portable enum is a compile error here rather than a
 /// silently inherited default.
-fn heap_type(
-    preference: ResourceMemoryPreference,
-) -> windows::Win32::Graphics::Direct3D12::D3D12_HEAP_TYPE {
+fn heap_type(preference: ResourceMemoryPreference) -> D3D12_HEAP_TYPE {
     match preference {
         ResourceMemoryPreference::Automatic | ResourceMemoryPreference::DeviceLocalPreferred => {
             D3D12_HEAP_TYPE_DEFAULT
@@ -195,9 +312,7 @@ fn heap_type(
 }
 
 /// The creation-time flags `usage` requires.
-fn resource_flags(
-    usage: BufferUsage,
-) -> windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_FLAGS {
+fn resource_flags(usage: BufferUsage) -> D3D12_RESOURCE_FLAGS {
     if usage.contains(BufferUsage::STORAGE) {
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
     } else {

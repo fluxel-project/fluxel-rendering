@@ -52,13 +52,23 @@ use crate::api::submission::LaneWorkDomains;
 /// The pairing is the point: section 37.1's command-level sequence is what makes
 /// "this draw consumed that binding" answerable, and a flat use list cannot say
 /// which command produced a use or in what order.
-#[expect(
-    dead_code,
-    reason = "the recorded command tree is read by a lowering backend and by \
-              graph_bridge::validate_recorded_work; neither is built"
-)]
+///
+/// This carried an `expect(dead_code)` until the DX12 command spine began
+/// matching on [`Self::payload`] and merging [`Self::uses`]. Its stated reason
+/// named two readers, and the first of them arriving is what expired it — which
+/// is the difference between an expectation that came true and one that was
+/// wrong. There is no feature gate here for the same reason there is none on
+/// `RecordedWork`: the recorder itself reads both fields in every build.
 pub(crate) struct RecordedCommand {
     /// What the command was.
+    ///
+    /// This field carried a feature-gated `expect(dead_code)` for one round, on
+    /// the reasoning that only a backend reads it. That was true of the *lowering*
+    /// and false of the submit path: `Device::submit` walks the recorded commands
+    /// to bind each readback ticket to its completion point (section 41.5), and
+    /// that walk is portable code compiled in every configuration. The gate is
+    /// therefore gone rather than widened — the reader that arrived is not a
+    /// backend at all.
     pub(crate) payload: RecordedPayload,
     /// The actual uses this command produced.
     ///
@@ -283,10 +293,14 @@ impl RecordedWork {
     /// Crate-private: section 37.1 keeps the command-level sequence *internal*,
     /// and it is read by the declared-versus-actual check, which needs to know
     /// not only that a use happened but which command produced it.
-    #[expect(
-        dead_code,
-        reason = "graph_bridge::validate_recorded_work reads this once its comparison is built"
-    )]
+    ///
+    /// The reader that arrived first is the DX12 command spine, which walks this
+    /// slice to lower each payload and refuses the plan rather than skipping one
+    /// it cannot lower, and the readback walk in `Device::submit`, which is how a
+    /// ticket learns which point of the plan covers it. The declared-versus-actual
+    /// comparison named in the old expectation is still unbuilt, and it is now the
+    /// only reader missing — which is why there is no gate here at all: the two
+    /// readers that arrived are portable code, compiled in every configuration.
     pub(crate) fn commands(&self) -> &[RecordedCommand] {
         &self.commands
     }

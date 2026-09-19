@@ -47,6 +47,19 @@ windows = { version = "=0.62.2", optional = true, features = [
     # Direct3D module even though the call is a Direct3D 12 one.
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D12",
+    # `CreateEventW`, `WaitForSingleObject`, and `CloseHandle`, which are the
+    # three calls `wait_idle` makes. Direct3D 12 states completion only through a
+    # fence, and the documented way to block on one is `SetEventOnCompletion`
+    # followed by a wait on the event it signals — polling `GetCompletedValue` in
+    # a loop instead would burn a core for the whole wait, which is a cost
+    # `wait_idle` should not impose on a shutdown path.
+    "Win32_System_Threading",
+    # `CreateEventW` itself is gated on this rather than on `System_Threading`,
+    # because its first parameter is a `*const SECURITY_ATTRIBUTES`. The
+    # declaration is in `System::Threading` and the type is in `Security`, and
+    # the binding puts the `cfg` on the function, so a build with only the
+    # former links nothing at all.
+    "Win32_Security",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

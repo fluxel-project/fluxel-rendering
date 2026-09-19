@@ -84,6 +84,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_NOT_FOUND, IDXGIAdapter1, IDXGIFactory1,
 };
 
+use super::command::{Dx12CommandSpine, SpineFailure};
 use super::facts;
 use super::ffi;
 use super::resource;
@@ -331,6 +332,17 @@ impl Dx12Provider {
         // run.
         let facts = facts::probe(&device)?;
 
+        // The spine is created beside the facts rather than lazily on the first
+        // submission, because both are native objects a device either has or does
+        // not: `CreateCommandQueue` and `CreateFence` are two calls that can fail,
+        // and a failure here is better reported as a refused device request than
+        // as a surprising first-submission error. It is also what lets
+        // `submission_capabilities` below be a statement about a queue that
+        // exists. The three command allocators this device will end up making are
+        // *not* created here: those are the ring `command` grows on demand, so a
+        // device that never submits never pays for one.
+        let spine = Dx12CommandSpine::new(&device).map_err(|native| native.into_rhi())?;
+
         let submission = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
             SubmissionLaneId::new(0),
             SubmissionLaneClass::General,
@@ -343,6 +355,7 @@ impl Dx12Provider {
             adapter: deferred_adapter_info(&candidate, self.instance),
             object: ObjectId::next(),
             device,
+            spine,
             facts,
             submission,
             liveness: Mutex::new(Liveness {
@@ -475,6 +488,12 @@ pub(crate) struct Dx12Device {
     /// non-test build while being fulfilled in a test one, and no single
     /// attribute satisfies both.
     device: ID3D12Device,
+    /// The queue, fence and command-list ring every submission goes through.
+    ///
+    /// Held by value and never cloned: it owns the one queue this device has, and
+    /// a second handle to the same queue would be a second path to `Signal` on
+    /// the same fence, which is the only place a serial is minted.
+    spine: Dx12CommandSpine,
     liveness: Mutex<Liveness>,
     /// The contract this device reports.
     ///
@@ -570,18 +589,27 @@ impl DeviceBackend for Dx12Device {
 
     fn poll(&self) -> RhiResult<()> {
         // Direct3D 12 reports a removed device from the next call that touches it
-        // rather than through a callback, so there is no pending state for a poll
-        // to advance: the return code of a real call is the only signal there is.
-        // See the module note in `super` for why nothing caches a liveness flag.
+        // rather than through a callback, so there is no *liveness* state for a
+        // poll to advance: the return code of a real call is the only signal
+        // there is, and nothing caches a liveness flag (see the module note in
+        // `super`).
+        //
+        // What a poll does advance is the submission side. A readback's bytes
+        // become readable when the GPU finishes writing them, and the fence is
+        // where that becomes known; this is the portable layer's only progress
+        // verb (section 6.7 keeps a blocking wait out of the frame loop), so it is
+        // the only place those bytes can be published. `advance` reads the fence
+        // and copies out whatever it reports finished — it never waits.
+        self.spine.advance();
         Ok(())
     }
 
     fn wait_idle(&self) -> RhiResult<()> {
-        // Correct rather than unimplemented: this device has no queue and no
-        // submitted work, so it is idle by construction. Once submission lands,
-        // this becomes a fence wait and this comment is the thing that must be
-        // deleted — not quietly outlived.
-        Ok(())
+        // Section 6.7: shutdown, recovery, and diagnostics only. The wait is a
+        // bounded one on a fence-signalled event rather than an `INFINITE` block,
+        // because a removed device leaves fence values that will never be written
+        // and a library must not turn that into a hung host.
+        self.spine.wait_idle().map_err(SpineFailure::into_rhi)
     }
 
     /// Allocates one buffer, and is the only place in this backend that acts on a
@@ -617,55 +645,69 @@ impl DeviceBackend for Dx12Device {
         }
     }
 
-    /// Refuses, because this backend has no command spine to submit through.
+    /// Lowers a plan onto the spine's queue, and is the second place in this
+    /// backend that acts on a terminal native failure.
     ///
-    /// A refusal rather than a stub, and the distinction is the whole of
-    /// discipline 3. The tempting shortcut is to accept the plan, hand back a
-    /// serial, and answer it `Complete` — which is what a mock may honestly do
-    /// because a mock models a device with no work to do. This device is not
-    /// that: it has a real `ID3D12Device`, and reporting work as complete that no
-    /// queue ever saw would be a silent substitution of exactly the kind section
-    /// 9.4 names — the caller would believe bytes moved, and nothing would have.
+    /// The two directions of section 41.3 meet here. Phase A — everything
+    /// recorded, nothing committed — is [`Dx12CommandSpine::submit`]'s, and its
+    /// `Err` genuinely proves no native work was accepted. Phase B — once
+    /// anything is accepted, no `Err` may claim otherwise — is also the spine's,
+    /// which is why a post-commit `Signal` failure comes back as `Ok` and is
+    /// reported through [`Self::completion`] instead.
     ///
-    /// What is missing is concrete and named: no `ID3D12CommandQueue`, no
-    /// allocator, no command list, and no fence exist behind this device yet, so
-    /// there is no object that could be handed a `CopyBufferRegion` and no
-    /// primitive that could report it finished. Section 41.3's Phase B is
-    /// therefore unreachable here, and this says so instead of inventing an
-    /// answer.
+    /// What is left for this layer is the one question only the device can
+    /// answer: whether a failure ended it. `Terminal` marks the device lost, for
+    /// the same reason and in the same shape as [`Self::create_buffer`] — a
+    /// failure that looks like a plain refusal may be the device ending, and
+    /// `ffi::NativeFailure` already carries the classification so this reads it
+    /// once rather than re-deriving it from a message.
     fn submit(
         &self,
-        _request: &crate::base::command::SubmissionRequest<'_>,
+        request: &crate::base::command::SubmissionRequest<'_>,
     ) -> RhiResult<crate::base::command::SubmissionOutcome> {
-        Err(RhiError::new(
-            RhiErrorKind::Unsupported,
-            "this device cannot submit yet: the Direct3D 12 command spine — a command queue, \
-             an allocator, a command list, and a fence — is not created behind it, so there is \
-             nothing to lower a batch onto. This is not a statement that the device cannot \
-             execute work",
-        )
-        .at("Dx12Device::submit"))
+        match self.spine.submit(request) {
+            Ok(outcome) => Ok(outcome),
+            Err(failure) => {
+                if failure.is_terminal() {
+                    // Built before the failure is consumed, because the summary is
+                    // about the same failure the error reports and the port read
+                    // that follows must answer the same thing.
+                    let summary = format!(
+                        "Direct3D 12 reported a terminal failure while lowering a plan, and \
+                         section 6.5 makes loss terminal for the identity: {}",
+                        failure.message()
+                    );
+                    self.mark_lost(DeviceLossInfo::new(summary));
+                }
+                Err(failure.into_rhi())
+            }
+        }
     }
 
-    /// Answers `Failed`, because no serial can have come from this device.
+    /// Reports one serial's state, asking the spine first.
     ///
-    /// Unreachable while [`Self::submit`] refuses — every serial a caller holds
-    /// would have to have been reported by a successful submit, and there is none.
-    /// It is written rather than left as a panic because section 41.8's liveness
-    /// rule is about exactly this shape: a completion query must always produce a
-    /// terminal state a caller can branch on, and a query that aborted the caller
-    /// would be the one outcome that rule rules out.
+    /// The order is section 41.8's, and it is the whole reason this is not a
+    /// two-line delegate. Points already reported `Complete` must stay `Complete`
+    /// after a loss — the work really did finish, and a caller that saw it finish
+    /// must not be told it did not. So the spine's answer wins when it is
+    /// `Complete`, and only a spine answer of `Pending` or `Failed` can be
+    /// upgraded to `DeviceLost` by the liveness cell.
+    ///
+    /// The upgrade is what closes the loop the spine opens: a serial past the
+    /// first unobservable one is answered `Failed` by [`Dx12CommandSpine`], which
+    /// the portable layer would surface as a backend failure even though the
+    /// device is gone. With the liveness cell consulted last, the same serial
+    /// answers `DeviceLost` — the terminal state section 41.8 requires and the one
+    /// a caller branches on to recover.
     fn completion(&self, serial: u64) -> crate::api::submission::CompletionState {
-        use crate::api::submission::{CompletionFailure, CompletionState};
-
-        if let Some(info) = self.loss_info() {
-            return CompletionState::DeviceLost(info);
+        let spine = self.spine.completion(serial);
+        if matches!(spine, crate::api::submission::CompletionState::Complete) {
+            return spine;
         }
-
-        CompletionState::Failed(CompletionFailure::new(format!(
-            "completion serial {serial} was never reported by this device: nothing can be \
-             submitted to it until the Direct3D 12 command spine exists"
-        )))
+        match self.loss_info() {
+            Some(info) => crate::api::submission::CompletionState::DeviceLost(info),
+            None => spine,
+        }
     }
 }
 

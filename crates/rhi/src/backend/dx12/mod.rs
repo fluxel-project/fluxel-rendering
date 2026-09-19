@@ -42,11 +42,11 @@
 //!
 //! # Where this tree stands, stated plainly
 //!
-//! **The native boundary ([`ffi`]), the provider ([`provider`]), and buffer
-//! allocation ([`resource`]) are written.** There is no texture, shader,
-//! pipeline, command or presentation lowering yet, and no claim of DX12 support
-//! exists until the shared contract suite and a real Windows run close on one
-//! revision.
+//! **The native boundary ([`ffi`]), the provider ([`provider`]), buffer
+//! allocation ([`resource`]), and the command spine ([`command`]) are written.**
+//! There is no texture, shader, pipeline or presentation lowering yet, and no
+//! claim of DX12 support exists until the shared contract suite and a real
+//! Windows run close on one revision.
 //!
 //! The order the rest arrives in is fixed by a dependency rather than by
 //! preference. DX12 answers every capability question (`CheckFeatureSupport`,
@@ -66,12 +66,16 @@
 //! Allocation arrived for buffers only, and it is the smallest lowering this
 //! backend will have: one `CreateCommittedResource` per descriptor, with the
 //! heap, the initial state and the one creation-time flag argued in [`resource`].
-//! It is not yet exercised by anything a caller outside the test set can run —
-//! the command, submission and transfer chapters that would copy into a buffer
-//! and read one back are what turn an allocation into an observable result — so
-//! the allocation is real-GPU evidence about this backend's native path and not
-//! yet about the portable contract.
+//! The command spine is what turns an allocation into an observable result: one
+//! direct queue, one fence, a ring of command-list slots claimed on demand, and
+//! the lowering of buffer copies, buffer uploads and buffer readbacks. It lowers
+//! nothing else, and refuses a plan naming anything else rather than executing a
+//! silently shortened version of it — see [`command`] for why that refusal is the
+//! point rather than a gap. Every list it records leaves every buffer it touched
+//! in `D3D12_RESOURCE_STATE_COMMON`, which is why there is no persistent resource
+//! state tracker to get out of step with the driver.
 
+mod command;
 mod facts;
 mod ffi;
 mod provider;

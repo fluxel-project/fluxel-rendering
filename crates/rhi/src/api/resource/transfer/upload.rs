@@ -90,16 +90,13 @@ impl UploadJob {
     /// Crate-private: section 3 gives identity to the object that created it, so
     /// only [`crate::api::platform::Device::create_buffer_upload`] and
     /// [`crate::api::platform::Device::create_texture_upload`] may produce one.
-    /// Those verbs exist and are the only callers this is written for, but they stop
-    /// before the staging bytes are accepted — nothing can mint the identity below
-    /// until a backend staging path does — so nothing calls this yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_buffer_upload and create_texture_upload call this once the backend staging path lands and can mint the job's identity"
-        )
-    )]
+    /// [`Device::create_buffer_upload`](crate::api::platform::Device::create_buffer_upload)
+    /// is the caller that arrived, and it arrived without waiting for a backend
+    /// staging path — which the old expectation here assumed was the precondition
+    /// for minting an identity. It is not: a job is portable (an identity, a
+    /// device, and a descriptor), and the staging is the encoding backend's to
+    /// allocate when a batch gives it a lifetime. The identity is minted by the
+    /// verb, in every configuration, so the attribute is gone rather than gated.
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: UploadDescriptor) -> Self {
         Self {
             id,
@@ -313,20 +310,27 @@ impl Device {
             )
         })?;
         validate_buffer_upload(&desc, self.identity(), &limits)?;
-        // Everything decidable here has been decided: the caller's descriptor was
-        // validated against this device's own copy route and its alignment, and
-        // the refusals above are live. What is missing is the staging path that
-        // actually writes the bytes, which is the backend port's work and nothing
-        // this layer can stand in for.
-        unimplemented!(
-            "Device::create_buffer_upload needs a backend staging path to write the {} \
-             retained bytes at offset {} of a buffer on device {:?}; the portable \
-             contract is fixed and every refusal path above is built, but the backend \
-             that would retain and stage the bytes is not",
-            desc.bytes.len(),
-            desc.dst_offset,
-            self.identity()
-        )
+
+        // Everything decidable here has been decided, and the job is minted. It
+        // is *not* staged here, and the split is deliberate: this verb answers
+        // "may these bytes be written there", which is a portable question with a
+        // portable answer, while the staging allocation is host-visible memory
+        // that belongs to a backend (`00:61`, and section 11.2 keeping
+        // host-visible buffers off the portable surface). A job is a portable
+        // object — an identity, a device, and a descriptor — and it stays one
+        // until a recorder encodes it, at which point the batch it lands in gives
+        // the staging its lifetime. See the Direct3D 12 command spine's upload
+        // lowering for why that lifetime, and not the job's, is the right one.
+        //
+        // The identity is minted here rather than by a backend for the same reason
+        // `Device::create_buffer` mints its own: section 3 makes object identity
+        // the portable layer's, and a backend that numbered jobs would give two
+        // backends two numbering schemes for one portable type.
+        Ok(UploadJob::new(
+            ObjectId::next(),
+            self.identity(),
+            UploadDescriptor::Buffer(desc),
+        ))
     }
 
     /// Prepares a texture upload.

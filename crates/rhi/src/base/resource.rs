@@ -56,16 +56,27 @@ pub(crate) trait BufferBackend: Send + Sync + 'static {
     /// backend-declared trait object because a trait declared here would have to
     /// name the operations, which is the shape the module documentation rejects.
     ///
-    /// The downcast's first caller is the transfer lowering, which is not
-    /// written, so no non-test build reaches this method yet even though every
-    /// backend implements it. The expectation is the honest form of that: the
-    /// method is part of the seam's contract and its absence of callers is a
-    /// schedule fact, not a design one.
+    /// The downcast's first caller is the DX12 command spine, which reaches a
+    /// backend's own buffer type from a portable handle to record a copy. It is
+    /// still unreached in a build with no backend compiled, so the expectation
+    /// below is gated on the backend feature list rather than deleted: the method
+    /// is part of the seam's contract, and a configuration with nothing on the
+    /// far side of the seam has nothing that could call it.
     #[cfg_attr(
-        not(test),
+        not(any(
+            test,
+            // The backend features that actually compile a lowering. A feature
+            // that selects nothing must not appear here: it would remove this
+            // expectation in a configuration where the item really is dead, and
+            // the gate would then be silent about it. When Vulkan lands and starts
+            // calling this, its feature joins the list — which is rule 4.6's
+            // "the matrix gets the row" applied to the attribute itself.
+            feature = "dx12"
+        )),
         expect(
             dead_code,
-            reason = "the transfer lowering is the first downcaster and is not written; until it lands, only the contract tests call this"
+            reason = "called by a backend's own lowering, which is the only code that may \
+                      downcast across the seam; a build with no backend compiled has none"
         )
     )]
     fn as_any(&self) -> &dyn Any;
