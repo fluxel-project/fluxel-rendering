@@ -286,6 +286,27 @@ pub enum BindingSupport {
     Supported,
 }
 
+impl BindingSupport {
+    /// Whether this answer permits the binding.
+    ///
+    /// Crate-visible, and taken by reference, for one reason each. It is not
+    /// public because section 20.4 freezes this type at two members with no
+    /// accessor — its three sibling answer types carry a public `is_supported`,
+    /// and this one does not, which is a difference the specification wrote rather
+    /// than an omission to be filled in. It is a method rather than an equality
+    /// check at each call site so that a third member would have to be classified
+    /// here, instead of quietly comparing unequal to both of the two.
+    ///
+    /// It takes `&self` because a method named `is_*` returning `bool` has to, and
+    /// because the four call sites all hold a value they do not own.
+    pub(crate) fn is_supported(&self) -> bool {
+        match self {
+            Self::Supported => true,
+            Self::Unsupported => false,
+        }
+    }
+}
+
 /// The resource class a binding-count limit is grouped under.
 ///
 /// Separate from [`BindingKind`] because the limits are counted per class rather

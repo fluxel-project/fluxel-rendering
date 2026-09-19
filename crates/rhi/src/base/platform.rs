@@ -238,6 +238,31 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
         descriptor: &crate::api::resource::buffer::BufferDescriptor,
     ) -> RhiResult<Box<dyn crate::base::resource::BufferBackend>>;
 
+    /// Prepares the native entry point behind one shader module.
+    ///
+    /// The same division of labour as [`Self::create_buffer`], with one difference
+    /// that is the whole point of this method's documentation: the portable layer
+    /// decides whether the device may use the artifact at all —
+    /// [`crate::api::capability::EnabledCapabilities::shader_acceptance`], section
+    /// 19.10, which consults the device's recorded facts and never a backend kind —
+    /// so by the time this is reached the *portable* question is answered and the
+    /// backend's only remaining question is how its own API wants the bytes.
+    ///
+    /// **What success here does not mean.** For a backend whose native API has no
+    /// shader-module object, preparing an entry point is copying bytes and cannot
+    /// fail; the driver's verdict on whether those bytes are a legal program
+    /// arrives later, at pipeline creation, and a backend must not report it here.
+    /// Section 19.10 puts a real compile error in
+    /// [`crate::api::RhiError`] plus a `DiagnosticEvent`, which is a thing that
+    /// happens when there is something to compile — a source form on a runtime
+    /// compiler. A backend that could not do the work must report
+    /// [`crate::api::RhiErrorKind::Unsupported`] rather than return an object that
+    /// will fail at first use (discipline 3: never a silent substitute).
+    fn create_shader(
+        &self,
+        artifact: &crate::api::shader::ShaderArtifact,
+    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>>;
+
     /// Lowers and submits one plan that has passed the portable preflight.
     ///
     /// This is Phase B of section 41.3 and the two phases are not symmetric. By

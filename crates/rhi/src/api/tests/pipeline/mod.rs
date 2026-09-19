@@ -297,7 +297,13 @@ fn module_on(
     interface: ShaderInterface,
     requirements: ShaderRequirements,
 ) -> ShaderModule {
-    ShaderModule::new(object(id), device, artifact(stage, interface, requirements))
+    let artifact = artifact(stage, interface, requirements);
+    ShaderModule::new(
+        object(id),
+        device,
+        artifact.clone(),
+        crate::base::mock::module_backend_for_test(&artifact),
+    )
 }
 
 /// A vertex entry point that writes the position built-in and the outputs given.

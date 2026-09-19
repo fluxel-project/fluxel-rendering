@@ -151,6 +151,86 @@ pub enum ShaderCode {
     },
 }
 
+/// A [`ShaderCode`] form, with none of its payload.
+///
+/// A crate-private mirror of one field of the frozen public enum, for the two
+/// reasons [`BindableKind`](crate::api::binding::vocabulary::BindableKind) is a
+/// mirror of `BindingKind`: a capability table needs a key it can enumerate,
+/// compare, and encode, and the public type cannot be that key. [`ShaderCode`]
+/// holds `Arc<str>` / `Arc<[u32]>` / `Arc<[u8]>` payloads, and section 19.2
+/// freezes its derive list at `Clone` and `Debug`, so "the forms this device
+/// accepts" cannot be a set of `ShaderCode` values.
+///
+/// [`Self::of`] has no wildcard arm, so a new code form fails to compile here
+/// until it is classified — the classification is what the record is keyed on, so
+/// it cannot be allowed to default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum AcceptedCodeForm {
+    /// See [`ShaderCode::Wgsl`].
+    Wgsl,
+    /// See [`ShaderCode::SpirV`].
+    SpirV,
+    /// See [`ShaderCode::Dxil`].
+    Dxil,
+    /// See [`ShaderCode::Msl`].
+    Msl,
+    /// See [`ShaderCode::Metallib`].
+    Metallib,
+    /// See [`ShaderCode::Glsl`].
+    Glsl,
+    /// See [`ShaderCode::GlslEs`].
+    GlslEs,
+}
+
+impl AcceptedCodeForm {
+    /// The form of `code`.
+    ///
+    /// Two forms are deliberately not distinguished further. A GLSL source's
+    /// `version` and `profile` are not part of this answer: whether a device
+    /// consumes desktop GLSL at all is the capability question, and whether it
+    /// can compile one particular version is a question only the runtime compiler
+    /// can answer — section 19.10 makes that a `RhiError` plus a
+    /// `DiagnosticEvent` from module creation rather than a verdict an acceptance
+    /// query could have given in advance.
+    pub(crate) fn of(code: &ShaderCode) -> Self {
+        match code {
+            ShaderCode::Wgsl(_) => Self::Wgsl,
+            ShaderCode::SpirV(_) => Self::SpirV,
+            ShaderCode::Dxil(_) => Self::Dxil,
+            ShaderCode::Msl(_) => Self::Msl,
+            ShaderCode::Metallib(_) => Self::Metallib,
+            ShaderCode::Glsl { .. } => Self::Glsl,
+            ShaderCode::GlslEs { .. } => Self::GlslEs,
+        }
+    }
+
+    /// Writes this form's canonical byte.
+    ///
+    /// A fieldless enum encodes as its discriminant; see [`ShaderStage`]'s
+    /// `encode_into` for why that dependency on declaration order is the intended
+    /// one.
+    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+}
+
+/// The lowering ABI this build implements.
+///
+/// Section 19.3 makes an artifact declare the lowering contract it was built
+/// against, and makes the device refuse one it does not speak. This crate lowers
+/// exactly one version of that contract, so the answer is a fact about the library
+/// rather than about any device: every device this build can create speaks it, and
+/// a backend that did not would be unable to lower the portable interface at all.
+///
+/// That is why the ABI is compared against a constant while the accepted *code
+/// forms* are recorded per device. Two devices of one backend kind can genuinely
+/// differ about which forms they consume — a desktop GL context and a GLES context
+/// are the same backend and different answers — while no two devices this build
+/// creates differ about the lowering contract. If a backend ever speaks a
+/// different version, that becomes a recorded device fact and this constant is
+/// where the split starts.
+pub(crate) const IMPLEMENTED_ABI: ShaderAbiVersion = ShaderAbiVersion { major: 1, minor: 0 };
+
 /// The Fluxel logical-to-native lowering ABI an artifact was produced against.
 ///
 /// The portable interface names a logical `group`/`slot` and a vertex or fragment

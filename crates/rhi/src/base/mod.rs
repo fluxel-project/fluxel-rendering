@@ -79,6 +79,7 @@
 //! ```text
 //! base/platform   provider, device request, device   (specification module 01)
 //! base/resource   buffer, texture, view, sampler     (specification module 02)
+//! base/shader     the native entry point             (specification module 03)
 //! base/mock       the CPU/mock backend
 //! ```
 //!
@@ -97,6 +98,12 @@ pub(crate) mod platform;
 // in the crate, the same argument adjudication A28 makes for keeping
 // `create_buffer` in the resource chapter rather than in `api::platform`.
 pub(crate) mod resource;
+
+// The shader chapter's seam. Separate from `resource` for the reason in this
+// module's layout note, and it is the one seam whose object a *later* chapter
+// consumes rather than the chapter that created it: a module is created here and
+// read when a pipeline state is built.
+pub(crate) mod shader;
 
 // The recording and submission chapter's seam. It is separate from `platform`
 // for the reason that one is separate from `resource`: the vocabulary is reached

@@ -43,10 +43,16 @@
 //! # Where this tree stands, stated plainly
 //!
 //! **The native boundary ([`ffi`]), the provider ([`provider`]), buffer
-//! allocation ([`resource`]), and the command spine ([`command`]) are written.**
-//! There is no texture, shader, pipeline or presentation lowering yet, and no
-//! claim of DX12 support exists until the shared contract suite and a real
-//! Windows run close on one revision.
+//! allocation ([`resource`]), the command spine ([`command`]), and shader entry
+//! points ([`shader`]) are written.** There is no texture, pipeline or
+//! presentation lowering yet, and no claim of DX12 support exists until the shared
+//! contract suite and a real Windows run close on one revision.
+//!
+//! [`shader`] is the smallest of those and the one whose size is easiest to
+//! misread: Direct3D 12 has no shader-module object, so preparing an entry point is
+//! keeping bytes alive for `CreateComputePipelineState` and nothing more. A module
+//! that was created has **not** been compiled, and [`shader`] says so at length
+//! because the opposite reading is the natural one.
 //!
 //! The order the rest arrives in is fixed by a dependency rather than by
 //! preference. DX12 answers every capability question (`CheckFeatureSupport`,
@@ -80,3 +86,4 @@ mod facts;
 mod ffi;
 mod provider;
 mod resource;
+mod shader;

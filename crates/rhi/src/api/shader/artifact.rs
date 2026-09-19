@@ -13,14 +13,15 @@
 use core::fmt;
 use std::sync::Arc;
 
-use crate::api::error::RhiResult;
+use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
 use crate::api::platform::provider::BackendKind;
+use crate::base::shader::ShaderModuleBackend;
 
 use super::requirements::{ShaderInterface, ShaderRequirements};
 use super::validation::validate_shader_artifact;
-use super::vocabulary::{ShaderAbiVersion, ShaderCode, ShaderStage};
+use super::vocabulary::{ArtifactAcceptance, ShaderAbiVersion, ShaderCode, ShaderStage};
 
 /// The content-address/provenance key computed by the artifact producer.
 ///
@@ -249,28 +250,68 @@ pub struct ShaderModule {
     id: ObjectId,
     device: DeviceIdentity,
     artifact: ShaderArtifact,
+    /// The backend's own entry point, in the same shape
+    /// [`crate::api::resource::Buffer`] holds its allocation: `Arc` so that the
+    /// handle stays `Clone` without the backend cloning a native device, and
+    /// behind `dyn` so that no native type reaches the exported surface (section
+    /// 59). Section 19.10 declares no accessor for it, and it is reached only by a
+    /// later chapter's device verb, which downcasts inside its own backend.
+    native: Arc<dyn ShaderModuleBackend>,
 }
 
 impl ShaderModule {
     /// Assembles a created module.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only `Device::create_shader` may produce one. That verb exists and calls
-    /// this nowhere yet, because a module is the compiler's answer about a
-    /// device, and no backend port can give that answer.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_shader calls this once the backend port lands"
-        )
-    )]
-    pub(crate) fn new(id: ObjectId, device: DeviceIdentity, artifact: ShaderArtifact) -> Self {
+    /// only `Device::create_shader` may produce one, and the identity is minted
+    /// there rather than here — a constructor that minted its own would give a
+    /// caller who assembled one directly an object the process has never recorded.
+    pub(crate) fn new(
+        id: ObjectId,
+        device: DeviceIdentity,
+        artifact: ShaderArtifact,
+        native: Arc<dyn ShaderModuleBackend>,
+    ) -> Self {
         Self {
             id,
             device,
             artifact,
+            native,
         }
+    }
+
+    /// The native entry point behind this module.
+    ///
+    /// Crate-private for the reason the whole seam is: section 59 keeps native
+    /// types off the exported surface. The caller will be the pipeline chapter's
+    /// device verb, which reaches each stage's own backend type to fill a native
+    /// shader bytecode struct; it is a backend's own lowering that may cross here,
+    /// exactly as [`crate::api::resource::Buffer::native`] documents for its side
+    /// of the seam.
+    ///
+    /// # Why the expectation is gated on `test` alone, unlike `Buffer::native`'s
+    ///
+    /// `Buffer::native` narrows to the backend feature list because the DX12 command
+    /// spine is a real caller. This accessor has none in any configuration: the DX12
+    /// pipeline lowering is what will read it, and that lowering is not written.
+    /// Gating it on a backend feature would therefore be a claim that some backend
+    /// reads it, which is not yet true of any of them.
+    ///
+    /// So the gate is `test`, and the reason says what is actually the case. When
+    /// the pipeline lowering lands, this `expect` sits *unfulfilled* in that
+    /// configuration and the build fails — which is the intended forcing function
+    /// rather than an accident: the attribute's reason has stopped being true, and
+    /// `expect` is what makes that a compile error instead of a stale comment.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the pipeline chapter's device verb, which is not written; the \
+                      contract tests are what exercise it until then"
+        )
+    )]
+    pub(crate) fn native(&self) -> &Arc<dyn ShaderModuleBackend> {
+        &self.native
     }
 
     /// This module's process-local object ID.
@@ -346,26 +387,72 @@ impl Device {
     /// argument here to refuse, and the device's own answers are the only input
     /// the check needs.
     ///
-    /// Panics until a backend port exists. The validation above still runs first,
-    /// because a refusal it produces is a statement about the artifact that a
-    /// caller can act on without any device having been touched.
+    /// # The two questions, and why both are asked
+    ///
+    /// `validate_shader_artifact` asks whether the *artifact* is internally
+    /// consistent — a producer's question, answered with
+    /// [`RhiErrorKind::InvalidUsage`].
+    /// [`EnabledCapabilities::shader_acceptance`](crate::api::capability::EnabledCapabilities::shader_acceptance)
+    /// then asks whether **this device** may use it, which is a fact about the
+    /// device and not a mistake by the caller.
+    ///
+    /// Both run, and the order is not a preference: a consumer may call the second
+    /// on its own — it is the question "should I build this artifact at all" — so
+    /// the two are allowed to overlap on the binding-support step, and
+    /// `acceptance.rs` records why that overlap is deliberate. What the order here
+    /// settles is which answer a caller gets when the artifact is *both*
+    /// ill-formed and unacceptable: the refusal it can act on without touching a
+    /// device, which is the artifact's own.
+    ///
+    /// # What a returned module does not prove
+    ///
+    /// That its bytes are a legal program. For a source form, a runtime compiler
+    /// error arrives here (section 19.10: [`crate::api::RhiError`] plus a
+    /// `DiagnosticEvent`), but for a form a backend copies through to a later
+    /// native call there is nothing to compile yet, and a backend must not pretend
+    /// otherwise — `Dx12ShaderModule` records the concrete case.
     pub fn create_shader(&self, artifact: &ShaderArtifact) -> RhiResult<ShaderModule> {
         // Section 6.5 refuses creation through a lost device. There is no
         // ownership comparison ahead of it here because a `ShaderArtifact`
         // carries no `DeviceIdentity` — it is producer-side data with a content
         // hash, as the doc above states — so the device's own liveness is the
         // first device-side question this verb can ask.
-        self.require_active()?;
+        self.require_active()
+            .map_err(|error| error.at("Device::create_shader"))?;
 
         let capabilities = self.capabilities();
-        validate_shader_artifact(artifact, |query| capabilities.binding_support(query))?;
-        unimplemented!(
-            "Device::create_shader needs a backend shader compiler to lower the {:?} entry \
-             point {:?} into a module on device {:?}; the portable contract is fixed, but no \
-             backend port is built",
-            artifact.stage,
-            artifact.entry_point,
-            self.identity()
-        )
+        validate_shader_artifact(artifact, |query| capabilities.binding_support(query))
+            .map_err(|error| error.at("Device::create_shader"))?;
+
+        // Section 19.10's verdict, and the reason it is not an `RhiError`: the
+        // artifact is well-formed and the device is the thing that cannot use it,
+        // so the answer is a value the caller reads rather than a failure the
+        // caller unwraps. A refusal carries the same information either way — the
+        // caller must not build this — but `Unsupported` would say "the RHI does
+        // not implement this" about a device that simply answered a question.
+        let acceptance = capabilities.shader_acceptance(artifact);
+        if acceptance != ArtifactAcceptance::Accepted {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                format!(
+                    "this device refused the {:?} entry point {:?}: {acceptance:?}",
+                    artifact.stage, artifact.entry_point
+                ),
+            )
+            // Named here rather than in the message, so that a caller reading
+            // `operation()` and one reading the text are told the same thing once.
+            .at("Device::create_shader"));
+        }
+
+        // The one backend call. Everything above it is a portable verdict about
+        // the artifact and about this device; this is the backend's answer to how
+        // its own API wants the bytes.
+        let native = self.native().create_shader(artifact)?;
+        Ok(ShaderModule::new(
+            ObjectId::next(),
+            self.identity(),
+            artifact.clone(),
+            native.into(),
+        ))
     }
 }

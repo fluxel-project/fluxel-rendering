@@ -10,10 +10,12 @@
 //! `validation.rs`). Section 19.5 reuses `BindingKind` and `BindingCount`
 //! directly rather than defining shader-side copies, so the two cannot drift.
 
-use crate::api::binding::{BindGroupIndex, BindingCount, BindingKind, BindingSlotId};
+use crate::api::binding::{
+    BindGroupIndex, BindingCount, BindingKind, BindingSlotId, BindingSupportQuery,
+};
 use crate::api::platform::requirements::{LimitRequirement, OptionalFeature};
 
-use super::vocabulary::ShaderLocationInterface;
+use super::vocabulary::{ShaderLocationInterface, ShaderStage, stage_mask};
 
 /// One resource an entry point requires, in the RHI binding vocabulary.
 ///
@@ -37,6 +39,34 @@ pub struct ShaderResourceRequirement {
 
     /// The fixed resource count of this logical binding in shader code.
     pub count: BindingCount,
+}
+
+impl ShaderResourceRequirement {
+    /// This requirement as the capability query it implies, for an entry point at
+    /// `stage`.
+    ///
+    /// One place rather than two, because section 19.7 makes both askers ask the
+    /// same thing: `validate_shader_artifact` asks before the backend is touched,
+    /// and `acceptance::decide` asks as part of the device's verdict. A requirement
+    /// is answered by asking [`BindingSupportQuery`] about it — never by repeating
+    /// capability in [`ShaderRequirements`] — so building the query twice is how the
+    /// two answers start to differ.
+    ///
+    /// `dynamic_offset` is false because it is a layout fact, not a shader semantic
+    /// (section 19.5): whether a dynamic offset is used is decided by the layout,
+    /// and the shader sees only the resolved resource.
+    ///
+    /// Crate-private: a caller's own spelling of this query is two lines, and
+    /// publishing a builder for it would declare a convenience the specification
+    /// does not have.
+    pub(crate) fn binding_query(&self, stage: ShaderStage) -> BindingSupportQuery {
+        BindingSupportQuery {
+            visibility: stage_mask(stage),
+            kind: self.kind.clone(),
+            count: self.count,
+            dynamic_offset: false,
+        }
+    }
 }
 
 /// The portable semantics of one entry point.

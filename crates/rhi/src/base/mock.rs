@@ -71,6 +71,7 @@ use crate::api::presentation::PresentationTarget;
 use crate::api::resource::buffer::{
     BufferDescriptor, BufferSupport, BufferSupportLimits, BufferUsage,
 };
+use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
     SubmissionLaneInfo,
@@ -276,6 +277,7 @@ impl DeviceRequestBackend for MockRequest {
                 facts: self.facts.clone(),
                 submission: self.submission.clone(),
                 allocations: AtomicUsize::new(0),
+                shader_modules: AtomicUsize::new(0),
                 submissions: AtomicUsize::new(0),
                 next_completion: AtomicU64::new(1),
                 holding: AtomicBool::new(false),
@@ -350,6 +352,37 @@ impl BufferBackend for MockBuffer {
     }
 }
 
+/// A shader entry point that was never compiled, because there is no compiler.
+///
+/// The mock has no GPU and no runtime shader compiler, so this holds the artifact's
+/// own bytes and nothing else. That is the honest model of a device in this
+/// position rather than a shortcut: section 19.10 makes a compile *error* a thing a
+/// runtime compiler produces, and this backend does not have one, so it has no
+/// error to report and no compiled form to hand back. What it does have is
+/// [`Self::artifact`], which is what lets a test show that the module's stage,
+/// entry point and code form arrived unchanged.
+pub(crate) struct MockShaderModule {
+    artifact: crate::api::shader::ShaderArtifact,
+}
+
+impl MockShaderModule {
+    /// Keeps `artifact` as this module's entry point.
+    pub(crate) fn new(artifact: crate::api::shader::ShaderArtifact) -> Self {
+        Self { artifact }
+    }
+
+    /// The artifact this module was created from.
+    pub(crate) fn artifact(&self) -> &crate::api::shader::ShaderArtifact {
+        &self.artifact
+    }
+}
+
+impl crate::base::shader::ShaderModuleBackend for MockShaderModule {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// A device that answers from memory.
 pub(crate) struct MockDevice {
     backend: BackendKind,
@@ -369,6 +402,15 @@ pub(crate) struct MockDevice {
     /// one that was never called. Counting is what tells those apart, and the
     /// count is read by the tests that assert a refusal never arrives here.
     allocations: AtomicUsize,
+    /// How many shader entry points have reached this backend.
+    ///
+    /// The same observable as `allocations`, one chapter later, and for the same
+    /// reason: section 19.10 puts the acceptance verdict *before* the backend call,
+    /// and "before" is invisible in the return value — a refused `create_shader`
+    /// looks identical whether the backend was reached and declined or was never
+    /// called. Counting is what separates them, and it is what pins the verdict's
+    /// placement against a later edit that moves it past the port.
+    shader_modules: AtomicUsize,
     /// How many plans have reached this backend's submit.
     ///
     /// The same observable as `allocations`, one chapter later. Section 41.3's
@@ -445,6 +487,7 @@ impl MockDevice {
             facts,
             submission,
             allocations: AtomicUsize::new(0),
+            shader_modules: AtomicUsize::new(0),
             submissions: AtomicUsize::new(0),
             // Starts at 1 so that serial 0 is never reported. A zero would make
             // the "never reported" check below depend on which side of the
@@ -463,6 +506,15 @@ impl MockDevice {
     /// happened to refuse too".
     pub(crate) fn allocations(&self) -> usize {
         self.allocations.load(Ordering::Relaxed)
+    }
+
+    /// How many shader entry points have reached this backend.
+    ///
+    /// The same observable one chapter later. Section 19.10 puts the acceptance
+    /// verdict before the port, so an artifact this device refuses must leave this
+    /// at its previous value.
+    pub(crate) fn shader_modules(&self) -> usize {
+        self.shader_modules.load(Ordering::Relaxed)
     }
 
     /// How many plans have reached this backend's `submit`.
@@ -569,6 +621,25 @@ impl DeviceBackend for MockDevice {
             size: descriptor.size,
             usage: descriptor.usage,
         }))
+    }
+
+    fn create_shader(
+        &self,
+        artifact: &crate::api::shader::ShaderArtifact,
+    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>> {
+        // No refusal here, and the absence is the same decision `create_buffer`
+        // records rather than an unfinished arm: section 19.10's acceptance verdict
+        // and every canonicality rule about this artifact have already run in
+        // `Device::create_shader`, so there is nothing left for this backend to
+        // refuse — and a backend that invented a rule here would be discipline 2's
+        // violation.
+        //
+        // `MockShaderModule` deliberately does *not* claim to have compiled
+        // anything. The mock has no runtime compiler, and a fabricated failure
+        // would be worse than the absence: it would tell a caller its artifact was
+        // wrong when the truth is that nothing ever looked at it.
+        self.shader_modules.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(MockShaderModule::new(artifact.clone())))
     }
 
     /// Accepts the plan, and executes none of it.
@@ -678,6 +749,63 @@ pub(crate) fn device_for_test(identity: DeviceIdentity) -> Device {
 /// A portable device handle paired with the backend that owns its liveness.
 pub(crate) fn paired_device_for_test(identity: DeviceIdentity) -> (Device, Arc<MockDevice>) {
     let native = mock_native(BackendKind::Dx12);
+    (
+        Device::new(identity, native.clone())
+            .expect("the mock backend offers a lane accepting raster and copy work"),
+        native,
+    )
+}
+
+/// A native entry point for a portable test that needs a
+/// [`ShaderModule`](crate::api::shader::ShaderModule) but is not about the shader
+/// lowering.
+///
+/// The command and pipeline chapters build modules as *inputs* to their own
+/// descriptors — a raster pass names one, a pipeline names its stages — and none of
+/// those tests is about how a module is made. Without this they would each have to
+/// invent a backend object, and an invented one would be a second answer to "what
+/// does a module hold".
+///
+/// It is the mock's own, so a test that reads it back gets the artifact it passed
+/// and nothing else: no compilation is modelled, and none is claimed.
+pub(crate) fn module_backend_for_test(
+    artifact: &crate::api::shader::ShaderArtifact,
+) -> Arc<dyn crate::base::shader::ShaderModuleBackend> {
+    Arc::new(MockShaderModule::new(artifact.clone()))
+}
+
+/// A portable device that consumes exactly the code forms a test names.
+///
+/// [`device_for_test`] reports empty facts, and for the shader chapter an empty
+/// table is a real answer rather than a hole: the accepted forms are a relation
+/// over an unbounded key space, so a device that recorded none refuses every
+/// artifact — which is what [`MockShaderModule`] deserves, since it holds an
+/// artifact and compiles nothing. A test that wants acceptance to *succeed* has to
+/// state which forms this device consumes, and it has to state them here rather
+/// than by narrowing the rule: the rule reads a recorded device fact, and a mock
+/// that could accept without one would be proving the shortcut section 6.3 forbids.
+///
+/// `forms` is the caller's because that is what a test varies — the two-form case
+/// is what shows the record is a set rather than a single answer.
+///
+/// Returned as a pair for the same reason [`paired_device_for_test`] is: the
+/// assertions worth making about a *refused* creation are about what the backend
+/// was never asked — see [`MockDevice::shader_modules`].
+pub(crate) fn shaders_for_test(
+    identity: DeviceIdentity,
+    forms: &[AcceptedCodeForm],
+) -> (Device, Arc<MockDevice>) {
+    let mut facts = CapabilityFacts::empty();
+    for form in forms {
+        facts.record_code_form(*form);
+    }
+
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
     (
         Device::new(identity, native.clone())
             .expect("the mock backend offers a lane accepting raster and copy work"),

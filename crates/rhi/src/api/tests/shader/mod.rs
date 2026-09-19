@@ -24,6 +24,7 @@
 //! requirements.rs sections 19.8, the canonical requirement collections
 //! validation.rs   sections 19.6-19.7, what an acceptable artifact is
 //! artifact.rs     sections 19.9-19.10, the artifact as a value and the handle
+//! acceptance.rs   section 19.8, the device's verdict on one artifact
 //! ```
 //!
 //! Keeping the fixtures in `mod.rs` is what lets each section file say only what
@@ -167,6 +168,7 @@ fn artifact_with(
     )
 }
 
+mod acceptance;
 mod artifact;
 mod requirements;
 mod validation;

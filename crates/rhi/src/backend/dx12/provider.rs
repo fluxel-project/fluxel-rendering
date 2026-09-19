@@ -645,6 +645,28 @@ impl DeviceBackend for Dx12Device {
         }
     }
 
+    /// Prepares one shader entry point, and cannot fail.
+    ///
+    /// The least eventful method on this trait, and the one most worth a note,
+    /// because the reason it cannot fail is a property of Direct3D 12 rather than a
+    /// gap: there is no shader-module object to create and no
+    /// `CheckFeatureSupport` question that could refuse. The lowering keeps the
+    /// artifact's bytes alive for `D3D12_SHADER_BYTECODE` and the driver's verdict
+    /// arrives at pipeline creation. [`super::shader`] states this at length, and
+    /// the length is deliberate — "the module was created" reads like "the shader
+    /// compiled", and that misreading is the one this method must not invite.
+    ///
+    /// There is also no device-liveness check to add here, unlike
+    /// [`Self::create_buffer`]: nothing in this method touches the device. The
+    /// portable layer's `require_active` has already refused a lost device, and a
+    /// backend that re-checked would be discipline 2's duplicate opinion.
+    fn create_shader(
+        &self,
+        artifact: &crate::api::shader::ShaderArtifact,
+    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>> {
+        Ok(Box::new(super::shader::create_shader(artifact)))
+    }
+
     /// Lowers a plan onto the spine's queue, and is the second place in this
     /// backend that acts on a terminal native failure.
     ///
@@ -783,6 +805,16 @@ impl DeviceBackend for ArcDevice {
     /// or the terminal-failure path above would be exercised by nobody.
     fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
         self.0.create_buffer(descriptor)
+    }
+
+    /// Forwarded for the same reason `create_buffer` is, and with the same
+    /// consequence if it were not: two entry points into the shader lowering would
+    /// let the portable path and the test path disagree about what a module holds.
+    fn create_shader(
+        &self,
+        artifact: &crate::api::shader::ShaderArtifact,
+    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>> {
+        self.0.create_shader(artifact)
     }
 
     /// Forwarded for the same reason `create_buffer` is: a device that reached the

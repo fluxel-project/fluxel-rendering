@@ -187,6 +187,7 @@ use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
 use crate::api::resource::view::TextureViewDimension;
+use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::backend::dx12::ffi;
 
 /// Reads every fact this backend enumerates from `device`.
@@ -235,6 +236,7 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
 
     let mut facts = CapabilityFacts::empty();
     record_features(&mut facts);
+    record_code_forms(&mut facts);
     record_limits(&options, &mut facts);
     record_buffer_support(&mut facts);
     record_binding_support(&mut facts);
@@ -275,6 +277,23 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
     record_buffer_route(&mut facts);
 
     Ok(facts)
+}
+
+/// Records the code form this backend consumes.
+///
+/// One member, and structural rather than probed: Direct3D 12 takes shader
+/// bytecode and nothing else. `D3D12_SHADER_BYTECODE` is a pointer and a length
+/// with no format field, `CreateComputePipelineState` and
+/// `CreateGraphicsPipelineState` accept exactly that struct, and there is no
+/// `CheckFeatureSupport` question about shader input that could answer anything
+/// else. A D3D12 device that refused DXIL would not be a D3D12 device.
+///
+/// The portable artifact need not be *validated* here — `decide` answers whether
+/// this device will try, and `CreateComputePipelineState` remains the only thing
+/// that can say whether the bytecode compiled. What this record settles is the
+/// form, which is the part of that question a device can answer in advance.
+fn record_code_forms(facts: &mut CapabilityFacts) {
+    facts.record_code_form(AcceptedCodeForm::Dxil);
 }
 
 /// Records the three optional features this backend can answer for.

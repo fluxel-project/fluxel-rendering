@@ -122,6 +122,7 @@ use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteQuery, RouteSupport};
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
+use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderStage, ShaderStages};
 use crate::api::submission::SubmissionCapabilities;
 use crate::base::digest::sha256;
@@ -383,6 +384,20 @@ pub(crate) fn visibilities() -> [ShaderStages; 7] {
 #[derive(Clone, Debug)]
 pub(crate) struct CapabilityFacts {
     features: HashSet<OptionalFeature>,
+    /// The [`ShaderCode`](crate::api::shader::ShaderCode) forms this device will
+    /// consume.
+    ///
+    /// A relation rather than a single answer, because a device may consume more
+    /// than one form — the GL family backend is the case that forces it, and the
+    /// shape is section 7.2's for accepting a code form at all. A form that is
+    /// absent is not a form this device refuses *in particular*; it is one this
+    /// device does not consume, and `shader_acceptance` answers
+    /// [`ArtifactAcceptance::UnsupportedCodeFormat`] for it.
+    ///
+    /// Not derived from the backend kind. Section 6.3 states in as many words that
+    /// the kind a device reports is diagnostics and tooling provenance and **not**
+    /// a capability oracle, and two devices of one kind can disagree here.
+    code_forms: HashSet<AcceptedCodeForm>,
     limits: DeviceLimits,
     formats: HashMap<TextureFormat, FormatFacts>,
     buffer_support: HashMap<BufferUsage, BufferSupport>,
@@ -425,6 +440,7 @@ impl CapabilityFacts {
     pub(crate) fn empty() -> Self {
         Self {
             features: HashSet::new(),
+            code_forms: HashSet::new(),
             limits: DeviceLimits {
                 entries: HashMap::new(),
             },
@@ -590,6 +606,19 @@ impl CapabilityFacts {
                 .collect(),
         );
 
+        // Appended last, after every section that was here before it, so that a
+        // section added in a later revision never moves an earlier section's
+        // offset. It still needs the domain bump: an encoding that grew a section
+        // is a different encoding, and two devices that differ only here would
+        // otherwise intern together.
+        write_section(
+            &mut out,
+            self.code_forms
+                .iter()
+                .map(|form| encode_entry(|out| form.encode_into(out), |_| {}))
+                .collect(),
+        );
+
         submission.encode_into(&mut out);
 
         out
@@ -637,8 +666,8 @@ impl CapabilityFacts {
 /// This block was one expectation over nine methods, on the reasoning that they
 /// were one body of code with one fate and that the expectation going
 /// *unfulfilled* when the DX12 fill arrived would be the gate saying "these are
-/// live now, delete the crutch". That is what happened, and it happened in three
-/// parts rather than one — which is the useful part of the story.
+/// live now, delete the crutch". That is what happened, and it happened in
+/// several parts rather than one — which is the useful part of the story.
 ///
 /// The form the arrival takes is a *narrowing* rather than a deletion: `not(test)`
 /// becomes `all(not(test), not(feature = "dx12"))`. A build without the `dx12`
@@ -650,21 +679,27 @@ impl CapabilityFacts {
 /// true is the failure mode [`Self::record_feature`]'s own reason string was
 /// written to announce.
 ///
-/// Six of the nine ([`Self::record_feature`], [`Self::record_limit`],
-/// [`Self::record_format`], [`Self::record_buffer_support`],
-/// [`Self::record_texture_support`], [`Self::record_route`]) have made that move:
-/// they are reached from a non-test build by `crate::backend::dx12::facts`.
+/// The block holds ten methods: the nine it started with, plus
+/// [`Self::record_code_form`]. Eight of them have made that move
+/// ([`Self::record_feature`], [`Self::record_limit`], [`Self::record_format`],
+/// [`Self::record_buffer_support`], [`Self::record_texture_support`],
+/// [`Self::record_binding_support`], [`Self::record_route`], and
+/// [`Self::record_code_form`]): they are reached from a non-test build by
+/// `crate::backend::dx12::facts`.
 ///
-/// The other three still have no caller outside this crate's tests. They are the
-/// ones whose DX12 fill is the *next* block — binding and view-compatibility
-/// facts — and they keep an expectation each, because a block-level one would now
-/// be unfulfilled and would have to be deleted even though most of its members
-/// are still dead. One expectation per method is what keeps the signal working
-/// when the block splits, and this block has now split three times: the second
-/// narrowed [`Self::record_texture_support`]'s expectation, the third narrowed
-/// [`Self::record_route`]'s, and each time the mechanism worked rather than
-/// surprised anyone — the crutch was still there to be removed a method at a
-/// time, which is exactly what per-method expectations buy.
+/// Two still have no caller outside this crate's tests, and they are not the same
+/// kind of gap:
+///
+/// - [`Self::record_binding_limit`]'s own doc explains why no Direct3D 12 backend
+///   will ever call it: this device states no per-stage, per-class binding ceiling,
+///   so an entry here would be this port inventing one.
+/// - [`Self::record_view_compatibility`] is the fill that has not landed yet.
+///
+/// One expectation per method is what keeps the signal working when the block
+/// splits, and this block has now split five times: each time the method that moved
+/// lost its expectation and the ones that had not kept theirs — the crutch was
+/// still there to be removed a method at a time, which is exactly what per-method
+/// expectations buy.
 impl CapabilityFacts {
     /// Records that the contract offers `feature`.
     #[cfg_attr(
@@ -676,6 +711,22 @@ impl CapabilityFacts {
     )]
     pub(crate) fn record_feature(&mut self, feature: OptionalFeature) {
         self.features.insert(feature);
+    }
+
+    /// Records that the device consumes this code form.
+    ///
+    /// Some backends have nothing to ask here and record a structural fact — the
+    /// DX12 port records `Dxil` because Direct3D 12's only shader input is
+    /// bytecode — which is why this method takes no device and no probe result.
+    #[cfg_attr(
+        all(not(test), not(feature = "dx12")),
+        expect(
+            dead_code,
+            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+        )
+    )]
+    pub(crate) fn record_code_form(&mut self, form: AcceptedCodeForm) {
+        self.code_forms.insert(form);
     }
 
     /// Records the value for `key`.
@@ -872,6 +923,33 @@ impl CapabilityFacts {
         }
     }
 
+    /// Whether the device consumes this code form.
+    ///
+    /// Crate-visible rather than private because
+    /// [`crate::api::shader::acceptance::decide`] reads it. It is deliberately not
+    /// a public accessor: section 7.2's frozen `EnabledCapabilities` surface has
+    /// no `code_forms` query, and the whole of what a caller may ask about a code
+    /// form is [`EnabledCapabilities::shader_acceptance`]'s verdict.
+    pub(crate) fn accepts_code_form(&self, form: AcceptedCodeForm) -> bool {
+        self.code_forms.contains(&form)
+    }
+
+    /// Whether the device enabled `feature`.
+    ///
+    /// Crate-visible for the same reason: the acceptance rule reads it, and
+    /// [`EnabledCapabilities::supports_feature`] is the public spelling.
+    pub(crate) fn has_feature(&self, feature: OptionalFeature) -> bool {
+        self.features.contains(&feature)
+    }
+
+    /// The device's value for `key`, or `None` when it defines none.
+    ///
+    /// Crate-visible for the same reason;
+    /// [`EnabledCapabilities::limit`] is the public spelling.
+    pub(crate) fn limit(&self, key: LimitKey) -> Option<u64> {
+        self.limits.get(key)
+    }
+
     /// Whether, and how, the described binding can be satisfied.
     ///
     /// Shape 4, and the two magnitudes [`BindingSupportKey`] drops are why: a
@@ -890,7 +968,7 @@ impl CapabilityFacts {
     /// either here would give one fact two sources, which section 7.3 forbids. This
     /// accessor answers whether the *kind* of binding is expressible; the ceilings
     /// are asked separately.
-    fn binding_support(&self, query: &BindingSupportQuery) -> BindingSupport {
+    pub(crate) fn binding_support(&self, query: &BindingSupportQuery) -> BindingSupport {
         Self::not_enumerable(
             self.binding_support
                 .get(&BindingSupportKey::of(query))
@@ -918,7 +996,11 @@ impl CapabilityFacts {
 /// equal to one recorded after it while describing something else. Bumping this
 /// string is what makes that true, and it is the one step of an encoding change
 /// that a compiler cannot be made to insist on.
-const ENCODING_DOMAIN: &[u8] = b"fluxel-rhi/capability-facts/v2";
+///
+/// `v3` added the accepted-code-form section. `v2` narrowed the texture-support
+/// key's `view_formats` away (see [`TextureSupportKey`]); `v1` was the first
+/// encoding.
+const ENCODING_DOMAIN: &[u8] = b"fluxel-rhi/capability-facts/v3";
 
 /// Encodes one section entry: the key's length, the key, then the value.
 ///
@@ -1306,16 +1388,12 @@ impl EnabledCapabilities {
     ///
     /// The decision rule is section 19.8's, alongside the artifact provenance the
     /// answer is derived from, so this delegates rather than re-deriving it from
-    /// the artifact's fields here. It panics until that module exists.
+    /// the artifact's fields here.
     ///
     /// Note the asymmetry with [`Self::supports_feature`]: a feature is a fact the
     /// device either has or lacks, while acceptance is a judgement about one
     /// artifact's provenance. Section 7.2 models it as a query for that reason.
     pub fn shader_acceptance(&self, artifact: &ShaderArtifact) -> ArtifactAcceptance {
-        let _ = artifact;
-        unimplemented!(
-            "shader artifact acceptance is decided by module 03 section 19.8; the \
-             contract is fixed, the decision rule is not built"
-        )
+        crate::api::shader::acceptance::decide(&self.facts, artifact)
     }
 }

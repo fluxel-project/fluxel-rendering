@@ -126,11 +126,28 @@ impl LimitKey {
     /// easy to read past. Stating it as a total function over the keys — with no
     /// wildcard arm, so a new key fails to compile here until it is classified —
     /// is what keeps [`LimitRequirement`] from being built backwards.
+    ///
+    /// # Why this has no caller in the crate
+    ///
+    /// It was written for the requirement-versus-answer comparison, and that
+    /// comparison does not need it: [`LimitRequirement`]'s variant already carries
+    /// the direction of the bound (`AtLeast` reads the device's value from below,
+    /// `AtMost` from above), so the key's own direction never has to be consulted
+    /// to compare. What this classifies is which *spelling* expresses "at least
+    /// this capable" for a given key — the knowledge a producer needs when it turns
+    /// a reflection result into a requirement, and the reason section 7.4 refuses
+    /// to collapse the two variants into one `minimum_limit()`.
+    ///
+    /// So it is a classifier with an audience outside this build, and it is kept
+    /// rather than deleted for the property the no-wildcard match gives it: adding
+    /// a limit key without deciding its direction is a compile error, and the
+    /// direction is the one thing about a limit a caller cannot read off the name.
+    /// The contract tests exercise it.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "exercised by the contract tests; the requirement-versus-limit comparison that reads it is not written"
+            reason = "a classifier for producers rather than a step of any comparison in this crate: the requirement's variant carries the direction. Exercised by the contract tests; see the note above"
         )
     )]
     pub(crate) fn larger_is_stronger(self) -> bool {

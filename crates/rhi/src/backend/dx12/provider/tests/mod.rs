@@ -22,6 +22,15 @@
 //!   containing one rather than skipping it — so section 4's other two
 //!   requirements, real headless raster and compute on Windows DX12, are **not
 //!   met by this module** and no test here may be read as if they were.
+//! - **A shader entry point is accepted, not compiled.** Section 19.10's verdict
+//!   is exercised against a real device by
+//!   `a_real_device_accepts_the_dxil_form_and_refuses_another`, and what that
+//!   establishes is narrower than "a shader was compiled": Direct3D 12 has no
+//!   shader-module object, so the test shows the recorded code-form fact reaching
+//!   the portable verdict through a real `ID3D12Device`, the module carrying the
+//!   checked-in DXIL blob unchanged, and a WGSL artifact being refused. The
+//!   driver's opinion of the bytecode arrives at `CreateComputePipelineState`,
+//!   which is not written — see [`crate::backend::dx12::shader`].
 //!
 //! Allocation is exercised below too, and it is a prerequisite for the byte
 //! movement rather than a part of it.
@@ -35,8 +44,8 @@ use windows::Win32::Graphics::Direct3D12::{
 use super::*;
 use crate::api::binding::vocabulary::StorageAccess;
 use crate::api::binding::{
-    BindingCount, BindingKind, BindingLimitClass, BindingSupport, BindingSupportQuery,
-    BufferBindingAccess, TextureSampleType,
+    BindingCount, BindingKind, BindingLimitClass, BindingSupportQuery, BufferBindingAccess,
+    TextureSampleType,
 };
 use crate::api::command::{BlitFilter, BufferCopy, RecorderDescriptor};
 use crate::api::format::{TextureFormat, TextureSupportQuery};
@@ -52,7 +61,11 @@ use crate::api::resource::subresource::TextureAspect;
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
 use crate::api::resource::transfer::{BufferUploadDescriptor, ReadbackData, ReadbackRequest};
 use crate::api::resource::view::TextureViewDimension;
-use crate::api::shader::{ShaderStage, ShaderStages};
+use crate::api::shader::{
+    ArtifactHash, ArtifactProducerId, ArtifactProducerVersion, ComputeWorkgroupRequirements,
+    ShaderAbiVersion, ShaderArtifact, ShaderInterface, ShaderRequirements, ShaderStage,
+    ShaderStages,
+};
 use crate::api::submission::{
     CompletionPoint, CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
 };
@@ -223,6 +236,105 @@ fn the_portable_path_produces_a_real_device_and_retires_its_request() {
 
     assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
     assert_eq!(error.operation(), Some("DeviceRequest::poll"));
+}
+
+/// The checked-in DXIL blob, summarised rather than only embedded.
+///
+/// The bytes come from `scripts/tests/data/dxil/fill_cs.dxil`, whose README records
+/// the `dxc` version, the command line and the hash. **No test runs `dxc`**: a test
+/// that generated its own input could not tell "the driver accepted this program"
+/// apart from "this machine's toolchain produced something", and the fixture would
+/// change under the test without anyone deciding to.
+const FILL_CS_DXIL: &[u8] =
+    include_bytes!("../../../../../../../scripts/tests/data/dxil/fill_cs.dxil");
+
+/// A compute artifact over the DXIL fixture: the closure's payload.
+fn fill_cs_artifact(code: crate::api::shader::ShaderCode) -> ShaderArtifact {
+    // The workgroup requirements match `[numthreads(8, 8, 1)]` in the source that
+    // produced the blob, because section 19.7 makes them a *statement about the
+    // entry point* rather than a hint: a dispatch is lowered from the artifact's
+    // declared size and the shader's own `numthreads` must agree with it.
+    ShaderArtifact::new(
+        ShaderStage::Compute,
+        "main",
+        code,
+        ShaderAbiVersion { major: 1, minor: 0 },
+        ShaderInterface::new(),
+        ShaderRequirements::new()
+            .with_compute_workgroup(ComputeWorkgroupRequirements::new(8, 8, 1, 64, 0)),
+        ArtifactHash([0x51; 32]),
+        ArtifactProducerId("fluxel-dx12-evidence".to_string()),
+        ArtifactProducerVersion {
+            major: 0,
+            minor: 16,
+        },
+    )
+}
+
+/// The acceptance verdict, on the device this machine actually has.
+///
+/// This is the real-GPU half of the shader step, and what it establishes is
+/// narrower than the paragraph that follows might suggest. The accepted code forms
+/// are a recorded device fact, and for Direct3D 12 that record is *structural* —
+/// there is no `CheckFeatureSupport` question whose answer could be otherwise, and
+/// [`super::super::facts`] records the form for that reason rather than from a
+/// probe. So this test does not check a driver's opinion. What it checks is that
+/// the fact reaches the portable verdict through a real device: the same
+/// `EnabledCapabilities` a caller holds, built from a real `ID3D12Device` by the
+/// production path, answers `Accepted` for a DXIL artifact and refuses a WGSL one.
+///
+/// The WGSL case is the one that can fail if the shortcut section 6.3 forbids is
+/// ever reintroduced: a device that answered "a DX12 backend consumes DXIL" would
+/// look identical here, which is why the refusal is asserted alongside.
+#[test]
+fn a_real_device_accepts_the_dxil_form_and_refuses_another() {
+    let device = portable_device();
+
+    assert_eq!(
+        device.backend(),
+        BackendKind::Dx12,
+        "this evidence is about the Direct3D 12 backend"
+    );
+
+    let dxil = device
+        .create_shader(&fill_cs_artifact(crate::api::shader::ShaderCode::Dxil(
+            Arc::from(FILL_CS_DXIL),
+        )))
+        .expect("a real DX12 device consumes DXIL, which its own facts record");
+
+    assert_eq!(dxil.stage(), ShaderStage::Compute);
+    assert_eq!(dxil.artifact().entry_point, "main");
+
+    // The seam, on real hardware: the portable handle hands back this backend's own
+    // object, holding the very bytes the fixture supplies. This is what the pipeline
+    // lowering will hand to `D3D12_SHADER_BYTECODE`.
+    let held = dxil
+        .native()
+        .as_any()
+        .downcast_ref::<crate::backend::dx12::shader::Dx12ShaderModule>()
+        .expect("a DX12 device's module is the DX12 backend's own type");
+    assert_eq!(
+        held.dxil(),
+        Some(FILL_CS_DXIL),
+        "the module must carry the fixture's bytes unchanged"
+    );
+
+    // The other direction. A `ShaderCode::Wgsl` artifact is well-formed — the
+    // portable rules pass — and this device still cannot consume it, so the refusal
+    // is `Unsupported` and it is the *device's* answer rather than a complaint about
+    // the artifact.
+    let error = device
+        .create_shader(&fill_cs_artifact(crate::api::shader::ShaderCode::Wgsl(
+            Arc::from("@compute @workgroup_size(8, 8, 1) fn main() {}"),
+        )))
+        .expect_err("a DX12 device has no WGSL compiler, and says so");
+    assert_eq!(error.kind(), RhiErrorKind::Unsupported);
+    assert_eq!(error.operation(), Some("Device::create_shader"));
+    assert!(
+        error.message().contains("UnsupportedCodeFormat"),
+        "the verdict names the reason rather than only the refusal: {}",
+        error.message()
+    );
 }
 
 #[test]
@@ -1167,30 +1279,11 @@ fn what_the_texture_enumeration_actually_reported() {
 // whether this driver sets them.
 // ---------------------------------------------------------------------------
 
-/// Reads a binding answer as the boolean the assertions below are about.
-///
-/// A private extension trait rather than a method on
-/// [`BindingSupport`](crate::api::binding::BindingSupport), and that is a decision
-/// rather than a convenience. Section 20.4 freezes that enum with two members and
-/// no accessors; the three sibling support enums that do carry `is_supported` —
-/// `TextureSupport`, `BufferSupport`, `RouteSupport` — carry it because the
-/// specification gives it to them, and it does not give it here. Adding a public
-/// accessor would be a change to a frozen surface made for a test's benefit, so the
-/// test brings its own reader instead and the surface is left alone. An inherent
-/// method always wins over a trait method, so the sibling enums' own
-/// `is_supported` is unaffected by this being in scope.
-///
-/// Taken by reference, and named as the siblings name it, so that the call sites
-/// read the same as the texture tests above.
-trait BindingAnswer {
-    fn is_supported(&self) -> bool;
-}
-
-impl BindingAnswer for BindingSupport {
-    fn is_supported(&self) -> bool {
-        matches!(self, BindingSupport::Supported)
-    }
-}
+// The assertions below read a binding answer through
+// `BindingSupport::is_supported`, which the crate carries as `pub(crate)` because
+// section 20.4 freezes that enum at two members and no *public* accessor. This
+// module had an extension trait of its own before that method existed, which was
+// the same reader written twice.
 
 /// Builds the query a shader would ask, with the magnitude fields filled in.
 ///

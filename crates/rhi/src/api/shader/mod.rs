@@ -58,7 +58,10 @@
 //!
 //! The remaining entries of that list are device facts — `ArtifactAcceptance`,
 //! `ShaderAbiVersion` acceptance, and binding support — so they are answered by
-//! the device façade and arrive here as parameters.
+//! the device façade. The first two are `acceptance.rs`'s decision rule, reached
+//! through `EnabledCapabilities::shader_acceptance`; the third is the device's own
+//! answer, which `validation.rs` receives as a parameter so that it stays
+//! decidable without a backend.
 //!
 //! # Files
 //!
@@ -71,6 +74,7 @@
 //! requirements.rs section 19.5-19.7, what an entry point requires
 //! artifact.rs     sections 19.8-19.9, provenance and the created module
 //! validation.rs   sections 19.6-19.10, the portable validators
+//! acceptance.rs   section 19.8, the device's verdict on one artifact
 //! ```
 //!
 //! The re-export list is the module's public contract with the rest of the crate:
@@ -84,6 +88,7 @@
 //! attributes as a substitute for a caller — so a crate-internal caller names the
 //! file that defines the item.
 
+pub(crate) mod acceptance;
 pub(crate) mod artifact;
 pub(crate) mod requirements;
 pub(crate) mod validation;

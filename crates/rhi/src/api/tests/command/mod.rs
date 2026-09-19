@@ -334,23 +334,25 @@ fn color_scope(label: &str) -> RasterScopeDescriptor {
 }
 
 fn vertex_module(id: u64) -> ShaderModule {
+    let artifact = ShaderArtifact::new(
+        ShaderStage::Vertex,
+        "main",
+        ShaderCode::Wgsl(Arc::from("@vertex fn main() {}")),
+        ShaderAbiVersion { major: 1, minor: 0 },
+        ShaderInterface::new().with_writes_position(true),
+        ShaderRequirements::new(),
+        ArtifactHash([3; 32]),
+        ArtifactProducerId("fluxel-shaderc".to_string()),
+        ArtifactProducerVersion {
+            major: 0,
+            minor: 16,
+        },
+    );
     ShaderModule::new(
         object(id),
         device(),
-        ShaderArtifact::new(
-            ShaderStage::Vertex,
-            "main",
-            ShaderCode::Wgsl(Arc::from("@vertex fn main() {}")),
-            ShaderAbiVersion { major: 1, minor: 0 },
-            ShaderInterface::new().with_writes_position(true),
-            ShaderRequirements::new(),
-            ArtifactHash([3; 32]),
-            ArtifactProducerId("fluxel-shaderc".to_string()),
-            ArtifactProducerVersion {
-                major: 0,
-                minor: 16,
-            },
-        ),
+        artifact.clone(),
+        crate::base::mock::module_backend_for_test(&artifact),
     )
 }
 

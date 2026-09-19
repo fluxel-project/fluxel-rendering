@@ -20,7 +20,7 @@ use crate::api::platform::requirements::LimitRequirement;
 use super::artifact::{ShaderArtifact, ShaderProvenance};
 use super::requirements::{ComputeWorkgroupRequirements, ShaderInterface, ShaderRequirements};
 use super::vocabulary::{
-    InterpolationMode, ShaderLocationInterface, ShaderNumericType, ShaderStage, stage_mask,
+    InterpolationMode, ShaderLocationInterface, ShaderNumericType, ShaderStage,
 };
 
 /// Checks everything about an artifact that does not need a device.
@@ -69,20 +69,15 @@ pub(crate) fn validate_shader_artifact(
     validate_provenance(&artifact.provenance)?;
 
     // Section 19.7: binding capability is not repeated in `ShaderRequirements`; it
-    // is answered here, by asking about each required resource. `dynamic_offset` is
-    // false because it is a layout fact, not a shader semantic (section 19.5).
-    let visibility = stage_mask(artifact.stage);
+    // is answered here, by asking about each required resource. The query itself is
+    // built by the requirement's own accessor, so that this check and
+    // `acceptance::decide` cannot ask two different questions about one resource.
     for requirement in artifact.interface.resources() {
-        let query = BindingSupportQuery {
-            visibility,
-            kind: requirement.kind.clone(),
-            count: requirement.count,
-            dynamic_offset: false,
-        };
         // Also rejects a `min_size` of zero, which is not a size a device can
         // express (section 20.3).
         validate_binding_kind(&requirement.kind)?;
-        if binding_support(&query) == BindingSupport::Unsupported {
+        let query = requirement.binding_query(artifact.stage);
+        if !binding_support(&query).is_supported() {
             return Err(RhiError::new(
                 RhiErrorKind::Unsupported,
                 format!(
