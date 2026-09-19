@@ -42,6 +42,11 @@ use std::sync::Arc;
 /// semver surface, it names no platform crate, and it holds the required floor
 /// plus one trait per optional capability domain.
 mod common;
+/// Fluxel RHI API v1: the frozen portable hardware interface.
+///
+/// This is the successor to the crate-root facade above. The facade is kept
+/// while its remaining callers migrate; new code uses `fluxel_rhi::rhi`.
+pub mod rhi;
 /// The native modern family: Direct3D 12, Vulkan and Metal (lead 3F, W2-W5).
 ///
 /// A grouping for readers, not a shared implementation: each backend implements
