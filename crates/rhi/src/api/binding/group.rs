@@ -13,8 +13,10 @@
 use core::fmt;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::format::TextureFormat;
+use crate::api::format::{TextureFormat, sample_type};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
+use crate::api::platform::requirements::LimitKey;
 use crate::api::resource::buffer::{
     BufferBinding, BufferUsage, validate_buffer_ownership, validate_buffer_range,
 };
@@ -129,8 +131,8 @@ impl BindGroupDescriptor {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_bind_group canonicalizes through this, and that creation \
-                      verb is not written yet"
+            reason = "Device::create_bind_group canonicalizes through this once the backend port \
+                      lands"
         )
     )]
     pub(crate) fn canonicalized(&self) -> Self {
@@ -165,8 +167,7 @@ impl BindGroup {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_bind_group calls this, and that creation verb is not \
-                      written yet"
+            reason = "Device::create_bind_group calls this once the backend port lands"
         )
     )]
     pub(crate) fn new(
@@ -235,14 +236,6 @@ pub(crate) struct BindGroupLimits {
 
 impl BindGroupLimits {
     /// States the four device limits a resource check depends on.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the device façade fills this when Device::create_bind_group is written, \
-                      and that creation verb does not exist yet"
-        )
-    )]
     pub(crate) fn new(
         max_uniform_buffer_binding_size: u64,
         max_storage_buffer_binding_size: u64,
@@ -295,14 +288,6 @@ impl BindGroupLimits {
 /// Identity is checked before anything else, per resource, in the sense of section
 /// 3.1: a buffer, view, or sampler from another device is
 /// [`RhiErrorKind::WrongDevice`], and there is no implicit migration.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_bind_group validates through this, and that creation verb is \
-                  not written yet"
-    )
-)]
 pub(crate) fn validate_bind_group_descriptor(
     desc: &BindGroupDescriptor,
     limits: BindGroupLimits,
@@ -850,5 +835,82 @@ fn validate_sampler(sampler: &Sampler, kind: SamplerKind, target: DeviceIdentity
                 Ok(())
             }
         }
+    }
+}
+
+/// Section 22.2's creation verb, defined in the chapter that owns the type it
+/// produces.
+///
+/// The placement is the specification's own: section 22.2 writes this verb in an
+/// `impl Device` in its own chapter, so the definition site is the owner.
+impl Device {
+    /// Creates a bind group on this device from a descriptor.
+    ///
+    /// Two steps before the stop, in this order:
+    ///
+    /// 1. Section 3.1's O(1) identity step, comparing the *layout's* device
+    ///    against this device. The validator takes the layout's device as the
+    ///    reference for every resource it checks, so proving that reference is
+    ///    this device is the façade's half of the rule — without it, a packet
+    ///    whose layout and resources all belong to another device would validate
+    ///    against that device and say nothing about this one.
+    /// 2. Section 22.2's canonicality rule and section 22.3's per-resource lists,
+    ///    through [`validate_bind_group_descriptor`], against this device's four
+    ///    binding limits and its two per-format answers.
+    ///
+    /// Panics until a backend port exists. Both steps above still run first,
+    /// because each refusal they produce is a statement about the packet that a
+    /// caller can act on without any device object having been allocated.
+    pub fn create_bind_group(&self, desc: &BindGroupDescriptor) -> RhiResult<BindGroup> {
+        let layout_device = desc.layout.device_identity();
+        if layout_device != self.identity() {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the layout this packet is validated against belongs to a different device; \
+                 there is no implicit migration between devices",
+            )
+            .with_object(desc.layout.id()));
+        }
+
+        let capabilities = self.capabilities();
+
+        // The four limits section 22.3 measures a buffer binding against. An
+        // unexposed ceiling imposes none, and an unexposed alignment imposes none
+        // either — `validate_buffer` skips an alignment of zero — which is the
+        // "not applicable rather than zero" convention the pipeline validators
+        // state for a limit the device does not expose. A ceiling of zero here
+        // would refuse every buffer binding.
+        let limits = BindGroupLimits::new(
+            capabilities
+                .limit(LimitKey::MaxUniformBufferBindingSize)
+                .unwrap_or(u64::MAX),
+            capabilities
+                .limit(LimitKey::MaxStorageBufferBindingSize)
+                .unwrap_or(u64::MAX),
+            capabilities
+                .limit(LimitKey::MinUniformBufferOffsetAlignment)
+                .unwrap_or(0),
+            capabilities
+                .limit(LimitKey::MinStorageBufferOffsetAlignment)
+                .unwrap_or(0),
+        );
+
+        // The sample type is a pure table, read through the same free function
+        // `FormatFacts::aspects` uses; the storage-access answer is a *probed*
+        // device fact, so it is read from the device's own format record rather
+        // than derived. Both stay parameters of the validator: see its docs.
+        validate_bind_group_descriptor(desc, limits, sample_type, |format, access| {
+            capabilities
+                .format(format)
+                .is_some_and(|facts| facts.storage_access().supports(access))
+        })?;
+
+        unimplemented!(
+            "Device::create_bind_group needs a backend descriptor-set builder to bind {} \
+             resource entries on device {:?}; the portable contract is fixed, but no backend \
+             port is built",
+            desc.entries.len(),
+            self.identity()
+        )
     }
 }

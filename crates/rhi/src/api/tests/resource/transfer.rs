@@ -4,6 +4,7 @@ use super::*;
 use crate::api::error::RhiErrorKind;
 use crate::api::format::TextureFormat;
 use crate::api::identity::Label;
+use crate::api::platform::Device;
 use crate::api::resource::buffer::{
     BufferRange, BufferSupport, BufferSupportLimits, BufferSupportQuery, BufferUsage,
 };
@@ -121,6 +122,46 @@ fn a_buffer_upload_from_another_device_is_wrong_device() {
     assert_kind(
         validate_buffer_upload(&descriptor, identity(9, 9), &copy_limits()),
         RhiErrorKind::WrongDevice,
+    );
+}
+
+#[test]
+fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
+    // The validator test above cannot see this, because the ordering it checks is
+    // the *verb's*. `create_buffer_upload` has to read the copy route before it can
+    // call the validator at all — the validator takes the alignment limits that read
+    // produces — so section 3.1's comparison has to be established by the verb, which
+    // is what its `# Errors` section promises.
+    //
+    // The difference is observable in the kind, not just in the order: with the
+    // identity comparison ahead of the route read a foreign buffer is `WrongDevice`,
+    // and with it only inside the validator the same call would answer `Unsupported`
+    // on a device stating no buffer-to-buffer route — a verdict about the device's
+    // routes, handed to a caller whose actual error was passing someone else's buffer.
+    //
+    // It is also the only refusal on these verbs that is reachable on today's tree:
+    // it returns before `Device::capabilities()`, whose body is still
+    // `unimplemented!()`. Every other path through these verbs stops there first.
+    let live = Device::new(device());
+    let foreign = Buffer::new(
+        object(91),
+        identity(9, 9),
+        BufferDescriptor::new(64, BufferUsage::COPY_DST),
+    );
+    let error = match live.create_buffer_upload(BufferUploadDescriptor {
+        label: Label::default(),
+        dst: foreign,
+        dst_offset: 0,
+        bytes: vec![0u8; 16].into(),
+    }) {
+        Ok(_) => panic!("a buffer from another device must be refused"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.kind(),
+        RhiErrorKind::WrongDevice,
+        "{}",
+        error.message()
     );
 }
 

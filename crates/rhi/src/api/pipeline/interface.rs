@@ -17,6 +17,7 @@ use crate::api::binding::{
 };
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
 use crate::api::platform::requirements::LimitKey;
 use crate::api::shader::ShaderStage;
 use crate::api::shader::vocabulary::stage_mask;
@@ -47,8 +48,8 @@ impl PipelineInterfaceCompatibilityId {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_pipeline_interface interns through this once api::platform \
-                      is declared"
+            reason = "Device::create_pipeline_interface mints one through the interning step, \
+                      which needs the backend port"
         )
     )]
     pub(crate) fn new(value: u64) -> Self {
@@ -118,7 +119,7 @@ impl PipelineInterface {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_pipeline_interface calls this once api::platform is declared"
+            reason = "Device::create_pipeline_interface calls this once the backend port lands"
         )
     )]
     pub(crate) fn new(
@@ -353,4 +354,62 @@ const CLASSES: [BindingLimitClass; 5] = [
 /// counts about which class a binding belongs to.
 fn binding_class_of(kind: &BindingKind) -> BindingLimitClass {
     crate::api::binding::vocabulary::binding_kind_class(kind)
+}
+
+/// Section 23.2's creation verb, defined in the chapter that owns the type it
+/// produces.
+///
+/// The placement is the specification's own: section 23.2 writes this verb in an
+/// `impl Device` in its own chapter, so the definition site is the owner.
+impl Device {
+    /// Creates a pipeline interface on this device from a descriptor.
+    ///
+    /// Two steps before the stop, in this order:
+    ///
+    /// 1. Section 3.1's O(1) identity step over the group layouts. Section 23.1's
+    ///    group-identity rule is *mutual equality between the groups*, as written,
+    ///    and the validator below implements exactly that; comparing the groups
+    ///    against this device is the façade's half of it (section 3.1), in the
+    ///    same shape section 12.3 leaves a buffer's ownership comparison to
+    ///    `validate_buffer_ownership`. Without it, a sequence of layouts that all
+    ///    agree with each other but belong to another device would validate and
+    ///    say nothing about this one.
+    /// 2. Section 23.1's aggregate counts, through
+    ///    [`validate_pipeline_interface_descriptor`], against this device's own
+    ///    limit and binding-count answers.
+    ///
+    /// Panics until a backend port exists. Both steps above still run first,
+    /// because each refusal they produce is a statement about the descriptor that
+    /// a caller can act on without any device object having been allocated.
+    pub fn create_pipeline_interface(
+        &self,
+        desc: &PipelineInterfaceDescriptor,
+    ) -> RhiResult<PipelineInterface> {
+        let identity = self.identity();
+        for group in &desc.groups {
+            if group.device_identity() != identity {
+                return Err(RhiError::new(
+                    RhiErrorKind::WrongDevice,
+                    "a group layout in this interface belongs to a different device; an \
+                     interface binds this device's layouts and nothing else",
+                )
+                .with_object(group.id()));
+            }
+        }
+
+        let capabilities = self.capabilities();
+        validate_pipeline_interface_descriptor(
+            desc,
+            |key| capabilities.limit(key),
+            |stage, class| capabilities.binding_limit(stage, class),
+        )?;
+
+        unimplemented!(
+            "Device::create_pipeline_interface needs a backend pipeline-layout builder to \
+             declare {} group layouts on device {:?}; the portable contract is fixed, but no \
+             backend port is built",
+            desc.groups.len(),
+            self.identity()
+        )
+    }
 }

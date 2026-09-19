@@ -37,9 +37,11 @@ use core::fmt;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, format_aspects};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
 use crate::api::resource::subresource::TextureAspects;
 use crate::api::resource::texture::{
     Extent3d, Texture, TextureDescriptor, TextureDimension, TextureViewCompatibility, mip_extent,
+    validate_texture_ownership,
 };
 
 /// The dimensionality a view presents.
@@ -180,13 +182,15 @@ impl TextureView {
     /// Assembles a created texture view.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only [`crate::api::platform::Device::create_texture_view`] may produce
-    /// one. The verb itself waits on `api::platform`, which is not declared yet.
+    /// only [`crate::api::platform::Device::create_texture_view`] may produce one.
+    /// That verb exists and is the only caller this is written for, but it stops
+    /// before a native view is bound — nothing can mint the identity below until a
+    /// backend view path does — so nothing calls this yet.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_texture_view calls this once api::platform is declared"
+            reason = "Device::create_texture_view calls this once the backend view path lands and can mint the view's identity"
         )
     )]
     pub(crate) fn new(
@@ -289,6 +293,67 @@ impl fmt::Debug for TextureView {
             .field("id", &self.id)
             .field("device", &self.device)
             .finish_non_exhaustive()
+    }
+}
+
+// The creation verb of this chapter, written here for the reason adjudication A28
+// records: section 15.3 declares `create_texture_view` beside the type it produces,
+// so the definition site is the owner. The inherent impl block attaches to `Device`
+// wherever it is written, so callers and intra-doc links that name
+// `crate::api::platform::Device::create_texture_view` still resolve here.
+impl Device {
+    /// Creates a texture view.
+    ///
+    /// Section 15.3's creation verb. It is an inherent method written in the view
+    /// chapter rather than in `api::platform` because section 15.3 declares it
+    /// beside the object it produces: the definition site is the owner
+    /// (adjudication A28).
+    ///
+    /// This is the verb whose portable half is decided entirely from objects the
+    /// caller already holds, so both of its checks run before anything else and
+    /// neither needs a capability fact:
+    ///
+    /// 1. section 3.1's identity comparison, first and in O(1), so a foreign
+    ///    texture is refused as [`RhiErrorKind::WrongDevice`] rather than as
+    ///    whatever the range check would have said about it — there is no implicit
+    ///    copy or staging bridge that could make a foreign texture work;
+    /// 2. section 15.3's descriptor rules, against the base texture's own
+    ///    descriptor: the mip and layer ranges, the aspect the base format carries,
+    ///    whether creation declared the alternate view format, the dimension
+    ///    compatibility, and the cube intent and layer counts.
+    ///
+    /// What it deliberately does not do is decide section 8.5's *device* half. That
+    /// half — whether this driver permits the base format to be reinterpreted as the
+    /// view format — is a probed device fact
+    /// ([`crate::api::capability::EnabledCapabilities::texture_view_format_compatible`]),
+    /// and section 8.5 requires both halves to be checked at creation while saying
+    /// neither may be skipped. It is named in the stop below rather than guessed at,
+    /// because guessing the driver's answer is exactly the "same byte size, therefore
+    /// view-compatible" shortcut that section 8.5 refuses.
+    ///
+    /// # Errors
+    ///
+    /// [`RhiErrorKind::WrongDevice`] when the texture belongs to another device, and
+    /// [`RhiErrorKind::InvalidUsage`] for every descriptor rule above — a view that
+    /// names a range the texture does not have, an aspect the base format does not
+    /// carry, or a reinterpretation the texture was not created to permit is a
+    /// mismatch between two objects the caller holds, not a device limitation.
+    pub fn create_texture_view(
+        &self,
+        texture: &Texture,
+        desc: &TextureViewDescriptor,
+    ) -> RhiResult<TextureView> {
+        validate_texture_ownership(texture, self.identity())?;
+        validate_texture_view_descriptor(desc, texture.descriptor())?;
+        unimplemented!(
+            "Device::create_texture_view needs a backend to bind a native view over a \
+             texture on device {:?}; the portable contract is fixed and both checks \
+             listed above are built, but no backend port is built, and section 8.5's \
+             device half — whether this driver permits the base format to be \
+             reinterpreted as the view format — needs the enabled-capability snapshot, \
+             which is a backend-port deliverable",
+            self.identity()
+        )
     }
 }
 

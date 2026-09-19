@@ -15,6 +15,8 @@ use core::fmt;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
+use crate::api::platform::requirements::LimitKey;
 use crate::api::shader::ShaderStages;
 
 use super::vocabulary::{
@@ -107,8 +109,8 @@ impl BindGroupLayoutCompatibilityId {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_bind_group_layout interns through this once api::platform \
-                      is declared"
+            reason = "Device::create_bind_group_layout mints one through the interning step, \
+                      which needs the backend port"
         )
     )]
     pub(crate) fn new(value: u64) -> Self {
@@ -178,8 +180,8 @@ impl BindGroupLayoutDescriptor {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_bind_group_layout canonicalizes through this once \
-                      api::platform is declared"
+            reason = "Device::create_bind_group_layout canonicalizes through this once the \
+                      backend port lands"
         )
     )]
     pub(crate) fn canonicalized(&self) -> Self {
@@ -218,7 +220,7 @@ impl BindGroupLayout {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_bind_group_layout calls this once api::platform is declared"
+            reason = "Device::create_bind_group_layout calls this once the backend port lands"
         )
     )]
     pub(crate) fn new(
@@ -346,14 +348,6 @@ impl fmt::Debug for BindGroupLayout {
 /// declares zero visibility, repeats a slot, or puts a dynamic offset on a texture
 /// is the caller's mistake ([`RhiErrorKind::InvalidUsage`]), while a binding the
 /// device cannot express is not ([`RhiErrorKind::Unsupported`]).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_bind_group_layout validates through this once api::platform \
-                  is declared"
-    )
-)]
 pub(crate) fn validate_bind_group_layout_descriptor(
     desc: &BindGroupLayoutDescriptor,
     max_bindings_per_group: u32,
@@ -435,4 +429,54 @@ pub(crate) fn validate_bind_group_layout_descriptor(
     }
 
     Ok(())
+}
+
+/// Section 21.3's creation verb, defined in the chapter that owns the type it
+/// produces.
+///
+/// The placement is the specification's own: section 21.3 writes this verb in an
+/// `impl Device` in its own chapter, so the definition site is the owner.
+impl Device {
+    /// Creates a layout on this device from a descriptor.
+    ///
+    /// Section 20.5's list is checked before the stop, through
+    /// [`validate_bind_group_layout_descriptor`]: visibility, the two
+    /// `MaxBindingsPerGroup` bounds, slot uniqueness, the per-binding kind and
+    /// count rules, and the binding-support question for each declared binding.
+    ///
+    /// A descriptor names no device-owned object — its entries are plain data —
+    /// so there is no wrong-device argument to refuse here, and the only input the
+    /// check needs is this device's own answers.
+    ///
+    /// Panics until a backend port exists. The validation above still runs first,
+    /// because a refusal it produces is a statement about the descriptor that a
+    /// caller can act on without any device object having been allocated.
+    pub fn create_bind_group_layout(
+        &self,
+        desc: &BindGroupLayoutDescriptor,
+    ) -> RhiResult<BindGroupLayout> {
+        let capabilities = self.capabilities();
+
+        // Section 20.5 applies `MaxBindingsPerGroup` unconditionally, and this
+        // validator's parameter is a plain `u32`, so an unexposed key has to be
+        // expressed as the value that imposes no ceiling. That is the same
+        // convention the pipeline-interface validator states for a limit the
+        // device does not expose — "not applicable" rather than zero — and zero
+        // here would refuse every non-empty layout.
+        let max_bindings_per_group = capabilities
+            .limit(LimitKey::MaxBindingsPerGroup)
+            .map_or(u32::MAX, |value| u32::try_from(value).unwrap_or(u32::MAX));
+
+        validate_bind_group_layout_descriptor(desc, max_bindings_per_group, |query| {
+            capabilities.binding_support(query)
+        })?;
+
+        unimplemented!(
+            "Device::create_bind_group_layout needs a backend layout builder to allocate a {} \
+             binding layout on device {:?}; the portable contract is fixed, but no backend port \
+             is built",
+            desc.entries.len(),
+            self.identity()
+        )
+    }
 }

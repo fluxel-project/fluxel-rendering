@@ -43,6 +43,7 @@ use core::fmt;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupport, TextureSupportQuery};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
 use crate::api::resource::buffer::ResourceMemoryPreference;
 
 /// What a texture will be used for.
@@ -394,13 +395,15 @@ impl Texture {
     /// Assembles a created texture.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only [`crate::api::platform::Device::create_texture`] may produce one. The
-    /// verb itself waits on `api::platform`, which is not declared yet.
+    /// only [`crate::api::platform::Device::create_texture`] may produce one. That
+    /// verb exists and is the only caller this is written for, but it stops before
+    /// the driver image is created — nothing can mint the identity below until a
+    /// backend image allocator does — so nothing calls this yet.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_texture calls this once api::platform is declared"
+            reason = "Device::create_texture calls this once the backend image allocator lands and can mint the texture's identity"
         )
     )]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: TextureDescriptor) -> Self {
@@ -446,6 +449,70 @@ impl fmt::Debug for Texture {
             .field("id", &self.id)
             .field("device", &self.device)
             .finish_non_exhaustive()
+    }
+}
+
+// The creation verb of this chapter, written here for the reason adjudication A28
+// records: section 13.4 declares `create_texture` beside the type it produces, so
+// the definition site is the owner. An inherent impl block attaches to `Device`
+// wherever it is written in the defining crate, so this is still
+// `crate::api::platform::Device::create_texture` to every caller and to the
+// intra-doc links that name that path.
+impl Device {
+    /// Creates a texture.
+    ///
+    /// Section 13.4's creation verb. It is an inherent method written in the
+    /// resource chapter rather than in `api::platform` because section 13.4
+    /// declares it beside the object it produces: the definition site is the owner
+    /// (adjudication A28).
+    ///
+    /// The descriptor is copied before validation, and the copy is the point. The
+    /// public signature borrows the descriptor (`&TextureDescriptor`, as section
+    /// 13.4 declares it) while section 13.4's validator takes `&mut`, because it
+    /// canonicalizes the alternate-view-format set *only on acceptance* so that a
+    /// rejected call leaves the caller's descriptor untouched. The accepted copy is
+    /// what the backend would have stored; since this verb stops before an image is
+    /// allocated, it is dropped rather than kept.
+    ///
+    /// The capability key is built here exactly as the validator builds it, and
+    /// deliberately so: section 13.3 requires the query, the creation validation,
+    /// and the backend's image creation to consult *one* description rather than
+    /// three, and two constructions that disagreed would let the device answer a
+    /// question validation does not check against.
+    ///
+    /// # Errors
+    ///
+    /// [`RhiErrorKind::InvalidUsage`] for every descriptor-local violation — the
+    /// shape invariants of section 13.1, an empty usage set, a non-canonical view
+    /// format list, a CUBE intent the shape cannot satisfy, or a value past the
+    /// device's ceiling — and [`RhiErrorKind::Unsupported`] when the device cannot
+    /// create a texture with this key at all.
+    pub fn create_texture(&self, desc: &TextureDescriptor) -> RhiResult<Texture> {
+        let mut accepted = desc.clone();
+        let mut query = TextureSupportQuery::new(
+            accepted.dimension,
+            accepted.format,
+            accepted.usage,
+            accepted.sample_count,
+        )
+        .with_view_compatibility(accepted.view_compatibility);
+        for format in &accepted.view_formats {
+            query = query.with_view_format(*format);
+        }
+        let support = self.capabilities().texture_support(&query);
+        validate_texture_descriptor(&mut accepted, &support)?;
+        unimplemented!(
+            "Device::create_texture needs a backend image allocator to create a {:?} \
+             texture of {}x{}x{} texels; the portable contract is fixed and its refusal \
+             paths above are built, but no backend port is built. The capability \
+             snapshot this verb reads its texture-support answer from is a backend-port \
+             deliverable as well, so on today's tree the call stops inside \
+             Device::capabilities before reaching this point",
+            accepted.dimension,
+            accepted.extent.width,
+            accepted.extent.height,
+            accepted.extent.depth
+        )
     }
 }
 
@@ -548,13 +615,6 @@ pub(crate) fn mip_ceiling(extent: Extent3d) -> u32 {
 /// [`RhiErrorKind::InvalidUsage`] for every descriptor-local violation, and
 /// [`RhiErrorKind::Unsupported`] when the device cannot create a texture with
 /// this key.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_texture validates through this once api::platform is declared"
-    )
-)]
 pub(crate) fn validate_texture_descriptor(
     desc: &mut TextureDescriptor,
     support: &TextureSupport,

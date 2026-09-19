@@ -115,6 +115,56 @@ fn a_color_attachment_needs_color_attachment_usage() {
 }
 
 #[test]
+fn a_frame_is_not_a_proven_resolve_target() {
+    // Section 46.1 permits the direct multisampled resolve into a presented frame
+    // only once the active presentation and route facts prove it, and the portable
+    // layer holds no such facts. A frame therefore answers `false` to the resolve
+    // question while still answering `true` to the color-attachment one — the
+    // reason the two questions are separate predicates is that one bool answering
+    // both let this route through unconditionally.
+    let source = multisampled_renderable(TextureFormat::Rgba8Unorm, 4);
+    let scope = RasterScopeDescriptor::new().with_color(
+        ShaderLocation::new(0),
+        ColorAttachment {
+            view: ColorAttachmentView::Texture(color_view_of(&source)),
+            load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
+            store: StoreOp::Store,
+            resolve: Some(ColorAttachmentView::Frame(frame_attachment(
+                TextureFormat::Rgba8Unorm,
+            ))),
+        },
+    );
+
+    // The *kind* is the assertion, not merely that it failed. `InvalidUsage` would
+    // say the caller built a malformed attachment set; `Unsupported` says the route
+    // is not proven on this device. A test that only checked `is_err` would keep
+    // passing if the refusal were folded back into `InvalidUsage`, which is exactly
+    // the distinction section 46.1 turns on.
+    assert_kind(validate_raster_scope(&scope), RhiErrorKind::Unsupported);
+}
+
+#[test]
+fn a_single_sampled_source_cannot_resolve_at_all() {
+    // The neighbouring refusal, kept next to the one above so the pair reads as
+    // what it is: this one *is* the caller's own descriptor (a resolve target on a
+    // source that was never multisampled), so it stays `InvalidUsage`.
+    let scope = RasterScopeDescriptor::new().with_color(
+        ShaderLocation::new(0),
+        ColorAttachment {
+            view: ColorAttachmentView::Texture(color_view_of(&renderable_texture(
+                TextureFormat::Rgba8Unorm,
+            ))),
+            load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
+            store: StoreOp::Store,
+            resolve: Some(ColorAttachmentView::Frame(frame_attachment(
+                TextureFormat::Rgba8Unorm,
+            ))),
+        },
+    );
+    assert_kind(validate_raster_scope(&scope), RhiErrorKind::InvalidUsage);
+}
+
+#[test]
 fn a_frame_attachment_must_store() {
     // Section 31.1: a frame is rendered in order to be presented, so discarding it
     // asks for contents that are thrown away.

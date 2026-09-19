@@ -53,13 +53,6 @@ use super::vocabulary::{
 /// misordered interface is a rejection and that the RHI must not silently sort,
 /// merge, or choose one, and section 19.8 repeats it for the canonical
 /// collections.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_shader calls this once api::platform is declared"
-    )
-)]
 pub(crate) fn validate_shader_artifact(
     artifact: &ShaderArtifact,
     binding_support: impl Fn(&BindingSupportQuery) -> BindingSupport,

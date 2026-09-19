@@ -12,16 +12,18 @@
 
 use core::fmt;
 
+use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupportQuery, logical_bytes_per_block};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
-use crate::api::platform::requirements::LimitKey;
+use crate::api::platform::Device;
+use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::texture::{TextureDimension, TextureUsage};
 use crate::api::shader::{
-    ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType, ShaderStage,
+    ShaderArtifact, ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
+    ShaderStage,
 };
 
-use super::PipelineDeviceFacts;
 use super::interface::{PipelineInterface, validate_pipeline_interface_descriptor};
 use super::raster_state::{
     ColorTargetState, ColorWriteMask, DepthStencilState, MultisampleState, PrimitiveState,
@@ -31,6 +33,7 @@ use super::resources::{merge_shader_resources, validate_shader_resource_requirem
 use super::vertex_input::{
     VertexInputState, validate_vertex_input_against_interface, validate_vertex_input_state,
 };
+use super::{ColorTargetFacts, PipelineDeviceFacts};
 
 // ---------------------------------------------------------------------------
 // Section 26 - Pipeline target signature
@@ -243,7 +246,7 @@ impl RasterPipeline {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_raster_pipeline calls this once api::platform is declared"
+            reason = "Device::create_raster_pipeline calls this once the backend port lands"
         )
     )]
     pub(crate) fn new(
@@ -329,14 +332,6 @@ impl fmt::Debug for RasterPipeline {
 /// section 23.1's aggregate list that needs the vertex input, which only a raster
 /// pipeline has; section 27.3's "Limits" block names the same limit, which is why
 /// it appears once.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_raster_pipeline validates through this once api::platform is \
-                  declared"
-    )
-)]
 pub(crate) fn validate_raster_pipeline_descriptor(
     desc: &RasterPipelineDescriptor,
     facts: PipelineDeviceFacts<'_>,
@@ -785,4 +780,106 @@ fn find_location(
 fn format_has_depth(format: TextureFormat) -> bool {
     crate::api::format::format_aspects(format)
         .contains(crate::api::resource::subresource::TextureAspects::DEPTH)
+}
+
+/// Section 27.2's creation verb, defined in the chapter that owns the type it
+/// produces.
+///
+/// The placement is the specification's own: section 27.2 writes this verb in an
+/// `impl Device` in its own chapter, so the definition site is the owner.
+impl Device {
+    /// Creates a raster pipeline on this device from a descriptor.
+    ///
+    /// Section 3.1's O(1) identity step comes first, over the three device-owned
+    /// objects the descriptor names: the interface and the two shader modules.
+    /// Section 27.3's device and stage block compares the modules against the
+    /// *interface's* device, so proving the interface is this device's is the
+    /// façade's half of the rule; without it, a descriptor whose parts all agree
+    /// with each other but belong to another device would validate and say nothing
+    /// about this one.
+    ///
+    /// Section 27.3's ten validation blocks then run, through
+    /// [`validate_raster_pipeline_descriptor`], against the seven device answers
+    /// the descriptor-bag carries. Those answers are read from this device rather
+    /// than passed in by the caller, because section 7.2 makes the device's own
+    /// answers — not the adapter's snapshot — the ones that decide legality.
+    ///
+    /// Panics until a backend port exists. Both steps above still run first,
+    /// because each refusal they produce is a statement about the descriptor that
+    /// a caller can act on without any device object having been allocated.
+    pub fn create_raster_pipeline(
+        &self,
+        desc: &RasterPipelineDescriptor,
+    ) -> RhiResult<RasterPipeline> {
+        let identity = self.identity();
+        if desc.interface.device_identity() != identity {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the pipeline interface belongs to a different device",
+            )
+            .with_object(desc.interface.id()));
+        }
+        if desc.vertex.device_identity() != identity {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the vertex shader belongs to a different device",
+            )
+            .with_object(desc.vertex.id()));
+        }
+        if let Some(fragment) = desc.fragment.as_ref() {
+            if fragment.device_identity() != identity {
+                return Err(RhiError::new(
+                    RhiErrorKind::WrongDevice,
+                    "the fragment shader belongs to a different device",
+                )
+                .with_object(fragment.id()));
+            }
+        }
+
+        let capabilities = self.capabilities();
+
+        // Each closure is one of the seven questions `PipelineDeviceFacts` names,
+        // answered by the method of the same name on `EnabledCapabilities`. They
+        // are locals rather than inline struct-literal fields because the bag
+        // holds `&dyn Fn` references, and a reference needs a binding to point at.
+        let limit = |key: LimitKey| capabilities.limit(key);
+        let binding_support = |query: &BindingSupportQuery| capabilities.binding_support(query);
+        let binding_limit =
+            |stage: ShaderStage, class: BindingLimitClass| capabilities.binding_limit(stage, class);
+        let feature_supported = |feature: OptionalFeature| capabilities.supports_feature(feature);
+        let shader_acceptance =
+            |artifact: &ShaderArtifact| capabilities.shader_acceptance(artifact);
+        let color_target_facts = |format: TextureFormat| {
+            capabilities.format(format).map(|facts| {
+                ColorTargetFacts::new(
+                    facts.color_attachment(),
+                    facts.blendable(),
+                    facts.has_alpha_channel(),
+                    facts.color_output_type(),
+                )
+            })
+        };
+        let texture_support = |query: &TextureSupportQuery| capabilities.texture_support(query);
+
+        validate_raster_pipeline_descriptor(
+            desc,
+            PipelineDeviceFacts {
+                limit: &limit,
+                binding_support: &binding_support,
+                binding_limit: &binding_limit,
+                feature_supported: &feature_supported,
+                shader_acceptance: &shader_acceptance,
+                color_target_facts: &color_target_facts,
+                texture_support: &texture_support,
+            },
+        )?;
+
+        unimplemented!(
+            "Device::create_raster_pipeline needs a backend graphics pipeline builder to lower \
+             the vertex input state, the fixed state, and {} color target(s) on device {:?}; the \
+             portable contract is fixed, but no backend port is built",
+            desc.color_targets.len(),
+            self.identity()
+        )
+    }
 }

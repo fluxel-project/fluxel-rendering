@@ -11,18 +11,21 @@
 
 use core::fmt;
 
+use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::shader::{
-    ArtifactAcceptance, ComputeWorkgroupRequirements, ShaderModule, ShaderStage,
+    ArtifactAcceptance, ComputeWorkgroupRequirements, ShaderArtifact, ShaderModule, ShaderStage,
 };
 
 use crate::api::shader::validation::validate_compute_workgroup;
 
-use super::PipelineDeviceFacts;
 use super::interface::{PipelineInterface, validate_pipeline_interface_descriptor};
 use super::resources::{merge_shader_resources, validate_shader_resource_requirements};
+use super::{ColorTargetFacts, PipelineDeviceFacts};
 
 // ---------------------------------------------------------------------------
 // Section 28 - ComputePipeline
@@ -79,7 +82,7 @@ impl ComputePipeline {
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_compute_pipeline calls this once api::platform is declared"
+            reason = "Device::create_compute_pipeline calls this once the backend port lands"
         )
     )]
     pub(crate) fn new(
@@ -156,14 +159,6 @@ impl fmt::Debug for ComputePipeline {
 /// These are reflection requirements of the entry point, not dispatch dimensions
 /// (section 28), which is why the device limits they are compared against are the
 /// workgroup-size limits and not the workgroups-per-dimension limit.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_compute_pipeline validates through this once api::platform is \
-                  declared"
-    )
-)]
 pub(crate) fn validate_compute_pipeline_descriptor(
     desc: &ComputePipelineDescriptor,
     facts: PipelineDeviceFacts<'_>,
@@ -266,4 +261,94 @@ pub(crate) fn validate_compute_pipeline_descriptor(
 /// call [`validate_compute_workgroup`], so the two readings cannot drift.
 fn validate_workgroup_shape(workgroup: &ComputeWorkgroupRequirements) -> RhiResult<()> {
     validate_compute_workgroup(workgroup)
+}
+
+/// Section 28's creation verb, defined in the chapter that owns the type it
+/// produces.
+///
+/// The placement is the specification's own: section 28 writes this verb in an
+/// `impl Device` in its own chapter, so the definition site is the owner.
+impl Device {
+    /// Creates a compute pipeline on this device from a descriptor.
+    ///
+    /// Section 3.1's O(1) identity step comes first, over the two device-owned
+    /// objects the descriptor names: the shader module and the interface. Section
+    /// 28's own rule compares the module against the *interface's* device, so
+    /// proving the interface is this device's is the façade's half of it; without
+    /// it, a descriptor whose two parts agree with each other but belong to
+    /// another device would validate and say nothing about this one.
+    ///
+    /// The compute gate, the merged-requirement checks and the workgroup limits
+    /// then run, through [`validate_compute_pipeline_descriptor`], against the
+    /// seven device answers the descriptor-bag carries.
+    ///
+    /// Panics until a backend port exists. Both steps above still run first,
+    /// because each refusal they produce is a statement about the descriptor that
+    /// a caller can act on without any device object having been allocated.
+    pub fn create_compute_pipeline(
+        &self,
+        desc: &ComputePipelineDescriptor,
+    ) -> RhiResult<ComputePipeline> {
+        let identity = self.identity();
+        if desc.interface.device_identity() != identity {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the pipeline interface belongs to a different device",
+            )
+            .with_object(desc.interface.id()));
+        }
+        if desc.shader.device_identity() != identity {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the compute shader belongs to a different device",
+            )
+            .with_object(desc.shader.id()));
+        }
+
+        let capabilities = self.capabilities();
+
+        // Each closure is one of the seven questions `PipelineDeviceFacts` names,
+        // answered by the method of the same name on `EnabledCapabilities`. They
+        // are locals rather than inline struct-literal fields because the bag
+        // holds `&dyn Fn` references, and a reference needs a binding to point at.
+        let limit = |key: LimitKey| capabilities.limit(key);
+        let binding_support = |query: &BindingSupportQuery| capabilities.binding_support(query);
+        let binding_limit =
+            |stage: ShaderStage, class: BindingLimitClass| capabilities.binding_limit(stage, class);
+        let feature_supported = |feature: OptionalFeature| capabilities.supports_feature(feature);
+        let shader_acceptance =
+            |artifact: &ShaderArtifact| capabilities.shader_acceptance(artifact);
+        let color_target_facts = |format: TextureFormat| {
+            capabilities.format(format).map(|facts| {
+                ColorTargetFacts::new(
+                    facts.color_attachment(),
+                    facts.blendable(),
+                    facts.has_alpha_channel(),
+                    facts.color_output_type(),
+                )
+            })
+        };
+        let texture_support = |query: &TextureSupportQuery| capabilities.texture_support(query);
+
+        validate_compute_pipeline_descriptor(
+            desc,
+            PipelineDeviceFacts {
+                limit: &limit,
+                binding_support: &binding_support,
+                binding_limit: &binding_limit,
+                feature_supported: &feature_supported,
+                shader_acceptance: &shader_acceptance,
+                color_target_facts: &color_target_facts,
+                texture_support: &texture_support,
+            },
+        )?;
+
+        unimplemented!(
+            "Device::create_compute_pipeline needs a backend compute pipeline builder to lower \
+             the compute entry point of {} on device {:?}; the portable contract is fixed, but \
+             no backend port is built",
+            desc.label.as_deref().unwrap_or("<unlabelled>"),
+            self.identity()
+        )
+    }
 }

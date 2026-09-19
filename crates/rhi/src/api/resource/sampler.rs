@@ -28,14 +28,18 @@
 //! an *optional feature* to have been enabled, and for a value at or below the
 //! device's maximum. Both halves are checked by
 //! `validate_sampler_anisotropy`, which takes the two device facts as
-//! parameters because the types that would carry them
-//! (`OptionalFeature`, `DeviceLimits`) belong to module 01 and are not declared
-//! yet.
+//! parameters. The types that carry those facts (`OptionalFeature`, `LimitKey`)
+//! exist — they are [`crate::api::platform::requirements`]'s and are read through
+//! [`crate::api::capability::EnabledCapabilities`] — but the *answers* are probed
+//! device state, so they arrive with the backend port rather than here. That is
+//! why [`Device::create_sampler`] names this rule in its stop instead of checking
+//! it: the descriptor half of section 16.1 is decidable now, this half is not.
 
 use core::fmt;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
 
 /// How texture coordinates outside the `[0, 1]` range are resolved.
 #[non_exhaustive]
@@ -229,13 +233,15 @@ impl Sampler {
     /// Assembles a created sampler.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only [`crate::api::platform::Device::create_sampler`] may produce one. The
-    /// verb itself waits on `api::platform`, which is not declared yet.
+    /// only [`crate::api::platform::Device::create_sampler`] may produce one. That
+    /// verb exists and is the only caller this is written for, but it stops before
+    /// a native sampler object is built — nothing can mint the identity below until
+    /// a backend sampler path does — so nothing calls this yet.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_sampler calls this once api::platform is declared"
+            reason = "Device::create_sampler calls this once the backend sampler path lands and can mint the sampler's identity"
         )
     )]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: SamplerDescriptor) -> Self {
@@ -281,6 +287,49 @@ impl fmt::Debug for Sampler {
     }
 }
 
+// The creation verb of this chapter, written here for the reason adjudication A28
+// records: section 16.1 declares `create_sampler` beside the type it produces, so
+// the definition site is the owner. The inherent impl block attaches to `Device`
+// wherever it is written, so callers and intra-doc links that name
+// `crate::api::platform::Device::create_sampler` still resolve here.
+impl Device {
+    /// Creates a sampler.
+    ///
+    /// Section 16.1's creation verb. It is an inherent method written in the
+    /// sampler chapter rather than in `api::platform` because section 16.1 declares
+    /// it beside the object it produces: the definition site is the owner
+    /// (adjudication A28).
+    ///
+    /// The descriptor's own rules run before the stop, and they are decidable from
+    /// the descriptor alone: the LOD clamp's finiteness and ordering, and a
+    /// `max_anisotropy` of at least 1. Section 16.1's remaining sampler rule —
+    /// that a request above 1 also needs the `SamplerAnisotropy` optional feature
+    /// enabled and lands within `MaxSamplerAnisotropy` — is a probed device fact, so
+    /// it is named in the stop rather than guessed at; `validate_sampler_anisotropy`
+    /// is the function that will decide it, and it stays uncalled until a device can
+    /// answer those two facts.
+    ///
+    /// # Errors
+    ///
+    /// [`RhiErrorKind::InvalidUsage`] for every descriptor-local violation: a
+    /// non-finite LOD bound, an inverted clamp, or `max_anisotropy` below 1. The
+    /// refusals that depend on the device — [`RhiErrorKind::Unsupported`] for an
+    /// anisotropy request with the feature off, and `InvalidUsage` for one above the
+    /// ceiling — belong to the anisotropy rule above and cannot be reached yet.
+    pub fn create_sampler(&self, desc: &SamplerDescriptor) -> RhiResult<Sampler> {
+        validate_sampler_descriptor(desc)?;
+        unimplemented!(
+            "Device::create_sampler needs a backend to build a native sampler object on \
+             device {:?}; the descriptor's portable contract is fixed and validated \
+             above, but no backend port is built, and the remaining section 16.1 rule — \
+             that a max_anisotropy above 1 needs the SamplerAnisotropy optional feature \
+             within the MaxSamplerAnisotropy ceiling — is a probed device fact only the \
+             enabled-capability snapshot can answer",
+            self.identity()
+        )
+    }
+}
+
 /// Checks the parts of a sampler descriptor that no device can change.
 ///
 /// Section 16.1's list:
@@ -296,13 +345,6 @@ impl fmt::Debug for Sampler {
 /// (that comparison is false, but so is its negation) and reach a backend as an
 /// undefined clamp. Infinity is refused for the same reason — a native LOD clamp
 /// is a finite float on every backend this crate targets.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_sampler validates through this once api::platform is declared"
-    )
-)]
 pub(crate) fn validate_sampler_descriptor(desc: &SamplerDescriptor) -> RhiResult<()> {
     if !desc.lod_min.is_finite() || !desc.lod_max.is_finite() {
         return Err(RhiError::new(
@@ -357,8 +399,7 @@ pub(crate) fn validate_sampler_descriptor(desc: &SamplerDescriptor) -> RhiResult
     not(test),
     expect(
         dead_code,
-        reason = "Device::create_sampler calls this once the capability module supplies the \
-                  optional-feature and limit facts"
+        reason = "Device::create_sampler calls this once the enabled-capability snapshot can answer the SamplerAnisotropy feature and its MaxSamplerAnisotropy ceiling"
     )
 )]
 pub(crate) fn validate_sampler_anisotropy(

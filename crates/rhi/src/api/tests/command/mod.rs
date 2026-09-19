@@ -150,6 +150,23 @@ fn renderable_texture(format: TextureFormat) -> Texture {
     )
 }
 
+/// A multisampled 4x4 renderable texture.
+///
+/// Separate from [`renderable_texture`] rather than a parameter on it, because
+/// `sample_count` is the one field that makes a texture a resolve *source* — and
+/// a scope that resolves needs both a multisampled source and a legal target, so
+/// the two are always built together and never at a default.
+fn multisampled_renderable(format: TextureFormat, sample_count: u32) -> Texture {
+    let mut descriptor = TextureDescriptor::new_2d(
+        4,
+        4,
+        format,
+        TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::COPY_SRC),
+    );
+    descriptor.sample_count = sample_count;
+    Texture::new(object(23), device(), descriptor)
+}
+
 /// A one-mip, one-layer color view of a 4x4 texture.
 fn color_view_of(texture: &Texture) -> TextureView {
     TextureView::new(

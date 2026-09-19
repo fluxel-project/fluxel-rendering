@@ -13,10 +13,13 @@
 use core::fmt;
 use std::sync::Arc;
 
+use crate::api::error::RhiResult;
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
 use crate::api::platform::provider::BackendKind;
 
 use super::requirements::{ShaderInterface, ShaderRequirements};
+use super::validation::validate_shader_artifact;
 use super::vocabulary::{ShaderAbiVersion, ShaderCode, ShaderStage};
 
 /// The content-address/provenance key computed by the artifact producer.
@@ -252,14 +255,14 @@ impl ShaderModule {
     /// Assembles a created module.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only `Device::create_shader` may produce one. The verb itself waits on
-    /// `api::platform`, which is declared after the capability module it depends
-    /// on.
+    /// only `Device::create_shader` may produce one. That verb exists and calls
+    /// this nowhere yet, because a module is the compiler's answer about a
+    /// device, and no backend port can give that answer.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_shader calls this once api::platform is declared"
+            reason = "Device::create_shader calls this once the backend port lands"
         )
     )]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, artifact: ShaderArtifact) -> Self {
@@ -322,5 +325,40 @@ impl fmt::Debug for ShaderModule {
             .field("id", &self.id)
             .field("device", &self.device)
             .finish_non_exhaustive()
+    }
+}
+
+/// Section 19.10's creation verb, defined in the chapter that owns the type it
+/// produces.
+///
+/// The placement is section 19.10's own: the specification writes an `impl Device`
+/// in each chapter for that chapter's verbs, so the definition site is the owner.
+/// Reading "what can a `Device` create" therefore takes a search across this
+/// tree rather than one file, which is the deliberate cost of the rule.
+impl Device {
+    /// Compiles an artifact into a module on this device.
+    ///
+    /// Everything section 19.10 lists is checked before the stop, through
+    /// [`validate_shader_artifact`], including the binding-support question every
+    /// resource in the artifact's interface asks. Nothing portable is left to the
+    /// backend: a [`ShaderArtifact`] carries no [`DeviceIdentity`] — it is
+    /// producer-side data with a content hash — so there is no wrong-device
+    /// argument here to refuse, and the device's own answers are the only input
+    /// the check needs.
+    ///
+    /// Panics until a backend port exists. The validation above still runs first,
+    /// because a refusal it produces is a statement about the artifact that a
+    /// caller can act on without any device having been touched.
+    pub fn create_shader(&self, artifact: &ShaderArtifact) -> RhiResult<ShaderModule> {
+        let capabilities = self.capabilities();
+        validate_shader_artifact(artifact, |query| capabilities.binding_support(query))?;
+        unimplemented!(
+            "Device::create_shader needs a backend shader compiler to lower the {:?} entry \
+             point {:?} into a module on device {:?}; the portable contract is fixed, but no \
+             backend port is built",
+            artifact.stage,
+            artifact.entry_point,
+            self.identity()
+        )
     }
 }

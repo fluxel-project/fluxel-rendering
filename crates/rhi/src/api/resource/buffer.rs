@@ -35,6 +35,7 @@ use core::fmt;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::platform::Device;
 
 /// What a buffer will be used for.
 ///
@@ -292,12 +293,14 @@ impl Buffer {
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
     /// only [`crate::api::platform::Device::create_buffer`] may produce one. That
-    /// verb is not written yet, which is why nothing calls this.
+    /// verb exists and is the only caller this is written for, but it stops before
+    /// allocating — nothing can mint the identity below until a backend allocator
+    /// does — so nothing calls this yet and the attribute stays.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "Device::create_buffer calls this once that verb is written"
+            reason = "Device::create_buffer calls this once the backend allocator lands and can mint the buffer's identity"
         )
     )]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: BufferDescriptor) -> Self {
@@ -348,6 +351,57 @@ impl fmt::Debug for Buffer {
             .field("id", &self.id)
             .field("device", &self.device)
             .finish_non_exhaustive()
+    }
+}
+
+// The creation verb of this chapter. Section 12.3 declares `create_buffer` beside
+// the type it produces, and adjudication A28 keeps it here rather than in
+// `api::platform`: the definition site is the owner. Rust attaches an inherent
+// method to the type wherever its impl block is written in the defining crate, so
+// `crate::api::platform::Device::create_buffer` resolves to this method, and the
+// links other modules write to that path keep working.
+impl Device {
+    /// Creates a buffer.
+    ///
+    /// Section 12.3's creation verb. It is an inherent method written in the
+    /// resource chapter rather than in `api::platform` because section 12.3
+    /// declares it beside the object it produces and because [`Buffer`] is this
+    /// chapter's type: the definition site is the owner (adjudication A28), and a
+    /// verb collected into `api::platform` instead would make that module the one
+    /// file that must know about every resource in the crate.
+    ///
+    /// The portable refusals happen before the stop, in section 12.3's own order:
+    /// the descriptor's rules first, then the device's answer to the
+    /// [`BufferSupportQuery`] its usage builds. Section 4 forbids handing a defect
+    /// portable validation can find to a driver for it to discover, and section
+    /// 3.1 forbids touching a backend before the portable checks have run — so what
+    /// panics here is the allocation, never the validation.
+    ///
+    /// The support answer is read from [`Device::capabilities`] rather than
+    /// assumed, because a `BufferSupport` built by hand would be a capability claim
+    /// about hardware nobody asked — the same reason
+    /// [`BufferSupportLimits`] mints its value crate-private.
+    ///
+    /// # Errors
+    ///
+    /// [`RhiErrorKind::InvalidUsage`] when the descriptor is inconsistent with
+    /// itself — a size of zero, an empty usage set, or a size past the ceiling the
+    /// device reports — and [`RhiErrorKind::Unsupported`] when the device cannot
+    /// express the usage combination at all, which is not the caller's mistake.
+    pub fn create_buffer(&self, desc: &BufferDescriptor) -> RhiResult<Buffer> {
+        let support = self
+            .capabilities()
+            .buffer_support(&BufferSupportQuery::new(desc.usage));
+        validate_buffer_descriptor(desc, &support)?;
+        unimplemented!(
+            "Device::create_buffer needs a backend allocator to allocate the {} bytes \
+             this descriptor asks for; the portable contract is fixed and its refusal \
+             paths above are built, but no backend port is built. The capability \
+             snapshot this verb reads its buffer-support answer from is a backend-port \
+             deliverable as well, so on today's tree the call stops inside \
+             Device::capabilities before reaching this point",
+            desc.size
+        )
     }
 }
 
@@ -430,13 +484,6 @@ impl BufferBinding {
 /// `DeviceIdentity` is the one entry of that list this function cannot check: it
 /// is a comparison between the descriptor's buffer and the target device, so it
 /// needs both and is checked by [`validate_buffer_ownership`].
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_buffer validates through this once that verb is written"
-    )
-)]
 pub(crate) fn validate_buffer_descriptor(
     desc: &BufferDescriptor,
     support: &BufferSupport,

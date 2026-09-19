@@ -185,13 +185,6 @@ pub(crate) struct ColorTargetFacts {
 
 impl ColorTargetFacts {
     /// Records one format's target facts.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the device façade builds this from its probed format facts"
-        )
-    )]
     pub(crate) fn new(
         color_attachment: bool,
         blendable: bool,
