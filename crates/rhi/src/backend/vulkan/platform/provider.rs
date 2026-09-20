@@ -36,8 +36,9 @@ use super::request::VulkanRequest;
 
 /// The instance and loader must outlive all devices made through it.
 pub(super) struct VulkanInstance {
-    _entry: ash::Entry,
+    entry: ash::Entry,
     instance: ash::Instance,
+    presentation_extensions: bool,
 }
 
 impl VulkanInstance {
@@ -50,13 +51,53 @@ impl VulkanInstance {
             .at("VulkanProvider::new")
         })?;
         let application = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_0);
-        let create = vk::InstanceCreateInfo::default().application_info(&application);
+        #[cfg(windows)]
+        let presentation_extensions = {
+            let available = unsafe { entry.enumerate_instance_extension_properties(None) }
+                .map_err(|result| {
+                    ffi::to_rhi(result, "VulkanProvider::enumerate_instance_extensions")
+                })?;
+            [ash::khr::surface::NAME, ash::khr::win32_surface::NAME]
+                .iter()
+                .all(|required| {
+                    available.iter().any(|property| unsafe {
+                        CStr::from_ptr(property.extension_name.as_ptr()) == *required
+                    })
+                })
+        };
+        #[cfg(not(windows))]
+        let presentation_extensions = false;
+        #[cfg(windows)]
+        let extensions = if presentation_extensions {
+            vec![
+                ash::khr::surface::NAME.as_ptr(),
+                ash::khr::win32_surface::NAME.as_ptr(),
+            ]
+        } else {
+            Vec::new()
+        };
+        #[cfg(not(windows))]
+        let extensions = Vec::new();
+        let create = vk::InstanceCreateInfo::default()
+            .application_info(&application)
+            .enabled_extension_names(&extensions);
         let instance = unsafe { entry.create_instance(&create, None) }
             .map_err(|result| ffi::to_rhi(result, "VulkanProvider::new"))?;
         Ok(Self {
-            _entry: entry,
+            entry,
             instance,
+            presentation_extensions,
         })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn entry(&self) -> &ash::Entry {
+        &self.entry
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn instance(&self) -> &ash::Instance {
+        &self.instance
     }
 }
 
@@ -79,12 +120,15 @@ struct Candidate {
     storage_buffer_ceiling: u64,
     non_coherent_atom_size: u64,
     capability_limits: facts::VulkanCapabilityLimits,
+    swapchain_supported: bool,
 }
 
 /// One Vulkan provider owns one loaded instance and may create many devices.
 pub(crate) struct VulkanProvider {
     provider: DeviceInstanceId,
     instance: Arc<VulkanInstance>,
+    #[cfg(windows)]
+    targets: Arc<crate::backend::vulkan::presentation::VulkanTargetRegistry>,
 }
 
 impl VulkanProvider {
@@ -92,7 +136,92 @@ impl VulkanProvider {
         Ok(Self {
             provider,
             instance: Arc::new(VulkanInstance::new()?),
+            #[cfg(windows)]
+            targets: Arc::new(crate::backend::vulkan::presentation::VulkanTargetRegistry::new()),
         })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn register_win32_presentation_target(
+        &self,
+        hwnd: usize,
+        hinstance: usize,
+    ) -> PresentationTarget {
+        self.targets
+            .register(hwnd as ash::vk::HWND, hinstance as ash::vk::HINSTANCE)
+    }
+
+    #[cfg(windows)]
+    fn candidate_supports_target(
+        &self,
+        candidate: &Candidate,
+        target: &PresentationTarget,
+    ) -> RhiResult<bool> {
+        Ok(self
+            .graphics_present_family(candidate, std::slice::from_ref(target))?
+            .is_some())
+    }
+
+    #[cfg(windows)]
+    fn graphics_present_family(
+        &self,
+        candidate: &Candidate,
+        targets: &[PresentationTarget],
+    ) -> RhiResult<Option<u32>> {
+        if !candidate.swapchain_supported {
+            return Ok(None);
+        }
+        let loader =
+            ash::khr::surface::Instance::new(self.instance.entry(), self.instance.instance());
+        let families = unsafe {
+            self.instance
+                .instance
+                .get_physical_device_queue_family_properties(candidate.physical)
+        };
+        let mut selected = None;
+        'families: for (index, family) in families.iter().enumerate() {
+            if family.queue_count == 0 || !family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                continue;
+            }
+            for target in targets {
+                let surface = self.targets.create_surface(
+                    self.instance.entry(),
+                    self.instance.instance(),
+                    target.id(),
+                )?;
+                let supported = unsafe {
+                    loader.get_physical_device_surface_support(
+                        candidate.physical,
+                        index as u32,
+                        surface,
+                    )
+                };
+                unsafe { loader.destroy_surface(surface, None) };
+                let supported = supported.map_err(|result| {
+                    ffi::to_rhi(result, "VulkanProvider::supports_presentation")
+                })?;
+                if !supported {
+                    continue 'families;
+                }
+            }
+            selected = Some(index as u32);
+            break;
+        }
+        Ok(selected)
+    }
+
+    #[cfg(not(windows))]
+    fn candidate_supports_target(&self, _: &Candidate, _: &PresentationTarget) -> RhiResult<bool> {
+        Ok(false)
+    }
+
+    #[cfg(not(windows))]
+    fn graphics_present_family(
+        &self,
+        _: &Candidate,
+        _: &[PresentationTarget],
+    ) -> RhiResult<Option<u32>> {
+        Ok(None)
     }
 
     fn candidates(&self) -> RhiResult<Vec<Candidate>> {
@@ -115,6 +244,19 @@ impl VulkanProvider {
                     .instance
                     .get_physical_device_properties(physical)
             };
+            let swapchain_supported = self.instance.presentation_extensions
+                && unsafe {
+                    self.instance
+                        .instance
+                        .enumerate_device_extension_properties(physical)
+                }
+                .map_err(|result| {
+                    ffi::to_rhi(result, "VulkanProvider::enumerate_device_extensions")
+                })?
+                .iter()
+                .any(|property| unsafe {
+                    CStr::from_ptr(property.extension_name.as_ptr()) == ash::khr::swapchain::NAME
+                });
             let memory = unsafe {
                 self.instance
                     .instance
@@ -204,6 +346,7 @@ impl VulkanProvider {
                         .min(properties.limits.max_fragment_input_components)
                         / 4,
                 },
+                swapchain_supported,
             });
         }
         Ok(candidates)
@@ -261,25 +404,36 @@ impl VulkanProvider {
     }
 
     fn create_native(&self, descriptor: &DeviceRequestDescriptor) -> RhiResult<VulkanDevice> {
-        let candidate = self.select(descriptor.selection())?;
+        let mut candidate = self.select(descriptor.selection())?;
         let facts = self.facts(&candidate)?;
         validate_requirements(
             descriptor.requirements(),
             &AvailableCapabilities::from_facts(facts.clone()),
         )?;
         if !descriptor.presentation_targets().is_empty() {
-            return Err(RhiError::new(
-                RhiErrorKind::Unsupported,
-                "the Vulkan platform slice does not yet enable surface/presentation extensions",
-            )
-            .at("VulkanProvider::request_device"));
+            let Some(family) =
+                self.graphics_present_family(&candidate, descriptor.presentation_targets())?
+            else {
+                return Err(RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    "the selected Vulkan graphics queue cannot present to a required target",
+                )
+                .at("VulkanProvider::request_device"));
+            };
+            candidate.graphics_family = family;
         }
         let priorities = [1.0];
         let queue = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(candidate.graphics_family)
             .queue_priorities(&priorities);
-        let create =
-            vk::DeviceCreateInfo::default().queue_create_infos(std::slice::from_ref(&queue));
+        let device_extensions = candidate
+            .swapchain_supported
+            .then_some(ash::khr::swapchain::NAME.as_ptr())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let create = vk::DeviceCreateInfo::default()
+            .queue_create_infos(std::slice::from_ref(&queue))
+            .enabled_extension_names(&device_extensions);
         let device = unsafe {
             self.instance
                 .instance
@@ -296,10 +450,9 @@ impl VulkanProvider {
             SubmissionLaneId::new(0),
             SubmissionLaneClass::Graphics,
             // v13's base submission invariant requires a graphics lane that
-            // carries RASTER|COPY. COMPUTE is now closed by native lowering on
-            // this same queue. Raster payload lowering is the next Vulkan
-            // vertical slice; until then its required base-domain declaration
-            // is guarded by explicit Phase-A Unsupported rather than a no-op.
+            // carries RASTER|COPY. COMPUTE and raster are both closed by native
+            // lowering on this same queue; multi-queue routing remains a
+            // backend-private performance enhancement.
             LaneWorkDomains::RASTER
                 .union(LaneWorkDomains::COMPUTE)
                 .union(LaneWorkDomains::COPY),
@@ -315,6 +468,9 @@ impl VulkanProvider {
             candidate.non_coherent_atom_size,
             facts,
             submission,
+            candidate.swapchain_supported,
+            #[cfg(windows)]
+            Arc::clone(&self.targets),
         )
         .map_err(|failure| failure.into_rhi("VulkanProvider::request_device"))
     }
@@ -330,10 +486,13 @@ impl ProviderBackend for VulkanProvider {
         Ok(Some(adapters))
     }
 
-    fn supports_presentation(&self, _: AdapterId, _: &PresentationTarget) -> RhiResult<bool> {
-        // A surface extension is intentionally not enabled until the presentation
-        // backend owns its complete acquire/present/loss lifecycle.
-        Ok(false)
+    fn supports_presentation(
+        &self,
+        adapter: AdapterId,
+        target: &PresentationTarget,
+    ) -> RhiResult<bool> {
+        let candidate = self.select(AdapterSelection::Explicit(adapter))?;
+        self.candidate_supports_target(&candidate, target)
     }
 
     fn request_device(

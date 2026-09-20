@@ -300,6 +300,14 @@ impl FrameAttachment {
         self.native().present(receipt);
     }
 
+    pub(crate) fn terminate_present(
+        &self,
+        receipt: crate::api::presentation::PresentReceiptId,
+        state: crate::api::presentation::PresentState,
+    ) {
+        self.native().terminate_present(receipt, state);
+    }
+
     /// The frame this attachment describes.
     ///
     /// What a validation looks the frame's state up by, and what a diagnostic

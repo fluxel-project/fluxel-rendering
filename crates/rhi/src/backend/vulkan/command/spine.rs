@@ -21,6 +21,7 @@ use ash::vk;
 use crate::api::command::record::{CopyRecord, RecordedPayload};
 use crate::api::command::{ResourceUse, TextureUse, TextureUseIntent};
 use crate::api::platform::DeviceLossInfo;
+use crate::api::presentation::{FrameAttachment, PresentState};
 use crate::api::resource::transfer::ReadbackStatus;
 use crate::api::submission::backend::{SubmissionOutcome, SubmissionRequest};
 use crate::api::submission::plan::PlanBatch;
@@ -32,6 +33,15 @@ use crate::backend::vulkan::platform::device::VulkanShared;
 use super::compute;
 use super::raster;
 use super::transfer::{self, ImageLayoutState, TransferRetention};
+
+#[cfg(windows)]
+use crate::backend::vulkan::presentation::{VulkanFrameAttachment, VulkanPresentSync};
+#[cfg(not(windows))]
+#[derive(Clone, Copy)]
+struct VulkanPresentSync {
+    acquire_wait: vk::Semaphore,
+    render_finished: vk::Semaphore,
+}
 
 /// One single-queue Vulkan command domain.
 pub(in crate::backend::vulkan) struct VulkanCommandSpine {
@@ -68,6 +78,11 @@ struct SpineState {
     /// Entries may outlive the logical texture; retirement is a bounded-memory
     /// optimization and must not weaken cross-submit layout correctness.
     image_layouts: Vec<ImageLayoutState>,
+    /// Join handles make device destruction wait until every detached native
+    /// fence wait has returned. This is observable on Android process teardown:
+    /// letting the test/runtime exit while a waiter still unwinds can race the
+    /// loader's native mutex destruction even after the logical point woke.
+    waiters: Vec<std::thread::JoinHandle<()>>,
 }
 
 struct PendingBatch {
@@ -83,6 +98,13 @@ struct PendingBatch {
 struct RecordedBatch {
     command_buffer: vk::CommandBuffer,
     retention: TransferRetention,
+}
+
+#[derive(Default)]
+struct BatchPresentation {
+    waits: Vec<vk::Semaphore>,
+    signals: Vec<vk::Semaphore>,
+    presents: Vec<usize>,
 }
 
 impl VulkanCommandSpine {
@@ -118,6 +140,7 @@ impl VulkanCommandSpine {
                     poison: None,
                     pending: BTreeMap::new(),
                     image_layouts: Vec::new(),
+                    waiters: Vec::new(),
                 }),
             }),
         })
@@ -141,6 +164,7 @@ impl VulkanCommandSpine {
     /// concurrent submission on the same logical device.
     pub(in crate::backend::vulkan) fn wait_idle(&self) -> Result<(), VulkanFailure> {
         let _state = self.lock();
+        let _queue = self.inner.shared.queue_guard();
         unsafe { self.inner.shared.device.device_wait_idle() }.map_err(|result| {
             VulkanFailure::Native(ffi::NativeError::new(
                 result,
@@ -170,6 +194,10 @@ impl VulkanCommandSpine {
         }
 
         let recorded = self.allocate_and_record(request.batches, &state.image_layouts)?;
+        // Presentation synchronization is part of Phase A. A foreign/non-Vulkan
+        // frame must be refused before the first vkQueueSubmit, preserving the
+        // portable `Err == zero native work accepted` contract.
+        let presentation = prepare_presentations(request)?;
         let first_serial = state
             .issued
             .checked_add(1)
@@ -221,6 +249,7 @@ impl VulkanCommandSpine {
         // multi-queue waits are intentionally not advertised yet.
         state.issued = last_serial;
         let mut poisoned = None;
+        let mut presented = vec![false; request.presents.len()];
         let mut recorded = recorded.into_iter();
         let mut fences = fences.into_iter();
         for index in 0..request.batches.len() {
@@ -233,10 +262,20 @@ impl VulkanCommandSpine {
                 .expect("Phase A allocated one fence per batch");
             let serial = first_serial + index as u64;
             let command_buffers = [buffer];
-            let submit = vk::SubmitInfo::default().command_buffers(&command_buffers);
+            let batch_presentation = &presentation[index];
+            let wait_stages = vec![
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+                batch_presentation.waits.len()
+            ];
+            let submit = vk::SubmitInfo::default()
+                .command_buffers(&command_buffers)
+                .wait_semaphores(&batch_presentation.waits)
+                .wait_dst_stage_mask(&wait_stages)
+                .signal_semaphores(&batch_presentation.signals);
             // SAFETY: the command buffer was ended in Phase A, belongs to this
             // device/pool, and the fence is fresh and unsignalled.
             let result = unsafe {
+                let _queue = self.inner.shared.queue_guard();
                 self.inner.shared.device.queue_submit(
                     self.inner.shared.graphics_queue,
                     &[submit],
@@ -256,7 +295,62 @@ impl VulkanCommandSpine {
                         },
                     );
                     self.inner.shared.register_readbacks(&readbacks);
-                    spawn_fence_waiter(Arc::clone(&self.inner), serial, fence);
+                    match spawn_fence_waiter(Arc::clone(&self.inner), serial, fence) {
+                        Ok(waiter) => state.waiters.push(waiter),
+                        Err(error) => {
+                            state.poison = Some((
+                                serial,
+                                CompletionFailure::new(format!(
+                                    "could not start Vulkan fence waiter: {error}"
+                                )),
+                            ));
+                            poisoned = Some(DeviceLossInfo::new(format!(
+                                "Vulkan work was accepted but its completion waiter could not start: {error}"
+                            )));
+                            let remaining_buffers = recorded
+                                .by_ref()
+                                .map(|batch| batch.command_buffer)
+                                .collect::<Vec<_>>();
+                            if !remaining_buffers.is_empty() {
+                                unsafe {
+                                    self.inner.shared.device.free_command_buffers(
+                                        self.inner.command_pool,
+                                        &remaining_buffers,
+                                    )
+                                };
+                            }
+                            for fence in fences.by_ref() {
+                                unsafe { self.inner.shared.device.destroy_fence(fence, None) };
+                            }
+                            break;
+                        }
+                    }
+                    for &present_index in &batch_presentation.presents {
+                        let present = &request.presents[present_index];
+                        present.attachment.present(present.receipt);
+                        presented[present_index] = true;
+                    }
+                    // vkQueuePresentKHR may be the first native call to report
+                    // device loss. Do not feed later batches to a terminal
+                    // queue; their receipts are completed below as DeviceLost.
+                    if self.inner.shared.loss_info().is_some() {
+                        let remaining_buffers = recorded
+                            .by_ref()
+                            .map(|batch| batch.command_buffer)
+                            .collect::<Vec<_>>();
+                        if !remaining_buffers.is_empty() {
+                            unsafe {
+                                self.inner.shared.device.free_command_buffers(
+                                    self.inner.command_pool,
+                                    &remaining_buffers,
+                                )
+                            };
+                        }
+                        for fence in fences.by_ref() {
+                            unsafe { self.inner.shared.device.destroy_fence(fence, None) };
+                        }
+                        break;
+                    }
                 }
                 Err(result) => {
                     // Do not return an error after queue submission was attempted.
@@ -317,6 +411,15 @@ impl VulkanCommandSpine {
         drop(state);
         if let Some(info) = poisoned {
             self.inner.shared.mark_lost(info);
+        }
+        if let Some(info) = self.inner.shared.loss_info() {
+            for (index, present) in request.presents.iter().enumerate() {
+                if !presented[index] {
+                    present
+                        .attachment
+                        .terminate_present(present.receipt, PresentState::DeviceLost(info.clone()));
+                }
+            }
         }
         Ok(SubmissionOutcome {
             completion: last_serial,
@@ -644,6 +747,18 @@ impl VulkanCommandSpine {
     }
 }
 
+impl Drop for VulkanCommandSpine {
+    fn drop(&mut self) {
+        let waiters = {
+            let mut state = self.lock();
+            std::mem::take(&mut state.waiters)
+        };
+        for waiter in waiters {
+            let _ = waiter.join();
+        }
+    }
+}
+
 impl Drop for SpineInner {
     fn drop(&mut self) {
         // Unlike COM-backed APIs, Vulkan command buffers and their pool may not
@@ -652,6 +767,7 @@ impl Drop for SpineInner {
         // so destruction itself must close that native lifetime. A lost device
         // may reject the wait; destruction is still the only remaining cleanup
         // path in that terminal domain.
+        let _queue = self.shared.queue_guard();
         let _ = unsafe { self.shared.device.device_wait_idle() };
         let state = self
             .state
@@ -681,9 +797,13 @@ impl Drop for SpineInner {
 /// Vulkan vertical slice.  A shared fence waiter may replace it later without
 /// changing the completion contract; this baseline's important property is that
 /// a `CompletionPoint` or `ReadbackTicket` future always makes progress.
-fn spawn_fence_waiter(inner: Arc<SpineInner>, serial: u64, fence: vk::Fence) {
+fn spawn_fence_waiter(
+    inner: Arc<SpineInner>,
+    serial: u64,
+    fence: vk::Fence,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
     let worker = Arc::clone(&inner);
-    let result = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("fluxel-vulkan-fence".into())
         .spawn(move || {
             // SAFETY: `worker` retains both the command pool and VulkanShared;
@@ -695,13 +815,7 @@ fn spawn_fence_waiter(inner: Arc<SpineInner>, serial: u64, fence: vk::Fence) {
                     .wait_for_fences(&[fence], true, u64::MAX)
             };
             finish_waited_batch(&worker, serial, result);
-        });
-    if result.is_err() {
-        // Work was already accepted, so a thread-creation failure cannot be
-        // returned as submit Err. Make the execution domain terminal instead;
-        // this wakes all futures rather than leaving accepted work Pending.
-        terminate_waiter_failure(&inner, serial, "could not start Vulkan fence waiter");
-    }
+        })
 }
 
 fn finish_waited_batch(inner: &SpineInner, serial: u64, result: Result<(), vk::Result>) {
@@ -826,22 +940,6 @@ fn finish_waited_batch(inner: &SpineInner, serial: u64, result: Result<(), vk::R
     }
 }
 
-fn terminate_waiter_failure(inner: &SpineInner, serial: u64, message: &'static str) {
-    let state = inner
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for pending in state.pending.range(serial..) {
-        for readback in &pending.1.retention.readbacks {
-            readback.ticket.set_status(ReadbackStatus::DeviceLost);
-        }
-    }
-    drop(state);
-    inner
-        .shared
-        .mark_lost(DeviceLossInfo::new(message.to_owned()));
-}
-
 fn completion_from_state(state: &SpineState, serial: u64) -> CompletionState {
     if serial == 0 {
         CompletionState::Failed(CompletionFailure::new(
@@ -862,6 +960,71 @@ fn completion_from_state(state: &SpineState, serial: u64) -> CompletionState {
             "Vulkan completion was queried for a serial this device never issued",
         ))
     }
+}
+
+fn prepare_presentations(
+    request: &SubmissionRequest<'_>,
+) -> Result<Vec<BatchPresentation>, VulkanFailure> {
+    let mut batches = (0..request.batches.len())
+        .map(|_| BatchPresentation::default())
+        .collect::<Vec<_>>();
+    for (present_index, present) in request.presents.iter().enumerate() {
+        let sync = frame_present_sync(&present.attachment)?;
+        let frame = present.attachment.frame_id();
+        let first_use = request
+            .batches
+            .iter()
+            .position(|batch| {
+                batch.work.iter().any(|work| {
+                    work.resource_uses()
+                        .iter()
+                        .any(|use_| matches!(use_, ResourceUse::Frame(use_) if use_.frame == frame))
+                })
+            })
+            .ok_or(VulkanFailure::Unsupported {
+                what: "a Vulkan presentation relation without frame work",
+                why: "portable plan validation should require the presented frame to be used",
+            })?;
+        let present_batch = request
+            .batches
+            .iter()
+            .position(|batch| batch.point == present.after)
+            .ok_or(VulkanFailure::Unsupported {
+                what: "a Vulkan presentation point outside the submitted plan",
+                why: "portable plan validation should resolve every present-after point",
+            })?;
+        if first_use > present_batch {
+            return Err(VulkanFailure::Unsupported {
+                what: "a Vulkan presentation ordered before its first frame use",
+                why: "portable plan validation should order every frame use before presentation",
+            });
+        }
+        batches[first_use].waits.push(sync.acquire_wait);
+        batches[present_batch].signals.push(sync.render_finished);
+        batches[present_batch].presents.push(present_index);
+    }
+    Ok(batches)
+}
+
+#[cfg(windows)]
+fn frame_present_sync(attachment: &FrameAttachment) -> Result<VulkanPresentSync, VulkanFailure> {
+    attachment
+        .native()
+        .as_any()
+        .downcast_ref::<VulkanFrameAttachment>()
+        .map(VulkanFrameAttachment::sync)
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a Vulkan presentation attachment",
+            why: "its native drawable belongs to another backend",
+        })
+}
+
+#[cfg(not(windows))]
+fn frame_present_sync(_: &FrameAttachment) -> Result<VulkanPresentSync, VulkanFailure> {
+    Err(VulkanFailure::Unsupported {
+        what: "a Vulkan presentation attachment",
+        why: "this platform has no Vulkan presentation lowering",
+    })
 }
 
 /// Collects exactly the shader image uses in one linear raster scope before it

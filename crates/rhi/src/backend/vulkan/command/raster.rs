@@ -24,6 +24,7 @@ use crate::api::command::geometry::{ColorClearValue, LoadOp, StoreOp};
 use crate::api::command::record::{RasterBegin, RasterDraw};
 use crate::api::command::{IndexFormat, ResourceUse, TextureUse, TextureUseIntent};
 use crate::api::pipeline::RasterPipeline;
+use crate::api::presentation::FrameAttachment;
 use crate::api::resource::buffer::Buffer;
 use crate::api::resource::view::TextureView;
 use crate::backend::vulkan::binding::VulkanBindGroup;
@@ -31,6 +32,8 @@ use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::format::vk_format;
 use crate::backend::vulkan::pipeline::VulkanRasterPipeline;
 use crate::backend::vulkan::platform::device::VulkanShared;
+#[cfg(windows)]
+use crate::backend::vulkan::presentation::VulkanFrameAttachment;
 use crate::backend::vulkan::resource::{VulkanBuffer, VulkanTextureView};
 
 use super::transfer;
@@ -48,6 +51,7 @@ pub(super) struct RasterRetention {
     pub(super) bind_groups: Vec<BindGroup>,
     pub(super) buffers: Vec<Buffer>,
     pub(super) views: Vec<TextureView>,
+    pub(super) frames: Vec<FrameAttachment>,
     objects: Vec<RasterObjects>,
 }
 
@@ -57,6 +61,7 @@ pub(super) struct RasterScopeState {
     objects: RasterObjects,
     extent: vk::Extent2D,
     colors: Vec<TextureView>,
+    frames: Vec<FrameAttachment>,
     depth: Option<TextureView>,
 }
 
@@ -67,6 +72,24 @@ struct RasterObjects {
     shared: Arc<VulkanShared>,
     render_pass: vk::RenderPass,
     framebuffer: vk::Framebuffer,
+    #[allow(
+        dead_code,
+        reason = "owns swapchain image views through framebuffer retirement"
+    )]
+    frame_views: FrameViews,
+}
+
+struct FrameViews {
+    shared: Arc<VulkanShared>,
+    views: Vec<vk::ImageView>,
+}
+
+impl Drop for FrameViews {
+    fn drop(&mut self) {
+        for view in self.views.drain(..) {
+            unsafe { self.shared.device.destroy_image_view(view, None) };
+        }
+    }
 }
 
 impl Drop for RasterObjects {
@@ -113,6 +136,11 @@ pub(super) fn lower_raster_begin(
     let mut color_refs = Vec::with_capacity(begin.colors.len());
     let mut clears = Vec::new();
     let mut colors = Vec::with_capacity(begin.colors.len());
+    let mut frames = Vec::new();
+    let mut frame_views = FrameViews {
+        shared: Arc::clone(&shared),
+        views: Vec::new(),
+    };
     let mut width = None;
     let mut height = None;
 
@@ -132,25 +160,64 @@ pub(super) fn lower_raster_begin(
                 layout: vk::ImageLayout::UNDEFINED,
             });
         }
-        let view = texture_color_view(&color.view)?;
-        check_extent(&mut width, &mut height, view.extent())?;
-        transfer::transition_raster_attachment(
-            &shared,
-            command_buffer,
-            &view,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            transfer_retention,
-        )?;
+        check_extent(&mut width, &mut height, color.view.extent())?;
+        let native_attachment_view = match &color.view {
+            ColorAttachmentView::Texture(view) => {
+                transfer::transition_raster_attachment(
+                    &shared,
+                    command_buffer,
+                    view,
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                    transfer_retention,
+                )?;
+                colors.push(view.clone());
+                native_view(view)?.view()
+            }
+            ColorAttachmentView::Frame(frame) => {
+                let image = native_frame_image(frame)?;
+                transition_frame(
+                    &shared,
+                    command_buffer,
+                    image,
+                    vk::ImageLayout::PRESENT_SRC_KHR,
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                );
+                let format = vk_format(frame.format()).ok_or(VulkanFailure::Unsupported {
+                    what: "a Vulkan frame attachment format",
+                    why: "the configured presentation format has no Vulkan mapping",
+                })?;
+                let info = vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(format)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    });
+                let view = unsafe { shared.device.create_image_view(&info, None) }
+                    .map_err(native("vkCreateImageView for presentation frame"))?;
+                frame_views.views.push(view);
+                frames.push(frame.clone());
+                view
+            }
+        };
         let index = attachments.len() as u32;
         attachments.push(vk::AttachmentDescription {
             flags: vk::AttachmentDescriptionFlags::empty(),
-            format: vk_format(view.format()).ok_or(VulkanFailure::Unsupported {
+            format: vk_format(color.view.format()).ok_or(VulkanFailure::Unsupported {
                 what: "a Vulkan color attachment format",
                 why: "the view format has no Vulkan mapping",
             })?,
-            samples: vk::SampleCountFlags::from_raw(view.sample_count()),
+            samples: vk::SampleCountFlags::from_raw(color.view.sample_count()),
             load_op: color_load(color.load),
             store_op: color_store(color.store),
             stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
@@ -162,9 +229,8 @@ pub(super) fn lower_raster_begin(
             attachment: index,
             layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         });
-        attachment_views.push(native_view(&view)?.view());
+        attachment_views.push(native_attachment_view);
         clears.push(clear_color(color.load));
-        colors.push(view);
     }
 
     let mut depth_ref = None;
@@ -282,6 +348,7 @@ pub(super) fn lower_raster_begin(
         shared,
         render_pass,
         framebuffer,
+        frame_views,
     };
     let info = vk::RenderPassBeginInfo::default()
         .render_pass(objects.render_pass)
@@ -302,6 +369,7 @@ pub(super) fn lower_raster_begin(
         objects,
         extent: vk::Extent2D { width, height },
         colors,
+        frames,
         depth,
     })
 }
@@ -329,6 +397,7 @@ pub(super) fn lower_raster_draw(
         bind_groups: Vec::new(),
         buffers: Vec::new(),
         views: Vec::new(),
+        frames: Vec::new(),
         objects: Vec::new(),
     };
     for resource_use in uses {
@@ -358,12 +427,7 @@ pub(super) fn lower_raster_draw(
                     });
                 }
             },
-            ResourceUse::Frame(_) => {
-                return Err(VulkanFailure::Unsupported {
-                    what: "a presentation frame used outside the raster attachment",
-                    why: "Vulkan presentation lowering is not implemented yet",
-                });
-            }
+            ResourceUse::Frame(_) => {}
         }
     }
     let mut sets = Vec::with_capacity(draw.groups.len());
@@ -566,6 +630,19 @@ pub(super) fn lower_raster_end(
         )?;
         retention.views.push(view);
     }
+    for frame in scope.frames.drain(..) {
+        let image = native_frame_image(&frame)?;
+        transition_frame(
+            &scope.objects.shared,
+            command_buffer,
+            image,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::ImageLayout::PRESENT_SRC_KHR,
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            vk::AccessFlags::empty(),
+        );
+        retention.frames.push(frame);
+    }
     if let Some(view) = scope.depth.take() {
         transfer::transition_raster_attachment(
             &scope.objects.shared,
@@ -582,13 +659,61 @@ pub(super) fn lower_raster_end(
     Ok(())
 }
 
-fn texture_color_view(view: &ColorAttachmentView) -> Result<TextureView, VulkanFailure> {
-    match view {
-        ColorAttachmentView::Texture(view) => Ok(view.clone()),
-        ColorAttachmentView::Frame(_) => Err(VulkanFailure::Unsupported {
-            what: "a Vulkan frame attachment",
-            why: "Vulkan swapchain/presentation lowering has not been implemented",
-        }),
+#[cfg(windows)]
+fn native_frame_image(frame: &FrameAttachment) -> Result<vk::Image, VulkanFailure> {
+    frame
+        .native()
+        .as_any()
+        .downcast_ref::<VulkanFrameAttachment>()
+        .map(VulkanFrameAttachment::image)
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a Vulkan presentation frame",
+            why: "its native drawable belongs to another backend",
+        })
+}
+
+#[cfg(not(windows))]
+fn native_frame_image(_: &FrameAttachment) -> Result<vk::Image, VulkanFailure> {
+    Err(VulkanFailure::Unsupported {
+        what: "a Vulkan presentation frame",
+        why: "this platform has no Vulkan presentation lowering",
+    })
+}
+
+fn transition_frame(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    image: vk::Image,
+    old_layout: vk::ImageLayout,
+    new_layout: vk::ImageLayout,
+    destination_stage: vk::PipelineStageFlags,
+    destination_access: vk::AccessFlags,
+) {
+    let barrier = vk::ImageMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
+        .dst_access_mask(destination_access)
+        .old_layout(old_layout)
+        .new_layout(new_layout)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
+    unsafe {
+        shared.device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            destination_stage,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[barrier],
+        );
     }
 }
 fn native_view(view: &TextureView) -> Result<&VulkanTextureView, VulkanFailure> {

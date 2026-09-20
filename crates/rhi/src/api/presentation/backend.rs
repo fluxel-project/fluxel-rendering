@@ -29,6 +29,11 @@ pub(crate) trait FrameAttachmentBackend: Send + Sync + 'static {
     /// executed. Failure is recorded in backend presentation state: Phase B must
     /// not return an Err after GPU work has been accepted.
     fn present(&self, _receipt: PresentReceiptId) {}
+    /// Publishes a terminal receipt without issuing a native present. This is
+    /// used only after Phase B has made the execution domain terminal before a
+    /// later present relation could be reached. It prevents a valid receipt
+    /// from remaining unknown/Pending after device loss.
+    fn terminate_present(&self, _receipt: PresentReceiptId, _state: PresentState) {}
 }
 
 /// Per-lease native state. A lease is shared with acquired frame tokens so their

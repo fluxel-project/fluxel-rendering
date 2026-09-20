@@ -29,6 +29,7 @@ struct Liveness {
     info: Option<DeviceLossInfo>,
     completion_waiters: BTreeMap<u64, Vec<Waker>>,
     pending_readbacks: Vec<ReadbackTicket>,
+    loss_waiters: Vec<Waker>,
 }
 
 /// A Vulkan device with exactly one loss authority.
@@ -44,6 +45,8 @@ pub(crate) struct VulkanDevice {
     command: VulkanCommandSpine,
     facts: CapabilityFacts,
     submission: SubmissionCapabilities,
+    #[cfg(windows)]
+    presentation: Option<crate::backend::vulkan::presentation::VulkanPresentation>,
 }
 
 /// The one shared native ownership domain for a Vulkan RHI device.
@@ -60,19 +63,23 @@ pub(crate) struct VulkanShared {
     /// than opening a second implicit queue path.
     pub(crate) graphics_queue: vk::Queue,
     pub(crate) graphics_family: u32,
+    /// Vulkan queues are externally synchronized. Submission, presentation,
+    /// abandonment and idle waits all pass through this one backend-private
+    /// authority rather than relying on callers to serialize unrelated public
+    /// objects.
+    queue_lock: Mutex<()>,
     /// Fixed at device creation. Dedicated allocations choose a compatible
     /// memory type from this snapshot; they never query a possibly unrelated
     /// physical device later.
-    #[expect(
-        dead_code,
-        reason = "retained for format/property probes that accompany later Vulkan capability slices"
-    )]
     pub(crate) physical_device: vk::PhysicalDevice,
     pub(crate) memory_properties: vk::PhysicalDeviceMemoryProperties,
     /// Required to align flush/invalidate ranges for host-visible memory that
     /// does not advertise HOST_COHERENT.
     pub(crate) non_coherent_atom_size: vk::DeviceSize,
     liveness: Mutex<Liveness>,
+    #[cfg(windows)]
+    presentation_retirements:
+        Mutex<Vec<crate::backend::vulkan::presentation::win32::VulkanSwapchainRetirement>>,
 }
 
 impl VulkanDevice {
@@ -88,12 +95,17 @@ impl VulkanDevice {
         non_coherent_atom_size: vk::DeviceSize,
         facts: CapabilityFacts,
         submission: SubmissionCapabilities,
+        presentation_enabled: bool,
+        #[cfg(windows)] targets: std::sync::Arc<
+            crate::backend::vulkan::presentation::VulkanTargetRegistry,
+        >,
     ) -> Result<Self, VulkanFailure> {
         let shared = std::sync::Arc::new(VulkanShared {
-            _instance: instance,
+            _instance: std::sync::Arc::clone(&instance),
             device,
             graphics_queue,
             graphics_family,
+            queue_lock: Mutex::new(()),
             physical_device,
             memory_properties,
             non_coherent_atom_size,
@@ -102,9 +114,23 @@ impl VulkanDevice {
                 info: None,
                 completion_waiters: BTreeMap::new(),
                 pending_readbacks: Vec::new(),
+                loss_waiters: Vec::new(),
             }),
+            #[cfg(windows)]
+            presentation_retirements: Mutex::new(Vec::new()),
         });
         let command = VulkanCommandSpine::new(std::sync::Arc::clone(&shared))?;
+        #[cfg(windows)]
+        let presentation = presentation_enabled.then(|| {
+            crate::backend::vulkan::presentation::VulkanPresentation::new(
+                instance.entry(),
+                instance.instance(),
+                std::sync::Arc::clone(&shared),
+                targets,
+            )
+        });
+        #[cfg(not(windows))]
+        let _ = presentation_enabled;
         Ok(Self {
             adapter,
             object: ObjectId::next(),
@@ -112,6 +138,8 @@ impl VulkanDevice {
             command,
             facts,
             submission,
+            #[cfg(windows)]
+            presentation,
         })
     }
 
@@ -146,12 +174,18 @@ impl VulkanShared {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    pub(crate) fn queue_guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.queue_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Publishes the execution domain's first terminal reason and wakes every
     /// completion future. Native failures from resources and queues both reach
     /// this authority, so no pending future depends on which API call happened
     /// to discover loss first.
     pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
-        let (waiters, readbacks) = {
+        let (waiters, readbacks, loss_waiters) = {
             let mut state = self.liveness();
             if matches!(state.status, DeviceStatus::Lost) {
                 return;
@@ -161,6 +195,7 @@ impl VulkanShared {
             (
                 std::mem::take(&mut state.completion_waiters),
                 std::mem::take(&mut state.pending_readbacks),
+                std::mem::take(&mut state.loss_waiters),
             )
         };
         for (_, waiters) in waiters {
@@ -171,6 +206,35 @@ impl VulkanShared {
         for ticket in readbacks {
             ticket.set_status(ReadbackStatus::DeviceLost);
         }
+        for waker in loss_waiters {
+            waker.wake();
+        }
+    }
+
+    pub(crate) fn register_loss_waker(&self, waker: &Waker) -> Result<(), DeviceLossInfo> {
+        let mut state = self.liveness();
+        if let Some(info) = &state.info {
+            return Err(info.clone());
+        }
+        if !state
+            .loss_waiters
+            .iter()
+            .any(|known| known.will_wake(waker))
+        {
+            state.loss_waiters.push(waker.clone());
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn retire_swapchain(
+        &self,
+        retirement: crate::backend::vulkan::presentation::win32::VulkanSwapchainRetirement,
+    ) {
+        self.presentation_retirements
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(retirement);
     }
 
     pub(crate) fn loss_info(&self) -> Option<DeviceLossInfo> {
@@ -265,6 +329,14 @@ impl Drop for VulkanShared {
         // proves all resource, staging and command-spine owners are gone. Future
         // descriptor pools/pipeline caches must join this same ownership domain
         // rather than introducing a second device lifetime registry.
+        #[cfg(windows)]
+        for retirement in std::mem::take(
+            self.presentation_retirements
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ) {
+            unsafe { retirement.destroy(&self.device) };
+        }
         unsafe { self.device.destroy_device(None) };
     }
 }
@@ -433,6 +505,19 @@ impl DeviceBackend for VulkanDevice {
                 Box::new(value) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
             })
             .map_err(|failure| self.observe_failure(failure))
+    }
+
+    fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
+        #[cfg(windows)]
+        {
+            self.presentation.as_ref().map(|presentation| {
+                presentation as &dyn crate::api::presentation::backend::PresentationBackend
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
     }
 
     fn submit(
