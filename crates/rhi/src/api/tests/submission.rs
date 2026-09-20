@@ -58,7 +58,9 @@ use crate::api::submission::{
     SubmissionReceipt,
 };
 use crate::api::tests::fixture;
-use crate::api::tests::mock::{buffers_for_test, paired_device_for_test};
+use crate::api::tests::mock::{
+    buffers_for_test, paired_device_for_test, persistent_mapped_buffers_for_test,
+};
 // The only import here that exists for the backend's own answer rather than the
 // portable layer's: section 41.8's per-point obligation is owed by whoever owns
 // the completion bookkeeping, and on this device that is the mock.
@@ -1440,6 +1442,64 @@ fn submit_refuses_a_foreign_plan_and_a_lost_device() {
     assert_eq!(error.operation(), Some("Device::submit"));
 }
 
+/// A pending or ready ordinary mapping excludes GPU use of the same buffer.
+/// The lease starts before the mapping future resolves, so Phase A must reject
+/// the plan without asking the backend to submit it.
+#[test]
+fn submit_refuses_a_mapped_buffer_without_persistent_mapping() {
+    let identity = device_identity(1);
+    let (device, _native) = paired_device_for_test(identity);
+    let buffer = fixture::buffer(
+        ObjectId::new(991),
+        identity,
+        BufferDescriptor::new(64, BufferUsage::STORAGE.union(BufferUsage::MAP_WRITE)),
+    );
+    buffer.begin_map().unwrap();
+
+    let use_ = ResourceUse::Buffer(BufferUse {
+        buffer: buffer.clone(),
+        range: BufferRange::new(0, 64),
+        stages: PipelineScope::COMPUTE,
+        access: AccessMask::SHADER_READ,
+    });
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    builder
+        .add_batch(lane_id(0), vec![raster_work(identity, vec![use_])])
+        .unwrap();
+
+    let error = block_on(device.submit(builder.build().unwrap())).unwrap_err();
+    assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
+    assert_eq!(error.object(), Some(buffer.id()));
+    buffer.end_map();
+}
+
+/// Persistent mapping is an explicit exception to ordinary host/GPU lease
+/// exclusion, rather than an implication of MAP_WRITE usage.
+#[test]
+fn submit_accepts_a_mapped_buffer_when_persistent_mapping_is_enabled() {
+    let identity = device_identity(1);
+    let (device, _native) = persistent_mapped_buffers_for_test(identity);
+    let buffer = fixture::buffer(
+        ObjectId::new(992),
+        identity,
+        BufferDescriptor::new(64, BufferUsage::STORAGE.union(BufferUsage::MAP_WRITE)),
+    );
+    buffer.begin_map().unwrap();
+    let use_ = ResourceUse::Buffer(BufferUse {
+        buffer: buffer.clone(),
+        range: BufferRange::new(0, 64),
+        stages: PipelineScope::COMPUTE,
+        access: AccessMask::SHADER_READ,
+    });
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    builder
+        .add_batch(lane_id(0), vec![raster_work(identity, vec![use_])])
+        .unwrap();
+
+    block_on(device.submit(builder.build().unwrap())).unwrap();
+    buffer.end_map();
+}
+
 /// Asking about a foreign completion point is `WrongDevice`, and asking a lost
 /// device about any point is `DeviceLost`.
 ///
@@ -1826,6 +1886,7 @@ fn a_refused_plan_never_reaches_the_backend() {
     let identity = device_identity(1);
     let other = device_identity(2);
     let (device, native) = paired_device_for_test(identity);
+    native.disable_presentation();
 
     // A plan built for another device.
     let mut builder = builder(other, vec![lane(0, everything())], 1);

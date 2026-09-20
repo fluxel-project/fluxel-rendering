@@ -34,7 +34,7 @@ use crate::api::command::attachment::{
     ColorAttachmentView, DepthAttachmentMode, StencilAttachmentMode,
 };
 use crate::api::command::geometry::{ColorClearValue, LoadOp};
-use crate::api::command::record::{RasterBegin, RasterDraw};
+use crate::api::command::record::{RasterBegin, RasterDraw, RasterIndirect};
 use crate::api::command::{AccessMask, IndexFormat, ResourceUse, TextureUseIntent};
 use crate::api::identity::ObjectId;
 use crate::api::pipeline::PrimitiveTopology;
@@ -106,7 +106,7 @@ pub(super) fn lower_raster_begin(
                 "ResolveSubresource lowering is not implemented yet",
             ));
         }
-        let attachment = lower_color_attachment(device, &color.view)?;
+        let attachment = lower_color_attachment(device, &color.view, color.depth_slice)?;
         entering.push(
             &attachment.resource,
             attachment.enter_state,
@@ -208,11 +208,12 @@ pub(super) fn lower_raster_begin(
 fn lower_color_attachment(
     device: &ID3D12Device,
     view: &ColorAttachmentView,
+    depth_slice: Option<u32>,
 ) -> Result<Dx12RenderAttachment, Dx12Failure> {
     match view {
         ColorAttachmentView::Texture(view) => {
             let resource = dx12_texture(view.texture())?.resource().clone();
-            let (heap, handle) = create_rtv(device, view)?;
+            let (heap, handle) = create_rtv(device, view, depth_slice)?;
             Ok(Dx12RenderAttachment {
                 resource,
                 handle,
@@ -223,6 +224,12 @@ fn lower_color_attachment(
             })
         }
         ColorAttachmentView::Frame(frame) => {
+            if depth_slice.is_some() {
+                return Err(unsupported(
+                    "a depth slice on a presentation attachment",
+                    "a frame attachment is not a 3D texture",
+                ));
+            }
             let native = frame
                 .native()
                 .as_any()
@@ -353,6 +360,12 @@ pub(super) fn lower_raster_draw(
                     "presentation attachment lowering is not implemented",
                 ));
             }
+            ResourceUse::AccelerationStructure(_) => {
+                return Err(unsupported(
+                    "an acceleration structure used by a raster draw",
+                    "DX12 acceleration-structure binding lowering is not enabled",
+                ));
+            }
         }
     }
     for (buffer, state) in buffers.values() {
@@ -407,6 +420,27 @@ pub(super) fn lower_raster_draw(
     unsafe {
         list.SetGraphicsRootSignature(pipeline.root_signature());
         list.SetPipelineState(pipeline.pipeline_state());
+        for write in &draw.immediates {
+            let (parameter, destination) = pipeline
+                .immediate_root_parameter(write.offset, write.bytes.len() as u32)
+                .ok_or_else(|| {
+                    unsupported(
+                        "an immediate write outside the DX12 root-constant layout",
+                        "portable validation must keep writes within declared ranges",
+                    )
+                })?;
+            let values: Vec<u32> = write
+                .bytes
+                .chunks_exact(4)
+                .map(|word| u32::from_le_bytes(word.try_into().expect("4-byte immediate word")))
+                .collect();
+            list.SetGraphicsRoot32BitConstants(
+                parameter,
+                values.len() as u32,
+                values.as_ptr().cast(),
+                destination,
+            );
+        }
         if let Some((_, group)) = groups.first() {
             // D3D12 permits precisely one CBV/SRV/UAV and one sampler heap to
             // be active. A group's table addresses are offsets in these shared
@@ -497,6 +531,122 @@ pub(super) fn lower_raster_draw(
     Ok(())
 }
 
+/// Executes one native draw signature after reusing the ordinary raster state
+/// encoder.  The zero-count setup draw emits no primitives; it exists solely to
+/// keep direct and indirect binding/IA/dynamic-state lowering identical.
+pub(super) fn lower_raster_indirect(
+    device: &ID3D12Device,
+    list: &ID3D12GraphicsCommandList,
+    indirect: &RasterIndirect,
+    uses: &[ResourceUse],
+    scope: &RasterScopeState,
+    committed: &mut CommittedBatch,
+) -> Result<(), Dx12Failure> {
+    let setup = RasterDraw {
+        pipeline: indirect.pipeline.clone(),
+        groups: indirect.groups.clone(),
+        vertex_buffers: indirect.vertex_buffers.clone(),
+        index: indirect.index.clone(),
+        viewport: indirect.viewport,
+        scissor: indirect.scissor,
+        blend_constant: indirect.blend_constant,
+        stencil_reference: indirect.stencil_reference,
+        range: 0..0,
+        instances: 0..0,
+        base_vertex: 0,
+        immediates: Vec::new(),
+    };
+    lower_raster_draw(list, &setup, uses, scope, committed)?;
+    let indexed = indirect.index.is_some();
+    let kind = if indexed {
+        D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED
+    } else {
+        D3D12_INDIRECT_ARGUMENT_TYPE_DRAW
+    };
+    let desc = D3D12_INDIRECT_ARGUMENT_DESC {
+        Type: kind,
+        Anonymous: D3D12_INDIRECT_ARGUMENT_DESC_0::default(),
+    };
+    let signature_desc = D3D12_COMMAND_SIGNATURE_DESC {
+        ByteStride: indirect.stride,
+        NumArgumentDescs: 1,
+        pArgumentDescs: &desc,
+        NodeMask: 0,
+    };
+    let mut signature: Option<ID3D12CommandSignature> = None;
+    unsafe {
+        device
+            .CreateCommandSignature(
+                &signature_desc,
+                None::<&ID3D12RootSignature>,
+                &mut signature,
+            )
+            .map_err(|error| {
+                Dx12Failure::Native(crate::backend::dx12::ffi::NativeError::new(
+                    &error,
+                    "ID3D12Device::CreateCommandSignature",
+                ))
+            })?;
+    }
+    let signature = signature.ok_or_else(|| {
+        unsupported(
+            "a missing raster command signature",
+            "CreateCommandSignature returned success without a signature",
+        )
+    })?;
+    let arguments = dx12_buffer(&indirect.arguments)?;
+    let count = match indirect.count.as_ref() {
+        Some((buffer, offset, max)) => Some((dx12_buffer(buffer)?, *offset, *max)),
+        None => None,
+    };
+    let mut entering = Transitions::default();
+    entering.push(
+        arguments.resource(),
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+    );
+    if let Some((buffer, _, _)) = &count {
+        entering.push(
+            buffer.resource(),
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+        );
+    }
+    entering.record(list);
+    unsafe {
+        list.ExecuteIndirect(
+            &signature,
+            count
+                .as_ref()
+                .map_or(indirect.draw_count, |(_, _, max)| *max),
+            arguments.resource(),
+            indirect.arguments_offset,
+            count.as_ref().map(|(buffer, _, _)| buffer.resource()),
+            count.as_ref().map_or(0, |(_, offset, _)| *offset),
+        );
+    }
+    let mut leaving = Transitions::default();
+    leaving.push(
+        arguments.resource(),
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+        D3D12_RESOURCE_STATE_COMMON,
+    );
+    if let Some((buffer, _, _)) = &count {
+        leaving.push(
+            buffer.resource(),
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+            D3D12_RESOURCE_STATE_COMMON,
+        );
+    }
+    leaving.record(list);
+    committed.indirect_buffers.push(indirect.arguments.clone());
+    if let Some((buffer, _, _)) = &indirect.count {
+        committed.indirect_buffers.push(buffer.clone());
+    }
+    committed.command_signatures.push(signature);
+    Ok(())
+}
+
 pub(super) fn lower_raster_end(
     list: &ID3D12GraphicsCommandList,
     scope: RasterScopeState,
@@ -549,19 +699,14 @@ pub(super) fn lower_raster_end(
 fn create_rtv(
     device: &ID3D12Device,
     view: &TextureView,
+    depth_slice: Option<u32>,
 ) -> Result<(ID3D12DescriptorHeap, D3D12_CPU_DESCRIPTOR_HANDLE), Dx12Failure> {
     let texture = dx12_texture(view.texture())?;
     let descriptor = view.descriptor();
-    if !matches!(view.texture().descriptor().dimension, TextureDimension::D2)
-        || !matches!(
-            descriptor.dimension,
-            TextureViewDimension::D2 | TextureViewDimension::D2Array
-        )
-        || view.texture().descriptor().sample_count != 1
-    {
+    if view.texture().descriptor().sample_count != 1 {
         return Err(unsupported(
-            "a non-single-sample 2D color attachment view",
-            "DX12 raster lowering currently implements 2D RTV descriptors",
+            "a multisampled color attachment view",
+            "DX12 multisample RTV lowering is not enabled by this backend",
         ));
     }
     let format = dxgi_format(view.format()).ok_or_else(|| {
@@ -575,8 +720,33 @@ fn create_rtv(
     // A portable D2 view selects one array layer. D3D12 requires the ARRAY
     // descriptor form whenever the resource has multiple layers; TEXTURE2D
     // would silently target layer zero and ignore `base_layer`.
-    let desc = if view.texture().descriptor().array_layers > 1
-        || matches!(descriptor.dimension, TextureViewDimension::D2Array)
+    let desc = if matches!(view.texture().descriptor().dimension, TextureDimension::D3)
+        && matches!(descriptor.dimension, TextureViewDimension::D3)
+    {
+        let slice = depth_slice.ok_or_else(|| {
+            unsupported(
+                "a 3D color attachment without a depth slice",
+                "the portable attachment requires an explicit 3D slice",
+            )
+        })?;
+        D3D12_RENDER_TARGET_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D12_RTV_DIMENSION_TEXTURE3D,
+            Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
+                Texture3D: D3D12_TEX3D_RTV {
+                    MipSlice: descriptor.base_mip,
+                    FirstWSlice: slice,
+                    WSize: 1,
+                },
+            },
+        }
+    } else if matches!(view.texture().descriptor().dimension, TextureDimension::D2)
+        && matches!(
+            descriptor.dimension,
+            TextureViewDimension::D2 | TextureViewDimension::D2Array
+        )
+        && (view.texture().descriptor().array_layers > 1
+            || matches!(descriptor.dimension, TextureViewDimension::D2Array))
     {
         D3D12_RENDER_TARGET_VIEW_DESC {
             Format: format,
@@ -590,7 +760,15 @@ fn create_rtv(
                 },
             },
         }
-    } else {
+    } else if matches!(view.texture().descriptor().dimension, TextureDimension::D2)
+        && matches!(descriptor.dimension, TextureViewDimension::D2)
+    {
+        if depth_slice.is_some() {
+            return Err(unsupported(
+                "a depth slice on a 2D color attachment",
+                "only a 3D RTV accepts a depth slice",
+            ));
+        }
         D3D12_RENDER_TARGET_VIEW_DESC {
             Format: format,
             ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
@@ -601,6 +779,11 @@ fn create_rtv(
                 },
             },
         }
+    } else {
+        return Err(unsupported(
+            "a color attachment view dimension",
+            "DX12 supports this backend's 2D and explicit-slice 3D RTV paths only",
+        ));
     };
     unsafe { device.CreateRenderTargetView(texture.resource(), Some(&desc), handle) };
     Ok((heap, handle))

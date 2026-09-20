@@ -11,6 +11,7 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMPUTE_PIPELINE_STATE_DESC, D3D12_SHADER_BYTECODE, ID3D12Device, ID3D12PipelineState,
     ID3D12RootSignature,
 };
+use windows::core::PCWSTR;
 
 use crate::api::pipeline::ComputePipelineDescriptor;
 use crate::api::pipeline::backend::ComputePipelineBackend;
@@ -50,6 +51,9 @@ impl Dx12ComputePipeline {
     pub(crate) fn sampler_root_parameter(&self, group: u32) -> Option<u32> {
         self.root_signature.sampler_parameter(group)
     }
+    pub(crate) fn immediate_root_parameter(&self, offset: u32, size: u32) -> Option<(u32, u32)> {
+        self.root_signature.immediate_parameter(offset, size)
+    }
 }
 
 impl ComputePipelineBackend for Dx12ComputePipeline {
@@ -69,6 +73,7 @@ pub(crate) fn create_compute_pipeline(
     let root_signature = super::interface::build_root_signature(
         device,
         &descriptor.interface.descriptor().groups,
+        &descriptor.interface.descriptor().immediate_ranges,
         false,
     )?;
     let Some(shader) = descriptor
@@ -102,16 +107,74 @@ pub(crate) fn create_compute_pipeline(
     // The DXIL slice is borrowed from the shader handle held by `descriptor`,
     // and both it and the root-signature clone remain live until the synchronous
     // driver call returns.
-    let state = unsafe { device.CreateComputePipelineState::<ID3D12PipelineState>(&description) };
+    let state: Result<ID3D12PipelineState, Dx12Failure> =
+        match super::cache::native_cache(descriptor.cache.as_ref())? {
+            Some(cache) => {
+                let name = super::cache::compute_name(descriptor);
+                let library = cache.library();
+                match unsafe {
+                    library.LoadComputePipeline::<_, ID3D12PipelineState>(
+                        PCWSTR(name.as_ptr()),
+                        &description,
+                    )
+                } {
+                    Ok(state) => Ok(state),
+                    // A name miss and a non-terminal invalidated stored entry both
+                    // fall back to authoritative driver creation, then replace the
+                    // entry. A terminal Load failure must not be hidden by a
+                    // successful creation attempt: its outer device boundary owns
+                    // the loss transition.
+                    Err(error) => {
+                        let failure = crate::backend::dx12::ffi::NativeError::new(
+                            &error,
+                            "ID3D12PipelineLibrary::LoadComputePipeline",
+                        );
+                        if failure.failure().is_terminal() {
+                            Err(Dx12Failure::Native(failure))
+                        } else {
+                            (|| -> Result<ID3D12PipelineState, Dx12Failure> {
+                                let state = unsafe {
+                                    device.CreateComputePipelineState::<ID3D12PipelineState>(
+                                        &description,
+                                    )
+                                }
+                                .map_err(|error| {
+                                    Dx12Failure::Native(
+                                        crate::backend::dx12::ffi::NativeError::new(
+                                            &error,
+                                            "Dx12Device::create_compute_pipeline",
+                                        ),
+                                    )
+                                })?;
+                                unsafe { library.StorePipeline(PCWSTR(name.as_ptr()), &state) }
+                                    .map_err(|error| {
+                                        Dx12Failure::Native(
+                                            crate::backend::dx12::ffi::NativeError::new(
+                                                &error,
+                                                "ID3D12PipelineLibrary::StorePipeline",
+                                            ),
+                                        )
+                                    })?;
+                                Ok(state)
+                            })()
+                        }
+                    }
+                }
+            }
+            None => {
+                unsafe { device.CreateComputePipelineState::<ID3D12PipelineState>(&description) }
+                    .map_err(|error| {
+                        Dx12Failure::Native(crate::backend::dx12::ffi::NativeError::new(
+                            &error,
+                            "Dx12Device::create_compute_pipeline",
+                        ))
+                    })
+            }
+        };
     // SAFETY: this is the one release of the clone placed in pRootSignature
     // above, after the native call has finished reading the descriptor.
     unsafe { ManuallyDrop::drop(&mut description.pRootSignature) };
-    let state = state.map_err(|error| {
-        Dx12Failure::Native(crate::backend::dx12::ffi::NativeError::new(
-            &error,
-            "Dx12Device::create_compute_pipeline",
-        ))
-    })?;
+    let state = state?;
 
     Ok(Dx12ComputePipeline {
         root_signature,

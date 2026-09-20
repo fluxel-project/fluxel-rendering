@@ -55,6 +55,22 @@ pub enum AddressMode {
     Repeat,
     /// The texture is tiled, mirrored on every other tile.
     MirrorRepeat,
+    /// Coordinates outside the range use the descriptor's border color.
+    ClampToBorder,
+}
+
+/// Border value used with [`AddressMode::ClampToBorder`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SamplerBorderColor {
+    /// Floating-point transparent black.
+    TransparentBlack,
+    /// Floating-point opaque black.
+    OpaqueBlack,
+    /// Floating-point opaque white.
+    OpaqueWhite,
+    /// Integer all-zero border. Requires `SamplerClampToZero`.
+    Zero,
 }
 
 /// How texels are combined when more than one contributes to a sample.
@@ -129,6 +145,9 @@ pub struct SamplerDescriptor {
     /// Present when this sampler compares instead of filtering.
     pub compare: Option<CompareFunction>,
 
+    /// Border value used by any clamp-to-border axis.
+    pub border_color: SamplerBorderColor,
+
     /// 1 = anisotropy disabled.
     pub max_anisotropy: u16,
 }
@@ -167,6 +186,7 @@ impl SamplerDescriptor {
             lod_min: 0.0,
             lod_max: 32.0,
             compare: None,
+            border_color: SamplerBorderColor::TransparentBlack,
             max_anisotropy: 1,
         }
     }
@@ -211,6 +231,12 @@ impl SamplerDescriptor {
     /// Makes this a comparison sampler.
     pub fn with_compare(mut self, compare: CompareFunction) -> Self {
         self.compare = Some(compare);
+        self
+    }
+
+    /// Sets the border value used by clamp-to-border addressing.
+    pub fn with_border_color(mut self, border_color: SamplerBorderColor) -> Self {
+        self.border_color = border_color;
         self
     }
 
@@ -356,6 +382,39 @@ impl Device {
                     .min(u16::MAX as u64) as u16
             });
         validate_sampler_anisotropy(desc, anisotropy)?;
+        let uses_border = [desc.address_u, desc.address_v, desc.address_w]
+            .into_iter()
+            .any(|mode| mode == AddressMode::ClampToBorder);
+        if uses_border
+            && !self
+                .capabilities()
+                .supports_feature(OptionalFeature::SamplerClampToBorder)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "clamp-to-border samplers are not enabled on this device",
+            ));
+        }
+        if desc.border_color == SamplerBorderColor::Zero
+            && !self
+                .capabilities()
+                .supports_feature(OptionalFeature::SamplerClampToZero)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "integer-zero sampler borders are not enabled on this device",
+            ));
+        }
+        if desc.compare.is_some()
+            && !self
+                .capabilities()
+                .supports_feature(OptionalFeature::ComparisonSamplers)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "comparison samplers are not enabled on this device",
+            ));
+        }
         let native = self.native().create_sampler(desc)?;
         Ok(Sampler::new_backed(
             ObjectId::next(),

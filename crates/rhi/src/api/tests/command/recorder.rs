@@ -110,7 +110,7 @@ fn an_upload_records_a_copy_write_in_the_copy_domain() {
             assert_eq!(buffer.stages, PipelineScope::COPY);
             assert_eq!(buffer.range, BufferRange::new(0, 16));
         }
-        ResourceUse::Texture(_) | ResourceUse::Frame(_) => {
+        ResourceUse::Texture(_) | ResourceUse::Frame(_) | ResourceUse::AccelerationStructure(_) => {
             panic!("a buffer upload must record a buffer use")
         }
     }

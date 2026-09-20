@@ -35,12 +35,173 @@ pub enum OptionalFeature {
     /// the corresponding feature, so `MaxSamplerAnisotropy > 1` does not imply
     /// that anisotropic filtering may be used.
     SamplerAnisotropy,
-    /// Fixed-length arrays of buffers, textures, or samplers.
-    ///
-    /// Runtime-sized, partially-bound, update-after-bind, and arbitrarily-indexed
-    /// binding arrays remain future bindless/indexing extensions and are not
-    /// covered by this variant.
+    /// Fixed-length arrays of buffers, textures, samplers, or acceleration
+    /// structures. Runtime-sized and partially-bound forms have distinct feature
+    /// variants because a fixed array alone does not imply descriptor indexing.
     BindingArrays,
+    /// Samplers that compare a sampled depth value to a reference.
+    ComparisonSamplers,
+    /// `ClampToBorder` sampler addressing.
+    SamplerClampToBorder,
+    /// `ClampToBorder` with an all-zero integer border value.
+    SamplerClampToZero,
+    /// Non-fill polygon rasterization.  Backends report the line and point
+    /// variants separately because their native support is independent.
+    PolygonModeLine,
+    /// Point polygon rasterization.
+    PolygonModePoint,
+    /// Disables depth clipping where the native API can express it.
+    DepthClipControl,
+    /// Conservative rasterization.
+    ConservativeRasterization,
+    /// A non-zero depth-bias clamp.
+    DepthBiasClamp,
+    /// Blend factors reading the second fragment output.
+    DualSourceBlending,
+    /// Per-target blend state for MRT pipelines.
+    IndependentBlend,
+    /// Per-sample fragment shading.
+    MultisampledShading,
+    /// 64-bit vertex attributes.
+    VertexAttribute64Bit,
+    /// Occlusion queries can be recorded and resolved.
+    OcclusionQuery,
+    /// Timestamp queries and timestamp-result resolution.
+    TimestampQuery,
+    /// Timestamp writes outside pass scopes.
+    TimestampInsideEncoder,
+    /// Timestamp writes in raster scopes.
+    TimestampInsideRasterScope,
+    /// Timestamp writes in compute scopes.
+    TimestampInsideComputeScope,
+    /// Pipeline-statistics queries.
+    PipelineStatisticsQuery,
+    /// Query result resolution into a buffer.
+    QueryResolve,
+    /// Direct and indexed indirect draws.
+    IndirectDraw,
+    /// Indirect compute dispatch.
+    IndirectDispatch,
+    /// More than one indirect draw in one command.
+    MultiDrawIndirect,
+    /// GPU indirect arguments may contain a non-zero `first_instance` field.
+    ///
+    /// The portable recorder cannot inspect GPU-provided argument bytes. A
+    /// backend may advertise executable raster indirect draws only when its
+    /// native route guarantees this semantic, rather than deferring failure to
+    /// the driver.
+    IndirectFirstInstance,
+    /// A count buffer determines an indirect draw count.
+    MultiDrawIndirectCount,
+    /// Indexed draws accept a non-zero base vertex.
+    BaseVertex,
+    /// Native clear-buffer lowering.
+    ClearBuffer,
+    /// Native clear-texture lowering.
+    ClearTexture,
+    /// Buffers declared with map usage may be mapped without first copying them
+    /// through the upload/readback API.
+    MappablePrimaryBuffers,
+    /// A mapped lease may remain open across submissions when the backend's
+    /// memory model permits it.  Absence does not remove ordinary map/unmap.
+    PersistentMapping,
+    /// Host-visible mappings are coherent; explicit flush/invalidate is not
+    /// required for visibility (though it remains a legal no-op).
+    CoherentMapping,
+    /// Immediate constant data declared by a pipeline interface.
+    Immediates,
+    /// Bindings whose element count is selected at runtime.
+    RuntimeSizedBindingArrays,
+    /// Binding arrays may leave elements unbound.
+    PartiallyBoundBindingArrays,
+    /// Non-uniform indexing of sampled textures and storage buffers.
+    NonUniformSampledTextureAndStorageBufferIndexing,
+    /// Non-uniform indexing of storage textures.
+    NonUniformStorageTextureIndexing,
+    /// External-video/image texture bindings.
+    ExternalTexture,
+    /// Multiview rasterization.
+    Multiview,
+    /// Selective multiview rasterization.
+    SelectiveMultiview,
+    /// Multisampled array textures.
+    MultisampleArray,
+    /// Task/mesh shader pipelines.
+    MeshShader,
+    /// Point primitive output from mesh shaders.
+    MeshShaderPoints,
+    /// Mesh shaders used with multiview.
+    MeshShaderMultiview,
+    /// Acceleration-structure bindings and ray queries.
+    RayQuery,
+    /// Ray-hit vertex return from ray queries.
+    RayHitVertexReturn,
+    /// Extended acceleration-structure vertex formats.
+    ExtendedAccelerationStructureVertexFormats,
+    /// In-place compatible acceleration-structure updates.
+    AccelerationStructureUpdate,
+    /// Acceleration-structure compact-size query and compaction copies.
+    AccelerationStructureCompaction,
+    /// Ray-tracing pipelines.
+    RayTracingPipeline,
+    /// Cooperative-matrix shader operations.
+    CooperativeMatrix,
+    /// Half precision floating-point shader operations.
+    ShaderF16,
+    /// Double precision floating-point shader operations.
+    ShaderF64,
+    /// Signed/unsigned 16-bit integer shader operations.
+    ShaderI16,
+    /// Signed/unsigned 64-bit integer shader operations.
+    ShaderInt64,
+    /// Float32 atomic shader operations.
+    ShaderFloat32Atomic,
+    /// Int64 atomic min/max shader operations.
+    ShaderInt64AtomicMinMax,
+    /// All supported int64 atomic shader operations.
+    ShaderInt64AtomicAllOps,
+    /// Texture atomic shader operations.
+    TextureAtomic,
+    /// Int64 texture atomic shader operations.
+    TextureInt64Atomic,
+    /// Explicit early depth testing in shaders.
+    ShaderEarlyDepthTest,
+    /// Subgroup operations.
+    Subgroup,
+    /// Subgroup operations in vertex-stage shaders.
+    SubgroupVertex,
+    /// Subgroup barrier operations.
+    SubgroupBarrier,
+    /// Fragment barycentric built-ins.
+    ShaderBarycentrics,
+    /// Per-vertex shader built-ins.
+    ShaderPerVertex,
+    /// Draw-index shader builtin.
+    ShaderDrawIndex,
+    /// Primitive-index shader builtin.
+    PrimitiveIndex,
+    /// Clip-distance shader outputs.
+    ClipDistances,
+    /// Coherent shader memory decoration.
+    MemoryDecorationCoherent,
+    /// Volatile shader memory decoration.
+    MemoryDecorationVolatile,
+    /// f16 values represented through an f32 interface.
+    ShaderF16InF32,
+    /// Caller supplied, ABI-checked reflection for trusted native code.
+    PassthroughShaders,
+    /// Native pipeline-cache object creation.
+    PipelineCache,
+    /// Pipeline-cache serialization and restoration.
+    PipelineCacheSerialization,
+    /// Integration with a native graphics debugger capture.
+    NativeGraphicsCapture,
+    /// Native allocator/memory diagnostics.
+    AllocatorReport,
+    /// Import of platform external-memory handles through the extension SPI.
+    ExternalMemory,
+    /// Copying an opaque external image source into a texture.
+    ExternalImageCopy,
 }
 
 /// A portable device limit a caller may require.
@@ -60,6 +221,8 @@ pub enum OptionalFeature {
 pub enum LimitKey {
     /// Largest single buffer, in bytes.
     MaxBufferSize,
+    /// Required alignment for mapped buffer ranges.
+    MapAlignment,
     /// Largest 1D texture dimension.
     MaxTexture1dDimension,
     /// Largest 2D texture dimension.
@@ -113,10 +276,94 @@ pub enum LimitKey {
     MaxComputeWorkgroupsPerDimension,
     /// Largest compute workgroup storage, in bytes.
     MaxComputeWorkgroupStorageSize,
+    /// Largest number of slots in one query set.
+    ///
+    /// A backend that enables any query-set feature must report this exact
+    /// ceiling. Absence is not interpreted as an arbitrary implementation
+    /// default because query allocation is observable resource creation.
+    MaxQueriesPerQuerySet,
+    /// Required alignment of a query-result resolve destination offset, in bytes.
+    ///
+    /// Meaningful only when [`OptionalFeature::QueryResolve`] is enabled. A
+    /// backend must report a non-zero power of two; absence is fail-closed.
+    QueryResolveBufferAlignment,
     /// Smallest uniform buffer offset alignment, in bytes.
     MinUniformBufferOffsetAlignment,
     /// Smallest storage buffer offset alignment, in bytes.
     MinStorageBufferOffsetAlignment,
+    /// Largest number of binding-array elements visible to one shader stage.
+    MaxBindingArrayElementsPerShaderStage,
+    /// Largest number of acceleration structures in a binding array per stage.
+    MaxBindingArrayAccelerationStructureElementsPerShaderStage,
+    /// Largest number of samplers in a binding array per stage.
+    MaxBindingArraySamplerElementsPerShaderStage,
+    /// Largest number of non-sampler bindings.
+    MaxNonSamplerBindings,
+    /// Largest immediate-data payload in bytes.
+    MaxImmediateSize,
+    /// Required alignment of immediate-data offsets and sizes.
+    ImmediateDataAlignment,
+    /// Largest number of views addressed by a multiview mask.
+    MaxMultiviewViewCount,
+    /// Task workgroup total count.
+    MaxTaskWorkgroupTotalCount,
+    /// Task workgroups per dimension.
+    MaxTaskWorkgroupsPerDimension,
+    /// Mesh workgroup total count.
+    MaxMeshWorkgroupTotalCount,
+    /// Mesh workgroups per dimension.
+    MaxMeshWorkgroupsPerDimension,
+    /// Task invocations per workgroup.
+    MaxTaskInvocationsPerWorkgroup,
+    /// Task invocations per dimension.
+    MaxTaskInvocationsPerDimension,
+    /// Mesh invocations per workgroup.
+    MaxMeshInvocationsPerWorkgroup,
+    /// Mesh invocations per dimension.
+    MaxMeshInvocationsPerDimension,
+    /// Task payload size in bytes.
+    MaxTaskPayloadSize,
+    /// Mesh output vertices.
+    MaxMeshOutputVertices,
+    /// Mesh output primitives.
+    MaxMeshOutputPrimitives,
+    /// Mesh output layers.
+    MaxMeshOutputLayers,
+    /// Mesh multiview count.
+    MaxMeshMultiviewViewCount,
+    /// BLAS primitive count.
+    MaxBlasPrimitiveCount,
+    /// BLAS geometry count.
+    MaxBlasGeometryCount,
+    /// TLAS instance count.
+    MaxTlasInstanceCount,
+    /// Exact byte size of one backend-encoded raw TLAS instance record.
+    ///
+    /// This is a fact rather than a guessed ABI constant.  Code that uploads
+    /// backend-native instance records must request it explicitly; ordinary
+    /// portable [`crate::api::resource::TlasInstance`] construction never
+    /// exposes that representation.
+    RawTlasInstanceSize,
+    /// Required alignment of acceleration-structure build scratch buffers.
+    RayTracingScratchBufferAlignment,
+    /// Acceleration structures visible to one shader stage.
+    MaxAccelerationStructuresPerShaderStage,
+    /// Combined buffers and acceleration structures visible to one shader stage.
+    MaxBuffersAndAccelerationStructuresPerShaderStage,
+    /// Ray dispatch count per dimension.
+    MaxRayDispatchCount,
+    /// Ray recursion depth.
+    MaxRayRecursionDepth,
+    /// Maximum bytes in one ray-tracing shader-table group record.
+    MaxRayTracingPipelineGroupDataSize,
+    /// Required alignment of one shader-table record's byte offset.
+    RayTracingPipelineGroupDataAlignment,
+    /// Required alignment of a shader-table region start.
+    RayTracingPipelineGroupDataOffsetAlignment,
+    /// Uniform binding bounds-check alignment.
+    UniformBoundsCheckAlignment,
+    /// Buffer binding size alignment.
+    BufferBindingSizeAlignment,
 }
 
 impl LimitKey {
@@ -176,9 +423,46 @@ impl LimitKey {
             | LimitKey::MaxComputeWorkgroupSizeY
             | LimitKey::MaxComputeWorkgroupSizeZ
             | LimitKey::MaxComputeWorkgroupsPerDimension
-            | LimitKey::MaxComputeWorkgroupStorageSize => true,
+            | LimitKey::MaxComputeWorkgroupStorageSize
+            | LimitKey::MaxQueriesPerQuerySet
+            | LimitKey::MaxBindingArrayElementsPerShaderStage
+            | LimitKey::MaxBindingArrayAccelerationStructureElementsPerShaderStage
+            | LimitKey::MaxBindingArraySamplerElementsPerShaderStage
+            | LimitKey::MaxNonSamplerBindings
+            | LimitKey::MaxImmediateSize
+            | LimitKey::MaxMultiviewViewCount
+            | LimitKey::MaxTaskWorkgroupTotalCount
+            | LimitKey::MaxTaskWorkgroupsPerDimension
+            | LimitKey::MaxMeshWorkgroupTotalCount
+            | LimitKey::MaxMeshWorkgroupsPerDimension
+            | LimitKey::MaxTaskInvocationsPerWorkgroup
+            | LimitKey::MaxTaskInvocationsPerDimension
+            | LimitKey::MaxMeshInvocationsPerWorkgroup
+            | LimitKey::MaxMeshInvocationsPerDimension
+            | LimitKey::MaxTaskPayloadSize
+            | LimitKey::MaxMeshOutputVertices
+            | LimitKey::MaxMeshOutputPrimitives
+            | LimitKey::MaxMeshOutputLayers
+            | LimitKey::MaxMeshMultiviewViewCount
+            | LimitKey::MaxBlasPrimitiveCount
+            | LimitKey::MaxBlasGeometryCount
+            | LimitKey::MaxTlasInstanceCount
+            | LimitKey::RawTlasInstanceSize
+            | LimitKey::MaxAccelerationStructuresPerShaderStage
+            | LimitKey::MaxBuffersAndAccelerationStructuresPerShaderStage
+            | LimitKey::MaxRayDispatchCount
+            | LimitKey::MaxRayRecursionDepth
+            | LimitKey::MaxRayTracingPipelineGroupDataSize => true,
             LimitKey::MinUniformBufferOffsetAlignment
-            | LimitKey::MinStorageBufferOffsetAlignment => false,
+            | LimitKey::MinStorageBufferOffsetAlignment
+            | LimitKey::MapAlignment
+            | LimitKey::QueryResolveBufferAlignment
+            | LimitKey::ImmediateDataAlignment
+            | LimitKey::UniformBoundsCheckAlignment
+            | LimitKey::BufferBindingSizeAlignment
+            | LimitKey::RayTracingPipelineGroupDataAlignment
+            | LimitKey::RayTracingPipelineGroupDataOffsetAlignment => false,
+            LimitKey::RayTracingScratchBufferAlignment => false,
         }
     }
 }

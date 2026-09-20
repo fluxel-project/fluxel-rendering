@@ -10,7 +10,7 @@
 use ash::vk;
 
 use crate::api::binding::BindGroup;
-use crate::api::command::record::ComputeDispatch;
+use crate::api::command::record::{BoundGroup, ComputeDispatch, ComputeIndirect};
 use crate::api::command::{AccessMask, ResourceUse};
 use crate::api::pipeline::ComputePipeline;
 use crate::backend::vulkan::binding::VulkanBindGroup;
@@ -42,8 +42,60 @@ pub(super) fn lower_compute_dispatch(
     uses: &[ResourceUse],
     transfer_retention: &mut TransferRetention,
 ) -> Result<ComputeRetention, VulkanFailure> {
-    let pipeline = dispatch
-        .pipeline
+    lower_compute(
+        shared,
+        command_buffer,
+        &dispatch.pipeline,
+        &dispatch.groups,
+        uses,
+        transfer_retention,
+        |device, command_buffer, _pipeline| unsafe {
+            let (x, y, z) = dispatch.workgroups;
+            device.cmd_dispatch(command_buffer, x, y, z);
+        },
+        &dispatch.immediates,
+    )
+}
+
+/// Records core `vkCmdDispatchIndirect` using the same binding/state path as a
+/// direct dispatch. The argument buffer is already present in `uses`, so the
+/// common barrier path retains it and establishes INDIRECT_COMMAND_READ.
+pub(super) fn lower_compute_indirect(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    dispatch: &ComputeIndirect,
+    uses: &[ResourceUse],
+    transfer_retention: &mut TransferRetention,
+) -> Result<ComputeRetention, VulkanFailure> {
+    let arguments = native_buffer(dispatch.arguments.native())?;
+    lower_compute(
+        shared,
+        command_buffer,
+        &dispatch.pipeline,
+        &dispatch.groups,
+        uses,
+        transfer_retention,
+        |device, command_buffer, _| unsafe {
+            device.cmd_dispatch_indirect(command_buffer, arguments, dispatch.arguments_offset);
+        },
+        &[],
+    )
+}
+
+fn lower_compute<F>(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    pipeline_handle: &ComputePipeline,
+    groups: &[BoundGroup],
+    uses: &[ResourceUse],
+    transfer_retention: &mut TransferRetention,
+    emit: F,
+    immediates: &[crate::api::command::record::ImmediateWrite],
+) -> Result<ComputeRetention, VulkanFailure>
+where
+    F: FnOnce(&ash::Device, vk::CommandBuffer, &VulkanComputePipeline),
+{
+    let pipeline = pipeline_handle
         .native()
         .as_any()
         .downcast_ref::<VulkanComputePipeline>()
@@ -52,9 +104,9 @@ pub(super) fn lower_compute_dispatch(
             why: "its native pipeline belongs to another backend",
         })?;
 
-    let mut sets = Vec::with_capacity(dispatch.groups.len());
-    let mut first_sets = Vec::with_capacity(dispatch.groups.len());
-    for bound in &dispatch.groups {
+    let mut sets = Vec::with_capacity(groups.len());
+    let mut first_sets = Vec::with_capacity(groups.len());
+    for bound in groups {
         if !bound.dynamic_offsets.is_empty() {
             return Err(VulkanFailure::Unsupported {
                 what: "a Vulkan compute bind group with dynamic offsets",
@@ -80,11 +132,23 @@ pub(super) fn lower_compute_dispatch(
     for use_ in uses {
         match use_ {
             ResourceUse::Buffer(buffer) => {
-                let destination_access = if buffer.access.contains(AccessMask::SHADER_WRITE) {
-                    vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE
-                } else {
-                    vk::AccessFlags::UNIFORM_READ | vk::AccessFlags::SHADER_READ
-                };
+                let (destination_stage, destination_access) =
+                    if buffer.access.contains(AccessMask::INDIRECT_READ) {
+                        (
+                            vk::PipelineStageFlags::DRAW_INDIRECT,
+                            vk::AccessFlags::INDIRECT_COMMAND_READ,
+                        )
+                    } else if buffer.access.contains(AccessMask::SHADER_WRITE) {
+                        (
+                            vk::PipelineStageFlags::COMPUTE_SHADER,
+                            vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                        )
+                    } else {
+                        (
+                            vk::PipelineStageFlags::COMPUTE_SHADER,
+                            vk::AccessFlags::UNIFORM_READ | vk::AccessFlags::SHADER_READ,
+                        )
+                    };
                 let barrier = vk::BufferMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
                     .dst_access_mask(destination_access)
@@ -97,7 +161,7 @@ pub(super) fn lower_compute_dispatch(
                     shared.device.cmd_pipeline_barrier(
                         command_buffer,
                         vk::PipelineStageFlags::ALL_COMMANDS,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        destination_stage,
                         vk::DependencyFlags::empty(),
                         &[],
                         &[barrier],
@@ -116,6 +180,12 @@ pub(super) fn lower_compute_dispatch(
                 return Err(VulkanFailure::Unsupported {
                     what: "a presentation frame used by a Vulkan compute dispatch",
                     why: "presentation images are not compute-bindable in this Vulkan slice",
+                });
+            }
+            ResourceUse::AccelerationStructure(_) => {
+                return Err(VulkanFailure::Unsupported {
+                    what: "an acceleration structure in a Vulkan compute dispatch",
+                    why: "the Vulkan ray-query descriptor and synchronization extension path is not enabled",
                 });
             }
         }
@@ -140,18 +210,34 @@ pub(super) fn lower_compute_dispatch(
                 &[],
             );
         }
-        let (x, y, z) = dispatch.workgroups;
-        shared.device.cmd_dispatch(command_buffer, x, y, z);
+        for immediate in immediates {
+            shared.device.cmd_push_constants(
+                command_buffer,
+                pipeline.layout(),
+                shader_stage_flags(immediate.visibility)?,
+                immediate.offset,
+                &immediate.bytes,
+            );
+        }
+        emit(&shared.device, command_buffer, pipeline);
     }
 
     Ok(ComputeRetention {
-        pipelines: vec![dispatch.pipeline.clone()],
-        bind_groups: dispatch
-            .groups
-            .iter()
-            .map(|bound| bound.group.clone())
-            .collect(),
+        pipelines: vec![pipeline_handle.clone()],
+        bind_groups: groups.iter().map(|bound| bound.group.clone()).collect(),
     })
+}
+
+fn shader_stage_flags(
+    stages: crate::api::shader::ShaderStages,
+) -> Result<vk::ShaderStageFlags, VulkanFailure> {
+    if !stages.contains(crate::api::shader::ShaderStages::COMPUTE) {
+        return Err(VulkanFailure::Unsupported {
+            what: "a Vulkan compute immediate write without compute visibility",
+            why: "the portable pipeline interface must declare the consuming compute stage",
+        });
+    }
+    Ok(vk::ShaderStageFlags::COMPUTE)
 }
 
 fn native_buffer(

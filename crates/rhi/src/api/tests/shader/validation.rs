@@ -5,6 +5,35 @@
 //! the fixtures; the banners below are the original section banners.
 
 use super::*;
+use crate::api::shader::PassthroughShaderProvenance;
+
+/// Trusted passthrough carries capture provenance, not an opaque escape hatch.
+/// The unsafe marker is only meaningful when both fields identify who established
+/// the exact-code/interface correspondence and how they did it.
+#[test]
+fn trusted_passthrough_rejects_incomplete_provenance() {
+    let incomplete = unsafe {
+        artifact(ShaderStage::Vertex, vertex_interface())
+            .assume_trusted_passthrough(PassthroughShaderProvenance::new("", "verified reflection"))
+    };
+    assert_kind(
+        validate_shader_artifact(&incomplete, permissive),
+        RhiErrorKind::InvalidUsage,
+    );
+
+    let complete = unsafe {
+        artifact(ShaderStage::Vertex, vertex_interface()).assume_trusted_passthrough(
+            PassthroughShaderProvenance::new("fixture compiler", "exact-bytecode reflection"),
+        )
+    };
+    assert!(validate_shader_artifact(&complete, permissive).is_ok());
+    assert_eq!(
+        complete
+            .passthrough_provenance()
+            .map(|value| value.producer()),
+        Some("fixture compiler")
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Section 19.6 / 19.7: what an acceptable artifact is.

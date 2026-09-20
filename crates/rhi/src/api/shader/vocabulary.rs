@@ -14,8 +14,9 @@ use std::sync::Arc;
 
 /// The stage an entry point belongs to.
 ///
-/// P0 freezes three: two base graphics stages plus compute. Section 19.1 makes
-/// compute legal only when `OptionalFeature::Compute` is enabled, which is a
+/// Vertex, fragment, and compute are the baseline stages. Task/mesh and ray
+/// stages are optional vocabulary, gated by their respective pipeline features.
+/// Compute is legal only when `OptionalFeature::Compute` is enabled, which is a
 /// device fact rather than a property of this enum — the same enum value is legal
 /// on one device and not on another.
 #[non_exhaustive]
@@ -27,6 +28,20 @@ pub enum ShaderStage {
     Fragment,
     /// The compute stage, which owns the workgroup contract.
     Compute,
+    /// The optional task/amplification stage of a mesh pipeline.
+    Task,
+    /// The optional mesh stage of a mesh pipeline.
+    Mesh,
+    /// Ray-generation stage of a ray-tracing pipeline.
+    RayGeneration,
+    /// Miss stage of a ray-tracing pipeline.
+    Miss,
+    /// Closest-hit stage of a ray-tracing pipeline.
+    ClosestHit,
+    /// Any-hit stage of a ray-tracing pipeline.
+    AnyHit,
+    /// Procedural-geometry intersection stage of a ray-tracing pipeline.
+    Intersection,
 }
 
 /// A set of [`ShaderStage`] values.
@@ -34,10 +49,11 @@ pub enum ShaderStage {
 /// A newtype over the bits of its members rather than a `Vec` or a `HashSet`,
 /// because it appears in a capability query key
 /// ([`BindingSupportQuery::visibility`](crate::api::binding::BindingSupportQuery::visibility))
-/// that must be cheap to copy and to compare, and because the set is closed at
-/// three members for as long as P0 freezes three stages.
+/// that must be cheap to copy and compare. Its bit width reserves the currently
+/// defined raster, compute, mesh, and ray-tracing stages without exposing native
+/// stage identifiers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ShaderStages(u8);
+pub struct ShaderStages(u16);
 
 impl ShaderStages {
     /// The vertex stage alone.
@@ -46,6 +62,20 @@ impl ShaderStages {
     pub const FRAGMENT: Self = Self(1 << 1);
     /// The compute stage alone.
     pub const COMPUTE: Self = Self(1 << 2);
+    /// The task stage alone.
+    pub const TASK: Self = Self(1 << 3);
+    /// The mesh stage alone.
+    pub const MESH: Self = Self(1 << 4);
+    /// Ray-generation stage alone.
+    pub const RAY_GENERATION: Self = Self(1 << 5);
+    /// Miss stage alone.
+    pub const MISS: Self = Self(1 << 6);
+    /// Closest-hit stage alone.
+    pub const CLOSEST_HIT: Self = Self(1 << 7);
+    /// Any-hit stage alone.
+    pub const ANY_HIT: Self = Self(1 << 8);
+    /// Intersection stage alone.
+    pub const INTERSECTION: Self = Self(1 << 9);
 
     /// Whether every bit set in `other` is set in `self`.
     ///
@@ -80,6 +110,13 @@ pub(crate) fn stage_mask(stage: ShaderStage) -> ShaderStages {
         ShaderStage::Vertex => ShaderStages::VERTEX,
         ShaderStage::Fragment => ShaderStages::FRAGMENT,
         ShaderStage::Compute => ShaderStages::COMPUTE,
+        ShaderStage::Task => ShaderStages::TASK,
+        ShaderStage::Mesh => ShaderStages::MESH,
+        ShaderStage::RayGeneration => ShaderStages::RAY_GENERATION,
+        ShaderStage::Miss => ShaderStages::MISS,
+        ShaderStage::ClosestHit => ShaderStages::CLOSEST_HIT,
+        ShaderStage::AnyHit => ShaderStages::ANY_HIT,
+        ShaderStage::Intersection => ShaderStages::INTERSECTION,
     }
 }
 
@@ -410,12 +447,12 @@ impl ShaderStage {
 }
 
 impl ShaderStages {
-    /// Writes this stage set's canonical byte.
+    /// Writes this stage set's canonical little-endian bits.
     ///
     /// The mask's bits, not a list of members: a set has exactly one bit pattern
     /// per membership, so the bits are already canonical and no ordering question
     /// arises.
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
-        out.push(self.0);
+        out.extend_from_slice(&self.0.to_le_bytes());
     }
 }

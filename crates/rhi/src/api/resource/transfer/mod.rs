@@ -68,7 +68,7 @@ pub use readback::{
 pub use upload::{BufferUploadDescriptor, TextureUploadDescriptor, UploadDescriptor, UploadJob};
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::format::format_aspects;
+use crate::api::format::{block_extent, format_aspects};
 use crate::api::resource::subresource::{
     Origin3d, TextureSubresourceLayers, aspect_bits, validate_origin_extent,
     validate_subresource_layers,
@@ -158,6 +158,39 @@ pub(crate) fn validate_texture_region(
                 level.height,
                 level.depth,
                 subresource.mip_level
+            ),
+        ));
+    }
+
+    validate_compressed_region_alignment(base.format, origin, extent, level)?;
+    Ok(())
+}
+
+/// Compressed copy regions address blocks. Starts are block-aligned and an end
+/// may be partial only when it reaches the mip edge, mirroring native copy
+/// rules without imposing a backend staging-pitch rule.
+fn validate_compressed_region_alignment(
+    format: crate::api::format::TextureFormat,
+    origin: Origin3d,
+    extent: Extent3d,
+    level: Extent3d,
+) -> RhiResult<()> {
+    let (bw, bh) = block_extent(format);
+    if bw == 1 && bh == 1 {
+        return Ok(());
+    }
+    let x_end = origin.x + extent.width;
+    let y_end = origin.y + extent.height;
+    if !origin.x.is_multiple_of(bw)
+        || !origin.y.is_multiple_of(bh)
+        || (!extent.width.is_multiple_of(bw) && x_end != level.width)
+        || (!extent.height.is_multiple_of(bh) && y_end != level.height)
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            format!(
+                "a {:?} copy region must use {}x{} block boundaries (except at the mip edge)",
+                format, bw, bh
             ),
         ));
     }

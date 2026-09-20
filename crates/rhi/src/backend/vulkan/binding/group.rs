@@ -202,6 +202,12 @@ fn write_entry(
             write_images(shared, set, binding, descriptor_type(kind), resource)
         }
         BindingKind::Sampler { .. } => write_samplers(shared, set, binding, resource),
+        BindingKind::AccelerationStructure | BindingKind::ExternalTexture => {
+            Err(VulkanFailure::Unsupported {
+                what: "a Vulkan acceleration-structure or external-texture descriptor",
+                why: "the descriptor layout gate must reject this unavailable Vulkan extension path",
+            })
+        }
     }
 }
 

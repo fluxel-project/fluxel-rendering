@@ -49,6 +49,62 @@
 
 use crate::api::identity::ObjectId;
 use crate::api::platform::device::Device;
+use crate::api::platform::requirements::OptionalFeature;
+use crate::api::{RhiError, RhiErrorKind, RhiResult};
+
+/// Reliability of allocator information reported by a backend.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllocatorReportQuality {
+    /// Exact values from the native allocator or memory-budget API.
+    Exact,
+    /// Values estimated by the backend from allocations it owns.
+    Estimated,
+    /// The platform exposes no trustworthy value for this field.
+    Unknown,
+}
+
+/// One portable allocator heap-class observation.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AllocatorHeapReport {
+    /// Backend-neutral heap class, such as `device-local` or `upload`.
+    pub class: String,
+    /// Bytes currently allocated to live RHI resources, if known.
+    pub allocated_bytes: Option<u64>,
+    /// Bytes reserved by allocator blocks, if known.
+    pub reserved_bytes: Option<u64>,
+    /// Bytes backed by native committed memory, if the platform distinguishes
+    /// commitment from virtual-address or heap reservation.
+    pub committed_bytes: Option<u64>,
+    /// Bytes currently resident in device-visible physical memory, if known.
+    ///
+    /// This is an observation, not a promise that the same bytes remain resident
+    /// after the report is returned.
+    pub resident_bytes: Option<u64>,
+    /// Logical live bytes sharing physical storage through aliasing, if known.
+    /// This may exceed physical committed bytes and must not be added to them.
+    pub aliased_bytes: Option<u64>,
+    /// Bytes retained only because accepted GPU work has not reached its
+    /// retirement point, if the backend tracks that quantity.
+    pub retired_bytes: Option<u64>,
+    /// Number of allocator blocks, if known.
+    pub block_count: Option<u64>,
+    /// Number of live allocations, if known.
+    pub allocation_count: Option<u64>,
+    /// Budget visible to the platform, if known.
+    pub budget_bytes: Option<u64>,
+    /// How the values were obtained.
+    pub quality: AllocatorReportQuality,
+}
+
+/// Optional backend allocator/memory diagnostic snapshot.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AllocatorReport {
+    /// Heap classes observed by the backend.
+    pub heaps: Vec<AllocatorHeapReport>,
+}
 
 /// How serious a diagnostic is.
 ///
@@ -112,6 +168,25 @@ pub struct DiagnosticEvent {
 }
 
 impl Device {
+    /// Returns a native allocator report when the selected backend exposes one.
+    ///
+    /// This is diagnostic data, never an allocation policy input.  In
+    /// particular, `Unknown` does not mean zero and callers must not reject a
+    /// resource based on it.
+    pub fn allocator_report(&self) -> RhiResult<AllocatorReport> {
+        self.require_active()?;
+        if !self
+            .capabilities()
+            .supports_feature(OptionalFeature::AllocatorReport)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "native allocator diagnostics are not enabled on this device",
+            )
+            .at("Device::allocator_report"));
+        }
+        self.native().allocator_report()
+    }
     /// Moves every diagnostic emitted since the last drain into `out`.
     ///
     /// Appends rather than replaces, so a caller may accumulate across several

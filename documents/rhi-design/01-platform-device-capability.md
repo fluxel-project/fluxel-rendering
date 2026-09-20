@@ -31,11 +31,11 @@ RHI 0.16 freezes the following principles:
 6. **`FrameAttachment` is not equal to `TextureView`. ** GL/WebGL2 default framebuffer can only have attachment semantics.
 7. **Present enters `SubmissionPlan` before submit. ** `PresentMode` belongs to the presentation configuration, not the frame-by-frame request parameter.
 8. **submit accepted != GPU complete != present outcome. ** The three must be separated.
-9. **Transient resource API is frozen now.** Every backend implements `Dedicated`; `Aliasing` is a later optimization without an API change.
+9. **Transient resource API is frozen now.** Every backend implements `Dedicated`; `Aliasing` is advertised only after real lowering, without an API change.
 10. **RHI must make portable semantics observable and reconstructable to support Capture/Replay; but RHI does not implement Artifact/ReplayRuntime. **
 11. **Statistics is portable logical observability, not native profiler. ** RHI freezes the unified logical counting caliber and resource inventory/video memory estimation; native barrier, real queue engine, driver allocation, GPU timestamp, etc. are not disguised as portable facts.
 12. **Async is only for operations that may await a future event, not for every concurrent operation.** Logical resource creation and recording remain synchronous.
-13. **Do not pre-build empty capability trait/empty handle. ** Known long-lived capability such as Transient freezes its complete contract now; other capabilities wait for real semantics.
+13. **Do not pre-build empty capability trait/empty handle.** Mature feature families have complete portable semantics now; unsupported devices answer through capability facts and structured `Unsupported`, as specified by module 09.
 
 ### 0.1 Async boundaries
 
@@ -70,29 +70,21 @@ Statistics / frame sampling / live inventory / logical memory estimate
 RHI semantic observability required for Capture/Replay
 ```
 
-## 1.2 DEFERRED
+## 1.2 Capability-complete optional families
 
-0.16 does not export the following empty APIs:
+Query/timestamp, indirect/multi-draw/count, binding arrays/descriptor indexing,
+general mapping, immediate data, external image/texture and external-memory
+extension semantics, pipeline caches, expanded formats, raster state, multiview,
+mesh/task, acceleration structures, ray tracing, cooperative matrices, HDR and
+presentation timing are public RHI families. Module 09 owns their common
+admission and capability rules; their concrete descriptors belong to the module
+that owns the relevant resource, pipeline, command, or presentation operation.
 
-```text
-Query / timestamp
-Indirect / MultiDraw / Count
-Bindless / descriptor indexing
-General map / persistent mapping
-Inline parameters / push constants
-External memory / external sync
-Pipeline cache persistence
-Mesh / task / geometry / tessellation
-Ray tracing
-Sparse / tiled / residency
-Device address
-Work graphs
-GPU-generated commands
-Multi-GPU
-XR custom present
-Portable Capture Artifact format
-ReplayRuntime
-```
+Sparse/tiled residency, device address, work graphs, GPU-generated commands,
+multi-GPU and XR custom presentation require their own complete portable
+semantic proposal before admission. They are not represented by empty handles
+or traits. Portable capture artifacts and ReplayRuntime remain tooling/runtime
+products rather than GPU capability families.
 
 ---
 
@@ -110,8 +102,11 @@ pub mod rhi {
     pub mod binding;
     pub mod pipeline;
     pub mod command;
+    pub mod query;
     pub mod submission;
     pub mod presentation;
+    pub mod acceleration;
+    pub mod ray_tracing;
     pub mod statistics;
     pub mod diagnostics;
 
@@ -660,9 +655,8 @@ pub enum OptionalFeature {
     SamplerAnisotropy,
 
     /// Fixed-length Buffer / Texture / Sampler binding arrays.
-    ///
-    /// runtime-sized / partially-bound / update-after-bind / arbitrary indexing
-    /// remain future bindless/indexing extensions.
+    /// Runtime-sized, partially-bound, and non-uniform-indexing forms are
+    /// separate optional features; none is inferred from this base array shape.
     BindingArrays,
 }
 
@@ -1546,5 +1540,11 @@ AtMost
 ```
 
 The two requirements do not allow for a unified `minimum_limit()` to change semantics.
+
+Structured facts are used where two scalar limits would otherwise permit an
+invalid pair. `EnabledCapabilities::subgroup_size_range()` returns either no
+subgroup support or one validated `SubgroupSizeRange { min, max }`, where
+`0 < min <= max`; it is not represented as independently optional min/max
+limits.
 
 ---

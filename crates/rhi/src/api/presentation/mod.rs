@@ -70,7 +70,9 @@ pub use frame::{
 };
 pub use present::{PresentFailure, PresentPlanId, PresentReceipt, PresentReceiptId, PresentState};
 pub use target::{
-    Extent2d, PresentMode, PresentationExtentControl, PresentationTargetCapabilities,
+    CompositeAlphaMode, DisplayHdrInfo, Extent2d, FrameLatencyRange, PresentMode,
+    PresentationColorSpace, PresentationExtentControl, PresentationFormat,
+    PresentationTargetCapabilities, PresentationTimestamp, PresentationTimingCapabilities,
 };
 
 /// A host surface the RHI can be asked to present to.

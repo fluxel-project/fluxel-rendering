@@ -62,6 +62,15 @@ pub(crate) fn validate_shader_artifact(
         ));
     }
 
+    if let Some(provenance) = artifact.passthrough_provenance()
+        && !provenance.is_complete()
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "trusted passthrough shader provenance requires non-empty producer and verification",
+        ));
+    }
+
     validate_interface(&artifact.interface, artifact.stage)?;
     validate_requirements(&artifact.requirements)?;
 
@@ -140,7 +149,7 @@ fn validate_interface(interface: &ShaderInterface, stage: ShaderStage) -> RhiRes
     // false anywhere it is not required to be true: a fragment stage that sets it
     // is not refused by the text, and refusing it here would be inventing a rule.
     match stage {
-        ShaderStage::Vertex => {
+        ShaderStage::Vertex | ShaderStage::Mesh => {
             if !interface.writes_position() {
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
@@ -149,7 +158,13 @@ fn validate_interface(interface: &ShaderInterface, stage: ShaderStage) -> RhiRes
             }
         }
         ShaderStage::Fragment => {}
-        ShaderStage::Compute => {
+        ShaderStage::Compute
+        | ShaderStage::Task
+        | ShaderStage::RayGeneration
+        | ShaderStage::Miss
+        | ShaderStage::ClosestHit
+        | ShaderStage::AnyHit
+        | ShaderStage::Intersection => {
             if !interface.inputs().is_empty() || !interface.outputs().is_empty() {
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
@@ -173,9 +188,15 @@ fn validate_interface(interface: &ShaderInterface, stage: ShaderStage) -> RhiRes
     // backend reproduces, and section 19.6 states this as validation rather than as
     // guidance to the producer.
     let inter_stage: &[ShaderLocationInterface] = match stage {
-        ShaderStage::Vertex => interface.outputs(),
+        ShaderStage::Vertex | ShaderStage::Mesh => interface.outputs(),
         ShaderStage::Fragment => interface.inputs(),
-        ShaderStage::Compute => &[],
+        ShaderStage::Compute
+        | ShaderStage::Task
+        | ShaderStage::RayGeneration
+        | ShaderStage::Miss
+        | ShaderStage::ClosestHit
+        | ShaderStage::AnyHit
+        | ShaderStage::Intersection => &[],
     };
     for location in inter_stage {
         if !matches!(location.numeric_type, ShaderNumericType::Float32)

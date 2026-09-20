@@ -45,7 +45,7 @@
 
 use crate::api::command::require_device;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::format::{TextureFormat, logical_bytes_per_block};
+use crate::api::format::{TextureFormat, block_extent, logical_bytes_per_block};
 use crate::api::identity::DeviceIdentity;
 use crate::api::resource::buffer::{Buffer, BufferRange, BufferUsage, validate_buffer_range};
 use crate::api::resource::route::RouteQuery;
@@ -54,6 +54,7 @@ use crate::api::resource::subresource::{
     validate_subresource_layers,
 };
 use crate::api::resource::texture::{Extent3d, Texture, TextureDimension, TextureUsage};
+use crate::api::resource::transfer::validate_texture_region;
 
 /// A byte-range copy between two buffers.
 ///
@@ -413,8 +414,12 @@ pub(crate) fn validate_buffer_texture_copy(
     }
 
     let descriptor = copy.texture.descriptor();
-    validate_subresource_layers(copy.texture_subresource, descriptor.dimension)?;
-    validate_origin_extent(copy.texture_origin, copy.extent, descriptor.dimension)?;
+    validate_texture_region(
+        descriptor,
+        copy.texture_subresource,
+        copy.texture_origin,
+        copy.extent,
+    )?;
     validate_texel_layout_footprint(copy, descriptor.dimension)?;
 
     Ok(())
@@ -428,28 +433,36 @@ pub(crate) fn validate_buffer_texture_copy(
 /// ```text
 /// bytes_per_row >= one row of the region, in whole blocks
 /// rows_per_image >= one image of the region, in whole blocks
-/// buffer_offset + bytes_per_row * rows_per_image * images <= buffer size
+/// buffer_offset
+///   + (images - 1) * bytes_per_row * rows_per_image
+///   + (block_rows - 1) * bytes_per_row
+///   + logical_row_bytes
+/// <= buffer size
 /// ```
 ///
-/// `images` is the region's depth for a 3D texture and one otherwise, because a
-/// 2D array's layers are addressed by the subresource rather than by the layout.
+/// `images` is the region's depth for a 3D texture and the selected array-layer
+/// count otherwise. Array layers are named by the subresource, but each selected
+/// layer still occupies one image stride on the buffer side.
 ///
 /// The *alignment* half of section 34.2 — whether the route accepts this
 /// `buffer_offset` and this `bytes_per_row` — is [`TexelCopyLayoutLimits`] and
 /// needs a device, so it is not checked here.
 ///
-/// One row is `extent.width * bytes_per_block`, which is exact because P0
-/// declares no block-compressed format (section 8 lists none). A compressed
-/// format would make the row count `ceil(width / block_width)` and the image
-/// count `ceil(height / block_height)`, and that is where the change would go.
+/// One row is `ceil(width / block_width) * bytes_per_block`; rows per image use
+/// the corresponding block-row count. This is the logical footprint, before
+/// any backend route's native row-pitch alignment is applied.
 fn validate_texel_layout_footprint(
     copy: &BufferTextureCopy,
     dimension: TextureDimension,
 ) -> RhiResult<()> {
     let extent = copy.extent;
 
-    if let Some(block_bytes) = logical_bytes_per_block(copy.texture.descriptor().format) {
-        let minimum_row_bytes = u64::from(extent.width) * u64::from(block_bytes);
+    let format = copy.texture.descriptor().format;
+    if let Some(block_bytes) = logical_bytes_per_block(format) {
+        let (block_width, block_height) = block_extent(format);
+        let block_columns = extent.width.div_ceil(block_width);
+        let block_rows = extent.height.div_ceil(block_height);
+        let minimum_row_bytes = u64::from(block_columns) * u64::from(block_bytes);
         if u64::from(copy.bytes_per_row) < minimum_row_bytes {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
@@ -460,13 +473,23 @@ fn validate_texel_layout_footprint(
                 ),
             ));
         }
-        if u64::from(copy.rows_per_image) < u64::from(extent.height) {
+        if !copy.bytes_per_row.is_multiple_of(block_bytes) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                format!(
+                    "a buffer/texture copy bytes_per_row of {} is not a multiple of the \
+                     {block_bytes}-byte block of {:?}",
+                    copy.bytes_per_row, format
+                ),
+            ));
+        }
+        if u64::from(copy.rows_per_image) < u64::from(block_rows) {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 format!(
                     "a buffer/texture copy of a {}-texel-high region needs at least {} rows per \
                      image, but rows_per_image is {}",
-                    extent.height, extent.height, copy.rows_per_image
+                    extent.height, block_rows, copy.rows_per_image
                 ),
             ));
         }
@@ -474,12 +497,47 @@ fn validate_texel_layout_footprint(
 
     let images = match dimension {
         TextureDimension::D3 => u64::from(extent.depth),
-        TextureDimension::D1 | TextureDimension::D2 => 1,
+        TextureDimension::D1 | TextureDimension::D2 => {
+            u64::from(copy.texture_subresource.layer_count)
+        }
     };
-    let footprint = u64::from(copy.bytes_per_row)
-        .checked_mul(u64::from(copy.rows_per_image))
-        .and_then(|row_bytes| row_bytes.checked_mul(images))
-        .and_then(|total| total.checked_add(copy.buffer_offset));
+    // A row/image pitch separates starts. It is not trailing storage that the
+    // final copied image must own. Count only the padding before the final
+    // logical block row; otherwise a small compressed mip would be rejected
+    // merely because its backend-aligned pitch is much wider than its payload.
+    let footprint = match logical_bytes_per_block(format) {
+        Some(block_bytes) => {
+            let (block_width, block_height) = block_extent(format);
+            let block_columns = u64::from(extent.width.div_ceil(block_width));
+            let block_rows = u64::from(extent.height.div_ceil(block_height));
+            let bytes_per_row = u64::from(copy.bytes_per_row);
+            let rows_per_image = u64::from(copy.rows_per_image);
+
+            images
+                .checked_sub(1)
+                .and_then(|value| value.checked_mul(rows_per_image))
+                .and_then(|rows| rows.checked_mul(bytes_per_row))
+                .and_then(|bytes| {
+                    block_rows
+                        .checked_sub(1)?
+                        .checked_mul(bytes_per_row)?
+                        .checked_add(bytes)
+                })
+                .and_then(|bytes| {
+                    block_columns
+                        .checked_mul(u64::from(block_bytes))?
+                        .checked_add(bytes)
+                })
+                .and_then(|bytes| bytes.checked_add(copy.buffer_offset))
+        }
+        // An implementation-defined format still needs a bounded buffer even
+        // though the portable layer cannot identify its final logical row size.
+        // Retain the conservative whole-stride bound for that uncommon case.
+        None => u64::from(copy.bytes_per_row)
+            .checked_mul(u64::from(copy.rows_per_image))
+            .and_then(|row_bytes| row_bytes.checked_mul(images))
+            .and_then(|total| total.checked_add(copy.buffer_offset)),
+    };
     match footprint {
         Some(end) if end <= copy.buffer.descriptor().size => Ok(()),
         Some(end) => Err(RhiError::new(
@@ -526,10 +584,8 @@ pub(crate) fn validate_texture_copy(copy: &TextureCopy, device: DeviceIdentity) 
         ));
     }
 
-    validate_subresource_layers(copy.src_subresource, src.dimension)?;
-    validate_subresource_layers(copy.dst_subresource, dst.dimension)?;
-    validate_origin_extent(copy.src_origin, copy.extent, src.dimension)?;
-    validate_origin_extent(copy.dst_origin, copy.extent, dst.dimension)?;
+    validate_texture_region(src, copy.src_subresource, copy.src_origin, copy.extent)?;
+    validate_texture_region(dst, copy.dst_subresource, copy.dst_origin, copy.extent)?;
 
     if copy.src.id() == copy.dst.id() {
         let a = TexelRegion {

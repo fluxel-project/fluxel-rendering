@@ -30,6 +30,7 @@ use crate::api::submission::{CompletionFailure, CompletionState};
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::ffi;
 use crate::backend::vulkan::platform::device::VulkanShared;
+use crate::backend::vulkan::resource::{VulkanBuffer, VulkanQuerySet};
 
 use super::compute;
 use super::raster;
@@ -341,6 +342,7 @@ impl VulkanCommandSpine {
             };
             match result {
                 Ok(()) => {
+                    mark_batch_buffer_uses(&request.batches[index], serial);
                     let readbacks = batch_recording.retention.readback_tickets();
                     state.image_layouts = batch_recording.retention.image_layouts();
                     state.pending.insert(
@@ -559,6 +561,29 @@ impl VulkanCommandSpine {
         batch: &PlanBatch,
         retention: &mut TransferRetention,
     ) -> Result<(), VulkanFailure> {
+        // Legacy vkCmdResetQueryPool is forbidden inside a render pass. Reset
+        // every slot used by this batch before replay can enter a raster scope;
+        // reset is idempotent for duplicate references and preserves the
+        // recorder's command order for begin/end/write operations themselves.
+        for work in &batch.work {
+            for command in work.commands() {
+                let query = match &command.payload {
+                    RecordedPayload::QueryBegin { set, index }
+                    | RecordedPayload::TimestampWrite { set, index } => Some((set, *index)),
+                    _ => None,
+                };
+                if let Some((set, index)) = query {
+                    unsafe {
+                        self.inner.shared.device.cmd_reset_query_pool(
+                            command_buffer,
+                            native_query_pool(set)?,
+                            index,
+                            1,
+                        );
+                    }
+                }
+            }
+        }
         let mut raster_scope = None;
         for (work_index, work) in batch.work.iter().enumerate() {
             for (command_index, command) in work.commands().iter().enumerate() {
@@ -595,6 +620,21 @@ impl VulkanCommandSpine {
                         )?;
                         retention.retain_raster(draw_retention);
                     }
+                    RecordedPayload::RasterIndirect(draw) => {
+                        let scope = raster_scope.as_ref().ok_or(VulkanFailure::Unsupported {
+                            what: "a Vulkan raster indirect draw outside a render pass",
+                            why: "portable recording should emit RasterBegin first",
+                        })?;
+                        let draw_retention = raster::lower_raster_indirect(
+                            &self.inner.shared,
+                            command_buffer,
+                            draw,
+                            &command.uses,
+                            scope,
+                            retention,
+                        )?;
+                        retention.retain_raster(draw_retention);
+                    }
                     RecordedPayload::RasterEnd => {
                         let scope = raster_scope.take().ok_or(VulkanFailure::Unsupported {
                             what: "a Vulkan raster-scope end without a begin",
@@ -620,11 +660,98 @@ impl VulkanCommandSpine {
                         )?;
                         retention.retain_compute(compute);
                     }
+                    RecordedPayload::ComputeIndirect(dispatch) => {
+                        let compute = compute::lower_compute_indirect(
+                            &self.inner.shared,
+                            command_buffer,
+                            dispatch,
+                            &command.uses,
+                            retention,
+                        )?;
+                        retention.retain_compute(compute);
+                        retention.buffers.push(dispatch.arguments.clone());
+                    }
+                    RecordedPayload::QueryBegin { set, index } => {
+                        let pool = native_query_pool(set)?;
+                        unsafe {
+                            self.inner.shared.device.cmd_begin_query(
+                                command_buffer,
+                                pool,
+                                *index,
+                                vk::QueryControlFlags::empty(),
+                            );
+                        }
+                        retention.query_sets.push(set.clone());
+                    }
+                    RecordedPayload::QueryEnd { set, index } => {
+                        unsafe {
+                            self.inner.shared.device.cmd_end_query(
+                                command_buffer,
+                                native_query_pool(set)?,
+                                *index,
+                            );
+                        }
+                        retention.query_sets.push(set.clone());
+                    }
+                    RecordedPayload::TimestampWrite { set, index } => {
+                        let pool = native_query_pool(set)?;
+                        unsafe {
+                            self.inner.shared.device.cmd_write_timestamp(
+                                command_buffer,
+                                vk::PipelineStageFlags::ALL_COMMANDS,
+                                pool,
+                                *index,
+                            );
+                        }
+                        retention.query_sets.push(set.clone());
+                    }
+                    RecordedPayload::QueryResolve(resolve) => {
+                        unsafe {
+                            self.inner.shared.device.cmd_copy_query_pool_results(
+                                command_buffer,
+                                native_query_pool(&resolve.set)?,
+                                resolve.first_query,
+                                resolve.query_count,
+                                native_buffer(&resolve.destination)?,
+                                resolve.destination_offset,
+                                query_result_stride(&resolve.set)?,
+                                // Timestamp facts explicitly say this slice
+                                // does not promise non-blocking availability.
+                                // WAIT turns the result copy into a defined
+                                // producer/consumer dependency rather than
+                                // exposing stale slots.
+                                vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
+                            );
+                        }
+                        retention.query_sets.push(resolve.set.clone());
+                        retention.buffers.push(resolve.destination.clone());
+                    }
                     RecordedPayload::Copy(CopyRecord::Buffer(copy)) => {
                         transfer::lower_buffer_copy(
                             &self.inner.shared,
                             command_buffer,
                             copy,
+                            retention,
+                        )?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::ClearBuffer { buffer, range }) => {
+                        transfer::lower_clear_buffer(
+                            &self.inner.shared,
+                            command_buffer,
+                            buffer,
+                            *range,
+                            retention,
+                        )?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::ClearTexture {
+                        texture,
+                        subresources,
+                    }) => {
+                        transfer::lower_clear_texture(
+                            &self.inner.shared,
+                            command_buffer,
+                            texture,
+                            *subresources,
                             retention,
                         )?;
                     }
@@ -704,7 +831,12 @@ impl VulkanCommandSpine {
                     // execution capability.
                     RecordedPayload::DebugPush(_)
                     | RecordedPayload::DebugPop
-                    | RecordedPayload::DebugMarker(_) => {}
+                    | RecordedPayload::DebugMarker(_) => {
+                        return Err(VulkanFailure::Unsupported {
+                            what: "a Vulkan debug-marker command",
+                            why: "VK_EXT_debug_utils command lowering is not enabled by this device slice",
+                        });
+                    }
                     other => {
                         return Err(VulkanFailure::Unsupported {
                             what: payload_name(other),
@@ -774,6 +906,30 @@ impl VulkanCommandSpine {
         }
         answer
     }
+}
+
+fn query_result_stride(set: &crate::api::query::QuerySet) -> Result<u64, VulkanFailure> {
+    use crate::api::query::{PipelineStatistics, QueryType};
+    let values = match set.descriptor().ty {
+        QueryType::Occlusion | QueryType::Timestamp => 1,
+        QueryType::PipelineStatistics(selection) => [
+            PipelineStatistics::VERTEX_SHADER_INVOCATIONS,
+            PipelineStatistics::CLIPPER_INVOCATIONS,
+            PipelineStatistics::CLIPPER_PRIMITIVES_OUT,
+            PipelineStatistics::FRAGMENT_SHADER_INVOCATIONS,
+            PipelineStatistics::COMPUTE_SHADER_INVOCATIONS,
+        ]
+        .into_iter()
+        .filter(|counter| selection.contains(*counter))
+        .count(),
+    };
+    u64::try_from(values)
+        .ok()
+        .and_then(|values| values.checked_mul(8))
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a Vulkan query-result stride",
+            why: "the selected portable result layout overflowed Vulkan's stride type",
+        })
 }
 
 impl Drop for VulkanCommandSpine {
@@ -953,6 +1109,7 @@ fn finish_waited_batch(inner: &SpineInner, serial: u64, result: Result<(), vk::R
                 state.completed += 1;
             }
             let completed_frontier = state.completed;
+            inner.shared.advance_completed_serial(completed_frontier);
             drop(state);
             for completed in previous_frontier + 1..=completed_frontier {
                 inner.shared.wake_completion(completed);
@@ -1016,6 +1173,30 @@ fn completion_from_state(state: &SpineState, serial: u64) -> CompletionState {
         CompletionState::Failed(CompletionFailure::new(
             "Vulkan completion was queried for a serial this device never issued",
         ))
+    }
+}
+
+/// Records the completion serial only after `vkQueueSubmit` accepted this
+/// batch. Phase-A failures never reach here, preserving the map future's
+/// guarantee that it waits for actual accepted GPU use rather than recorded
+/// intent. Duplicate uses are harmless because the native buffer atomically
+/// keeps the greatest serial.
+fn mark_batch_buffer_uses(batch: &PlanBatch, serial: u64) {
+    for work in &batch.work {
+        for command in work.commands() {
+            for use_ in &command.uses {
+                if let ResourceUse::Buffer(buffer) = use_ {
+                    if let Some(native) = buffer
+                        .buffer
+                        .native()
+                        .as_any()
+                        .downcast_ref::<VulkanBuffer>()
+                    {
+                        native.mark_accepted(serial);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1115,7 +1296,7 @@ fn collect_raster_shader_texture_uses(
                         why: "portable recording should keep raster scopes linear",
                     });
                 }
-                RecordedPayload::RasterDraw(_) => {
+                RecordedPayload::RasterDraw(_) | RecordedPayload::RasterIndirect(_) => {
                     let shader_uses: Vec<_> = command
                         .uses
                         .iter()
@@ -1183,11 +1364,23 @@ fn collect_raster_shader_texture_uses(
 
 fn payload_name(payload: &RecordedPayload) -> &'static str {
     match payload {
+        RecordedPayload::MeshDispatch(_) => "a mesh dispatch",
+        RecordedPayload::MeshIndirect(_) => "an indirect mesh dispatch",
+        RecordedPayload::RayTracingBegin(_) => "a ray-tracing scope",
+        RecordedPayload::RayTracingDispatch(_) => "a ray dispatch",
+        RecordedPayload::RayTracingEnd => "a ray-tracing scope end",
+        RecordedPayload::AccelerationStructure(_) => "an acceleration-structure command",
         RecordedPayload::RasterBegin(_) => "a raster scope",
         RecordedPayload::RasterDraw(_) => "a raster draw",
         RecordedPayload::RasterEnd => "a raster-scope end",
         RecordedPayload::ComputeBegin(_) => "a compute scope",
         RecordedPayload::ComputeDispatch(_) => "a compute dispatch",
+        RecordedPayload::RasterIndirect(_) => "an indirect raster draw",
+        RecordedPayload::ComputeIndirect(_) => "an indirect compute dispatch",
+        RecordedPayload::QueryBegin { .. } => "a query begin",
+        RecordedPayload::QueryEnd { .. } => "a query end",
+        RecordedPayload::TimestampWrite { .. } => "a timestamp write",
+        RecordedPayload::QueryResolve(_) => "a query resolve",
         RecordedPayload::ComputeEnd => "a compute-scope end",
         RecordedPayload::Copy(_) => "a copy command",
         RecordedPayload::Upload(_) => "an upload command",
@@ -1196,6 +1389,29 @@ fn payload_name(payload: &RecordedPayload) -> &'static str {
         RecordedPayload::DebugPop => "a debug-group pop",
         RecordedPayload::DebugMarker(_) => "a debug marker",
     }
+}
+
+fn native_query_pool(set: &crate::api::query::QuerySet) -> Result<vk::QueryPool, VulkanFailure> {
+    set.native()
+        .as_any()
+        .downcast_ref::<VulkanQuerySet>()
+        .map(VulkanQuerySet::pool)
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a query set this Vulkan device did not create",
+            why: "its VkQueryPool belongs to another backend",
+        })
+}
+
+fn native_buffer(buffer: &crate::api::resource::Buffer) -> Result<vk::Buffer, VulkanFailure> {
+    buffer
+        .native()
+        .as_any()
+        .downcast_ref::<VulkanBuffer>()
+        .map(VulkanBuffer::buffer)
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a query resolve buffer this Vulkan device did not create",
+            why: "its VkBuffer belongs to another backend",
+        })
 }
 
 #[cfg(test)]

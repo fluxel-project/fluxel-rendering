@@ -43,8 +43,8 @@ use crate::api::platform::Device;
 use crate::api::resource::backend::TextureViewBackend;
 use crate::api::resource::subresource::TextureAspects;
 use crate::api::resource::texture::{
-    Extent3d, Texture, TextureDescriptor, TextureDimension, TextureViewCompatibility, mip_extent,
-    validate_texture_ownership,
+    Extent3d, Texture, TextureDescriptor, TextureDimension, TextureUsage, TextureViewCompatibility,
+    mip_extent, validate_texture_ownership,
 };
 
 /// The dimensionality a view presents.
@@ -96,6 +96,11 @@ pub struct TextureViewDescriptor {
     pub base_layer: u32,
     /// Number of array layers the view covers. Must be at least 1.
     pub layer_count: u32,
+
+    /// Optional usage restriction for this view. When present it must be a
+    /// subset of the base texture usage; it never grants a usage omitted at
+    /// texture creation.
+    pub usage: Option<TextureUsage>,
 }
 
 impl TextureViewDescriptor {
@@ -118,6 +123,7 @@ impl TextureViewDescriptor {
             mip_count,
             base_layer,
             layer_count,
+            usage: None,
         }
     }
 
@@ -163,6 +169,12 @@ impl TextureViewDescriptor {
     /// "same byte size, therefore view-compatible".
     pub fn with_format(mut self, format: TextureFormat) -> Self {
         self.format = Some(format);
+        self
+    }
+
+    /// Restricts operations performed through this view.
+    pub fn with_usage(mut self, usage: TextureUsage) -> Self {
+        self.usage = Some(usage);
         self
     }
 }
@@ -444,6 +456,14 @@ pub(crate) fn validate_texture_view_descriptor(
             RhiErrorKind::InvalidUsage,
             "a texture view must select at least one aspect",
         ));
+    }
+    if let Some(usage) = view.usage {
+        if usage.is_empty() || !base.usage.contains(usage) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a texture-view usage must be a non-empty subset of the texture usage",
+            ));
+        }
     }
 
     // Mip range. `checked_add` first: `base_mip + mip_count` overflowing u64 is

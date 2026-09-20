@@ -18,6 +18,7 @@ use crate::api::pipeline::backend::ComputePipelineBackend;
 use crate::backend::vulkan::binding::layout_bindings;
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::ffi;
+use crate::backend::vulkan::pipeline::cache::native_cache;
 use crate::backend::vulkan::platform::device::VulkanShared;
 use crate::backend::vulkan::shader::VulkanShaderModule;
 
@@ -106,7 +107,10 @@ pub(in crate::backend::vulkan) fn create_compute_pipeline(
         }
     }
 
-    let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+    let push_ranges = push_constant_ranges(descriptor.interface.descriptor())?;
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&set_layouts)
+        .push_constant_ranges(&push_ranges);
     let layout = match unsafe { shared.device.create_pipeline_layout(&layout_info, None) } {
         Ok(layout) => layout,
         Err(result) => {
@@ -123,9 +127,11 @@ pub(in crate::backend::vulkan) fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
     let pipeline = match unsafe {
-        shared
-            .device
-            .create_compute_pipelines(vk::PipelineCache::null(), &[create], None)
+        shared.device.create_compute_pipelines(
+            native_cache(descriptor.cache.as_ref())?,
+            &[create],
+            None,
+        )
     } {
         Ok(mut pipelines) => match pipelines.pop() {
             Some(pipeline) => pipeline,
@@ -155,6 +161,35 @@ pub(in crate::backend::vulkan) fn create_compute_pipeline(
         layout,
         set_layouts,
     })
+}
+
+fn push_constant_ranges(
+    interface: &crate::api::pipeline::PipelineInterfaceDescriptor,
+) -> Result<Vec<vk::PushConstantRange>, VulkanFailure> {
+    interface
+        .immediate_ranges
+        .iter()
+        .map(|range| {
+            let mut stages = vk::ShaderStageFlags::empty();
+            if range
+                .visibility
+                .contains(crate::api::shader::ShaderStages::COMPUTE)
+            {
+                stages |= vk::ShaderStageFlags::COMPUTE;
+            }
+            if stages.is_empty() {
+                return Err(VulkanFailure::Unsupported {
+                    what: "a compute immediate range with non-compute visibility",
+                    why: "this Vulkan compute pipeline has no lowering for that shader stage",
+                });
+            }
+            Ok(vk::PushConstantRange {
+                stage_flags: stages,
+                offset: range.offset,
+                size: range.size,
+            })
+        })
+        .collect()
 }
 
 fn destroy_set_layouts(shared: &VulkanShared, set_layouts: &mut Vec<vk::DescriptorSetLayout>) {

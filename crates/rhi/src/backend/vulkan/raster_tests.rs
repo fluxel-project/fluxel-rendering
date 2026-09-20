@@ -218,6 +218,7 @@ fn offscreen_raster_draw_transitions_to_readback_and_retains_native_objects() {
                     load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
                     store: StoreOp::Store,
                     resolve: None,
+                    depth_slice: None,
                 },
             ))
             .expect("Vulkan facts advertise this color attachment");

@@ -53,6 +53,7 @@ use std::sync::Arc;
 use crate::api::command::{
     BlitFilter, ColorClearValue, DepthAttachmentMode, LoadOp, StencilAttachmentMode, StoreOp,
 };
+use crate::api::external::{ExternalAlphaMode, ExternalColorSpaceConversion};
 use crate::api::identity::{Label, ObjectId};
 use crate::api::presentation::AcquiredFrameId;
 use crate::api::resource::buffer::BufferRange;
@@ -86,6 +87,9 @@ pub struct CapturedColorAttachment {
 
     /// What happens to it when the scope ends.
     pub store: StoreOp,
+
+    /// Selected Z slice for a 3D color attachment.
+    pub depth_slice: Option<u32>,
 
     /// The view this attachment resolves into, when it is multisampled.
     pub resolve: Option<CapturedColorAttachmentView>,
@@ -272,6 +276,23 @@ pub struct CapturedBlit {
 
     /// How the source is sampled into the destination.
     pub filter: BlitFilter,
+}
+
+/// A captured copy from a host-owned external image.
+///
+/// The source is named only by its RHI object identity.  In particular this
+/// never serializes a browser object, OS handle, or backend-private lease.
+#[derive(Clone)]
+pub struct CapturedExternalImageCopy {
+    pub source: ObjectId,
+    pub source_origin: Origin3d,
+    pub destination: ObjectId,
+    pub destination_subresource: TextureSubresourceLayers,
+    pub destination_origin: Origin3d,
+    pub extent: Extent3d,
+    pub flip_y: bool,
+    pub alpha_mode: ExternalAlphaMode,
+    pub color_space_conversion: ExternalColorSpaceConversion,
 }
 
 /// A captured CPU upload: an observable mutation of resource contents.

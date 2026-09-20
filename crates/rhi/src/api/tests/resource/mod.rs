@@ -25,7 +25,9 @@
 //!   test that could not name an object could not test what an accessor reports
 //!   about it.
 
+mod acceleration;
 mod buffer;
+mod mapping;
 mod route;
 mod sampler;
 mod subresource;

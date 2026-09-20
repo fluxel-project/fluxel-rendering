@@ -30,6 +30,7 @@
 
 mod compute;
 mod copy;
+mod query;
 mod raster;
 mod spine;
 mod transfer;

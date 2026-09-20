@@ -531,7 +531,11 @@ displayed frame count
 vsync count
 ```
 
-unless a Presentation Timing extension is added later.
+unless the configured target reports timing support through
+`PresentationTargetCapabilities::timing()` and the caller samples the optional
+`Device::presentation_timestamp()` facility. Those values are intentionally
+reported separately from frame-loop counters: a timestamp is an observation,
+not proof that a present was scanned out.
 
 Acquire refusal and submitted-present outcome are disjoint accounting domains.
 `NotReady`, `Timeout`, `FrameOutstanding`, zero-size suspension, and acquire-time

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device};
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -11,9 +11,11 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
-    IDXGIFactory4, IDXGISwapChain3,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory4, IDXGISwapChain2,
+    IDXGISwapChain3,
 };
+use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::core::Interface;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -25,10 +27,12 @@ use crate::api::presentation::backend::{
     PresentationBackend,
 };
 use crate::api::presentation::{
-    AcquireError, AcquireErrorKind, AcquiredFrameId, Extent2d, PresentMode, PresentReceiptId,
-    PresentState, PresentationConfiguration, PresentationExtent, PresentationExtentControl,
-    PresentationTarget, PresentationTargetCapabilities,
+    AcquireError, AcquireErrorKind, AcquiredFrameId, CompositeAlphaMode, Extent2d,
+    FrameLatencyRange, PresentMode, PresentReceiptId, PresentState, PresentationColorSpace,
+    PresentationConfiguration, PresentationExtent, PresentationExtentControl, PresentationFormat,
+    PresentationTarget, PresentationTargetCapabilities, PresentationTimingCapabilities,
 };
+use crate::api::resource::TextureUsage;
 use crate::backend::dx12::platform::device::Dx12LossState;
 
 /// Private DXGI target registry. `HWND` crosses only this module's boundary.
@@ -100,15 +104,8 @@ impl Dx12Presentation {
     }
 
     fn capabilities_for(&self, target: ObjectId) -> RhiResult<PresentationTargetCapabilities> {
-        let _ = self.hwnd(target)?;
-        Ok(PresentationTargetCapabilities::new(
-            vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
-            // This flip-model path currently calls `Present(1, 0)`.  Do not
-            // advertise Immediate until the lowering selects sync interval 0
-            // (and the required tearing policy) for that request.
-            vec![PresentMode::Fifo],
-            PresentationExtentControl::HostManaged { current: None },
-        ))
+        let hwnd = self.hwnd(target)?;
+        Ok(dx12_capabilities(Some(client_extent(hwnd)?)))
     }
 }
 
@@ -378,13 +375,20 @@ impl Dx12ConfiguredPresentation {
 
 impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
     fn capabilities(&self) -> RhiResult<PresentationTargetCapabilities> {
-        Ok(PresentationTargetCapabilities::new(
-            vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
-            // Keep these facts in lockstep with `Dx12FrameAttachment::present`.
-            // `Present(1, 0)` is FIFO; Immediate is not silently substituted.
-            vec![PresentMode::Fifo],
-            PresentationExtentControl::HostManaged { current: None },
-        ))
+        // A configured HWND swapchain owns the host-managed size.  Its current
+        // `GetDesc1` dimensions are the authoritative answer after resize.
+        let desc = unsafe {
+            self.state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .swapchain
+                .GetDesc1()
+        }
+        .map_err(|error| native_rhi_error(&self.loss, &error, "IDXGISwapChain3::GetDesc1"))?;
+        Ok(dx12_capabilities(Some(Extent2d {
+            width: desc.Width,
+            height: desc.Height,
+        })))
     }
     fn reconfigure_or_register_waker(
         &self,
@@ -456,6 +460,9 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
         if let Err(error) = resize {
             return Poll::Ready(Err(error));
         }
+        if let Err(error) = configure_frame_latency(&state.swapchain, config, &self.loss) {
+            return Poll::Ready(Err(error));
+        }
         state.acquired = None;
         Poll::Ready(Ok(()))
     }
@@ -506,6 +513,7 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
         debug_assert!(inserted, "each acquired DXGI frame serial is unique");
         Ok(Some(AcquiredSurfaceFrame {
             serial,
+            suboptimal: false,
             extent: Extent2d {
                 width: desc.Width,
                 height: desc.Height,
@@ -614,13 +622,84 @@ fn create_swapchain(
         Scaling: DXGI_SCALING_STRETCH,
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
         AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-        Flags: 0,
+        // The waitable-object flag is required before DXGI will accept the
+        // portable maximum-frame-latency request.  We do not expose that object
+        // or use it as a public synchronization primitive; it merely makes the
+        // requested queue bound a real native configuration.
+        Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
     };
     let chain = unsafe { factory.CreateSwapChainForHwnd(queue, hwnd, &desc, None, None) }
         .map_err(|error| native_rhi_error(loss, &error, "IDXGIFactory4::CreateSwapChainForHwnd"))?;
-    chain
+    let chain: IDXGISwapChain3 = chain
         .cast()
-        .map_err(|error| native_rhi_error(loss, &error, "IDXGISwapChain1::cast"))
+        .map_err(|error| native_rhi_error(loss, &error, "IDXGISwapChain1::cast"))?;
+    configure_frame_latency(&chain, config, loss)?;
+    Ok(chain)
+}
+
+/// Facts this lowering can actually honour.  This HWND flip-model path has no
+/// alpha-composited swapchain, mutable-format view list, HDR colour-space setup,
+/// or presentation timestamp source, so those are deliberately absent rather
+/// than guessed from DXGI defaults.
+fn dx12_capabilities(current: Option<Extent2d>) -> PresentationTargetCapabilities {
+    PresentationTargetCapabilities::new(
+        vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
+        // Keep this in lockstep with `Dx12FrameAttachment::present`, which uses
+        // `Present(1, 0)`. Immediate is never silently substituted.
+        vec![PresentMode::Fifo],
+        PresentationExtentControl::HostManaged { current },
+    )
+    .with_format_color_spaces(vec![
+        PresentationFormat {
+            format: TextureFormat::Bgra8Unorm,
+            color_space: PresentationColorSpace::Srgb,
+        },
+        PresentationFormat {
+            format: TextureFormat::Rgba8Unorm,
+            color_space: PresentationColorSpace::Srgb,
+        },
+    ])
+    .with_surface_details(
+        TextureUsage::COLOR_ATTACHMENT,
+        vec![CompositeAlphaMode::Automatic, CompositeAlphaMode::Opaque],
+        Some(FrameLatencyRange { min: 1, max: 16 }),
+        Vec::new(),
+    )
+    .with_timing_and_hdr(PresentationTimingCapabilities { timestamps: false }, None)
+}
+
+fn client_extent(hwnd: HWND) -> RhiResult<Extent2d> {
+    let mut rect = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut rect) }.map_err(|_error| {
+        // A client rectangle is a host-target fact, not a device failure.  Keep
+        // the portable boundary structured and do not leak a Win32 error value.
+        RhiError::new(
+            RhiErrorKind::TargetLost,
+            "the registered DX12 presentation target no longer has a client rectangle",
+        )
+        .at("GetClientRect")
+    })?;
+    Ok(Extent2d {
+        width: u32::try_from(rect.right.saturating_sub(rect.left)).unwrap_or(0),
+        height: u32::try_from(rect.bottom.saturating_sub(rect.top)).unwrap_or(0),
+    })
+}
+
+fn configure_frame_latency(
+    swapchain: &IDXGISwapChain3,
+    config: &PresentationConfiguration,
+    loss: &Dx12LossState,
+) -> RhiResult<()> {
+    let swapchain: IDXGISwapChain2 = swapchain.cast().map_err(|error| {
+        native_rhi_error(loss, &error, "IDXGISwapChain3::cast(IDXGISwapChain2)")
+    })?;
+    unsafe {
+        swapchain
+            .SetMaximumFrameLatency(config.maximum_frame_latency())
+            .map_err(|error| {
+                native_rhi_error(loss, &error, "IDXGISwapChain2::SetMaximumFrameLatency")
+            })
+    }
 }
 
 fn swapchain_format(

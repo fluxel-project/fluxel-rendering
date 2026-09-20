@@ -158,6 +158,24 @@ pub struct LiveObjectCounts {
     pub raster_pipelines: u64,
     /// Compute pipelines that exist.
     pub compute_pipelines: u64,
+    /// Query sets that exist.
+    pub query_sets: u64,
+    /// Acceleration structures that exist.
+    pub acceleration_structures: u64,
+    /// Mesh/task pipelines that exist.
+    pub mesh_pipelines: u64,
+    /// Ray-tracing pipelines that exist.
+    pub ray_tracing_pipelines: u64,
+    /// Native pipeline-cache objects that exist.
+    pub pipeline_caches: u64,
+    /// Opaque host image sources that exist. This is a logical bridge object,
+    /// never a count of browser/OS handles.
+    pub external_image_sources: u64,
+    /// Sampled external textures that exist.
+    pub external_textures: u64,
+    /// External-memory texture sources that exist; native handle values are not
+    /// exposed or counted independently.
+    pub external_memory_texture_sources: u64,
 
     /// Frames currently in the acquired or planned-for-present state.
     ///

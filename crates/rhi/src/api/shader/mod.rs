@@ -91,8 +91,15 @@ pub(crate) mod requirements;
 pub(crate) mod validation;
 pub(crate) mod vocabulary;
 
-pub use artifact::{ArtifactHash, ArtifactProducerVersion, ShaderArtifact, ShaderModule};
-pub use requirements::{ShaderInterface, ShaderRequirements, ShaderResourceRequirement};
+pub use artifact::{
+    ArtifactHash, ArtifactProducerVersion, PassthroughShaderProvenance, ShaderArtifact,
+    ShaderModule,
+};
+pub use requirements::{
+    CooperativeMatrixComponentType, CooperativeMatrixProperties, CooperativeMatrixRequirement,
+    CooperativeMatrixScope, ShaderBuiltin, ShaderInterface, ShaderRequirements,
+    ShaderResourceRequirement, SubgroupSizeRange,
+};
 pub use vocabulary::{
     ArtifactAcceptance, GlslProfile, InterpolationMode, InterpolationSampling, ShaderAbiVersion,
     ShaderCode, ShaderInterpolation, ShaderLocation, ShaderLocationInterface, ShaderNumericType,

@@ -640,6 +640,7 @@ fn validate_transient_uses(
                 ResourceUse::Buffer(use_record) => use_record.buffer.transient_lifetime(),
                 ResourceUse::Texture(use_record) => use_record.texture.transient_lifetime(),
                 ResourceUse::Frame(_) => None,
+                ResourceUse::AccelerationStructure(_) => None,
             };
             let Some(lifetime) = lifetime else {
                 continue;
@@ -1014,12 +1015,22 @@ fn shared_resource(one: &ResourceUse, other: &ResourceUse) -> Option<String> {
             }
             None
         }
+        (ResourceUse::AccelerationStructure(one), ResourceUse::AccelerationStructure(other)) => {
+            (one.structure.id() == other.structure.id())
+                .then(|| format!("acceleration structure {}", one.structure.id().as_u64()))
+        }
         (ResourceUse::Buffer(_), ResourceUse::Texture(_))
         | (ResourceUse::Texture(_), ResourceUse::Buffer(_))
         | (ResourceUse::Buffer(_), ResourceUse::Frame(_))
         | (ResourceUse::Frame(_), ResourceUse::Buffer(_))
         | (ResourceUse::Texture(_), ResourceUse::Frame(_))
-        | (ResourceUse::Frame(_), ResourceUse::Texture(_)) => None,
+        | (ResourceUse::Frame(_), ResourceUse::Texture(_))
+        | (ResourceUse::AccelerationStructure(_), ResourceUse::Buffer(_))
+        | (ResourceUse::Buffer(_), ResourceUse::AccelerationStructure(_))
+        | (ResourceUse::AccelerationStructure(_), ResourceUse::Texture(_))
+        | (ResourceUse::Texture(_), ResourceUse::AccelerationStructure(_))
+        | (ResourceUse::AccelerationStructure(_), ResourceUse::Frame(_))
+        | (ResourceUse::Frame(_), ResourceUse::AccelerationStructure(_)) => None,
     }
 }
 
@@ -1035,6 +1046,7 @@ fn writes(use_record: &ResourceUse) -> bool {
         ResourceUse::Buffer(use_record) => use_record.access,
         ResourceUse::Texture(use_record) => use_record.access,
         ResourceUse::Frame(use_record) => use_record.access,
+        ResourceUse::AccelerationStructure(use_record) => use_record.access,
     };
     [
         AccessMask::SHADER_WRITE,
@@ -1042,6 +1054,7 @@ fn writes(use_record: &ResourceUse) -> bool {
         AccessMask::DEPTH_WRITE,
         AccessMask::STENCIL_WRITE,
         AccessMask::COPY_WRITE,
+        AccessMask::ACCELERATION_STRUCTURE_BUILD_WRITE,
     ]
     .into_iter()
     .any(|bit| access.contains(bit))

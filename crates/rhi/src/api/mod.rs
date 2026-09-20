@@ -1,6 +1,6 @@
 //! Fluxel RHI API freeze v13 — the portable interface.
 //!
-//! This tree is written from `documents/rhi-design/01`–`08` and from nothing
+//! This tree is written from `documents/rhi-design/01`–`09` and from nothing
 //! else. Where the rest of this crate holds an implementation, this module holds
 //! the *contract*: the public types, the refusal paths, and the invariants that
 //! a backend must lower without being consulted about legality.
@@ -60,11 +60,13 @@ pub mod capability;
 pub mod command;
 pub mod diagnostics;
 pub mod error;
+pub mod external;
 pub mod format;
 pub mod identity;
 pub mod pipeline;
 pub mod platform;
 pub mod presentation;
+pub mod query;
 pub mod resource;
 pub mod shader;
 pub mod statistics;
@@ -88,12 +90,12 @@ pub(crate) mod internal;
 #[doc(hidden)]
 pub mod tooling;
 
-// All seven chapters are written as of 2026-09-20: 01 (platform, capability,
+// The v13 chapters are written as of 2026-09-20: 01 (platform, capability,
 // identity, error), 02 (format, resource), 03 (shader, binding, pipeline), 04
 // (command), 05 (submission, presentation), 06 (statistics, diagnostics,
-// transient resources), and 07 (tooling). Each carries a module note recording how far
-// it got and what it could not close; the open items are collected as numbered
-// adjudications in `documents/draft/0.16-plan.md`.
+// transient resources), 07 (tooling), 08 (freeze governance), and 09 (the
+// capability-complete feature families). Each public family must keep its
+// positive, refusal, and boundary conformance tests adjacent to this contract.
 
 pub use error::{RhiError, RhiErrorKind, RhiResult};
 pub use identity::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};

@@ -1722,14 +1722,8 @@ safe abandon/drop recovery
 final Base route = raster to FrameAttachment; direct MSAA resolve only when facts prove it
 ```
 
-Explicitly deferred:
-
-```text
-surface drawable TextureView
-direct copy/blit to frame
-multiple outstanding acquired frames
-frame latency/buffering controls
-HDR metadata
-present timing / scan-out completion
-XR/custom compositor
-```
+`FrameAttachment` remains distinct from `TextureView`; this does not exclude
+surface view-format negotiation, direct frame operations, multi-acquire,
+latency/buffering, HDR metadata, presentation timing, or host compositor
+integration. Each is a capability-gated presentation family specified by module
+09. An unavailable surface returns `Unsupported` before work is accepted.

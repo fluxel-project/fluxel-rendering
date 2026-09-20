@@ -367,6 +367,35 @@ impl DeviceBackend for Dx12Device {
             .map_err(|failure| self.observe_native_failure(failure, "Dx12Device::create_buffer"))
     }
 
+    fn map_buffer(
+        &self,
+        buffer: &crate::api::resource::Buffer,
+        mode: crate::api::resource::MapMode,
+        range: crate::api::resource::BufferRange,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::MappingRequestBackend>> {
+        let native = buffer
+            .native()
+            .as_any()
+            .downcast_ref::<resource::Dx12Buffer>()
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::BackendFailure,
+                    "DX12 received a buffer without a DX12 allocation",
+                )
+                .at("Dx12Device::map_buffer")
+            })?;
+        self.spine.map_buffer(native, mode, range)
+    }
+
+    fn create_query_set(
+        &self,
+        descriptor: &crate::api::query::QuerySetDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::QuerySetBackend>> {
+        resource::create_query_set(&self.device, descriptor)
+            .map(|query| Box::new(query) as Box<dyn crate::api::resource::backend::QuerySetBackend>)
+            .map_err(|failure| self.observe_native_failure(failure, "Dx12Device::create_query_set"))
+    }
+
     fn create_texture(
         &self,
         descriptor: &crate::api::resource::texture::TextureDescriptor,
@@ -474,6 +503,16 @@ impl DeviceBackend for Dx12Device {
                 Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
             })
             .map_err(|failure| self.observe_failure(failure, "Dx12Device::create_raster_pipeline"))
+    }
+
+    fn create_pipeline_cache(
+        &self,
+        descriptor: &crate::api::pipeline::PipelineCacheDescriptor,
+    ) -> RhiResult<(
+        Box<dyn crate::api::pipeline::backend::PipelineCacheBackend>,
+        crate::api::pipeline::PipelineCacheValidationKey,
+    )> {
+        pipeline::create_pipeline_cache(&self.device, Arc::clone(&self.loss), descriptor)
     }
 
     fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {

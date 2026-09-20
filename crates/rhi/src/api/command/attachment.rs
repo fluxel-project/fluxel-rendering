@@ -37,13 +37,13 @@
 
 use crate::api::command::geometry::{ClearValueClass, ColorClearValue, LoadOp, StoreOp};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::format::TextureFormat;
+use crate::api::format::{TextureFormat, color_output_type};
 use crate::api::identity::{DeviceIdentity, Label};
 use crate::api::pipeline::RenderTargetSignature;
 use crate::api::presentation::FrameAttachment;
 use crate::api::resource::texture::{Extent3d, TextureUsage};
 use crate::api::resource::view::TextureView;
-use crate::api::shader::ShaderLocation;
+use crate::api::shader::{ShaderLocation, ShaderNumericType};
 
 /// The view a color attachment renders into.
 ///
@@ -193,6 +193,10 @@ pub struct ColorAttachment {
     pub load: LoadOp<ColorClearValue>,
     /// What happens to the contents when the scope ends.
     pub store: StoreOp,
+    /// Z slice selected when `view` is a 3D texture view. Must be `None` for
+    /// all non-3D views and within the selected mip's depth extent for a 3D
+    /// view. A frame never has a depth slice.
+    pub depth_slice: Option<u32>,
     /// The single-sampled target this multisampled attachment resolves into.
     ///
     /// Section 31.1: a resolve target is part of the *attachment*, not a
@@ -420,59 +424,15 @@ impl Default for RasterScopeDescriptor {
 /// color attachment is refused by the device's format facts, and stating a class
 /// for it here would invent an answer for a case that has none.
 ///
-/// **This is a table, and tables belong to their owner.** It duplicates the
-/// class column of section 8's format facts because
-/// [`crate::api::format::FormatFacts`] does not expose it yet:
-/// `color_output_type()` is commented out in `format.rs` pending a type that
-/// lived in a module not then declared. When that accessor is restored, this
-/// function should be deleted and its one caller rewritten to read it, so that
-/// section 8 has exactly one class table. The match is exhaustive on purpose —
-/// a format added to `TextureFormat` must be classified here before the crate
-/// compiles.
+/// The format module owns this classification. This adapter translates its
+/// shader-output vocabulary into the clear-value vocabulary used by command
+/// validation, so adding a format cannot leave two independent class tables.
 pub(crate) fn color_clear_class(format: TextureFormat) -> Option<ClearValueClass> {
-    match format {
-        TextureFormat::R8Unorm
-        | TextureFormat::R8Snorm
-        | TextureFormat::Rg8Unorm
-        | TextureFormat::Rg8Snorm
-        | TextureFormat::Rgba8Unorm
-        | TextureFormat::Rgba8UnormSrgb
-        | TextureFormat::Rgba8Snorm
-        | TextureFormat::Bgra8Unorm
-        | TextureFormat::Bgra8UnormSrgb
-        | TextureFormat::R16Float
-        | TextureFormat::Rg16Float
-        | TextureFormat::Rgba16Float
-        | TextureFormat::R32Float
-        | TextureFormat::Rg32Float
-        | TextureFormat::Rgba32Float => Some(ClearValueClass::Float),
-
-        TextureFormat::R8Uint
-        | TextureFormat::Rg8Uint
-        | TextureFormat::Rgba8Uint
-        | TextureFormat::R16Uint
-        | TextureFormat::Rg16Uint
-        | TextureFormat::Rgba16Uint
-        | TextureFormat::R32Uint
-        | TextureFormat::Rg32Uint
-        | TextureFormat::Rgba32Uint => Some(ClearValueClass::Uint),
-
-        TextureFormat::R8Sint
-        | TextureFormat::Rg8Sint
-        | TextureFormat::Rgba8Sint
-        | TextureFormat::R16Sint
-        | TextureFormat::Rg16Sint
-        | TextureFormat::Rgba16Sint
-        | TextureFormat::R32Sint
-        | TextureFormat::Rg32Sint
-        | TextureFormat::Rgba32Sint => Some(ClearValueClass::Sint),
-
-        TextureFormat::Depth16Unorm
-        | TextureFormat::Depth24Plus
-        | TextureFormat::Depth24PlusStencil8
-        | TextureFormat::Depth32Float
-        | TextureFormat::Depth32FloatStencil8 => None,
-    }
+    color_output_type(format).map(|class| match class {
+        ShaderNumericType::Float32 => ClearValueClass::Float,
+        ShaderNumericType::Sint32 => ClearValueClass::Sint,
+        ShaderNumericType::Uint32 => ClearValueClass::Uint,
+    })
 }
 
 /// Checks one color attachment against section 31.1.
@@ -481,6 +441,34 @@ pub(crate) fn color_clear_class(format: TextureFormat) -> Option<ClearValueClass
 /// validated here, because a location is an index into the scope's own vector
 /// and carries no bound of its own.
 fn validate_color_attachment(location: u32, attachment: &ColorAttachment) -> RhiResult<()> {
+    match &attachment.view {
+        ColorAttachmentView::Texture(view)
+            if view.descriptor().dimension == crate::api::resource::TextureViewDimension::D3 =>
+        {
+            let slice = attachment.depth_slice.ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    format!("color attachment {location} selects a 3D view but has no depth slice"),
+                )
+            })?;
+            if slice >= view.extent().depth {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    format!(
+                        "color attachment {location} depth slice {slice} is outside the view depth {}",
+                        view.extent().depth
+                    ),
+                ));
+            }
+        }
+        _ if attachment.depth_slice.is_some() => {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                format!("color attachment {location} supplies a depth slice for a non-3D view"),
+            ));
+        }
+        _ => {}
+    }
     if !attachment.view.allows_color_attachment() {
         return Err(RhiError::new(
             RhiErrorKind::InvalidUsage,
@@ -728,16 +716,6 @@ pub(crate) fn validate_raster_scope(desc: &RasterScopeDescriptor) -> RhiResult<(
             // there is nothing to report as a count.
             ColorAttachmentView::Frame(_) => 1,
         };
-        if layers != 1 {
-            return Err(RhiError::new(
-                RhiErrorKind::Unsupported,
-                format!(
-                    "color attachment {} covers {} layers, and P0 does not freeze layered or \
-                     multiview raster",
-                    location, layers
-                ),
-            ));
-        }
         // Section 31.1: a frame is rendered in order to be presented, so a frame
         // attachment marked Discard asks for contents that are thrown away. That
         // is refused here rather than at submit, where nothing could be done
@@ -758,6 +736,7 @@ pub(crate) fn validate_raster_scope(desc: &RasterScopeDescriptor) -> RhiResult<(
             view.device_identity(),
             view.extent(),
             view.sample_count(),
+            layers,
             "color attachment",
             location,
         )?;
@@ -773,19 +752,12 @@ pub(crate) fn validate_raster_scope(desc: &RasterScopeDescriptor) -> RhiResult<(
                 "the depth/stencil attachment has a zero width or height",
             ));
         }
-        if view.layer_count() != 1 {
-            return Err(RhiError::new(
-                RhiErrorKind::Unsupported,
-                "the depth/stencil attachment covers more than one layer, and P0 does not freeze \
-                 layered or multiview raster",
-            ));
-        }
-
         compare_set_member(
             &mut set,
             view.device_identity(),
             view.extent(),
             view.sample_count(),
+            view.layer_count(),
             "the depth/stencil attachment",
             0,
         )?;
@@ -794,7 +766,7 @@ pub(crate) fn validate_raster_scope(desc: &RasterScopeDescriptor) -> RhiResult<(
     Ok(())
 }
 
-/// The three set-wide facts an attachment set is folded into.
+/// The four set-wide facts an attachment set is folded into.
 ///
 /// Section 31.4's rule compares a member against all three at once, so they are
 /// carried and passed as one value: a member that disagrees about any one of
@@ -805,6 +777,7 @@ struct SetFacts {
     device: Option<DeviceIdentity>,
     extent: Option<(u32, u32)>,
     sample_count: Option<u32>,
+    layer_count: Option<u32>,
 }
 
 /// Folds one attachment into the set-wide identity, extent, and sample count.
@@ -817,6 +790,7 @@ fn compare_set_member(
     member_device: DeviceIdentity,
     member_extent: Extent3d,
     member_samples: u32,
+    member_layers: u32,
     what: &'static str,
     location: u32,
 ) -> RhiResult<()> {
@@ -861,6 +835,20 @@ fn compare_set_member(
         }
         Some(_) => {}
         None => set.sample_count = Some(member_samples),
+    }
+
+    match set.layer_count {
+        Some(expected) if expected != member_layers => {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                format!(
+                    "{} {} covers {} layers, which differs from the rest of the attachment set",
+                    what, location, member_layers
+                ),
+            ));
+        }
+        Some(_) => {}
+        None => set.layer_count = Some(member_layers),
     }
 
     Ok(())

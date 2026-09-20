@@ -29,7 +29,9 @@ use crate::api::format::{
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::pipeline::compute::validate_compute_pipeline_descriptor;
 use crate::api::pipeline::interface::validate_pipeline_interface_descriptor;
+use crate::api::pipeline::mesh::validate_mesh_pipeline_descriptor;
 use crate::api::pipeline::raster::validate_raster_pipeline_descriptor;
+use crate::api::pipeline::ray_tracing::validate_ray_tracing_pipeline_descriptor;
 use crate::api::pipeline::resources::{
     merge_shader_resources, validate_shader_resource_requirements,
 };
@@ -454,6 +456,7 @@ fn check_compute(desc: &ComputePipelineDescriptor, facts: &Facts) -> RhiResult<(
 
 mod compute;
 mod interface;
+mod mesh_ray_tracing;
 mod raster;
 mod raster_state;
 mod resources;

@@ -26,6 +26,7 @@ use crate::api::format::{
     format_aspects, sample_type,
 };
 use crate::api::platform::{LimitKey, OptionalFeature};
+use crate::api::query::{PipelineStatistics, TimestampQueryCapabilities};
 use crate::api::resource::TextureAspects;
 use crate::api::resource::buffer::{BufferSupport, BufferSupportLimits, BufferUsage};
 use crate::api::resource::route::{
@@ -35,14 +36,41 @@ use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
 use crate::api::resource::view::TextureViewDimension;
+use crate::api::shader::ShaderStage;
 use crate::api::shader::vocabulary::AcceptedCodeForm;
-use crate::api::shader::{ShaderStage, ShaderStages};
 use crate::backend::vulkan::ffi;
 
-use crate::backend::vulkan::format::{FORMATS, vk_format};
+use crate::backend::vulkan::format::{FORMATS, is_astc_hdr, vk_format};
 
 #[derive(Clone, Copy)]
 pub(super) struct VulkanCapabilityLimits {
+    /// The extension was present and its feature bit was enabled in the
+    /// logical-device feature chain. `*_SFLOAT_BLOCK` format properties alone
+    /// are insufficient to publish ASTC HDR support.
+    pub(super) astc_hdr: bool,
+    /// `None` means `VkPhysicalDeviceFeatures::samplerAnisotropy` was not
+    /// enabled on the logical device.  The numeric property alone is not a
+    /// capability: Vulkan requires both the feature and a non-zero limit.
+    pub(super) max_sampler_anisotropy: Option<u32>,
+    /// Core `VkPhysicalDeviceFeatures` bits which must be enabled on the
+    /// logical device before their portable raster semantics are published.
+    pub(super) depth_bias_clamp: bool,
+    pub(super) dual_src_blend: bool,
+    pub(super) independent_blend: bool,
+    pub(super) pipeline_statistics_query: bool,
+    pub(super) timestamp_compute_and_graphics: bool,
+    pub(super) timestamp_period: f32,
+    pub(super) timestamp_valid_bits: u32,
+    pub(super) max_push_constants_size: u32,
+    pub(super) draw_indirect_first_instance: bool,
+    pub(super) multi_draw_indirect: bool,
+    /// `VK_KHR_draw_indirect_count` was present during physical-device probe
+    /// and will be enabled on the logical device. The baseline creates a 1.0
+    /// instance, so even Vulkan 1.2 implementations use this extension route.
+    pub(super) draw_indirect_count: bool,
+    /// Native `maxDrawIndirectCount`; checked again by lowering because the
+    /// public vocabulary has no separate capability-limit key for it yet.
+    pub(super) max_draw_indirect_count: u32,
     pub(super) max_bindings_per_group: u32,
     pub(super) max_bound_descriptor_sets: u32,
     pub(super) max_per_stage_uniform_buffers: u32,
@@ -93,6 +121,12 @@ pub(super) fn probe(
     );
 
     for &format in FORMATS {
+        // `VK_EXT_texture_compression_astc_hdr` owns both the format family
+        // and feature bit. Do not even record FormatFacts before device
+        // creation has enabled that exact contract.
+        if is_astc_hdr(format) && !limits.astc_hdr {
+            continue;
+        }
         let native = vk_format(format).expect("FORMATS contains only mapped Vulkan formats");
         let properties =
             unsafe { instance.get_physical_device_format_properties(physical, native) };
@@ -112,30 +146,33 @@ pub(super) fn probe(
             ),
         );
         if storage {
-            for dimension in [
-                TextureViewDimension::D1,
-                TextureViewDimension::D2,
-                TextureViewDimension::D2Array,
-                TextureViewDimension::D3,
-            ] {
-                for access in [
-                    StorageAccess::ReadOnly,
-                    StorageAccess::WriteOnly,
-                    StorageAccess::ReadWrite,
+            for visibility in crate::api::capability::visibilities() {
+                for dimension in [
+                    TextureViewDimension::D1,
+                    TextureViewDimension::D2,
+                    TextureViewDimension::D2Array,
+                    TextureViewDimension::D3,
                 ] {
-                    facts.record_binding_support(
-                        BindingSupportKey {
-                            visibility: ShaderStages::COMPUTE,
-                            kind: BindableKind::StorageTexture {
-                                dimension,
-                                format,
-                                access,
+                    for access in [
+                        StorageAccess::ReadOnly,
+                        StorageAccess::WriteOnly,
+                        StorageAccess::ReadWrite,
+                    ] {
+                        facts.record_binding_support(
+                            BindingSupportKey {
+                                visibility,
+                                kind: BindableKind::StorageTexture {
+                                    dimension,
+                                    format,
+                                    access,
+                                },
+                                array: false,
+                                runtime_sized: false,
+                                dynamic_offset: false,
                             },
-                            array: false,
-                            dynamic_offset: false,
-                        },
-                        BindingSupport::Supported,
-                    );
+                            BindingSupport::Supported,
+                        );
+                    }
                 }
             }
         }
@@ -143,7 +180,7 @@ pub(super) fn probe(
         // reported the matching optimal-tiling transfer feature.  The command
         // spine has real `vkCmdCopy*` lowering for this subset; resolve and
         // blit deliberately remain absent until their own conformance slices.
-        let texel_limits = Some(TexelCopyLayoutLimits::new(4, 4));
+        let texel_limits = Some(TexelCopyLayoutLimits::new(4, 4).with_image_layout(1, false));
         for dimension in [
             TextureDimension::D1,
             TextureDimension::D2,
@@ -274,6 +311,107 @@ pub(super) fn probe(
 
 fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabilityLimits) {
     facts.record_feature(OptionalFeature::Compute);
+    // `firstInstance` is GPU-provided indirect data, so it cannot be checked
+    // by portable recording. Do not publish even one raster indirect draw
+    // unless the native feature guarantees that field is honored.
+    if limits.draw_indirect_first_instance {
+        facts.record_feature(OptionalFeature::IndirectFirstInstance);
+        facts.record_feature(OptionalFeature::IndirectDraw);
+    }
+    // Multi-draw has its own physical feature bit. It still requires the
+    // first-instance guarantee because the portable indirect command contains
+    // that GPU-owned field and `IndirectDraw` is not a lossy subset.
+    if limits.draw_indirect_first_instance && limits.multi_draw_indirect {
+        facts.record_feature(OptionalFeature::MultiDrawIndirect);
+        if limits.draw_indirect_count {
+            facts.record_feature(OptionalFeature::MultiDrawIndirectCount);
+        }
+    }
+    // vkCmdDispatchIndirect is core and has no analogous optional feature bit.
+    facts.record_feature(OptionalFeature::IndirectDispatch);
+    if limits.max_push_constants_size != 0 {
+        facts.record_feature(OptionalFeature::Immediates);
+        facts.record_limit(
+            LimitKey::MaxImmediateSize,
+            u64::from(limits.max_push_constants_size),
+        );
+        // Vulkan push-constant offset and size are always multiples of four.
+        facts.record_limit(LimitKey::ImmediateDataAlignment, 4);
+    }
+    facts.record_feature(OptionalFeature::ClearBuffer);
+    facts.record_feature(OptionalFeature::ClearTexture);
+    // VkPipelineCache is core Vulkan. The backend owns the native cache,
+    // validates serialized bytes against pipelineCacheUUID/device metadata,
+    // and passes it to both compute and graphics creation paths.
+    facts.record_feature(OptionalFeature::PipelineCache);
+    facts.record_feature(OptionalFeature::PipelineCacheSerialization);
+    // MAP_* primary buffers are allocated from a compatible HOST_VISIBLE
+    // memory type by resource::buffer. Non-coherent allocations use explicit
+    // whole-allocation flush/invalidate, so coherence is intentionally not a
+    // blanket fact. Mapping maps from allocation offset zero then slices the
+    // portable range, making byte-granular map ranges safe.
+    facts.record_feature(OptionalFeature::MappablePrimaryBuffers);
+    facts.record_limit(LimitKey::MapAlignment, 1);
+    // Query pools and result copies are Vulkan core. Query-pool creation can
+    // still report OOM, but has no device feature bit beyond the exact
+    // pipeline-statistics feature handled below.
+    facts.record_feature(OptionalFeature::OcclusionQuery);
+    facts.record_feature(OptionalFeature::QueryResolve);
+    facts.record_limit(LimitKey::MaxQueriesPerQuerySet, u64::from(u32::MAX));
+    facts.record_limit(LimitKey::QueryResolveBufferAlignment, 8);
+    if limits.timestamp_compute_and_graphics && limits.timestamp_valid_bits != 0 {
+        if let Some(timestamp) = TimestampQueryCapabilities::new(
+            f64::from(limits.timestamp_period),
+            (limits.timestamp_valid_bits < 64).then_some(limits.timestamp_valid_bits as u8),
+            false,
+        ) {
+            facts.record_feature(OptionalFeature::TimestampQuery);
+            facts.record_feature(OptionalFeature::TimestampInsideEncoder);
+            // A compute scope is not a Vulkan render pass, so legacy
+            // vkCmdWriteTimestamp is valid there. Raster scopes use legacy
+            // render passes and deliberately do not publish the raster form.
+            facts.record_feature(OptionalFeature::TimestampInsideComputeScope);
+            facts.record_timestamp_queries(timestamp);
+        }
+    }
+    if limits.pipeline_statistics_query {
+        facts.record_feature(OptionalFeature::PipelineStatisticsQuery);
+        facts.record_pipeline_statistics(PipelineStatistics::ALL);
+    }
+    // Fixed-size descriptor arrays are core Vulkan descriptor-set semantics
+    // and the descriptor writer emits all elements atomically. Runtime-sized
+    // arrays, partial binding and descriptor indexing are intentionally not
+    // implied by this feature and stay unavailable without VK_EXT_descriptor_indexing.
+    facts.record_feature(OptionalFeature::BindingArrays);
+    facts.record_limit(
+        LimitKey::MaxBindingArrayElementsPerShaderStage,
+        u64::from(
+            limits
+                .max_per_stage_uniform_buffers
+                .min(limits.max_per_stage_storage_buffers)
+                .min(limits.max_per_stage_sampled_images)
+                .min(limits.max_per_stage_storage_images)
+                .min(limits.max_per_stage_samplers),
+        ),
+    );
+    // These are Vulkan core sampler and blend semantics. Feature-gated raster
+    // extensions (depth clamp, non-fill modes, conservative raster) are not
+    // advertised here until logical-device feature negotiation enables them.
+    facts.record_feature(OptionalFeature::ComparisonSamplers);
+    facts.record_feature(OptionalFeature::SamplerClampToBorder);
+    if limits.depth_bias_clamp {
+        facts.record_feature(OptionalFeature::DepthBiasClamp);
+    }
+    if limits.dual_src_blend {
+        facts.record_feature(OptionalFeature::DualSourceBlending);
+    }
+    if limits.independent_blend {
+        facts.record_feature(OptionalFeature::IndependentBlend);
+    }
+    if let Some(max_anisotropy) = limits.max_sampler_anisotropy.filter(|max| *max > 1) {
+        facts.record_feature(OptionalFeature::SamplerAnisotropy);
+        facts.record_limit(LimitKey::MaxSamplerAnisotropy, u64::from(max_anisotropy));
+    }
     facts.record_limit(
         LimitKey::MaxBindGroups,
         u64::from(limits.max_bound_descriptor_sets),
@@ -347,105 +485,116 @@ fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabi
         LimitKey::MaxInterStageShaderVariables,
         u64::from(limits.max_inter_stage_variables),
     );
-    facts.record_binding_limit(
+    for stage in [
+        ShaderStage::Vertex,
+        ShaderStage::Fragment,
         ShaderStage::Compute,
-        BindingLimitClass::UniformBuffers,
-        limits.max_per_stage_uniform_buffers,
-    );
-    facts.record_binding_limit(
-        ShaderStage::Compute,
-        BindingLimitClass::StorageBuffers,
-        limits.max_per_stage_storage_buffers,
-    );
-    facts.record_binding_limit(
-        ShaderStage::Compute,
-        BindingLimitClass::SampledTextures,
-        limits.max_per_stage_sampled_images,
-    );
-    facts.record_binding_limit(
-        ShaderStage::Compute,
-        BindingLimitClass::StorageTextures,
-        limits.max_per_stage_storage_images,
-    );
-    facts.record_binding_limit(
-        ShaderStage::Compute,
-        BindingLimitClass::Samplers,
-        limits.max_per_stage_samplers,
-    );
-    // Fixed descriptor arrays are implemented by the descriptor writer, but
-    // remain unadvertised until a native conformance case closes that route.
-    // Capability publication follows proven lowering, not Vulkan's theoretical
-    // descriptor-set vocabulary.
-    for array in [false] {
-        facts.record_binding_support(
-            BindingSupportKey {
-                visibility: ShaderStages::COMPUTE,
-                kind: BindableKind::UniformBuffer,
-                array,
-                dynamic_offset: false,
-            },
-            BindingSupport::Supported,
+    ] {
+        facts.record_binding_limit(
+            stage,
+            BindingLimitClass::UniformBuffers,
+            limits.max_per_stage_uniform_buffers,
         );
-        for access in [
-            BufferBindingAccess::ReadOnly,
-            BufferBindingAccess::ReadWrite,
-        ] {
+        facts.record_binding_limit(
+            stage,
+            BindingLimitClass::StorageBuffers,
+            limits.max_per_stage_storage_buffers,
+        );
+        facts.record_binding_limit(
+            stage,
+            BindingLimitClass::SampledTextures,
+            limits.max_per_stage_sampled_images,
+        );
+        facts.record_binding_limit(
+            stage,
+            BindingLimitClass::StorageTextures,
+            limits.max_per_stage_storage_images,
+        );
+        facts.record_binding_limit(
+            stage,
+            BindingLimitClass::Samplers,
+            limits.max_per_stage_samplers,
+        );
+    }
+    // Both scalar and fixed-size packets lower to core Vulkan descriptor sets.
+    // Runtime-sized arrays remain absent: their declared count is not known at
+    // VkDescriptorSetLayout creation without descriptor-indexing semantics.
+    for visibility in crate::api::capability::visibilities() {
+        for array in [false, true] {
             facts.record_binding_support(
                 BindingSupportKey {
-                    visibility: ShaderStages::COMPUTE,
-                    kind: BindableKind::StorageBuffer { access },
+                    visibility,
+                    kind: BindableKind::UniformBuffer,
                     array,
+                    runtime_sized: false,
                     dynamic_offset: false,
                 },
                 BindingSupport::Supported,
             );
-        }
-
-        for dimension in [
-            TextureViewDimension::D1,
-            TextureViewDimension::D2,
-            TextureViewDimension::D2Array,
-            TextureViewDimension::Cube,
-            TextureViewDimension::CubeArray,
-            TextureViewDimension::D3,
-        ] {
-            for sample_type in [
-                TextureSampleType::Float,
-                TextureSampleType::UnfilterableFloat,
-                TextureSampleType::Sint,
-                TextureSampleType::Uint,
-                TextureSampleType::Depth,
+            for access in [
+                BufferBindingAccess::ReadOnly,
+                BufferBindingAccess::ReadWrite,
             ] {
                 facts.record_binding_support(
                     BindingSupportKey {
-                        visibility: ShaderStages::COMPUTE,
-                        kind: BindableKind::SampledTexture {
-                            dimension,
-                            sample_type,
-                            multisampled: false,
-                        },
+                        visibility,
+                        kind: BindableKind::StorageBuffer { access },
                         array,
+                        runtime_sized: false,
                         dynamic_offset: false,
                     },
                     BindingSupport::Supported,
                 );
             }
-        }
 
-        for kind in [
-            SamplerKind::Filtering,
-            SamplerKind::NonFiltering,
-            SamplerKind::Comparison,
-        ] {
-            facts.record_binding_support(
-                BindingSupportKey {
-                    visibility: ShaderStages::COMPUTE,
-                    kind: BindableKind::Sampler { kind },
-                    array,
-                    dynamic_offset: false,
-                },
-                BindingSupport::Supported,
-            );
+            for dimension in [
+                TextureViewDimension::D1,
+                TextureViewDimension::D2,
+                TextureViewDimension::D2Array,
+                TextureViewDimension::Cube,
+                TextureViewDimension::CubeArray,
+                TextureViewDimension::D3,
+            ] {
+                for sample_type in [
+                    TextureSampleType::Float,
+                    TextureSampleType::UnfilterableFloat,
+                    TextureSampleType::Sint,
+                    TextureSampleType::Uint,
+                    TextureSampleType::Depth,
+                ] {
+                    facts.record_binding_support(
+                        BindingSupportKey {
+                            visibility,
+                            kind: BindableKind::SampledTexture {
+                                dimension,
+                                sample_type,
+                                multisampled: false,
+                            },
+                            array,
+                            runtime_sized: false,
+                            dynamic_offset: false,
+                        },
+                        BindingSupport::Supported,
+                    );
+                }
+            }
+
+            for kind in [
+                SamplerKind::Filtering,
+                SamplerKind::NonFiltering,
+                SamplerKind::Comparison,
+            ] {
+                facts.record_binding_support(
+                    BindingSupportKey {
+                        visibility,
+                        kind: BindableKind::Sampler { kind },
+                        array,
+                        runtime_sized: false,
+                        dynamic_offset: false,
+                    },
+                    BindingSupport::Supported,
+                );
+            }
         }
     }
 }

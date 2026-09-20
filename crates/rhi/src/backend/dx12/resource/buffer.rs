@@ -38,19 +38,23 @@
 //! candidate and quietly relax the contract the caller stated.
 
 use std::any::Any;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll};
 
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE,
     D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD,
-    D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
+    D3D12_MEMORY_POOL_UNKNOWN, D3D12_RANGE, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
     D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_FLAGS,
     D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ,
     D3D12_RESOURCE_STATES, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, ID3D12Device, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC};
 
-use crate::api::resource::backend::BufferBackend;
+use crate::api::error::{RhiError, RhiResult};
+use crate::api::resource::backend::{BufferBackend, MappedBufferBackend, MappingRequestBackend};
 use crate::api::resource::buffer::{BufferDescriptor, BufferUsage, ResourceMemoryPreference};
+use crate::api::resource::{BufferRange, MapMode};
 
 use crate::backend::dx12::ffi;
 
@@ -82,6 +86,22 @@ pub(crate) struct Dx12Buffer {
     /// padding absorbs that DX12 representation detail without changing the
     /// public buffer size or relaxing raw-view range semantics.
     allocation_size: u64,
+    /// Host heap resources have fixed native states and must never be passed to
+    /// the ordinary COMMON-state transition path.
+    heap: Dx12BufferHeap,
+    /// Last serial whose command list was accepted by the native queue. Mapping
+    /// waits for this rather than assuming Map implies GPU idleness.
+    last_accepted: AtomicU64,
+}
+
+/// The three D3D12 heap/state contracts this backend can assign a portable
+/// buffer.  This is not public placement policy: map usage, rather than a
+/// caller-selected heap, is what chooses a host-visible allocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Dx12BufferHeap {
+    Default,
+    Upload,
+    Readback,
 }
 
 impl Dx12Buffer {
@@ -115,6 +135,27 @@ impl Dx12Buffer {
     pub(crate) fn allocation_size(&self) -> u64 {
         self.allocation_size
     }
+
+    /// The immutable state required by a host-visible heap, if any.
+    pub(crate) fn fixed_state(self: &Self) -> Option<D3D12_RESOURCE_STATES> {
+        match self.heap {
+            Dx12BufferHeap::Default => None,
+            Dx12BufferHeap::Upload => Some(D3D12_RESOURCE_STATE_GENERIC_READ),
+            Dx12BufferHeap::Readback => Some(D3D12_RESOURCE_STATE_COPY_DEST),
+        }
+    }
+
+    pub(crate) fn last_accepted(&self) -> u64 {
+        self.last_accepted.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_accepted(&self, serial: u64) {
+        self.last_accepted.fetch_max(serial, Ordering::Release);
+    }
+
+    pub(crate) fn mapping_parts(&self) -> (ID3D12Resource, Dx12BufferHeap) {
+        (self.resource.clone(), self.heap)
+    }
 }
 
 impl BufferBackend for Dx12Buffer {
@@ -139,7 +180,7 @@ pub(crate) fn create_buffer(
 ) -> Result<Dx12Buffer, ffi::NativeError> {
     let allocation_size = native_allocation_size(descriptor);
     let heap = D3D12_HEAP_PROPERTIES {
-        Type: heap_type(descriptor.memory),
+        Type: primary_heap(descriptor),
         CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
         MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
         // One node, visible to one node. Direct3D 12's linked-node adapters are a
@@ -183,7 +224,7 @@ pub(crate) fn create_buffer(
                 &heap,
                 D3D12_HEAP_FLAG_NONE,
                 &native,
-                D3D12_RESOURCE_STATE_COMMON,
+                primary_initial_state(descriptor),
                 None,
                 &mut resource,
             )
@@ -206,6 +247,8 @@ pub(crate) fn create_buffer(
         resource,
         size: descriptor.size,
         allocation_size,
+        heap: primary_heap_kind(descriptor),
+        last_accepted: AtomicU64::new(0),
     })
 }
 
@@ -335,7 +378,148 @@ pub(crate) fn create_staging(
         resource,
         size,
         allocation_size: size,
+        heap: match heap {
+            StagingHeap::Upload => Dx12BufferHeap::Upload,
+            StagingHeap::Readback => Dx12BufferHeap::Readback,
+        },
+        last_accepted: AtomicU64::new(0),
     })
+}
+
+/// Starts a mapping request for a buffer allocated in its matching host heap.
+/// D3D12 `Map` is synchronous for UPLOAD/READBACK resources; the portable
+/// future remains asynchronous because other backends may need a fence wait.
+pub(crate) fn map_buffer(
+    buffer: &Dx12Buffer,
+    mode: MapMode,
+    range: BufferRange,
+) -> Result<Box<dyn MappingRequestBackend>, ffi::NativeError> {
+    let expected = match mode {
+        MapMode::Read => Dx12BufferHeap::Readback,
+        MapMode::Write => Dx12BufferHeap::Upload,
+    };
+    if buffer.heap != expected {
+        return Err(ffi::NativeError::driver_contract_violation(
+            "mapping mode does not match the buffer's DX12 host heap",
+            "Dx12Device::map_buffer",
+        ));
+    }
+    map_resource(buffer.resource.clone(), buffer.heap, mode, range).map(|lease| {
+        Box::new(Dx12MappingRequest { lease: Some(lease) }) as Box<dyn MappingRequestBackend>
+    })
+}
+
+/// Acquires a ready native mapping lease over a retained host-heap resource.
+/// The spine calls this only after its shared fence bridge has observed the
+/// buffer's last accepted serial complete.
+pub(crate) fn map_resource(
+    resource: ID3D12Resource,
+    heap: Dx12BufferHeap,
+    mode: MapMode,
+    range: BufferRange,
+) -> Result<Box<dyn MappedBufferBackend>, ffi::NativeError> {
+    let expected = match mode {
+        MapMode::Read => Dx12BufferHeap::Readback,
+        MapMode::Write => Dx12BufferHeap::Upload,
+    };
+    if heap != expected {
+        return Err(ffi::NativeError::driver_contract_violation(
+            "mapping mode does not match the buffer's DX12 host heap",
+            "Dx12Device::map_buffer",
+        ));
+    }
+    let native_range = D3D12_RANGE {
+        Begin: range.offset as usize,
+        End: (range.offset + range.size) as usize,
+    };
+    let mut pointer = std::ptr::null_mut();
+    // A read mapping supplies the bytes the CPU will inspect; an upload mapping
+    // supplies null because the CPU will only write.  Both ranges were checked
+    // by the portable API before this backend seam.
+    unsafe {
+        resource
+            .Map(
+                0,
+                if matches!(mode, MapMode::Read) {
+                    Some(&native_range)
+                } else {
+                    None
+                },
+                Some(&mut pointer),
+            )
+            .map_err(|error| ffi::NativeError::new(&error, "ID3D12Resource::Map"))?;
+    }
+    let pointer = std::ptr::NonNull::new(pointer.cast::<u8>()).ok_or_else(|| {
+        ffi::NativeError::driver_contract_violation(
+            "ID3D12Resource::Map succeeded without a pointer",
+            "Dx12Device::map_buffer",
+        )
+    })?;
+    // The resource owns the mapping and is cloned into the RAII lease. Pointer
+    // arithmetic is bounded by the validated logical range, never allocation
+    // padding.
+    let pointer = unsafe { pointer.as_ptr().add(range.offset as usize) };
+    Ok(Box::new(Dx12MappedBuffer {
+        resource,
+        pointer,
+        length: range.size as usize,
+        writable: matches!(mode, MapMode::Write),
+    }))
+}
+
+struct Dx12MappingRequest {
+    lease: Option<Box<dyn MappedBufferBackend>>,
+}
+
+impl MappingRequestBackend for Dx12MappingRequest {
+    fn poll(
+        &mut self,
+        _context: &mut Context<'_>,
+    ) -> Poll<RhiResult<Box<dyn MappedBufferBackend>>> {
+        match self.lease.take() {
+            Some(lease) => Poll::Ready(Ok(lease)),
+            None => Poll::Ready(Err(RhiError::new(
+                crate::api::RhiErrorKind::InvalidUsage,
+                "a DX12 mapping request was polled after producing its lease",
+            ))),
+        }
+    }
+}
+
+/// One mapped D3D12 allocation. Its `Drop` is the matching native `Unmap`.
+struct Dx12MappedBuffer {
+    resource: ID3D12Resource,
+    pointer: *mut u8,
+    length: usize,
+    writable: bool,
+}
+
+impl MappedBufferBackend for Dx12MappedBuffer {
+    fn bytes(&self) -> &[u8] {
+        // The mapping remains active until this lease drops; `length` came from
+        // portable validated bounds and the pointer is offset within it.
+        unsafe { std::slice::from_raw_parts(self.pointer, self.length) }
+    }
+
+    fn bytes_mut(&mut self) -> Option<&mut [u8]> {
+        self.writable
+            .then(|| unsafe { std::slice::from_raw_parts_mut(self.pointer, self.length) })
+    }
+
+    fn flush(&mut self) -> RhiResult<()> {
+        Ok(())
+    }
+    fn invalidate(&mut self) -> RhiResult<()> {
+        Ok(())
+    }
+}
+
+impl Drop for Dx12MappedBuffer {
+    fn drop(&mut self) {
+        // UPLOAD/READBACK heaps are CPU-coherent. A null written range is legal
+        // and conservative; it avoids fabricating cache-management semantics.
+        unsafe { self.resource.Unmap(0, None) };
+    }
 }
 
 /// Returns the backing width a portable buffer needs on DX12.
@@ -358,7 +542,35 @@ fn native_allocation_size(descriptor: &BufferDescriptor) -> u64 {
         .unwrap_or(descriptor.size)
 }
 
-/// The heap type `preference` lowers onto.
+/// The native heap a primary buffer needs. Map usage is an explicit correctness
+/// contract and wins over the otherwise advisory memory preference.
+fn primary_heap(descriptor: &BufferDescriptor) -> D3D12_HEAP_TYPE {
+    match primary_heap_kind(descriptor) {
+        Dx12BufferHeap::Default => heap_type(descriptor.memory),
+        Dx12BufferHeap::Upload => D3D12_HEAP_TYPE_UPLOAD,
+        Dx12BufferHeap::Readback => D3D12_HEAP_TYPE_READBACK,
+    }
+}
+
+fn primary_heap_kind(descriptor: &BufferDescriptor) -> Dx12BufferHeap {
+    if descriptor.usage.contains(BufferUsage::MAP_READ) {
+        Dx12BufferHeap::Readback
+    } else if descriptor.usage.contains(BufferUsage::MAP_WRITE) {
+        Dx12BufferHeap::Upload
+    } else {
+        Dx12BufferHeap::Default
+    }
+}
+
+fn primary_initial_state(descriptor: &BufferDescriptor) -> D3D12_RESOURCE_STATES {
+    match primary_heap_kind(descriptor) {
+        Dx12BufferHeap::Default => D3D12_RESOURCE_STATE_COMMON,
+        Dx12BufferHeap::Upload => D3D12_RESOURCE_STATE_GENERIC_READ,
+        Dx12BufferHeap::Readback => D3D12_RESOURCE_STATE_COPY_DEST,
+    }
+}
+
+/// The heap type a non-mappable allocation's preference lowers onto.
 ///
 /// One answer for both variants, and the module documentation states why: the
 /// variants differ in *where on the device* the caller would like the memory, and

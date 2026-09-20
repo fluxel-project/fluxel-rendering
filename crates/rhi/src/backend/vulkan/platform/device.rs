@@ -1,7 +1,10 @@
 //! The owned Vulkan execution domain for the platform slice.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::task::Waker;
 
 use ash::vk;
@@ -28,6 +31,11 @@ struct Liveness {
     status: DeviceStatus,
     info: Option<DeviceLossInfo>,
     completion_waiters: BTreeMap<u64, Vec<Waker>>,
+    // Mapping waits have an explicit registration identity because dropping a
+    // map future must not retain its executor waker until unrelated GPU work
+    // eventually completes. Completion futures use their own public lifetime
+    // model; this registry only represents backend mapping requests.
+    mapping_waiters: BTreeMap<u64, BTreeMap<u64, Waker>>,
     pending_readbacks: Vec<ReadbackTicket>,
     // One replaceable entry per pending backend operation. Unlike a Vec this
     // cannot retain every executor task that ever polled an acquire future.
@@ -78,7 +86,14 @@ pub(crate) struct VulkanShared {
     /// Required to align flush/invalidate ranges for host-visible memory that
     /// does not advertise HOST_COHERENT.
     pub(crate) non_coherent_atom_size: vk::DeviceSize,
+    /// Loaded only after enabling VK_KHR_draw_indirect_count. The public
+    /// backend keeps a 1.0 instance baseline, so this extension loader is the
+    /// authoritative route even on drivers that also promote it in Vulkan 1.2.
+    pub(crate) draw_indirect_count: Option<ash::khr::draw_indirect_count::Device>,
+    pub(crate) max_draw_indirect_count: u32,
     liveness: Mutex<Liveness>,
+    completed_serial: AtomicU64,
+    next_mapping_waiter: AtomicU64,
     #[cfg(any(windows, target_os = "android"))]
     presentation_retirements:
         Mutex<Vec<crate::backend::vulkan::presentation::VulkanSwapchainRetirement>>,
@@ -95,6 +110,8 @@ impl VulkanDevice {
         physical_device: vk::PhysicalDevice,
         memory_properties: vk::PhysicalDeviceMemoryProperties,
         non_coherent_atom_size: vk::DeviceSize,
+        draw_indirect_count: Option<ash::khr::draw_indirect_count::Device>,
+        max_draw_indirect_count: u32,
         facts: CapabilityFacts,
         submission: SubmissionCapabilities,
         presentation_enabled: bool,
@@ -111,13 +128,18 @@ impl VulkanDevice {
             physical_device,
             memory_properties,
             non_coherent_atom_size,
+            draw_indirect_count,
+            max_draw_indirect_count,
             liveness: Mutex::new(Liveness {
                 status: DeviceStatus::Active,
                 info: None,
                 completion_waiters: BTreeMap::new(),
+                mapping_waiters: BTreeMap::new(),
                 pending_readbacks: Vec::new(),
                 loss_waiters: BTreeMap::new(),
             }),
+            completed_serial: AtomicU64::new(0),
+            next_mapping_waiter: AtomicU64::new(1),
             #[cfg(any(windows, target_os = "android"))]
             presentation_retirements: Mutex::new(Vec::new()),
         });
@@ -170,6 +192,23 @@ impl VulkanDevice {
 }
 
 impl VulkanShared {
+    /// Builds a stable-in-practice cache compatibility key from Vulkan's
+    /// pipeline-cache UUID plus the driver/device tuple. The UUID is the
+    /// native cache contract; the surrounding fields prevent accidental reuse
+    /// when a driver exposes an unusual UUID policy.
+    pub(crate) fn pipeline_cache_validation_key(
+        &self,
+    ) -> crate::api::pipeline::PipelineCacheValidationKey {
+        let properties = self._instance.physical_properties(self.physical_device);
+        let mut bytes = [0_u8; 32];
+        bytes[..16].copy_from_slice(&properties.pipeline_cache_uuid);
+        bytes[16..20].copy_from_slice(&properties.vendor_id.to_le_bytes());
+        bytes[20..24].copy_from_slice(&properties.device_id.to_le_bytes());
+        bytes[24..28].copy_from_slice(&properties.driver_version.to_le_bytes());
+        bytes[28..32].copy_from_slice(&properties.api_version.to_le_bytes());
+        crate::api::pipeline::PipelineCacheValidationKey::from_bytes(bytes)
+    }
+
     fn liveness(&self) -> std::sync::MutexGuard<'_, Liveness> {
         self.liveness
             .lock()
@@ -187,7 +226,7 @@ impl VulkanShared {
     /// this authority, so no pending future depends on which API call happened
     /// to discover loss first.
     pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
-        let (waiters, readbacks, loss_waiters) = {
+        let (waiters, mapping_waiters, readbacks, loss_waiters) = {
             let mut state = self.liveness();
             if matches!(state.status, DeviceStatus::Lost) {
                 return;
@@ -196,12 +235,18 @@ impl VulkanShared {
             state.info = Some(info);
             (
                 std::mem::take(&mut state.completion_waiters),
+                std::mem::take(&mut state.mapping_waiters),
                 std::mem::take(&mut state.pending_readbacks),
                 std::mem::take(&mut state.loss_waiters),
             )
         };
         for (_, waiters) in waiters {
             for waker in waiters {
+                waker.wake();
+            }
+        }
+        for (_, waiters) in mapping_waiters {
+            for (_, waker) in waiters {
                 waker.wake();
             }
         }
@@ -268,12 +313,75 @@ impl VulkanShared {
     }
 
     pub(crate) fn wake_completion(&self, serial: u64) {
-        let waiters = self.liveness().completion_waiters.remove(&serial);
+        let (waiters, mapping_waiters) = {
+            let mut state = self.liveness();
+            (
+                state.completion_waiters.remove(&serial),
+                state.mapping_waiters.remove(&serial),
+            )
+        };
         if let Some(waiters) = waiters {
             for waker in waiters {
                 waker.wake();
             }
         }
+        if let Some(waiters) = mapping_waiters {
+            for (_, waker) in waiters {
+                waker.wake();
+            }
+        }
+    }
+
+    /// Waits for the shared fence frontier without taking ownership of a
+    /// command-spine object. Buffer-map requests use this to wait for their
+    /// recorded last accepted use before exposing host memory.
+    pub(crate) fn map_completion(
+        &self,
+        serial: u64,
+        slot: u64,
+        waker: &Waker,
+    ) -> Result<bool, DeviceLossInfo> {
+        if self.completed_serial.load(Ordering::Acquire) >= serial {
+            return Ok(true);
+        }
+        let mut state = self.liveness();
+        if let Some(info) = &state.info {
+            return Err(info.clone());
+        }
+        state
+            .mapping_waiters
+            .entry(serial)
+            .or_default()
+            .insert(slot, waker.clone());
+        drop(state);
+        Ok(self.completed_serial.load(Ordering::Acquire) >= serial)
+    }
+
+    /// Allocates an identity for one pending map request. The identity is only
+    /// used to cancel this request's completion-waker registration.
+    pub(crate) fn mapping_waiter_slot(&self) -> u64 {
+        self.next_mapping_waiter.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Removes a dropped or completed map request from the shared waiter
+    /// registry. This is idempotent so normal ready and Drop paths can both
+    /// call it without a state-machine race.
+    pub(crate) fn unregister_mapping_waiter(&self, serial: u64, slot: u64) {
+        let mut state = self.liveness();
+        let remove_serial = match state.mapping_waiters.get_mut(&serial) {
+            Some(waiters) => {
+                waiters.remove(&slot);
+                waiters.is_empty()
+            }
+            None => false,
+        };
+        if remove_serial {
+            state.mapping_waiters.remove(&serial);
+        }
+    }
+
+    pub(crate) fn advance_completed_serial(&self, serial: u64) {
+        self.completed_serial.fetch_max(serial, Ordering::Release);
     }
 
     /// Registers accepted readbacks with the device-wide loss authority. This
@@ -413,6 +521,31 @@ impl DeviceBackend for VulkanDevice {
             })
     }
 
+    fn map_buffer(
+        &self,
+        buffer: &crate::api::resource::Buffer,
+        mode: crate::api::resource::MapMode,
+        range: crate::api::resource::BufferRange,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::MappingRequestBackend>> {
+        let native = buffer
+            .native()
+            .as_any()
+            .downcast_ref::<resource::VulkanBuffer>()
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::BackendFailure,
+                    "Vulkan received a buffer without a Vulkan allocation",
+                )
+                .at("VulkanDevice::map_buffer")
+            })?;
+        resource::map_buffer(native, mode, range).map_err(|result| {
+            self.observe_failure(VulkanFailure::Native(ffi::NativeError::new(
+                result,
+                "VulkanDevice::map_buffer",
+            )))
+        })
+    }
+
     fn create_texture(
         &self,
         descriptor: &crate::api::resource::texture::TextureDescriptor,
@@ -466,6 +599,15 @@ impl DeviceBackend for VulkanDevice {
                     "VulkanDevice::create_sampler",
                 )))
             })
+    }
+
+    fn create_query_set(
+        &self,
+        descriptor: &crate::api::query::QuerySetDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::QuerySetBackend>> {
+        resource::create_query_set(self.shared.clone(), descriptor)
+            .map(|value| Box::new(value) as Box<dyn crate::api::resource::backend::QuerySetBackend>)
+            .map_err(|failure| self.observe_failure(failure))
     }
 
     fn create_shader(
@@ -522,10 +664,22 @@ impl DeviceBackend for VulkanDevice {
                 presentation as &dyn crate::api::presentation::backend::PresentationBackend
             })
         }
+
         #[cfg(not(any(windows, target_os = "android")))]
         {
             None
         }
+    }
+
+    fn create_pipeline_cache(
+        &self,
+        descriptor: &crate::api::pipeline::PipelineCacheDescriptor,
+    ) -> RhiResult<(
+        Box<dyn crate::api::pipeline::backend::PipelineCacheBackend>,
+        crate::api::pipeline::PipelineCacheValidationKey,
+    )> {
+        pipeline::create_pipeline_cache(Arc::clone(&self.shared), descriptor)
+            .map_err(|error| error.at("VulkanDevice::create_pipeline_cache"))
     }
 
     fn submit(

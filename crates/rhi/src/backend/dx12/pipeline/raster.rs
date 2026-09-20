@@ -10,6 +10,7 @@ use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::{FALSE, TRUE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::core::PCWSTR;
 
 use crate::api::format::TextureFormat;
 use crate::api::pipeline::backend::RasterPipelineBackend;
@@ -40,6 +41,9 @@ impl Dx12RasterPipeline {
     pub(crate) fn sampler_root_parameter(&self, group: u32) -> Option<u32> {
         self.root_signature.sampler_parameter(group)
     }
+    pub(crate) fn immediate_root_parameter(&self, offset: u32, size: u32) -> Option<(u32, u32)> {
+        self.root_signature.immediate_parameter(offset, size)
+    }
 }
 
 impl RasterPipelineBackend for Dx12RasterPipeline {
@@ -55,6 +59,7 @@ pub(crate) fn create_raster_pipeline(
     let root_signature = super::interface::build_root_signature(
         device,
         &descriptor.interface.descriptor().groups,
+        &descriptor.interface.descriptor().immediate_ranges,
         !descriptor.vertex_input.buffers.is_empty(),
     )?;
     let vertex = dxil(&descriptor.vertex, "vertex")?;
@@ -145,14 +150,71 @@ pub(crate) fn create_raster_pipeline(
         },
         ..Default::default()
     };
-    let state = unsafe { device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&description) };
+    let state: Result<ID3D12PipelineState, Dx12Failure> =
+        match super::cache::native_cache(descriptor.cache.as_ref())? {
+            Some(cache) => {
+                let name = super::cache::raster_name(descriptor);
+                let library = cache.library();
+                match unsafe {
+                    library.LoadGraphicsPipeline::<_, ID3D12PipelineState>(
+                        PCWSTR(name.as_ptr()),
+                        &description,
+                    )
+                } {
+                    Ok(state) => Ok(state),
+                    Err(error) => {
+                        // A name miss is ordinary cache behavior.  Device removal
+                        // observed by LoadGraphicsPipeline is not: preserve it for
+                        // the outer loss authority instead of accidentally masking
+                        // it with a later successful Create call.
+                        let failure = crate::backend::dx12::ffi::NativeError::new(
+                            &error,
+                            "ID3D12PipelineLibrary::LoadGraphicsPipeline",
+                        );
+                        if failure.failure().is_terminal() {
+                            Err(Dx12Failure::Native(failure))
+                        } else {
+                            (|| -> Result<ID3D12PipelineState, Dx12Failure> {
+                                let state = unsafe {
+                                    device.CreateGraphicsPipelineState::<ID3D12PipelineState>(
+                                        &description,
+                                    )
+                                }
+                                .map_err(|error| {
+                                    Dx12Failure::Native(
+                                        crate::backend::dx12::ffi::NativeError::new(
+                                            &error,
+                                            "Dx12Device::create_raster_pipeline",
+                                        ),
+                                    )
+                                })?;
+                                unsafe { library.StorePipeline(PCWSTR(name.as_ptr()), &state) }
+                                    .map_err(|error| {
+                                        Dx12Failure::Native(
+                                            crate::backend::dx12::ffi::NativeError::new(
+                                                &error,
+                                                "ID3D12PipelineLibrary::StorePipeline",
+                                            ),
+                                        )
+                                    })?;
+                                Ok(state)
+                            })()
+                        }
+                    }
+                }
+            }
+            None => {
+                unsafe { device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&description) }
+                    .map_err(|error| {
+                        Dx12Failure::Native(crate::backend::dx12::ffi::NativeError::new(
+                            &error,
+                            "Dx12Device::create_raster_pipeline",
+                        ))
+                    })
+            }
+        };
     unsafe { ManuallyDrop::drop(&mut description.pRootSignature) };
-    let state = state.map_err(|error| {
-        Dx12Failure::Native(crate::backend::dx12::ffi::NativeError::new(
-            &error,
-            "Dx12Device::create_raster_pipeline",
-        ))
-    })?;
+    let state = state?;
     Ok(Dx12RasterPipeline {
         root_signature,
         state,
@@ -209,6 +271,13 @@ fn hlsl_location_semantic_index(location: crate::api::shader::ShaderLocation) ->
 }
 fn vertex_format(value: VertexFormat) -> Result<DXGI_FORMAT, Dx12Failure> {
     Ok(match value {
+        VertexFormat::Uint8 => DXGI_FORMAT_R8_UINT,
+        VertexFormat::Uint8x2 => DXGI_FORMAT_R8G8_UINT,
+        VertexFormat::Uint8x4 => DXGI_FORMAT_R8G8B8A8_UINT,
+        VertexFormat::Sint8 => DXGI_FORMAT_R8_SINT,
+        VertexFormat::Sint8x2 => DXGI_FORMAT_R8G8_SINT,
+        VertexFormat::Sint8x4 => DXGI_FORMAT_R8G8B8A8_SINT,
+        VertexFormat::Unorm8 => DXGI_FORMAT_R8_UNORM,
         VertexFormat::Float32 => DXGI_FORMAT_R32_FLOAT,
         VertexFormat::Float32x2 => DXGI_FORMAT_R32G32_FLOAT,
         VertexFormat::Float32x3 => DXGI_FORMAT_R32G32B32_FLOAT,
@@ -223,23 +292,52 @@ fn vertex_format(value: VertexFormat) -> Result<DXGI_FORMAT, Dx12Failure> {
         VertexFormat::Sint32x4 => DXGI_FORMAT_R32G32B32A32_SINT,
         VertexFormat::Unorm8x2 => DXGI_FORMAT_R8G8_UNORM,
         VertexFormat::Unorm8x4 => DXGI_FORMAT_R8G8B8A8_UNORM,
+        VertexFormat::Unorm8x4Bgra => DXGI_FORMAT_B8G8R8A8_UNORM,
+        VertexFormat::Snorm8 => DXGI_FORMAT_R8_SNORM,
+        VertexFormat::Snorm8x2 => DXGI_FORMAT_R8G8_SNORM,
+        VertexFormat::Snorm8x4 => DXGI_FORMAT_R8G8B8A8_SNORM,
+        VertexFormat::Uint16 => DXGI_FORMAT_R16_UINT,
+        VertexFormat::Uint16x2 => DXGI_FORMAT_R16G16_UINT,
+        VertexFormat::Uint16x4 => DXGI_FORMAT_R16G16B16A16_UINT,
+        VertexFormat::Sint16 => DXGI_FORMAT_R16_SINT,
+        VertexFormat::Sint16x2 => DXGI_FORMAT_R16G16_SINT,
+        VertexFormat::Sint16x4 => DXGI_FORMAT_R16G16B16A16_SINT,
+        VertexFormat::Unorm16 => DXGI_FORMAT_R16_UNORM,
+        VertexFormat::Unorm16x2 => DXGI_FORMAT_R16G16_UNORM,
+        VertexFormat::Unorm16x4 => DXGI_FORMAT_R16G16B16A16_UNORM,
+        VertexFormat::Snorm16 => DXGI_FORMAT_R16_SNORM,
+        VertexFormat::Snorm16x2 => DXGI_FORMAT_R16G16_SNORM,
+        VertexFormat::Snorm16x4 => DXGI_FORMAT_R16G16B16A16_SNORM,
+        VertexFormat::Float16 => DXGI_FORMAT_R16_FLOAT,
+        VertexFormat::Float16x2 => DXGI_FORMAT_R16G16_FLOAT,
+        VertexFormat::Float16x4 => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        VertexFormat::Unorm10_10_10_2 => DXGI_FORMAT_R10G10B10A2_UNORM,
+        VertexFormat::Float64
+        | VertexFormat::Float64x2
+        | VertexFormat::Float64x3
+        | VertexFormat::Float64x4 => {
+            return Err(unsupported("64-bit vertex attributes"));
+        }
     })
 }
 fn texture_format(value: TextureFormat) -> Result<DXGI_FORMAT, Dx12Failure> {
-    Ok(match value {
-        TextureFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-        TextureFormat::Rgba8UnormSrgb => DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-        TextureFormat::Bgra8Unorm => DXGI_FORMAT_B8G8R8A8_UNORM,
-        TextureFormat::Bgra8UnormSrgb => DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
-        TextureFormat::Depth16Unorm => DXGI_FORMAT_D16_UNORM,
-        TextureFormat::Depth32Float => DXGI_FORMAT_D32_FLOAT,
-        TextureFormat::Depth32FloatStencil8 => DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
-        _ => return Err(unsupported("this texture format")),
-    })
+    // Pipeline creation must consume the same exact DXGI mapping that facts and
+    // resource creation used. Keeping a second hand-maintained subset here made
+    // a format appear attachment-capable in the capability snapshot and then
+    // fail only after shader validation had succeeded.
+    crate::backend::dx12::platform::facts::dxgi_format(value)
+        .ok_or_else(|| unsupported("a texture format without a DXGI representation"))
 }
 fn rasterizer_state(desc: &RasterPipelineDescriptor) -> D3D12_RASTERIZER_DESC {
     D3D12_RASTERIZER_DESC {
-        FillMode: D3D12_FILL_MODE_SOLID,
+        FillMode: match desc.primitive.polygon_mode {
+            crate::api::pipeline::PolygonMode::Fill => D3D12_FILL_MODE_SOLID,
+            crate::api::pipeline::PolygonMode::Line => D3D12_FILL_MODE_WIREFRAME,
+            // D3D12 has no point polygon mode. The public validator never lets
+            // this lowering run unless a future DX12 capability port can prove
+            // a native equivalent.
+            crate::api::pipeline::PolygonMode::Point => D3D12_FILL_MODE_SOLID,
+        },
         CullMode: match desc.primitive.cull_mode {
             crate::api::pipeline::CullMode::None => D3D12_CULL_MODE_NONE,
             crate::api::pipeline::CullMode::Front => D3D12_CULL_MODE_FRONT,
@@ -254,9 +352,13 @@ fn rasterizer_state(desc: &RasterPipelineDescriptor) -> D3D12_RASTERIZER_DESC {
             FALSE
         },
         DepthBias: desc.primitive.depth_bias.map_or(0, |v| v.constant),
-        DepthBiasClamp: 0.0,
+        DepthBiasClamp: desc.primitive.depth_bias.map_or(0.0, |v| v.clamp),
         SlopeScaledDepthBias: desc.primitive.depth_bias.map_or(0.0, |v| v.slope_scale),
-        DepthClipEnable: TRUE,
+        DepthClipEnable: if desc.primitive.unclipped_depth {
+            FALSE
+        } else {
+            TRUE
+        },
         MultisampleEnable: if desc.multisample.count > 1 {
             TRUE
         } else {
@@ -264,7 +366,11 @@ fn rasterizer_state(desc: &RasterPipelineDescriptor) -> D3D12_RASTERIZER_DESC {
         },
         AntialiasedLineEnable: FALSE,
         ForcedSampleCount: 0,
-        ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+        ConservativeRaster: if desc.primitive.conservative {
+            D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON
+        } else {
+            D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF
+        },
     }
 }
 fn blend_state(desc: &RasterPipelineDescriptor) -> D3D12_BLEND_DESC {
@@ -341,6 +447,10 @@ fn blend_factor(value: crate::api::pipeline::BlendFactor) -> D3D12_BLEND {
         OneMinusSrc => D3D12_BLEND_INV_SRC_COLOR,
         SrcAlpha => D3D12_BLEND_SRC_ALPHA,
         OneMinusSrcAlpha => D3D12_BLEND_INV_SRC_ALPHA,
+        Src1 => D3D12_BLEND_SRC1_COLOR,
+        OneMinusSrc1 => D3D12_BLEND_INV_SRC1_COLOR,
+        Src1Alpha => D3D12_BLEND_SRC1_ALPHA,
+        OneMinusSrc1Alpha => D3D12_BLEND_INV_SRC1_ALPHA,
         Dst => D3D12_BLEND_DEST_COLOR,
         OneMinusDst => D3D12_BLEND_INV_DEST_COLOR,
         DstAlpha => D3D12_BLEND_DEST_ALPHA,

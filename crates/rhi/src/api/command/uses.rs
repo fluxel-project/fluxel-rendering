@@ -47,8 +47,10 @@ use crate::api::binding::{
 use crate::api::command::copy::BufferTextureCopy;
 use crate::api::command::record::{BoundGroup, CopyRecord};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::format::{block_extent, logical_bytes_per_block};
 use crate::api::pipeline::PipelineInterface;
 use crate::api::presentation::FrameAttachment;
+use crate::api::resource::AccelerationStructure;
 use crate::api::resource::buffer::{Buffer, BufferRange};
 use crate::api::resource::subresource::{
     TextureSubresourceLayers, TextureSubresourceRange, aspect_bits,
@@ -62,6 +64,11 @@ use crate::api::shader::ShaderStages;
 pub struct PipelineScope(u32);
 
 impl PipelineScope {
+    /// No programmable stage; used by fixed-function command paths.
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
     /// Vertex-stage access.
     pub const VERTEX: Self = Self(1 << 0);
     /// Fragment-stage access.
@@ -70,6 +77,8 @@ impl PipelineScope {
     pub const COMPUTE: Self = Self(1 << 2);
     /// Copy, upload, or readback access.
     pub const COPY: Self = Self(1 << 3);
+    /// Ray-tracing shader access.
+    pub const RAY_TRACING: Self = Self(1 << 4);
 
     /// Returns whether this scope contains every bit in `other`.
     pub fn contains(self, other: Self) -> bool {
@@ -92,6 +101,7 @@ impl core::fmt::Display for PipelineScope {
                 (Self::FRAGMENT.0, "FRAGMENT"),
                 (Self::COMPUTE.0, "COMPUTE"),
                 (Self::COPY.0, "COPY"),
+                (Self::RAY_TRACING.0, "RAY_TRACING"),
             ],
         )
     }
@@ -128,6 +138,16 @@ impl AccessMask {
     pub const COPY_READ: Self = Self(1 << 11);
     /// Copy-destination write access.
     pub const COPY_WRITE: Self = Self(1 << 12);
+    /// Indirect command arguments are read by fixed-function execution.
+    pub const INDIRECT_READ: Self = Self(1 << 13);
+    /// Query data is resolved into the buffer.
+    pub const QUERY_RESOLVE_WRITE: Self = Self(1 << 14);
+    /// Acceleration-structure build input read.
+    pub const ACCELERATION_STRUCTURE_BUILD_READ: Self = Self(1 << 15);
+    /// Acceleration-structure build or copy destination write.
+    pub const ACCELERATION_STRUCTURE_BUILD_WRITE: Self = Self(1 << 16);
+    /// Ray shader reads the hierarchy.
+    pub const RAY_TRACING_SHADER_DATA_READ: Self = Self(1 << 17);
 
     /// Returns whether this mask contains every bit in `other`.
     pub fn contains(self, other: Self) -> bool {
@@ -159,6 +179,20 @@ impl core::fmt::Display for AccessMask {
                 (Self::STENCIL_WRITE.0, "STENCIL_WRITE"),
                 (Self::COPY_READ.0, "COPY_READ"),
                 (Self::COPY_WRITE.0, "COPY_WRITE"),
+                (Self::INDIRECT_READ.0, "INDIRECT_READ"),
+                (Self::QUERY_RESOLVE_WRITE.0, "QUERY_RESOLVE_WRITE"),
+                (
+                    Self::ACCELERATION_STRUCTURE_BUILD_READ.0,
+                    "ACCELERATION_STRUCTURE_BUILD_READ",
+                ),
+                (
+                    Self::ACCELERATION_STRUCTURE_BUILD_WRITE.0,
+                    "ACCELERATION_STRUCTURE_BUILD_WRITE",
+                ),
+                (
+                    Self::RAY_TRACING_SHADER_DATA_READ.0,
+                    "RAY_TRACING_SHADER_DATA_READ",
+                ),
             ],
         )
     }
@@ -227,6 +261,17 @@ pub struct FrameAttachmentUse {
     pub access: AccessMask,
 }
 
+/// An acceleration structure touched by recorded work.
+#[derive(Clone)]
+pub struct AccelerationStructureUse {
+    /// Hierarchy object being read or written.
+    pub structure: AccelerationStructure,
+    /// Pipeline domains issuing the access.
+    pub stages: PipelineScope,
+    /// Memory access performed by the command.
+    pub access: AccessMask,
+}
+
 /// One resource actually touched by recorded work.
 ///
 /// This is the complete portable synchronization input for an individual
@@ -243,6 +288,8 @@ pub enum ResourceUse {
     Texture(TextureUse),
     /// An acquired-frame attachment access.
     Frame(FrameAttachmentUse),
+    /// Acceleration-structure access.
+    AccelerationStructure(AccelerationStructureUse),
 }
 
 fn write_bit_names(
@@ -358,6 +405,19 @@ pub(crate) fn pipeline_scope_of(stages: ShaderStages) -> Option<PipelineScope> {
         (PipelineScope::VERTEX, ShaderStages::VERTEX),
         (PipelineScope::FRAGMENT, ShaderStages::FRAGMENT),
         (PipelineScope::COMPUTE, ShaderStages::COMPUTE),
+        (
+            PipelineScope::VERTEX.union(PipelineScope::FRAGMENT),
+            ShaderStages::TASK,
+        ),
+        (
+            PipelineScope::VERTEX.union(PipelineScope::FRAGMENT),
+            ShaderStages::MESH,
+        ),
+        (PipelineScope::RAY_TRACING, ShaderStages::RAY_GENERATION),
+        (PipelineScope::RAY_TRACING, ShaderStages::MISS),
+        (PipelineScope::RAY_TRACING, ShaderStages::CLOSEST_HIT),
+        (PipelineScope::RAY_TRACING, ShaderStages::ANY_HIT),
+        (PipelineScope::RAY_TRACING, ShaderStages::INTERSECTION),
     ] {
         if stages.contains(mask) {
             scope = Some(match scope {
@@ -390,7 +450,8 @@ fn access_of_kind(kind: &BindingKind) -> Option<AccessMask> {
             StorageAccess::WriteOnly => AccessMask::SHADER_WRITE,
             StorageAccess::ReadWrite => AccessMask::SHADER_READ.union(AccessMask::SHADER_WRITE),
         }),
-        BindingKind::Sampler { .. } => None,
+        BindingKind::Sampler { .. } | BindingKind::ExternalTexture => None,
+        BindingKind::AccelerationStructure => Some(AccessMask::RAY_TRACING_SHADER_DATA_READ),
     }
 }
 
@@ -411,7 +472,9 @@ fn intent_of_kind(kind: &BindingKind) -> TextureUseIntent {
         BindingKind::StorageTexture { .. } => TextureUseIntent::ShaderReadWrite,
         BindingKind::UniformBuffer { .. }
         | BindingKind::StorageBuffer { .. }
-        | BindingKind::Sampler { .. } => TextureUseIntent::ShaderRead,
+        | BindingKind::Sampler { .. }
+        | BindingKind::AccelerationStructure
+        | BindingKind::ExternalTexture => TextureUseIntent::ShaderRead,
     }
 }
 
@@ -427,7 +490,9 @@ fn expects_buffer(kind: &BindingKind) -> bool {
         BindingKind::UniformBuffer { .. } | BindingKind::StorageBuffer { .. } => true,
         BindingKind::SampledTexture { .. }
         | BindingKind::StorageTexture { .. }
-        | BindingKind::Sampler { .. } => false,
+        | BindingKind::Sampler { .. }
+        | BindingKind::AccelerationStructure
+        | BindingKind::ExternalTexture => false,
     }
 }
 
@@ -504,6 +569,36 @@ pub(crate) fn bound_group_uses(group: &BindGroup) -> RhiResult<Vec<ResourceUse>>
             }
             BindingResource::Sampler(_) | BindingResource::SamplerArray(_) => {
                 return Err(mismatched(slot.slot.get()));
+            }
+            // An external texture has no portable memory-hazard record; its
+            // `ExternalTexture` binding kind exits above with `None`.  Reaching
+            // this arm therefore proves a malformed group bypassed validation.
+            BindingResource::ExternalTexture(_) => return Err(mismatched(slot.slot.get())),
+            BindingResource::AccelerationStructure(structure) => {
+                if !matches!(slot.kind, BindingKind::AccelerationStructure) {
+                    return Err(mismatched(slot.slot.get()));
+                }
+                uses.push(ResourceUse::AccelerationStructure(
+                    AccelerationStructureUse {
+                        structure: structure.clone(),
+                        stages,
+                        access,
+                    },
+                ));
+            }
+            BindingResource::AccelerationStructureArray(structures) => {
+                if !matches!(slot.kind, BindingKind::AccelerationStructure) {
+                    return Err(mismatched(slot.slot.get()));
+                }
+                for structure in structures {
+                    uses.push(ResourceUse::AccelerationStructure(
+                        AccelerationStructureUse {
+                            structure: structure.clone(),
+                            stages,
+                            access,
+                        },
+                    ));
+                }
             }
         }
     }
@@ -723,6 +818,29 @@ pub(crate) fn validate_bound_groups(
 /// intent is what a later check reads to tell them apart.
 pub(crate) fn copy_uses(copy: &CopyRecord) -> Vec<ResourceUse> {
     match copy {
+        CopyRecord::ClearBuffer { buffer, range } => vec![ResourceUse::Buffer(BufferUse {
+            buffer: buffer.clone(),
+            range: *range,
+            stages: PipelineScope::COPY,
+            access: AccessMask::COPY_WRITE,
+        })],
+        CopyRecord::ExternalImage(copy) => vec![texture_use(
+            &copy.destination,
+            subresource_of(&copy.destination_subresource),
+            PipelineScope::COPY,
+            AccessMask::COPY_WRITE,
+            TextureUseIntent::CopyDst,
+        )],
+        CopyRecord::ClearTexture {
+            texture,
+            subresources,
+        } => vec![ResourceUse::Texture(TextureUse {
+            texture: texture.clone(),
+            subresources: *subresources,
+            stages: PipelineScope::COPY,
+            access: AccessMask::COPY_WRITE,
+            intent: TextureUseIntent::CopyDst,
+        })],
         CopyRecord::Buffer(copy) => vec![
             buffer_use(
                 &copy.src,
@@ -842,11 +960,11 @@ fn subresource_of(layers: &TextureSubresourceLayers) -> TextureSubresourceRange 
 
 /// How many bytes of the buffer side a buffer-image copy addresses.
 ///
-/// Section 34.2's footprint: one image is `bytes_per_row` by `rows_per_image`,
-/// and a copy carries as many images as it has array layers — or, for a 3D
-/// texture, as many as its Z extent, because section 34.2 addresses 3D slices
-/// through `origin`/`extent` rather than as array subresources. The distinction is
-/// why the dimension is read rather than assumed.
+/// Section 34.2's exact footprint through the last copied block. Image and row
+/// pitches separate starts; padding after the final row is not part of the use.
+/// Validation has already rejected an overflowing or out-of-bounds footprint.
+/// The checked fallback conservatively covers the rest of the buffer if that
+/// invariant is ever broken, so hazard metadata can never wrap to a small range.
 fn texel_copy_span(copy: &BufferTextureCopy) -> u64 {
     let images = match copy.texture.descriptor().dimension {
         TextureDimension::D3 => u64::from(copy.extent.depth),
@@ -854,5 +972,38 @@ fn texel_copy_span(copy: &BufferTextureCopy) -> u64 {
             u64::from(copy.texture_subresource.layer_count)
         }
     };
-    u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image) * images
+    let format = copy.texture.descriptor().format;
+    let bytes_per_row = u64::from(copy.bytes_per_row);
+    let rows_per_image = u64::from(copy.rows_per_image);
+    let exact = match logical_bytes_per_block(format) {
+        Some(block_bytes) => {
+            let (block_width, block_height) = block_extent(format);
+            let block_columns = u64::from(copy.extent.width.div_ceil(block_width));
+            let block_rows = u64::from(copy.extent.height.div_ceil(block_height));
+            images
+                .checked_sub(1)
+                .and_then(|value| value.checked_mul(rows_per_image))
+                .and_then(|rows| rows.checked_mul(bytes_per_row))
+                .and_then(|bytes| {
+                    block_rows
+                        .checked_sub(1)?
+                        .checked_mul(bytes_per_row)?
+                        .checked_add(bytes)
+                })
+                .and_then(|bytes| {
+                    block_columns
+                        .checked_mul(u64::from(block_bytes))?
+                        .checked_add(bytes)
+                })
+        }
+        None => bytes_per_row
+            .checked_mul(rows_per_image)
+            .and_then(|stride| stride.checked_mul(images)),
+    };
+    exact.unwrap_or_else(|| {
+        copy.buffer
+            .descriptor()
+            .size
+            .saturating_sub(copy.buffer_offset)
+    })
 }

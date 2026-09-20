@@ -35,6 +35,16 @@
 
 use std::any::Any;
 
+use crate::api::error::RhiResult;
+
+/// Native pipeline-cache object kept behind the portable cache handle.
+pub(crate) trait PipelineCacheBackend: Send + Sync + 'static {
+    /// Returns backend-owned serialized cache bytes.
+    fn serialized_data(&self) -> RhiResult<Vec<u8>>;
+    /// Exposes the native object only to its owning backend.
+    fn as_any(&self) -> &dyn Any;
+}
+
 /// The native graphics pipeline state object behind one
 /// [`RasterPipeline`](crate::api::pipeline::RasterPipeline).
 ///
@@ -64,5 +74,17 @@ pub(crate) trait ComputePipelineBackend: Send + Sync + 'static {
     /// the native pipeline state from the bound pipeline to hand it to the native
     /// bind verb, and the backend's own test set.
     #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// Native mesh/task pipeline object behind a portable [`MeshPipeline`].
+pub(crate) trait MeshPipelineBackend: Send + Sync + 'static {
+    /// Exposes the backend object only to the owning command lowering.
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// Native ray-tracing pipeline object behind a portable [`RayTracingPipeline`].
+pub(crate) trait RayTracingPipelineBackend: Send + Sync + 'static {
+    /// Exposes the backend object only to the owning command lowering.
     fn as_any(&self) -> &dyn Any;
 }

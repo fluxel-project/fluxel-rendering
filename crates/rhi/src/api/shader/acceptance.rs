@@ -37,6 +37,7 @@
 use crate::api::capability::CapabilityFacts;
 use crate::api::platform::requirements::{LimitRequirement, OptionalFeature};
 use crate::api::shader::artifact::ShaderArtifact;
+use crate::api::shader::requirements::ShaderRequirements;
 use crate::api::shader::vocabulary::{
     AcceptedCodeForm, ArtifactAcceptance, IMPLEMENTED_ABI, ShaderAbiVersion, ShaderStage,
 };
@@ -71,11 +72,40 @@ pub(crate) fn decide(facts: &CapabilityFacts, artifact: &ShaderArtifact) -> Arti
         return ArtifactAcceptance::MissingFeature;
     }
 
+    // Native code form and trusted passthrough are intentionally separate: a
+    // backend may consume SPIR-V/DXIL/etc. through its normal validated compiler
+    // path without accepting caller-asserted reflection.  Only the explicit unsafe
+    // admission boundary requires this feature.
+    if artifact.is_trusted_passthrough() && !facts.has_feature(OptionalFeature::PassthroughShaders)
+    {
+        return ArtifactAcceptance::MissingFeature;
+    }
+
     if artifact
         .requirements
         .required_features()
         .iter()
         .any(|feature| !facts.has_feature(*feature))
+    {
+        return ArtifactAcceptance::MissingFeature;
+    }
+
+    if artifact
+        .requirements
+        .cooperative_matrices()
+        .iter()
+        .any(|requirement| !facts.supports_cooperative_matrix(*requirement))
+    {
+        return ArtifactAcceptance::MissingFeature;
+    }
+
+    if artifact
+        .requirements
+        .builtins()
+        .iter()
+        .any(|builtin| !facts.has_feature(ShaderRequirements::builtin_feature(*builtin)))
+        || (!artifact.requirements.cooperative_matrices().is_empty()
+            && !facts.has_feature(OptionalFeature::CooperativeMatrix))
     {
         return ArtifactAcceptance::MissingFeature;
     }

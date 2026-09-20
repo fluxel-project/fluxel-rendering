@@ -29,6 +29,7 @@
 //! statement, not a stability one. Everything here is public, versioned, and
 //! semver-governed; it is simply not what a *rendering* caller learns. A caller
 //! that never opens a capture tool never names a type in this module.
+
 //!
 //! # The two invariants
 //!
@@ -231,6 +232,7 @@ use std::sync::Arc;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, ObjectId};
+use crate::api::platform::requirements::OptionalFeature;
 use crate::api::platform::{Device, DeviceStatus};
 
 pub mod definition;
@@ -238,6 +240,66 @@ pub mod event;
 pub mod mutation;
 pub mod plan;
 pub mod work;
+
+impl Device {
+    /// Begins a backend-native graphics debugger capture.
+    pub fn begin_native_graphics_capture(&self) -> RhiResult<()> {
+        self.require_active()?;
+        if !self
+            .capabilities()
+            .supports_feature(OptionalFeature::NativeGraphicsCapture)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "native graphics debugger capture is not enabled on this device",
+            )
+            .at("Device::begin_native_graphics_capture"));
+        }
+        let mut active = self
+            .native_capture_active()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *active {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a native graphics capture is already active on this device",
+            )
+            .at("Device::begin_native_graphics_capture"));
+        }
+        self.native().begin_native_graphics_capture()?;
+        *active = true;
+        Ok(())
+    }
+
+    /// Ends the native graphics debugger capture begun on this device.
+    pub fn end_native_graphics_capture(&self) -> RhiResult<()> {
+        self.require_active()?;
+        if !self
+            .capabilities()
+            .supports_feature(OptionalFeature::NativeGraphicsCapture)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "native graphics debugger capture is not enabled on this device",
+            )
+            .at("Device::end_native_graphics_capture"));
+        }
+        let mut active = self
+            .native_capture_active()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !*active {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "no native graphics capture is active on this device",
+            )
+            .at("Device::end_native_graphics_capture"));
+        }
+        self.native().end_native_graphics_capture()?;
+        *active = false;
+        Ok(())
+    }
+}
 
 pub use definition::CapturedObjectDefinition;
 pub use event::SemanticEvent;
@@ -424,11 +486,13 @@ impl ToolingAccess {
     /// [`Self::describe_object`] gives.
     pub fn describe_work(&self, work: ObjectId) -> RhiResult<CapturedRecordedWork> {
         self.refuse_if_lost()?;
-        Err(RhiError::new(
-            RhiErrorKind::Unsupported,
-            "recorded-work descriptions are not retained by this RHI build",
-        )
-        .with_object(work))
+        self.device.captured_work(work).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "no live recorded-work capture definition exists for this device",
+            )
+            .with_object(work)
+        })
     }
 
     /// Refuses when the device is gone.

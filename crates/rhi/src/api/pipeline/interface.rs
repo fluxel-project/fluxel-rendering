@@ -19,8 +19,34 @@ use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
 use crate::api::platform::requirements::LimitKey;
-use crate::api::shader::ShaderStage;
 use crate::api::shader::vocabulary::stage_mask;
+use crate::api::shader::{ShaderStage, ShaderStages};
+
+/// A byte range of pipeline-owned immediate data.
+///
+/// This deliberately avoids the name of any native push-constant facility. A
+/// pipeline owns a portable byte address space and makes its stage visibility
+/// explicit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ImmediateRange {
+    /// First byte in the immediate-data address space.
+    pub offset: u32,
+    /// Number of bytes in this range.
+    pub size: u32,
+    /// Stages permitted to consume these bytes.
+    pub visibility: ShaderStages,
+}
+
+impl ImmediateRange {
+    /// Creates one declared range.
+    pub const fn new(offset: u32, size: u32, visibility: ShaderStages) -> Self {
+        Self {
+            offset,
+            size,
+            visibility,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Section 23 - PipelineInterface
@@ -69,6 +95,8 @@ pub struct PipelineInterfaceDescriptor {
 
     /// The group layouts, in [`BindGroupIndex`] order.
     pub groups: Vec<BindGroupLayout>,
+    /// Immediate-data ABI ranges, in canonical ascending offset order.
+    pub immediate_ranges: Vec<ImmediateRange>,
 }
 
 impl PipelineInterfaceDescriptor {
@@ -77,7 +105,14 @@ impl PipelineInterfaceDescriptor {
         Self {
             label: Label::default(),
             groups,
+            immediate_ranges: Vec::new(),
         }
+    }
+
+    /// Adds a declared immediate-data range.
+    pub fn with_immediate_range(mut self, range: ImmediateRange) -> Self {
+        self.immediate_ranges.push(range);
+        self
     }
 
     /// Attaches a diagnostic label.
@@ -105,6 +140,12 @@ impl PipelineInterfaceDescriptor {
             let bytes = group.descriptor().canonical_bytes();
             out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
             out.extend_from_slice(&bytes);
+        }
+        out.extend_from_slice(&(self.immediate_ranges.len() as u64).to_le_bytes());
+        for range in &self.immediate_ranges {
+            out.extend_from_slice(&range.offset.to_le_bytes());
+            out.extend_from_slice(&range.size.to_le_bytes());
+            range.visibility.encode_into(&mut out);
         }
         out
     }
@@ -240,6 +281,41 @@ pub(crate) fn validate_pipeline_interface_descriptor(
     limit: impl Fn(LimitKey) -> Option<u64>,
     binding_limit: impl Fn(ShaderStage, BindingLimitClass) -> Option<u32>,
 ) -> RhiResult<()> {
+    let alignment = limit(LimitKey::ImmediateDataAlignment).unwrap_or(1);
+    let maximum = limit(LimitKey::MaxImmediateSize).unwrap_or(0);
+    if !desc.immediate_ranges.is_empty() && alignment == 0 {
+        return Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "the device reported a zero immediate-data alignment",
+        ));
+    }
+    let mut previous_end = 0u64;
+    for range in &desc.immediate_ranges {
+        let end = u64::from(range.offset)
+            .checked_add(u64::from(range.size))
+            .ok_or_else(|| {
+                RhiError::new(RhiErrorKind::InvalidUsage, "immediate-data range overflows")
+            })?;
+        if range.size == 0 || range.visibility.is_empty() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "an immediate-data range needs non-zero size and visibility",
+            ));
+        }
+        if u64::from(range.offset) % alignment != 0 || u64::from(range.size) % alignment != 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "an immediate-data range violates the device alignment",
+            ));
+        }
+        if u64::from(range.offset) < previous_end || end > maximum {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "immediate-data ranges overlap, are unordered, or exceed MaxImmediateSize",
+            ));
+        }
+        previous_end = end;
+    }
     if let Some(max) = limit(LimitKey::MaxBindGroups) {
         if desc.groups.len() as u64 > max {
             return Err(RhiError::new(
@@ -308,7 +384,9 @@ pub(crate) fn validate_pipeline_interface_descriptor(
                 }
                 BindingKind::SampledTexture { .. }
                 | BindingKind::StorageTexture { .. }
-                | BindingKind::Sampler { .. } => {}
+                | BindingKind::Sampler { .. }
+                | BindingKind::AccelerationStructure
+                | BindingKind::ExternalTexture => {}
             }
         }
     }
@@ -338,11 +416,13 @@ pub(crate) fn validate_pipeline_interface_descriptor(
     Ok(())
 }
 
-/// The three stages a pipeline can draw from, in section 19.1's declaration order.
-const STAGES: [ShaderStage; 3] = [
+/// All portable shader stages, in declaration order.
+const STAGES: [ShaderStage; 5] = [
     ShaderStage::Vertex,
     ShaderStage::Fragment,
     ShaderStage::Compute,
+    ShaderStage::Task,
+    ShaderStage::Mesh,
 ];
 
 /// The five aggregate classes of section 20.4, in declaration order.
@@ -418,6 +498,15 @@ impl Device {
         self.require_active()?;
 
         let capabilities = self.capabilities();
+        if !desc.immediate_ranges.is_empty()
+            && !capabilities
+                .supports_feature(crate::api::platform::requirements::OptionalFeature::Immediates)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not support immediate pipeline data",
+            ));
+        }
         validate_pipeline_interface_descriptor(
             desc,
             |key| capabilities.limit(key),

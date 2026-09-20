@@ -42,16 +42,20 @@ pub(super) fn lower_buffer_copy(
     let destination = dx12_buffer(&copy.dst)?;
 
     let mut entering = Transitions::default();
-    entering.push(
-        source.resource(),
-        D3D12_RESOURCE_STATE_COMMON,
-        D3D12_RESOURCE_STATE_COPY_SOURCE,
-    );
-    entering.push(
-        destination.resource(),
-        D3D12_RESOURCE_STATE_COMMON,
-        D3D12_RESOURCE_STATE_COPY_DEST,
-    );
+    if source.fixed_state().is_none() {
+        entering.push(
+            source.resource(),
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        );
+    }
+    if destination.fixed_state().is_none() {
+        entering.push(
+            destination.resource(),
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        );
+    }
     entering.record(list);
 
     // SAFETY: both resources are alive for at least as long as this call, the
@@ -69,16 +73,20 @@ pub(super) fn lower_buffer_copy(
     }
 
     let mut leaving = Transitions::default();
-    leaving.push(
-        source.resource(),
-        D3D12_RESOURCE_STATE_COPY_SOURCE,
-        D3D12_RESOURCE_STATE_COMMON,
-    );
-    leaving.push(
-        destination.resource(),
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_COMMON,
-    );
+    if source.fixed_state().is_none() {
+        leaving.push(
+            source.resource(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        );
+    }
+    if destination.fixed_state().is_none() {
+        leaving.push(
+            destination.resource(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
+        );
+    }
     leaving.record(list);
     Ok(())
 }

@@ -426,3 +426,23 @@ fn a_views_extent_halves_per_level_and_never_reaches_zero() {
     assert_eq!(cube_view.extent(), Extent3d::d2(8, 8));
     assert_eq!(cube_view.extent().depth, 1);
 }
+
+#[test]
+fn view_usage_is_a_nonempty_subset_of_texture_usage() {
+    let texture = TextureDescriptor::new_2d(
+        4,
+        4,
+        TextureFormat::Rgba8Unorm,
+        TextureUsage::SAMPLED.union(TextureUsage::COPY_DST),
+    );
+    let legal =
+        TextureViewDescriptor::new(TextureViewDimension::D2, TextureAspects::COLOR, 0, 1, 0, 1)
+            .with_usage(TextureUsage::SAMPLED);
+    assert!(validate_texture_view_descriptor(&legal, &texture).is_ok());
+
+    let unavailable = legal.clone().with_usage(TextureUsage::COLOR_ATTACHMENT);
+    assert_kind(
+        validate_texture_view_descriptor(&unavailable, &texture),
+        RhiErrorKind::InvalidUsage,
+    );
+}

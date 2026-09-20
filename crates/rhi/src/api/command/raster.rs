@@ -36,7 +36,8 @@ use crate::api::command::geometry::{
     Color, LoadOp, Rect, Viewport, validate_rect, validate_viewport,
 };
 use crate::api::command::record::{
-    BoundGroup, BoundIndexBuffer, RasterBegin, RasterDraw, RecordedPayload,
+    BoundGroup, BoundIndexBuffer, ImmediateWrite, MeshDispatch, MeshIndirect, RasterBegin,
+    RasterDraw, RasterIndirect, RecordedPayload,
 };
 use crate::api::command::uses::{
     bound_group_uses, buffer_use, frame_use, require_valid_dynamic_offsets, texture_use_of_view,
@@ -47,8 +48,9 @@ use crate::api::command::{
     TextureUseIntent, require_device,
 };
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::identity::Label;
-use crate::api::pipeline::{RasterPipeline, RenderTargetSignature, VertexStepMode};
+use crate::api::identity::{Label, ObjectId};
+use crate::api::pipeline::{MeshPipeline, RasterPipeline, RenderTargetSignature, VertexStepMode};
+use crate::api::query::{QuerySet, QueryType, validate_query};
 use crate::api::resource::buffer::{BufferBinding, BufferUsage, validate_buffer_range};
 use crate::api::resource::texture::Extent3d;
 
@@ -85,6 +87,7 @@ impl CommandRecorder {
             .collect();
         let signature = desc.target_signature();
         let extent = primary_extent(&colors, desc.depth_stencil.as_ref());
+        let layer_count = primary_layer_count(&colors, desc.depth_stencil.as_ref());
 
         let uses = begin_uses(&colors, desc.depth_stencil.as_ref());
         let begin = RasterBegin {
@@ -99,9 +102,11 @@ impl CommandRecorder {
             recorder: self,
             signature,
             extent,
+            layer_count,
             colors,
             depth_stencil: desc.depth_stencil,
             pipeline: None,
+            mesh_pipeline: None,
             groups: Vec::new(),
             vertex_buffers: Vec::new(),
             index: None,
@@ -109,6 +114,8 @@ impl CommandRecorder {
             scissor: None,
             blend_constant: Color::new(0.0, 0.0, 0.0, 0.0),
             stencil_reference: 0,
+            immediates: Vec::new(),
+            active_query: None,
             debug_stack: Vec::new(),
             ended: false,
         })
@@ -133,6 +140,8 @@ pub struct RasterScope<'a> {
     signature: RenderTargetSignature,
     /// The primary attachment's extent, for the portable dynamic-state defaults.
     extent: Extent3d,
+    /// Common layer count of all main attachments.
+    layer_count: u32,
     /// The color attachments, by location, fixed at `begin_raster`.
     colors: Vec<(u32, ColorAttachment)>,
     /// The depth/stencil attachment, fixed at `begin_raster`.
@@ -140,6 +149,8 @@ pub struct RasterScope<'a> {
 
     /// The bound pipeline, if any.
     pipeline: Option<RasterPipeline>,
+    /// The mesh/task pipeline, if mesh dispatch is selected for this scope.
+    mesh_pipeline: Option<MeshPipeline>,
     /// The bound bind groups, by index.
     groups: Vec<BoundGroup>,
     /// The bound vertex buffers, by slot.
@@ -155,6 +166,13 @@ pub struct RasterScope<'a> {
     blend_constant: Color,
     /// The stencil reference. Portable default: zero.
     stencil_reference: u32,
+    /// Immediate bytes current for the selected graphics pipeline interface.
+    immediates: Vec<ImmediateWrite>,
+
+    /// The single occlusion or pipeline-statistics query currently bracketed by
+    /// this scope.  This is scope-local state, not a property of `QuerySet`:
+    /// another recording may use another slot concurrently.
+    active_query: Option<ActiveQuery>,
 
     /// This scope's own debug-group stack, independent of the recorder's.
     debug_stack: Vec<String>,
@@ -162,7 +180,714 @@ pub struct RasterScope<'a> {
     ended: bool,
 }
 
+/// Identity of the query bracket currently open in one raster scope.
+#[derive(Clone, Copy)]
+struct ActiveQuery {
+    set: ObjectId,
+    index: u32,
+}
+
 impl RasterScope<'_> {
+    /// Writes immediate bytes declared by the currently bound raster interface.
+    pub fn set_immediates(&mut self, offset: u32, bytes: &[u8]) -> RhiResult<()> {
+        let pipeline = self.pipeline.as_ref().ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "immediate data needs a bound raster pipeline",
+            )
+            .at("RasterScope::set_immediates")
+        })?;
+        let write = crate::api::command::advanced::immediate_write(
+            self.recorder,
+            pipeline.interface(),
+            offset,
+            bytes,
+            "RasterScope::set_immediates",
+        )?;
+        self.immediates.retain(|existing| existing.offset != offset);
+        self.immediates.push(write);
+        Ok(())
+    }
+    /// Crate-visible implementation used by the public advanced-command façade.
+    pub(crate) fn set_mesh_pipeline_inner(&mut self, pipeline: &MeshPipeline) -> RhiResult<()> {
+        if !self
+            .recorder
+            .capabilities()
+            .supports_feature(crate::api::platform::requirements::OptionalFeature::MeshShader)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not enable mesh shaders",
+            )
+            .at("RasterScope::set_mesh_pipeline"));
+        }
+        require_device(
+            pipeline.device_identity(),
+            self.recorder.device_identity(),
+            "the mesh pipeline",
+        )?;
+        if pipeline.descriptor().target_signature() != self.signature {
+            return Err(RhiError::new(
+                RhiErrorKind::IncompatibleInterface,
+                "the mesh pipeline target signature does not match this raster scope's attachments",
+            )
+            .at("RasterScope::set_mesh_pipeline"));
+        }
+        self.mesh_pipeline = Some(pipeline.clone());
+        Ok(())
+    }
+
+    /// Crate-visible implementation used by the public advanced-command façade.
+    pub(crate) fn dispatch_mesh_inner(&mut self, x: u32, y: u32, z: u32) -> RhiResult<()> {
+        let pipeline = self.mesh_pipeline.clone().ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a mesh dispatch needs a bound mesh pipeline",
+            )
+            .at("RasterScope::dispatch_mesh")
+        })?;
+        if x == 0 || y == 0 || z == 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "mesh workgroup counts must be non-zero",
+            )
+            .at("RasterScope::dispatch_mesh"));
+        }
+        let max = self
+            .recorder
+            .capabilities()
+            .limit(crate::api::platform::requirements::LimitKey::MaxMeshWorkgroupsPerDimension)
+            .unwrap_or(0);
+        if [x, y, z].into_iter().any(|value| u64::from(value) > max) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "mesh workgroup count exceeds MaxMeshWorkgroupsPerDimension",
+            )
+            .at("RasterScope::dispatch_mesh"));
+        }
+        validate_bound_groups(&pipeline.descriptor().interface, &self.groups)?;
+        let uses = self.draw_uses(false)?;
+        self.recorder.record_command(
+            RecordedPayload::MeshDispatch(Box::new(MeshDispatch {
+                pipeline,
+                groups: self.groups.clone(),
+                workgroups: (x, y, z),
+            })),
+            uses,
+            RASTER_DOMAIN,
+        );
+        Ok(())
+    }
+    pub(crate) fn dispatch_mesh_indirect_inner(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        offset: u64,
+        count: Option<(&crate::api::resource::Buffer, u64, u32)>,
+    ) -> RhiResult<()> {
+        if !self
+            .recorder
+            .capabilities()
+            .supports_feature(crate::api::platform::requirements::OptionalFeature::IndirectDraw)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not enable indirect mesh dispatch",
+            )
+            .at("RasterScope::dispatch_mesh_indirect"));
+        }
+        require_device(
+            arguments.device_identity(),
+            self.recorder.device_identity(),
+            "mesh indirect argument buffer",
+        )?;
+        if !arguments.descriptor().usage.contains(BufferUsage::INDIRECT) || offset % 4 != 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "mesh indirect arguments require INDIRECT usage and a four-byte aligned offset",
+            )
+            .at("RasterScope::dispatch_mesh_indirect"));
+        }
+        let argument_count = count.map_or(1, |(_, _, max)| max);
+        if argument_count == 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "mesh indirect count max_count must be non-zero",
+            )
+            .at("RasterScope::dispatch_mesh_indirect_count"));
+        }
+        let argument_bytes = u64::from(argument_count).checked_mul(12).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "mesh indirect argument range overflows",
+            )
+            .at("RasterScope::dispatch_mesh_indirect")
+        })?;
+        validate_buffer_range(
+            crate::api::resource::BufferRange::new(offset, argument_bytes),
+            arguments.descriptor().size,
+        )?;
+        let count = if let Some((buffer, count_offset, max_count)) = count {
+            if !self.recorder.capabilities().supports_feature(
+                crate::api::platform::requirements::OptionalFeature::MultiDrawIndirectCount,
+            ) {
+                return Err(RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    "this device does not enable indirect-count mesh dispatch",
+                )
+                .at("RasterScope::dispatch_mesh_indirect_count"));
+            }
+            require_device(
+                buffer.device_identity(),
+                self.recorder.device_identity(),
+                "mesh indirect count buffer",
+            )?;
+            if !buffer.descriptor().usage.contains(BufferUsage::INDIRECT) || count_offset % 4 != 0 {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "mesh indirect count requires INDIRECT usage and a four-byte aligned offset",
+                )
+                .at("RasterScope::dispatch_mesh_indirect_count"));
+            }
+            validate_buffer_range(
+                crate::api::resource::BufferRange::new(count_offset, 4),
+                buffer.descriptor().size,
+            )?;
+            Some((buffer.clone(), count_offset, max_count))
+        } else {
+            None
+        };
+        let pipeline = self.mesh_pipeline.clone().ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "an indirect mesh dispatch needs a bound mesh pipeline",
+            )
+            .at("RasterScope::dispatch_mesh_indirect")
+        })?;
+        validate_bound_groups(&pipeline.descriptor().interface, &self.groups)?;
+        let mut uses = self.draw_uses(false)?;
+        uses.push(buffer_use(
+            arguments,
+            crate::api::resource::BufferRange::new(offset, argument_bytes),
+            PipelineScope::VERTEX,
+            AccessMask::INDIRECT_READ,
+        ));
+        if let Some((buffer, count_offset, _)) = &count {
+            uses.push(buffer_use(
+                buffer,
+                crate::api::resource::BufferRange::new(*count_offset, 4),
+                PipelineScope::VERTEX,
+                AccessMask::INDIRECT_READ,
+            ));
+        }
+        self.recorder.record_command(
+            RecordedPayload::MeshIndirect(Box::new(MeshIndirect {
+                pipeline,
+                groups: self.groups.clone(),
+                arguments: arguments.clone(),
+                offset,
+                count_buffer: count,
+            })),
+            uses,
+            RASTER_DOMAIN,
+        );
+        Ok(())
+    }
+    /// Issues one non-indexed indirect draw from `arguments_offset`.
+    pub fn draw_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        arguments_offset: u64,
+    ) -> RhiResult<()> {
+        self.validate_indirect(
+            arguments,
+            arguments_offset,
+            16,
+            crate::api::platform::requirements::OptionalFeature::IndirectDraw,
+            "RasterScope::draw_indirect",
+        )?;
+        self.record_indirect(arguments, arguments_offset, 1, 16, 16, false)
+    }
+
+    /// Issues one indexed indirect draw from `arguments_offset`.
+    pub fn draw_indexed_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        arguments_offset: u64,
+    ) -> RhiResult<()> {
+        self.validate_indirect(
+            arguments,
+            arguments_offset,
+            20,
+            crate::api::platform::requirements::OptionalFeature::IndirectDraw,
+            "RasterScope::draw_indexed_indirect",
+        )?;
+        self.record_indirect(arguments, arguments_offset, 1, 20, 20, true)
+    }
+
+    /// Issues `draw_count` non-indexed indirect draws with `stride` bytes between arguments.
+    pub fn multi_draw_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        arguments_offset: u64,
+        draw_count: u32,
+        stride: u32,
+    ) -> RhiResult<()> {
+        self.validate_multi_indirect(
+            arguments,
+            arguments_offset,
+            draw_count,
+            stride,
+            16,
+            "RasterScope::multi_draw_indirect",
+        )?;
+        self.record_indirect(arguments, arguments_offset, draw_count, stride, 16, false)
+    }
+
+    /// Issues `draw_count` indexed indirect draws with `stride` bytes between arguments.
+    pub fn multi_draw_indexed_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        arguments_offset: u64,
+        draw_count: u32,
+        stride: u32,
+    ) -> RhiResult<()> {
+        self.validate_multi_indirect(
+            arguments,
+            arguments_offset,
+            draw_count,
+            stride,
+            20,
+            "RasterScope::multi_draw_indexed_indirect",
+        )?;
+        self.record_indirect(arguments, arguments_offset, draw_count, stride, 20, true)
+    }
+
+    /// Issues non-indexed indirect draws whose GPU count is clamped by `max_count`.
+    pub fn draw_indirect_count(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        arguments_offset: u64,
+        count_buffer: &crate::api::resource::Buffer,
+        count_offset: u64,
+        max_count: u32,
+    ) -> RhiResult<()> {
+        self.record_indirect_count(
+            arguments,
+            arguments_offset,
+            count_buffer,
+            count_offset,
+            max_count,
+            16,
+            false,
+            "RasterScope::draw_indirect_count",
+        )
+    }
+
+    /// Issues indexed indirect draws whose GPU count is clamped by `max_count`.
+    pub fn draw_indexed_indirect_count(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        arguments_offset: u64,
+        count_buffer: &crate::api::resource::Buffer,
+        count_offset: u64,
+        max_count: u32,
+    ) -> RhiResult<()> {
+        self.record_indirect_count(
+            arguments,
+            arguments_offset,
+            count_buffer,
+            count_offset,
+            max_count,
+            20,
+            true,
+            "RasterScope::draw_indexed_indirect_count",
+        )
+    }
+
+    fn record_indirect_count(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        offset: u64,
+        count_buffer: &crate::api::resource::Buffer,
+        count_offset: u64,
+        max_count: u32,
+        argument_size: u64,
+        indexed: bool,
+        operation: &'static str,
+    ) -> RhiResult<()> {
+        if !self.recorder.capabilities().supports_feature(
+            crate::api::platform::requirements::OptionalFeature::MultiDrawIndirectCount,
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device did not enable indirect count draws",
+            )
+            .at(operation));
+        }
+        if max_count == 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "indirect count max_count must be non-zero",
+            )
+            .at(operation));
+        }
+        self.validate_multi_indirect(
+            arguments,
+            offset,
+            max_count,
+            argument_size as u32,
+            argument_size,
+            operation,
+        )?;
+        self.validate_indirect(
+            count_buffer,
+            count_offset,
+            4,
+            crate::api::platform::requirements::OptionalFeature::MultiDrawIndirectCount,
+            operation,
+        )?;
+        let pipeline = self.bound_pipeline()?;
+        self.validate_groups(&pipeline)?;
+        self.validate_vertex_buffers(&pipeline, &(0..0), &(0..0))?;
+        if indexed && self.index.is_none() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "an indexed indirect draw needs an index buffer",
+            )
+            .at(operation));
+        }
+        let span = u64::from(max_count - 1)
+            .checked_mul(argument_size)
+            .and_then(|v| v.checked_add(argument_size))
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "indirect count argument range overflows",
+                )
+                .at(operation)
+            })?;
+        let mut uses = self.draw_uses(indexed)?;
+        uses.push(buffer_use(
+            arguments,
+            crate::api::resource::BufferRange::new(offset, span),
+            PipelineScope::VERTEX,
+            AccessMask::INDIRECT_READ,
+        ));
+        uses.push(buffer_use(
+            count_buffer,
+            crate::api::resource::BufferRange::new(count_offset, 4),
+            PipelineScope::VERTEX,
+            AccessMask::INDIRECT_READ,
+        ));
+        self.recorder.record_command(
+            RecordedPayload::RasterIndirect(Box::new(RasterIndirect {
+                pipeline,
+                groups: self.groups.clone(),
+                vertex_buffers: self.vertex_buffers.clone(),
+                index: indexed.then(|| self.index.clone()).flatten(),
+                viewport: self.viewport,
+                scissor: self.scissor,
+                blend_constant: self.blend_constant,
+                stencil_reference: self.stencil_reference,
+                arguments: arguments.clone(),
+                arguments_offset: offset,
+                draw_count: max_count,
+                stride: argument_size as u32,
+                count: Some((count_buffer.clone(), count_offset, max_count)),
+            })),
+            uses,
+            RASTER_DOMAIN,
+        );
+        Ok(())
+    }
+
+    /// Validates one indirect command route. Native lowering is deliberately
+    /// capability-gated: no backend is allowed to accept a command it cannot
+    /// replay transactionally.
+    fn validate_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        offset: u64,
+        size: u64,
+        feature: crate::api::platform::requirements::OptionalFeature,
+        operation: &'static str,
+    ) -> RhiResult<()> {
+        if !self.recorder.capabilities().supports_feature(feature) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device did not enable the requested indirect-draw route",
+            )
+            .at(operation));
+        }
+        require_device(
+            arguments.device_identity(),
+            self.recorder.device_identity(),
+            "the indirect argument buffer",
+        )?;
+        if !arguments.descriptor().usage.contains(BufferUsage::INDIRECT) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "indirect arguments require INDIRECT usage",
+            )
+            .at(operation));
+        }
+        if offset % 4 != 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "indirect argument offset must be four-byte aligned",
+            )
+            .at(operation));
+        }
+        validate_buffer_range(
+            crate::api::resource::BufferRange::new(offset, size),
+            arguments.descriptor().size,
+        )?;
+        Ok(())
+    }
+
+    fn validate_multi_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        offset: u64,
+        count: u32,
+        stride: u32,
+        argument_size: u64,
+        operation: &'static str,
+    ) -> RhiResult<()> {
+        if !self.recorder.capabilities().supports_feature(
+            crate::api::platform::requirements::OptionalFeature::MultiDrawIndirect,
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device did not enable multi-draw indirect",
+            )
+            .at(operation));
+        }
+        if count == 0 || stride < argument_size as u32 || stride % 4 != 0 {
+            return Err(RhiError::new(RhiErrorKind::InvalidUsage, "multi-draw indirect needs non-zero count and a four-byte-aligned stride at least the argument size").at(operation));
+        }
+        let bytes = u64::from(count - 1)
+            .checked_mul(u64::from(stride))
+            .and_then(|n| n.checked_add(argument_size))
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "multi-draw indirect range overflows u64",
+                )
+            })?;
+        self.validate_indirect(
+            arguments,
+            offset,
+            bytes,
+            crate::api::platform::requirements::OptionalFeature::MultiDrawIndirect,
+            operation,
+        )
+    }
+
+    /// Captures the complete draw state after the argument route has passed
+    /// portable validation. Native support is a submission Phase-A decision;
+    /// recording must not turn an advertised capability into an unconditional
+    /// `Unsupported` result.
+    fn record_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        arguments_offset: u64,
+        draw_count: u32,
+        stride: u32,
+        argument_size: u64,
+        indexed: bool,
+    ) -> RhiResult<()> {
+        let pipeline = self.bound_pipeline()?;
+        self.validate_groups(&pipeline)?;
+
+        // The GPU-provided argument record determines vertex/index counts, so
+        // host validation cannot derive byte bounds. It can and must still prove
+        // that every declared vertex slot and the indexed route are bound.
+        self.validate_vertex_buffers(&pipeline, &(0..0), &(0..0))?;
+        if indexed && self.index.is_none() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "an indexed indirect draw needs an index buffer",
+            ));
+        }
+        if indexed && pipeline.descriptor().primitive.topology.is_strip() {
+            let actual = self.index.as_ref().map(|index| index.format);
+            if pipeline.descriptor().primitive.strip_index_format != actual {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "an indexed indirect strip draw requires the bound index format to match the pipeline",
+                ));
+            }
+        }
+
+        // `validate_multi_indirect` calculated the same span before recording,
+        // but keep this calculation checked as well: this helper is the sole
+        // construction site for the actual-use range, so it must remain safe if
+        // a future caller reaches it without that validator.
+        let argument_span = u64::from(draw_count - 1)
+            .checked_mul(u64::from(stride))
+            .and_then(|offset| offset.checked_add(argument_size))
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "indirect argument span overflows u64",
+                )
+            })?;
+        let mut uses = self.draw_uses(indexed)?;
+        uses.push(buffer_use(
+            arguments,
+            crate::api::resource::BufferRange::new(arguments_offset, argument_span),
+            // Indirect arguments are consumed by the draw command's fixed
+            // function front end. `VERTEX` is the portable graphics stage that
+            // owns vertex/index fetch, rather than an empty scope that would
+            // hide this read from a hazard tracker.
+            PipelineScope::VERTEX,
+            AccessMask::INDIRECT_READ,
+        ));
+        self.recorder.record_command(
+            RecordedPayload::RasterIndirect(Box::new(RasterIndirect {
+                pipeline,
+                groups: self.groups.clone(),
+                vertex_buffers: self.vertex_buffers.clone(),
+                index: indexed.then(|| self.index.clone()).flatten(),
+                viewport: self.viewport,
+                scissor: self.scissor,
+                blend_constant: self.blend_constant,
+                stencil_reference: self.stencil_reference,
+                arguments: arguments.clone(),
+                arguments_offset,
+                draw_count,
+                stride,
+                count: None,
+            })),
+            uses,
+            RASTER_DOMAIN,
+        );
+        Ok(())
+    }
+    /// Begins an occlusion or pipeline-statistics query in this raster scope.
+    pub fn begin_query(&mut self, set: &QuerySet, index: u32) -> RhiResult<()> {
+        if !matches!(
+            set.descriptor().ty,
+            QueryType::Occlusion | QueryType::PipelineStatistics(_)
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "raster begin_query requires Occlusion or PipelineStatistics query type",
+            )
+            .at("RasterScope::begin_query"));
+        }
+        validate_query(
+            set,
+            index,
+            self.recorder.device_identity(),
+            "RasterScope::begin_query",
+        )?;
+        if self.active_query.is_some() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a raster scope may have only one active query; query scopes cannot nest or repeat",
+            )
+            .at("RasterScope::begin_query"));
+        }
+        self.recorder.record_command(
+            RecordedPayload::QueryBegin {
+                set: set.clone(),
+                index,
+            },
+            Vec::new(),
+            RASTER_DOMAIN,
+        );
+        self.active_query = Some(ActiveQuery {
+            set: set.id(),
+            index,
+        });
+        Ok(())
+    }
+
+    /// Ends an occlusion or pipeline-statistics query in this raster scope.
+    pub fn end_query(&mut self, set: &QuerySet, index: u32) -> RhiResult<()> {
+        if !matches!(
+            set.descriptor().ty,
+            QueryType::Occlusion | QueryType::PipelineStatistics(_)
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "raster end_query requires Occlusion or PipelineStatistics query type",
+            )
+            .at("RasterScope::end_query"));
+        }
+        validate_query(
+            set,
+            index,
+            self.recorder.device_identity(),
+            "RasterScope::end_query",
+        )?;
+        match self.active_query {
+            None => {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "cannot end a raster query before begin_query",
+                )
+                .at("RasterScope::end_query"));
+            }
+            Some(active) if active.set != set.id() || active.index != index => {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "end_query must name the query set and index opened by begin_query",
+                )
+                .at("RasterScope::end_query"));
+            }
+            Some(_) => {}
+        }
+        self.recorder.record_command(
+            RecordedPayload::QueryEnd {
+                set: set.clone(),
+                index,
+            },
+            Vec::new(),
+            RASTER_DOMAIN,
+        );
+        self.active_query = None;
+        Ok(())
+    }
+
+    /// Writes a timestamp in this raster scope.
+    pub fn write_timestamp(&mut self, set: &QuerySet, index: u32) -> RhiResult<()> {
+        if !self.recorder.capabilities().supports_feature(
+            crate::api::platform::requirements::OptionalFeature::TimestampInsideRasterScope,
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not support timestamps in raster scopes",
+            )
+            .at("RasterScope::write_timestamp"));
+        }
+        if set.descriptor().ty != QueryType::Timestamp {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "write_timestamp requires a Timestamp query set",
+            )
+            .at("RasterScope::write_timestamp"));
+        }
+        validate_query(
+            set,
+            index,
+            self.recorder.device_identity(),
+            "RasterScope::write_timestamp",
+        )?;
+        self.recorder
+            .mark_query_written(set, index, "RasterScope::begin_query")?;
+        self.recorder.record_command(
+            RecordedPayload::TimestampWrite {
+                set: set.clone(),
+                index,
+            },
+            Vec::new(),
+            RASTER_DOMAIN,
+        );
+        Ok(())
+    }
     /// Binds a pipeline, if it matches this scope's attachment set.
     ///
     /// Section 32.2's two checks, in its order: same device first, then the target
@@ -182,7 +907,9 @@ impl RasterScope<'_> {
                 "the pipeline's target signature does not match this raster scope's attachments",
             ));
         }
+        self.validate_multiview_mask(pipeline.descriptor().multiview_mask)?;
         self.pipeline = Some(pipeline.clone());
+        self.immediates.clear();
         Ok(())
     }
 
@@ -360,6 +1087,7 @@ impl RasterScope<'_> {
             range: vertices,
             instances,
             base_vertex: 0,
+            immediates: self.immediates.clone(),
         };
         self.recorder.record_command(
             RecordedPayload::RasterDraw(Box::new(draw)),
@@ -381,6 +1109,18 @@ impl RasterScope<'_> {
         base_vertex: i32,
         instances: core::ops::Range<u32>,
     ) -> RhiResult<()> {
+        if base_vertex != 0
+            && !self
+                .recorder
+                .capabilities()
+                .supports_feature(crate::api::platform::requirements::OptionalFeature::BaseVertex)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device did not enable BaseVertex, so indexed draws require base_vertex == 0",
+            )
+            .at("RasterScope::draw_indexed"));
+        }
         let pipeline = self.bound_pipeline()?;
         self.validate_groups(&pipeline)?;
 
@@ -446,6 +1186,7 @@ impl RasterScope<'_> {
             range: indices,
             instances,
             base_vertex,
+            immediates: self.immediates.clone(),
         };
         self.recorder.record_command(
             RecordedPayload::RasterDraw(Box::new(draw)),
@@ -515,6 +1256,12 @@ impl RasterScope<'_> {
                 ),
             ));
         }
+        if self.active_query.is_some() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "this raster scope still has an active query at end(); call end_query first",
+            ));
+        }
 
         let uses = self.end_uses();
         self.recorder
@@ -572,6 +1319,26 @@ impl RasterScope<'_> {
                 RhiErrorKind::InvalidUsage,
                 "a draw needs a pipeline, and none is bound in this raster scope",
             )),
+        }
+    }
+
+    fn validate_multiview_mask(&self, mask: Option<u32>) -> RhiResult<()> {
+        match mask {
+            None if self.layer_count == 1 => Ok(()),
+            None => Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "layered attachments require a multiview pipeline mask",
+            )),
+            Some(mask) => {
+                let highest = 32 - mask.leading_zeros();
+                if highest > self.layer_count {
+                    return Err(RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "the multiview mask selects a view outside the attachment layer count",
+                    ));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -750,8 +1517,11 @@ impl Drop for RasterScope<'_> {
     /// [`RasterScope::end`] refuses.
     fn drop(&mut self) {
         if !self.ended {
-            self.recorder
-                .poison("a raster scope was dropped without a successful end()");
+            self.recorder.poison(if self.active_query.is_some() {
+                "a raster scope was dropped with an active query"
+            } else {
+                "a raster scope was dropped without a successful end()"
+            });
         }
     }
 }
@@ -957,6 +1727,20 @@ fn primary_extent(
         height: 0,
         depth: 1,
     }
+}
+
+/// The common layer count established by attachment validation.
+fn primary_layer_count(
+    colors: &[(u32, ColorAttachment)],
+    depth_stencil: Option<&DepthStencilAttachment>,
+) -> u32 {
+    if let Some((_, attachment)) = colors.first() {
+        return match &attachment.view {
+            ColorAttachmentView::Texture(view) => view.layer_count(),
+            ColorAttachmentView::Frame(_) => 1,
+        };
+    }
+    depth_stencil.map_or(1, |depth| depth.view.layer_count())
 }
 
 /// The uses one color attachment view produces with a given access.

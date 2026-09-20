@@ -224,7 +224,7 @@ pub(crate) fn validate_texture_upload(
 
     let image_count = image_count(base, desc.subresource, desc.extent);
     if let Some(required) =
-        source_bytes_required(desc.source_layout, desc.extent, image_count, base.format)
+        source_bytes_required(desc.source_layout, desc.extent, image_count, base.format)?
     {
         if (desc.bytes.len() as u64) < required {
             return Err(RhiError::new(

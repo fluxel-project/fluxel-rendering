@@ -32,7 +32,10 @@ use crate::api::resource::route::{RouteCapabilities, RouteQuery, RouteSupport};
 use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
 use crate::api::resource::transient::{TransientAllocationSupport, TransientCapabilities};
 use crate::api::resource::view::TextureViewDimension;
-use crate::api::shader::ShaderStages;
+use crate::api::shader::{
+    CooperativeMatrixComponentType, CooperativeMatrixProperties, CooperativeMatrixRequirement,
+    CooperativeMatrixScope, ShaderStages,
+};
 use crate::api::submission::{
     LaneDependencyRoute, LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass,
     SubmissionLaneId, SubmissionLaneInfo,
@@ -90,6 +93,68 @@ fn transient_capabilities_are_part_of_the_enabled_contract() {
         TransientAllocationSupport::Aliasing
     );
     assert!(enabled.transient().mixed_resource_aliasing);
+}
+
+#[test]
+fn cooperative_matrix_properties_are_exact_queryable_device_facts() {
+    let property = CooperativeMatrixProperties {
+        rows: 16,
+        columns: 16,
+        depth: 16,
+        component_type: CooperativeMatrixComponentType::Float16,
+        result_type: CooperativeMatrixComponentType::Float32,
+        stages: ShaderStages::COMPUTE,
+        scope: CooperativeMatrixScope::Subgroup,
+    };
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(OptionalFeature::CooperativeMatrix);
+    facts.record_cooperative_matrix(property);
+    let enabled = enabled_from(facts);
+    assert_eq!(enabled.cooperative_matrix_properties(), &[property]);
+}
+
+#[test]
+fn cooperative_matrix_property_rejects_unsupported_shape_and_stage() {
+    let property = CooperativeMatrixProperties {
+        rows: 16,
+        columns: 16,
+        depth: 16,
+        component_type: CooperativeMatrixComponentType::Float16,
+        result_type: CooperativeMatrixComponentType::Float32,
+        stages: ShaderStages::COMPUTE,
+        scope: CooperativeMatrixScope::Subgroup,
+    };
+    assert!(!property.satisfies(CooperativeMatrixRequirement {
+        rows: 8,
+        columns: 16,
+        depth: 16,
+        stages: ShaderStages::COMPUTE
+    }));
+    assert!(!property.satisfies(CooperativeMatrixRequirement {
+        rows: 16,
+        columns: 16,
+        depth: 16,
+        stages: ShaderStages::MESH
+    }));
+}
+
+#[test]
+fn cooperative_matrix_property_accepts_exact_boundary_shape() {
+    let property = CooperativeMatrixProperties {
+        rows: 1,
+        columns: 1,
+        depth: 1,
+        component_type: CooperativeMatrixComponentType::Sint8,
+        result_type: CooperativeMatrixComponentType::Sint32,
+        stages: ShaderStages::COMPUTE,
+        scope: CooperativeMatrixScope::Workgroup,
+    };
+    assert!(property.satisfies(CooperativeMatrixRequirement {
+        rows: 1,
+        columns: 1,
+        depth: 1,
+        stages: ShaderStages::COMPUTE
+    }));
 }
 
 /// Section 7.2's WebGPU case, which is why `format` returns `Option` where the
@@ -337,6 +402,46 @@ fn the_limits_view_agrees_with_the_single_key_query() {
     assert_eq!(enabled.limits().keys().count(), 2);
 }
 
+#[test]
+fn query_limits_keep_capacity_and_alignment_directions_distinct() {
+    use crate::api::platform::{DeviceRequirements, LimitRequirement};
+
+    let requirements = DeviceRequirements::new()
+        .require_limit_at_least(LimitKey::MaxQueriesPerQuerySet, 256)
+        .require_limit_at_most(LimitKey::QueryResolveBufferAlignment, 16);
+    assert_eq!(
+        requirements.limit_requirements(),
+        &[
+            LimitRequirement::AtLeast {
+                key: LimitKey::MaxQueriesPerQuerySet,
+                value: 256,
+            },
+            LimitRequirement::AtMost {
+                key: LimitKey::QueryResolveBufferAlignment,
+                value: 16,
+            },
+        ]
+    );
+}
+
+#[test]
+fn subgroup_range_is_typed_non_empty_and_visible_as_one_fact() {
+    use crate::api::shader::SubgroupSizeRange;
+
+    assert!(SubgroupSizeRange::new(0, 32).is_none());
+    assert!(SubgroupSizeRange::new(64, 32).is_none());
+    let range = SubgroupSizeRange::new(4, 32).expect("valid inclusive range");
+    assert!(range.contains(4));
+    assert!(range.contains(32));
+    assert!(!range.contains(3));
+    assert!(!range.contains(33));
+
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(OptionalFeature::Subgroup);
+    facts.record_subgroup_size(range);
+    assert_eq!(enabled_from(facts).subgroup_size_range(), Some(range));
+}
+
 /// The compatibility token is evidence of equality and not an ordinal, and it is
 /// not interchangeable with the fingerprint.
 #[test]
@@ -553,6 +658,7 @@ fn a_difference_anywhere_in_the_facts_yields_a_different_id() {
                     kind: crate::api::binding::SamplerKind::Filtering,
                 },
                 array: false,
+                runtime_sized: false,
                 dynamic_offset: false,
             },
             BindingSupport::Unsupported
@@ -601,6 +707,7 @@ fn two_queries_differing_only_inside_a_key_yield_different_ids() {
                     multisampled,
                 },
                 array: false,
+                runtime_sized: false,
                 dynamic_offset: false,
             },
             BindingSupport::Supported,

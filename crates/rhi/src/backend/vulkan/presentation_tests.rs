@@ -158,6 +158,7 @@ fn clear_frame_work(
             load: LoadOp::Clear(ColorClearValue::Float([0.05, 0.2, 0.4, 1.0])),
             store: StoreOp::Store,
             resolve: None,
+            depth_slice: None,
         },
     );
     let mut recorder = device

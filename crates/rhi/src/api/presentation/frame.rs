@@ -393,6 +393,7 @@ pub struct AcquiredFrame {
     device: DeviceIdentity,
     state: AcquiredFrameState,
     attachment: FrameAttachment,
+    suboptimal: bool,
     /// The same domain as the lease that acquired this frame. It keeps the native
     /// configured surface and its sole outstanding-frame record together until this
     /// token ends; there is no optional or independently shared backing.
@@ -426,8 +427,21 @@ impl AcquiredFrame {
             device,
             state: AcquiredFrameState::Acquired,
             attachment: FrameAttachment::new(id, device, format, extent),
+            suboptimal: false,
             presentation: ConfiguredPresentationInner::test_backed(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_suboptimal(
+        id: AcquiredFrameId,
+        device: DeviceIdentity,
+        format: TextureFormat,
+        extent: Extent3d,
+    ) -> Self {
+        let mut frame = Self::new(id, device, format, extent);
+        frame.suboptimal = true;
+        frame
     }
 
     /// Links this frame to the lease record its ending is reported to.
@@ -447,12 +461,14 @@ impl AcquiredFrame {
         extent: Extent3d,
         presentation: Arc<ConfiguredPresentationInner>,
         native: Box<dyn FrameAttachmentBackend>,
+        suboptimal: bool,
     ) -> Self {
         Self {
             id,
             device,
             state: AcquiredFrameState::Acquired,
             attachment: FrameAttachment::new_backed(id, device, format, extent, native),
+            suboptimal,
             presentation,
         }
     }
@@ -480,6 +496,11 @@ impl AcquiredFrame {
     /// Where the frame is in its lifecycle.
     pub fn state(&self) -> AcquiredFrameState {
         self.state
+    }
+
+    /// Whether acquisition succeeded but the target recommends reconfiguration.
+    pub fn suboptimal(&self) -> bool {
+        self.suboptimal
     }
 
     /// The attachment a raster scope draws into.
@@ -818,6 +839,7 @@ impl ConfiguredPresentation {
             },
             Arc::clone(&self.inner),
             acquired.attachment,
+            acquired.suboptimal,
         )
     }
 }

@@ -115,24 +115,40 @@ use windows::Win32::Graphics::Direct3D12::{
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::core::PCWSTR;
 
-use crate::api::command::record::{CopyRecord, RecordedPayload};
+use crate::api::command::{
+    ResourceUse,
+    record::{CopyRecord, RecordedPayload},
+};
+use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::Label;
 use crate::api::platform::DeviceLossInfo;
+use crate::api::resource::backend::{MappedBufferBackend, MappingRequestBackend};
 use crate::api::resource::transfer::ReadbackStatus;
+use crate::api::resource::{BufferRange, MapMode};
 use crate::api::submission::backend::{SubmissionOutcome, SubmissionRequest};
 use crate::api::submission::plan::PlanBatch;
 use crate::api::submission::{CompletionFailure, CompletionState};
 use crate::backend::dx12::ffi;
 use crate::backend::dx12::platform::device::Dx12LossState;
 
-use super::compute::lower_compute_dispatch;
+use super::compute::{lower_compute_dispatch, lower_compute_indirect};
 use super::copy::lower_buffer_copy;
-use super::raster::{RasterScopeState, lower_raster_begin, lower_raster_draw, lower_raster_end};
+use super::dx12_buffer;
+use super::query::{
+    begin as lower_query_begin, end as lower_query_end, resolve as lower_query_resolve,
+};
+use super::raster::{
+    RasterScopeState, lower_raster_begin, lower_raster_draw, lower_raster_end,
+    lower_raster_indirect,
+};
+use super::transfer::lower_texture_clear;
 use super::transfer::{
-    CommittedBatch, lower_buffer_texture_copy, lower_readback, lower_texture_copy, lower_upload,
-    publish_readback,
+    CommittedBatch, lower_buffer_clear, lower_buffer_texture_copy, lower_readback,
+    lower_texture_copy, lower_upload, publish_readback,
 };
 use crate::backend::dx12::failure::{Dx12Failure, ref_native};
+
+use crate::backend::dx12::resource::{self, Dx12Buffer, Dx12BufferHeap};
 
 /// How long `wait_idle` will block before it reports that the GPU never got
 /// there.
@@ -247,6 +263,140 @@ struct CompletionWaiters {
     shutdown: bool,
 }
 
+/// A pending host mapping that waits on the same serial-keyed fence bridge as a
+/// public completion future. It owns a COM reference, never a portable Buffer,
+/// so cancellation cannot extend the logical resource's ownership lifetime.
+struct Dx12DeferredMapping {
+    resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    heap: Dx12BufferHeap,
+    mode: MapMode,
+    range: BufferRange,
+    serial: u64,
+    fence: ID3D12Fence,
+    device: ID3D12Device,
+    state: Arc<Mutex<SpineState>>,
+    waiters: Arc<Mutex<CompletionWaiters>>,
+    loss: Arc<Dx12LossState>,
+    registered: Option<Waker>,
+}
+
+impl Dx12DeferredMapping {
+    fn terminal_error(&self) -> Option<RhiError> {
+        self.loss.loss_info().map(|info| {
+            RhiError::new(RhiErrorKind::DeviceLost, info.message().to_owned())
+                .at("Dx12Device::map_buffer")
+        })
+    }
+
+    fn register(&mut self, waker: &Waker) {
+        let spawn = {
+            let mut waiters = self
+                .waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let registered = waiters.by_serial.entry(self.serial).or_default();
+            if !registered.iter().any(|known| known.will_wake(waker)) {
+                registered.push(waker.clone());
+            }
+            if waiters.active {
+                false
+            } else {
+                waiters.active = true;
+                true
+            }
+        };
+        self.registered = Some(waker.clone());
+        if spawn {
+            let fence = self.fence.clone();
+            let waiters = Arc::clone(&self.waiters);
+            let loss = Arc::clone(&self.loss);
+            std::thread::spawn(move || run_completion_waiter(fence, waiters, loss));
+        }
+    }
+}
+
+fn map_native_error(failure: ffi::NativeError, loss: &Dx12LossState) -> RhiError {
+    if failure.failure().is_terminal() {
+        loss.mark_lost(DeviceLossInfo::new(format!(
+            "Direct3D 12 Map failed terminally: {}",
+            failure.as_error()
+        )));
+    }
+    match loss.loss_info() {
+        Some(info) => RhiError::new(RhiErrorKind::DeviceLost, info.message().to_owned())
+            .at("Dx12Device::map_buffer"),
+        None => failure.into_rhi(),
+    }
+}
+
+impl MappingRequestBackend for Dx12DeferredMapping {
+    fn poll(
+        &mut self,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<RhiResult<Box<dyn MappedBufferBackend>>> {
+        if let Some(error) = self.terminal_error() {
+            return std::task::Poll::Ready(Err(error));
+        }
+        // A removed DX12 fence reports UINT64_MAX. Never compare that sentinel
+        // as an ordinary serial: it would publish a map lease over DMA that may
+        // have been aborted.
+        let completed = unsafe { self.fence.GetCompletedValue() };
+        if is_removed_fence_value(completed) {
+            let detail = match unsafe { self.device.GetDeviceRemovedReason() } {
+                Ok(()) => "DX12 fence reported device removal while mapping".to_owned(),
+                Err(error) => format!("DX12 fence reported device removal while mapping: {error}"),
+            };
+            self.loss.mark_lost(DeviceLossInfo::new(detail));
+            return std::task::Poll::Ready(Err(self
+                .terminal_error()
+                .expect("loss was just marked")));
+        }
+        if completed >= self.serial {
+            return std::task::Poll::Ready(
+                resource::map_resource(self.resource.clone(), self.heap, self.mode, self.range)
+                    .map_err(|failure| map_native_error(failure, &self.loss)),
+            );
+        }
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((bound, failure)) = &state.unobservable {
+            if self.serial >= *bound {
+                return std::task::Poll::Ready(Err(RhiError::new(
+                    RhiErrorKind::BackendFailure,
+                    failure.message(),
+                )
+                .at("Dx12Device::map_buffer")));
+            }
+        }
+        drop(state);
+        self.register(context.waker());
+        if let Some(error) = self.terminal_error() {
+            return std::task::Poll::Ready(Err(error));
+        }
+        std::task::Poll::Pending
+    }
+}
+
+impl Drop for Dx12DeferredMapping {
+    fn drop(&mut self) {
+        let Some(waker) = self.registered.take() else {
+            return;
+        };
+        let mut waiters = self
+            .waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(registered) = waiters.by_serial.get_mut(&self.serial) {
+            registered.retain(|known| !known.will_wake(&waker));
+            if registered.is_empty() {
+                waiters.by_serial.remove(&self.serial);
+            }
+        }
+    }
+}
+
 impl SpineState {
     /// Claims a slot free to record into, creating one if none is.
     ///
@@ -345,6 +495,36 @@ impl Drop for OwnedEvent {
 }
 
 impl Dx12CommandSpine {
+    /// Starts mapping only after the buffer's last accepted queue serial. The
+    /// request shares completion's one fence waiter; it never creates a thread
+    /// per map and its Drop removes its registered waker.
+    pub(crate) fn map_buffer(
+        &self,
+        buffer: &Dx12Buffer,
+        mode: MapMode,
+        range: BufferRange,
+    ) -> RhiResult<Box<dyn MappingRequestBackend>> {
+        let serial = buffer.last_accepted();
+        if serial == 0 {
+            return resource::map_buffer(buffer, mode, range)
+                .map_err(|failure| map_native_error(failure, &self.loss));
+        }
+        let (resource, heap) = buffer.mapping_parts();
+        Ok(Box::new(Dx12DeferredMapping {
+            resource,
+            heap,
+            mode,
+            range,
+            serial,
+            fence: self.fence.clone(),
+            device: self.device.clone(),
+            state: Arc::clone(&self.state),
+            waiters: Arc::clone(&self.completion_waiters),
+            loss: Arc::clone(&self.loss),
+            registered: None,
+        }))
+    }
+
     pub(crate) fn queue(&self) -> ID3D12CommandQueue {
         self.queue.clone()
     }
@@ -519,6 +699,9 @@ impl Dx12CommandSpine {
                     raster_textures: Vec::new(),
                     raster_descriptor_heaps: Vec::new(),
                     bind_groups: Vec::new(),
+                    query_sets: Vec::new(),
+                    indirect_buffers: Vec::new(),
+                    command_signatures: Vec::new(),
                 };
                 self.record_batch(&slot.list, batch, &mut committed)?;
 
@@ -559,6 +742,22 @@ impl Dx12CommandSpine {
             // the duration of the call, and the queue holds its own reference to
             // every list it is given.
             unsafe { self.queue.ExecuteCommandLists(&[Some(list)]) };
+
+            // ExecuteCommandLists is the acceptance boundary. Only after this
+            // call may a mapping request wait on this serial; doing it while
+            // Phase A records would leave a failed transactional submit with a
+            // phantom GPU dependency.
+            for resource_use in request.batches[offset]
+                .work
+                .iter()
+                .flat_map(|work| work.resource_uses())
+            {
+                if let ResourceUse::Buffer(buffer_use) = resource_use {
+                    if let Ok(native) = dx12_buffer(&buffer_use.buffer) {
+                        native.mark_accepted(serial);
+                    }
+                }
+            }
 
             // DXGI Present transfers ownership after the batch its plan point
             // names has entered the queue.  It cannot turn Phase B back into an
@@ -673,6 +872,22 @@ impl Dx12CommandSpine {
                         };
                         lower_raster_draw(list, draw, &command.uses, scope, committed)?;
                     }
+                    RecordedPayload::RasterIndirect(draw) => {
+                        let Some(scope) = raster.as_ref() else {
+                            return Err(Dx12Failure::Unsupported {
+                                what: "an indirect raster draw outside a raster scope",
+                                why: "the portable recorder never emits it",
+                            });
+                        };
+                        lower_raster_indirect(
+                            &self.device,
+                            list,
+                            draw,
+                            &command.uses,
+                            scope,
+                            committed,
+                        )?;
+                    }
                     RecordedPayload::RasterEnd => {
                         let Some(scope) = raster.take() else {
                             return Err(Dx12Failure::Unsupported {
@@ -684,6 +899,15 @@ impl Dx12CommandSpine {
                     }
                     RecordedPayload::Copy(CopyRecord::Buffer(copy)) => {
                         lower_buffer_copy(list, copy)?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::ClearBuffer { buffer, range }) => {
+                        lower_buffer_clear(&self.device, list, buffer, *range, committed)?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::ClearTexture {
+                        texture,
+                        subresources,
+                    }) => {
+                        lower_texture_clear(&self.device, list, texture, *subresources, committed)?;
                     }
                     RecordedPayload::Copy(CopyRecord::Texture(copy)) => {
                         lower_texture_copy(list, copy)?;
@@ -703,6 +927,24 @@ impl Dx12CommandSpine {
                     RecordedPayload::ComputeBegin(_) | RecordedPayload::ComputeEnd => {}
                     RecordedPayload::ComputeDispatch(dispatch) => {
                         lower_compute_dispatch(list, dispatch, &command.uses, committed)?;
+                    }
+                    RecordedPayload::ComputeIndirect(dispatch) => {
+                        lower_compute_indirect(
+                            &self.device,
+                            list,
+                            dispatch,
+                            &command.uses,
+                            committed,
+                        )?;
+                    }
+                    RecordedPayload::QueryBegin { set, index } => {
+                        lower_query_begin(list, set, *index, committed)?;
+                    }
+                    RecordedPayload::QueryEnd { set, index } => {
+                        lower_query_end(list, set, *index, committed)?;
+                    }
+                    RecordedPayload::QueryResolve(query) => {
+                        lower_query_resolve(list, query, committed)?;
                     }
                     // D3D12's event methods copy the marker payload during the
                     // call. They are legal on every command list and carry no
@@ -921,6 +1163,12 @@ impl Dx12CommandSpine {
         // value will never be written — from hanging the host forever.
         let waited = unsafe { WaitForSingleObject(event.0, WAIT_BOUND_MS) };
         if waited != WAIT_OBJECT_0 {
+            // A removal can race the event registration such that the bounded
+            // host wait expires before its event is delivered.  Sample the
+            // fence once before classifying that case as merely slow: D3D12
+            // signals removed-device fences to UINT64_MAX, and completed_value
+            // converts that sentinel into the shared terminal loss state.
+            let _ = self.completed_value()?;
             return Err(Dx12Failure::Stalled {
                 bound_ms: WAIT_BOUND_MS,
             });
@@ -1240,11 +1488,23 @@ const NOT_LOWERED: &str = "this recorded operation has no Direct3D 12 lowering y
 /// the wrong thing.
 fn payload_name(payload: &RecordedPayload) -> &'static str {
     match payload {
+        RecordedPayload::MeshDispatch(_) => "a mesh dispatch",
+        RecordedPayload::MeshIndirect(_) => "an indirect mesh dispatch",
+        RecordedPayload::RayTracingBegin(_) => "a ray-tracing scope",
+        RecordedPayload::RayTracingDispatch(_) => "a ray dispatch",
+        RecordedPayload::RayTracingEnd => "the end of a ray-tracing scope",
+        RecordedPayload::AccelerationStructure(_) => "an acceleration-structure operation",
         RecordedPayload::RasterBegin(_) => "a raster scope",
         RecordedPayload::RasterDraw(_) => "a draw",
         RecordedPayload::RasterEnd => "the end of a raster scope",
         RecordedPayload::ComputeBegin(_) => "a compute scope",
         RecordedPayload::ComputeDispatch(_) => "a dispatch",
+        RecordedPayload::RasterIndirect(_) => "an indirect raster draw",
+        RecordedPayload::ComputeIndirect(_) => "an indirect compute dispatch",
+        RecordedPayload::QueryBegin { .. } => "a query begin",
+        RecordedPayload::QueryEnd { .. } => "a query end",
+        RecordedPayload::TimestampWrite { .. } => "a timestamp write",
+        RecordedPayload::QueryResolve(_) => "a query resolve",
         RecordedPayload::ComputeEnd => "the end of a compute scope",
         RecordedPayload::Copy(_) => "a copy this spine has no lowering for",
         RecordedPayload::Upload(_) => "an upload",

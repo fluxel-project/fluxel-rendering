@@ -62,6 +62,7 @@
 //! repaired, because a recording with a hole in it cannot be lowered and pretending
 //! otherwise would put a malformed command sequence in front of a driver.
 
+pub(crate) mod advanced;
 pub(crate) mod attachment;
 pub(crate) mod compute;
 pub(crate) mod copy;
@@ -70,6 +71,9 @@ pub(crate) mod raster;
 pub(crate) mod record;
 pub(crate) mod uses;
 
+pub use advanced::{
+    RayTracingScope, RayTracingScopeDescriptor, RayTracingShaderTable, RayTracingShaderTableRegion,
+};
 pub use attachment::{
     ColorAttachment, ColorAttachmentView, DepthAttachmentMode, DepthStencilAttachment,
     RasterScopeDescriptor, StencilAttachmentMode,
@@ -82,14 +86,16 @@ pub use geometry::{Color, ColorClearValue, LoadOp, Rect, StoreOp, Viewport};
 pub use raster::RasterScope;
 pub use record::RecordedWork;
 pub use uses::{
-    AccessMask, BufferUse, FrameAttachmentUse, PipelineScope, ResourceUse, TextureUse,
-    TextureUseIntent,
+    AccelerationStructureUse, AccessMask, BufferUse, FrameAttachmentUse, PipelineScope,
+    ResourceUse, TextureUse, TextureUseIntent,
 };
 
 use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::external::ExternalImageCopyDescriptor;
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
+use crate::api::query::{QuerySet, QueryType, validate_query};
 use crate::api::resource::buffer::BufferRange;
 use crate::api::resource::transfer::readback::{
     validate_buffer_readback, validate_texture_readback,
@@ -98,13 +104,14 @@ use crate::api::resource::transfer::{
     ReadbackRequest, ReadbackTicket, UploadDescriptor, UploadJob,
 };
 use crate::api::submission::LaneWorkDomains;
+use std::collections::HashSet;
 
 use self::copy::{
     buffer_copy_route, buffer_texture_route, resolve_route, texture_copy_route,
     texture_to_buffer_route, validate_buffer_copy, validate_buffer_texture_copy,
     validate_texture_blit, validate_texture_copy, validate_texture_resolve,
 };
-use self::record::{CopyRecord, RecordedCommand, RecordedPayload};
+use self::record::{CopyRecord, QueryResolve, RecordedCommand, RecordedPayload};
 use self::uses::copy_uses;
 
 /// The index element type a strip topology is cut with.
@@ -223,9 +230,411 @@ pub struct CommandRecorder {
     domains: Option<LaneWorkDomains>,
     /// This recorder's own debug-group stack, independent of any scope's.
     debug_stack: Vec<String>,
+    /// Query slots written by this RecordedWork. A backend may reset a set only
+    /// once in its preamble, so reusing one slot cannot be lowered correctly.
+    written_queries: HashSet<(ObjectId, u32)>,
 }
 
 impl CommandRecorder {
+    /// Copies an opaque host image into a destination texture.
+    ///
+    /// The source remains backend-private: only its opaque bridge token reaches
+    /// lowering.  The destination is a normal copy destination and therefore
+    /// participates in `ResourceUse` and submission hazards like every copy.
+    pub fn copy_external_image_to_texture(
+        &mut self,
+        copy: ExternalImageCopyDescriptor,
+    ) -> RhiResult<()> {
+        self.require_open("copy_external_image_to_texture")?;
+        if !self.capabilities().supports_feature(
+            crate::api::platform::requirements::OptionalFeature::ExternalImageCopy,
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "external image copies are not enabled on this device",
+            )
+            .at("CommandRecorder::copy_external_image_to_texture"));
+        }
+        if copy.source.device_identity() != self.device {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the external image source belongs to a different device/context",
+            )
+            .with_object(copy.source.id())
+            .at("CommandRecorder::copy_external_image_to_texture"));
+        }
+        crate::api::resource::texture::validate_texture_ownership(&copy.destination, self.device)?;
+        if !copy
+            .destination
+            .descriptor()
+            .usage
+            .contains(crate::api::resource::TextureUsage::COPY_DST)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "an external image copy destination requires COPY_DST usage",
+            )
+            .at("CommandRecorder::copy_external_image_to_texture"));
+        }
+        let capabilities = self.owner.external_image_copy_capabilities()?;
+        if copy.flip_y && !capabilities.flip_y {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device cannot flip external image copies vertically",
+            )
+            .at("CommandRecorder::copy_external_image_to_texture"));
+        }
+        if copy.alpha_mode != crate::api::external::ExternalAlphaMode::Premultiplied
+            && !capabilities.alpha_mode
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device cannot select external-image alpha interpretation",
+            )
+            .at("CommandRecorder::copy_external_image_to_texture"));
+        }
+        if copy.color_space_conversion != crate::api::external::ExternalColorSpaceConversion::None
+            && !capabilities.color_space_conversion
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device cannot perform external-image color-space conversion",
+            )
+            .at("CommandRecorder::copy_external_image_to_texture"));
+        }
+        let source_end_x = copy.source_origin.x.checked_add(copy.extent.width);
+        let source_end_y = copy.source_origin.y.checked_add(copy.extent.height);
+        if copy.extent.depth != 1
+            || source_end_x.is_none_or(|x| x > copy.source.extent().width)
+            || source_end_y.is_none_or(|y| y > copy.source.extent().height)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "external copy source origin and extent must name one in-bounds 2D image region",
+            )
+            .at("CommandRecorder::copy_external_image_to_texture"));
+        }
+        crate::api::resource::transfer::validate_texture_region(
+            copy.destination.descriptor(),
+            copy.destination_subresource,
+            copy.destination_origin,
+            copy.extent,
+        )?;
+        let uses = copy_uses(&CopyRecord::ExternalImage(copy.clone()));
+        self.record_command(
+            RecordedPayload::Copy(CopyRecord::ExternalImage(copy)),
+            uses,
+            crate::api::submission::LaneWorkDomains::COPY,
+        );
+        Ok(())
+    }
+    /// Clears a buffer range to zero.
+    ///
+    /// Backends that cannot lower a native buffer clear leave `ClearBuffer`
+    /// disabled; this method then returns `Unsupported` before recording work.
+    pub fn clear_buffer(
+        &mut self,
+        buffer: &crate::api::resource::Buffer,
+        range: BufferRange,
+    ) -> RhiResult<()> {
+        self.require_open("clear_buffer")?;
+        if !self
+            .capabilities()
+            .supports_feature(crate::api::platform::requirements::OptionalFeature::ClearBuffer)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device has no native clear-buffer route",
+            )
+            .at("CommandRecorder::clear_buffer"));
+        }
+        crate::api::resource::buffer::validate_buffer_ownership(buffer, self.device)?;
+        if !buffer
+            .descriptor()
+            .usage
+            .contains(crate::api::resource::BufferUsage::COPY_DST)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "clear_buffer requires COPY_DST usage",
+            )
+            .at("CommandRecorder::clear_buffer"));
+        }
+        if range.offset % 4 != 0 || range.size % 4 != 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "clear_buffer offset and size must be four-byte aligned",
+            )
+            .at("CommandRecorder::clear_buffer"));
+        }
+        crate::api::resource::buffer::validate_buffer_range(range, buffer.descriptor().size)?;
+        let uses = vec![ResourceUse::Buffer(BufferUse {
+            buffer: buffer.clone(),
+            range,
+            stages: PipelineScope::COPY,
+            access: AccessMask::COPY_WRITE,
+        })];
+        self.record_command(
+            RecordedPayload::Copy(CopyRecord::ClearBuffer {
+                buffer: buffer.clone(),
+                range,
+            }),
+            uses,
+            crate::api::submission::LaneWorkDomains::COPY,
+        );
+        Ok(())
+    }
+
+    /// Clears every texel in `subresources` to the backend-defined zero value.
+    ///
+    /// The command deliberately does not synthesize a render or compute pass:
+    /// a backend without a native clear route reports `ClearTexture` absent.
+    pub fn clear_texture(
+        &mut self,
+        texture: &crate::api::resource::Texture,
+        subresources: crate::api::resource::TextureSubresourceRange,
+    ) -> RhiResult<()> {
+        self.require_open("clear_texture")?;
+        if !self
+            .capabilities()
+            .supports_feature(crate::api::platform::requirements::OptionalFeature::ClearTexture)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device has no native clear-texture route",
+            )
+            .at("CommandRecorder::clear_texture"));
+        }
+        crate::api::resource::texture::validate_texture_ownership(texture, self.device)?;
+        if !texture
+            .descriptor()
+            .usage
+            .contains(crate::api::resource::TextureUsage::COPY_DST)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "clear_texture requires COPY_DST usage",
+            )
+            .at("CommandRecorder::clear_texture"));
+        }
+        crate::api::resource::subresource::validate_subresource_range(
+            subresources,
+            texture.descriptor().dimension,
+        )?;
+        if !crate::api::format::format_aspects(texture.descriptor().format)
+            .contains(subresources.aspects)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "clear texture subresources select an aspect the texture format does not have",
+            )
+            .at("CommandRecorder::clear_texture"));
+        }
+        if (subresources
+            .aspects
+            .contains(crate::api::resource::TextureAspects::DEPTH)
+            || subresources
+                .aspects
+                .contains(crate::api::resource::TextureAspects::STENCIL))
+            && !texture
+                .descriptor()
+                .usage
+                .contains(crate::api::resource::TextureUsage::DEPTH_STENCIL_ATTACHMENT)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "clearing a depth or stencil aspect requires DEPTH_STENCIL_ATTACHMENT usage",
+            )
+            .at("CommandRecorder::clear_texture"));
+        }
+        let mip_end = subresources
+            .base_mip
+            .checked_add(subresources.mip_count)
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "clear texture mip range overflows u32",
+                )
+            })?;
+        if mip_end > texture.descriptor().mip_levels {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "clear texture mip range exceeds the texture mip count",
+            )
+            .at("CommandRecorder::clear_texture"));
+        }
+        if texture.descriptor().dimension != crate::api::resource::TextureDimension::D3 {
+            let layer_end = subresources
+                .base_layer
+                .checked_add(subresources.layer_count)
+                .ok_or_else(|| {
+                    RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "clear texture layer range overflows u32",
+                    )
+                })?;
+            if layer_end > texture.descriptor().array_layers {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "clear texture layer range exceeds the texture layer count",
+                )
+                .at("CommandRecorder::clear_texture"));
+            }
+        }
+        let uses = vec![ResourceUse::Texture(TextureUse {
+            texture: texture.clone(),
+            subresources,
+            stages: PipelineScope::COPY,
+            access: AccessMask::COPY_WRITE,
+            intent: TextureUseIntent::CopyDst,
+        })];
+        self.record_command(
+            RecordedPayload::Copy(CopyRecord::ClearTexture {
+                texture: texture.clone(),
+                subresources,
+            }),
+            uses,
+            crate::api::submission::LaneWorkDomains::COPY,
+        );
+        Ok(())
+    }
+    /// Writes a timestamp outside a pass scope.
+    pub fn write_timestamp(&mut self, set: &QuerySet, index: u32) -> RhiResult<()> {
+        self.require_open("write_timestamp")?;
+        if !self.capabilities().supports_feature(
+            crate::api::platform::requirements::OptionalFeature::TimestampInsideEncoder,
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not support timestamps outside a scope",
+            )
+            .at("CommandRecorder::write_timestamp"));
+        }
+        if set.descriptor().ty != QueryType::Timestamp {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "write_timestamp requires a Timestamp query set",
+            )
+            .at("CommandRecorder::write_timestamp"));
+        }
+        validate_query(set, index, self.device, "CommandRecorder::write_timestamp")?;
+        self.mark_query_written(set, index, "CommandRecorder::write_timestamp")?;
+        self.record_command(
+            RecordedPayload::TimestampWrite {
+                set: set.clone(),
+                index,
+            },
+            Vec::new(),
+            crate::api::submission::LaneWorkDomains::COPY,
+        );
+        Ok(())
+    }
+
+    /// Resolves a contiguous query range into a buffer.
+    pub fn resolve_query_set(
+        &mut self,
+        set: &QuerySet,
+        first_query: u32,
+        query_count: u32,
+        destination: &crate::api::resource::Buffer,
+        destination_offset: u64,
+    ) -> RhiResult<()> {
+        self.require_open("resolve_query_set")?;
+        if !self
+            .capabilities()
+            .supports_feature(crate::api::platform::requirements::OptionalFeature::QueryResolve)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not support query-result resolution",
+            )
+            .at("CommandRecorder::resolve_query_set"));
+        }
+        if query_count == 0 {
+            return Err(
+                RhiError::new(RhiErrorKind::InvalidUsage, "query_count must not be zero")
+                    .at("CommandRecorder::resolve_query_set"),
+            );
+        }
+        validate_query(
+            set,
+            first_query,
+            self.device,
+            "CommandRecorder::resolve_query_set",
+        )?;
+        let last = first_query.checked_add(query_count - 1).ok_or_else(|| {
+            RhiError::new(RhiErrorKind::InvalidUsage, "query range overflows u32")
+        })?;
+        validate_query(set, last, self.device, "CommandRecorder::resolve_query_set")?;
+        crate::api::resource::buffer::validate_buffer_ownership(destination, self.device)?;
+        if !destination
+            .descriptor()
+            .usage
+            .contains(crate::api::resource::BufferUsage::QUERY_RESOLVE)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "query-result destination requires QUERY_RESOLVE usage",
+            )
+            .at("CommandRecorder::resolve_query_set"));
+        }
+        let Some(alignment) = self
+            .capabilities()
+            .limit(crate::api::platform::requirements::LimitKey::QueryResolveBufferAlignment)
+        else {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device did not report query-result resolve alignment",
+            )
+            .at("CommandRecorder::resolve_query_set"));
+        };
+        if alignment == 0 || !alignment.is_power_of_two() {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device reported an invalid query-result resolve alignment",
+            )
+            .at("CommandRecorder::resolve_query_set"));
+        }
+        if destination_offset % alignment != 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                format!("query-result destination offset must be {alignment}-byte aligned"),
+            )
+            .at("CommandRecorder::resolve_query_set"));
+        }
+        let words = u64::from(set.descriptor().ty.result_words());
+        let bytes = u64::from(query_count)
+            .checked_mul(words)
+            .and_then(|words| words.checked_mul(8))
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "query resolve size overflows u64",
+                )
+            })?;
+        crate::api::resource::buffer::validate_buffer_range(
+            BufferRange::new(destination_offset, bytes),
+            destination.descriptor().size,
+        )?;
+        let uses = vec![ResourceUse::Buffer(BufferUse {
+            buffer: destination.clone(),
+            range: BufferRange::new(destination_offset, bytes),
+            stages: PipelineScope::COPY,
+            access: AccessMask::QUERY_RESOLVE_WRITE,
+        })];
+        self.record_command(
+            RecordedPayload::QueryResolve(QueryResolve {
+                set: set.clone(),
+                first_query,
+                query_count,
+                destination: destination.clone(),
+                destination_offset,
+            }),
+            uses,
+            crate::api::submission::LaneWorkDomains::COPY,
+        );
+        Ok(())
+    }
     /// Assembles a recorder.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
@@ -244,7 +653,25 @@ impl CommandRecorder {
             commands: Vec::new(),
             domains: None,
             debug_stack: Vec::new(),
+            written_queries: HashSet::new(),
         }
+    }
+
+    /// Records the single-write rule for query slots in this work item.
+    pub(crate) fn mark_query_written(
+        &mut self,
+        set: &QuerySet,
+        index: u32,
+        operation: &'static str,
+    ) -> RhiResult<()> {
+        if !self.written_queries.insert((set.id(), index)) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "one QuerySet slot may be written at most once per RecordedWork",
+            )
+            .at(operation));
+        }
+        Ok(())
     }
 
     /// The device every object in this recording belongs to.
@@ -317,13 +744,10 @@ impl CommandRecorder {
             .iter()
             .flat_map(|command| command.uses.iter().cloned())
             .collect();
-        Ok(RecordedWork::new(
-            self.id,
-            self.device,
-            domains,
-            uses,
-            self.commands,
-        ))
+        let work = RecordedWork::new(self.id, self.device, domains, uses, self.commands);
+        self.owner
+            .retain_captured_work(crate::api::tooling::work::capture_recorded_work(&work));
+        Ok(work)
     }
 
     /// Copies a byte range between two buffers.
@@ -355,10 +779,7 @@ impl CommandRecorder {
             buffer_texture_route(copy, true),
             "copy_buffer_to_texture",
             CopyRecord::BufferToTexture(copy.clone()),
-            Alignment::Texel {
-                buffer_offset: copy.buffer_offset,
-                bytes_per_row: copy.bytes_per_row,
-            },
+            texel_alignment(copy),
         )
     }
 
@@ -370,10 +791,7 @@ impl CommandRecorder {
             buffer_texture_route(copy, false),
             "copy_texture_to_buffer",
             CopyRecord::TextureToBuffer(copy.clone()),
-            Alignment::Texel {
-                buffer_offset: copy.buffer_offset,
-                bytes_per_row: copy.bytes_per_row,
-            },
+            texel_alignment(copy),
         )
     }
 
@@ -747,10 +1165,23 @@ impl CommandRecorder {
             Alignment::Texel {
                 buffer_offset,
                 bytes_per_row,
+                rows_per_image,
+                logical_block_rows,
+                dimension,
+                image_count,
             } => {
                 let limits = self.texel_copy_layout_limits(route, what)?;
                 limits
                     .validate(buffer_offset, bytes_per_row)
+                    .map_err(|e| e.at(what))?;
+                limits
+                    .validate_image_layout(
+                        bytes_per_row,
+                        rows_per_image,
+                        logical_block_rows,
+                        dimension,
+                        image_count,
+                    )
                     .map_err(|e| e.at(what))?;
             }
         }
@@ -778,11 +1209,39 @@ enum Alignment {
         dst_offset: u64,
         size: u64,
     },
-    /// A buffer/texture copy: where the buffer side starts, and its row stride.
+    /// A buffer/texture copy: the buffer's row/image layout and region shape.
     Texel {
         buffer_offset: u64,
         bytes_per_row: u32,
+        rows_per_image: u32,
+        logical_block_rows: u32,
+        dimension: crate::api::resource::TextureDimension,
+        image_count: u32,
     },
+}
+
+/// Extracts the device-dependent image-layout facts from the already validated
+/// portable copy descriptor.  `rows_per_image` is measured in physical format
+/// block rows, while a 3D extent's depth is one native footprint's Z count;
+/// keeping both values here prevents a route validator from mistaking array
+/// layers for 3D slices.
+fn texel_alignment(copy: &BufferTextureCopy) -> Alignment {
+    let descriptor = copy.texture.descriptor();
+    let (_, block_height) = crate::api::format::block_extent(descriptor.format);
+    let image_count = match descriptor.dimension {
+        crate::api::resource::TextureDimension::D3 => copy.extent.depth,
+        crate::api::resource::TextureDimension::D1 | crate::api::resource::TextureDimension::D2 => {
+            copy.texture_subresource.layer_count
+        }
+    };
+    Alignment::Texel {
+        buffer_offset: copy.buffer_offset,
+        bytes_per_row: copy.bytes_per_row,
+        rows_per_image: copy.rows_per_image,
+        logical_block_rows: copy.extent.height.div_ceil(block_height),
+        dimension: descriptor.dimension,
+        image_count,
+    }
 }
 
 impl core::fmt::Debug for CommandRecorder {

@@ -12,19 +12,19 @@
 
 use crate::api::format::{
     FormatFacts, StorageAccessSupport, TextureFormat, TextureSupport, TextureSupportLimits,
-    TextureSupportQuery,
+    TextureSupportQuery, format_aspects, logical_bytes_per_block, sample_type,
 };
 use crate::api::resource::subresource::TextureAspects;
 use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
 
-/// Every P0 format, in section 8.1's own order.
+/// The 38 uncompressed core formats, in section 8.1's own order.
 ///
 /// Written out rather than derived from the enum, because a list derived from
 /// the type under test cannot detect a variant that went missing — and this list
 /// is what pins the count the specification freezes.
-const ALL_FORMATS: [TextureFormat; 38] = [
+const CORE_FORMATS: [TextureFormat; 38] = [
     TextureFormat::R8Unorm,
     TextureFormat::R8Snorm,
     TextureFormat::R8Uint,
@@ -63,6 +63,27 @@ const ALL_FORMATS: [TextureFormat; 38] = [
     TextureFormat::Depth24PlusStencil8,
     TextureFormat::Depth32Float,
     TextureFormat::Depth32FloatStencil8,
+];
+
+/// The HDR ASTC vocabulary is deliberately an independent, exhaustive list.
+/// A backend walks `TextureFormat::all`, but this second list catches the more
+/// subtle regression where a new HDR block shape is declared yet omitted from
+/// a table shared by copy layout and capability probing.
+const ASTC_HDR_FORMATS: [TextureFormat; 14] = [
+    TextureFormat::Astc4x4Hdr,
+    TextureFormat::Astc5x4Hdr,
+    TextureFormat::Astc5x5Hdr,
+    TextureFormat::Astc6x5Hdr,
+    TextureFormat::Astc6x6Hdr,
+    TextureFormat::Astc8x5Hdr,
+    TextureFormat::Astc8x6Hdr,
+    TextureFormat::Astc8x8Hdr,
+    TextureFormat::Astc10x5Hdr,
+    TextureFormat::Astc10x6Hdr,
+    TextureFormat::Astc10x8Hdr,
+    TextureFormat::Astc10x10Hdr,
+    TextureFormat::Astc12x10Hdr,
+    TextureFormat::Astc12x12Hdr,
 ];
 
 /// Facts for one format, assembled the way the device façade will assemble them.
@@ -117,10 +138,10 @@ fn every_p0_format_survives_the_round_trip_through_its_own_accessors() {
     // Section 8.1's list has 38 entries. The count is asserted, not just the
     // presence of each name, because the failure this catches is a variant
     // dropped while transcribing.
-    assert_eq!(ALL_FORMATS.len(), 38);
+    assert_eq!(CORE_FORMATS.len(), 38);
 
     let mut seen = std::collections::HashSet::new();
-    for format in ALL_FORMATS {
+    for format in CORE_FORMATS {
         assert!(seen.insert(format), "{format:?} is listed twice");
         // All three accessors are total: every format answers, and none panics.
         let _ = facts(format).aspects();
@@ -184,12 +205,22 @@ fn aspects_follow_the_format_family() {
     assert_eq!(facts(TextureFormat::Depth24PlusStencil8).aspects(), both);
     assert_eq!(facts(TextureFormat::Depth32FloatStencil8).aspects(), both);
 
-    // No format carries a stencil aspect without a depth aspect: a stencil-only
-    // format is not in P0, so the shape of the set is bounded by what is legal.
-    for format in ALL_FORMATS {
+    // Stencil-only is a real format-family member. It must not be folded into
+    // depth-stencil merely because most native APIs commonly pair the two.
+    assert_eq!(
+        facts(TextureFormat::Stencil8).aspects(),
+        TextureAspects::STENCIL
+    );
+
+    // Any remaining stencil format is a depth-stencil representation; this
+    // makes the stencil-only exception explicit and keeps the family rule
+    // reviewable as formats are added.
+    for format in TextureFormat::all() {
         let aspects = facts(format).aspects();
         assert!(
-            !aspects.contains(TextureAspects::STENCIL) || aspects.contains(TextureAspects::DEPTH),
+            format == TextureFormat::Stencil8
+                || !aspects.contains(TextureAspects::STENCIL)
+                || aspects.contains(TextureAspects::DEPTH),
             "{format:?} has a stencil aspect without a depth aspect"
         );
     }
@@ -202,6 +233,9 @@ fn alpha_follows_the_channel_count_not_the_channel_order() {
     assert!(facts(TextureFormat::Bgra8UnormSrgb).has_alpha_channel());
     assert!(facts(TextureFormat::Rgba16Float).has_alpha_channel());
     assert!(facts(TextureFormat::Rgba32Float).has_alpha_channel());
+    assert!(facts(TextureFormat::Rgb10a2Uint).has_alpha_channel());
+    assert!(facts(TextureFormat::Astc4x4Hdr).has_alpha_channel());
+    assert!(facts(TextureFormat::Astc12x12UnormSrgb).has_alpha_channel());
 
     assert!(!facts(TextureFormat::R8Unorm).has_alpha_channel());
     assert!(!facts(TextureFormat::Rg8Unorm).has_alpha_channel());
@@ -210,16 +244,79 @@ fn alpha_follows_the_channel_count_not_the_channel_order() {
 }
 
 #[test]
-fn block_geometry_is_one_texel_for_every_p0_format() {
-    // No compressed or planar format is in P0 (section 8.1), so every block is
-    // exactly one texel. The accessors exist so that a caller who reads them
-    // gets the right answer for the formats that exist, which is what makes the
-    // addition of one that does not cover a single texel a data change rather
-    // than a silent breakage.
-    for format in ALL_FORMATS {
+fn block_geometry_is_one_texel_for_every_uncompressed_core_format() {
+    // Every uncompressed core format has one texel per block; compressed
+    // geometry is checked separately below.
+    for format in CORE_FORMATS {
         assert_eq!(facts(format).block_width(), 1, "{format:?}");
         assert_eq!(facts(format).block_height(), 1, "{format:?}");
     }
+}
+
+#[test]
+fn compressed_formats_expose_exact_block_geometry_and_bytes() {
+    let bc1 = facts(TextureFormat::Bc1RgbaUnorm);
+    assert_eq!((bc1.block_width(), bc1.block_height()), (4, 4));
+    assert_eq!(bc1.logical_bytes_per_block(), Some(8));
+    assert!(bc1.has_alpha_channel());
+
+    let etc = facts(TextureFormat::Etc2Rgba8UnormSrgb);
+    assert_eq!((etc.block_width(), etc.block_height()), (4, 4));
+    assert_eq!(etc.logical_bytes_per_block(), Some(16));
+
+    let astc = facts(TextureFormat::Astc12x10UnormSrgb);
+    assert_eq!((astc.block_width(), astc.block_height()), (12, 10));
+    assert_eq!(astc.logical_bytes_per_block(), Some(16));
+}
+
+/// Positive contract: every HDR ASTC block is a color, floating-point sampled
+/// 16-byte codec block. This is intrinsic vocabulary, not a claim that a
+/// particular device supports it.
+#[test]
+fn astc_hdr_formats_have_complete_intrinsic_codec_facts() {
+    let mut seen = std::collections::HashSet::new();
+    for format in ASTC_HDR_FORMATS {
+        assert!(seen.insert(format), "{format:?} is listed twice");
+        let facts = facts(format);
+        assert_eq!(facts.aspects(), TextureAspects::COLOR, "{format:?}");
+        assert_eq!(facts.logical_bytes_per_block(), Some(16), "{format:?}");
+        assert_eq!(
+            sample_type(format),
+            Some(crate::api::binding::TextureSampleType::Float)
+        );
+    }
+    assert_eq!(seen.len(), 14);
+}
+
+/// Boundary contract: transfer planning uses codec-block ceiling division, so
+/// an extent ending exactly at a block boundary consumes no phantom block and
+/// one texel past it consumes exactly one additional block.
+#[test]
+fn astc_hdr_block_boundaries_are_exact_for_copy_planning() {
+    for format in ASTC_HDR_FORMATS {
+        let facts = facts(format);
+        let (width, height) = (facts.block_width(), facts.block_height());
+        let blocks = |extent: u32, block: u32| extent.div_ceil(block);
+        assert_eq!(blocks(width, width), 1, "{format:?}");
+        assert_eq!(blocks(width + 1, width), 2, "{format:?}");
+        assert_eq!(blocks(height, height), 1, "{format:?}");
+        assert_eq!(blocks(height + 1, height), 2, "{format:?}");
+    }
+}
+
+/// Negative contract: a public format name never manufactures a capability.
+/// In particular an ASTC HDR key may be structurally valid while a device that
+/// did not enable/probe the native feature answers `Unsupported`.
+#[test]
+fn astc_hdr_support_is_not_inferred_from_the_format_name() {
+    let query = TextureSupportQuery::new(
+        TextureDimension::D2,
+        TextureFormat::Astc4x4Hdr,
+        TextureUsage::SAMPLED,
+        1,
+    );
+    assert_eq!(query.format(), TextureFormat::Astc4x4Hdr);
+    assert!(!TextureSupport::Unsupported.is_supported());
 }
 
 #[test]
@@ -303,7 +400,7 @@ fn the_byte_count_table_agrees_with_the_format_name_where_it_reports() {
     // A weak but broad check that the table did not drift: every format whose
     // name ends in `32` and that reports a count reports a multiple of four, and
     // the count never exceeds the sum of its widest channels.
-    for format in ALL_FORMATS {
+    for format in CORE_FORMATS {
         if let Some(bytes) = facts(format).logical_bytes_per_block() {
             assert!(bytes > 0, "{format:?}");
             assert!(bytes <= 16, "{format:?} reports {bytes} bytes per texel");
@@ -499,7 +596,7 @@ fn the_format_enumeration_covers_every_declared_variant() {
         .iter()
         .map(|format| *format as usize)
         .max()
-        .expect("the P0 format set is not empty");
+        .expect("the frozen format set is not empty");
 
     assert_eq!(
         enumerated.len(),
@@ -507,5 +604,40 @@ fn the_format_enumeration_covers_every_declared_variant() {
         "TextureFormat::all must list every variant exactly once; it lists {} of {}",
         enumerated.len(),
         highest + 1
+    );
+}
+
+#[test]
+fn extended_formats_have_expected_intrinsic_shape() {
+    assert_eq!(logical_bytes_per_block(TextureFormat::R16Unorm), Some(2));
+    assert_eq!(
+        logical_bytes_per_block(TextureFormat::Rgb10a2Unorm),
+        Some(4)
+    );
+    assert_eq!(logical_bytes_per_block(TextureFormat::R64Uint), Some(8));
+    assert_eq!(
+        format_aspects(TextureFormat::Stencil8),
+        TextureAspects::STENCIL
+    );
+    assert!(format_aspects(TextureFormat::Nv12).contains(TextureAspects::PLANE0));
+    assert!(format_aspects(TextureFormat::P010).contains(TextureAspects::PLANE1));
+    assert_eq!(sample_type(TextureFormat::Nv12), None);
+}
+
+/// Every vocabulary entry must have a total intrinsic sample/output answer.
+/// This is deliberately an enumeration test rather than a hand-picked list:
+/// Vulkan format probing asks these helpers while walking formats, so a missing
+/// arm otherwise becomes a machine-specific panic instead of an Unsupported
+/// capability answer.
+#[test]
+fn sample_and_output_tables_are_total_over_the_format_vocabulary() {
+    for format in TextureFormat::all() {
+        let _ = sample_type(format);
+        let _ = crate::api::format::color_output_type(format);
+    }
+
+    assert_eq!(
+        sample_type(TextureFormat::Rgb10a2Uint),
+        Some(crate::api::binding::TextureSampleType::Uint)
     );
 }

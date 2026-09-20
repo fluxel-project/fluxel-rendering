@@ -120,12 +120,14 @@ use crate::api::binding::{BindingCount, BindingLimitClass, BindingSupport, Bindi
 use crate::api::format::{FormatFacts, TextureFormat, TextureSupport, TextureSupportQuery};
 use crate::api::internal::digest::sha256;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
+use crate::api::query::{PipelineStatistics, TimestampQueryCapabilities};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteQuery, RouteSupport};
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
 use crate::api::resource::transient::{TransientAllocationSupport, TransientCapabilities};
 use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderStage, ShaderStages};
+use crate::api::shader::{CooperativeMatrixProperties, SubgroupSizeRange};
 use crate::api::submission::SubmissionCapabilities;
 
 /// Process-local exact capability-contract intern token.
@@ -310,6 +312,10 @@ pub(crate) struct BindingSupportKey {
     pub(crate) kind: BindableKind,
     /// Whether the binding is a fixed-length array rather than a single element.
     pub(crate) array: bool,
+    /// Whether this is a runtime-sized descriptor-indexed array.  It must not
+    /// collapse with fixed arrays: native descriptor indexing is a distinct
+    /// capability and an omitted fact is a fail-closed answer.
+    pub(crate) runtime_sized: bool,
     /// Whether a dynamic offset will be applied. Only ever true for buffer kinds.
     pub(crate) dynamic_offset: bool,
 }
@@ -323,7 +329,11 @@ impl BindingSupportKey {
         Self {
             visibility: query.visibility,
             kind: BindableKind::of(&query.kind),
-            array: matches!(query.count, BindingCount::Fixed(_)),
+            array: matches!(
+                query.count,
+                BindingCount::Fixed(_) | BindingCount::RuntimeSized
+            ),
+            runtime_sized: matches!(query.count, BindingCount::RuntimeSized),
             dynamic_offset: query.dynamic_offset,
         }
     }
@@ -340,6 +350,7 @@ impl BindingSupportKey {
         self.visibility.encode_into(out);
         self.kind.encode_into(out);
         out.push(u8::from(self.array));
+        out.push(u8::from(self.runtime_sized));
         out.push(u8::from(self.dynamic_offset));
     }
 }
@@ -418,6 +429,10 @@ pub(crate) struct CapabilityFacts {
     /// [`Self::features`] has, and for the same reason.
     view_compatibility: HashSet<(TextureFormat, TextureFormat)>,
     transient: TransientCapabilities,
+    pipeline_statistics: PipelineStatistics,
+    timestamp_queries: TimestampQueryCapabilities,
+    subgroup_size: Option<SubgroupSizeRange>,
+    cooperative_matrices: Vec<CooperativeMatrixProperties>,
 }
 
 impl CapabilityFacts {
@@ -458,6 +473,10 @@ impl CapabilityFacts {
                 textures: TransientAllocationSupport::Dedicated,
                 mixed_resource_aliasing: false,
             },
+            pipeline_statistics: PipelineStatistics::NONE,
+            timestamp_queries: TimestampQueryCapabilities::NONE,
+            subgroup_size: None,
+            cooperative_matrices: Vec::new(),
         }
     }
 
@@ -643,6 +662,36 @@ impl CapabilityFacts {
                 },
             )],
         );
+        write_section(
+            &mut out,
+            vec![encode_entry(
+                |out| out.push(0),
+                |out| self.timestamp_queries.encode_into(out),
+            )],
+        );
+
+        write_section(
+            &mut out,
+            vec![encode_entry(
+                |out| out.push(0),
+                |out| self.pipeline_statistics.encode_into(out),
+            )],
+        );
+        write_section(
+            &mut out,
+            self.subgroup_size
+                .into_iter()
+                .map(|range| encode_entry(|out| out.push(0), |out| range.encode_into(out)))
+                .collect(),
+        );
+
+        write_section(
+            &mut out,
+            self.cooperative_matrices
+                .iter()
+                .map(|properties| encode_entry(|out| properties.encode_into(out), |_| {}))
+                .collect(),
+        );
 
         submission.encode_into(&mut out);
 
@@ -765,6 +814,21 @@ impl CapabilityFacts {
     )]
     pub(crate) fn record_limit(&mut self, key: LimitKey, value: u64) {
         self.limits.entries.insert(key, value);
+    }
+
+    /// Records the exact pipeline-statistics counters native queries can return.
+    pub(crate) fn record_pipeline_statistics(&mut self, counters: PipelineStatistics) {
+        self.pipeline_statistics = counters;
+    }
+
+    /// Records timestamp conversion and resolve facts probed for this device.
+    pub(crate) fn record_timestamp_queries(&mut self, facts: TimestampQueryCapabilities) {
+        self.timestamp_queries = facts;
+    }
+
+    /// Records the valid subgroup-size interval after native feature probing.
+    pub(crate) fn record_subgroup_size(&mut self, range: SubgroupSizeRange) {
+        self.subgroup_size = Some(range);
     }
 
     /// Records the facts for `format`.
@@ -901,6 +965,23 @@ impl CapabilityFacts {
     )]
     pub(crate) fn record_transient_capabilities(&mut self, transient: TransientCapabilities) {
         self.transient = transient;
+    }
+
+    /// Records one concrete cooperative-matrix shape reported by the device.
+    pub(crate) fn record_cooperative_matrix(&mut self, properties: CooperativeMatrixProperties) {
+        if !self.cooperative_matrices.contains(&properties) {
+            self.cooperative_matrices.push(properties);
+        }
+    }
+
+    pub(crate) fn supports_cooperative_matrix(
+        &self,
+        requirement: crate::api::shader::CooperativeMatrixRequirement,
+    ) -> bool {
+        self.cooperative_matrices
+            .iter()
+            .copied()
+            .any(|properties| properties.satisfies(requirement))
     }
 }
 
@@ -1254,6 +1335,25 @@ pub struct EnabledCapabilities {
 }
 
 impl EnabledCapabilities {
+    /// Exact pipeline-statistics counters supported by this device.
+    ///
+    /// An empty set is the normal answer when pipeline-statistics queries are not
+    /// enabled; it never implies that all counters are available.
+    pub fn pipeline_statistics(&self) -> PipelineStatistics {
+        self.facts.pipeline_statistics
+    }
+    /// Timestamp conversion and non-blocking-resolve facts for this device.
+    pub fn timestamp_queries(&self) -> TimestampQueryCapabilities {
+        self.facts.timestamp_queries
+    }
+    /// Valid subgroup sizes, or `None` when subgroup operations are unavailable.
+    pub fn subgroup_size_range(&self) -> Option<SubgroupSizeRange> {
+        self.facts.subgroup_size
+    }
+    /// Concrete cooperative-matrix shapes the enabled device can lower.
+    pub fn cooperative_matrix_properties(&self) -> &[CooperativeMatrixProperties] {
+        &self.facts.cooperative_matrices
+    }
     /// The device's transient resource allocation capabilities.
     pub fn transient(&self) -> TransientCapabilities {
         self.facts.transient

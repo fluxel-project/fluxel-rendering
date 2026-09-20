@@ -27,6 +27,20 @@ use crate::api::shader::{ShaderInterface, ShaderLocation, ShaderNumericType};
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VertexFormat {
+    /// One unsigned 8-bit integer.
+    Uint8,
+    /// Two unsigned 8-bit integers.
+    Uint8x2,
+    /// Four unsigned 8-bit integers.
+    Uint8x4,
+    /// One signed 8-bit integer.
+    Sint8,
+    /// Two signed 8-bit integers.
+    Sint8x2,
+    /// Four signed 8-bit integers.
+    Sint8x4,
+    /// One unsigned normalized 8-bit value.
+    Unorm8,
     /// One 32-bit float.
     Float32,
     /// Two 32-bit floats.
@@ -58,6 +72,54 @@ pub enum VertexFormat {
     Unorm8x2,
     /// Four unsigned 8-bit normalized values.
     Unorm8x4,
+    /// Four normalized bytes in BGRA storage order.
+    Unorm8x4Bgra,
+    /// One signed normalized 8-bit value.
+    Snorm8,
+    /// Two signed normalized 8-bit values.
+    Snorm8x2,
+    /// Four signed normalized 8-bit values.
+    Snorm8x4,
+    /// One unsigned 16-bit integer.
+    Uint16,
+    /// Two unsigned 16-bit integers.
+    Uint16x2,
+    /// Four unsigned 16-bit integers.
+    Uint16x4,
+    /// One signed 16-bit integer.
+    Sint16,
+    /// Two signed 16-bit integers.
+    Sint16x2,
+    /// Four signed 16-bit integers.
+    Sint16x4,
+    /// One unsigned normalized 16-bit value.
+    Unorm16,
+    /// Two unsigned normalized 16-bit values.
+    Unorm16x2,
+    /// Four unsigned normalized 16-bit values.
+    Unorm16x4,
+    /// One signed normalized 16-bit value.
+    Snorm16,
+    /// Two signed normalized 16-bit values.
+    Snorm16x2,
+    /// Four signed normalized 16-bit values.
+    Snorm16x4,
+    /// One 16-bit floating-point value.
+    Float16,
+    /// Two 16-bit floating-point values.
+    Float16x2,
+    /// Four 16-bit floating-point values.
+    Float16x4,
+    /// One 64-bit floating-point value.
+    Float64,
+    /// Two 64-bit floating-point values.
+    Float64x2,
+    /// Three 64-bit floating-point values.
+    Float64x3,
+    /// Four 64-bit floating-point values.
+    Float64x4,
+    /// Packed four-component normalized 10:10:10:2 value.
+    Unorm10_10_10_2,
 }
 
 impl VertexFormat {
@@ -68,12 +130,40 @@ impl VertexFormat {
     /// per format.
     pub fn byte_size(self) -> u32 {
         match self {
+            Self::Uint8 | Self::Sint8 | Self::Unorm8 | Self::Snorm8 => 1,
+            Self::Uint8x2
+            | Self::Sint8x2
+            | Self::Unorm8x2
+            | Self::Snorm8x2
+            | Self::Uint16
+            | Self::Sint16
+            | Self::Unorm16
+            | Self::Snorm16
+            | Self::Float16 => 2,
+            Self::Uint8x4
+            | Self::Sint8x4
+            | Self::Unorm8x4
+            | Self::Unorm8x4Bgra
+            | Self::Snorm8x4
+            | Self::Uint16x2
+            | Self::Sint16x2
+            | Self::Unorm16x2
+            | Self::Snorm16x2
+            | Self::Float16x2
+            | Self::Unorm10_10_10_2 => 4,
             Self::Float32 | Self::Uint32 | Self::Sint32 => 4,
+            Self::Uint16x4
+            | Self::Sint16x4
+            | Self::Unorm16x4
+            | Self::Snorm16x4
+            | Self::Float16x4
+            | Self::Float64 => 8,
             Self::Float32x2 | Self::Uint32x2 | Self::Sint32x2 => 8,
             Self::Float32x3 | Self::Uint32x3 | Self::Sint32x3 => 12,
+            Self::Float64x2 => 16,
             Self::Float32x4 | Self::Uint32x4 | Self::Sint32x4 => 16,
-            Self::Unorm8x2 => 2,
-            Self::Unorm8x4 => 4,
+            Self::Float64x3 => 24,
+            Self::Float64x4 => 32,
         }
     }
 
@@ -85,27 +175,111 @@ impl VertexFormat {
     /// mismatch even though the storage is an integer.
     pub fn shader_numeric_type(self) -> ShaderNumericType {
         match self {
-            Self::Float32 | Self::Float32x2 | Self::Float32x3 | Self::Float32x4 => {
+            Self::Float32
+            | Self::Float32x2
+            | Self::Float32x3
+            | Self::Float32x4
+            | Self::Float16
+            | Self::Float16x2
+            | Self::Float16x4
+            | Self::Unorm8
+            | Self::Unorm8x2
+            | Self::Unorm8x4
+            | Self::Unorm8x4Bgra
+            | Self::Snorm8
+            | Self::Snorm8x2
+            | Self::Snorm8x4
+            | Self::Unorm16
+            | Self::Unorm16x2
+            | Self::Unorm16x4
+            | Self::Snorm16
+            | Self::Snorm16x2
+            | Self::Snorm16x4
+            | Self::Unorm10_10_10_2 => ShaderNumericType::Float32,
+            Self::Uint32
+            | Self::Uint32x2
+            | Self::Uint32x3
+            | Self::Uint32x4
+            | Self::Uint8
+            | Self::Uint8x2
+            | Self::Uint8x4
+            | Self::Uint16
+            | Self::Uint16x2
+            | Self::Uint16x4 => ShaderNumericType::Uint32,
+            Self::Sint32
+            | Self::Sint32x2
+            | Self::Sint32x3
+            | Self::Sint32x4
+            | Self::Sint8
+            | Self::Sint8x2
+            | Self::Sint8x4
+            | Self::Sint16
+            | Self::Sint16x2
+            | Self::Sint16x4 => ShaderNumericType::Sint32,
+            // Shader IO currently has no f64 interface class. Keep the format
+            // vocabulary complete; pipeline creation gates it before it can be
+            // matched to an ordinary Float32 shader location.
+            Self::Float64 | Self::Float64x2 | Self::Float64x3 | Self::Float64x4 => {
                 ShaderNumericType::Float32
             }
-            Self::Uint32 | Self::Uint32x2 | Self::Uint32x3 | Self::Uint32x4 => {
-                ShaderNumericType::Uint32
-            }
-            Self::Sint32 | Self::Sint32x2 | Self::Sint32x3 | Self::Sint32x4 => {
-                ShaderNumericType::Sint32
-            }
-            Self::Unorm8x2 | Self::Unorm8x4 => ShaderNumericType::Float32,
         }
     }
 
     /// How many components one element carries, `1..=4`.
     pub fn components(self) -> u8 {
         match self {
-            Self::Float32 | Self::Uint32 | Self::Sint32 => 1,
-            Self::Float32x2 | Self::Uint32x2 | Self::Sint32x2 | Self::Unorm8x2 => 2,
-            Self::Float32x3 | Self::Uint32x3 | Self::Sint32x3 => 3,
-            Self::Float32x4 | Self::Uint32x4 | Self::Sint32x4 | Self::Unorm8x4 => 4,
+            Self::Float32
+            | Self::Uint32
+            | Self::Sint32
+            | Self::Uint8
+            | Self::Sint8
+            | Self::Unorm8
+            | Self::Snorm8
+            | Self::Uint16
+            | Self::Sint16
+            | Self::Unorm16
+            | Self::Snorm16
+            | Self::Float16
+            | Self::Float64 => 1,
+            Self::Float32x2
+            | Self::Uint32x2
+            | Self::Sint32x2
+            | Self::Uint8x2
+            | Self::Sint8x2
+            | Self::Unorm8x2
+            | Self::Snorm8x2
+            | Self::Uint16x2
+            | Self::Sint16x2
+            | Self::Unorm16x2
+            | Self::Snorm16x2
+            | Self::Float16x2
+            | Self::Float64x2 => 2,
+            Self::Float32x3 | Self::Uint32x3 | Self::Sint32x3 | Self::Float64x3 => 3,
+            Self::Float32x4
+            | Self::Uint32x4
+            | Self::Sint32x4
+            | Self::Uint8x4
+            | Self::Sint8x4
+            | Self::Unorm8x4
+            | Self::Unorm8x4Bgra
+            | Self::Snorm8x4
+            | Self::Uint16x4
+            | Self::Sint16x4
+            | Self::Unorm16x4
+            | Self::Snorm16x4
+            | Self::Float16x4
+            | Self::Float64x4
+            | Self::Unorm10_10_10_2 => 4,
         }
+    }
+
+    /// True for formats whose vertex-fetch conversion needs a 64-bit shader
+    /// input capability.
+    pub fn requires_64bit_attribute(self) -> bool {
+        matches!(
+            self,
+            Self::Float64 | Self::Float64x2 | Self::Float64x3 | Self::Float64x4
+        )
     }
 }
 

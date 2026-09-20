@@ -51,6 +51,30 @@ fn shape_a_dispatch_states_only_its_workgroups(recorder: &mut CommandRecorder) {
     scope.end().expect("the scope is complete");
 }
 
+/// Shape-positive indirect dispatch: arguments are an ordinary `INDIRECT`
+/// buffer and all state is the same state a direct dispatch already requires.
+#[expect(dead_code, reason = "shape test; compiled API conformance coverage")]
+fn shape_an_indirect_dispatch_uses_an_indirect_buffer(recorder: &mut CommandRecorder) {
+    let arguments = buffer_with(BufferUsage::INDIRECT, 12);
+    let mut scope = recorder
+        .begin_compute(&ComputeScopeDescriptor::new())
+        .expect("compute is enabled");
+    scope
+        .set_pipeline(&compute_pipeline())
+        .expect("pipeline belongs to the recorder device");
+    scope
+        .set_bind_group(
+            BindGroupIndex::new(0),
+            &uniform_group(uniform_layout(1)),
+            &[],
+        )
+        .expect("bind group is complete");
+    scope
+        .dispatch_indirect(&arguments, 0)
+        .expect("enabled backend records indirect dispatch");
+    scope.end().expect("scope closes");
+}
+
 fn compute_pipeline() -> ComputePipeline {
     let descriptor =
         ComputePipelineDescriptor::new(vertex_module(67), interface_of(uniform_layout(1)));
@@ -177,6 +201,33 @@ fn a_buffer_texture_copy_that_breaks_the_texel_alignment_is_refused() {
             .copy_buffer_to_texture(&buffer_texture_copy(256, 1024))
             .is_ok(),
         "a 256-byte row pitch satisfies the alignment this device reports"
+    );
+}
+
+#[test]
+fn a_compressed_buffer_texture_pitch_must_name_whole_blocks() {
+    let format = TextureFormat::Bc1RgbaUnorm;
+    let texture = Texture::new(
+        object(25),
+        device(),
+        TextureDescriptor::new_2d(5, 4, format, TextureUsage::COPY_DST),
+    );
+    let copy = BufferTextureCopy {
+        buffer: buffer_with(BufferUsage::COPY_SRC, 64),
+        buffer_offset: 0,
+        // Two BC1 blocks need 16 bytes; 17 covers the payload but cannot be
+        // represented as an integral block row by either native backend.
+        bytes_per_row: 17,
+        rows_per_image: 1,
+        texture,
+        texture_subresource: color_layers(1),
+        texture_origin: origin(),
+        extent: Extent3d::d2(5, 4),
+    };
+    let mut recorder = recorder_reporting(facts_with_texel_copy_route_for(format, 1, 1));
+    assert_kind(
+        recorder.copy_buffer_to_texture(&copy),
+        RhiErrorKind::InvalidUsage,
     );
 }
 

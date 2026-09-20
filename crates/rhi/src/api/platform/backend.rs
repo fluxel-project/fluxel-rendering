@@ -240,6 +240,61 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
         descriptor: &crate::api::resource::buffer::BufferDescriptor,
     ) -> RhiResult<Box<dyn crate::api::resource::backend::BufferBackend>>;
 
+    /// Starts one native asynchronous mapping request after portable validation
+    /// has acquired the object's exclusive mapping lease.
+    ///
+    /// The returned request, rather than this synchronous call, waits for GPU
+    /// use retirement.  It registers wakers while pending and wakes them on
+    /// native completion or device loss.  Dropping it cancels native waiting.
+    fn map_buffer(
+        &self,
+        _buffer: &crate::api::resource::Buffer,
+        _mode: crate::api::resource::MapMode,
+        _range: crate::api::resource::BufferRange,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::MappingRequestBackend>> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement general buffer mapping",
+        ))
+    }
+
+    /// Allocates native query storage for an already validated query set.
+    fn create_query_set(
+        &self,
+        descriptor: &crate::api::query::QuerySetDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::QuerySetBackend>>;
+
+    /// Calculates exact native result and scratch allocation requirements.
+    ///
+    /// The descriptor includes build options, so this answer is authoritative
+    /// for both ordinary builds and update-capable allocations.  It deliberately
+    /// precedes allocation: callers must never guess a native AS or scratch
+    /// size from geometry counts.
+    fn acceleration_structure_build_sizes(
+        &self,
+        _descriptor: &crate::api::resource::AccelerationStructureDescriptor,
+    ) -> RhiResult<crate::api::resource::AccelerationStructureBuildSizes> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement acceleration-structure sizing",
+        ))
+    }
+
+    /// Creates a native acceleration structure using the exact queried sizes.
+    /// Backends which do not expose
+    /// ray-query support keep the default fail-closed answer; capability facts
+    /// must consequently never advertise `RayQuery` for them.
+    fn create_acceleration_structure(
+        &self,
+        _descriptor: &crate::api::resource::AccelerationStructureDescriptor,
+        _sizes: crate::api::resource::AccelerationStructureBuildSizes,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::AccelerationStructureBackend>> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement acceleration structures",
+        ))
+    }
+
     fn create_texture(
         &self,
         descriptor: &crate::api::resource::texture::TextureDescriptor,
@@ -333,6 +388,111 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
         &self,
         descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
     ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>>;
+
+    /// Creates a mesh/task pipeline, or returns `Unsupported` before any native
+    /// work when the backend did not publish mesh support.
+    fn create_mesh_pipeline(
+        &self,
+        _descriptor: &crate::api::pipeline::MeshPipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::MeshPipelineBackend>> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement mesh pipelines",
+        ))
+    }
+
+    /// Creates a ray-tracing pipeline, or returns `Unsupported` before any
+    /// native work when the backend did not publish ray-tracing support.
+    fn create_ray_tracing_pipeline(
+        &self,
+        _descriptor: &crate::api::pipeline::RayTracingPipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RayTracingPipelineBackend>> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement ray-tracing pipelines",
+        ))
+    }
+
+    /// Creates a native pipeline cache after portable feature and descriptor validation.
+    fn create_pipeline_cache(
+        &self,
+        _descriptor: &crate::api::pipeline::PipelineCacheDescriptor,
+    ) -> RhiResult<(
+        Box<dyn crate::api::pipeline::backend::PipelineCacheBackend>,
+        crate::api::pipeline::PipelineCacheValidationKey,
+    )> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement native pipeline caches",
+        ))
+    }
+
+    /// Reports constraints for opaque external-image copy sources.
+    fn external_image_copy_capabilities(
+        &self,
+    ) -> RhiResult<crate::api::external::ExternalImageCopyCapabilities> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement external image copies",
+        ))
+    }
+
+    /// Verifies that the backend's host bridge owns the opaque source token.
+    fn validate_external_texture_source(
+        &self,
+        _source: &crate::api::external::ExternalImageSource,
+    ) -> RhiResult<()> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement external textures",
+        ))
+    }
+
+    /// Reports generic extension-SPI external-memory capability.
+    fn external_memory_capabilities(
+        &self,
+    ) -> RhiResult<crate::api::external::ExternalMemoryCapabilities> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement external memory",
+        ))
+    }
+
+    /// Imports an extension-owned external allocation after portable validation.
+    fn import_external_memory_texture(
+        &self,
+        _descriptor: &crate::api::external::ExternalTextureImportDescriptor,
+        _accepted: &crate::api::resource::TextureDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureBackend>> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not implement external-memory texture import",
+        ))
+    }
+
+    /// Starts a backend-native graphics debugger capture.
+    fn begin_native_graphics_capture(&self) -> RhiResult<()> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend has no native graphics debugger integration",
+        ))
+    }
+
+    /// Ends a backend-native graphics debugger capture.
+    fn end_native_graphics_capture(&self) -> RhiResult<()> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend has no native graphics debugger integration",
+        ))
+    }
+
+    /// Returns optional backend allocator diagnostics.
+    fn allocator_report(&self) -> RhiResult<crate::api::diagnostics::AllocatorReport> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this backend does not expose allocator diagnostics",
+        ))
+    }
 
     fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
         None

@@ -224,3 +224,16 @@ fn an_interpolation_value_is_comparable_across_stages() {
         "the mode half participates"
     );
 }
+
+#[test]
+fn extended_vertex_formats_report_their_fetch_shape() {
+    assert_eq!(VertexFormat::Uint8x4.byte_size(), 4);
+    assert_eq!(VertexFormat::Snorm16x2.byte_size(), 4);
+    assert_eq!(VertexFormat::Float16x4.components(), 4);
+    assert_eq!(
+        VertexFormat::Unorm8x4Bgra.shader_numeric_type(),
+        ShaderNumericType::Float32
+    );
+    assert!(VertexFormat::Float64x4.requires_64bit_attribute());
+    assert!(!VertexFormat::Float32x4.requires_64bit_attribute());
+}

@@ -3,8 +3,9 @@
 use super::*;
 use crate::api::error::RhiErrorKind;
 use crate::api::identity::Label;
+use crate::api::platform::OptionalFeature;
 use crate::api::resource::sampler::{
-    AddressMode, CompareFunction, FilterMode, Sampler, SamplerDescriptor,
+    AddressMode, CompareFunction, FilterMode, Sampler, SamplerBorderColor, SamplerDescriptor,
     validate_sampler_anisotropy, validate_sampler_descriptor,
 };
 
@@ -124,4 +125,70 @@ fn a_sampler_reports_its_own_id_device_and_descriptor() {
     let clone = sampler.clone();
     assert_eq!(clone.id(), sampler.id());
     assert!(std::ptr::eq(clone.native(), sampler.native()));
+}
+
+#[test]
+fn border_sampler_descriptor_carries_an_explicit_color() {
+    let descriptor = SamplerDescriptor::new()
+        .with_address_modes(
+            AddressMode::ClampToBorder,
+            AddressMode::ClampToEdge,
+            AddressMode::ClampToEdge,
+        )
+        .with_border_color(SamplerBorderColor::OpaqueWhite);
+    assert_eq!(descriptor.address_u, AddressMode::ClampToBorder);
+    assert_eq!(descriptor.border_color, SamplerBorderColor::OpaqueWhite);
+}
+
+#[test]
+fn sampler_optional_states_are_checked_against_device_facts() {
+    let border = SamplerDescriptor::new().with_address_modes(
+        AddressMode::ClampToBorder,
+        AddressMode::ClampToEdge,
+        AddressMode::ClampToEdge,
+    );
+    let comparison = SamplerDescriptor::new().with_compare(CompareFunction::Less);
+    let anisotropic = SamplerDescriptor::new().with_max_anisotropy(2);
+    let disabled = crate::api::tests::mock::sampler_device_for_test(identity(51), &[], None);
+    assert_kind(disabled.create_sampler(&border), RhiErrorKind::Unsupported);
+    assert_kind(
+        disabled.create_sampler(&comparison),
+        RhiErrorKind::Unsupported,
+    );
+    assert_kind(
+        disabled.create_sampler(&anisotropic),
+        RhiErrorKind::Unsupported,
+    );
+
+    let enabled = crate::api::tests::mock::sampler_device_for_test(
+        identity(52),
+        &[
+            OptionalFeature::SamplerClampToBorder,
+            OptionalFeature::ComparisonSamplers,
+            OptionalFeature::SamplerAnisotropy,
+        ],
+        Some(2),
+    );
+    assert!(enabled.create_sampler(&border).is_ok());
+    assert!(enabled.create_sampler(&comparison).is_ok());
+    assert!(enabled.create_sampler(&anisotropic).is_ok());
+    let zero_border = border.clone().with_border_color(SamplerBorderColor::Zero);
+    assert_kind(
+        enabled.create_sampler(&zero_border),
+        RhiErrorKind::Unsupported,
+    );
+    let zero_enabled = crate::api::tests::mock::sampler_device_for_test(
+        identity(53),
+        &[
+            OptionalFeature::SamplerClampToBorder,
+            OptionalFeature::SamplerClampToZero,
+        ],
+        None,
+    );
+    assert!(zero_enabled.create_sampler(&zero_border).is_ok());
+    // Boundary: an enabled feature remains bounded by the probed ceiling.
+    assert_kind(
+        enabled.create_sampler(&SamplerDescriptor::new().with_max_anisotropy(3)),
+        RhiErrorKind::InvalidUsage,
+    );
 }

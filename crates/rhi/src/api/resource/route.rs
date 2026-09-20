@@ -225,6 +225,15 @@ impl BufferCopyLayoutLimits {
 pub struct TexelCopyLayoutLimits {
     buffer_offset_alignment: u64,
     bytes_per_row_alignment: u32,
+    // Alignment required between separately addressed array images in the copy
+    // buffer.  This is distinct from row alignment: D3D12 placed footprints
+    // require each array subresource offset to begin on a placement boundary,
+    // while one 3D footprint contains all of its depth slices contiguously.
+    image_stride_alignment: u64,
+    // Whether a 3D footprint may contain padding rows between Z slices.  APIs
+    // such as D3D12 describe a 3D placed footprint with one row pitch and no
+    // independent slice pitch, whereas Vulkan can express an image height.
+    tightly_packed_3d_slices: bool,
 }
 
 impl TexelCopyLayoutLimits {
@@ -243,7 +252,24 @@ impl TexelCopyLayoutLimits {
         Self {
             buffer_offset_alignment,
             bytes_per_row_alignment,
+            image_stride_alignment: 1,
+            tightly_packed_3d_slices: false,
         }
+    }
+
+    /// Adds image-stride constraints to a device's texel-copy route.
+    ///
+    /// A value of one states that adjacent array images need no extra alignment.
+    /// The tightly-packed flag applies only to 3D copies and intentionally does
+    /// not impose a fictitious 512-byte alignment on their depth slices.
+    pub(crate) fn with_image_layout(
+        mut self,
+        image_stride_alignment: u64,
+        tightly_packed_3d_slices: bool,
+    ) -> Self {
+        self.image_stride_alignment = image_stride_alignment;
+        self.tightly_packed_3d_slices = tightly_packed_3d_slices;
+        self
     }
 
     /// The byte alignment the copy buffer's offset must satisfy.
@@ -254,6 +280,16 @@ impl TexelCopyLayoutLimits {
     /// The byte alignment the copy buffer's row pitch must satisfy.
     pub fn bytes_per_row_alignment(&self) -> u32 {
         self.bytes_per_row_alignment
+    }
+
+    /// The required byte alignment between separately addressed array images.
+    pub fn image_stride_alignment(&self) -> u64 {
+        self.image_stride_alignment
+    }
+
+    /// Whether 3D depth slices must have no padding rows between them.
+    pub fn tightly_packed_3d_slices(&self) -> bool {
+        self.tightly_packed_3d_slices
     }
 
     /// Checks a GPU-side copy's offset and row pitch against this device's
@@ -284,6 +320,52 @@ impl TexelCopyLayoutLimits {
                     self.bytes_per_row_alignment
                 ),
             ));
+        }
+        Ok(())
+    }
+
+    /// Checks the part of a texel-copy layout that only becomes meaningful once
+    /// its region shape is known.
+    pub(crate) fn validate_image_layout(
+        &self,
+        bytes_per_row: u32,
+        rows_per_image: u32,
+        logical_block_rows: u32,
+        dimension: TextureDimension,
+        image_count: u32,
+    ) -> RhiResult<()> {
+        if dimension == TextureDimension::D3
+            && self.tightly_packed_3d_slices
+            && rows_per_image != logical_block_rows
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                format!(
+                    "this route requires tightly packed 3D depth slices, so rows_per_image {} must equal the copied {} block rows",
+                    rows_per_image, logical_block_rows
+                ),
+            ));
+        }
+        // A 3D region is one subresource footprint: its Z slices are not array
+        // images and do not each start at a placement-aligned buffer offset.
+        if dimension != TextureDimension::D3 && image_count > 1 {
+            let image_stride = u64::from(bytes_per_row)
+                .checked_mul(u64::from(rows_per_image))
+                .ok_or_else(|| {
+                    RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "copy image stride overflows u64",
+                    )
+                })?;
+            if !is_aligned(image_stride, self.image_stride_alignment) {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    format!(
+                        "copy image stride {image_stride} is not aligned to {} bytes",
+                        self.image_stride_alignment
+                    ),
+                ));
+            }
         }
         Ok(())
     }

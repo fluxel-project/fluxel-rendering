@@ -10,13 +10,14 @@ use crate::api::error::RhiResult;
 use crate::api::identity::{DeviceIdentity, ObjectId};
 use crate::api::presentation::{
     AcquireError, AcquiredFrameId, Extent2d, PresentReceiptId, PresentState,
-    PresentationConfiguration, PresentationTargetCapabilities,
+    PresentationConfiguration, PresentationTargetCapabilities, PresentationTimestamp,
 };
 
 /// Native facts returned for one acquired drawable.
 pub(crate) struct AcquiredSurfaceFrame {
     pub(crate) serial: u64,
     pub(crate) extent: Extent2d,
+    pub(crate) suboptimal: bool,
     /// Backend-private drawable backing. It is carried by FrameAttachment, never
     /// exposed through the public presentation vocabulary.
     pub(crate) attachment: Box<dyn FrameAttachmentBackend>,
@@ -98,4 +99,10 @@ pub(crate) trait PresentationBackend: Send + Sync + 'static {
         receipt: PresentReceiptId,
         waker: &Waker,
     ) -> RhiResult<PresentState>;
+    fn presentation_timestamp(&self, _target: ObjectId) -> RhiResult<PresentationTimestamp> {
+        Err(crate::api::error::RhiError::new(
+            crate::api::error::RhiErrorKind::Unsupported,
+            "this presentation backend has no presentation-clock lowering",
+        ))
+    }
 }

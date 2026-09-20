@@ -14,10 +14,12 @@ use core::fmt;
 use std::sync::Arc;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::external::ExternalTexture;
 use crate::api::format::{TextureFormat, sample_type};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
 use crate::api::platform::requirements::LimitKey;
+use crate::api::resource::AccelerationStructure;
 use crate::api::resource::buffer::{
     BufferBinding, BufferUsage, validate_buffer_ownership, validate_buffer_range,
 };
@@ -53,6 +55,10 @@ pub enum BindingResource {
     Texture(TextureView),
     /// One sampler.
     Sampler(Sampler),
+    /// One acceleration structure.
+    AccelerationStructure(AccelerationStructure),
+    /// One opaque external texture.
+    ExternalTexture(ExternalTexture),
 
     /// A fixed-length array of buffer ranges.
     BufferArray(Vec<BufferBinding>),
@@ -60,6 +66,8 @@ pub enum BindingResource {
     TextureArray(Vec<TextureView>),
     /// A fixed-length array of samplers.
     SamplerArray(Vec<Sampler>),
+    /// A fixed-length array of acceleration structures.
+    AccelerationStructureArray(Vec<AccelerationStructure>),
 }
 
 /// One slot of a bind group packet, paired with the resource that fills it.
@@ -390,7 +398,9 @@ fn validate_resource(
             }
             BindingKind::SampledTexture { .. }
             | BindingKind::StorageTexture { .. }
-            | BindingKind::Sampler { .. } => Err(resource_mismatch(slot, "buffer")),
+            | BindingKind::Sampler { .. }
+            | BindingKind::AccelerationStructure
+            | BindingKind::ExternalTexture => Err(resource_mismatch(slot, "buffer")),
         },
 
         BindingResource::Texture(view) => match &slot.kind {
@@ -426,7 +436,9 @@ fn validate_resource(
             }
             BindingKind::UniformBuffer { .. }
             | BindingKind::StorageBuffer { .. }
-            | BindingKind::Sampler { .. } => Err(resource_mismatch(slot, "texture")),
+            | BindingKind::Sampler { .. }
+            | BindingKind::AccelerationStructure
+            | BindingKind::ExternalTexture => Err(resource_mismatch(slot, "texture")),
         },
 
         BindingResource::Sampler(sampler) => match &slot.kind {
@@ -437,7 +449,39 @@ fn validate_resource(
             BindingKind::UniformBuffer { .. }
             | BindingKind::StorageBuffer { .. }
             | BindingKind::SampledTexture { .. }
-            | BindingKind::StorageTexture { .. } => Err(resource_mismatch(slot, "sampler")),
+            | BindingKind::StorageTexture { .. }
+            | BindingKind::AccelerationStructure
+            | BindingKind::ExternalTexture => Err(resource_mismatch(slot, "sampler")),
+        },
+
+        BindingResource::AccelerationStructure(structure) => match &slot.kind {
+            BindingKind::AccelerationStructure => {
+                validate_scalar_slot(slot)?;
+                if structure.device_identity() != target {
+                    return Err(RhiError::new(
+                        RhiErrorKind::WrongDevice,
+                        "acceleration structure belongs to a different device",
+                    )
+                    .with_object(structure.id()));
+                }
+                Ok(())
+            }
+            _ => Err(resource_mismatch(slot, "acceleration structure")),
+        },
+
+        BindingResource::ExternalTexture(texture) => match &slot.kind {
+            BindingKind::ExternalTexture => {
+                validate_scalar_slot(slot)?;
+                if texture.device_identity() != target {
+                    return Err(RhiError::new(
+                        RhiErrorKind::WrongDevice,
+                        "external texture belongs to a different device",
+                    )
+                    .with_object(texture.id()));
+                }
+                Ok(())
+            }
+            _ => Err(resource_mismatch(slot, "external texture")),
         },
 
         BindingResource::BufferArray(bindings) => match &slot.kind {
@@ -457,7 +501,9 @@ fn validate_resource(
             }
             BindingKind::SampledTexture { .. }
             | BindingKind::StorageTexture { .. }
-            | BindingKind::Sampler { .. } => Err(array_mismatch(slot, "buffer array")),
+            | BindingKind::Sampler { .. }
+            | BindingKind::AccelerationStructure
+            | BindingKind::ExternalTexture => Err(array_mismatch(slot, "buffer array")),
         },
 
         BindingResource::TextureArray(views) => match &slot.kind {
@@ -499,7 +545,9 @@ fn validate_resource(
             }
             BindingKind::UniformBuffer { .. }
             | BindingKind::StorageBuffer { .. }
-            | BindingKind::Sampler { .. } => Err(array_mismatch(slot, "texture array")),
+            | BindingKind::Sampler { .. }
+            | BindingKind::AccelerationStructure
+            | BindingKind::ExternalTexture => Err(array_mismatch(slot, "texture array")),
         },
 
         BindingResource::SamplerArray(samplers) => match &slot.kind {
@@ -513,7 +561,26 @@ fn validate_resource(
             BindingKind::UniformBuffer { .. }
             | BindingKind::StorageBuffer { .. }
             | BindingKind::SampledTexture { .. }
-            | BindingKind::StorageTexture { .. } => Err(array_mismatch(slot, "sampler array")),
+            | BindingKind::StorageTexture { .. }
+            | BindingKind::AccelerationStructure
+            | BindingKind::ExternalTexture => Err(array_mismatch(slot, "sampler array")),
+        },
+
+        BindingResource::AccelerationStructureArray(structures) => match &slot.kind {
+            BindingKind::AccelerationStructure => {
+                validate_array_len(slot, structures.len())?;
+                for structure in structures {
+                    if structure.device_identity() != target {
+                        return Err(RhiError::new(
+                            RhiErrorKind::WrongDevice,
+                            "acceleration structure belongs to a different device",
+                        )
+                        .with_object(structure.id()));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(array_mismatch(slot, "acceleration-structure array")),
         },
     }
 }
@@ -530,6 +597,13 @@ fn validate_scalar_slot(slot: &BindingSlot) -> RhiResult<()> {
             format!(
                 "slot {} is declared with a fixed array of {elements} elements, so it takes the \
                  matching array, not one resource",
+                slot.slot.get()
+            ),
+        )),
+        BindingCount::RuntimeSized => Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            format!(
+                "slot {} is runtime-sized and takes an array packet, not one resource",
                 slot.slot.get()
             ),
         )),
@@ -553,6 +627,14 @@ fn validate_array_len(slot: &BindingSlot, len: usize) -> RhiResult<()> {
             format!(
                 "slot {} is declared with a fixed array of {elements} elements, but the packet \
                  binds {len}",
+                slot.slot.get()
+            ),
+        )),
+        BindingCount::RuntimeSized if len > 0 => Ok(()),
+        BindingCount::RuntimeSized => Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            format!(
+                "slot {} is runtime-sized but the packet binds no elements",
                 slot.slot.get()
             ),
         )),

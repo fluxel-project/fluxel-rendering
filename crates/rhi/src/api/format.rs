@@ -71,14 +71,11 @@ use crate::api::resource::texture::{
 };
 use crate::api::shader::vocabulary::ShaderNumericType;
 
-/// The portable texture formats P0 freezes.
+/// The portable texture formats.
 ///
-/// The set covers what the current renderer main path needs. Compressed,
-/// planar, and video formats are not in P0, and future additions extend *this*
-/// enum and its facts rather than introducing something like a
-/// `CompressedTextureApi` trait: a trait would move the capability into the type
-/// system, where a caller cannot ask about it at run time, and section 3.1 makes
-/// capability instance data rather than a Rust trait's existence.
+/// Compressed formats deliberately live in this same vocabulary.  Their support
+/// is still queried per concrete format through [`FormatFacts`] and
+/// [`TextureSupportQuery`]; there is no coarse `CompressedTextureApi` switch.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureFormat {
@@ -111,6 +108,143 @@ pub enum TextureFormat {
     /// Four 8-bit signed integer channels.
     Rgba8Sint,
 
+    // Block-compressed families. Each variant remains independently probeable:
+    // support for ETC2 is not evidence for BC or ASTC support (and vice versa).
+    /// BC1/DXT1 RGBA, linear.
+    Bc1RgbaUnorm,
+    /// BC1/DXT1 RGBA, sRGB.
+    Bc1RgbaUnormSrgb,
+    /// BC2/DXT3 RGBA, linear.
+    Bc2RgbaUnorm,
+    /// BC2/DXT3 RGBA, sRGB.
+    Bc2RgbaUnormSrgb,
+    /// BC3/DXT5 RGBA, linear.
+    Bc3RgbaUnorm,
+    /// BC3/DXT5 RGBA, sRGB.
+    Bc3RgbaUnormSrgb,
+    /// BC4 single-channel unsigned normalized.
+    Bc4RUnorm,
+    /// BC4 single-channel signed normalized.
+    Bc4RSnorm,
+    /// BC5 two-channel unsigned normalized.
+    Bc5RgUnorm,
+    /// BC5 two-channel signed normalized.
+    Bc5RgSnorm,
+    /// BC6H RGB unsigned floating point.
+    Bc6hRgbUfloat,
+    /// BC6H RGB signed floating point.
+    Bc6hRgbFloat,
+    /// BC7 RGBA, linear.
+    Bc7RgbaUnorm,
+    /// BC7 RGBA, sRGB.
+    Bc7RgbaUnormSrgb,
+
+    /// ETC2 RGB8, linear.
+    Etc2Rgb8Unorm,
+    /// ETC2 RGB8, sRGB.
+    Etc2Rgb8UnormSrgb,
+    /// ETC2 RGB8 with one-bit alpha, linear.
+    Etc2Rgb8A1Unorm,
+    /// ETC2 RGB8 with one-bit alpha, sRGB.
+    Etc2Rgb8A1UnormSrgb,
+    /// ETC2 RGBA8, linear.
+    Etc2Rgba8Unorm,
+    /// ETC2 RGBA8, sRGB.
+    Etc2Rgba8UnormSrgb,
+    /// EAC single-channel unsigned normalized.
+    EacR11Unorm,
+    /// EAC single-channel signed normalized.
+    EacR11Snorm,
+    /// EAC two-channel unsigned normalized.
+    EacRg11Unorm,
+    /// EAC two-channel signed normalized.
+    EacRg11Snorm,
+
+    /// ASTC 4x4, linear.
+    Astc4x4Unorm,
+    /// ASTC 4x4, sRGB.
+    Astc4x4UnormSrgb,
+    /// ASTC 4x4 HDR. Availability is an exact per-format device fact.
+    Astc4x4Hdr,
+    /// ASTC 5x4, linear.
+    Astc5x4Unorm,
+    /// ASTC 5x4, sRGB.
+    Astc5x4UnormSrgb,
+    /// ASTC 5x4 HDR.
+    Astc5x4Hdr,
+    /// ASTC 5x5, linear.
+    Astc5x5Unorm,
+    /// ASTC 5x5, sRGB.
+    Astc5x5UnormSrgb,
+    /// ASTC 5x5 HDR.
+    Astc5x5Hdr,
+    /// ASTC 6x5, linear.
+    Astc6x5Unorm,
+    /// ASTC 6x5, sRGB.
+    Astc6x5UnormSrgb,
+    /// ASTC 6x5 HDR.
+    Astc6x5Hdr,
+    /// ASTC 6x6, linear.
+    Astc6x6Unorm,
+    /// ASTC 6x6, sRGB.
+    Astc6x6UnormSrgb,
+    /// ASTC 6x6 HDR.
+    Astc6x6Hdr,
+    /// ASTC 8x5, linear.
+    Astc8x5Unorm,
+    /// ASTC 8x5, sRGB.
+    Astc8x5UnormSrgb,
+    /// ASTC 8x5 HDR.
+    Astc8x5Hdr,
+    /// ASTC 8x6, linear.
+    Astc8x6Unorm,
+    /// ASTC 8x6, sRGB.
+    Astc8x6UnormSrgb,
+    /// ASTC 8x6 HDR.
+    Astc8x6Hdr,
+    /// ASTC 8x8, linear.
+    Astc8x8Unorm,
+    /// ASTC 8x8, sRGB.
+    Astc8x8UnormSrgb,
+    /// ASTC 8x8 HDR.
+    Astc8x8Hdr,
+    /// ASTC 10x5, linear.
+    Astc10x5Unorm,
+    /// ASTC 10x5, sRGB.
+    Astc10x5UnormSrgb,
+    /// ASTC 10x5 HDR.
+    Astc10x5Hdr,
+    /// ASTC 10x6, linear.
+    Astc10x6Unorm,
+    /// ASTC 10x6, sRGB.
+    Astc10x6UnormSrgb,
+    /// ASTC 10x6 HDR.
+    Astc10x6Hdr,
+    /// ASTC 10x8, linear.
+    Astc10x8Unorm,
+    /// ASTC 10x8, sRGB.
+    Astc10x8UnormSrgb,
+    /// ASTC 10x8 HDR.
+    Astc10x8Hdr,
+    /// ASTC 10x10, linear.
+    Astc10x10Unorm,
+    /// ASTC 10x10, sRGB.
+    Astc10x10UnormSrgb,
+    /// ASTC 10x10 HDR.
+    Astc10x10Hdr,
+    /// ASTC 12x10, linear.
+    Astc12x10Unorm,
+    /// ASTC 12x10, sRGB.
+    Astc12x10UnormSrgb,
+    /// ASTC 12x10 HDR.
+    Astc12x10Hdr,
+    /// ASTC 12x12, linear.
+    Astc12x12Unorm,
+    /// ASTC 12x12, sRGB.
+    Astc12x12UnormSrgb,
+    /// ASTC 12x12 HDR.
+    Astc12x12Hdr,
+
     /// Four 8-bit unsigned normalized channels in BGRA order.
     Bgra8Unorm,
     /// Four 8-bit unsigned normalized channels in BGRA order, sRGB encoded.
@@ -122,6 +256,10 @@ pub enum TextureFormat {
     R16Sint,
     /// One 16-bit float red channel.
     R16Float,
+    /// One 16-bit unsigned normalized red channel.
+    R16Unorm,
+    /// One 16-bit signed normalized red channel.
+    R16Snorm,
 
     /// Two 16-bit unsigned integer channels.
     Rg16Uint,
@@ -129,6 +267,10 @@ pub enum TextureFormat {
     Rg16Sint,
     /// Two 16-bit float channels.
     Rg16Float,
+    /// Two 16-bit unsigned normalized channels.
+    Rg16Unorm,
+    /// Two 16-bit signed normalized channels.
+    Rg16Snorm,
 
     /// Four 16-bit unsigned integer channels.
     Rgba16Uint,
@@ -136,6 +278,19 @@ pub enum TextureFormat {
     Rgba16Sint,
     /// Four 16-bit float channels.
     Rgba16Float,
+    /// Four 16-bit unsigned normalized channels.
+    Rgba16Unorm,
+    /// Four 16-bit signed normalized channels.
+    Rgba16Snorm,
+
+    /// Shared-exponent RGB 9e5 floating-point color.
+    Rgb9e5Ufloat,
+    /// Packed RGB 10:10:10 plus alpha 2 unsigned integer.
+    Rgb10a2Uint,
+    /// Packed RGB 10:10:10 plus alpha 2 normalized color.
+    Rgb10a2Unorm,
+    /// Packed 11:11:10 unsigned floating-point RGB color.
+    Rg11b10Ufloat,
 
     /// One 32-bit unsigned integer red channel.
     R32Uint,
@@ -143,6 +298,8 @@ pub enum TextureFormat {
     R32Sint,
     /// One 32-bit float red channel.
     R32Float,
+    /// One 64-bit unsigned integer channel.
+    R64Uint,
 
     /// Two 32-bit unsigned integer channels.
     Rg32Uint,
@@ -174,6 +331,12 @@ pub enum TextureFormat {
     Depth32Float,
     /// A 32-bit float depth channel plus 8 bits of stencil.
     Depth32FloatStencil8,
+    /// Stencil-only 8-bit format.
+    Stencil8,
+    /// Two-plane 8-bit 4:2:0 video format.
+    Nv12,
+    /// Two-plane 10-bit 4:2:0 video format stored in 16-bit words.
+    P010,
 }
 
 /// Which of the single-aspect storage accesses one format supports.
@@ -262,6 +425,8 @@ pub struct FormatFacts {
     depth_attachment: bool,
     stencil_attachment: bool,
     blendable: bool,
+    filterable: bool,
+    storage_atomic: bool,
 }
 
 impl FormatFacts {
@@ -292,7 +457,24 @@ impl FormatFacts {
             depth_attachment,
             stencil_attachment,
             blendable,
+            // A backend must opt in after probing its native format feature
+            // bits. In particular this keeps R32Float fail-closed instead of
+            // claiming filterability from the enum spelling.
+            filterable: false,
+            storage_atomic: false,
         }
+    }
+
+    /// Adds device-probed sampling and atomic-storage answers to a fact record.
+    /// This is crate-private because callers must not manufacture hardware facts.
+    pub(crate) fn with_sampling_and_atomic(
+        mut self,
+        filterable: bool,
+        storage_atomic: bool,
+    ) -> Self {
+        self.filterable = filterable;
+        self.storage_atomic = storage_atomic;
+        self
     }
 
     /// Set of Color / Depth / Stencil aspects.
@@ -308,9 +490,10 @@ impl FormatFacts {
     /// `None` means the format cannot be used as a sampled texture at all
     /// (section 8.2). It is not an error and not "unknown": the caller has asked a
     /// question with a negative answer, and the answer is about the format rather
-    /// than about this device. No format in section 8.1's P0 set reaches it —
-    /// every one of them is sampleable — and the formats that would are the
-    /// compressed, planar, and multi-planar ones P0 excludes.
+    /// than about this device. Every currently named format is sampleable when
+    /// the device's precise format/use query supports it; BC, ETC2/EAC and ASTC
+    /// therefore answer the floating-point sample class. `None` remains in the
+    /// contract for future formats such as non-sampleable planar representations.
     ///
     /// The two float variants are the reason this is not a `bool` "filterable":
     /// [`TextureSampleType::Float`] permits a filtering sampler and
@@ -321,7 +504,23 @@ impl FormatFacts {
     /// and depth classes, whose sample types carry the binding's semantics
     /// instead.
     pub fn sample_type(&self) -> Option<TextureSampleType> {
-        sample_type(self.format)
+        match sample_type(self.format) {
+            Some(TextureSampleType::UnfilterableFloat) if self.filterable => {
+                Some(TextureSampleType::Float)
+            }
+            other => other,
+        }
+    }
+
+    /// Whether this device permits linear filtering for this concrete format.
+    /// It is intentionally a probed answer rather than a static format table.
+    pub fn filterable(&self) -> bool {
+        self.filterable
+    }
+
+    /// Whether storage-image atomic operations are supported for this format.
+    pub fn storage_atomic(&self) -> bool {
+        self.storage_atomic
     }
 
     /// Which storage accesses this format supports.
@@ -384,32 +583,28 @@ impl FormatFacts {
     /// format writes `Float32`, a signed integer format `Sint32`, and an unsigned
     /// integer format `Uint32`.
     ///
-    /// `None` for every depth and depth/stencil format, always. They are not color
-    /// attachments, so they have no class to state, and inventing one would give a
-    /// caller an answer for a case the chapter says has none — the same boundary
-    /// the clear-class table in `api/command/attachment.rs` draws, which is a
-    /// second copy of this column that should be deleted and rewritten to read
-    /// this accessor, so that section 8 has exactly one class table.
+    /// `None` for compressed, depth and depth/stencil formats. They are not color
+    /// attachments, so they have no class to state. Command clear validation
+    /// translates this same answer instead of maintaining a second format table.
     pub fn color_output_type(&self) -> Option<ShaderNumericType> {
         color_output_type(self.format)
     }
 
     /// How many texels one addressable texel/block covers, horizontally.
     ///
-    /// Always 1 in P0. The accessor exists because the answer is not 1 for a
-    /// compressed or planar format, and those are the formats section 8.1
-    /// excludes; a caller that reads the block width today gets the right answer
-    /// for the formats that exist instead of an assumption that stops holding
-    /// the moment one is added.
+    /// One for uncompressed formats; the codec block width for BC, ETC2/EAC and
+    /// ASTC. Keeping this in the central format table makes transfer validation,
+    /// backend footprints and logical estimates agree.
     pub fn block_width(&self) -> u32 {
-        1
+        block_extent(self.format).0
     }
 
     /// How many texels one addressable texel/block covers, vertically.
     ///
-    /// Always 1 in P0, for the reason given on [`Self::block_width`].
+    /// One for uncompressed formats; the codec block height for BC, ETC2/EAC and
+    /// ASTC.
     pub fn block_height(&self) -> u32 {
-        1
+        block_extent(self.format).1
     }
 
     /// Bytes/block that may be used for a descriptor-based logical memory
@@ -447,6 +642,8 @@ pub(crate) fn logical_bytes_per_block(format: TextureFormat) -> Option<u32> {
         | TextureFormat::R16Uint
         | TextureFormat::R16Sint
         | TextureFormat::R16Float
+        | TextureFormat::R16Unorm
+        | TextureFormat::R16Snorm
         | TextureFormat::Depth16Unorm => 2,
         TextureFormat::Rgba8Unorm
         | TextureFormat::Rgba8UnormSrgb
@@ -458,21 +655,175 @@ pub(crate) fn logical_bytes_per_block(format: TextureFormat) -> Option<u32> {
         | TextureFormat::Rg16Uint
         | TextureFormat::Rg16Sint
         | TextureFormat::Rg16Float
+        | TextureFormat::Rg16Unorm
+        | TextureFormat::Rg16Snorm
         | TextureFormat::R32Uint
         | TextureFormat::R32Sint
         | TextureFormat::R32Float
+        | TextureFormat::Rgb9e5Ufloat
+        | TextureFormat::Rgb10a2Uint
+        | TextureFormat::Rgb10a2Unorm
+        | TextureFormat::Rg11b10Ufloat
         | TextureFormat::Depth32Float => 4,
         TextureFormat::Rgba16Uint
         | TextureFormat::Rgba16Sint
         | TextureFormat::Rgba16Float
+        | TextureFormat::Rgba16Unorm
+        | TextureFormat::Rgba16Snorm
         | TextureFormat::Rg32Uint
         | TextureFormat::Rg32Sint
         | TextureFormat::Rg32Float => 8,
         TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint | TextureFormat::Rgba32Float => 16,
+        TextureFormat::R64Uint => 8,
+        TextureFormat::Stencil8 => 1,
+        TextureFormat::Bc1RgbaUnorm
+        | TextureFormat::Bc1RgbaUnormSrgb
+        | TextureFormat::Bc4RUnorm
+        | TextureFormat::Bc4RSnorm
+        | TextureFormat::Etc2Rgb8Unorm
+        | TextureFormat::Etc2Rgb8UnormSrgb
+        | TextureFormat::Etc2Rgb8A1Unorm
+        | TextureFormat::Etc2Rgb8A1UnormSrgb
+        | TextureFormat::EacR11Unorm
+        | TextureFormat::EacR11Snorm => 8,
+        TextureFormat::Bc2RgbaUnorm
+        | TextureFormat::Bc2RgbaUnormSrgb
+        | TextureFormat::Bc3RgbaUnorm
+        | TextureFormat::Bc3RgbaUnormSrgb
+        | TextureFormat::Bc5RgUnorm
+        | TextureFormat::Bc5RgSnorm
+        | TextureFormat::Bc6hRgbUfloat
+        | TextureFormat::Bc6hRgbFloat
+        | TextureFormat::Bc7RgbaUnorm
+        | TextureFormat::Bc7RgbaUnormSrgb
+        | TextureFormat::Etc2Rgba8Unorm
+        | TextureFormat::Etc2Rgba8UnormSrgb
+        | TextureFormat::EacRg11Unorm
+        | TextureFormat::EacRg11Snorm
+        | TextureFormat::Astc4x4Unorm
+        | TextureFormat::Astc4x4UnormSrgb
+        | TextureFormat::Astc4x4Hdr
+        | TextureFormat::Astc5x4Unorm
+        | TextureFormat::Astc5x4UnormSrgb
+        | TextureFormat::Astc5x4Hdr
+        | TextureFormat::Astc5x5Unorm
+        | TextureFormat::Astc5x5UnormSrgb
+        | TextureFormat::Astc5x5Hdr
+        | TextureFormat::Astc6x5Unorm
+        | TextureFormat::Astc6x5UnormSrgb
+        | TextureFormat::Astc6x5Hdr
+        | TextureFormat::Astc6x6Unorm
+        | TextureFormat::Astc6x6UnormSrgb
+        | TextureFormat::Astc6x6Hdr
+        | TextureFormat::Astc8x5Unorm
+        | TextureFormat::Astc8x5UnormSrgb
+        | TextureFormat::Astc8x5Hdr
+        | TextureFormat::Astc8x6Unorm
+        | TextureFormat::Astc8x6UnormSrgb
+        | TextureFormat::Astc8x6Hdr
+        | TextureFormat::Astc8x8Unorm
+        | TextureFormat::Astc8x8UnormSrgb
+        | TextureFormat::Astc8x8Hdr
+        | TextureFormat::Astc10x5Unorm
+        | TextureFormat::Astc10x5UnormSrgb
+        | TextureFormat::Astc10x5Hdr
+        | TextureFormat::Astc10x6Unorm
+        | TextureFormat::Astc10x6UnormSrgb
+        | TextureFormat::Astc10x6Hdr
+        | TextureFormat::Astc10x8Unorm
+        | TextureFormat::Astc10x8UnormSrgb
+        | TextureFormat::Astc10x8Hdr
+        | TextureFormat::Astc10x10Unorm
+        | TextureFormat::Astc10x10UnormSrgb
+        | TextureFormat::Astc10x10Hdr
+        | TextureFormat::Astc12x10Unorm
+        | TextureFormat::Astc12x10UnormSrgb
+        | TextureFormat::Astc12x10Hdr
+        | TextureFormat::Astc12x12Unorm
+        | TextureFormat::Astc12x12UnormSrgb
+        | TextureFormat::Astc12x12Hdr => 16,
         TextureFormat::Depth24Plus
         | TextureFormat::Depth24PlusStencil8
-        | TextureFormat::Depth32FloatStencil8 => return None,
+        | TextureFormat::Depth32FloatStencil8
+        // Multi-planar formats do not have one byte size: each selected plane
+        // has its own footprint and is queried through its aspect.
+        | TextureFormat::Nv12
+        | TextureFormat::P010 => return None,
     })
+}
+
+/// Texel extent represented by one addressable block.  Kept next to the byte
+/// table so upload, readback and estimates cannot diverge on a new format.
+pub(crate) fn block_extent(format: TextureFormat) -> (u32, u32) {
+    match format {
+        TextureFormat::Astc4x4Unorm
+        | TextureFormat::Astc4x4UnormSrgb
+        | TextureFormat::Astc4x4Hdr => (4, 4),
+        TextureFormat::Astc5x4Unorm
+        | TextureFormat::Astc5x4UnormSrgb
+        | TextureFormat::Astc5x4Hdr => (5, 4),
+        TextureFormat::Astc5x5Unorm
+        | TextureFormat::Astc5x5UnormSrgb
+        | TextureFormat::Astc5x5Hdr => (5, 5),
+        TextureFormat::Astc6x5Unorm
+        | TextureFormat::Astc6x5UnormSrgb
+        | TextureFormat::Astc6x5Hdr => (6, 5),
+        TextureFormat::Astc6x6Unorm
+        | TextureFormat::Astc6x6UnormSrgb
+        | TextureFormat::Astc6x6Hdr => (6, 6),
+        TextureFormat::Astc8x5Unorm
+        | TextureFormat::Astc8x5UnormSrgb
+        | TextureFormat::Astc8x5Hdr => (8, 5),
+        TextureFormat::Astc8x6Unorm
+        | TextureFormat::Astc8x6UnormSrgb
+        | TextureFormat::Astc8x6Hdr => (8, 6),
+        TextureFormat::Astc8x8Unorm
+        | TextureFormat::Astc8x8UnormSrgb
+        | TextureFormat::Astc8x8Hdr => (8, 8),
+        TextureFormat::Astc10x5Unorm
+        | TextureFormat::Astc10x5UnormSrgb
+        | TextureFormat::Astc10x5Hdr => (10, 5),
+        TextureFormat::Astc10x6Unorm
+        | TextureFormat::Astc10x6UnormSrgb
+        | TextureFormat::Astc10x6Hdr => (10, 6),
+        TextureFormat::Astc10x8Unorm
+        | TextureFormat::Astc10x8UnormSrgb
+        | TextureFormat::Astc10x8Hdr => (10, 8),
+        TextureFormat::Astc10x10Unorm
+        | TextureFormat::Astc10x10UnormSrgb
+        | TextureFormat::Astc10x10Hdr => (10, 10),
+        TextureFormat::Astc12x10Unorm
+        | TextureFormat::Astc12x10UnormSrgb
+        | TextureFormat::Astc12x10Hdr => (12, 10),
+        TextureFormat::Astc12x12Unorm
+        | TextureFormat::Astc12x12UnormSrgb
+        | TextureFormat::Astc12x12Hdr => (12, 12),
+        TextureFormat::Bc1RgbaUnorm
+        | TextureFormat::Bc1RgbaUnormSrgb
+        | TextureFormat::Bc2RgbaUnorm
+        | TextureFormat::Bc2RgbaUnormSrgb
+        | TextureFormat::Bc3RgbaUnorm
+        | TextureFormat::Bc3RgbaUnormSrgb
+        | TextureFormat::Bc4RUnorm
+        | TextureFormat::Bc4RSnorm
+        | TextureFormat::Bc5RgUnorm
+        | TextureFormat::Bc5RgSnorm
+        | TextureFormat::Bc6hRgbUfloat
+        | TextureFormat::Bc6hRgbFloat
+        | TextureFormat::Bc7RgbaUnorm
+        | TextureFormat::Bc7RgbaUnormSrgb
+        | TextureFormat::Etc2Rgb8Unorm
+        | TextureFormat::Etc2Rgb8UnormSrgb
+        | TextureFormat::Etc2Rgb8A1Unorm
+        | TextureFormat::Etc2Rgb8A1UnormSrgb
+        | TextureFormat::Etc2Rgba8Unorm
+        | TextureFormat::Etc2Rgba8UnormSrgb
+        | TextureFormat::EacR11Unorm
+        | TextureFormat::EacR11Snorm
+        | TextureFormat::EacRg11Unorm
+        | TextureFormat::EacRg11Snorm => (4, 4),
+        _ => (1, 1),
+    }
 }
 
 /// The aspects one format covers.
@@ -488,6 +839,10 @@ pub(crate) fn format_aspects(format: TextureFormat) -> TextureAspects {
         }
         TextureFormat::Depth24PlusStencil8 | TextureFormat::Depth32FloatStencil8 => {
             TextureAspects::DEPTH.union(TextureAspects::STENCIL)
+        }
+        TextureFormat::Stencil8 => TextureAspects::STENCIL,
+        TextureFormat::Nv12 | TextureFormat::P010 => {
+            TextureAspects::PLANE0.union(TextureAspects::PLANE1)
         }
         _ => TextureAspects::COLOR,
     }
@@ -507,9 +862,69 @@ pub(crate) fn has_alpha_channel(format: TextureFormat) -> bool {
             | TextureFormat::Rgba16Uint
             | TextureFormat::Rgba16Sint
             | TextureFormat::Rgba16Float
+            | TextureFormat::Rgba16Unorm
+            | TextureFormat::Rgba16Snorm
+            | TextureFormat::Rgb10a2Uint
+            | TextureFormat::Rgb10a2Unorm
             | TextureFormat::Rgba32Uint
             | TextureFormat::Rgba32Sint
             | TextureFormat::Rgba32Float
+            | TextureFormat::Bc1RgbaUnorm
+            | TextureFormat::Bc1RgbaUnormSrgb
+            | TextureFormat::Bc2RgbaUnorm
+            | TextureFormat::Bc2RgbaUnormSrgb
+            | TextureFormat::Bc3RgbaUnorm
+            | TextureFormat::Bc3RgbaUnormSrgb
+            | TextureFormat::Bc7RgbaUnorm
+            | TextureFormat::Bc7RgbaUnormSrgb
+            | TextureFormat::Etc2Rgb8A1Unorm
+            | TextureFormat::Etc2Rgb8A1UnormSrgb
+            | TextureFormat::Etc2Rgba8Unorm
+            | TextureFormat::Etc2Rgba8UnormSrgb
+            // ASTC's portable vocabulary is RGBA for every block footprint
+            // and channel encoding, including the SFLOAT/HDR forms.
+            | TextureFormat::Astc4x4Unorm
+            | TextureFormat::Astc4x4UnormSrgb
+            | TextureFormat::Astc4x4Hdr
+            | TextureFormat::Astc5x4Unorm
+            | TextureFormat::Astc5x4UnormSrgb
+            | TextureFormat::Astc5x4Hdr
+            | TextureFormat::Astc5x5Unorm
+            | TextureFormat::Astc5x5UnormSrgb
+            | TextureFormat::Astc5x5Hdr
+            | TextureFormat::Astc6x5Unorm
+            | TextureFormat::Astc6x5UnormSrgb
+            | TextureFormat::Astc6x5Hdr
+            | TextureFormat::Astc6x6Unorm
+            | TextureFormat::Astc6x6UnormSrgb
+            | TextureFormat::Astc6x6Hdr
+            | TextureFormat::Astc8x5Unorm
+            | TextureFormat::Astc8x5UnormSrgb
+            | TextureFormat::Astc8x5Hdr
+            | TextureFormat::Astc8x6Unorm
+            | TextureFormat::Astc8x6UnormSrgb
+            | TextureFormat::Astc8x6Hdr
+            | TextureFormat::Astc8x8Unorm
+            | TextureFormat::Astc8x8UnormSrgb
+            | TextureFormat::Astc8x8Hdr
+            | TextureFormat::Astc10x5Unorm
+            | TextureFormat::Astc10x5UnormSrgb
+            | TextureFormat::Astc10x5Hdr
+            | TextureFormat::Astc10x6Unorm
+            | TextureFormat::Astc10x6UnormSrgb
+            | TextureFormat::Astc10x6Hdr
+            | TextureFormat::Astc10x8Unorm
+            | TextureFormat::Astc10x8UnormSrgb
+            | TextureFormat::Astc10x8Hdr
+            | TextureFormat::Astc10x10Unorm
+            | TextureFormat::Astc10x10UnormSrgb
+            | TextureFormat::Astc10x10Hdr
+            | TextureFormat::Astc12x10Unorm
+            | TextureFormat::Astc12x10UnormSrgb
+            | TextureFormat::Astc12x10Hdr
+            | TextureFormat::Astc12x12Unorm
+            | TextureFormat::Astc12x12UnormSrgb
+            | TextureFormat::Astc12x12Hdr
     )
 }
 
@@ -542,12 +957,16 @@ pub(crate) fn has_alpha_channel(format: TextureFormat) -> bool {
 /// boolean.
 ///
 /// `Option` is the contract the chapter freezes (`None` = "cannot be used as a
-/// sampled texture"), not a value any P0 format reaches: section 8.1's set is
-/// entirely sampleable, and the formats that answer `None` are the compressed,
-/// planar, and multi-planar ones it excludes. The depth-stencil formats answer
-/// [`TextureSampleType::Depth`] rather than `None` because the sample type is
-/// asked of the format and the view's aspect choice is checked separately.
+/// sampled texture"). Every currently named format is sampleable when its
+/// per-device facts support the requested use: BC, ETC2/EAC and ASTC decode to
+/// the floating-point sample class, while depth-stencil formats answer
+/// [`TextureSampleType::Depth`]. The view's aspect choice is checked separately.
 pub(crate) fn sample_type(format: TextureFormat) -> Option<TextureSampleType> {
+    if is_compressed(format) {
+        // BC/ETC2/EAC/ASTC are sampled floating-point representations. Exact
+        // filterability remains a per-format device fact, not an enum claim.
+        return Some(TextureSampleType::Float);
+    }
     Some(match format {
         TextureFormat::R8Uint
         | TextureFormat::Rg8Uint
@@ -557,7 +976,10 @@ pub(crate) fn sample_type(format: TextureFormat) -> Option<TextureSampleType> {
         | TextureFormat::Rgba16Uint
         | TextureFormat::R32Uint
         | TextureFormat::Rg32Uint
-        | TextureFormat::Rgba32Uint => TextureSampleType::Uint,
+        | TextureFormat::Rgba32Uint
+        | TextureFormat::Rgb10a2Uint => TextureSampleType::Uint,
+
+        TextureFormat::R64Uint => TextureSampleType::Uint,
 
         TextureFormat::R8Sint
         | TextureFormat::Rg8Sint
@@ -575,6 +997,8 @@ pub(crate) fn sample_type(format: TextureFormat) -> Option<TextureSampleType> {
         | TextureFormat::Depth32Float
         | TextureFormat::Depth32FloatStencil8 => TextureSampleType::Depth,
 
+        TextureFormat::Stencil8 | TextureFormat::Nv12 | TextureFormat::P010 => return None,
+
         TextureFormat::R32Float | TextureFormat::Rg32Float | TextureFormat::Rgba32Float => {
             TextureSampleType::UnfilterableFloat
         }
@@ -591,6 +1015,20 @@ pub(crate) fn sample_type(format: TextureFormat) -> Option<TextureSampleType> {
         | TextureFormat::R16Float
         | TextureFormat::Rg16Float
         | TextureFormat::Rgba16Float => TextureSampleType::Float,
+        TextureFormat::R16Unorm
+        | TextureFormat::R16Snorm
+        | TextureFormat::Rg16Unorm
+        | TextureFormat::Rg16Snorm
+        | TextureFormat::Rgba16Unorm
+        | TextureFormat::Rgba16Snorm
+        | TextureFormat::Rgb9e5Ufloat
+        | TextureFormat::Rgb10a2Unorm
+        | TextureFormat::Rg11b10Ufloat => TextureSampleType::Float,
+        // Keep a newly added format fail-closed until its sample class has a
+        // reviewed entry. Format probing walks this table on real adapters;
+        // returning no sample contract is safe, while an `unreachable!` here
+        // would turn a missing table arm into a device-dependent panic.
+        _ => return None,
     })
 }
 
@@ -603,6 +1041,11 @@ pub(crate) fn sample_type(format: TextureFormat) -> Option<TextureSampleType> {
 /// are never color attachments — section 8.2 says so explicitly, and a class for
 /// them would be an answer to a question the chapter refuses to ask.
 pub(crate) fn color_output_type(format: TextureFormat) -> Option<ShaderNumericType> {
+    // Block-compressed formats are color-aspect textures but never portable
+    // render targets; do not manufacture a fragment-output contract for them.
+    if is_compressed(format) {
+        return None;
+    }
     Some(match format {
         TextureFormat::R8Unorm
         | TextureFormat::R8Snorm
@@ -619,6 +1062,15 @@ pub(crate) fn color_output_type(format: TextureFormat) -> Option<ShaderNumericTy
         | TextureFormat::R32Float
         | TextureFormat::Rg32Float
         | TextureFormat::Rgba32Float => ShaderNumericType::Float32,
+        TextureFormat::R16Unorm
+        | TextureFormat::R16Snorm
+        | TextureFormat::Rg16Unorm
+        | TextureFormat::Rg16Snorm
+        | TextureFormat::Rgba16Unorm
+        | TextureFormat::Rgba16Snorm
+        | TextureFormat::Rgb9e5Ufloat
+        | TextureFormat::Rgb10a2Unorm
+        | TextureFormat::Rg11b10Ufloat => ShaderNumericType::Float32,
 
         TextureFormat::R8Uint
         | TextureFormat::Rg8Uint
@@ -629,6 +1081,7 @@ pub(crate) fn color_output_type(format: TextureFormat) -> Option<ShaderNumericTy
         | TextureFormat::R32Uint
         | TextureFormat::Rg32Uint
         | TextureFormat::Rgba32Uint => ShaderNumericType::Uint32,
+        TextureFormat::Rgb10a2Uint | TextureFormat::R64Uint => ShaderNumericType::Uint32,
 
         TextureFormat::R8Sint
         | TextureFormat::Rg8Sint
@@ -645,7 +1098,17 @@ pub(crate) fn color_output_type(format: TextureFormat) -> Option<ShaderNumericTy
         | TextureFormat::Depth24PlusStencil8
         | TextureFormat::Depth32Float
         | TextureFormat::Depth32FloatStencil8 => return None,
+        TextureFormat::Stencil8 | TextureFormat::Nv12 | TextureFormat::P010 => return None,
+        // A future format without a reviewed color-output class is not a color
+        // attachment candidate, never a backend panic.
+        _ => return None,
     })
+}
+
+/// Whether this vocabulary member is block-compressed. This only decides
+/// format-intrinsic validation; usable features are always reported per format.
+pub(crate) fn is_compressed(format: TextureFormat) -> bool {
+    block_extent(format) != (1, 1)
 }
 
 /// The key of a "can this texture be created" question.
@@ -846,14 +1309,14 @@ impl TextureFormat {
     /// A fieldless enum encodes as its discriminant; see
     /// [`crate::api::shader::ShaderStage::encode_into`] for why that dependency on
     /// declaration order is the intended one. This is the type on which that
-    /// dependency is most visible — 38 variants, and section 8.1's P0 set is a
-    /// subset of them — which is also why it is written as a cast rather than a
-    /// 38-arm match that could be edited out of step with the declaration.
+    /// dependency is most visible — 90 variants — which is also why it is
+    /// written as a cast rather than a 90-arm match that could be edited out of
+    /// step with the declaration.
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
         out.push(*self as u8);
     }
 
-    /// Every format in section 8.1's P0 set, in declaration order.
+    /// Every format in section 8.1's frozen set, in declaration order.
     ///
     /// Crate-private, and a backend probing a format table is its caller. Written
     /// as an explicit list rather than as a range over the discriminants, because
@@ -891,20 +1354,97 @@ impl TextureFormat {
             Self::Rgba8Snorm,
             Self::Rgba8Uint,
             Self::Rgba8Sint,
+            Self::Bc1RgbaUnorm,
+            Self::Bc1RgbaUnormSrgb,
+            Self::Bc2RgbaUnorm,
+            Self::Bc2RgbaUnormSrgb,
+            Self::Bc3RgbaUnorm,
+            Self::Bc3RgbaUnormSrgb,
+            Self::Bc4RUnorm,
+            Self::Bc4RSnorm,
+            Self::Bc5RgUnorm,
+            Self::Bc5RgSnorm,
+            Self::Bc6hRgbUfloat,
+            Self::Bc6hRgbFloat,
+            Self::Bc7RgbaUnorm,
+            Self::Bc7RgbaUnormSrgb,
+            Self::Etc2Rgb8Unorm,
+            Self::Etc2Rgb8UnormSrgb,
+            Self::Etc2Rgb8A1Unorm,
+            Self::Etc2Rgb8A1UnormSrgb,
+            Self::Etc2Rgba8Unorm,
+            Self::Etc2Rgba8UnormSrgb,
+            Self::EacR11Unorm,
+            Self::EacR11Snorm,
+            Self::EacRg11Unorm,
+            Self::EacRg11Snorm,
+            Self::Astc4x4Unorm,
+            Self::Astc4x4UnormSrgb,
+            Self::Astc4x4Hdr,
+            Self::Astc5x4Unorm,
+            Self::Astc5x4UnormSrgb,
+            Self::Astc5x4Hdr,
+            Self::Astc5x5Unorm,
+            Self::Astc5x5UnormSrgb,
+            Self::Astc5x5Hdr,
+            Self::Astc6x5Unorm,
+            Self::Astc6x5UnormSrgb,
+            Self::Astc6x5Hdr,
+            Self::Astc6x6Unorm,
+            Self::Astc6x6UnormSrgb,
+            Self::Astc6x6Hdr,
+            Self::Astc8x5Unorm,
+            Self::Astc8x5UnormSrgb,
+            Self::Astc8x5Hdr,
+            Self::Astc8x6Unorm,
+            Self::Astc8x6UnormSrgb,
+            Self::Astc8x6Hdr,
+            Self::Astc8x8Unorm,
+            Self::Astc8x8UnormSrgb,
+            Self::Astc8x8Hdr,
+            Self::Astc10x5Unorm,
+            Self::Astc10x5UnormSrgb,
+            Self::Astc10x5Hdr,
+            Self::Astc10x6Unorm,
+            Self::Astc10x6UnormSrgb,
+            Self::Astc10x6Hdr,
+            Self::Astc10x8Unorm,
+            Self::Astc10x8UnormSrgb,
+            Self::Astc10x8Hdr,
+            Self::Astc10x10Unorm,
+            Self::Astc10x10UnormSrgb,
+            Self::Astc10x10Hdr,
+            Self::Astc12x10Unorm,
+            Self::Astc12x10UnormSrgb,
+            Self::Astc12x10Hdr,
+            Self::Astc12x12Unorm,
+            Self::Astc12x12UnormSrgb,
+            Self::Astc12x12Hdr,
             Self::Bgra8Unorm,
             Self::Bgra8UnormSrgb,
             Self::R16Uint,
             Self::R16Sint,
             Self::R16Float,
+            Self::R16Unorm,
+            Self::R16Snorm,
             Self::Rg16Uint,
             Self::Rg16Sint,
             Self::Rg16Float,
+            Self::Rg16Unorm,
+            Self::Rg16Snorm,
             Self::Rgba16Uint,
             Self::Rgba16Sint,
             Self::Rgba16Float,
+            Self::Rgba16Unorm,
+            Self::Rgba16Snorm,
+            Self::Rgb9e5Ufloat,
+            Self::Rgb10a2Uint,
+            Self::Rgb10a2Unorm,
+            Self::Rg11b10Ufloat,
             Self::R32Uint,
             Self::R32Sint,
             Self::R32Float,
+            Self::R64Uint,
             Self::Rg32Uint,
             Self::Rg32Sint,
             Self::Rg32Float,
@@ -916,6 +1456,9 @@ impl TextureFormat {
             Self::Depth24PlusStencil8,
             Self::Depth32Float,
             Self::Depth32FloatStencil8,
+            Self::Stencil8,
+            Self::Nv12,
+            Self::P010,
         ]
         .into_iter()
     }
@@ -946,6 +1489,7 @@ impl FormatFacts {
             | u8::from(self.stencil_attachment) << 2
             | u8::from(self.blendable) << 3;
         out.push(attachments);
+        out.push(u8::from(self.filterable) | (u8::from(self.storage_atomic) << 1));
     }
 }
 

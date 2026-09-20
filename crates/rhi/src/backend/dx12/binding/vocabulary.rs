@@ -92,6 +92,13 @@ pub(crate) fn class_of(kind: &BindingKind) -> RegisterClass {
             StorageAccess::WriteOnly | StorageAccess::ReadWrite => RegisterClass::UnorderedAccess,
         },
         BindingKind::Sampler { .. } => RegisterClass::Sampler,
+        // Neither shape is advertised by the DX12 fact table until it has a
+        // native descriptor representation.  This value only keeps the
+        // lowering's mapping total; `write_entries` refuses it before a root
+        // table can be emitted.
+        BindingKind::AccelerationStructure | BindingKind::ExternalTexture => {
+            RegisterClass::ShaderResource
+        }
     }
 }
 

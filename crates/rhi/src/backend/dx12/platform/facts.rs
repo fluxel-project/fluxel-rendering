@@ -130,6 +130,8 @@
 
 use core::mem::size_of;
 
+use windows::core::Interface;
+
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT,
     D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION, D3D12_CS_TGSM_REGISTER_COUNT,
@@ -154,14 +156,22 @@ use windows::Win32::Graphics::Direct3D12::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
-    DXGI_FORMAT_D16_UNORM, DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
-    DXGI_FORMAT_R8_SINT, DXGI_FORMAT_R8_SNORM, DXGI_FORMAT_R8_UINT, DXGI_FORMAT_R8_UNORM,
-    DXGI_FORMAT_R8G8_SINT, DXGI_FORMAT_R8G8_SNORM, DXGI_FORMAT_R8G8_UINT, DXGI_FORMAT_R8G8_UNORM,
-    DXGI_FORMAT_R8G8B8A8_SINT, DXGI_FORMAT_R8G8B8A8_SNORM, DXGI_FORMAT_R8G8B8A8_UINT,
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R16_FLOAT,
-    DXGI_FORMAT_R16_SINT, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16_SINT,
-    DXGI_FORMAT_R16G16_UINT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_SINT,
-    DXGI_FORMAT_R16G16B16A16_UINT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_SINT,
+    DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC1_UNORM_SRGB, DXGI_FORMAT_BC2_UNORM,
+    DXGI_FORMAT_BC2_UNORM_SRGB, DXGI_FORMAT_BC3_UNORM, DXGI_FORMAT_BC3_UNORM_SRGB,
+    DXGI_FORMAT_BC4_SNORM, DXGI_FORMAT_BC4_UNORM, DXGI_FORMAT_BC5_SNORM, DXGI_FORMAT_BC5_UNORM,
+    DXGI_FORMAT_BC6H_SF16, DXGI_FORMAT_BC6H_UF16, DXGI_FORMAT_BC7_UNORM,
+    DXGI_FORMAT_BC7_UNORM_SRGB, DXGI_FORMAT_D16_UNORM, DXGI_FORMAT_D32_FLOAT,
+    DXGI_FORMAT_D32_FLOAT_S8X24_UINT, DXGI_FORMAT_R8_SINT, DXGI_FORMAT_R8_SNORM,
+    DXGI_FORMAT_R8_UINT, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_SINT, DXGI_FORMAT_R8G8_SNORM,
+    DXGI_FORMAT_R8G8_UINT, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8G8B8A8_SINT,
+    DXGI_FORMAT_R8G8B8A8_SNORM, DXGI_FORMAT_R8G8B8A8_UINT, DXGI_FORMAT_R8G8B8A8_UNORM,
+    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R9G9B9E5_SHAREDEXP, DXGI_FORMAT_R10G10B10A2_UINT,
+    DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R16_FLOAT,
+    DXGI_FORMAT_R16_SINT, DXGI_FORMAT_R16_SNORM, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R16_UNORM,
+    DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16_SINT, DXGI_FORMAT_R16G16_SNORM,
+    DXGI_FORMAT_R16G16_UINT, DXGI_FORMAT_R16G16_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R16G16B16A16_SINT, DXGI_FORMAT_R16G16B16A16_SNORM, DXGI_FORMAT_R16G16B16A16_UINT,
+    DXGI_FORMAT_R16G16B16A16_UNORM, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_SINT,
     DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32_SINT,
     DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32G32B32A32_SINT,
     DXGI_FORMAT_R32G32B32A32_UINT,
@@ -237,7 +247,7 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
 
     let mut facts = CapabilityFacts::empty();
     facts.record_transient_capabilities(crate::backend::dx12::resource::transient_capabilities());
-    record_features(&mut facts);
+    record_features(device, &mut facts);
     record_code_forms(&mut facts);
     record_limits(&options, &mut facts);
     record_buffer_support(&mut facts);
@@ -303,7 +313,7 @@ fn record_code_forms(facts: &mut CapabilityFacts) {
 /// structural, so a parameter would be an unused argument that reads like a
 /// question being asked. [`record_limits`] is the one that takes the options
 /// struct, because the limit it derives is a real device reading.
-fn record_features(facts: &mut CapabilityFacts) {
+fn record_features(device: &ID3D12Device, facts: &mut CapabilityFacts) {
     // Compute is structural. Every Direct3D 12 command list has `Dispatch`, every
     // D3D12 device has a compute queue family's worth of dispatch support, and
     // there is no D3D12 device that cannot run a compute pipeline — so there is
@@ -334,6 +344,51 @@ fn record_features(facts: &mut CapabilityFacts) {
     // limit that goes with this feature is recorded in `record_limits`, and it is
     // the same API-defined ceiling rather than a second, independent probe.
     facts.record_feature(OptionalFeature::SamplerAnisotropy);
+    // D3D12 sampler descriptors always expose comparison and border addressing;
+    // neither answer is inferred from the Rust backend trait.
+    facts.record_feature(OptionalFeature::ComparisonSamplers);
+    facts.record_feature(OptionalFeature::SamplerClampToBorder);
+    // D3D12 exposes a fixed palette of float border colors. `Zero` maps to the
+    // all-zero float value and is not claimed as an integer-border capability.
+    facts.record_feature(OptionalFeature::PolygonModeLine);
+    facts.record_feature(OptionalFeature::DepthClipControl);
+    facts.record_feature(OptionalFeature::DepthBiasClamp);
+    facts.record_feature(OptionalFeature::DualSourceBlending);
+    facts.record_feature(OptionalFeature::IndependentBlend);
+    // Every D3D12 direct command list exposes occlusion query begin/end and a
+    // query heap is an ordinary device allocation. Timestamp/statistics are
+    // intentionally separate: their portable result conversion is not implied
+    // by this structural occlusion path.
+    facts.record_feature(OptionalFeature::OcclusionQuery);
+    facts.record_feature(OptionalFeature::QueryResolve);
+    facts.record_feature(OptionalFeature::IndirectDispatch);
+    facts.record_feature(OptionalFeature::IndirectDraw);
+    facts.record_feature(OptionalFeature::MultiDrawIndirect);
+    facts.record_feature(OptionalFeature::MultiDrawIndirectCount);
+    facts.record_feature(OptionalFeature::IndirectFirstInstance);
+    // DrawIndexedInstanced carries BaseVertexLocation directly; the raster
+    // lowerer forwards the recorded i32 without emulation.
+    facts.record_feature(OptionalFeature::BaseVertex);
+    facts.record_feature(OptionalFeature::ClearBuffer);
+    // Color clear lowers through zeroed upload footprints; depth/stencil clear
+    // uses a temporary DSV after recording-time validation requires both COPY_DST
+    // and DEPTH_STENCIL_ATTACHMENT. Planar formats are not creatable here.
+    facts.record_feature(OptionalFeature::ClearTexture);
+    // General mapping is real only for the explicit UPLOAD/READBACK usage
+    // combinations recorded in `record_buffer_support`; those host heaps have
+    // synchronous Map/RAII Unmap lowerings in `resource::buffer`.
+    facts.record_feature(OptionalFeature::MappablePrimaryBuffers);
+    facts.record_feature(OptionalFeature::Immediates);
+    // PipelineLibrary is an ID3D12Device1 extension. Its cast is the native
+    // capability query; the cache lowering owns real Create/Load/Store/Serialize
+    // paths and therefore both facts can be published together.
+    if device
+        .cast::<windows::Win32::Graphics::Direct3D12::ID3D12Device1>()
+        .is_ok()
+    {
+        facts.record_feature(OptionalFeature::PipelineCache);
+        facts.record_feature(OptionalFeature::PipelineCacheSerialization);
+    }
 }
 
 /// Records the device limits this backend can ground.
@@ -348,6 +403,18 @@ fn record_features(facts: &mut CapabilityFacts) {
 ///
 /// The two recorded here are the two whose Direct3D 12 source is unambiguous.
 fn record_limits(options: &D3D12_FEATURE_DATA_D3D12_OPTIONS, facts: &mut CapabilityFacts) {
+    // D3D12_QUERY_HEAP_DESC carries Count as a u32 and the API specifies no
+    // smaller device limit. Allocation availability is still a native resource
+    // creation result, just like a buffer of a representable size.
+    facts.record_limit(LimitKey::MaxQueriesPerQuerySet, u64::from(u32::MAX));
+    facts.record_limit(LimitKey::QueryResolveBufferAlignment, 8);
+    facts.record_limit(LimitKey::ImmediateDataAlignment, 4);
+    // D3D12 Map itself permits byte-granular ranges on buffer resources.
+    facts.record_limit(LimitKey::MapAlignment, 1);
+    // 32 DWORDs are reserved for the one contiguous DX12 root-constant ABI.
+    // The remaining 32 DWORDs leave room for descriptor-table parameters in
+    // the native 64-DWORD root-signature budget.
+    facts.record_limit(LimitKey::MaxImmediateSize, 128);
     // Anisotropic filtering's ceiling, from the sampler-descriptor range rather
     // than from a device query — see `record_features` for why there is no query
     // to make. `MaxAnisotropy` is clamped to 1..=16 by the API, so 16 is the
@@ -399,6 +466,30 @@ fn record_buffer_support(facts: &mut CapabilityFacts) {
             // Recorded rather than skipped: the space is enumerated in full, and
             // an entry left out of it would be a hole that panics.
             BufferSupport::Unsupported
+        } else if usage.contains(BufferUsage::MAP_READ) && usage.contains(BufferUsage::MAP_WRITE) {
+            // D3D12 has distinct READBACK and UPLOAD heaps. One allocation
+            // cannot be both, so this portable combination must fail before
+            // creation instead of selecting one direction arbitrarily.
+            BufferSupport::Unsupported
+        } else if usage.contains(BufferUsage::MAP_READ) {
+            // READBACK heaps are permanently COPY_DEST. This currently closes
+            // the map-read + buffer-copy route; query resolve and other uses
+            // remain unsupported until their lowering is host-heap aware.
+            let allowed = BufferUsage::MAP_READ.union(BufferUsage::COPY_DST);
+            if usage.is_subset_of(allowed) {
+                BufferSupport::Supported(limits)
+            } else {
+                BufferSupport::Unsupported
+            }
+        } else if usage.contains(BufferUsage::MAP_WRITE) {
+            // UPLOAD heaps are permanently GENERIC_READ, which includes the
+            // source side of a copy but not arbitrary DEFAULT-heap states.
+            let allowed = BufferUsage::MAP_WRITE.union(BufferUsage::COPY_SRC);
+            if usage.is_subset_of(allowed) {
+                BufferSupport::Supported(limits)
+            } else {
+                BufferSupport::Unsupported
+            }
         } else {
             BufferSupport::Supported(limits)
         };
@@ -479,7 +570,16 @@ fn record_binding_support(facts: &mut CapabilityFacts) {
                     // The texture table deliberately refuses MSAA until its
                     // full raster/resolve lifecycle is lowered, so an MSAA
                     // binding shape cannot be useful before that same work.
-                    if multisampled {
+                    // A portable depth sample is not just an SRV whose format
+                    // happens to be D32/D16.  DX12 needs a typeless resource
+                    // plus an R* view format, while this baseline's texture
+                    // allocation intentionally preserves the exact portable
+                    // depth DXGI format.  Publishing the generic depth-SRV
+                    // row would therefore let validation reach a void native
+                    // descriptor-write call that cannot report its rejection.
+                    // Keep it absent until resource/view typeless families are
+                    // lowered as one end-to-end path.
+                    if multisampled || matches!(sample_type, TextureSampleType::Depth) {
                         BindingSupport::Unsupported
                     } else {
                         BindingSupport::Supported
@@ -528,6 +628,7 @@ fn record_bindable(
                     visibility,
                     kind,
                     array,
+                    runtime_sized: false,
                     dynamic_offset,
                 },
                 answer,
@@ -616,6 +717,7 @@ fn record_texture_bindable(
                     visibility,
                     kind: kind.clone(),
                     array,
+                    runtime_sized: false,
                     dynamic_offset,
                 },
                 answer,
@@ -751,25 +853,113 @@ pub(crate) fn dxgi_format(format: TextureFormat) -> Option<DXGI_FORMAT> {
         TextureFormat::R16Uint => DXGI_FORMAT_R16_UINT,
         TextureFormat::R16Sint => DXGI_FORMAT_R16_SINT,
         TextureFormat::R16Float => DXGI_FORMAT_R16_FLOAT,
+        TextureFormat::R16Unorm => DXGI_FORMAT_R16_UNORM,
+        TextureFormat::R16Snorm => DXGI_FORMAT_R16_SNORM,
         TextureFormat::Rg16Uint => DXGI_FORMAT_R16G16_UINT,
         TextureFormat::Rg16Sint => DXGI_FORMAT_R16G16_SINT,
         TextureFormat::Rg16Float => DXGI_FORMAT_R16G16_FLOAT,
+        TextureFormat::Rg16Unorm => DXGI_FORMAT_R16G16_UNORM,
+        TextureFormat::Rg16Snorm => DXGI_FORMAT_R16G16_SNORM,
         TextureFormat::Rgba16Uint => DXGI_FORMAT_R16G16B16A16_UINT,
         TextureFormat::Rgba16Sint => DXGI_FORMAT_R16G16B16A16_SINT,
         TextureFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        TextureFormat::Rgba16Unorm => DXGI_FORMAT_R16G16B16A16_UNORM,
+        TextureFormat::Rgba16Snorm => DXGI_FORMAT_R16G16B16A16_SNORM,
+        TextureFormat::Rgb9e5Ufloat => DXGI_FORMAT_R9G9B9E5_SHAREDEXP,
+        TextureFormat::Rgb10a2Uint => DXGI_FORMAT_R10G10B10A2_UINT,
+        TextureFormat::Rgb10a2Unorm => DXGI_FORMAT_R10G10B10A2_UNORM,
+        TextureFormat::Rg11b10Ufloat => DXGI_FORMAT_R11G11B10_FLOAT,
         TextureFormat::R32Uint => DXGI_FORMAT_R32_UINT,
         TextureFormat::R32Sint => DXGI_FORMAT_R32_SINT,
         TextureFormat::R32Float => DXGI_FORMAT_R32_FLOAT,
+        TextureFormat::R64Uint => return None,
         TextureFormat::Rg32Uint => DXGI_FORMAT_R32G32_UINT,
         TextureFormat::Rg32Sint => DXGI_FORMAT_R32G32_SINT,
         TextureFormat::Rg32Float => DXGI_FORMAT_R32G32_FLOAT,
         TextureFormat::Rgba32Uint => DXGI_FORMAT_R32G32B32A32_UINT,
         TextureFormat::Rgba32Sint => DXGI_FORMAT_R32G32B32A32_SINT,
         TextureFormat::Rgba32Float => DXGI_FORMAT_R32G32B32A32_FLOAT,
+        // BC is a native DXGI block-compressed family.  It remains individually
+        // probed below: the mapping only makes `FORMAT_SUPPORT` queryable and
+        // never turns a driver refusal into portable support.
+        TextureFormat::Bc1RgbaUnorm => DXGI_FORMAT_BC1_UNORM,
+        TextureFormat::Bc1RgbaUnormSrgb => DXGI_FORMAT_BC1_UNORM_SRGB,
+        TextureFormat::Bc2RgbaUnorm => DXGI_FORMAT_BC2_UNORM,
+        TextureFormat::Bc2RgbaUnormSrgb => DXGI_FORMAT_BC2_UNORM_SRGB,
+        TextureFormat::Bc3RgbaUnorm => DXGI_FORMAT_BC3_UNORM,
+        TextureFormat::Bc3RgbaUnormSrgb => DXGI_FORMAT_BC3_UNORM_SRGB,
+        TextureFormat::Bc4RUnorm => DXGI_FORMAT_BC4_UNORM,
+        TextureFormat::Bc4RSnorm => DXGI_FORMAT_BC4_SNORM,
+        TextureFormat::Bc5RgUnorm => DXGI_FORMAT_BC5_UNORM,
+        TextureFormat::Bc5RgSnorm => DXGI_FORMAT_BC5_SNORM,
+        TextureFormat::Bc6hRgbUfloat => DXGI_FORMAT_BC6H_UF16,
+        TextureFormat::Bc6hRgbFloat => DXGI_FORMAT_BC6H_SF16,
+        TextureFormat::Bc7RgbaUnorm => DXGI_FORMAT_BC7_UNORM,
+        TextureFormat::Bc7RgbaUnormSrgb => DXGI_FORMAT_BC7_UNORM_SRGB,
         TextureFormat::Depth16Unorm => DXGI_FORMAT_D16_UNORM,
         TextureFormat::Depth32Float => DXGI_FORMAT_D32_FLOAT,
         TextureFormat::Depth32FloatStencil8 => DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
-        TextureFormat::Depth24Plus | TextureFormat::Depth24PlusStencil8 => {
+        // DX12 does not define ETC2/EAC/ASTC DXGI formats.  They deliberately
+        // remain `None`: capability facts omit them and creation/view lowering
+        // returns structured Unsupported rather than pretending BC is a
+        // substitute codec.
+        TextureFormat::Etc2Rgb8Unorm
+        | TextureFormat::Etc2Rgb8UnormSrgb
+        | TextureFormat::Etc2Rgb8A1Unorm
+        | TextureFormat::Etc2Rgb8A1UnormSrgb
+        | TextureFormat::Etc2Rgba8Unorm
+        | TextureFormat::Etc2Rgba8UnormSrgb
+        | TextureFormat::EacR11Unorm
+        | TextureFormat::EacR11Snorm
+        | TextureFormat::EacRg11Unorm
+        | TextureFormat::EacRg11Snorm
+        | TextureFormat::Astc4x4Unorm
+        | TextureFormat::Astc4x4UnormSrgb
+        | TextureFormat::Astc4x4Hdr
+        | TextureFormat::Astc5x4Unorm
+        | TextureFormat::Astc5x4UnormSrgb
+        | TextureFormat::Astc5x4Hdr
+        | TextureFormat::Astc5x5Unorm
+        | TextureFormat::Astc5x5UnormSrgb
+        | TextureFormat::Astc5x5Hdr
+        | TextureFormat::Astc6x5Unorm
+        | TextureFormat::Astc6x5UnormSrgb
+        | TextureFormat::Astc6x5Hdr
+        | TextureFormat::Astc6x6Unorm
+        | TextureFormat::Astc6x6UnormSrgb
+        | TextureFormat::Astc6x6Hdr
+        | TextureFormat::Astc8x5Unorm
+        | TextureFormat::Astc8x5UnormSrgb
+        | TextureFormat::Astc8x5Hdr
+        | TextureFormat::Astc8x6Unorm
+        | TextureFormat::Astc8x6UnormSrgb
+        | TextureFormat::Astc8x6Hdr
+        | TextureFormat::Astc8x8Unorm
+        | TextureFormat::Astc8x8UnormSrgb
+        | TextureFormat::Astc8x8Hdr
+        | TextureFormat::Astc10x5Unorm
+        | TextureFormat::Astc10x5UnormSrgb
+        | TextureFormat::Astc10x5Hdr
+        | TextureFormat::Astc10x6Unorm
+        | TextureFormat::Astc10x6UnormSrgb
+        | TextureFormat::Astc10x6Hdr
+        | TextureFormat::Astc10x8Unorm
+        | TextureFormat::Astc10x8UnormSrgb
+        | TextureFormat::Astc10x8Hdr
+        | TextureFormat::Astc10x10Unorm
+        | TextureFormat::Astc10x10UnormSrgb
+        | TextureFormat::Astc10x10Hdr
+        | TextureFormat::Astc12x10Unorm
+        | TextureFormat::Astc12x10UnormSrgb
+        | TextureFormat::Astc12x10Hdr
+        | TextureFormat::Astc12x12Unorm
+        | TextureFormat::Astc12x12UnormSrgb
+        | TextureFormat::Astc12x12Hdr
+        | TextureFormat::Depth24Plus
+        | TextureFormat::Depth24PlusStencil8
+        | TextureFormat::Stencil8
+        | TextureFormat::Nv12
+        | TextureFormat::P010 => {
             return None;
         }
     };
@@ -929,12 +1119,16 @@ fn texture_answer(
         return TextureSupport::Unsupported;
     }
 
-    // The current RTV/DSV lowering deliberately implements 2D attachments.
-    // Reporting D1 or D3 attachment usage from native format bits would be a
-    // capability promise that submission cannot keep.
-    if dimension_bit != D3D12_FORMAT_SUPPORT1_TEXTURE2D
-        && (usage.contains(TextureUsage::COLOR_ATTACHMENT)
-            || usage.contains(TextureUsage::DEPTH_STENCIL_ATTACHMENT))
+    // The raster backend owns 2D DSVs plus 2D and explicit-slice 3D RTVs. D3D
+    // depth/stencil views and 1D attachments are still absent, so do not turn a
+    // format-support bit into a promise their lowering cannot keep.
+    if (usage.contains(TextureUsage::DEPTH_STENCIL_ATTACHMENT)
+        && dimension_bit != D3D12_FORMAT_SUPPORT1_TEXTURE2D)
+        || (usage.contains(TextureUsage::COLOR_ATTACHMENT)
+            && !matches!(
+                dimension_bit,
+                D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_TEXTURE3D
+            ))
     {
         return TextureSupport::Unsupported;
     }
@@ -1163,8 +1357,7 @@ fn record_buffer_route(facts: &mut CapabilityFacts) {
     );
 }
 
-/// Records the routes of one format: the two buffer-texture copies, the
-/// texture-to-texture copy, and the resolve.
+/// Records the direct copy routes of one format.
 ///
 /// # What is walked, and why it is the legal combinations rather than all of them
 ///
@@ -1176,8 +1369,11 @@ fn record_buffer_route(facts: &mut CapabilityFacts) {
 /// unrecorded legal route is a refusal to execute an operation the device can
 /// perform, and section 9.4 makes that refusal final rather than advisory.
 ///
-/// So the walk below is over the combinations Direct3D 12 has a path for, and
-/// the two rules that decide membership are the API's rather than this backend's:
+/// The walk below is over the combinations this backend can lower for every
+/// public input accepted by the route vocabulary. Buffer↔texture carries its
+/// D3D12 image-placement and 3D-slice constraints in `TexelCopyLayoutLimits`,
+/// so those rejections occur at recording rather than Phase A. The two rules
+/// that decide texture-copy membership are:
 ///
 /// - **A copy covers one plane, and only a plane the format has.** Section 15.3
 ///   makes the aspect set a property of the format, so a color format has no
@@ -1189,31 +1385,37 @@ fn record_buffer_route(facts: &mut CapabilityFacts) {
 ///   a copy the API does not offer. The sample counts are therefore walked once
 ///   and used for both sides rather than crossed with each other.
 fn record_format_routes(format: TextureFormat, facts: &mut CapabilityFacts) {
+    // Keep this helper total over the portable enum as well as correct at its
+    // probe call site: an abstract/mobile format with no exact DXGI resource
+    // must not gain route rows merely because its portable aspect set is known.
+    if dxgi_format(format).is_none() {
+        return;
+    }
     let aspects = format_aspects(format);
-
-    // A buffer-texture copy is a placed footprint, and the two numbers are the
-    // API's placement requirements: the footprint's offset in the buffer, and the
-    // pitch of one row of texels. Both are `D3D12_*_ALIGNMENT` constants rather
-    // than driver preferences, which is what makes them reportable at all.
-    let texel = RouteCapabilities::new(
-        None,
-        Some(TexelCopyLayoutLimits::new(
-            u64::from(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT),
-            D3D12_TEXTURE_DATA_PITCH_ALIGNMENT,
-        )),
-    );
 
     // A texture-to-texture copy and a resolve state no alignment, and the empty
     // pair is how this type says so: a route that reports neither layout is one
     // that has no copy alignment to declare.
     let none = RouteCapabilities::new(None, None);
 
+    let texel = RouteCapabilities::new(
+        None,
+        Some(
+            TexelCopyLayoutLimits::new(
+                u64::from(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT),
+                D3D12_TEXTURE_DATA_PITCH_ALIGNMENT,
+            )
+            // Array layers are separate placed footprints.  3D depth slices
+            // are one footprint, so they require packed rows but not a 512-byte
+            // offset per slice.
+            .with_image_layout(u64::from(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT), true),
+        ),
+    );
     for dimension in ROUTE_DIMENSIONS {
         for aspect in ROUTE_ASPECTS {
-            if !aspects.contains(aspect_bits(aspect)) {
+            if !aspects.contains(aspect_bits(aspect)) || !copy_aspect_is_lowered(aspect) {
                 continue;
             }
-
             let supported = RouteSupport::Supported(texel);
             facts.record_route(
                 RouteQuery::BufferToTexture {
@@ -1236,11 +1438,19 @@ fn record_format_routes(format: TextureFormat, facts: &mut CapabilityFacts) {
 
     for dimension in ROUTE_DIMENSIONS {
         for src_aspect in ROUTE_ASPECTS {
-            if !aspects.contains(aspect_bits(src_aspect)) {
+            if !aspects.contains(aspect_bits(src_aspect)) || !copy_aspect_is_lowered(src_aspect) {
                 continue;
             }
             for dst_aspect in ROUTE_ASPECTS {
-                if !aspects.contains(aspect_bits(dst_aspect)) {
+                // `CopyTextureRegion` is an exact same-plane move.  Do not
+                // turn the fact matrix's independent source/destination
+                // fields into an invented depth-to-stencil conversion route.
+                // Stencil needs DXGI plane arithmetic this backend does not
+                // lower, so it is absent rather than nominally supported.
+                if src_aspect != dst_aspect
+                    || !aspects.contains(aspect_bits(dst_aspect))
+                    || !copy_aspect_is_lowered(dst_aspect)
+                {
                     continue;
                 }
                 facts.record_route(
@@ -1259,6 +1469,17 @@ fn record_format_routes(format: TextureFormat, facts: &mut CapabilityFacts) {
             }
         }
     }
+}
+
+/// Planes whose route facts have an exact counterpart in
+/// `command::transfer::texture_subresource`.
+///
+/// D3D12 plane zero is sufficient for ordinary color and depth-only copies.
+/// Stencil and multi-planar resources need format-specific plane index and
+/// footprint lowering; publishing them before that work exists would cause the
+/// public route validator to accept commands the submit path must later refuse.
+fn copy_aspect_is_lowered(aspect: TextureAspect) -> bool {
+    matches!(aspect, TextureAspect::Color | TextureAspect::Depth)
 }
 
 /// Records the limits Direct3D 12 fixes for every device.
@@ -1487,13 +1708,52 @@ mod tests {
             | D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL.0;
         let word = support(bits, 0);
 
-        for usage in [
-            TextureUsage::COLOR_ATTACHMENT,
-            TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+        assert!(
+            !answer(
+                D3D12_FORMAT_SUPPORT1_TEXTURE1D,
+                &word,
+                TextureUsage::COLOR_ATTACHMENT,
+                1,
+                0
+            )
+            .is_supported()
+        );
+        assert!(
+            answer(
+                D3D12_FORMAT_SUPPORT1_TEXTURE2D,
+                &word,
+                TextureUsage::COLOR_ATTACHMENT,
+                1,
+                0
+            )
+            .is_supported()
+        );
+        assert!(
+            answer(
+                D3D12_FORMAT_SUPPORT1_TEXTURE3D,
+                &word,
+                TextureUsage::COLOR_ATTACHMENT,
+                1,
+                0
+            )
+            .is_supported()
+        );
+        for dimension in [
+            D3D12_FORMAT_SUPPORT1_TEXTURE1D,
+            D3D12_FORMAT_SUPPORT1_TEXTURE2D,
+            D3D12_FORMAT_SUPPORT1_TEXTURE3D,
         ] {
-            assert!(!answer(D3D12_FORMAT_SUPPORT1_TEXTURE1D, &word, usage, 1, 0).is_supported());
-            assert!(answer(D3D12_FORMAT_SUPPORT1_TEXTURE2D, &word, usage, 1, 0).is_supported());
-            assert!(!answer(D3D12_FORMAT_SUPPORT1_TEXTURE3D, &word, usage, 1, 0).is_supported());
+            assert_eq!(
+                answer(
+                    dimension,
+                    &word,
+                    TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+                    1,
+                    0
+                )
+                .is_supported(),
+                dimension == D3D12_FORMAT_SUPPORT1_TEXTURE2D
+            );
         }
     }
 
@@ -1666,6 +1926,21 @@ mod tests {
         // Recorded as a derived number rather than as a literal because that is
         // the claim: the two come from one another.
         assert_eq!(max_mip_levels(D3D12_FORMAT_SUPPORT1_TEXTURE3D), 12);
+    }
+
+    #[test]
+    fn dxgi_mapping_keeps_bc_native_and_mobile_codecs_refused() {
+        assert_eq!(
+            dxgi_format(TextureFormat::Bc1RgbaUnorm),
+            Some(DXGI_FORMAT_BC1_UNORM)
+        );
+        assert_eq!(
+            dxgi_format(TextureFormat::Bc7RgbaUnormSrgb),
+            Some(DXGI_FORMAT_BC7_UNORM_SRGB)
+        );
+        assert_eq!(dxgi_format(TextureFormat::Etc2Rgba8Unorm), None);
+        assert_eq!(dxgi_format(TextureFormat::Astc4x4Unorm), None);
+        assert_eq!(dxgi_format(TextureFormat::Astc4x4Hdr), None);
     }
 
     #[test]
@@ -1844,11 +2119,14 @@ mod tests {
             )
         };
 
-        assert!(stencil_of(
+        // These abstract formats intentionally have no single DXGI backing, so
+        // they have no route rows at all; format aspect membership alone must
+        // not manufacture an executable plane route.
+        assert!(!stencil_of(
             TextureFormat::Depth24PlusStencil8,
             TextureAspect::Stencil
         ));
-        assert!(stencil_of(
+        assert!(!stencil_of(
             TextureFormat::Depth24PlusStencil8,
             TextureAspect::Depth
         ));

@@ -15,11 +15,10 @@
 //!   answer `Unsupported` up front, instead of creating the buffer and failing
 //!   later at a bind group — which is the same "no second set of conditions"
 //!   rule the texture chapter applies to its own query.
-//! - A buffer's *contents*, mapping, and host visibility are not here. Section
-//!   11.2 removes the old `host_access` / `HostAccessIntent` surface because P0
-//!   has no mapping semantics to honor; upload and readback are the two
-//!   supported mutation paths and they live in
-//!   [`crate::api::resource::transfer`].
+//! - A buffer's contents and host visibility do not appear in its descriptor.
+//!   Explicit host mapping is a separate asynchronous lease in
+//!   [`crate::api::resource::mapping`]; upload and readback remain the two
+//!   transfer facilities in [`crate::api::resource::transfer`].
 //! - The element stride is not here either. Section 12.2 deletes
 //!   `element_stride_hint` because a byte-addressed P0 buffer has no elements,
 //!   and a structured stride belongs to a future `BufferView`.
@@ -32,7 +31,7 @@
 //! without a backend (root section 4) and testable without a GPU.
 
 use core::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
@@ -66,6 +65,23 @@ impl BufferUsage {
     pub const UNIFORM: Self = Self(1 << 4);
     /// Storage buffer binding.
     pub const STORAGE: Self = Self(1 << 5);
+    /// Indirect draw or dispatch argument source.
+    pub const INDIRECT: Self = Self(1 << 6);
+    /// Destination for resolved query results.
+    pub const QUERY_RESOLVE: Self = Self(1 << 7);
+    /// CPU map-read source. Mapping is an explicitly negotiated capability.
+    pub const MAP_READ: Self = Self(1 << 8);
+    /// CPU map-write destination. Mapping is an explicitly negotiated capability.
+    pub const MAP_WRITE: Self = Self(1 << 9);
+    /// Bottom-level acceleration-structure build input.
+    pub const BLAS_INPUT: Self = Self(1 << 10);
+    /// Top-level acceleration-structure instance input.
+    pub const TLAS_INPUT: Self = Self(1 << 11);
+    /// Scratch storage used exclusively by acceleration-structure build/update.
+    ///
+    /// Native lowerings may use its stronger alignment requirement without
+    /// treating arbitrary storage buffers as valid scratch allocations.
+    pub const ACCELERATION_STRUCTURE_SCRATCH: Self = Self(1 << 12);
 
     /// Whether every bit set in `other` is set in `self`.
     ///
@@ -90,6 +106,14 @@ impl BufferUsage {
         self.0 == 0
     }
 
+    /// Whether no bit outside `allowed` is present. Backend capability tables
+    /// use this to reject native heap combinations that cannot be represented
+    /// safely; it deliberately remains crate-private rather than exposing a
+    /// second public bitset algebra spelling.
+    pub(crate) fn is_subset_of(self, allowed: Self) -> bool {
+        self.0 & !allowed.0 == 0
+    }
+
     /// Every bit this type defines, as one mask.
     ///
     /// Built from the constants rather than written as `63`: a seventh usage bit
@@ -105,7 +129,14 @@ impl BufferUsage {
         | Self::VERTEX.0
         | Self::INDEX.0
         | Self::UNIFORM.0
-        | Self::STORAGE.0;
+        | Self::STORAGE.0
+        | Self::INDIRECT.0
+        | Self::QUERY_RESOLVE.0
+        | Self::MAP_READ.0
+        | Self::MAP_WRITE.0
+        | Self::BLAS_INPUT.0
+        | Self::TLAS_INPUT.0
+        | Self::ACCELERATION_STRUCTURE_SCRATCH.0;
 
     /// Every usage combination, including the empty one, in mask order.
     ///
@@ -144,6 +175,16 @@ impl fmt::Display for BufferUsage {
             (Self::INDEX, "INDEX"),
             (Self::UNIFORM, "UNIFORM"),
             (Self::STORAGE, "STORAGE"),
+            (Self::INDIRECT, "INDIRECT"),
+            (Self::QUERY_RESOLVE, "QUERY_RESOLVE"),
+            (Self::MAP_READ, "MAP_READ"),
+            (Self::MAP_WRITE, "MAP_WRITE"),
+            (Self::BLAS_INPUT, "BLAS_INPUT"),
+            (Self::TLAS_INPUT, "TLAS_INPUT"),
+            (
+                Self::ACCELERATION_STRUCTURE_SCRATCH,
+                "ACCELERATION_STRUCTURE_SCRATCH",
+            ),
         ];
         let mut written = false;
         for (bit, name) in names {
@@ -164,15 +205,14 @@ impl fmt::Display for BufferUsage {
 
 /// Where a resource should be placed, when the backend has a choice.
 ///
-/// Section 11.2 keeps exactly one member, and keeps it a *preference*: it is not
-/// a correctness guarantee, and a UMA, WebGPU, or GL backend may treat it as
-/// equivalent to [`Self::Automatic`] or ignore it.
+/// Section 11.2 keeps resource placement deliberately narrow and treats it as a
+/// *preference*: it is not a correctness guarantee, and a UMA, WebGPU, or GL
+/// backend may treat it as equivalent to [`Self::Automatic`] or ignore it.
 ///
-/// The old `HostAccessIntent` / `HostPreferred` pair is deleted rather than
-/// deprecated, because P0 exposes no mapping and therefore has no user semantics
-/// to honor. A future General Mapping feature freezes host visibility,
-/// persistent mapping, coherency, and flush/invalidate together; until then
-/// nothing may take advantage of the gap.
+/// The old `HostAccessIntent` / `HostPreferred` pair stays deleted: mapping is
+/// governed by explicit usage bits, capability facts, and an asynchronous lease
+/// rather than a placement promise in this descriptor. Persistent mapping and
+/// coherency remain separately capability-gated mapping semantics.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceMemoryPreference {
@@ -184,6 +224,24 @@ pub enum ResourceMemoryPreference {
     /// This is a preference, not a correctness guarantee.
     /// UMA / WebGPU / GL backends may treat it equivalently or ignore it.
     DeviceLocalPreferred,
+}
+
+/// Device-level allocator policy.
+///
+/// It is a performance hint only. It cannot enable an otherwise unsupported
+/// resource, alter its visibility semantics, or expose a native heap model.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MemoryPolicy {
+    /// Backend-selected policy.
+    #[default]
+    Automatic,
+    /// Prefer throughput and device-local residency.
+    Performance,
+    /// Prefer smaller allocator reservation/commitment.
+    MemoryUsage,
+    /// Permit backend-private suballocation where it is already correct.
+    ManualSuballocation,
 }
 
 /// The key of a "can this buffer be created" question.
@@ -357,9 +415,51 @@ struct BufferInner {
     native: Box<dyn BufferBackend>,
     /// Plan-scoped transient execution metadata, when this is not persistent.
     transient: Option<TransientResourceMetadata>,
+    /// Portable mapping exclusivity. A second mapping never reaches native code.
+    mapped: Mutex<bool>,
 }
 
 impl Buffer {
+    /// Acquires this buffer's sole portable mapping lease.
+    pub(crate) fn begin_map(&self) -> RhiResult<()> {
+        let mut mapped = self
+            .inner
+            .mapped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *mapped {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "buffer already has an active mapping lease",
+            )
+            .with_object(self.id()));
+        }
+        *mapped = true;
+        Ok(())
+    }
+
+    /// Releases a lease acquired by [`Self::begin_map`].
+    pub(crate) fn end_map(&self) {
+        *self
+            .inner
+            .mapped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
+
+    /// Whether a pending or ready host mapping owns the portable lease.
+    ///
+    /// This is observed during submission Phase A. Ordinary mappings exclude
+    /// GPU use; a device must explicitly enable persistent mapping before a
+    /// mapped buffer can remain in submitted work.
+    pub(crate) fn is_mapped(&self) -> bool {
+        *self
+            .inner
+            .mapped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Assembles a created buffer.
     ///
     /// Crate-private: section 3 gives identity to the object that created it, so
@@ -380,6 +480,7 @@ impl Buffer {
                 descriptor,
                 native,
                 transient: None,
+                mapped: Mutex::new(false),
             }),
         }
     }
@@ -399,6 +500,7 @@ impl Buffer {
                 descriptor,
                 native,
                 transient: Some(transient),
+                mapped: Mutex::new(false),
             }),
         }
     }

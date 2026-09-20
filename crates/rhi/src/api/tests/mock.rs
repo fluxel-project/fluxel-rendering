@@ -59,7 +59,7 @@
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::task::Waker;
+use std::task::{Context, Poll, Waker};
 
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -71,11 +71,19 @@ use crate::api::platform::{
     AdapterId, AdapterInfo, BackendKind, Device, DeviceLossInfo, DeviceRequestDescriptor,
     DeviceStatus,
 };
-use crate::api::presentation::PresentationTarget;
-use crate::api::resource::backend::BufferBackend;
-use crate::api::resource::buffer::{
-    BufferDescriptor, BufferSupport, BufferSupportLimits, BufferUsage,
+use crate::api::presentation::backend::{ConfiguredPresentationBackend, PresentationBackend};
+use crate::api::presentation::{
+    Extent2d, PresentReceiptId, PresentState, PresentationConfiguration, PresentationExtentControl,
+    PresentationTarget, PresentationTargetCapabilities, PresentationTimestamp,
+    PresentationTimingCapabilities,
 };
+use crate::api::resource::backend::{
+    BufferBackend, MappedBufferBackend, MappingRequestBackend, QuerySetBackend,
+};
+use crate::api::resource::buffer::{
+    BufferDescriptor, BufferRange, BufferSupport, BufferSupportLimits, BufferUsage,
+};
+use crate::api::resource::{Buffer, MapMode};
 use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
@@ -286,6 +294,12 @@ impl DeviceRequestBackend for MockRequest {
                 holding: AtomicBool::new(false),
                 completed_at_loss: AtomicBool::new(false),
                 completion_waiters: Mutex::new(Vec::new()),
+                mapping: Arc::new(MockMappingControl {
+                    held: AtomicBool::new(false),
+                    waiters: Mutex::new(Vec::new()),
+                }),
+                presentation_timing: AtomicBool::new(false),
+                presentation_available: AtomicBool::new(true),
             }))),
             MockOutcome::Fails(message) => {
                 Err(RhiError::new(RhiErrorKind::Unsupported, message.clone()))
@@ -318,6 +332,18 @@ fn default_lanes() -> SubmissionCapabilities {
     )])
 }
 
+/// Query fixtures enable compute/timestamp-in-compute, so their lane contract
+/// must advertise the matching execution domain as well.
+fn query_lanes() -> SubmissionCapabilities {
+    SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
+        SubmissionLaneId::new(0),
+        SubmissionLaneClass::General,
+        LaneWorkDomains::RASTER
+            .union(LaneWorkDomains::COMPUTE)
+            .union(LaneWorkDomains::COPY),
+    )])
+}
+
 /// A buffer this backend allocated.
 ///
 /// It holds the two facts the portable layer handed over and nothing else, which
@@ -332,6 +358,7 @@ fn default_lanes() -> SubmissionCapabilities {
 pub(crate) struct MockBuffer {
     size: u64,
     usage: BufferUsage,
+    bytes: Arc<Mutex<Vec<u8>>>,
 }
 
 impl MockBuffer {
@@ -354,6 +381,103 @@ impl MockBuffer {
 impl BufferBackend for MockBuffer {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// In-memory mapping lease used only by portable mapping contract tests.
+struct MockMappedBuffer {
+    destination: Arc<Mutex<Vec<u8>>>,
+    offset: usize,
+    bytes: Vec<u8>,
+    writable: bool,
+}
+
+impl Drop for MockMappedBuffer {
+    fn drop(&mut self) {
+        if self.writable {
+            let mut destination = self
+                .destination
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            destination[self.offset..self.offset + self.bytes.len()].copy_from_slice(&self.bytes);
+        }
+    }
+}
+
+impl MappedBufferBackend for MockMappedBuffer {
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    fn bytes_mut(&mut self) -> Option<&mut [u8]> {
+        self.writable.then_some(self.bytes.as_mut_slice())
+    }
+    fn flush(&mut self) -> RhiResult<()> {
+        Ok(())
+    }
+    fn invalidate(&mut self) -> RhiResult<()> {
+        Ok(())
+    }
+}
+
+/// A controllable asynchronous mock mapping request.
+///
+/// It is deliberately separate from [`MockMappedBuffer`]: a pending request has
+/// no host lease and must not copy or publish bytes until its waker is released.
+struct MockMappingRequest {
+    control: Arc<MockMappingControl>,
+    destination: Arc<Mutex<Vec<u8>>>,
+    offset: usize,
+    len: usize,
+    writable: bool,
+}
+
+impl MappingRequestBackend for MockMappingRequest {
+    fn poll(&mut self, context: &mut Context<'_>) -> Poll<RhiResult<Box<dyn MappedBufferBackend>>> {
+        if self.control.held.load(Ordering::Relaxed) {
+            self.control.register_waker(context.waker());
+            if self.control.held.load(Ordering::Relaxed) {
+                return Poll::Pending;
+            }
+        }
+        let bytes = self
+            .destination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            [self.offset..self.offset + self.len]
+            .to_vec();
+        Poll::Ready(Ok(Box::new(MockMappedBuffer {
+            destination: Arc::clone(&self.destination),
+            offset: self.offset,
+            bytes,
+            writable: self.writable,
+        })))
+    }
+}
+
+/// Shared test-only native progress state for mapping requests.
+struct MockMappingControl {
+    held: AtomicBool,
+    waiters: Mutex<Vec<Waker>>,
+}
+
+impl MockMappingControl {
+    fn register_waker(&self, waker: &Waker) {
+        self.waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(waker.clone());
+    }
+
+    fn wake_waiters(&self) {
+        let mut waiters = self
+            .waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let registered = core::mem::take(&mut *waiters);
+        drop(waiters);
+        for waker in registered {
+            waker.wake();
+        }
     }
 }
 
@@ -462,10 +586,36 @@ impl crate::api::pipeline::backend::RasterPipelineBackend for MockRasterPipeline
     }
 }
 
+/// Inert mesh pipeline backing for portable command-contract tests.
+pub(crate) struct MockMeshPipeline;
+impl crate::api::pipeline::backend::MeshPipelineBackend for MockMeshPipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Inert ray-tracing pipeline backing for portable command-contract tests.
+pub(crate) struct MockRayTracingPipeline;
+impl crate::api::pipeline::backend::RayTracingPipelineBackend for MockRayTracingPipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 pub(crate) struct MockTexture;
 
 impl crate::api::resource::backend::TextureBackend for MockTexture {
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub(crate) struct MockPipelineCache;
+impl crate::api::pipeline::backend::PipelineCacheBackend for MockPipelineCache {
+    fn serialized_data(&self) -> RhiResult<Vec<u8>> {
+        Ok(vec![0xca, 0xce])
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 }
@@ -486,10 +636,38 @@ impl crate::api::resource::backend::SamplerBackend for MockSampler {
     }
 }
 
+struct MockQuerySet;
+
+impl QuerySetBackend for MockQuerySet {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Native-free AS backing used solely to prove portable sizing/ownership rules.
+struct MockAccelerationStructure;
+
+impl crate::api::resource::backend::AccelerationStructureBackend for MockAccelerationStructure {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// Native graphics state for a portable test that is not about lowering.
 pub(crate) fn raster_pipeline_backend_for_test()
 -> Box<dyn crate::api::pipeline::backend::RasterPipelineBackend> {
     Box::new(MockRasterPipeline)
+}
+
+/// Native-free mesh backing for public recording tests.
+pub(crate) fn mesh_pipeline_backend_for_test()
+-> Box<dyn crate::api::pipeline::backend::MeshPipelineBackend> {
+    Box::new(MockMeshPipeline)
+}
+/// Native-free ray-tracing backing for public recording tests.
+pub(crate) fn ray_tracing_pipeline_backend_for_test()
+-> Box<dyn crate::api::pipeline::backend::RayTracingPipelineBackend> {
+    Box::new(MockRayTracingPipeline)
 }
 
 /// A bind group backend holding the canonical packet it was handed.
@@ -600,6 +778,12 @@ pub(crate) struct MockDevice {
     completed_at_loss: AtomicBool,
     /// Async waiters registered while `holding` made completion pending.
     completion_waiters: Mutex<Vec<Waker>>,
+    /// Native progress/waker state for test mapping requests.
+    mapping: Arc<MockMappingControl>,
+    /// Whether this test device reports a presentation clock for its targets.
+    presentation_timing: AtomicBool,
+    /// Whether this mock exposes a presentation lowering at all.
+    presentation_available: AtomicBool,
 }
 
 impl MockDevice {
@@ -655,6 +839,12 @@ impl MockDevice {
             holding: AtomicBool::new(false),
             completed_at_loss: AtomicBool::new(false),
             completion_waiters: Mutex::new(Vec::new()),
+            mapping: Arc::new(MockMappingControl {
+                held: AtomicBool::new(false),
+                waiters: Mutex::new(Vec::new()),
+            }),
+            presentation_timing: AtomicBool::new(false),
+            presentation_available: AtomicBool::new(true),
         })
     }
 
@@ -704,6 +894,11 @@ impl MockDevice {
         self.submissions.load(Ordering::Relaxed)
     }
 
+    /// Makes this mock represent a backend without presentation lowering.
+    pub(crate) fn disable_presentation(&self) {
+        self.presentation_available.store(false, Ordering::Relaxed);
+    }
+
     /// Holds every reported completion short, so it answers `Pending`.
     ///
     /// Models a device that has accepted work and has not finished it — the state
@@ -726,6 +921,22 @@ impl MockDevice {
         self.wake_completion_waiters();
     }
 
+    /// Holds later mapping requests pending until [`Self::release_mapping`].
+    pub(crate) fn hold_mapping(&self) {
+        self.mapping.held.store(true, Ordering::Relaxed);
+    }
+
+    /// Completes mapping requests currently held by [`Self::hold_mapping`].
+    pub(crate) fn release_mapping(&self) {
+        self.mapping.held.store(false, Ordering::Relaxed);
+        self.mapping.wake_waiters();
+    }
+
+    /// Changes the surface-specific presentation-clock fact for contract tests.
+    pub(crate) fn set_presentation_timing(&self, enabled: bool) {
+        self.presentation_timing.store(enabled, Ordering::Relaxed);
+    }
+
     /// Records that this device is gone, with the reason.
     ///
     /// One-way, like the loss it records: section 6.5 makes device loss terminal
@@ -738,6 +949,7 @@ impl MockDevice {
         liveness.loss = Some(info);
         drop(liveness);
         self.wake_completion_waiters();
+        self.mapping.wake_waiters();
     }
 
     /// Borrows the liveness cell, surviving a poisoned lock.
@@ -805,6 +1017,53 @@ impl DeviceBackend for MockDevice {
         Ok(())
     }
 
+    fn create_pipeline_cache(
+        &self,
+        _descriptor: &crate::api::pipeline::PipelineCacheDescriptor,
+    ) -> RhiResult<(
+        Box<dyn crate::api::pipeline::backend::PipelineCacheBackend>,
+        crate::api::pipeline::PipelineCacheValidationKey,
+    )> {
+        Ok((
+            Box::new(MockPipelineCache),
+            crate::api::pipeline::PipelineCacheValidationKey::from_bytes([9; 32]),
+        ))
+    }
+
+    fn external_memory_capabilities(
+        &self,
+    ) -> RhiResult<crate::api::external::ExternalMemoryCapabilities> {
+        Ok(crate::api::external::ExternalMemoryCapabilities {
+            supported_handle_types: vec![crate::api::external::ExternalMemoryHandleType::DmaBuf],
+        })
+    }
+
+    fn import_external_memory_texture(
+        &self,
+        _descriptor: &crate::api::external::ExternalTextureImportDescriptor,
+        _accepted: &crate::api::resource::TextureDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureBackend>> {
+        Ok(Box::new(MockTexture))
+    }
+
+    fn allocator_report(&self) -> RhiResult<crate::api::diagnostics::AllocatorReport> {
+        Ok(crate::api::diagnostics::AllocatorReport { heaps: Vec::new() })
+    }
+
+    fn begin_native_graphics_capture(&self) -> RhiResult<()> {
+        Ok(())
+    }
+
+    fn end_native_graphics_capture(&self) -> RhiResult<()> {
+        Ok(())
+    }
+
+    fn presentation(&self) -> Option<&dyn PresentationBackend> {
+        self.presentation_available
+            .load(Ordering::Relaxed)
+            .then_some(self)
+    }
+
     fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
         // No refusal here, and the absence is a decision rather than an
         // unfinished arm. Every portable rule about this descriptor has already
@@ -816,7 +1075,79 @@ impl DeviceBackend for MockDevice {
         Ok(Box::new(MockBuffer {
             size: descriptor.size,
             usage: descriptor.usage,
+            bytes: Arc::new(Mutex::new(vec![
+                0;
+                usize::try_from(descriptor.size).map_err(
+                    |_| RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "mock buffer exceeds host address space"
+                    )
+                )?
+            ])),
         }))
+    }
+
+    fn map_buffer(
+        &self,
+        buffer: &Buffer,
+        mode: MapMode,
+        range: BufferRange,
+    ) -> RhiResult<Box<dyn MappingRequestBackend>> {
+        let native = buffer
+            .native()
+            .as_any()
+            .downcast_ref::<MockBuffer>()
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    "mock cannot map a foreign native buffer",
+                )
+            })?;
+        let offset = usize::try_from(range.offset).map_err(|_| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "mapped offset exceeds host address space",
+            )
+        })?;
+        let len = usize::try_from(range.size).map_err(|_| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "mapped length exceeds host address space",
+            )
+        })?;
+        Ok(Box::new(MockMappingRequest {
+            control: Arc::clone(&self.mapping),
+            destination: Arc::clone(&native.bytes),
+            offset,
+            len,
+            writable: matches!(mode, MapMode::Write),
+        }))
+    }
+
+    fn create_query_set(
+        &self,
+        _descriptor: &crate::api::query::QuerySetDescriptor,
+    ) -> RhiResult<Box<dyn QuerySetBackend>> {
+        Ok(Box::new(MockQuerySet))
+    }
+
+    fn acceleration_structure_build_sizes(
+        &self,
+        _descriptor: &crate::api::resource::AccelerationStructureDescriptor,
+    ) -> RhiResult<crate::api::resource::AccelerationStructureBuildSizes> {
+        Ok(crate::api::resource::AccelerationStructureBuildSizes {
+            acceleration_structure_size: 256,
+            build_scratch_size: 256,
+            update_scratch_size: 256,
+        })
+    }
+
+    fn create_acceleration_structure(
+        &self,
+        _descriptor: &crate::api::resource::AccelerationStructureDescriptor,
+        _sizes: crate::api::resource::AccelerationStructureBuildSizes,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::AccelerationStructureBackend>> {
+        Ok(Box::new(MockAccelerationStructure))
     }
 
     fn create_texture(
@@ -1028,6 +1359,67 @@ impl DeviceBackend for MockDevice {
     }
 }
 
+impl PresentationBackend for MockDevice {
+    fn capabilities(&self, _target: ObjectId) -> RhiResult<PresentationTargetCapabilities> {
+        Ok(PresentationTargetCapabilities::new(
+            vec![crate::api::format::TextureFormat::Bgra8Unorm],
+            vec![crate::api::presentation::PresentMode::Fifo],
+            PresentationExtentControl::HostManaged {
+                current: Some(Extent2d {
+                    width: 640,
+                    height: 480,
+                }),
+            },
+        )
+        .with_timing_and_hdr(
+            PresentationTimingCapabilities {
+                timestamps: self.presentation_timing.load(Ordering::Relaxed),
+            },
+            None,
+        ))
+    }
+
+    fn configure(
+        &self,
+        _device: DeviceIdentity,
+        _target: ObjectId,
+        _config: &PresentationConfiguration,
+    ) -> RhiResult<Box<dyn ConfiguredPresentationBackend>> {
+        Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "the presentation mock only implements capability and clock queries",
+        ))
+    }
+
+    fn present_state(&self, _receipt: PresentReceiptId) -> RhiResult<PresentState> {
+        Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "the presentation mock has no present receipts",
+        ))
+    }
+
+    fn present_state_or_register_waker(
+        &self,
+        receipt: PresentReceiptId,
+        _waker: &Waker,
+    ) -> RhiResult<PresentState> {
+        self.present_state(receipt)
+    }
+
+    fn presentation_timestamp(&self, _target: ObjectId) -> RhiResult<PresentationTimestamp> {
+        if !self.presentation_timing.load(Ordering::Relaxed) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "the presentation mock clock is disabled",
+            ));
+        }
+        Ok(PresentationTimestamp {
+            value: 42,
+            period_nanos: 0.5,
+        })
+    }
+}
+
 /// Test-only adapter which lets assertions retain a view of a mock backend while
 /// the portable `Device` still directly owns one boxed backend. Production
 /// backends never take this extra reference-counted path.
@@ -1068,8 +1460,55 @@ impl DeviceBackend for ObservedMockDevice {
     fn wait_idle(&self) -> RhiResult<()> {
         self.0.wait_idle()
     }
+    fn create_pipeline_cache(
+        &self,
+        descriptor: &crate::api::pipeline::PipelineCacheDescriptor,
+    ) -> RhiResult<(
+        Box<dyn crate::api::pipeline::backend::PipelineCacheBackend>,
+        crate::api::pipeline::PipelineCacheValidationKey,
+    )> {
+        self.0.create_pipeline_cache(descriptor)
+    }
+    fn external_memory_capabilities(
+        &self,
+    ) -> RhiResult<crate::api::external::ExternalMemoryCapabilities> {
+        self.0.external_memory_capabilities()
+    }
+    fn import_external_memory_texture(
+        &self,
+        descriptor: &crate::api::external::ExternalTextureImportDescriptor,
+        accepted: &crate::api::resource::TextureDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureBackend>> {
+        self.0.import_external_memory_texture(descriptor, accepted)
+    }
+    fn allocator_report(&self) -> RhiResult<crate::api::diagnostics::AllocatorReport> {
+        self.0.allocator_report()
+    }
+    fn begin_native_graphics_capture(&self) -> RhiResult<()> {
+        self.0.begin_native_graphics_capture()
+    }
+    fn end_native_graphics_capture(&self) -> RhiResult<()> {
+        self.0.end_native_graphics_capture()
+    }
+    fn presentation(&self) -> Option<&dyn PresentationBackend> {
+        self.0.presentation()
+    }
     fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
         self.0.create_buffer(descriptor)
+    }
+    fn map_buffer(
+        &self,
+        buffer: &Buffer,
+        mode: MapMode,
+        range: BufferRange,
+    ) -> RhiResult<Box<dyn MappingRequestBackend>> {
+        self.0.map_buffer(buffer, mode, range)
+    }
+    fn create_query_set(
+        &self,
+        descriptor: &crate::api::query::QuerySetDescriptor,
+    ) -> RhiResult<Box<dyn QuerySetBackend>> {
+        self.0.create_query_set(descriptor)
     }
     fn create_texture(
         &self,
@@ -1140,6 +1579,34 @@ impl DeviceBackend for ObservedMockDevice {
 pub(crate) fn device_for_test(identity: DeviceIdentity) -> Device {
     Device::new(identity, observed_backend(mock_native(BackendKind::Dx12)))
         .expect("the mock backend offers a lane accepting raster and copy work")
+}
+
+/// A mock device exposing exactly the sampler features supplied by a test.
+/// This lets sampler validation assert capability refusal before any native
+/// descriptor allocation is attempted.
+pub(crate) fn sampler_device_for_test(
+    identity: DeviceIdentity,
+    features: &[crate::api::platform::OptionalFeature],
+    max_anisotropy: Option<u64>,
+) -> Device {
+    let mut facts = CapabilityFacts::empty();
+    for feature in features {
+        facts.record_feature(*feature);
+    }
+    if let Some(max_anisotropy) = max_anisotropy {
+        facts.record_limit(
+            crate::api::platform::LimitKey::MaxSamplerAnisotropy,
+            max_anisotropy,
+        );
+    }
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
+    Device::new(identity, observed_backend(native))
+        .expect("sampler mock exposes the base submission lane")
 }
 
 /// A portable device handle paired with the backend that owns its liveness.
@@ -1250,6 +1717,171 @@ pub(crate) fn buffers_for_test(
     (
         Device::new(identity, observed_backend(native.clone()))
             .expect("the mock backend offers a lane accepting raster and copy work"),
+        native,
+    )
+}
+
+/// A mock device that advertises the complete portable query vocabulary.
+pub(crate) fn query_device_for_test(identity: DeviceIdentity) -> Device {
+    let mut facts = CapabilityFacts::empty();
+    let limits = BufferSupportLimits::new(1 << 20);
+    for usage in BufferUsage::all() {
+        facts.record_buffer_support(
+            usage,
+            if usage.is_empty() {
+                BufferSupport::Unsupported
+            } else {
+                BufferSupport::Supported(limits)
+            },
+        );
+    }
+    for feature in [
+        crate::api::platform::OptionalFeature::OcclusionQuery,
+        crate::api::platform::OptionalFeature::TimestampQuery,
+        crate::api::platform::OptionalFeature::TimestampInsideEncoder,
+        crate::api::platform::OptionalFeature::TimestampInsideRasterScope,
+        crate::api::platform::OptionalFeature::TimestampInsideComputeScope,
+        crate::api::platform::OptionalFeature::PipelineStatisticsQuery,
+        crate::api::platform::OptionalFeature::QueryResolve,
+        crate::api::platform::OptionalFeature::Compute,
+        crate::api::platform::OptionalFeature::IndirectDispatch,
+        crate::api::platform::OptionalFeature::ClearBuffer,
+        crate::api::platform::OptionalFeature::ClearTexture,
+    ] {
+        facts.record_feature(feature);
+    }
+    facts.record_limit(crate::api::platform::LimitKey::MaxQueriesPerQuerySet, 8);
+    facts.record_limit(
+        crate::api::platform::LimitKey::QueryResolveBufferAlignment,
+        8,
+    );
+    facts.record_pipeline_statistics(crate::api::query::PipelineStatistics::ALL);
+    facts.record_timestamp_queries(
+        crate::api::query::TimestampQueryCapabilities::new(1.0, None, true)
+            .expect("mock timestamp facts are valid"),
+    );
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        query_lanes(),
+    );
+    Device::new(identity, observed_backend(native))
+        .expect("query mock exposes the base submission lane")
+}
+
+/// A mock device that advertises native debugger capture and accepts its two calls.
+pub(crate) fn native_capture_device_for_test(identity: DeviceIdentity) -> Device {
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(crate::api::platform::OptionalFeature::NativeGraphicsCapture);
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
+    Device::new(identity, observed_backend(native))
+        .expect("capture mock exposes base submission lanes")
+}
+
+/// A mock device with exactly the optional features a façade test needs.
+pub(crate) fn device_with_features_for_test(
+    identity: DeviceIdentity,
+    features: &[crate::api::platform::OptionalFeature],
+) -> Device {
+    let mut facts = CapabilityFacts::empty();
+    for feature in features {
+        facts.record_feature(*feature);
+    }
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
+    Device::new(identity, observed_backend(native))
+        .expect("feature mock exposes base submission lanes")
+}
+
+/// A mock capable of importing the one ordinary external-memory texture used by façade tests.
+pub(crate) fn external_memory_device_for_test(identity: DeviceIdentity) -> Device {
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(crate::api::platform::OptionalFeature::ExternalMemory);
+    let query = crate::api::format::TextureSupportQuery::new(
+        crate::api::resource::TextureDimension::D2,
+        crate::api::format::TextureFormat::Rgba8Unorm,
+        crate::api::resource::TextureUsage::SAMPLED,
+        1,
+    );
+    facts.record_texture_support(
+        &query,
+        crate::api::format::TextureSupport::Supported(
+            crate::api::format::TextureSupportLimits::new(
+                crate::api::resource::Extent3d::d2(4096, 4096),
+                1,
+                1,
+            ),
+        ),
+    );
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
+    Device::new(identity, observed_backend(native))
+        .expect("external-memory mock exposes base submission lanes")
+}
+
+/// A mock device with explicit general-mapping facts.
+pub(crate) fn mapped_buffers_for_test(
+    identity: DeviceIdentity,
+    coherent: bool,
+) -> (Device, Arc<MockDevice>) {
+    mapped_buffers_with_options_for_test(identity, coherent, false)
+}
+
+/// A mapping-capable mock that also permits an open mapping across submission.
+pub(crate) fn persistent_mapped_buffers_for_test(
+    identity: DeviceIdentity,
+) -> (Device, Arc<MockDevice>) {
+    mapped_buffers_with_options_for_test(identity, true, true)
+}
+
+fn mapped_buffers_with_options_for_test(
+    identity: DeviceIdentity,
+    coherent: bool,
+    persistent: bool,
+) -> (Device, Arc<MockDevice>) {
+    let mut facts = CapabilityFacts::empty();
+    let limits = BufferSupportLimits::new(1 << 20);
+    for usage in BufferUsage::all() {
+        facts.record_buffer_support(
+            usage,
+            if usage.is_empty() {
+                BufferSupport::Unsupported
+            } else {
+                BufferSupport::Supported(limits)
+            },
+        );
+    }
+    facts.record_feature(crate::api::platform::OptionalFeature::MappablePrimaryBuffers);
+    if coherent {
+        facts.record_feature(crate::api::platform::OptionalFeature::CoherentMapping);
+    }
+    if persistent {
+        facts.record_feature(crate::api::platform::OptionalFeature::PersistentMapping);
+    }
+    facts.record_limit(crate::api::platform::LimitKey::MapAlignment, 4);
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
+    (
+        Device::new(identity, observed_backend(native.clone()))
+            .expect("the mapping mock offers base submission lanes"),
         native,
     )
 }

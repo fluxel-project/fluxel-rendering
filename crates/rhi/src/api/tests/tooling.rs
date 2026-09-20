@@ -36,6 +36,26 @@ use crate::api::command::{
     AccessMask, ColorClearValue, LoadOp, PipelineScope, StoreOp, TextureUseIntent,
 };
 use crate::api::diagnostics::{DiagnosticEvent, DiagnosticSeverity};
+#[test]
+fn native_graphics_capture_has_a_portable_begin_end_state_machine() {
+    let device = crate::api::tests::mock::native_capture_device_for_test(DeviceIdentity::new(
+        DeviceInstanceId::new(93),
+    ));
+    device
+        .begin_native_graphics_capture()
+        .expect("first begin is legal");
+    assert_eq!(
+        device.begin_native_graphics_capture().unwrap_err().kind(),
+        RhiErrorKind::InvalidUsage
+    );
+    device
+        .end_native_graphics_capture()
+        .expect("matching end is legal");
+    assert_eq!(
+        device.end_native_graphics_capture().unwrap_err().kind(),
+        RhiErrorKind::InvalidUsage
+    );
+}
 use crate::api::error::{RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};
@@ -354,10 +374,13 @@ fn describe_object_reports_unsupported_when_the_runtime_does_not_retain_definiti
 }
 
 #[test]
-fn describe_work_reports_unsupported_when_the_runtime_does_not_retain_work() {
+fn describe_work_refuses_an_unknown_recording_identity() {
     let access = active_device().tooling();
-    let error = access.describe_work(object(12)).err().expect("unsupported");
-    assert_eq!(error.kind(), RhiErrorKind::Unsupported);
+    let error = access
+        .describe_work(object(12))
+        .err()
+        .expect("unknown work");
+    assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +462,15 @@ impl SemanticObserver for CaptureQueue {
                     | CapturedObjectDefinition::BindGroup { id, .. }
                     | CapturedObjectDefinition::PipelineInterface { id, .. }
                     | CapturedObjectDefinition::RasterPipeline { id, .. }
-                    | CapturedObjectDefinition::ComputePipeline { id, .. } => *id,
+                    | CapturedObjectDefinition::ComputePipeline { id, .. }
+                    | CapturedObjectDefinition::QuerySet { id, .. }
+                    | CapturedObjectDefinition::AccelerationStructure { id, .. }
+                    | CapturedObjectDefinition::MeshPipeline { id, .. }
+                    | CapturedObjectDefinition::RayTracingPipeline { id, .. }
+                    | CapturedObjectDefinition::PipelineCache { id, .. }
+                    | CapturedObjectDefinition::ExternalImageSource { id, .. }
+                    | CapturedObjectDefinition::ExternalTexture { id, .. }
+                    | CapturedObjectDefinition::ExternalMemoryTextureSource { id, .. } => *id,
                 };
                 if let Ok(mut list) = self.definitions.lock() {
                     list.push(name);
@@ -621,6 +652,7 @@ fn an_observer_keeps_what_it_copies_and_drops_every_borrow() {
         frame,
         configuration: &configuration,
         extent: Extent3d::d2(1280, 720),
+        suboptimal: false,
     });
     queue.on_event(SemanticEvent::PresentChanged {
         event: event_id(9),
@@ -751,6 +783,7 @@ fn a_captured_raster_scope_keeps_interior_attachment_holes() {
                 view: CapturedColorAttachmentView::TextureView(object(51)),
                 load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
                 store: StoreOp::Store,
+                depth_slice: None,
                 resolve: None,
             }),
             None,
@@ -759,6 +792,7 @@ fn a_captured_raster_scope_keeps_interior_attachment_holes() {
                 view: CapturedColorAttachmentView::Frame(AcquiredFrameId::new(identity(3), 1)),
                 load: LoadOp::Load,
                 store: StoreOp::Discard,
+                depth_slice: None,
                 resolve: None,
             }),
         ],
@@ -1031,7 +1065,9 @@ fn objects_named_by(work: &CapturedRecordedWork) -> Vec<ObjectId> {
                 }
             }
             PortableCommand::SetRasterPipeline(pipeline)
-            | PortableCommand::SetComputePipeline(pipeline) => touched.push(*pipeline),
+            | PortableCommand::SetComputePipeline(pipeline)
+            | PortableCommand::SetMeshPipeline(pipeline)
+            | PortableCommand::SetRayTracingPipeline(pipeline) => touched.push(*pipeline),
             PortableCommand::SetBindGroup { group, .. } => touched.push(*group),
             PortableCommand::SetVertexBuffer { buffer, .. }
             | PortableCommand::SetIndexBuffer { buffer, .. } => touched.push(*buffer),
@@ -1040,7 +1076,8 @@ fn objects_named_by(work: &CapturedRecordedWork) -> Vec<ObjectId> {
             // state-setting verb.
             PortableCommand::Draw { .. }
             | PortableCommand::DrawIndexed { .. }
-            | PortableCommand::Dispatch { .. } => {
+            | PortableCommand::Dispatch { .. }
+            | PortableCommand::DispatchMesh { .. } => {
                 for used in &captured.actual_uses {
                     match used {
                         CapturedResourceUse::Buffer { buffer, .. } => touched.push(*buffer),
@@ -1048,11 +1085,82 @@ fn objects_named_by(work: &CapturedRecordedWork) -> Vec<ObjectId> {
                         CapturedResourceUse::Frame { frame, .. } => {
                             let _ = frame.device_identity();
                         }
+                        CapturedResourceUse::AccelerationStructure { structure, .. } => {
+                            touched.push(*structure)
+                        }
                     }
                 }
             }
-            PortableCommand::Upload { upload } | PortableCommand::Readback { ticket: upload } => {
-                touched.push(*upload)
+            PortableCommand::TraceRays { table, .. } => {
+                touched.push(table.ray_generation.buffer);
+                if let Some(region) = &table.miss {
+                    touched.push(region.buffer);
+                }
+                if let Some(region) = &table.hit {
+                    touched.push(region.buffer);
+                }
+                for used in &captured.actual_uses {
+                    if let CapturedResourceUse::AccelerationStructure { structure, .. } = used {
+                        touched.push(*structure);
+                    }
+                }
+            }
+            PortableCommand::DrawIndirect { arguments, .. }
+            | PortableCommand::DispatchIndirect { arguments, .. } => touched.push(*arguments),
+            PortableCommand::DispatchMeshIndirect {
+                arguments,
+                count_buffer,
+                ..
+            } => {
+                touched.push(*arguments);
+                if let Some((buffer, ..)) = count_buffer {
+                    touched.push(*buffer);
+                }
+            }
+            PortableCommand::SetImmediates { .. } => {}
+            PortableCommand::BuildAccelerationStructure {
+                destination,
+                scratch,
+                ..
+            } => {
+                touched.push(*destination);
+                touched.push(*scratch);
+            }
+            PortableCommand::CopyAccelerationStructure {
+                source,
+                destination,
+                ..
+            } => {
+                touched.push(*source);
+                touched.push(*destination);
+            }
+            PortableCommand::WriteAccelerationStructureCompactedSize {
+                source,
+                destination,
+                ..
+            } => {
+                touched.push(*source);
+                touched.push(*destination);
+            }
+            PortableCommand::ClearBuffer { buffer, .. } => touched.push(*buffer),
+            PortableCommand::ClearTexture { texture, .. } => touched.push(*texture),
+            PortableCommand::Upload { upload } => match upload {
+                CapturedUploadDefinition::Buffer { id, dst, .. }
+                | CapturedUploadDefinition::Texture { id, dst, .. } => {
+                    touched.push(*id);
+                    touched.push(*dst);
+                }
+            },
+            PortableCommand::Readback { request } => match request {
+                CapturedReadbackRequest::Buffer { ticket, src, .. }
+                | CapturedReadbackRequest::Texture { ticket, src, .. } => {
+                    touched.push(*ticket);
+                    touched.push(*src);
+                }
+            },
+            PortableCommand::CopyExternalImage(copy) => {
+                touched.push(copy.source);
+                touched.push(copy.destination);
             }
             PortableCommand::CopyBuffer(copy) => {
                 touched.push(copy.src);
@@ -1075,9 +1183,22 @@ fn objects_named_by(work: &CapturedRecordedWork) -> Vec<ObjectId> {
                 touched.push(blit.src);
                 touched.push(blit.dst);
             }
+            PortableCommand::WriteTimestamp { query_set, .. }
+            | PortableCommand::BeginQuery { query_set, .. }
+            | PortableCommand::EndQuery { query_set, .. } => touched.push(*query_set),
+            PortableCommand::ResolveQuerySet {
+                query_set,
+                destination,
+                ..
+            } => {
+                touched.push(*query_set);
+                touched.push(*destination);
+            }
             PortableCommand::EndRaster
             | PortableCommand::EndCompute
             | PortableCommand::BeginCompute { .. }
+            | PortableCommand::BeginRayTracing { .. }
+            | PortableCommand::EndRayTracing
             | PortableCommand::SetViewport(_)
             | PortableCommand::SetScissor(_)
             | PortableCommand::SetBlendConstant(_)
@@ -1106,6 +1227,7 @@ fn a_walk_over_a_recording_reaches_every_object_it_names() {
                         view: CapturedColorAttachmentView::TextureView(object(121)),
                         load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
                         store: StoreOp::Store,
+                        depth_slice: None,
                         resolve: None,
                     })],
                     depth_stencil: None,
@@ -1142,7 +1264,12 @@ fn a_walk_over_a_recording_reaches_every_object_it_names() {
             },
             CapturedCommand {
                 command: PortableCommand::Upload {
-                    upload: object(125),
+                    upload: CapturedUploadDefinition::Buffer {
+                        id: object(125),
+                        dst: object(126),
+                        dst_offset: 0,
+                        bytes: Arc::from([1u8]),
+                    },
                 },
                 actual_uses: Vec::new(),
             },
@@ -1161,7 +1288,8 @@ fn a_walk_over_a_recording_reaches_every_object_it_names() {
             object(122),
             object(123),
             object(124),
-            object(125)
+            object(125),
+            object(126)
         ]
     );
 }

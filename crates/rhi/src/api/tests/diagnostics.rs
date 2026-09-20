@@ -1,11 +1,10 @@
 //! Contract tests for the diagnostics chapter (specification section 48).
 //!
-//! The chapter has one verb and two types, and the verb is not implemented, so
-//! almost everything here is a **shape test**: an ordinary function compiled but
-//! never called, written as a realistic call site. That is the right instrument
-//! for this chapter, because what section 48 fixes is a *pull* model — a caller
-//! drains into its own buffer and decides what to do — and the question worth
-//! asking before a backend exists is whether that model is expressible at all:
+//! The chapter has one pull verb and two data families. Shape tests remain useful:
+//! they are realistic call sites compiled but never called, and catch an API that
+//! would impose a callback or a caller-visible lifetime. What section 48 fixes
+//! is a *pull* model — a caller drains into its own buffer and decides what to do
+//! — and the question worth asking is whether that model remains expressible:
 //! whether an event can be built without a sink, kept after the queue forgets it,
 //! and read without the reader learning a driver's vocabulary.
 //!
@@ -16,9 +15,16 @@
 //!
 //! None of this is GPU evidence and none of it stands in for a device.
 
-use crate::api::diagnostics::{DiagnosticEvent, DiagnosticSeverity};
+use crate::api::RhiErrorKind;
+use crate::api::diagnostics::{
+    AllocatorHeapReport, AllocatorReport, AllocatorReportQuality, DiagnosticEvent,
+    DiagnosticSeverity,
+};
 use crate::api::identity::ObjectId;
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId};
+use crate::api::platform::OptionalFeature;
 use crate::api::platform::device::Device;
+use crate::api::tests::mock::{device_with_features_for_test, paired_device_for_test};
 
 /// An event about an object, written the way an emit site writes one.
 fn event_about_an_object() -> DiagnosticEvent {
@@ -88,6 +94,60 @@ fn an_event_that_names_no_object_is_still_a_complete_event() {
     // Only severity and message are required, and both are present.
     assert_eq!(device_wide.severity, DiagnosticSeverity::Info);
     assert!(!device_wide.message.is_empty());
+}
+
+#[test]
+fn allocator_report_preserves_unknown_separately_from_zero() {
+    let report = AllocatorReport {
+        heaps: vec![AllocatorHeapReport {
+            class: "device-local".to_owned(),
+            allocated_bytes: Some(0),
+            reserved_bytes: None,
+            committed_bytes: Some(0),
+            resident_bytes: None,
+            aliased_bytes: Some(0),
+            retired_bytes: None,
+            block_count: None,
+            allocation_count: Some(0),
+            budget_bytes: None,
+            quality: AllocatorReportQuality::Unknown,
+        }],
+    };
+    let heap = &report.heaps[0];
+    assert_eq!(heap.allocated_bytes, Some(0));
+    assert_eq!(heap.reserved_bytes, None);
+    assert_eq!(heap.committed_bytes, Some(0));
+    assert_eq!(heap.resident_bytes, None);
+    assert_eq!(heap.aliased_bytes, Some(0));
+    assert_eq!(heap.retired_bytes, None);
+    assert_eq!(heap.quality, AllocatorReportQuality::Unknown);
+}
+
+#[test]
+fn allocator_report_facade_gates_capability_and_calls_supported_mock() {
+    let unsupported =
+        device_with_features_for_test(DeviceIdentity::new(DeviceInstanceId::new(81)), &[]);
+    assert_eq!(
+        unsupported.allocator_report().unwrap_err().kind(),
+        RhiErrorKind::Unsupported
+    );
+    let supported = device_with_features_for_test(
+        DeviceIdentity::new(DeviceInstanceId::new(82)),
+        &[OptionalFeature::AllocatorReport],
+    );
+    assert!(supported.allocator_report().unwrap().heaps.is_empty());
+}
+
+#[test]
+fn allocator_report_observes_device_loss_before_capability() {
+    let (device, backend) = paired_device_for_test(DeviceIdentity::new(DeviceInstanceId::new(83)));
+    backend.mark_lost(crate::api::platform::device::DeviceLossInfo::new(
+        "lost".to_owned(),
+    ));
+    assert_eq!(
+        device.allocator_report().unwrap_err().kind(),
+        RhiErrorKind::DeviceLost
+    );
 }
 
 /// The label travels with the event rather than being looked up by the reader.
@@ -170,10 +230,9 @@ fn the_operation_names_a_call_site_and_costs_no_allocation() {
 /// The drain verb as a host calls it: into a buffer the caller owns, appended to
 /// rather than replacing, so one call site can accumulate across devices.
 ///
-/// Compiled, never called. The queue is filled by the code that detects the
-/// problem and that code does not exist yet, so the verb panics; what this test
-/// reviews is that the caller does not have to hand the RHI a callback, a sink, or
-/// a buffer lifetime the caller cannot express. Section 48's own note on the verb
+/// Compiled, never called. The behavioural tests cover queue semantics; this
+/// call site reviews that the caller does not have to hand the RHI a callback, a
+/// sink, or a buffer lifetime the caller cannot express. Section 48's note on the verb
 /// — *"Pull model; avoids imposing a callback threading policy"* — is the contract
 /// this call site has to satisfy, and it does: no closure, no `Send` bound, no
 /// `'static`, and the buffer is a plain `&mut Vec` the caller keeps.

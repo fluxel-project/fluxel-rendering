@@ -17,6 +17,7 @@ use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupportQuery, logical_bytes_per_block};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::pipeline::PipelineCache;
 use crate::api::pipeline::backend::RasterPipelineBackend;
 use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
@@ -110,6 +111,8 @@ pub struct RasterPipelineDescriptor {
 
     /// The logical layout contract bound to these entry points.
     pub interface: PipelineInterface,
+    /// Optional native cache consulted while building this pipeline.
+    pub cache: Option<PipelineCache>,
 
     /// The vertex buffer bindings and attributes.
     pub vertex_input: VertexInputState,
@@ -121,6 +124,10 @@ pub struct RasterPipelineDescriptor {
     pub depth_stencil: Option<DepthStencilState>,
     /// The multisample state.
     pub multisample: MultisampleState,
+
+    /// Bit `n` selects view `n` for multiview rasterization. `None` is the
+    /// ordinary single-view path; `Some` must be non-zero.
+    pub multiview_mask: Option<u32>,
 
     /// Vector index = color output location.
     pub color_targets: Vec<Option<ColorTargetState>>,
@@ -142,10 +149,12 @@ impl RasterPipelineDescriptor {
             vertex,
             fragment: None,
             interface,
+            cache: None,
             vertex_input: VertexInputState::new(),
             primitive: PrimitiveState::new(PrimitiveTopology::TriangleList),
             depth_stencil: None,
             multisample: MultisampleState::new(1),
+            multiview_mask: None,
             color_targets: Vec::new(),
         }
     }
@@ -153,6 +162,12 @@ impl RasterPipelineDescriptor {
     /// Attaches a diagnostic label.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Label(Some(label.into()));
+        self
+    }
+
+    /// Associates a same-device native pipeline cache with this creation.
+    pub fn with_cache(mut self, cache: PipelineCache) -> Self {
+        self.cache = Some(cache);
         self
     }
 
@@ -183,6 +198,12 @@ impl RasterPipelineDescriptor {
     /// Replaces the multisample state.
     pub fn with_multisample(mut self, state: MultisampleState) -> Self {
         self.multisample = state;
+        self
+    }
+
+    /// Enables the selected multiview layers for this pipeline.
+    pub fn with_multiview_mask(mut self, mask: u32) -> Self {
+        self.multiview_mask = Some(mask);
         self
     }
 
@@ -351,6 +372,123 @@ pub(crate) fn validate_raster_pipeline_descriptor(
     facts: PipelineDeviceFacts<'_>,
 ) -> RhiResult<()> {
     let limit = facts.limit;
+
+    // These states have a portable spelling but are not a baseline guarantee.
+    // Gate them before native PSO creation so a backend never has to rely on a
+    // driver error for a known unsupported pipeline.
+    let require_feature =
+        |requested: bool, feature: OptionalFeature, name: &str| -> RhiResult<()> {
+            if requested && !(facts.feature_supported)(feature) {
+                return Err(RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    format!("{name} is not enabled on this device"),
+                ));
+            }
+            Ok(())
+        };
+    require_feature(
+        desc.multiview_mask.is_some(),
+        OptionalFeature::Multiview,
+        "multiview rasterization",
+    )?;
+    if desc.multiview_mask == Some(0) {
+        return Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "a multiview mask must select at least one view",
+        ));
+    }
+    if let Some(mask) = desc.multiview_mask {
+        if let Some(max) = limit(LimitKey::MaxMultiviewViewCount) {
+            if u64::from(32 - mask.leading_zeros()) > max {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "the multiview mask exceeds MaxMultiviewViewCount",
+                ));
+            }
+        }
+    }
+    require_feature(
+        matches!(
+            desc.primitive.polygon_mode,
+            crate::api::pipeline::PolygonMode::Line
+        ),
+        OptionalFeature::PolygonModeLine,
+        "line polygon mode",
+    )?;
+    require_feature(
+        matches!(
+            desc.primitive.polygon_mode,
+            crate::api::pipeline::PolygonMode::Point
+        ),
+        OptionalFeature::PolygonModePoint,
+        "point polygon mode",
+    )?;
+    require_feature(
+        desc.primitive.unclipped_depth,
+        OptionalFeature::DepthClipControl,
+        "unclipped depth",
+    )?;
+    require_feature(
+        desc.primitive.conservative,
+        OptionalFeature::ConservativeRasterization,
+        "conservative rasterization",
+    )?;
+    require_feature(
+        desc.primitive
+            .depth_bias
+            .is_some_and(|bias| !bias.clamp.is_finite() || bias.clamp != 0.0),
+        OptionalFeature::DepthBiasClamp,
+        "depth-bias clamp",
+    )?;
+    if desc
+        .primitive
+        .depth_bias
+        .is_some_and(|bias| !bias.slope_scale.is_finite() || !bias.clamp.is_finite())
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "depth-bias slope and clamp must be finite",
+        ));
+    }
+    let uses_dual_source = desc
+        .color_targets
+        .iter()
+        .flatten()
+        .filter_map(|target| target.blend)
+        .any(|blend| {
+            [
+                blend.color.src_factor,
+                blend.color.dst_factor,
+                blend.alpha.src_factor,
+                blend.alpha.dst_factor,
+            ]
+            .into_iter()
+            .any(|factor| {
+                matches!(
+                    factor,
+                    crate::api::pipeline::BlendFactor::Src1
+                        | crate::api::pipeline::BlendFactor::OneMinusSrc1
+                        | crate::api::pipeline::BlendFactor::Src1Alpha
+                        | crate::api::pipeline::BlendFactor::OneMinusSrc1Alpha
+                )
+            })
+        });
+    require_feature(
+        uses_dual_source,
+        OptionalFeature::DualSourceBlending,
+        "dual-source blending",
+    )?;
+    let blends: Vec<_> = desc
+        .color_targets
+        .iter()
+        .flatten()
+        .map(|target| target.blend)
+        .collect();
+    require_feature(
+        blends.len() > 1 && blends.windows(2).any(|pair| pair[0] != pair[1]),
+        OptionalFeature::IndependentBlend,
+        "independent blending",
+    )?;
 
     // --- Device / stage ---------------------------------------------------
     let device = desc.interface.device_identity();
@@ -833,6 +971,15 @@ impl Device {
             )
             .with_object(desc.interface.id()));
         }
+        if let Some(cache) = desc.cache.as_ref()
+            && cache.device_identity() != identity
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the pipeline cache belongs to a different device",
+            )
+            .with_object(cache.id()));
+        }
         if desc.vertex.device_identity() != identity {
             return Err(RhiError::new(
                 RhiErrorKind::WrongDevice,
@@ -867,6 +1014,19 @@ impl Device {
         let binding_limit =
             |stage: ShaderStage, class: BindingLimitClass| capabilities.binding_limit(stage, class);
         let feature_supported = |feature: OptionalFeature| capabilities.supports_feature(feature);
+        if desc
+            .vertex_input
+            .buffers
+            .iter()
+            .flat_map(|buffer| &buffer.attributes)
+            .any(|attribute| attribute.format.requires_64bit_attribute())
+            && !feature_supported(OptionalFeature::VertexAttribute64Bit)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "64-bit vertex attributes are not enabled on this device",
+            ));
+        }
         let shader_acceptance =
             |artifact: &ShaderArtifact| capabilities.shader_acceptance(artifact);
         let color_target_facts = |format: TextureFormat| {

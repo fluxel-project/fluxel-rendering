@@ -264,12 +264,9 @@ impl FrameStatisticsSampler {
     /// A caller that wants to accept a reconfigure does not need a new API: it
     /// drops this sampler and asks for another one.
     ///
-    /// # This verb is not implemented
-    ///
-    /// It needs a fresh snapshot, and snapshots read counters the RHI increments
-    /// while it works. The epoch refusal above is therefore written but not yet
-    /// reachable; it is the same rule that
-    /// [`StatisticsSnapshot::delta_since`] enforces and is tested there.
+    /// The sampler takes a fresh synchronous snapshot on each call. The epoch
+    /// refusal is reachable whenever a concurrent caller reconfigures the
+    /// device statistics service between two samples.
     pub fn sample_frame(&mut self) -> RhiResult<FrameStatistics> {
         let current = self.statistics.snapshot();
         let interval = current.delta_since(&self.previous)?;

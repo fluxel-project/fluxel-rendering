@@ -352,6 +352,7 @@ fn the_lifecycle_record_pairs_creation_with_reclaim_for_every_class() {
         raster_pipelines_reclaimed: 0,
         compute_pipelines_created: 1,
         compute_pipelines_reclaimed: 0,
+        ..ResourceLifecycleStatistics::default()
     };
 
     assert_eq!(retiring.buffers_created, retiring.buffers_reclaimed);

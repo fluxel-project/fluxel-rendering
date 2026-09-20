@@ -5,11 +5,30 @@ use crate::api::error::RhiErrorKind;
 use crate::api::format::TextureFormat;
 use crate::api::identity::Label;
 use crate::api::platform::device::DeviceLossInfo;
+use crate::api::platform::{AdapterSelection, DeviceRequestDescriptor, DeviceRequirements};
 use crate::api::resource::buffer::{
     BufferBinding, BufferDescriptor, BufferRange, BufferSupport, BufferSupportLimits, BufferUsage,
-    ResourceMemoryPreference, validate_buffer_descriptor, validate_buffer_ownership,
+    MemoryPolicy, ResourceMemoryPreference, validate_buffer_descriptor, validate_buffer_ownership,
     validate_buffer_range,
 };
+
+#[test]
+fn memory_policy_is_a_device_allocator_hint_not_resource_visibility() {
+    assert_eq!(MemoryPolicy::default(), MemoryPolicy::Automatic);
+    assert_ne!(MemoryPolicy::Performance, MemoryPolicy::MemoryUsage);
+    assert_ne!(MemoryPolicy::ManualSuballocation, MemoryPolicy::Automatic);
+
+    let request =
+        DeviceRequestDescriptor::new(AdapterSelection::Default, DeviceRequirements::new());
+    assert_eq!(request.memory_policy(), MemoryPolicy::Automatic);
+    assert_eq!(
+        request
+            .with_memory_policy(MemoryPolicy::MemoryUsage)
+            .memory_policy(),
+        MemoryPolicy::MemoryUsage,
+        "the policy is a device-request hint, not a per-resource visibility flag"
+    );
+}
 use crate::api::resource::texture::{
     Extent3d, TextureDescriptor, TextureDimension, TextureUsage, TextureViewCompatibility,
     mip_ceiling,
@@ -18,7 +37,7 @@ use crate::api::tests::fixture;
 
 #[test]
 fn buffer_usage_bits_are_distinct_and_compose() {
-    // The six constants must be six different bits: a bitset whose members
+    // Every constant must be a different bit: overlap would make `contains`
     // overlapped would make `contains` answer questions about the wrong
     // operation.
     let all = [
@@ -28,6 +47,12 @@ fn buffer_usage_bits_are_distinct_and_compose() {
         BufferUsage::INDEX,
         BufferUsage::UNIFORM,
         BufferUsage::STORAGE,
+        BufferUsage::MAP_READ,
+        BufferUsage::MAP_WRITE,
+        BufferUsage::INDIRECT,
+        BufferUsage::QUERY_RESOLVE,
+        BufferUsage::BLAS_INPUT,
+        BufferUsage::TLAS_INPUT,
     ];
     for (index, first) in all.iter().enumerate() {
         for second in all.iter().skip(index + 1) {
@@ -406,7 +431,7 @@ fn a_binding_carries_the_buffer_and_the_range_together() {
 /// The enumeration the capability table is keyed on covers every declared bit.
 ///
 /// `BufferUsage` is a mask rather than an enum, so `all()` cannot be derived and
-/// `ALL_BITS` is a hand-written union of the six constants. A seventh bit added
+/// `ALL_BITS` is a hand-written union of the declared constants. A new bit added
 /// without extending that union would be a silent hole in the DX12 support table
 /// — and because membership in an enumerable space is a *panic* rather than an
 /// answer (§8.1, and the four-shape rule in `api::capability`), the hole would
@@ -421,6 +446,13 @@ fn the_usage_enumeration_covers_every_declared_bit() {
         BufferUsage::INDEX,
         BufferUsage::UNIFORM,
         BufferUsage::STORAGE,
+        BufferUsage::INDIRECT,
+        BufferUsage::QUERY_RESOLVE,
+        BufferUsage::MAP_READ,
+        BufferUsage::MAP_WRITE,
+        BufferUsage::BLAS_INPUT,
+        BufferUsage::TLAS_INPUT,
+        BufferUsage::ACCELERATION_STRUCTURE_SCRATCH,
     ];
 
     let enumerated: Vec<BufferUsage> = BufferUsage::all().collect();
@@ -428,7 +460,8 @@ fn the_usage_enumeration_covers_every_declared_bit() {
     assert_eq!(
         enumerated.len(),
         1 << declared.len(),
-        "a six-bit mask has {} combinations; the enumeration walked {}",
+        "a {}-bit mask has {} combinations; the enumeration walked {}",
+        declared.len(),
         1 << declared.len(),
         enumerated.len()
     );

@@ -44,14 +44,21 @@
 
 use crate::api::binding::layout::BindGroupLayoutDescriptor;
 use crate::api::binding::vocabulary::BindingSlotId;
+use crate::api::external::ExternalMemoryHandleType;
 use crate::api::identity::{Label, ObjectId};
+use crate::api::pipeline::PipelineCacheDescriptor;
 use crate::api::pipeline::{
     ColorTargetState, DepthStencilState, MultisampleState, PrimitiveState, VertexInputState,
 };
+use crate::api::query::QuerySetDescriptor;
 use crate::api::resource::buffer::{BufferDescriptor, BufferRange};
 use crate::api::resource::sampler::SamplerDescriptor;
 use crate::api::resource::texture::TextureDescriptor;
 use crate::api::resource::view::TextureViewDescriptor;
+use crate::api::resource::{
+    AccelerationStructureBuildOptions, AccelerationStructureIndexFormat,
+    AccelerationStructureVertexFormat,
+};
 use crate::api::shader::ShaderArtifact;
 
 /// A captured resource reference, as a bind group entry holds it.
@@ -91,6 +98,13 @@ pub enum CapturedBindingResource {
         sampler: ObjectId,
     },
 
+    /// One acceleration structure. Its descriptor contains only ordinary RHI
+    /// object handles in the live API; capture substitutes their identities.
+    AccelerationStructure(ObjectId),
+
+    /// One sampled external texture, named by the opaque source definition.
+    ExternalTexture(ObjectId),
+
     /// A fixed-length array of buffer ranges.
     BufferArray(Vec<(ObjectId, BufferRange)>),
 
@@ -99,6 +113,12 @@ pub enum CapturedBindingResource {
 
     /// A fixed-length array of samplers.
     SamplerArray(Vec<ObjectId>),
+
+    /// A fixed-length array of acceleration structures.
+    AccelerationStructureArray(Vec<ObjectId>),
+
+    /// A fixed-length array of sampled external textures.
+    ExternalTextureArray(Vec<ObjectId>),
 }
 
 /// One slot of a captured bind group packet.
@@ -211,6 +231,100 @@ pub struct CapturedComputePipelineDefinition {
 
     /// The interface this pipeline's groups are validated against.
     pub interface: ObjectId,
+}
+
+/// What a captured mesh pipeline is. Mesh pipelines replace vertex input and
+/// the vertex module only; all remaining graphics fixed state is retained.
+#[derive(Clone)]
+pub struct CapturedMeshPipelineDefinition {
+    pub label: Label,
+    pub task: Option<ObjectId>,
+    pub mesh: ObjectId,
+    pub fragment: Option<ObjectId>,
+    pub interface: ObjectId,
+    pub primitive: PrimitiveState,
+    pub depth_stencil: Option<DepthStencilState>,
+    pub multisample: MultisampleState,
+    pub multiview_mask: Option<u32>,
+    pub color_targets: Vec<Option<ColorTargetState>>,
+}
+
+/// A ray hit group projected without live shader handles.
+#[derive(Clone)]
+pub struct CapturedRayTracingHitGroup {
+    pub closest_hit: Option<ObjectId>,
+    pub any_hit: Option<ObjectId>,
+    pub intersection: Option<ObjectId>,
+}
+
+/// What a captured ray-tracing pipeline is. The shader-table bytes are command
+/// data, not pipeline definition data, and therefore live in `work`.
+#[derive(Clone)]
+pub struct CapturedRayTracingPipelineDefinition {
+    pub label: Label,
+    pub interface: ObjectId,
+    pub ray_generation: ObjectId,
+    pub miss: Vec<ObjectId>,
+    pub hit_groups: Vec<CapturedRayTracingHitGroup>,
+    pub max_recursion_depth: u32,
+}
+
+/// An opaque external-image source definition. Native host objects, tokens and
+/// credentials are deliberately absent.
+#[derive(Clone, Copy)]
+pub struct CapturedExternalImageSourceDefinition {
+    pub extent: crate::api::resource::Extent3d,
+}
+
+/// An external-memory source definition never carries the native fd/HANDLE.
+#[derive(Clone)]
+pub struct CapturedExternalMemoryTextureSourceDefinition {
+    pub handle_type: ExternalMemoryHandleType,
+    pub texture: TextureDescriptor,
+}
+
+/// One BLAS geometry with live buffers replaced by stable object identities.
+#[derive(Clone)]
+pub enum CapturedBlasGeometry {
+    Triangles {
+        vertices: ObjectId,
+        vertex_range: BufferRange,
+        vertex_format: AccelerationStructureVertexFormat,
+        vertex_stride: u32,
+        vertex_count: u32,
+        primitive_count: u32,
+        indices: Option<(ObjectId, BufferRange, AccelerationStructureIndexFormat)>,
+    },
+    Aabbs {
+        boxes: ObjectId,
+        range: BufferRange,
+        stride: u32,
+        primitive_count: u32,
+    },
+}
+
+/// A TLAS instance with the referenced BLAS converted to its identity.
+#[derive(Clone)]
+pub struct CapturedTlasInstance {
+    pub bottom_level: ObjectId,
+    pub transform: [[f32; 4]; 3],
+    pub mask: u8,
+    pub shader_record_offset: u32,
+}
+
+/// Full AS reconstruction graph node, deliberately free of live handles.
+#[derive(Clone)]
+pub enum CapturedAccelerationStructureDefinition {
+    BottomLevel {
+        label: Label,
+        geometries: Vec<CapturedBlasGeometry>,
+        build_options: AccelerationStructureBuildOptions,
+    },
+    TopLevel {
+        label: Label,
+        instances: Vec<CapturedTlasInstance>,
+        build_options: AccelerationStructureBuildOptions,
+    },
 }
 
 /// One object's complete definition, as the tooling side sees it.
@@ -328,6 +442,56 @@ pub enum CapturedObjectDefinition {
         id: ObjectId,
         /// What it is.
         definition: CapturedComputePipelineDefinition,
+    },
+
+    /// A query-set definition.
+    QuerySet {
+        id: ObjectId,
+        descriptor: QuerySetDescriptor,
+    },
+
+    /// An acceleration-structure definition with all BLAS/TLAS edges named by ID.
+    AccelerationStructure {
+        id: ObjectId,
+        definition: CapturedAccelerationStructureDefinition,
+    },
+
+    /// A mesh/task graphics pipeline.
+    MeshPipeline {
+        id: ObjectId,
+        definition: CapturedMeshPipelineDefinition,
+    },
+
+    /// A ray-tracing pipeline.
+    RayTracingPipeline {
+        id: ObjectId,
+        definition: CapturedRayTracingPipelineDefinition,
+    },
+
+    /// A backend-native pipeline-cache object. Serialized bytes are capture
+    /// policy data and are intentionally not included in the object graph.
+    PipelineCache {
+        id: ObjectId,
+        descriptor: PipelineCacheDescriptor,
+    },
+
+    /// Opaque host image source with only a portable extent.
+    ExternalImageSource {
+        id: ObjectId,
+        definition: CapturedExternalImageSourceDefinition,
+    },
+
+    /// Sampled external texture, retaining only its source graph edge and label.
+    ExternalTexture {
+        id: ObjectId,
+        source: ObjectId,
+        label: Label,
+    },
+
+    /// External-memory source with handle class, never handle value.
+    ExternalMemoryTextureSource {
+        id: ObjectId,
+        definition: CapturedExternalMemoryTextureSourceDefinition,
     },
 }
 

@@ -41,7 +41,7 @@
 //!   the other without telling the caller.
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::format::{TextureFormat, logical_bytes_per_block};
+use crate::api::format::{TextureFormat, block_extent, logical_bytes_per_block};
 use crate::api::resource::texture::{Extent3d, TextureDimension};
 
 /// One single aspect of a texture.
@@ -58,6 +58,12 @@ pub enum TextureAspect {
     Depth,
     /// Stencil plane.
     Stencil,
+    /// First plane of a multi-planar image.
+    Plane0,
+    /// Second plane of a multi-planar image.
+    Plane1,
+    /// Third plane reserved for formats with three planes.
+    Plane2,
 }
 
 /// A set of texture aspects.
@@ -75,6 +81,12 @@ impl TextureAspects {
     pub const DEPTH: Self = Self(1 << 1);
     /// The stencil aspect.
     pub const STENCIL: Self = Self(1 << 2);
+    /// First planar image plane.
+    pub const PLANE0: Self = Self(1 << 3);
+    /// Second planar image plane.
+    pub const PLANE1: Self = Self(1 << 4);
+    /// Third planar image plane.
+    pub const PLANE2: Self = Self(1 << 5);
 
     /// Whether every bit set in `other` is set in `self`.
     pub fn contains(self, other: Self) -> bool {
@@ -173,6 +185,9 @@ pub(crate) fn aspect_bits(aspect: TextureAspect) -> TextureAspects {
         TextureAspect::Color => TextureAspects::COLOR,
         TextureAspect::Depth => TextureAspects::DEPTH,
         TextureAspect::Stencil => TextureAspects::STENCIL,
+        TextureAspect::Plane0 => TextureAspects::PLANE0,
+        TextureAspect::Plane1 => TextureAspects::PLANE1,
+        TextureAspect::Plane2 => TextureAspects::PLANE2,
     }
 }
 
@@ -371,19 +386,22 @@ pub(crate) fn validate_host_texel_layout(
     extent: Extent3d,
     format: TextureFormat,
 ) -> RhiResult<()> {
-    if layout.rows_per_image < extent.height {
+    let (block_width, block_height) = block_extent(format);
+    let block_rows = extent.height.div_ceil(block_height);
+    if layout.rows_per_image < block_rows {
         return Err(RhiError::new(
             RhiErrorKind::InvalidUsage,
             format!(
                 "host rows_per_image {} is smaller than the {} block rows of the copied \
                  extent",
-                layout.rows_per_image, extent.height
+                layout.rows_per_image, block_rows
             ),
         ));
     }
 
     if let Some(block_bytes) = logical_bytes_per_block(format) {
-        let logical_row = u64::from(extent.width) * u64::from(block_bytes);
+        let blocks_per_row = extent.width.div_ceil(block_width);
+        let logical_row = u64::from(blocks_per_row) * u64::from(block_bytes);
         if u64::from(layout.bytes_per_row) < logical_row {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
@@ -416,27 +434,43 @@ pub(crate) fn validate_host_texel_layout(
 /// `bytes_per_row` separating rows — and must be followed by one full logical
 /// row of texels.
 ///
-/// `None` when the format's entry size is not fixed by its name, for the reason
-/// given on [`validate_host_texel_layout`].
+/// `Ok(None)` when the format's entry size is not fixed by its name, for the
+/// reason given on [`validate_host_texel_layout`]. An arithmetic overflow is an
+/// invalid layout rather than an unknown size, so it is returned as an error
+/// instead of being allowed to wrap or masquerade as `None`.
 pub(crate) fn source_bytes_required(
     layout: HostTexelLayout,
     extent: Extent3d,
     image_count: u32,
     format: TextureFormat,
-) -> Option<u64> {
-    let block_bytes = u64::from(logical_bytes_per_block(format)?);
-    let logical_row = u64::from(extent.width) * block_bytes;
+) -> RhiResult<Option<u64>> {
+    let Some(block_bytes) = logical_bytes_per_block(format).map(u64::from) else {
+        return Ok(None);
+    };
+    let (block_width, block_height) = block_extent(format);
+    let logical_row = u64::from(extent.width.div_ceil(block_width)) * block_bytes;
     let rows_per_image = u64::from(layout.rows_per_image);
     let bytes_per_row = u64::from(layout.bytes_per_row);
 
     let images_before_last = u64::from(image_count.saturating_sub(1));
-    let rows_before_last = u64::from(extent.height.saturating_sub(1));
+    let rows_before_last = u64::from(extent.height.div_ceil(block_height).saturating_sub(1));
 
-    Some(
-        images_before_last * rows_per_image * bytes_per_row
-            + rows_before_last * bytes_per_row
-            + logical_row,
-    )
+    let required = images_before_last
+        .checked_mul(rows_per_image)
+        .and_then(|rows| rows.checked_mul(bytes_per_row))
+        .and_then(|bytes| {
+            rows_before_last
+                .checked_mul(bytes_per_row)?
+                .checked_add(bytes)
+        })
+        .and_then(|bytes| bytes.checked_add(logical_row))
+        .ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "the host texture layout byte requirement overflows u64",
+            )
+        })?;
+    Ok(Some(required))
 }
 
 // ---------------------------------------------------------------------------

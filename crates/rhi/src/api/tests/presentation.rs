@@ -27,13 +27,14 @@ use crate::api::format::TextureFormat;
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::platform::{Device, DeviceLossInfo};
 use crate::api::presentation::{
-    AcquireErrorKind, AcquiredFrame, AcquiredFrameId, AcquiredFrameState, ConfiguredPresentation,
-    Extent2d, FrameAttachment, PresentFailure, PresentMode, PresentPlanId, PresentReceipt,
-    PresentReceiptId, PresentState, PresentationConfiguration, PresentationExtent,
-    PresentationExtentControl, PresentationTarget, PresentationTargetCapabilities, configure,
-    frame, target,
+    AcquireErrorKind, AcquiredFrame, AcquiredFrameId, AcquiredFrameState, CompositeAlphaMode,
+    ConfiguredPresentation, DisplayHdrInfo, Extent2d, FrameAttachment, FrameLatencyRange,
+    PresentFailure, PresentMode, PresentPlanId, PresentReceipt, PresentReceiptId, PresentState,
+    PresentationColorSpace, PresentationConfiguration, PresentationExtent,
+    PresentationExtentControl, PresentationFormat, PresentationTarget,
+    PresentationTargetCapabilities, PresentationTimingCapabilities, configure, frame, target,
 };
-use crate::api::resource::texture::Extent3d;
+use crate::api::resource::texture::{Extent3d, TextureUsage};
 use crate::api::submission::{CompletionPoint, SubmissionPlanId, SubmissionPoint};
 use crate::api::tests::mock::paired_device_for_test;
 
@@ -41,9 +42,9 @@ use crate::api::tests::mock::paired_device_for_test;
 // Section 43 — configuration.
 // ---------------------------------------------------------------------------
 
-/// The portable defaults are the two choices that ask a target for nothing it
-/// might refuse: `Automatic`, the only mode every backend supports, and a
-/// host-managed extent.
+/// The constructor spells every portable default explicitly. `Automatic` and a
+/// host-managed extent are universally meaningful; the remaining baseline
+/// choices are still checked against the target snapshot at configuration time.
 #[test]
 fn configuration_defaults_ask_for_nothing_a_target_must_refuse() {
     let config = PresentationConfiguration::new(TextureFormat::Bgra8Unorm);
@@ -51,6 +52,11 @@ fn configuration_defaults_ask_for_nothing_a_target_must_refuse() {
     assert_eq!(config.format(), TextureFormat::Bgra8Unorm);
     assert_eq!(config.present_mode(), PresentMode::Automatic);
     assert_eq!(config.extent(), PresentationExtent::HostManaged);
+    assert_eq!(config.color_space(), PresentationColorSpace::Srgb);
+    assert_eq!(config.maximum_frame_latency(), 2);
+    assert_eq!(config.composite_alpha_mode(), CompositeAlphaMode::Automatic);
+    assert_eq!(config.usage(), TextureUsage::COLOR_ATTACHMENT);
+    assert!(config.view_formats().is_empty());
 
     let asked =
         config
@@ -72,6 +78,63 @@ fn configuration_defaults_ask_for_nothing_a_target_must_refuse() {
         asked.format(),
         TextureFormat::Bgra8Unorm,
         "the two `with_` methods leave the format the constructor was given"
+    );
+}
+
+#[test]
+fn acquired_frame_reports_suboptimal_without_changing_ownership() {
+    let identity = device_identity(1);
+    let regular = AcquiredFrame::new(
+        AcquiredFrameId::new(identity, 1),
+        identity,
+        TextureFormat::Bgra8Unorm,
+        Extent3d::d2(1, 1),
+    );
+    let suboptimal = AcquiredFrame::new_suboptimal(
+        AcquiredFrameId::new(identity, 2),
+        identity,
+        TextureFormat::Bgra8Unorm,
+        Extent3d::d2(1, 1),
+    );
+    assert!(!regular.suboptimal());
+    assert!(suboptimal.suboptimal());
+    assert_eq!(suboptimal.state(), AcquiredFrameState::Acquired);
+}
+
+#[test]
+fn presentation_clock_has_supported_unsupported_and_loss_boundaries() {
+    let (device, native) = paired_device_for_test(device_identity(41));
+    let target = PresentationTarget::new(ObjectId::new(9));
+
+    assert_eq!(
+        device.presentation_timestamp(&target).unwrap_err().kind(),
+        RhiErrorKind::Unsupported,
+        "a target that did not report timing must be refused before sampling"
+    );
+
+    native.set_presentation_timing(true);
+    let capabilities = device.presentation_capabilities(&target).unwrap();
+    assert!(capabilities.timing().timestamps);
+    assert_eq!(
+        device.presentation_timestamp(&target).unwrap(),
+        crate::api::presentation::PresentationTimestamp {
+            value: 42,
+            period_nanos: 0.5,
+        }
+    );
+
+    native.mark_lost(DeviceLossInfo::new("presentation clock loss".into()));
+    assert_eq!(
+        device.presentation_timestamp(&target).unwrap_err().kind(),
+        RhiErrorKind::DeviceLost
+    );
+    assert_eq!(
+        device
+            .presentation_capabilities(&target)
+            .unwrap_err()
+            .kind(),
+        RhiErrorKind::DeviceLost,
+        "surface fact queries are still Device operations after terminal loss"
     );
 }
 
@@ -100,6 +163,104 @@ fn a_format_the_target_never_reported_is_unsupported() {
     .unwrap_err();
 
     assert_eq!(error.kind(), RhiErrorKind::Unsupported);
+}
+
+#[test]
+fn complete_surface_configuration_accepts_reported_values() {
+    let caps = target_caps(
+        vec![TextureFormat::Bgra8Unorm],
+        vec![PresentMode::Fifo],
+        host_managed(Some((640, 480))),
+    )
+    .with_format_color_spaces(vec![PresentationFormat {
+        format: TextureFormat::Bgra8Unorm,
+        color_space: PresentationColorSpace::DisplayP3,
+    }])
+    .with_surface_details(
+        TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::COPY_SRC),
+        vec![CompositeAlphaMode::Opaque],
+        Some(FrameLatencyRange { min: 1, max: 3 }),
+        vec![TextureFormat::Bgra8UnormSrgb],
+    )
+    .with_timing_and_hdr(
+        PresentationTimingCapabilities { timestamps: true },
+        Some(DisplayHdrInfo {
+            min_luminance_nits: 0.01,
+            max_luminance_nits: 1_000.0,
+            max_full_frame_luminance_nits: 400.0,
+        }),
+    );
+    assert!(caps.timing().timestamps);
+    assert_eq!(caps.hdr_info().unwrap().max_luminance_nits, 1_000.0);
+    for latency in [1, 3] {
+        let config = PresentationConfiguration::new(TextureFormat::Bgra8Unorm)
+            .with_color_space(PresentationColorSpace::DisplayP3)
+            .with_present_mode(PresentMode::Fifo)
+            .with_maximum_frame_latency(latency)
+            .with_composite_alpha_mode(CompositeAlphaMode::Opaque)
+            .with_usage(TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::COPY_SRC))
+            .with_view_formats([TextureFormat::Bgra8UnormSrgb]);
+        assert!(configure::validate_presentation_configuration(&config, &caps).is_ok());
+    }
+}
+
+#[test]
+fn surface_configuration_rejects_unreported_independent_facts() {
+    let caps = target_caps(
+        vec![TextureFormat::Bgra8Unorm],
+        vec![],
+        host_managed(Some((640, 480))),
+    )
+    .with_surface_details(
+        TextureUsage::COLOR_ATTACHMENT,
+        vec![CompositeAlphaMode::Opaque],
+        Some(FrameLatencyRange { min: 1, max: 3 }),
+        vec![],
+    );
+
+    let unsupported = [
+        PresentationConfiguration::new(TextureFormat::Bgra8Unorm)
+            .with_color_space(PresentationColorSpace::Hdr10),
+        PresentationConfiguration::new(TextureFormat::Bgra8Unorm)
+            .with_composite_alpha_mode(CompositeAlphaMode::PreMultiplied),
+        PresentationConfiguration::new(TextureFormat::Bgra8Unorm)
+            .with_usage(TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::COPY_SRC)),
+        PresentationConfiguration::new(TextureFormat::Bgra8Unorm)
+            .with_view_formats([TextureFormat::Bgra8UnormSrgb]),
+    ];
+    for config in unsupported {
+        assert_eq!(
+            configure::validate_presentation_configuration(&config, &caps)
+                .unwrap_err()
+                .kind(),
+            RhiErrorKind::Unsupported
+        );
+    }
+}
+
+#[test]
+fn frame_latency_zero_and_values_past_the_reported_edge_are_invalid() {
+    let caps = target_caps(
+        vec![TextureFormat::Bgra8Unorm],
+        vec![],
+        host_managed(Some((640, 480))),
+    )
+    .with_surface_details(
+        TextureUsage::COLOR_ATTACHMENT,
+        vec![CompositeAlphaMode::Opaque],
+        Some(FrameLatencyRange { min: 1, max: 3 }),
+        vec![],
+    );
+    for latency in [0, 4, u32::MAX] {
+        let config = PresentationConfiguration::new(TextureFormat::Bgra8Unorm)
+            .with_maximum_frame_latency(latency);
+        assert_eq!(
+            configure::validate_presentation_configuration(&config, &caps)
+                .unwrap_err()
+                .kind(),
+            RhiErrorKind::InvalidUsage
+        );
+    }
 }
 
 /// `Automatic` needs no report and every other mode does — the one rule section

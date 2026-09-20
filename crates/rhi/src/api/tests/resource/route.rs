@@ -96,6 +96,37 @@ fn texel_copy_alignment_is_checked_on_both_sides() {
 }
 
 #[test]
+fn texel_copy_image_stride_distinguishes_array_images_from_3d_slices() {
+    let limits = TexelCopyLayoutLimits::new(512, 256).with_image_layout(512, true);
+    assert_eq!(limits.image_stride_alignment(), 512);
+    assert!(limits.tightly_packed_3d_slices());
+
+    // Two D2 array layers name two independently placed D3D12 footprints.
+    assert!(
+        limits
+            .validate_image_layout(256, 2, 1, TextureDimension::D2, 2)
+            .is_ok()
+    );
+    assert_kind(
+        limits.validate_image_layout(256, 1, 1, TextureDimension::D2, 2),
+        RhiErrorKind::InvalidUsage,
+    );
+
+    // A D3 region is one footprint. Its slices do not each need a 512-byte
+    // start, but the backend that requested this fact cannot represent padding
+    // rows between consecutive Z slices.
+    assert!(
+        limits
+            .validate_image_layout(256, 2, 2, TextureDimension::D3, 3)
+            .is_ok()
+    );
+    assert_kind(
+        limits.validate_image_layout(256, 3, 2, TextureDimension::D3, 3),
+        RhiErrorKind::InvalidUsage,
+    );
+}
+
+#[test]
 fn a_zero_alignment_is_no_constraint_rather_than_a_panic() {
     // A malformed capability must not be able to turn validation into an abort.
     let limits = BufferCopyLayoutLimits::new(0, 0);

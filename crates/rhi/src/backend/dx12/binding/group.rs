@@ -355,6 +355,19 @@ fn write_entries(
                     samplers.push(sampler.clone());
                 }
             }
+            BindingResource::AccelerationStructure(_)
+            | BindingResource::AccelerationStructureArray(_) => {
+                return Err(Dx12Failure::Unsupported {
+                    what: "an acceleration structure bind group entry",
+                    why: "DX12 acceleration-structure descriptor-table lowering is not enabled",
+                });
+            }
+            BindingResource::ExternalTexture(_) => {
+                return Err(Dx12Failure::Unsupported {
+                    what: "an external texture bind group entry",
+                    why: "DX12 external-image conversion and descriptor lowering is not enabled",
+                });
+            }
         }
     }
     Ok(())
@@ -421,7 +434,9 @@ fn write_element(
         },
         BindingKind::SampledTexture { .. }
         | BindingKind::StorageTexture { .. }
-        | BindingKind::Sampler { .. } => Err(Dx12Failure::Unsupported {
+        | BindingKind::Sampler { .. }
+        | BindingKind::AccelerationStructure
+        | BindingKind::ExternalTexture => Err(Dx12Failure::Unsupported {
             what: "a buffer bound to a slot whose layout declares a texture or a sampler",
             why: "the portable layer refuses that shape before this backend is \
                       reached, so this is a total function over an empty case",

@@ -9,6 +9,7 @@
 use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::requirements::DeviceRequirements;
 use crate::api::presentation::PresentationTarget;
+use crate::api::resource::MemoryPolicy;
 
 /// A request for a device, before any adapter has been chosen.
 ///
@@ -24,6 +25,7 @@ pub struct DeviceRequestDescriptor {
     selection: AdapterSelection,
     requirements: DeviceRequirements,
     presentation_targets: Vec<PresentationTarget>,
+    memory_policy: MemoryPolicy,
 }
 
 impl DeviceRequestDescriptor {
@@ -36,6 +38,7 @@ impl DeviceRequestDescriptor {
             selection,
             requirements,
             presentation_targets: Vec::new(),
+            memory_policy: MemoryPolicy::Automatic,
         }
     }
 
@@ -48,6 +51,17 @@ impl DeviceRequestDescriptor {
     pub fn require_presentation_target(mut self, target: PresentationTarget) -> Self {
         self.presentation_targets.push(target);
         self
+    }
+
+    /// Supplies an allocator strategy hint for the requested device.
+    pub fn with_memory_policy(mut self, policy: MemoryPolicy) -> Self {
+        self.memory_policy = policy;
+        self
+    }
+
+    /// The requested allocator strategy hint.
+    pub fn memory_policy(&self) -> MemoryPolicy {
+        self.memory_policy
     }
 
     /// How the adapter is to be chosen.

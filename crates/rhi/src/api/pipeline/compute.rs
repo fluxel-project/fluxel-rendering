@@ -15,6 +15,7 @@ use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::pipeline::PipelineCache;
 use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderModule, ShaderStage};
@@ -39,6 +40,8 @@ pub struct ComputePipelineDescriptor {
     pub shader: ShaderModule,
     /// The logical layout contract bound to this entry point.
     pub interface: PipelineInterface,
+    /// Optional native cache consulted while building this pipeline.
+    pub cache: Option<PipelineCache>,
 }
 
 impl ComputePipelineDescriptor {
@@ -48,12 +51,19 @@ impl ComputePipelineDescriptor {
             label: Label::default(),
             shader,
             interface,
+            cache: None,
         }
     }
 
     /// Attaches a diagnostic label.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Label(Some(label.into()));
+        self
+    }
+
+    /// Associates a same-device native pipeline cache with this creation.
+    pub fn with_cache(mut self, cache: PipelineCache) -> Self {
+        self.cache = Some(cache);
         self
     }
 }
@@ -279,6 +289,15 @@ impl Device {
                 "the compute shader belongs to a different device",
             )
             .with_object(desc.shader.id()));
+        }
+        if let Some(cache) = desc.cache.as_ref()
+            && cache.device_identity() != identity
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "the pipeline cache belongs to a different device",
+            )
+            .with_object(cache.id()));
         }
 
         // Section 6.5's liveness verdict, after every ownership comparison above

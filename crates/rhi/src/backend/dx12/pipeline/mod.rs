@@ -43,9 +43,11 @@
 //! asynchronous public creation API intentionally exposes no cache policy, so
 //! memory/disk caching can evolve without an RHI API revision.
 
+mod cache;
 mod compute;
 mod interface;
 mod raster;
 
+pub(crate) use cache::create_pipeline_cache;
 pub(crate) use compute::{Dx12ComputePipeline, create_compute_pipeline};
 pub(crate) use raster::{Dx12RasterPipeline, create_raster_pipeline};

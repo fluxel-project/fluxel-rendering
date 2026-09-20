@@ -15,27 +15,37 @@
 //! exists for that reason.
 
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_BOX, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_STATE_COMMON,
-    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_TEXTURE_COPY_LOCATION,
-    D3D12_TEXTURE_COPY_LOCATION_0, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-    D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, ID3D12DescriptorHeap, ID3D12Device,
-    ID3D12GraphicsCommandList, ID3D12Resource,
+    D3D12_BOX, D3D12_CLEAR_FLAG_DEPTH, D3D12_CLEAR_FLAG_STENCIL, D3D12_CLEAR_FLAGS,
+    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DEPTH_STENCIL_VIEW_DESC, D3D12_DEPTH_STENCIL_VIEW_DESC_0,
+    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+    D3D12_DSV_DIMENSION_TEXTURE2D, D3D12_DSV_DIMENSION_TEXTURE2DARRAY, D3D12_DSV_FLAG_NONE,
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_STATE_COMMON,
+    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+    D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_TEX2D_ARRAY_DSV, D3D12_TEX2D_DSV,
+    D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+    ID3D12CommandSignature, ID3D12DescriptorHeap, ID3D12Device, ID3D12GraphicsCommandList,
+    ID3D12Resource,
 };
 
 use crate::api::binding::BindGroup;
 use crate::api::command::copy::{BufferTextureCopy, TextureCopy};
-use crate::api::format::logical_bytes_per_block;
+use crate::api::format::{block_extent, logical_bytes_per_block};
 use crate::api::pipeline::{ComputePipeline, RasterPipeline};
 use crate::api::presentation::FrameAttachment;
+use crate::api::query::QuerySet;
 use crate::api::resource::buffer::Buffer;
-use crate::api::resource::subresource::{TextureAspect, TextureSubresourceLayers};
-use crate::api::resource::texture::Texture;
+use crate::api::resource::subresource::{
+    TextureAspect, TextureAspects, TextureSubresourceLayers, TextureSubresourceRange,
+};
+use crate::api::resource::texture::{Texture, TextureDimension, mip_extent};
 use crate::api::resource::transfer::{
     ReadbackRequest, ReadbackStatus, ReadbackTexelLayout, ReadbackTicket, UploadDescriptor,
     UploadJob,
 };
 use crate::api::resource::view::TextureView;
 use crate::backend::dx12::ffi;
+use crate::backend::dx12::platform::facts::dxgi_format;
 use crate::backend::dx12::resource::{Dx12Buffer, StagingHeap, create_staging, readback_bytes};
 
 use super::transition::Transitions;
@@ -81,6 +91,14 @@ pub(super) struct CommittedBatch {
     pub(super) raster_textures: Vec<Texture>,
     pub(super) raster_descriptor_heaps: Vec<ID3D12DescriptorHeap>,
     pub(super) bind_groups: Vec<BindGroup>,
+    /// Query heaps and indirect-argument buffers referenced by native commands.
+    /// D3D12 command lists retain neither COM query heaps nor portable buffer
+    /// owners; these handles therefore live through the batch fence.
+    pub(super) query_sets: Vec<QuerySet>,
+    pub(super) indirect_buffers: Vec<Buffer>,
+    /// `ExecuteIndirect` only borrows its command signature. Retain the COM
+    /// object until the submission fence reports completion.
+    pub(super) command_signatures: Vec<ID3D12CommandSignature>,
 }
 
 /// A readback's staging buffer and the ticket waiting on it.
@@ -182,6 +200,292 @@ pub(super) fn lower_upload(
     leaving.record(list);
 
     committed.staging.push(staging);
+    Ok(())
+}
+
+/// Zeroes a validated buffer range without requiring public `STORAGE` usage.
+///
+/// D3D12 has a UAV clear, but that would turn a copy-destination clear into a
+/// different public resource contract.  A zero-filled upload allocation plus
+/// `CopyBufferRegion` preserves `COPY_DST` semantics and works for every buffer
+/// the portable `ClearBuffer` command admits.
+pub(super) fn lower_buffer_clear(
+    device: &ID3D12Device,
+    list: &ID3D12GraphicsCommandList,
+    buffer: &Buffer,
+    range: crate::api::resource::BufferRange,
+    committed: &mut CommittedBatch,
+) -> Result<(), Dx12Failure> {
+    let destination = dx12_buffer(buffer)?;
+    let host_len = usize::try_from(range.size).map_err(|_| Dx12Failure::Unsupported {
+        what: "a buffer clear too large for this host address space",
+        why: "the zero-upload fallback must materialize every cleared byte before GPU execution",
+    })?;
+    let staging =
+        create_staging(device, range.size, StagingHeap::Upload).map_err(Dx12Failure::Native)?;
+    let mut pointer: *mut core::ffi::c_void = std::ptr::null_mut();
+    unsafe {
+        staging
+            .resource()
+            .Map(0, None, Some(&mut pointer))
+            .map_err(|error| ref_native(&error))?;
+    }
+    let pointer = std::ptr::NonNull::new(pointer.cast::<u8>()).ok_or_else(|| {
+        Dx12Failure::Native(ffi::NativeError::driver_contract_violation(
+            "Map reported success without producing a pointer",
+            "Dx12Device::submit",
+        ))
+    })?;
+    unsafe {
+        std::ptr::write_bytes(pointer.as_ptr(), 0, host_len);
+        staging.resource().Unmap(0, None);
+    }
+    let mut entering = Transitions::default();
+    entering.push(
+        destination.resource(),
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    );
+    entering.record(list);
+    unsafe {
+        list.CopyBufferRegion(
+            destination.resource(),
+            range.offset,
+            staging.resource(),
+            0,
+            range.size,
+        );
+    }
+    let mut leaving = Transitions::default();
+    leaving.push(
+        destination.resource(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_COMMON,
+    );
+    leaving.record(list);
+    committed.staging.push(staging);
+    committed.indirect_buffers.push(buffer.clone());
+    Ok(())
+}
+
+/// Clears complete color subresources by copying an explicitly zeroed upload
+/// footprint into each one.
+///
+/// D3D12 has no format-independent equivalent of WebGPU's texture-clear
+/// command.  A `COPY_DST` upload is nevertheless a real native route, not a
+/// shader fallback: it preserves the public command's zero-value semantics for
+/// every color format with a fixed block layout, including BC/ETC/ASTC. Depth
+/// and stencil use the DSV route below; planar formats are not created by this
+/// backend and therefore cannot reach either path.
+pub(super) fn lower_texture_clear(
+    device: &ID3D12Device,
+    list: &ID3D12GraphicsCommandList,
+    texture: &Texture,
+    range: TextureSubresourceRange,
+    committed: &mut CommittedBatch,
+) -> Result<(), Dx12Failure> {
+    if range.aspects != TextureAspects::COLOR {
+        return lower_depth_stencil_clear(device, list, texture, range, committed);
+    }
+    let destination = dx12_texture(texture)?;
+    let descriptor = texture.descriptor();
+    let mut copies = Vec::new();
+    let mut next_offset = 0_u64;
+    for mip_level in range.base_mip..range.base_mip + range.mip_count {
+        let extent = mip_extent(descriptor.extent, descriptor.dimension, mip_level);
+        let images = if descriptor.dimension == TextureDimension::D3 {
+            1
+        } else {
+            range.layer_count
+        };
+        for layer in 0..images {
+            let layers = TextureSubresourceLayers {
+                aspect: TextureAspect::Color,
+                mip_level,
+                base_layer: range.base_layer,
+                layer_count: range.layer_count,
+            };
+            let subresource = texture_subresource(texture, layers, layer)?;
+            let (footprint, _, _) =
+                region_footprint(device, texture, subresource, extent, next_offset)?;
+            let bytes = u64::from(footprint.Footprint.RowPitch)
+                .checked_mul(u64::from(block_rows(descriptor.format, extent.height)))
+                .and_then(|value| value.checked_mul(u64::from(extent.depth)))
+                .ok_or_else(|| {
+                    Dx12Failure::Native(ffi::NativeError::driver_contract_violation(
+                        "texture clear upload footprint overflowed",
+                        "Dx12Device::submit",
+                    ))
+                })?;
+            next_offset = align_up(
+                next_offset.checked_add(bytes).ok_or_else(|| {
+                    Dx12Failure::Native(ffi::NativeError::driver_contract_violation(
+                        "texture clear staging allocation overflowed",
+                        "Dx12Device::submit",
+                    ))
+                })?,
+                512,
+            )?;
+            copies.push((subresource, footprint));
+        }
+    }
+    let staging =
+        create_staging(device, next_offset, StagingHeap::Upload).map_err(Dx12Failure::Native)?;
+    let mut pointer: *mut core::ffi::c_void = std::ptr::null_mut();
+    unsafe {
+        staging
+            .resource()
+            .Map(0, None, Some(&mut pointer))
+            .map_err(|error| ref_native(&error))?;
+    }
+    let clear_result = (|| {
+        let pointer = std::ptr::NonNull::new(pointer.cast::<u8>()).ok_or_else(|| {
+            Dx12Failure::Native(ffi::NativeError::driver_contract_violation(
+                "Map reported success without producing a pointer",
+                "Dx12Device::submit",
+            ))
+        })?;
+        let length = usize::try_from(next_offset).map_err(|_| Dx12Failure::Unsupported {
+            what: "a texture clear staging allocation too large for this host address space",
+            why: "the native zero-upload route must materialize all cleared texels before execution",
+        })?;
+        unsafe { std::ptr::write_bytes(pointer.as_ptr(), 0, length) };
+        Ok(())
+    })();
+    unsafe { staging.resource().Unmap(0, None) };
+    clear_result?;
+
+    let mut entering = Transitions::default();
+    entering.push(
+        destination.resource(),
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    );
+    entering.record(list);
+    for (subresource, footprint) in copies {
+        let mut source = footprint_location(staging.resource(), footprint);
+        let mut target = texture_location(destination.resource(), subresource);
+        unsafe {
+            list.CopyTextureRegion(&target, 0, 0, 0, &source, None);
+            drop_copy_location(&mut source);
+            drop_copy_location(&mut target);
+        }
+    }
+    let mut leaving = Transitions::default();
+    leaving.push(
+        destination.resource(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_COMMON,
+    );
+    leaving.record(list);
+    committed.staging.push(staging);
+    // A command list only borrows the resource; retain the portable owner to
+    // the completion serial just like attachment textures.
+    committed.raster_textures.push(texture.clone());
+    Ok(())
+}
+
+/// Clears selected depth/stencil subresources through temporary CPU-only DSVs.
+///
+/// A DSV describes one mip/layer, hence every selected array layer receives its
+/// own descriptor. The descriptors and portable texture owner are retained in
+/// `CommittedBatch` through the fence just as raster attachments are.  D3D12's
+/// depth/stencil clear values are explicitly zero here, matching ClearTexture's
+/// backend-defined zero contract rather than a raster pass's caller-supplied
+/// load value.
+fn lower_depth_stencil_clear(
+    device: &ID3D12Device,
+    list: &ID3D12GraphicsCommandList,
+    texture: &Texture,
+    range: TextureSubresourceRange,
+    committed: &mut CommittedBatch,
+) -> Result<(), Dx12Failure> {
+    if range.aspects.contains(TextureAspects::COLOR)
+        || !(range.aspects.contains(TextureAspects::DEPTH)
+            || range.aspects.contains(TextureAspects::STENCIL))
+    {
+        return Err(Dx12Failure::Unsupported {
+            what: "a mixed or non-depth/stencil texture clear",
+            why: "a D3D12 DSV clear selects depth/stencil planes and cannot be combined with a color upload clear",
+        });
+    }
+    let native = dx12_texture(texture)?;
+    let descriptor = texture.descriptor();
+    if descriptor.dimension != TextureDimension::D2 || descriptor.sample_count != 1 {
+        return Err(Dx12Failure::Unsupported {
+            what: "a non-single-sample 2D depth/stencil texture clear",
+            why: "the DX12 ClearTexture DSV route lowers the same 2D DSV shape as raster attachment lowering",
+        });
+    }
+    let format = dxgi_format(descriptor.format).ok_or(Dx12Failure::Unsupported {
+        what: "a depth/stencil clear format without an exact DXGI format",
+        why: "DX12 must create a typed DSV for the texture's declared format",
+    })?;
+    let mut flags = D3D12_CLEAR_FLAGS(0);
+    if range.aspects.contains(TextureAspects::DEPTH) {
+        flags |= D3D12_CLEAR_FLAG_DEPTH;
+    }
+    if range.aspects.contains(TextureAspects::STENCIL) {
+        flags |= D3D12_CLEAR_FLAG_STENCIL;
+    }
+    let mut entering = Transitions::default();
+    entering.push(
+        native.resource(),
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+    );
+    entering.record(list);
+    for mip in range.base_mip..range.base_mip + range.mip_count {
+        for layer in range.base_layer..range.base_layer + range.layer_count {
+            let heap = unsafe {
+                device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&D3D12_DESCRIPTOR_HEAP_DESC {
+                    Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+                    NumDescriptors: 1,
+                    Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+                    NodeMask: 0,
+                })
+            }
+            .map_err(|error| ref_native(&error))?;
+            let handle: D3D12_CPU_DESCRIPTOR_HANDLE =
+                unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
+            let dsv = if descriptor.array_layers > 1 {
+                D3D12_DEPTH_STENCIL_VIEW_DESC {
+                    Format: format,
+                    ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2DARRAY,
+                    Flags: D3D12_DSV_FLAG_NONE,
+                    Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+                        Texture2DArray: D3D12_TEX2D_ARRAY_DSV {
+                            MipSlice: mip,
+                            FirstArraySlice: layer,
+                            ArraySize: 1,
+                        },
+                    },
+                }
+            } else {
+                D3D12_DEPTH_STENCIL_VIEW_DESC {
+                    Format: format,
+                    ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
+                    Flags: D3D12_DSV_FLAG_NONE,
+                    Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+                        Texture2D: D3D12_TEX2D_DSV { MipSlice: mip },
+                    },
+                }
+            };
+            unsafe {
+                device.CreateDepthStencilView(native.resource(), Some(&dsv), handle);
+                list.ClearDepthStencilView(handle, flags, 0.0, 0, None);
+            }
+            committed.raster_descriptor_heaps.push(heap);
+        }
+    }
+    let mut leaving = Transitions::default();
+    leaving.push(
+        native.resource(),
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_COMMON,
+    );
+    leaving.record(list);
+    committed.raster_textures.push(texture.clone());
     Ok(())
 }
 
@@ -288,6 +592,31 @@ fn align_up(value: u64, alignment: u64) -> Result<u64, Dx12Failure> {
         })
 }
 
+/// Number of physical block rows occupied by a logical texel height.
+///
+/// Copy descriptors are expressed in logical texels, while D3D12's placed
+/// footprints are laid out in format blocks.  Keeping this conversion beside
+/// the DX12 footprint lowering prevents a compressed upload/readback from
+/// accidentally treating its 4x4 blocks as sixteen independent rows.
+fn block_rows(format: crate::api::format::TextureFormat, height: u32) -> u32 {
+    let (_, block_height) = block_extent(format);
+    height.div_ceil(block_height)
+}
+
+/// Number of bytes in one physical block row of a logical texel width.
+fn block_row_bytes(
+    format: crate::api::format::TextureFormat,
+    width: u32,
+) -> Result<u64, Dx12Failure> {
+    let (block_width, _) = block_extent(format);
+    let blocks = width.div_ceil(block_width);
+    let bytes = logical_bytes_per_block(format).ok_or(Dx12Failure::Unsupported {
+        what: "a texture transfer with an abstract texel byte size",
+        why: "the portable format has no fixed host byte layout for staging repacking",
+    })?;
+    Ok(u64::from(blocks) * u64::from(bytes))
+}
+
 fn texture_subresource(
     texture: &Texture,
     layers: TextureSubresourceLayers,
@@ -302,6 +631,15 @@ fn texture_subresource(
             return Err(Dx12Failure::Unsupported {
                 what: "a stencil-plane texture transfer",
                 why: "the DX12 lowering currently exposes only plane-zero color/depth copies",
+            });
+        }
+        // Multi-planar formats require per-format DXGI plane arithmetic and
+        // plane-specific footprint validation.  The DX12 fact table keeps their
+        // transfer routes disabled until that entire path is implemented.
+        TextureAspect::Plane0 | TextureAspect::Plane1 | TextureAspect::Plane2 => {
+            return Err(Dx12Failure::Unsupported {
+                what: "a multi-planar texture transfer",
+                why: "DX12 plane-specific transfer lowering is not enabled",
             });
         }
     };
@@ -348,12 +686,7 @@ fn region_footprint(
     placed.Footprint.Width = extent.width;
     placed.Footprint.Height = extent.height;
     placed.Footprint.Depth = extent.depth;
-    let bytes_per_block =
-        logical_bytes_per_block(texture.descriptor().format).ok_or(Dx12Failure::Unsupported {
-            what: "a texture transfer with an abstract texel byte size",
-            why: "the portable format has no fixed host byte layout for staging repacking",
-        })?;
-    let row_bytes = u64::from(extent.width) * u64::from(bytes_per_block);
+    let row_bytes = block_row_bytes(texture.descriptor().format, extent.width)?;
     if row_bytes > u64::from(placed.Footprint.RowPitch) {
         return Err(Dx12Failure::Native(
             ffi::NativeError::driver_contract_violation(
@@ -418,8 +751,9 @@ fn lower_texture_upload(
         0,
     )?;
     let row_pitch = u64::from(first_footprint.Footprint.RowPitch);
+    let block_rows = block_rows(descriptor.dst.descriptor().format, descriptor.extent.height);
     let slice_bytes = row_pitch
-        .checked_mul(u64::from(descriptor.extent.height))
+        .checked_mul(u64::from(block_rows))
         .ok_or_else(|| {
             Dx12Failure::Native(ffi::NativeError::driver_contract_violation(
                 "texture upload footprint overflowed",
@@ -442,7 +776,9 @@ fn lower_texture_upload(
     })?;
     let staging =
         create_staging(device, staging_size, StagingHeap::Upload).map_err(Dx12Failure::Native)?;
-    write_texture_upload(&staging, descriptor, row_pitch, row_bytes, images)?;
+    write_texture_upload(
+        &staging, descriptor, row_pitch, row_bytes, block_rows, images,
+    )?;
 
     let mut entering = Transitions::default();
     entering.push(
@@ -501,6 +837,7 @@ fn write_texture_upload(
     descriptor: &crate::api::resource::transfer::TextureUploadDescriptor,
     destination_row_pitch: u64,
     row_bytes: u64,
+    block_rows: u32,
     images: u32,
 ) -> Result<(), Dx12Failure> {
     let mut pointer: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -525,15 +862,11 @@ fn write_texture_upload(
             let destination_image = if descriptor.dst.descriptor().dimension
                 == crate::api::resource::texture::TextureDimension::D3
             {
-                u64::from(image) * destination_row_pitch * u64::from(descriptor.extent.height)
+                u64::from(image) * destination_row_pitch * u64::from(block_rows)
             } else {
-                u64::from(image)
-                    * align_up(
-                        destination_row_pitch * u64::from(descriptor.extent.height),
-                        512,
-                    )?
+                u64::from(image) * align_up(destination_row_pitch * u64::from(block_rows), 512)?
             };
-            for row in 0..descriptor.extent.height {
+            for row in 0..block_rows {
                 let source_offset = source_image + u64::from(row) * source_row_pitch;
                 let destination_offset = destination_image + u64::from(row) * destination_row_pitch;
                 let source_end = source_offset.checked_add(row_bytes).ok_or_else(|| {
@@ -591,11 +924,12 @@ fn lower_texture_readback(
     let first = texture_subresource(src, *subresource, 0)?;
     let (footprint, _, _) = region_footprint(device, src, first, *extent, 0)?;
     let row_pitch = u64::from(footprint.Footprint.RowPitch);
+    let block_rows = block_rows(src.descriptor().format, extent.height);
     let rows_per_image =
         if src.descriptor().dimension == crate::api::resource::texture::TextureDimension::D3 {
-            extent.height
+            block_rows
         } else {
-            (align_up(row_pitch * u64::from(extent.height), 512)? / row_pitch) as u32
+            (align_up(row_pitch * u64::from(block_rows), 512)? / row_pitch) as u32
         };
     let total_size = row_pitch
         .checked_mul(u64::from(rows_per_image))
@@ -747,6 +1081,22 @@ pub(super) fn lower_buffer_texture_copy(
     let texture = dx12_texture(&copy.texture)?;
     let is_3d =
         copy.texture.descriptor().dimension == crate::api::resource::texture::TextureDimension::D3;
+    let logical_block_rows = block_rows(copy.texture.descriptor().format, copy.extent.height);
+    // A D3D12 placed footprint exposes RowPitch but no independent slice-pitch
+    // field: its slice stride is the physical row count times RowPitch. Array
+    // layers can use separate placed footprints below, but one 3D subresource
+    // cannot directly express extra rows between depth slices. Refuse that
+    // uncommon layout during transactional Phase A instead of silently ignoring
+    // rows_per_image and addressing different bytes than ResourceUse reports.
+    // Upload/readback do not have this restriction because they repack through
+    // private staging; a future GPU-copy staging path can close this case without
+    // changing the public API.
+    if is_3d && copy.rows_per_image != logical_block_rows {
+        return Err(Dx12Failure::Unsupported {
+            what: "a padded 3D buffer-texture image pitch",
+            why: "D3D12 placed footprints have no independent slice pitch; the current direct-copy path requires rows_per_image to equal the copied block-row count",
+        });
+    }
     let images = if is_3d {
         1
     } else {
@@ -760,13 +1110,8 @@ pub(super) fn lower_buffer_texture_copy(
                 "Dx12Device::submit",
             ))
         })?;
-    let bytes_per_block = logical_bytes_per_block(copy.texture.descriptor().format).ok_or(
-        Dx12Failure::Unsupported {
-            what: "a buffer-texture copy with an abstract texel byte size",
-            why: "the DX12 placed-footprint path needs a concrete row byte count",
-        },
-    )?;
-    if u64::from(copy.bytes_per_row) < u64::from(copy.extent.width) * u64::from(bytes_per_block) {
+    let minimum_row_bytes = block_row_bytes(copy.texture.descriptor().format, copy.extent.width)?;
+    if u64::from(copy.bytes_per_row) < minimum_row_bytes {
         return Err(Dx12Failure::Native(
             ffi::NativeError::driver_contract_violation(
                 "portable copy validation accepted a row pitch smaller than its texel row",
@@ -871,4 +1216,23 @@ pub(super) fn lower_buffer_texture_copy(
     );
     leaving.record(list);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{block_row_bytes, block_rows};
+    use crate::api::format::TextureFormat;
+
+    #[test]
+    fn compressed_footprints_count_blocks_not_texels() {
+        assert_eq!(block_rows(TextureFormat::Bc1RgbaUnorm, 5), 2);
+        assert_eq!(
+            block_row_bytes(TextureFormat::Bc1RgbaUnorm, 5).ok(),
+            Some(16)
+        );
+        assert_eq!(
+            block_row_bytes(TextureFormat::Bc7RgbaUnorm, 4).ok(),
+            Some(16)
+        );
+    }
 }

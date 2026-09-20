@@ -25,6 +25,7 @@ use crate::backend::vulkan::binding::layout_bindings;
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::ffi;
 use crate::backend::vulkan::format::vk_format;
+use crate::backend::vulkan::pipeline::cache::native_cache;
 use crate::backend::vulkan::platform::device::VulkanShared;
 use crate::backend::vulkan::shader::VulkanShaderModule;
 
@@ -107,7 +108,10 @@ pub(in crate::backend::vulkan) fn create_raster_pipeline(
         .transpose()?;
 
     let mut set_layouts = create_set_layouts(&shared, descriptor)?;
-    let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+    let push_ranges = push_constant_ranges(descriptor.interface.descriptor())?;
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&set_layouts)
+        .push_constant_ranges(&push_ranges);
     let layout = match unsafe { shared.device.create_pipeline_layout(&layout_info, None) } {
         Ok(layout) => layout,
         Err(result) => {
@@ -273,7 +277,7 @@ fn create_graphics_pipeline(
         .viewport_count(1)
         .scissor_count(1);
     let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
+        .polygon_mode(polygon_mode(descriptor.primitive.polygon_mode))
         .cull_mode(cull_mode(descriptor.primitive.cull_mode))
         .front_face(front_face(descriptor.primitive.front_face))
         .depth_bias_enable(descriptor.primitive.depth_bias.is_some())
@@ -289,6 +293,13 @@ fn create_graphics_pipeline(
                 .depth_bias
                 .map_or(0.0, |bias| bias.slope_scale),
         )
+        .depth_bias_clamp(
+            descriptor
+                .primitive
+                .depth_bias
+                .map_or(0.0, |bias| bias.clamp),
+        )
+        .depth_clamp_enable(descriptor.primitive.unclipped_depth)
         .line_width(1.0);
     let multisample = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(samples(descriptor.multisample.count)?)
@@ -324,7 +335,7 @@ fn create_graphics_pipeline(
         .subpass(0);
     let mut pipelines = match unsafe {
         shared.device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+            native_cache(descriptor.cache.as_ref())?,
             std::slice::from_ref(&create),
             None,
         )
@@ -515,6 +526,31 @@ fn entry_point(
     })
 }
 
+fn push_constant_ranges(
+    interface: &crate::api::pipeline::PipelineInterfaceDescriptor,
+) -> Result<Vec<vk::PushConstantRange>, VulkanFailure> {
+    interface
+        .immediate_ranges
+        .iter()
+        .map(|range| {
+            let mut stages = vk::ShaderStageFlags::empty();
+            if range.visibility.contains(crate::api::shader::ShaderStages::VERTEX) {
+                stages |= vk::ShaderStageFlags::VERTEX;
+            }
+            if range.visibility.contains(crate::api::shader::ShaderStages::FRAGMENT) {
+                stages |= vk::ShaderStageFlags::FRAGMENT;
+            }
+            if stages.is_empty() {
+                return Err(VulkanFailure::Unsupported {
+                    what: "a raster immediate range with unsupported stage visibility",
+                    why: "this Vulkan raster pipeline only lowers vertex and fragment push constants",
+                });
+            }
+            Ok(vk::PushConstantRange { stage_flags: stages, offset: range.offset, size: range.size })
+        })
+        .collect()
+}
+
 fn texture_format(format: TextureFormat) -> Result<vk::Format, VulkanFailure> {
     vk_format(format).ok_or(VulkanFailure::Unsupported {
         what: "a raster attachment format without a Vulkan mapping",
@@ -537,6 +573,13 @@ fn samples(count: u32) -> Result<vk::SampleCountFlags, VulkanFailure> {
 
 fn vertex_format(format: VertexFormat) -> vk::Format {
     match format {
+        VertexFormat::Uint8 => vk::Format::R8_UINT,
+        VertexFormat::Uint8x2 => vk::Format::R8G8_UINT,
+        VertexFormat::Uint8x4 => vk::Format::R8G8B8A8_UINT,
+        VertexFormat::Sint8 => vk::Format::R8_SINT,
+        VertexFormat::Sint8x2 => vk::Format::R8G8_SINT,
+        VertexFormat::Sint8x4 => vk::Format::R8G8B8A8_SINT,
+        VertexFormat::Unorm8 => vk::Format::R8_UNORM,
         VertexFormat::Float32 => vk::Format::R32_SFLOAT,
         VertexFormat::Float32x2 => vk::Format::R32G32_SFLOAT,
         VertexFormat::Float32x3 => vk::Format::R32G32B32_SFLOAT,
@@ -551,6 +594,38 @@ fn vertex_format(format: VertexFormat) -> vk::Format {
         VertexFormat::Sint32x4 => vk::Format::R32G32B32A32_SINT,
         VertexFormat::Unorm8x2 => vk::Format::R8G8_UNORM,
         VertexFormat::Unorm8x4 => vk::Format::R8G8B8A8_UNORM,
+        VertexFormat::Unorm8x4Bgra => vk::Format::B8G8R8A8_UNORM,
+        VertexFormat::Snorm8 => vk::Format::R8_SNORM,
+        VertexFormat::Snorm8x2 => vk::Format::R8G8_SNORM,
+        VertexFormat::Snorm8x4 => vk::Format::R8G8B8A8_SNORM,
+        VertexFormat::Uint16 => vk::Format::R16_UINT,
+        VertexFormat::Uint16x2 => vk::Format::R16G16_UINT,
+        VertexFormat::Uint16x4 => vk::Format::R16G16B16A16_UINT,
+        VertexFormat::Sint16 => vk::Format::R16_SINT,
+        VertexFormat::Sint16x2 => vk::Format::R16G16_SINT,
+        VertexFormat::Sint16x4 => vk::Format::R16G16B16A16_SINT,
+        VertexFormat::Unorm16 => vk::Format::R16_UNORM,
+        VertexFormat::Unorm16x2 => vk::Format::R16G16_UNORM,
+        VertexFormat::Unorm16x4 => vk::Format::R16G16B16A16_UNORM,
+        VertexFormat::Snorm16 => vk::Format::R16_SNORM,
+        VertexFormat::Snorm16x2 => vk::Format::R16G16_SNORM,
+        VertexFormat::Snorm16x4 => vk::Format::R16G16B16A16_SNORM,
+        VertexFormat::Float16 => vk::Format::R16_SFLOAT,
+        VertexFormat::Float16x2 => vk::Format::R16G16_SFLOAT,
+        VertexFormat::Float16x4 => vk::Format::R16G16B16A16_SFLOAT,
+        VertexFormat::Float64 => vk::Format::R64_SFLOAT,
+        VertexFormat::Float64x2 => vk::Format::R64G64_SFLOAT,
+        VertexFormat::Float64x3 => vk::Format::R64G64B64_SFLOAT,
+        VertexFormat::Float64x4 => vk::Format::R64G64B64A64_SFLOAT,
+        VertexFormat::Unorm10_10_10_2 => vk::Format::A2B10G10R10_UNORM_PACK32,
+    }
+}
+
+fn polygon_mode(mode: crate::api::pipeline::PolygonMode) -> vk::PolygonMode {
+    match mode {
+        crate::api::pipeline::PolygonMode::Fill => vk::PolygonMode::FILL,
+        crate::api::pipeline::PolygonMode::Line => vk::PolygonMode::LINE,
+        crate::api::pipeline::PolygonMode::Point => vk::PolygonMode::POINT,
     }
 }
 
@@ -604,6 +679,10 @@ fn blend_factor(factor: BlendFactor) -> vk::BlendFactor {
         BlendFactor::OneMinusSrc => vk::BlendFactor::ONE_MINUS_SRC_COLOR,
         BlendFactor::SrcAlpha => vk::BlendFactor::SRC_ALPHA,
         BlendFactor::OneMinusSrcAlpha => vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+        BlendFactor::Src1 => vk::BlendFactor::SRC1_COLOR,
+        BlendFactor::OneMinusSrc1 => vk::BlendFactor::ONE_MINUS_SRC1_COLOR,
+        BlendFactor::Src1Alpha => vk::BlendFactor::SRC1_ALPHA,
+        BlendFactor::OneMinusSrc1Alpha => vk::BlendFactor::ONE_MINUS_SRC1_ALPHA,
         BlendFactor::Dst => vk::BlendFactor::DST_COLOR,
         BlendFactor::OneMinusDst => vk::BlendFactor::ONE_MINUS_DST_COLOR,
         BlendFactor::DstAlpha => vk::BlendFactor::DST_ALPHA,

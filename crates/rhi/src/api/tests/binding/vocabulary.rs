@@ -34,3 +34,15 @@ fn a_binding_count_is_one_or_a_fixed_array_of_at_least_two() {
     let legal = layout_from(vec![uniform_slot(0, 64).with_count(BindingCount::Fixed(2))]);
     assert!(validate_bind_group_layout_descriptor(legal.descriptor(), 8, permissive).is_ok());
 }
+
+#[test]
+fn runtime_sized_arrays_are_a_distinct_count_spelling() {
+    // The count deliberately does not invent a compile-time cardinality: the
+    // actual packet length is validated when the packet is created and its
+    // descriptor-indexing capability is a distinct fail-closed fact.
+    assert_eq!(BindingCount::RuntimeSized.elements(), 0);
+    let layout = layout_from(vec![
+        uniform_slot(0, 64).with_count(BindingCount::RuntimeSized),
+    ]);
+    assert!(validate_bind_group_layout_descriptor(layout.descriptor(), 8, permissive).is_ok());
+}

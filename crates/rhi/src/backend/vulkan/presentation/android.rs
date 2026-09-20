@@ -21,10 +21,12 @@ use crate::api::presentation::backend::{
     PresentationBackend,
 };
 use crate::api::presentation::{
-    AcquireError, AcquireErrorKind, AcquiredFrameId, Extent2d, PresentMode, PresentReceiptId,
-    PresentState, PresentationConfiguration, PresentationExtent, PresentationExtentControl,
-    PresentationTarget, PresentationTargetCapabilities,
+    AcquireError, AcquireErrorKind, AcquiredFrameId, CompositeAlphaMode, Extent2d,
+    FrameLatencyRange, PresentMode, PresentReceiptId, PresentState, PresentationColorSpace,
+    PresentationConfiguration, PresentationExtent, PresentationExtentControl, PresentationFormat,
+    PresentationTarget, PresentationTargetCapabilities, PresentationTimingCapabilities,
 };
+use crate::api::resource::TextureUsage;
 use crate::backend::vulkan::platform::device::VulkanShared;
 
 #[link(name = "android")]
@@ -713,7 +715,7 @@ impl ConfiguredPresentationBackend for VulkanConfiguredPresentation {
                 vk::Fence::null(),
             )
         } {
-            Ok((index, _suboptimal)) => {
+            Ok((index, suboptimal)) => {
                 current.reclaim_image_semaphores(&self.shared, index);
                 let serial = self.serial.fetch_add(1, Ordering::Relaxed);
                 let return_state = Arc::new(AtomicU8::new(0));
@@ -725,6 +727,7 @@ impl ConfiguredPresentationBackend for VulkanConfiguredPresentation {
                 });
                 Ok(Some(AcquiredSurfaceFrame {
                     serial,
+                    suboptimal,
                     extent: Extent2d {
                         width: current.extent.width,
                         height: current.extent.height,
@@ -963,12 +966,13 @@ fn create_swapchain_with_old(
         surface.get_physical_device_surface_formats(shared.physical_device, target.surface)
     }
     .map_err(|r| native_error(r, "vkGetPhysicalDeviceSurfaceFormatsKHR"))?;
-    let format = choose_format(&formats, config.format()).ok_or_else(|| {
-        RhiError::new(
-            RhiErrorKind::Unsupported,
-            "requested presentation format is not offered by this Vulkan surface",
-        )
-    })?;
+    let format =
+        choose_format(&formats, config.format(), config.color_space()).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::Unsupported,
+                "requested presentation format is not offered by this Vulkan surface",
+            )
+        })?;
     let extent = choose_extent(caps, config.extent())?;
     let mode = choose_mode(
         unsafe {
@@ -978,14 +982,7 @@ fn create_swapchain_with_old(
         .map_err(|r| native_error(r, "vkGetPhysicalDeviceSurfacePresentModesKHR"))?,
         config.present_mode(),
     )?;
-    let count = caps
-        .min_image_count
-        .saturating_add(1)
-        .min(if caps.max_image_count == 0 {
-            u32::MAX
-        } else {
-            caps.max_image_count
-        });
+    let count = config.maximum_frame_latency();
     let info = vk::SwapchainCreateInfoKHR::default()
         .surface(target.surface)
         .min_image_count(count)
@@ -996,7 +993,10 @@ fn create_swapchain_with_old(
         .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
         .pre_transform(caps.current_transform)
-        .composite_alpha(choose_composite_alpha(caps.supported_composite_alpha)?)
+        .composite_alpha(choose_composite_alpha(
+            caps.supported_composite_alpha,
+            config.composite_alpha_mode(),
+        )?)
         .present_mode(mode)
         .clipped(true)
         .old_swapchain(old);
@@ -1041,17 +1041,30 @@ fn surface_capabilities(
         .map_err(|r| native_error(r, "vkGetPhysicalDeviceSurfacePresentModesKHR"))?;
     let caps = unsafe { loader.get_physical_device_surface_capabilities(physical, surface) }
         .map_err(|r| native_error(r, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"))?;
-    let formats = if formats.len() == 1 && formats[0].format == vk::Format::UNDEFINED {
-        vec![
+    let pairs = if formats.len() == 1 && formats[0].format == vk::Format::UNDEFINED {
+        [
             TextureFormat::Bgra8Unorm,
             TextureFormat::Bgra8UnormSrgb,
             TextureFormat::Rgba8Unorm,
             TextureFormat::Rgba8UnormSrgb,
         ]
+        .into_iter()
+        .filter_map(|format| {
+            portable_color_space(formats[0].color_space).map(|color_space| PresentationFormat {
+                format,
+                color_space,
+            })
+        })
+        .collect()
     } else {
         formats
             .into_iter()
-            .filter_map(|f| portable_format(f.format))
+            .filter_map(|f| {
+                Some(PresentationFormat {
+                    format: portable_format(f.format)?,
+                    color_space: portable_color_space(f.color_space)?,
+                })
+            })
             .collect()
     };
     let modes = modes.into_iter().filter_map(portable_mode).collect();
@@ -1074,42 +1087,111 @@ fn surface_capabilities(
             }),
         }
     };
-    Ok(PresentationTargetCapabilities::new(formats, modes, extent))
+    let max_latency = if caps.max_image_count == 0 {
+        u32::MAX
+    } else {
+        caps.max_image_count
+    };
+    Ok(
+        PresentationTargetCapabilities::new(Vec::new(), modes, extent)
+            .with_format_color_spaces(pairs)
+            .with_surface_details(
+                TextureUsage::COLOR_ATTACHMENT,
+                composite_alpha_modes(caps.supported_composite_alpha),
+                Some(FrameLatencyRange {
+                    min: caps.min_image_count,
+                    max: max_latency,
+                }),
+                Vec::new(),
+            )
+            .with_timing_and_hdr(PresentationTimingCapabilities { timestamps: false }, None),
+    )
 }
 
 fn choose_format(
     formats: &[vk::SurfaceFormatKHR],
     wanted: TextureFormat,
+    color_space: PresentationColorSpace,
 ) -> Option<vk::SurfaceFormatKHR> {
     if formats.len() == 1 && formats[0].format == vk::Format::UNDEFINED {
-        return native_format(wanted).map(|format| vk::SurfaceFormatKHR {
-            format,
-            color_space: formats[0].color_space,
-        });
+        return (portable_color_space(formats[0].color_space) == Some(color_space))
+            .then(|| native_format(wanted))
+            .flatten()
+            .map(|format| vk::SurfaceFormatKHR {
+                format,
+                color_space: formats[0].color_space,
+            });
     }
-    formats
-        .iter()
-        .copied()
-        .find(|value| portable_format(value.format) == Some(wanted))
+    formats.iter().copied().find(|value| {
+        portable_format(value.format) == Some(wanted)
+            && portable_color_space(value.color_space) == Some(color_space)
+    })
 }
 
 fn choose_composite_alpha(
     supported: vk::CompositeAlphaFlagsKHR,
+    requested: CompositeAlphaMode,
 ) -> RhiResult<vk::CompositeAlphaFlagsKHR> {
-    [
+    let modes = [
         vk::CompositeAlphaFlagsKHR::OPAQUE,
         vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
         vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED,
         vk::CompositeAlphaFlagsKHR::INHERIT,
-    ]
-    .into_iter()
-    .find(|mode| supported.contains(*mode))
-    .ok_or_else(|| {
-        RhiError::new(
-            RhiErrorKind::Unsupported,
-            "the Vulkan surface exposes no supported composite-alpha mode",
-        )
-    })
+    ];
+    let requested = match requested {
+        CompositeAlphaMode::Automatic => modes.into_iter().find(|mode| supported.contains(*mode)),
+        CompositeAlphaMode::Opaque => Some(vk::CompositeAlphaFlagsKHR::OPAQUE),
+        CompositeAlphaMode::PreMultiplied => Some(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED),
+        CompositeAlphaMode::PostMultiplied => Some(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED),
+        CompositeAlphaMode::Inherit => Some(vk::CompositeAlphaFlagsKHR::INHERIT),
+    };
+    requested
+        .filter(|mode| supported.contains(*mode))
+        .ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::Unsupported,
+                "the Vulkan surface exposes no supported composite-alpha mode",
+            )
+        })
+}
+
+fn composite_alpha_modes(supported: vk::CompositeAlphaFlagsKHR) -> Vec<CompositeAlphaMode> {
+    let mut modes = vec![CompositeAlphaMode::Automatic];
+    for (native, portable) in [
+        (
+            vk::CompositeAlphaFlagsKHR::OPAQUE,
+            CompositeAlphaMode::Opaque,
+        ),
+        (
+            vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+            CompositeAlphaMode::PreMultiplied,
+        ),
+        (
+            vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED,
+            CompositeAlphaMode::PostMultiplied,
+        ),
+        (
+            vk::CompositeAlphaFlagsKHR::INHERIT,
+            CompositeAlphaMode::Inherit,
+        ),
+    ] {
+        if supported.contains(native) {
+            modes.push(portable);
+        }
+    }
+    modes
+}
+
+fn portable_color_space(color_space: vk::ColorSpaceKHR) -> Option<PresentationColorSpace> {
+    match color_space {
+        vk::ColorSpaceKHR::SRGB_NONLINEAR => Some(PresentationColorSpace::Srgb),
+        vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT => Some(PresentationColorSpace::DisplayP3),
+        vk::ColorSpaceKHR::EXTENDED_SRGB_NONLINEAR_EXT => {
+            Some(PresentationColorSpace::ExtendedSrgb)
+        }
+        vk::ColorSpaceKHR::HDR10_ST2084_EXT => Some(PresentationColorSpace::Hdr10),
+        _ => None,
+    }
 }
 
 fn native_format(format: TextureFormat) -> Option<vk::Format> {

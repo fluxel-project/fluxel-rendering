@@ -25,8 +25,10 @@
 //!   this chapter that report nothing are the ones that make "this device cannot"
 //!   observable as [`RhiErrorKind::Unsupported`].
 
+mod advanced;
 mod attachment;
 mod copy;
+mod query;
 mod raster;
 mod recorder;
 mod transfer;
@@ -177,10 +179,18 @@ fn facts_with_buffer_copy_route(offset: u64, size: u64) -> CapabilityFacts {
 
 /// Facts in which the buffer/texture route exists with a texel-copy alignment.
 fn facts_with_texel_copy_route(buffer_offset: u64, bytes_per_row: u32) -> CapabilityFacts {
+    facts_with_texel_copy_route_for(TextureFormat::Rgba8Unorm, buffer_offset, bytes_per_row)
+}
+
+fn facts_with_texel_copy_route_for(
+    format: TextureFormat,
+    buffer_offset: u64,
+    bytes_per_row: u32,
+) -> CapabilityFacts {
     let mut facts = CapabilityFacts::empty();
     let shape = crate::api::resource::route::RouteQuery::BufferToTexture {
         dimension: crate::api::resource::texture::TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm,
+        format,
         aspect: crate::api::resource::subresource::TextureAspect::Color,
     };
     facts.record_route(
@@ -292,8 +302,9 @@ fn copy_dst_texture(format: TextureFormat) -> Texture {
 ///
 /// One row of the region is 4 texels of 4 bytes, so `bytes_per_row` is stated
 /// generously and the *alignment* of that number is what the device checks. The
-/// footprint is `bytes_per_row * rows_per_image`, which is why the buffer is
-/// sized for the generous pitch rather than for the tight one.
+/// footprint reaches the start of the last row plus its 16 logical bytes. The
+/// helper keeps a generously sized buffer because most tests here exercise the
+/// route's pitch alignment rather than the exact final-row boundary.
 fn buffer_texture_copy(bytes_per_row: u32, buffer_size: u64) -> BufferTextureCopy {
     BufferTextureCopy {
         buffer: buffer_with(BufferUsage::COPY_SRC, buffer_size),
@@ -334,6 +345,29 @@ fn color_view_of(texture: &Texture) -> TextureView {
     )
 }
 
+/// A 4x4x4 renderable volume and its whole-volume view, for attachment-slice
+/// validation. Keeping it a fixture makes the slice tests exercise exactly the
+/// same object ownership path as normal attachments.
+fn volume_color_view() -> TextureView {
+    let texture = Texture::new(
+        object(24),
+        device(),
+        TextureDescriptor::new_3d(
+            4,
+            4,
+            4,
+            TextureFormat::Rgba8Unorm,
+            TextureUsage::COLOR_ATTACHMENT,
+        ),
+    );
+    TextureView::new(
+        object(25),
+        device(),
+        texture,
+        TextureViewDescriptor::new(TextureViewDimension::D3, TextureAspects::COLOR, 0, 1, 0, 1),
+    )
+}
+
 /// A one-attachment scope: location 0, cleared to opaque black, stored.
 fn color_scope(label: &str) -> RasterScopeDescriptor {
     RasterScopeDescriptor::new().with_label(label).with_color(
@@ -346,6 +380,7 @@ fn color_scope(label: &str) -> RasterScopeDescriptor {
                 0.0, 0.0, 0.0, 1.0,
             ])),
             store: StoreOp::Store,
+            depth_slice: None,
             resolve: None,
         },
     )

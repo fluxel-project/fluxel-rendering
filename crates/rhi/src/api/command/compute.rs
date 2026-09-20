@@ -26,15 +26,18 @@
 //! section 4 forbids.
 
 use crate::api::binding::{BindGroup, BindGroupIndex};
-use crate::api::command::record::{BoundGroup, ComputeBegin, ComputeDispatch, RecordedPayload};
+use crate::api::command::record::{
+    BoundGroup, ComputeBegin, ComputeDispatch, ComputeIndirect, ImmediateWrite, RecordedPayload,
+};
 use crate::api::command::uses::{
     bound_group_uses, require_valid_dynamic_offsets, validate_bound_groups,
 };
 use crate::api::command::{CommandRecorder, RecorderPhase, ResourceUse, require_device};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::identity::Label;
+use crate::api::identity::{Label, ObjectId};
 use crate::api::pipeline::ComputePipeline;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
+use crate::api::query::{QuerySet, QueryType, validate_query};
 
 /// The domain bit every compute command contributes.
 const COMPUTE_DOMAIN: crate::api::submission::LaneWorkDomains =
@@ -129,6 +132,8 @@ impl CommandRecorder {
             recorder: self,
             pipeline: None,
             groups: Vec::new(),
+            immediates: Vec::new(),
+            active_query: None,
             debug_stack: Vec::new(),
             ended: false,
         })
@@ -150,13 +155,226 @@ pub struct ComputeScope<'a> {
     pipeline: Option<ComputePipeline>,
     /// The bound bind groups, by index.
     groups: Vec<BoundGroup>,
+    /// Immediate bytes current for the bound pipeline interface.
+    immediates: Vec<ImmediateWrite>,
+    /// The single pipeline-statistics query currently bracketed by this scope.
+    /// Native query scopes cannot be nested, so the portable recorder rejects a
+    /// second begin instead of making backend lowering choose a recovery rule.
+    active_query: Option<ActiveQuery>,
     /// This scope's own debug-group stack, independent of the recorder's.
     debug_stack: Vec<String>,
     /// Whether `end` completed, which is what decides whether `Drop` poisons.
     ended: bool,
 }
 
+/// Identity of the query bracket currently open in one compute scope.
+#[derive(Clone, Copy)]
+struct ActiveQuery {
+    set: ObjectId,
+    index: u32,
+}
+
 impl ComputeScope<'_> {
+    /// Writes immediate bytes declared by the currently bound compute interface.
+    pub fn set_immediates(&mut self, offset: u32, bytes: &[u8]) -> RhiResult<()> {
+        let pipeline = self.pipeline.as_ref().ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "immediate data needs a bound compute pipeline",
+            )
+            .at("ComputeScope::set_immediates")
+        })?;
+        let write = crate::api::command::advanced::immediate_write(
+            self.recorder,
+            pipeline.interface(),
+            offset,
+            bytes,
+            "ComputeScope::set_immediates",
+        )?;
+        self.immediates.retain(|existing| existing.offset != offset);
+        self.immediates.push(write);
+        Ok(())
+    }
+    /// Dispatches with workgroup counts read from an indirect-argument buffer.
+    pub fn dispatch_indirect(
+        &mut self,
+        arguments: &crate::api::resource::Buffer,
+        offset: u64,
+    ) -> RhiResult<()> {
+        if !self
+            .recorder
+            .capabilities()
+            .supports_feature(OptionalFeature::IndirectDispatch)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device did not enable indirect dispatch",
+            )
+            .at("ComputeScope::dispatch_indirect"));
+        }
+        require_device(
+            arguments.device_identity(),
+            self.recorder.device_identity(),
+            "the indirect argument buffer",
+        )?;
+        if !arguments
+            .descriptor()
+            .usage
+            .contains(crate::api::resource::BufferUsage::INDIRECT)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "indirect dispatch arguments require INDIRECT usage",
+            )
+            .at("ComputeScope::dispatch_indirect"));
+        }
+        if offset % 4 != 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "indirect dispatch offset must be four-byte aligned",
+            )
+            .at("ComputeScope::dispatch_indirect"));
+        }
+        crate::api::resource::buffer::validate_buffer_range(
+            crate::api::resource::BufferRange::new(offset, 12),
+            arguments.descriptor().size,
+        )?;
+        let pipeline = self.bound_pipeline()?;
+        validate_bound_groups(pipeline.interface(), &self.groups)?;
+        let mut uses = self.dispatch_uses()?;
+        uses.push(ResourceUse::Buffer(crate::api::command::BufferUse {
+            buffer: arguments.clone(),
+            range: crate::api::resource::BufferRange::new(offset, 12),
+            stages: crate::api::command::PipelineScope::COMPUTE,
+            access: crate::api::command::AccessMask::INDIRECT_READ,
+        }));
+        self.recorder.record_command(
+            RecordedPayload::ComputeIndirect(Box::new(ComputeIndirect {
+                pipeline,
+                groups: self.groups.clone(),
+                arguments: arguments.clone(),
+                arguments_offset: offset,
+            })),
+            uses,
+            COMPUTE_DOMAIN,
+        );
+        Ok(())
+    }
+    /// Begins a pipeline-statistics query in this compute scope.
+    pub fn begin_query(&mut self, set: &QuerySet, index: u32) -> RhiResult<()> {
+        if !matches!(set.descriptor().ty, QueryType::PipelineStatistics(_)) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "compute begin_query requires PipelineStatistics query type",
+            )
+            .at("ComputeScope::begin_query"));
+        }
+        validate_query(
+            set,
+            index,
+            self.recorder.device_identity(),
+            "ComputeScope::begin_query",
+        )?;
+        if self.active_query.is_some() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a compute scope may have only one active query; query scopes cannot nest or repeat",
+            )
+            .at("ComputeScope::begin_query"));
+        }
+        self.recorder.record_command(
+            RecordedPayload::QueryBegin {
+                set: set.clone(),
+                index,
+            },
+            Vec::new(),
+            COMPUTE_DOMAIN,
+        );
+        self.active_query = Some(ActiveQuery {
+            set: set.id(),
+            index,
+        });
+        Ok(())
+    }
+    /// Ends a pipeline-statistics query in this compute scope.
+    pub fn end_query(&mut self, set: &QuerySet, index: u32) -> RhiResult<()> {
+        if !matches!(set.descriptor().ty, QueryType::PipelineStatistics(_)) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "compute end_query requires PipelineStatistics query type",
+            )
+            .at("ComputeScope::end_query"));
+        }
+        validate_query(
+            set,
+            index,
+            self.recorder.device_identity(),
+            "ComputeScope::end_query",
+        )?;
+        match self.active_query {
+            None => {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "cannot end a compute query before begin_query",
+                )
+                .at("ComputeScope::end_query"));
+            }
+            Some(active) if active.set != set.id() || active.index != index => {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "end_query must name the query set and index opened by begin_query",
+                )
+                .at("ComputeScope::end_query"));
+            }
+            Some(_) => {}
+        }
+        self.recorder.record_command(
+            RecordedPayload::QueryEnd {
+                set: set.clone(),
+                index,
+            },
+            Vec::new(),
+            COMPUTE_DOMAIN,
+        );
+        self.active_query = None;
+        Ok(())
+    }
+    /// Writes a timestamp in this compute scope.
+    pub fn write_timestamp(&mut self, set: &QuerySet, index: u32) -> RhiResult<()> {
+        if !self.recorder.capabilities().supports_feature(
+            crate::api::platform::requirements::OptionalFeature::TimestampInsideComputeScope,
+        ) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not support timestamps in compute scopes",
+            )
+            .at("ComputeScope::write_timestamp"));
+        }
+        if set.descriptor().ty != QueryType::Timestamp {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "write_timestamp requires a Timestamp query set",
+            )
+            .at("ComputeScope::write_timestamp"));
+        }
+        validate_query(
+            set,
+            index,
+            self.recorder.device_identity(),
+            "ComputeScope::write_timestamp",
+        )?;
+        self.recorder
+            .mark_query_written(set, index, "ComputeScope::begin_query")?;
+        self.recorder.record_command(
+            RecordedPayload::TimestampWrite {
+                set: set.clone(),
+                index,
+            },
+            Vec::new(),
+            COMPUTE_DOMAIN,
+        );
+        Ok(())
+    }
     /// Binds a compute pipeline.
     ///
     /// Only the device check, because a compute scope has no attachment set for a
@@ -169,6 +387,7 @@ impl ComputeScope<'_> {
             "the pipeline",
         )?;
         self.pipeline = Some(pipeline.clone());
+        self.immediates.clear();
         Ok(())
     }
 
@@ -261,6 +480,7 @@ impl ComputeScope<'_> {
             pipeline,
             groups: self.groups.clone(),
             workgroups: (x, y, z),
+            immediates: self.immediates.clone(),
         };
         self.recorder.record_command(
             RecordedPayload::ComputeDispatch(Box::new(dispatch)),
@@ -328,6 +548,12 @@ impl ComputeScope<'_> {
                 ),
             ));
         }
+        if self.active_query.is_some() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "this compute scope still has an active query at end(); call end_query first",
+            ));
+        }
 
         self.recorder
             .record_command(RecordedPayload::ComputeEnd, Vec::new(), COMPUTE_DOMAIN);
@@ -373,8 +599,11 @@ impl Drop for ComputeScope<'_> {
     /// is the only thing this may do.
     fn drop(&mut self) {
         if !self.ended {
-            self.recorder
-                .poison("a compute scope was dropped without a successful end()");
+            self.recorder.poison(if self.active_query.is_some() {
+                "a compute scope was dropped with an active query"
+            } else {
+                "a compute scope was dropped without a successful end()"
+            });
         }
     }
 }

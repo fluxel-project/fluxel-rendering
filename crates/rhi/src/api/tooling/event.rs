@@ -165,6 +165,8 @@ pub enum SemanticEvent<'a> {
         configuration: &'a PresentationConfiguration,
         /// The frame's extent.
         extent: Extent3d,
+        /// Whether the surface recommends reconfiguration after this acquire.
+        suboptimal: bool,
     },
 
     /// A presentation's state changed.

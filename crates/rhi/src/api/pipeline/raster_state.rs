@@ -2,9 +2,10 @@
 //!
 //! Primitive, blend, depth/stencil and multisample state as data: what a caller
 //! states, with constructors that make the common legal state cheap to write. The
-//! chapter's deliberate exclusions — polygon mode, depth clip control, depth
-//! bounds, conservative raster, programmable sample positions, VRS — are absences
-//! in these types rather than reserved placeholders.
+//! chapter keeps depth bounds, programmable sample positions, and VRS absent
+//! rather than reserving placeholders. Polygon mode, depth clip control, and
+//! conservative rasterization are present and capability-gated at pipeline
+//! creation.
 //!
 //! Not owned here: every rule that compares this state against a device, a target
 //! signature or a shader. Those live with the pipeline, in `raster.rs`, because
@@ -70,12 +71,23 @@ pub enum CullMode {
     Back,
 }
 
+/// How rasterization covers a primitive.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolygonMode {
+    /// Fill the primitive interior.
+    Fill,
+    /// Rasterize polygon edges.
+    Line,
+    /// Rasterize polygon vertices.
+    Point,
+}
+
 /// A portable depth bias.
 ///
-/// P0 carries constant and slope only. Section 25.1 defers the clamp and the
-/// line/point bias forms to later capability families rather than reserving fields
-/// for them, because a reserved field is an interface a caller can set and a
-/// backend must then decide what to do about.
+/// Constant and slope are portable baseline fields. A non-zero clamp is an
+/// explicit `DepthBiasClamp` capability request; line/point-specific bias forms
+/// remain absent because the RHI has no portable lowering contract for them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DepthBiasState {
@@ -83,6 +95,8 @@ pub struct DepthBiasState {
     pub constant: i32,
     /// Offset scaled by the primitive's depth slope.
     pub slope_scale: f32,
+    /// Maximum absolute depth-bias contribution. Zero is the portable baseline.
+    pub clamp: f32,
 }
 
 impl DepthBiasState {
@@ -91,14 +105,21 @@ impl DepthBiasState {
         Self {
             constant,
             slope_scale,
+            clamp: 0.0,
         }
+    }
+
+    /// Sets a finite depth-bias clamp.
+    pub fn with_clamp(mut self, clamp: f32) -> Self {
+        self.clamp = clamp;
+        self
     }
 }
 
 /// The primitive assembly and rasterization state.
 ///
-/// `SlopeScaledDepthBias`'s `slope_scale` must be finite and P0 admits bias only
-/// for triangle topology, both of which section 27.3's strip-topology block
+/// `DepthBiasState::slope_scale` must be finite and the portable contract admits
+/// bias only for triangle topology, both of which section 27.3's strip-topology block
 /// checks; neither is decided here, because a state value carries no other value
 /// to compare against.
 #[non_exhaustive]
@@ -111,7 +132,14 @@ pub struct PrimitiveState {
     /// Which faces are discarded.
     pub cull_mode: CullMode,
 
-    /// P0 portable depth bias: constant + slope; clamp is deferred.
+    /// Polygon coverage mode.
+    pub polygon_mode: PolygonMode,
+    /// When true, primitives are not clipped against the depth range.
+    pub unclipped_depth: bool,
+    /// When true, rasterization conservatively covers touched pixels.
+    pub conservative: bool,
+
+    /// Portable depth bias. A non-zero clamp requires `DepthBiasClamp`.
     pub depth_bias: Option<DepthBiasState>,
 
     /// Legal only for LineStrip / TriangleStrip.
@@ -132,6 +160,9 @@ impl PrimitiveState {
             topology,
             front_face: FrontFace::Ccw,
             cull_mode: CullMode::None,
+            polygon_mode: PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
             depth_bias: None,
             strip_index_format: None,
         }
@@ -146,6 +177,22 @@ impl PrimitiveState {
     /// Sets the cull mode.
     pub fn with_cull_mode(mut self, cull_mode: CullMode) -> Self {
         self.cull_mode = cull_mode;
+        self
+    }
+
+    /// Sets the polygon coverage mode.
+    pub fn with_polygon_mode(mut self, polygon_mode: PolygonMode) -> Self {
+        self.polygon_mode = polygon_mode;
+        self
+    }
+    /// Enables or disables unclipped depth.
+    pub fn with_unclipped_depth(mut self, enabled: bool) -> Self {
+        self.unclipped_depth = enabled;
+        self
+    }
+    /// Enables or disables conservative rasterization.
+    pub fn with_conservative(mut self, enabled: bool) -> Self {
+        self.conservative = enabled;
         self
     }
 
@@ -184,6 +231,15 @@ pub enum BlendFactor {
     SrcAlpha,
     /// One minus the source alpha.
     OneMinusSrcAlpha,
+
+    /// The second source color output.
+    Src1,
+    /// One minus the second source color output.
+    OneMinusSrc1,
+    /// The second source alpha output.
+    Src1Alpha,
+    /// One minus the second source alpha output.
+    OneMinusSrc1Alpha,
 
     /// The destination color.
     Dst,

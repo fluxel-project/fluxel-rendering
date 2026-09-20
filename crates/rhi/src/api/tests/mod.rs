@@ -15,9 +15,11 @@ mod binding;
 mod capability;
 mod command;
 mod error;
+mod external;
 mod format;
 mod identity;
 mod pipeline;
+mod query;
 mod resource;
 mod shader;
 

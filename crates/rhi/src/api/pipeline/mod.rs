@@ -102,22 +102,34 @@
 // attributes as a substitute for a caller. Paths point at the module that
 // defines the item.
 pub(crate) mod backend;
+pub(crate) mod cache;
 pub(crate) mod compute;
 pub(crate) mod interface;
+pub(crate) mod mesh;
 pub(crate) mod raster;
 pub(crate) mod raster_state;
+pub(crate) mod ray_tracing;
 pub(crate) mod resources;
 pub(crate) mod vertex_input;
 
+pub use cache::{
+    PipelineCache, PipelineCacheDescriptor, PipelineCacheFallback, PipelineCacheValidationKey,
+};
 pub use compute::{ComputePipeline, ComputePipelineDescriptor};
 pub use interface::{
-    PipelineInterface, PipelineInterfaceCompatibilityId, PipelineInterfaceDescriptor,
+    ImmediateRange, PipelineInterface, PipelineInterfaceCompatibilityId,
+    PipelineInterfaceDescriptor,
 };
+pub use mesh::{MeshPipeline, MeshPipelineDescriptor};
 pub use raster::{RasterPipeline, RasterPipelineDescriptor, RenderTargetSignature};
 pub use raster_state::{
     BlendComponent, BlendFactor, BlendOperation, BlendState, ColorTargetState, ColorWriteMask,
     CullMode, DepthBiasState, DepthState, DepthStencilState, FrontFace, MultisampleState,
-    PrimitiveState, PrimitiveTopology, StencilFaceState, StencilOperation, StencilState,
+    PolygonMode, PrimitiveState, PrimitiveTopology, StencilFaceState, StencilOperation,
+    StencilState,
+};
+pub use ray_tracing::{
+    RayTracingHitGroup, RayTracingPipeline, RayTracingPipelineDescriptor, RayTracingShaderGroup,
 };
 pub use vertex_input::{
     VertexAttribute, VertexBufferLayout, VertexFormat, VertexInputState, VertexStepMode,

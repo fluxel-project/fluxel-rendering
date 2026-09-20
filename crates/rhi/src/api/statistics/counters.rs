@@ -358,6 +358,18 @@ pub struct ResourceLifecycleStatistics {
     pub raster_pipelines_created: u64,
     /// Compute pipelines created.
     pub compute_pipelines_created: u64,
+    /// Query sets created.
+    pub query_sets_created: u64,
+    /// Acceleration structures created.
+    pub acceleration_structures_created: u64,
+    /// Mesh/task pipelines created.
+    pub mesh_pipelines_created: u64,
+    /// Ray-tracing pipelines created.
+    pub ray_tracing_pipelines_created: u64,
+    /// Pipeline caches created.
+    pub pipeline_caches_created: u64,
+    /// External source/texture logical objects created.
+    pub external_objects_created: u64,
 
     /// Buffers reclaimed.
     pub buffers_reclaimed: u64,
@@ -380,6 +392,18 @@ pub struct ResourceLifecycleStatistics {
     pub raster_pipelines_reclaimed: u64,
     /// Compute pipelines reclaimed.
     pub compute_pipelines_reclaimed: u64,
+    /// Query sets reclaimed after their native retirement point.
+    pub query_sets_reclaimed: u64,
+    /// Acceleration structures reclaimed after their native retirement point.
+    pub acceleration_structures_reclaimed: u64,
+    /// Mesh/task pipelines reclaimed.
+    pub mesh_pipelines_reclaimed: u64,
+    /// Ray-tracing pipelines reclaimed.
+    pub ray_tracing_pipelines_reclaimed: u64,
+    /// Pipeline caches reclaimed.
+    pub pipeline_caches_reclaimed: u64,
+    /// External source/texture logical objects reclaimed.
+    pub external_objects_reclaimed: u64,
 }
 
 /// The unique objects an interval actually used (specification 47.12).

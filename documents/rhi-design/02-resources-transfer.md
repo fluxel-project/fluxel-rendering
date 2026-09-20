@@ -27,7 +27,7 @@ These two concepts must not be merged again.
 
 ## 8.1 TextureFormat
 
-0.16 freezes the core formats needed by the current renderer main path:
+v13 freezes the core formats plus a per-format block-compression vocabulary:
 
 ```rust
 #[non_exhaustive]
@@ -91,9 +91,26 @@ pub enum TextureFormat {
 }
 ```
 
-Compressed / planar / video formats are not in P0.
+The enum additionally includes these concrete compressed families (with the
+linear/sRGB variants named by the API):
 
-Future additions extend this same enum + facts; do not create a `CompressedTextureApi` trait.
+- BC: BC1/2/3 RGBA, BC4 R, BC5 RG, BC6H RGB float/ufloat, and BC7 RGBA.
+- ETC2/EAC: RGB8, RGB8A1, RGBA8, R11/RG11, including signed EAC and sRGB
+  variants where the encoded color representation permits one.
+- ASTC: 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6, 8x8, 10x5, 10x6, 10x8, 10x10,
+  12x10 and 12x12, each in linear and sRGB form.
+
+Support is never represented by a family-wide boolean. `FormatFacts(format)`
+and `TextureSupportQuery { format, ... }` answer every concrete enum member;
+thus an ETC2-capable device does not accidentally promise BC or an unsupported
+ASTC block size. `block_width`, `block_height`, and `logical_bytes_per_block`
+are the one source of truth for upload/readback/copy layouts. Copy origins are
+block aligned and extents may end part-way through a block only at a mip edge.
+
+Planar/video formats (`NV12`, `P010`) and plane aspects are part of the same
+per-format vocabulary, with their plane geometry and copy/view restrictions
+defined by `TextureSupportQuery`. Do not create a `CompressedTextureApi` trait
+or a family-wide compressed capability.
 
 ---
 
@@ -449,11 +466,17 @@ pub struct TexelCopyLayoutLimits {
 impl TexelCopyLayoutLimits {
     pub fn buffer_offset_alignment(&self) -> u64;
     pub fn bytes_per_row_alignment(&self) -> u32;
+    pub fn image_stride_alignment(&self) -> u64;
+    pub fn tightly_packed_3d_slices(&self) -> bool;
 }
 ```
 
-`rows_per_image` does not unify additional alignment fields;
-Legality is verified by extent / format block geometry / route rules.
+`image_stride_alignment` applies only between independently addressed array
+images. It does not impose a fictitious placement alignment on 3D Z slices:
+those belong to one native footprint. `tightly_packed_3d_slices` instead says
+whether `rows_per_image` must equal the copied physical block-row count because
+the backend has no independent 3D slice pitch. All rules remain route facts,
+verified after the region shape is known and before recording.
 
 ---
 
@@ -724,7 +747,7 @@ storage mode
 tiling mode
 allocation offset
 resource state
-CPU mapping mode
+native map/unmap primitive
 ```
 
 ---
@@ -744,6 +767,12 @@ impl BufferUsage {
     pub const INDEX: Self = Self(1 << 3);
     pub const UNIFORM: Self = Self(1 << 4);
     pub const STORAGE: Self = Self(1 << 5);
+    pub const MAP_READ: Self = Self(1 << 6);
+    pub const MAP_WRITE: Self = Self(1 << 7);
+    pub const INDIRECT: Self = Self(1 << 8);
+    pub const QUERY_RESOLVE: Self = Self(1 << 9);
+    pub const BLAS_INPUT: Self = Self(1 << 10);
+    pub const TLAS_INPUT: Self = Self(1 << 11);
 
     pub fn contains(self, other: Self) -> bool;
     pub fn union(self, other: Self) -> Self;
@@ -788,16 +817,8 @@ The backend cannot bypass portable usage validation just because a platform "hap
 
 ## 11.2 Resource memory preference
 
-P0 does not provide a public map, so the old draft is deleted:
-
-```text
-HostAccessIntent
-HostPreferred
-```
-
-They have no user semantics to be honored under the current API.
-
-Keeping a **pure performance preference**:
+General mapping is an explicit usage/capability contract, while placement
+remains a **pure performance preference**:
 
 ```rust
 #[non_exhaustive]
@@ -814,17 +835,43 @@ pub enum ResourceMemoryPreference {
 }
 ```
 
-In the future, if General Mapping enters P1, it will be frozen separately:
+`ResourceMemoryPreference` does not imply host visibility. Host access requires
+`MAP_READ` or `MAP_WRITE` at creation and the enabled mapping facts:
 
 ```text
-host-visible
-persistent mapping
-coherency
-flush / invalidate
-CPU ownership
+MappablePrimaryBuffers
+PersistentMapping
+CoherentMapping or explicit flush/invalidate
+MapAlignment
 ```
 
-You cannot use `HostAccessIntent` to take advantage of the situation in advance now.
+`Device::map_buffer` returns `RhiResult<MapBufferFuture<'_>>`. The future may
+remain pending until conflicting GPU use retires, registers its executor waker,
+and terminates as `DeviceLost` if the device is lost. Awaiting it yields
+`MappedRange<'buffer>`, a borrowing RAII lease; dropping either the pending
+future or the ready range releases exactly one exclusive mapping reservation. A
+write range exposes mutable bytes and may be flushed; a read range exposes
+immutable bytes and may be invalidated. Wrong usage, device identity,
+empty/out-of-bounds/overflowing range, alignment, and a second concurrent map
+are refused before native mapping begins.
+
+Mapped leases also participate in submit Phase-A validation. On a device without
+`PersistentMapping`, a buffer with a pending or ready mapping lease cannot be
+accepted by `submit`, even if the eventual command uses a disjoint byte range;
+the caller must drop/unmap first. With `PersistentMapping` enabled, an active
+lease is allowed, but it does not make simultaneous CPU/GPU access to overlapping
+bytes data-race-free. The caller owns that synchronization: CPU writes to a
+non-coherent lease must be flushed before submitting GPU work that reads the
+same bytes; CPU reads must wait for the last GPU writer to complete and then
+invalidate non-coherent memory; and CPU code must not read or write bytes while
+accepted GPU work may concurrently write those bytes. Coherent memory removes
+cache-maintenance calls, not this execution-order requirement. A backend may
+publish `PersistentMapping` only when its native allocation and submission
+barriers uphold these rules. This is checked before native work is accepted, so
+failure cannot produce a partial submission.
+
+The borrowing result is deliberate: the lease needs no extra cloned resource
+handle or reference-count operation merely to keep the buffer alive.
 
 ---
 
@@ -934,7 +981,8 @@ reason:
 
 - P0 Buffer is byte-addressed;
 - structured/texel stride should belong to future `BufferView`;
-- CPU host access waits for General Mapping to freeze before adding it.
+- CPU host access is governed by the separately frozen General Mapping
+  capability and lease contract, not a placement field.
 
 ---
 
@@ -1464,6 +1512,7 @@ This is host-to-GPU staging behavior promised by Upload itself, not a backend se
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureViewDimension {
     D1,
+    D1Array,
     D2,
     D2Array,
     Cube,
@@ -1472,13 +1521,11 @@ pub enum TextureViewDimension {
 }
 ~~~
 
-P0 provides no D1Array because baseline WebGPU has no common 1D-array view semantics. P0 also provides no:
-
-~~~text
-D3 -> D2 / D2Array sliced view
-~~~
-
-This is deferred to a separate future extension.
+`D1Array` and `D3 -> D2/D2Array` sliced views are descriptor-dependent view
+routes. They are present only when the concrete texture/view route fact reports
+support; the descriptor validates the selected layer/slice bounds and otherwise
+returns `Unsupported`. A `ColorAttachment::depth_slice` is separately valid for
+3D attachment rendering and does not require exposing a native view handle.
 
 ---
 
@@ -1496,6 +1543,10 @@ pub struct TextureViewDescriptor {
     pub format: Option<TextureFormat>,
 
     pub aspects: TextureAspects,
+
+    /// Requested uses of this view. Must be a subset of the parent texture's
+    /// usage and supported by the concrete format/aspect/view route.
+    pub usage: TextureUsage,
 
     pub base_mip: u32,
     pub mip_count: u32,

@@ -298,14 +298,16 @@ fn the_source_byte_requirement_covers_the_last_copied_texel() {
         rows_per_image: 2,
     };
     assert_eq!(
-        source_bytes_required(layout, Extent3d::d2(4, 2), 1, TextureFormat::Rgba8Unorm),
+        source_bytes_required(layout, Extent3d::d2(4, 2), 1, TextureFormat::Rgba8Unorm)
+            .expect("the byte requirement fits"),
         Some(32)
     );
 
     // Two images separated by rows_per_image rows: one whole image, then the
     // second image's last row.
     assert_eq!(
-        source_bytes_required(layout, Extent3d::d2(4, 2), 2, TextureFormat::Rgba8Unorm),
+        source_bytes_required(layout, Extent3d::d2(4, 2), 2, TextureFormat::Rgba8Unorm)
+            .expect("the byte requirement fits"),
         Some(64)
     );
 
@@ -317,13 +319,39 @@ fn the_source_byte_requirement_covers_the_last_copied_texel() {
         rows_per_image: 2,
     };
     assert_eq!(
-        source_bytes_required(padded, Extent3d::d2(4, 2), 1, TextureFormat::Rgba8Unorm),
+        source_bytes_required(padded, Extent3d::d2(4, 2), 1, TextureFormat::Rgba8Unorm)
+            .expect("the byte requirement fits"),
         Some(80)
     );
 
     // And for a format with no fixed entry size there is nothing to compute.
     assert_eq!(
-        source_bytes_required(layout, Extent3d::d2(4, 2), 1, TextureFormat::Depth24Plus),
+        source_bytes_required(layout, Extent3d::d2(4, 2), 1, TextureFormat::Depth24Plus)
+            .expect("an implementation-defined format is not an arithmetic error"),
         None
     );
+}
+
+#[test]
+fn an_overflowing_source_byte_requirement_is_refused() {
+    let layout = HostTexelLayout {
+        bytes_per_row: u32::MAX,
+        rows_per_image: u32::MAX,
+    };
+    assert_kind(
+        source_bytes_required(
+            layout,
+            Extent3d::d3(u32::MAX, u32::MAX, u32::MAX),
+            u32::MAX,
+            TextureFormat::Rgba32Float,
+        ),
+        RhiErrorKind::InvalidUsage,
+    );
+}
+
+#[test]
+fn planar_aspects_remain_single_copy_aspects() {
+    assert_eq!(aspect_bits(TextureAspect::Plane0), TextureAspects::PLANE0);
+    assert_eq!(aspect_bits(TextureAspect::Plane1), TextureAspects::PLANE1);
+    assert_eq!(aspect_bits(TextureAspect::Plane2), TextureAspects::PLANE2);
 }

@@ -320,11 +320,13 @@ same width/height
 same sample_count (except resolve targets)
 ```
 
-P0 does not freeze the layered/multiview raster, so all main attachment views:
-
-```text
-layer_count == 1
-```
+Single-view pipelines require `layer_count == 1`. A multiview pipeline's
+non-zero mask selects attachment layers: its highest selected bit must be less
+than every main attachment's common `layer_count`; all color and depth/stencil
+main attachments must have identical layer counts. `begin_raster()` validates
+the common geometry, while `set_pipeline()` validates the pipeline mask after
+the pipeline is known. Resolve views remain separate from the main attachment
+geometry.
 
 At least one color or depth/stencil attachment exists; an empty attachment RasterScope does not enter P0.
 
@@ -640,6 +642,8 @@ Both require:
 
 ~~~text
 buffer_offset / bytes_per_row satisfy TexelCopyLayoutLimits
+array image stride satisfies TexelCopyLayoutLimits when more than one layer is copied
+3D rows_per_image satisfies the route's packed-slice rule when it has one
 bytes_per_row > 0
 rows_per_image > 0
 layout footprint sufficiently covers region

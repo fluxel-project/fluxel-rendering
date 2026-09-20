@@ -257,6 +257,7 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
     let scope = crate::api::command::RasterScopeDescriptor::new().with_color(
         crate::api::shader::ShaderLocation::new(0),
         crate::api::command::ColorAttachment {
+            depth_slice: None,
             view: crate::api::command::ColorAttachmentView::Frame(attachment),
             load: crate::api::command::LoadOp::Clear(crate::api::command::ColorClearValue::Float(
                 [0.0, 0.0, 0.0, 1.0],
@@ -331,6 +332,7 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
     let scope = crate::api::command::RasterScopeDescriptor::new().with_color(
         crate::api::shader::ShaderLocation::new(0),
         crate::api::command::ColorAttachment {
+            depth_slice: None,
             view: crate::api::command::ColorAttachmentView::Frame(attachment),
             load: crate::api::command::LoadOp::Clear(crate::api::command::ColorClearValue::Float(
                 [0.0, 0.0, 0.0, 1.0],
@@ -872,11 +874,25 @@ fn a_real_device_answers_every_buffer_usage_combination() {
             continue;
         }
 
-        assert!(
+        let map_read = usage.contains(BufferUsage::MAP_READ);
+        let map_write = usage.contains(BufferUsage::MAP_WRITE);
+        let expected = if map_read && map_write {
+            false
+        } else if map_read {
+            usage.is_subset_of(BufferUsage::MAP_READ.union(BufferUsage::COPY_DST))
+        } else if map_write {
+            usage.is_subset_of(BufferUsage::MAP_WRITE.union(BufferUsage::COPY_SRC))
+        } else {
+            true
+        };
+        assert_eq!(
             support.is_supported(),
-            "Direct3D 12 expresses {usage} as resource states rather than as creation \
-             flags, so it must be reported creatable"
+            expected,
+            "DX12 maps host-visible buffers to fixed UPLOAD/READBACK heaps; every other non-empty usage set is a DEFAULT-heap allocation"
         );
+        if !expected {
+            continue;
+        }
         assert!(
             support.limits().is_some_and(|limits| limits.max_size() > 0),
             "a supported answer must carry a non-zero ceiling: {usage}"
@@ -934,22 +950,19 @@ fn a_real_device_reports_what_each_namable_format_can_do() {
     let device = portable_device();
     let capabilities = device.capabilities();
 
-    // The two permitted-layout formats are the only ones this backend declines to
-    // answer, and that is asserted as an exact set rather than one format at a
-    // time: a third silent omission is the failure mode worth catching, and
-    // checking only the two known names would not catch it.
+    // A format fact exists exactly when the backend has one exact DXGI format
+    // to probe and create. Mobile codecs, planar formats, abstract depth formats
+    // and R64Uint do not become imaginary DXGI formats merely to fill a table.
     let unanswered: Vec<TextureFormat> = TextureFormat::all()
         .filter(|format| capabilities.format(*format).is_none())
         .collect();
 
+    let expected: Vec<TextureFormat> = TextureFormat::all()
+        .filter(|format| super::facts::dxgi_format(*format).is_none())
+        .collect();
     assert_eq!(
-        unanswered,
-        vec![
-            TextureFormat::Depth24Plus,
-            TextureFormat::Depth24PlusStencil8
-        ],
-        "exactly the two formats whose bit layout Direct3D 12 leaves to the driver \
-         may go unanswered; anything else absent is a hole in the table"
+        unanswered, expected,
+        "format facts and exact DXGI lowering must have identical coverage"
     );
 
     // One answered format, read end to end: `None` above is only meaningful if
@@ -1224,18 +1237,16 @@ fn every_legal_route_key_is_recorded_rather_than_left_to_the_negative() {
         }
     }
 
-    // The count the rule requires, derived rather than observed. Each of the three
-    // formats has its own planes — colour for one, depth for the next, depth and
-    // stencil for the third — over three dimensions and two directions, so
-    // `3 * (1 + 1 + 2) * 2` keys are legal and the other thirty of the fifty-four
-    // walked name a plane their format does not have. Asserted as a count because a
-    // walk that silently stopped early would satisfy every per-key assertion above.
+    // The exact DX12 lowering has color and plane-zero depth copy routes only:
+    // no abstract Depth24PlusStencil8 format and no stencil-plane arithmetic.
+    // Assert counts in addition to each key above so a future partial walk cannot
+    // silently satisfy only the local assertions.
     assert_eq!(
-        legal, 24,
+        legal, 18,
         "the walk must reach every legal key, not merely some"
     );
     assert_eq!(
-        refused, 30,
+        refused, 36,
         "a plane the format does not have is not a refusal by the device"
     );
 }

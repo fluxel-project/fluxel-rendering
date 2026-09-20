@@ -30,6 +30,7 @@
 use crate::api::identity::{DeviceIdentity, ObjectId};
 use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::{Buffer, BufferDescriptor};
+use crate::api::resource::texture::{Texture, TextureDescriptor};
 use std::any::Any;
 
 /// The native side of a fixture buffer: a token that is never read.
@@ -48,4 +49,13 @@ impl BufferBackend for FixtureBuffer {
 /// supplied by this function.
 pub(crate) fn buffer(id: ObjectId, device: DeviceIdentity, descriptor: BufferDescriptor) -> Buffer {
     Buffer::new(id, device, descriptor, Box::new(FixtureBuffer))
+}
+
+/// A texture handle assembled without a device allocation.
+pub(crate) fn texture(
+    id: ObjectId,
+    device: DeviceIdentity,
+    descriptor: TextureDescriptor,
+) -> Texture {
+    Texture::new(id, device, descriptor)
 }

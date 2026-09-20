@@ -13,10 +13,12 @@ use ash::vk;
 use crate::api::binding::BindGroup;
 use crate::api::command::copy::{BufferCopy, BufferTextureCopy, TextureCopy};
 use crate::api::command::{AccessMask, TextureUse, TextureUseIntent};
-use crate::api::format::logical_bytes_per_block;
+use crate::api::format::{block_extent, logical_bytes_per_block};
 use crate::api::identity::ObjectId;
 use crate::api::pipeline::ComputePipeline;
+use crate::api::query::QuerySet;
 use crate::api::resource::buffer::Buffer;
+use crate::api::resource::buffer::BufferRange;
 use crate::api::resource::subresource::{HostTexelLayout, TextureAspect, TextureSubresourceLayers};
 use crate::api::resource::texture::{Texture, TextureDimension};
 use crate::api::resource::transfer::{
@@ -43,6 +45,10 @@ pub(super) struct TransferRetention {
     pub(super) readbacks: Vec<ReadbackRetention>,
     pub(super) compute_pipelines: Vec<ComputePipeline>,
     pub(super) bind_groups: Vec<BindGroup>,
+    /// Query pools are native objects too; retain their portable owners until
+    /// the enclosing fence retires rather than relying on recorded work to
+    /// survive submission.
+    pub(super) query_sets: Vec<QuerySet>,
     pub(super) raster: Vec<super::raster::RasterRetention>,
     /// Per-subresource layout knowledge seeded from the queue-domain tracker.
     /// Fluxel object identity, rather than a recyclable `VkImage` handle, makes
@@ -134,6 +140,123 @@ pub(super) fn lower_buffer_copy(
     }
     retention.buffers.push(copy.src.clone());
     retention.buffers.push(copy.dst.clone());
+    Ok(())
+}
+
+/// Zeroes one 4-byte-aligned portable buffer range with Vulkan's native fill
+/// command. Public validation owns the alignment rule; this lowering keeps the
+/// native state transition and lifetime retention beside the other transfer
+/// writes so `ClearBuffer` cannot be advertised as a no-op.
+pub(super) fn lower_clear_buffer(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    buffer: &Buffer,
+    range: BufferRange,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let destination = native_buffer(buffer)?;
+    transfer_dependency(
+        shared,
+        command_buffer,
+        destination.buffer(),
+        vk::AccessFlags::TRANSFER_WRITE,
+    );
+    unsafe {
+        shared.device.cmd_fill_buffer(
+            command_buffer,
+            destination.buffer(),
+            range.offset,
+            range.size,
+            0,
+        );
+    }
+    retention.buffers.push(buffer.clone());
+    Ok(())
+}
+
+/// Clears validated texture subresources to the portable zero value using
+/// Vulkan's native image-clear commands. No render/compute emulation is used.
+pub(super) fn lower_clear_texture(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    texture: &Texture,
+    range: crate::api::resource::TextureSubresourceRange,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let native = native_texture(texture)?;
+    let native_range = vk::ImageSubresourceRange::default()
+        .base_mip_level(range.base_mip)
+        .level_count(range.mip_count)
+        .base_array_layer(range.base_layer)
+        .layer_count(range.layer_count);
+    for aspect in shader_texture_aspects(range.aspects) {
+        for mip in range.base_mip..range.base_mip + range.mip_count {
+            transition_image(
+                shared,
+                command_buffer,
+                native.image(),
+                texture,
+                TextureSubresourceLayers {
+                    aspect,
+                    mip_level: mip,
+                    base_layer: range.base_layer,
+                    layer_count: range.layer_count,
+                },
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::TRANSFER_WRITE,
+                retention,
+            );
+        }
+    }
+    let color = range
+        .aspects
+        .contains(crate::api::resource::TextureAspects::COLOR);
+    if color {
+        unsafe {
+            shared.device.cmd_clear_color_image(
+                command_buffer,
+                native.image(),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &vk::ClearColorValue { uint32: [0; 4] },
+                &[native_range.aspect_mask(vk::ImageAspectFlags::COLOR)],
+            );
+        }
+    }
+    let depth_stencil = range
+        .aspects
+        .contains(crate::api::resource::TextureAspects::DEPTH)
+        || range
+            .aspects
+            .contains(crate::api::resource::TextureAspects::STENCIL);
+    if depth_stencil {
+        let mut aspects = vk::ImageAspectFlags::empty();
+        if range
+            .aspects
+            .contains(crate::api::resource::TextureAspects::DEPTH)
+        {
+            aspects |= vk::ImageAspectFlags::DEPTH;
+        }
+        if range
+            .aspects
+            .contains(crate::api::resource::TextureAspects::STENCIL)
+        {
+            aspects |= vk::ImageAspectFlags::STENCIL;
+        }
+        unsafe {
+            shared.device.cmd_clear_depth_stencil_image(
+                command_buffer,
+                native.image(),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &vk::ClearDepthStencilValue {
+                    depth: 0.0,
+                    stencil: 0,
+                },
+                &[native_range.aspect_mask(aspects)],
+            );
+        }
+    }
+    retention.textures.push(texture.clone());
     Ok(())
 }
 
@@ -276,11 +399,28 @@ pub(super) fn lower_buffer_texture_copy(
             why: "the format has no Vulkan byte-copy block size",
         },
     )?;
-    let row_length = copy.bytes_per_row / bytes;
+    let (block_width, block_height) = block_extent(copy.texture.descriptor().format);
+    // Vulkan expresses these two fields in *texels*, whereas Fluxel host
+    // layouts express row pitch and rows-per-image in compressed blocks. A
+    // 16-byte ASTC block is not one texel: passing the block count directly
+    // would make Vulkan interpret the source as a 1x1 format.
+    let row_length = (copy.bytes_per_row / bytes)
+        .checked_mul(block_width)
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a texture transfer row pitch",
+            why: "the Vulkan texel row length overflows u32",
+        })?;
+    let image_height =
+        copy.rows_per_image
+            .checked_mul(block_height)
+            .ok_or(VulkanFailure::Unsupported {
+                what: "a texture transfer image pitch",
+                why: "the Vulkan texel image height overflows u32",
+            })?;
     let region = vk::BufferImageCopy::default()
         .buffer_offset(copy.buffer_offset)
         .buffer_row_length(row_length)
-        .buffer_image_height(copy.rows_per_image)
+        .buffer_image_height(image_height)
         .image_subresource(image_layers(copy.texture_subresource))
         .image_offset(image_offset(copy.texture_origin))
         .image_extent(image_extent(copy.extent));
@@ -376,8 +516,9 @@ pub(super) fn lower_texture_upload(
             what: "a texture upload format",
             why: "the format has no Vulkan byte-copy block size",
         })? as usize;
-    let tight_row = desc.extent.width as usize * block;
-    let rows = desc.extent.height as usize;
+    let (block_width, block_height) = block_extent(desc.dst.descriptor().format);
+    let tight_row = desc.extent.width.div_ceil(block_width) as usize * block;
+    let rows = desc.extent.height.div_ceil(block_height) as usize;
     let images = if desc.dst.descriptor().dimension == TextureDimension::D3 {
         desc.extent.depth as usize
     } else {
@@ -463,8 +604,10 @@ pub(super) fn lower_texture_readback(
             what: "a texture readback format",
             why: "the format has no Vulkan byte-copy block size",
         })?;
+    let (block_width, block_height) = block_extent(src.descriptor().format);
     let row = extent
         .width
+        .div_ceil(block_width)
         .checked_mul(block)
         .ok_or(VulkanFailure::Unsupported {
             what: "a texture readback",
@@ -476,7 +619,7 @@ pub(super) fn lower_texture_readback(
         subresource.layer_count
     };
     let size = u64::from(row)
-        .checked_mul(u64::from(extent.height))
+        .checked_mul(u64::from(extent.height.div_ceil(block_height)))
         .and_then(|v| v.checked_mul(u64::from(images)))
         .ok_or(VulkanFailure::Unsupported {
             what: "a texture readback",
@@ -517,7 +660,7 @@ pub(super) fn lower_texture_readback(
         ticket: ticket.clone(),
         layout: Some(ReadbackTexelLayout {
             bytes_per_row: row,
-            rows_per_image: extent.height,
+            rows_per_image: extent.height.div_ceil(block_height),
             total_size: size,
         }),
     });
@@ -582,6 +725,9 @@ fn image_layers(value: TextureSubresourceLayers) -> vk::ImageSubresourceLayers {
             TextureAspect::Color => vk::ImageAspectFlags::COLOR,
             TextureAspect::Depth => vk::ImageAspectFlags::DEPTH,
             TextureAspect::Stencil => vk::ImageAspectFlags::STENCIL,
+            TextureAspect::Plane0 => vk::ImageAspectFlags::PLANE_0,
+            TextureAspect::Plane1 => vk::ImageAspectFlags::PLANE_1,
+            TextureAspect::Plane2 => vk::ImageAspectFlags::PLANE_2,
         })
         .mip_level(value.mip_level)
         .base_array_layer(value.base_layer)
@@ -831,6 +977,9 @@ pub(super) fn barrier_raster_buffer(
 ) -> Result<(), VulkanFailure> {
     let native = native_buffer(buffer)?;
     let mut destination = vk::AccessFlags::empty();
+    if access.contains(AccessMask::INDIRECT_READ) {
+        destination |= vk::AccessFlags::INDIRECT_COMMAND_READ;
+    }
     if access.contains(AccessMask::VERTEX_READ) {
         destination |= vk::AccessFlags::VERTEX_ATTRIBUTE_READ;
     }
@@ -858,7 +1007,9 @@ pub(super) fn barrier_raster_buffer(
         shared.device.cmd_pipeline_barrier(
             command_buffer,
             vk::PipelineStageFlags::ALL_COMMANDS,
-            vk::PipelineStageFlags::ALL_GRAPHICS,
+            // DRAW_INDIRECT covers indirect argument/count reads; graphics
+            // stages cover the remaining vertex/index/shader accesses.
+            vk::PipelineStageFlags::DRAW_INDIRECT | vk::PipelineStageFlags::ALL_GRAPHICS,
             vk::DependencyFlags::empty(),
             &[],
             &[barrier],

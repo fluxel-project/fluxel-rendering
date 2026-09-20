@@ -30,16 +30,23 @@
 //! consumes the recorder rather than lending from it.
 
 use crate::api::binding::{BindGroup, BindGroupIndex};
+use crate::api::command::RayTracingShaderTable;
 use crate::api::command::attachment::{ColorAttachment, DepthStencilAttachment};
 use crate::api::command::copy::{
     BufferCopy, BufferTextureCopy, TextureBlit, TextureCopy, TextureResolve,
 };
 use crate::api::command::geometry::{Color, Rect, Viewport};
 use crate::api::command::{IndexFormat, ResourceUse};
+use crate::api::external::ExternalImageCopyDescriptor;
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::pipeline::{ComputePipeline, RasterPipeline};
+use crate::api::pipeline::{MeshPipeline, RayTracingPipeline};
+use crate::api::query::QuerySet;
 use crate::api::resource::buffer::BufferBinding;
 use crate::api::resource::transfer::{ReadbackTicket, UploadJob};
+use crate::api::resource::{
+    AccelerationStructure, AccelerationStructureBuildMode, AccelerationStructureCopyMode,
+};
 use crate::api::submission::LaneWorkDomains;
 
 /// One recording command, with the uses it produced.
@@ -74,6 +81,18 @@ pub(crate) struct RecordedCommand {
     )
 )]
 pub(crate) enum RecordedPayload {
+    /// A mesh/task dispatch inside a raster scope.
+    MeshDispatch(Box<MeshDispatch>),
+    /// A mesh/task dispatch whose workgroup count is read from an argument buffer.
+    MeshIndirect(Box<MeshIndirect>),
+    /// A ray-tracing scope began.
+    RayTracingBegin(RayTracingBegin),
+    /// A ray dispatch inside the open ray-tracing scope.
+    RayTracingDispatch(Box<RayTracingDispatch>),
+    /// The ray-tracing scope ended.
+    RayTracingEnd,
+    /// An acceleration-structure build, update, clone, or compaction operation.
+    AccelerationStructure(AccelerationStructureCommand),
     /// A raster scope began, with its attachment set.
     RasterBegin(RasterBegin),
     /// A draw inside the open raster scope.
@@ -88,6 +107,18 @@ pub(crate) enum RecordedPayload {
     ComputeBegin(ComputeBegin),
     /// A dispatch inside the open compute scope.
     ComputeDispatch(Box<ComputeDispatch>),
+    /// A raster indirect or multi-indirect invocation.
+    RasterIndirect(Box<RasterIndirect>),
+    /// A compute indirect invocation.
+    ComputeIndirect(Box<ComputeIndirect>),
+    /// A query begins in the current scope.
+    QueryBegin { set: QuerySet, index: u32 },
+    /// A query ends in the current scope.
+    QueryEnd { set: QuerySet, index: u32 },
+    /// A timestamp write.
+    TimestampWrite { set: QuerySet, index: u32 },
+    /// Query results are copied to a query-resolve buffer.
+    QueryResolve(QueryResolve),
     /// The compute scope ended.
     ComputeEnd,
     /// One copy-family command.
@@ -116,11 +147,84 @@ pub(crate) enum RecordedPayload {
     DebugMarker(Label),
 }
 
+/// State retained for a mesh/task dispatch.
+pub(crate) struct MeshDispatch {
+    pub(crate) pipeline: MeshPipeline,
+    pub(crate) groups: Vec<BoundGroup>,
+    pub(crate) workgroups: (u32, u32, u32),
+}
+/// State retained for indirect mesh dispatch.
+pub(crate) struct MeshIndirect {
+    pub(crate) pipeline: MeshPipeline,
+    pub(crate) groups: Vec<BoundGroup>,
+    pub(crate) arguments: crate::api::resource::Buffer,
+    pub(crate) offset: u64,
+    pub(crate) count_buffer: Option<(crate::api::resource::Buffer, u64, u32)>,
+}
+
+/// Ray scope diagnostic state.
+pub(crate) struct RayTracingBegin {
+    pub(crate) label: Label,
+}
+
+/// State retained for one ray dispatch.
+pub(crate) struct RayTracingDispatch {
+    pub(crate) pipeline: RayTracingPipeline,
+    pub(crate) groups: Vec<BoundGroup>,
+    /// Checked SBT data retained verbatim; native lowering must never invent a
+    /// table or substitute backend-private records for caller-provided ranges.
+    pub(crate) table: RayTracingShaderTable,
+    pub(crate) dimensions: (u32, u32, u32),
+    /// Immediate byte writes active for this dispatch.  The declaration's
+    /// visibility travels with every packet so native lowering never has to
+    /// infer ray-stage flags from backend conventions.
+    pub(crate) immediates: Vec<ImmediateWrite>,
+}
+
+/// One validated write into a pipeline interface's immediate-data address space.
+///
+/// This stays a command packet rather than a resource: immediate data has no
+/// lifetime, identity, or `ResourceUse`; it is retained only so replay/capture
+/// observes the exact state current at each dispatch.
+#[derive(Clone)]
+pub(crate) struct ImmediateWrite {
+    pub(crate) offset: u32,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) visibility: crate::api::shader::ShaderStages,
+}
+
+/// Portable acceleration-structure command packet.
+pub(crate) enum AccelerationStructureCommand {
+    Build {
+        destination: AccelerationStructure,
+        scratch: crate::api::resource::Buffer,
+        mode: AccelerationStructureBuildMode,
+    },
+    Copy {
+        source: AccelerationStructure,
+        destination: AccelerationStructure,
+        mode: AccelerationStructureCopyMode,
+    },
+    /// Writes the native compacted-size result as one little-endian `u64`.
+    /// The destination becomes meaningful only when the enclosing submission's
+    /// completion is terminal; it is not a synchronous size oracle.
+    WriteCompactedSize {
+        source: AccelerationStructure,
+        destination: crate::api::resource::Buffer,
+        destination_offset: u64,
+    },
+}
+
+/// One query-result resolve command.
+pub(crate) struct QueryResolve {
+    pub(crate) set: QuerySet,
+    pub(crate) first_query: u32,
+    pub(crate) query_count: u32,
+    pub(crate) destination: crate::api::resource::Buffer,
+    pub(crate) destination_offset: u64,
+}
+
 /// A raster scope's beginning, as recorded.
-#[expect(
-    dead_code,
-    reason = "scope labels are retained for backend debug-marker lowering"
-)]
 pub(crate) struct RasterBegin {
     /// The scope's diagnostic label.
     pub(crate) label: Label,
@@ -166,13 +270,11 @@ pub(crate) struct RasterDraw {
     pub(crate) instances: core::ops::Range<u32>,
     /// The base vertex of an indexed draw, or `0`.
     pub(crate) base_vertex: i32,
+    /// Immediate writes current at this draw.
+    pub(crate) immediates: Vec<ImmediateWrite>,
 }
 
 /// A compute scope's beginning, as recorded.
-#[expect(
-    dead_code,
-    reason = "scope labels are retained for backend debug-marker lowering"
-)]
 pub(crate) struct ComputeBegin {
     /// The scope's diagnostic label.
     pub(crate) label: Label,
@@ -190,6 +292,34 @@ pub(crate) struct ComputeDispatch {
     pub(crate) groups: Vec<BoundGroup>,
     /// The workgroup counts.
     pub(crate) workgroups: (u32, u32, u32),
+    /// Immediate writes current at this dispatch.
+    pub(crate) immediates: Vec<ImmediateWrite>,
+}
+
+/// Raster state plus indirect argument metadata retained for replay/capture.
+pub(crate) struct RasterIndirect {
+    pub(crate) pipeline: RasterPipeline,
+    pub(crate) groups: Vec<BoundGroup>,
+    pub(crate) vertex_buffers: Vec<(u32, BufferBinding)>,
+    pub(crate) index: Option<BoundIndexBuffer>,
+    pub(crate) viewport: Option<Viewport>,
+    pub(crate) scissor: Option<Rect>,
+    pub(crate) blend_constant: Color,
+    pub(crate) stencil_reference: u32,
+    pub(crate) arguments: crate::api::resource::Buffer,
+    pub(crate) arguments_offset: u64,
+    pub(crate) draw_count: u32,
+    pub(crate) stride: u32,
+    /// Optional GPU count source and portable maximum draw count.
+    pub(crate) count: Option<(crate::api::resource::Buffer, u64, u32)>,
+}
+
+/// Compute state plus indirect argument metadata retained for replay/capture.
+pub(crate) struct ComputeIndirect {
+    pub(crate) pipeline: ComputePipeline,
+    pub(crate) groups: Vec<BoundGroup>,
+    pub(crate) arguments: crate::api::resource::Buffer,
+    pub(crate) arguments_offset: u64,
 }
 
 /// A bind group bound at an index, with its dynamic offsets.
@@ -214,6 +344,18 @@ pub(crate) struct BoundIndexBuffer {
 
 /// One copy-family command, as recorded.
 pub(crate) enum CopyRecord {
+    /// Opaque host image copied into a portable texture.
+    ExternalImage(ExternalImageCopyDescriptor),
+    /// Zeroes a buffer range through the backend's native clear route.
+    ClearBuffer {
+        buffer: crate::api::resource::Buffer,
+        range: crate::api::resource::BufferRange,
+    },
+    /// Clears a texture subresource range through a backend-native clear route.
+    ClearTexture {
+        texture: crate::api::resource::Texture,
+        subresources: crate::api::resource::TextureSubresourceRange,
+    },
     /// Buffer to buffer.
     Buffer(BufferCopy),
     /// Buffer to texture.

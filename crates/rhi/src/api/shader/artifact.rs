@@ -21,6 +21,47 @@ use super::requirements::{ShaderInterface, ShaderRequirements};
 use super::validation::validate_shader_artifact;
 use super::vocabulary::{ArtifactAcceptance, ShaderAbiVersion, ShaderCode, ShaderStage};
 
+/// Auditable origin of native shader code admitted through the passthrough path.
+///
+/// This is deliberately descriptive rather than an authority token.  The authority
+/// boundary is [`ShaderArtifact::assume_trusted_passthrough`], which is `unsafe`:
+/// strings supplied here are retained for diagnostics and capture, but cannot make
+/// arbitrary DXIL, SPIR-V, Metallib, or source code safe by themselves.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PassthroughShaderProvenance {
+    producer: String,
+    verification: String,
+}
+
+impl PassthroughShaderProvenance {
+    /// Records the producer and verification procedure that established the
+    /// artifact's declared interface and requirements.
+    ///
+    /// Empty text is refused by [`ShaderArtifact::assume_trusted_passthrough`],
+    /// where it can be reported as an ordinary artifact-validation error.
+    pub fn new(producer: impl Into<String>, verification: impl Into<String>) -> Self {
+        Self {
+            producer: producer.into(),
+            verification: verification.into(),
+        }
+    }
+
+    /// Identifies the toolchain or host which produced the native code.
+    pub fn producer(&self) -> &str {
+        &self.producer
+    }
+
+    /// Identifies the interface/reflection verification that was performed.
+    pub fn verification(&self) -> &str {
+        &self.verification
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        !self.producer.is_empty() && !self.verification.is_empty()
+    }
+}
+
 /// The content-address key computed by the artifact producer.
 ///
 /// A newtype with a public array field, unlike the identity tokens of section 3,
@@ -59,9 +100,10 @@ pub struct ArtifactProducerVersion {
 ///
 /// A P0 artifact must have **pipeline specialization closed**: no WGSL required
 /// override without a default, no unresolved Vulkan specialization constant, no
-/// Metal required function constant (section 19.9). Supplying values at pipeline
-/// creation belongs to a future capability family, and P0 does not carry a
-/// half-complete constants map in anticipation of it.
+/// Metal required function constant (section 19.9). Fluxel intentionally closes
+/// specialization in the artifact rather than exposing a second native-constant
+/// ABI at pipeline creation; callers produce a distinct artifact for each
+/// specialization.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct ShaderArtifact {
@@ -88,6 +130,14 @@ pub struct ShaderArtifact {
     pub content_hash: ArtifactHash,
     /// That toolchain's version.
     pub producer_version: ArtifactProducerVersion,
+
+    /// Provenance for an explicitly trusted native-code admission, if any.
+    ///
+    /// Private so ordinary construction cannot silently opt into the trusted
+    /// boundary.  Use [`Self::assume_trusted_passthrough`] only after independently
+    /// validating that `code`, `interface`, and `requirements` describe the same
+    /// program.
+    passthrough_provenance: Option<PassthroughShaderProvenance>,
 }
 
 impl ShaderArtifact {
@@ -126,6 +176,7 @@ impl ShaderArtifact {
             requirements,
             content_hash,
             producer_version,
+            passthrough_provenance: None,
         }
     }
 
@@ -133,6 +184,37 @@ impl ShaderArtifact {
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Label(Some(label.into()));
         self
+    }
+
+    /// Marks this artifact as native code admitted without frontend reflection.
+    ///
+    /// # Safety
+    /// The caller must have independently verified, for this exact immutable code
+    /// payload, that `stage`, `entry_point`, `interface`, and `requirements` are
+    /// complete and correct.  In particular, no unreported resource access,
+    /// builtin, feature, or limit may be present.  The portable validator still
+    /// checks the supplied declaration and device capability, but cannot recover
+    /// semantics omitted by an untrusted reflection producer.
+    ///
+    /// A device must enable [`OptionalFeature::PassthroughShaders`](crate::api::platform::OptionalFeature::PassthroughShaders)
+    /// before this artifact can be created.  Plain `ShaderArtifact::new` remains
+    /// the normal path even when its code happens to be native bytecode.
+    pub unsafe fn assume_trusted_passthrough(
+        mut self,
+        provenance: PassthroughShaderProvenance,
+    ) -> Self {
+        self.passthrough_provenance = Some(provenance);
+        self
+    }
+
+    /// Returns capture-visible provenance when this artifact uses the explicit
+    /// trusted-passthrough boundary.
+    pub fn passthrough_provenance(&self) -> Option<&PassthroughShaderProvenance> {
+        self.passthrough_provenance.as_ref()
+    }
+
+    pub(crate) fn is_trusted_passthrough(&self) -> bool {
+        self.passthrough_provenance.is_some()
     }
 }
 

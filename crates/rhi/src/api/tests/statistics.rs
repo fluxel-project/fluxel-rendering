@@ -22,14 +22,10 @@
 //!   refusals, the descriptor-based estimate, the sampling-rate formula, the
 //!   counter records' own defaults. They run and they assert exact kinds.
 //! * **Shape tests** are ordinary functions compiled but never called, written as
-//!   realistic call sites for the verbs that panic. Their job is to answer "is
-//!   this interface usable from the caller's side" before a backend exists.
-//! * **Tier tests** are the ones worth dwelling on. Section 4 requires the
-//!   portable half of a verb to run *before* anything reaches a backend, so a
-//!   verb whose body is `unimplemented!()` must still refuse a cross-device
-//!   argument first — and a `#[should_panic]` test pins that the unbuilt half
-//!   panics rather than fabricating a number. Together they are the only evidence
-//!   available that the two tiers are wired in the right order.
+//!   realistic caller-side checks for ergonomics that the type system owns.
+//! * **Tier tests** verify that portable validation runs before a backend or
+//!   capability boundary and that an unavailable fact is returned structurally,
+//!   never fabricated as a number.
 //!
 //! There is no GPU behind any of this. Counters that read zero here read zero
 //! because nothing was ever recorded, and section 47.1's own warning applies to
@@ -290,17 +286,14 @@ fn a_buffer_estimate_is_the_descriptor_size() {
 // Section 47.18 — the texture estimate, whose portable half runs first.
 // ---------------------------------------------------------------------------
 
-/// The two-tier rule of section 4, as an executable assertion: a verb whose body
-/// is `unimplemented!()` still refuses a cross-device argument before it panics.
+/// The two-tier rule of section 4, as an executable assertion: cross-device
+/// ownership is refused before texture format facts are consulted.
 ///
-/// The order is the whole point. If the panic came first, a caller that passed a
-/// foreign texture would see a panic where the contract promises
-/// [`RhiErrorKind::WrongDevice`], and a caller that caught it would have no way
-/// to learn what was actually wrong. The wrong-device case is checked first, and
-/// the unbuilt half is reached only when the arguments are portable-legal — which
-/// is what the `#[should_panic]` test below pins from the other side.
+/// The order is the whole point. A caller that passed a foreign texture must see
+/// the promised [`RhiErrorKind::WrongDevice`], rather than a format lookup or an
+/// estimate about an unrelated device.
 #[test]
-fn a_texture_from_another_device_is_refused_before_the_estimate_panics() {
+fn a_texture_from_another_device_is_refused_before_the_estimate_reads_facts() {
     let service = statistics();
     let foreign = texture_on(other_device());
 

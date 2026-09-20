@@ -169,13 +169,11 @@ impl Default for StatisticsConfig {
 /// There is no global statistics singleton, and no way to aggregate two devices'
 /// domains here: section 47.2 puts that combination in the caller's hands.
 ///
-/// # What is built and what is not
+/// # Collection model
 ///
-/// Two of the verbs below are answered from data already in hand — the
-/// descriptor-based memory estimates of section 47.15 — and they are
-/// implemented. The rest read counters that the RHI increments while it records,
-/// submits, and presents, and that code does not exist yet, so they panic with a
-/// message naming what is missing.
+/// The domain is immediately usable. It begins with zero cumulative counters,
+/// records events through the device-owned collection state, and exposes
+/// descriptor-based logical memory estimates without consulting a native heap.
 pub struct DeviceStatistics {
     device: Device,
 }
@@ -207,9 +205,8 @@ impl DeviceStatistics {
     /// Opens a handle to a device's statistics domain.
     ///
     /// Crate-private: section 47.2 scopes a domain to one `DeviceIdentity`, so
-    /// only the device façade may hand one out. The domain itself lives on the
-    /// device; until the backend port stores it there, this handle carries the
-    /// identity it is scoped to and the verbs that would read the domain panic.
+    /// only the device façade may hand one out. The domain lives in the device's
+    /// execution ownership domain, so clones observe the same epoch and counters.
     pub(crate) fn new(device: Device) -> Self {
         Self { device }
     }
@@ -356,11 +353,10 @@ impl DeviceStatistics {
     /// `inventory::estimate_texture_bytes`, which takes the format facts as a
     /// parameter so that the rule is testable without a device.
     ///
-    /// Here it panics: the call needs the device's `FormatFacts` for the
-    /// texture's format, and those come from the capability snapshot the backend
-    /// port builds. It does not wait for the GPU and does not query a native
-    /// heap — section 47.18 forbids both, because a number that arrives after a
-    /// wait is a different kind of number and is not comparable across backends.
+    /// The device's `FormatFacts` determines the block arithmetic. It does not
+    /// wait for the GPU and does not query a native heap — section 47.18 forbids
+    /// both, because a number that arrives after a wait is a different kind of
+    /// number and is not comparable across backends.
     ///
     /// # Refusals
     ///

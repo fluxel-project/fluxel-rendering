@@ -78,12 +78,12 @@ impl BindingSlotId {
 
 /// How many resource elements one logical binding holds.
 ///
-/// `Fixed(n)` is capability-gated vocabulary, and section 20.2 is careful about
-/// what it does *not* imply: not runtime-sized, not partially bound, not
-/// update-after-bind, not non-uniform arbitrary descriptor indexing. Those remain
-/// future bindless/indexing extensions, and a backend is free to answer
-/// [`BindingSupport::Unsupported`] for the whole vocabulary — WebGPU core does
-/// not require it.
+/// Array shape is capability-gated vocabulary. `Fixed(n)` is exact-length;
+/// `RuntimeSized` obtains its active length from the binding packet. Neither form
+/// silently implies partially-bound elements, update-after-bind, or non-uniform
+/// indexing: those are distinct requested features and backend facts. A backend is
+/// free to answer [`BindingSupport::Unsupported`] for every array shape — WebGPU
+/// core does not require descriptor indexing.
 ///
 /// `Hash` is *not* derived, and it used to be. A count was part of the capability
 /// cache key while the whole [`BindingSupportQuery`] was that key; the key is now
@@ -103,6 +103,10 @@ pub enum BindingCount {
     /// array of length 1 cannot stand in for [`Self::One`], so a count of one
     /// element has exactly one legal spelling.
     Fixed(u32),
+    /// A descriptor-indexed array whose active length is supplied by the
+    /// binding packet. It is capability-gated and intentionally has no implicit
+    /// maximum: the per-stage ceiling is a device limit.
+    RuntimeSized,
 }
 
 impl BindingCount {
@@ -117,6 +121,10 @@ impl BindingCount {
         match self {
             Self::One => 1,
             Self::Fixed(elements) => elements,
+            // Runtime-sized arrays deliberately do not fabricate an element
+            // count. Aggregate pipeline limits use the device's declared
+            // maximum; packet validation uses the actual packet length.
+            Self::RuntimeSized => 0,
         }
     }
 
@@ -137,6 +145,7 @@ impl BindingCount {
                 out.push(1);
                 out.extend_from_slice(&elements.to_le_bytes());
             }
+            Self::RuntimeSized => out.push(2),
         }
     }
 }
@@ -267,6 +276,10 @@ pub enum BindingKind {
         /// What the shader expects of the sampler.
         kind: SamplerKind,
     },
+    /// An acceleration structure visible to ray-query or ray-tracing shaders.
+    AccelerationStructure,
+    /// An opaque platform external texture, sampled through backend-private conversion.
+    ExternalTexture,
 }
 
 /// One question about whether, and how, a device can satisfy a binding.
@@ -361,6 +374,10 @@ pub enum BindingLimitClass {
     StorageTextures,
     /// Sampler bindings.
     Samplers,
+    /// Acceleration-structure bindings.
+    AccelerationStructures,
+    /// Opaque external-texture bindings.
+    ExternalTextures,
 }
 
 /// The class one binding kind is counted under.
@@ -375,6 +392,8 @@ pub(crate) fn binding_kind_class(kind: &BindingKind) -> BindingLimitClass {
         BindingKind::SampledTexture { .. } => BindingLimitClass::SampledTextures,
         BindingKind::StorageTexture { .. } => BindingLimitClass::StorageTextures,
         BindingKind::Sampler { .. } => BindingLimitClass::Samplers,
+        BindingKind::AccelerationStructure => BindingLimitClass::AccelerationStructures,
+        BindingKind::ExternalTexture => BindingLimitClass::ExternalTextures,
     }
 }
 
@@ -452,6 +471,9 @@ pub(crate) enum BindableKind {
         /// What the shader expects of the sampler.
         kind: SamplerKind,
     },
+    /// An acceleration structure binding.
+    AccelerationStructure,
+    ExternalTexture,
 }
 
 impl BindableKind {
@@ -479,6 +501,8 @@ impl BindableKind {
                 access: *access,
             },
             BindingKind::Sampler { kind } => Self::Sampler { kind: *kind },
+            BindingKind::AccelerationStructure => Self::AccelerationStructure,
+            BindingKind::ExternalTexture => Self::ExternalTexture,
         }
     }
 }
@@ -495,7 +519,9 @@ pub(crate) fn validate_binding_kind(kind: &BindingKind) -> RhiResult<()> {
         BindingKind::StorageBuffer { min_size, .. } => Some(*min_size),
         BindingKind::SampledTexture { .. }
         | BindingKind::StorageTexture { .. }
-        | BindingKind::Sampler { .. } => None,
+        | BindingKind::Sampler { .. }
+        | BindingKind::AccelerationStructure
+        | BindingKind::ExternalTexture => None,
     };
     if min_size == Some(0) {
         return Err(RhiError::new(
@@ -516,6 +542,7 @@ pub(crate) fn validate_binding_count(count: BindingCount) -> RhiResult<()> {
     let elements = match count {
         BindingCount::One => return Ok(()),
         BindingCount::Fixed(elements) => elements,
+        BindingCount::RuntimeSized => return Ok(()),
     };
     if elements < 2 {
         return Err(RhiError::new(
@@ -539,7 +566,9 @@ pub(crate) fn is_buffer_kind(kind: &BindingKind) -> bool {
         BindingKind::UniformBuffer { .. } | BindingKind::StorageBuffer { .. } => true,
         BindingKind::SampledTexture { .. }
         | BindingKind::StorageTexture { .. }
-        | BindingKind::Sampler { .. } => false,
+        | BindingKind::Sampler { .. }
+        | BindingKind::AccelerationStructure
+        | BindingKind::ExternalTexture => false,
     }
 }
 
@@ -627,6 +656,8 @@ impl BindingKind {
                 out.push(4);
                 kind.encode_into(out);
             }
+            Self::AccelerationStructure => out.push(5),
+            Self::ExternalTexture => out.push(6),
         }
     }
 }
@@ -672,6 +703,8 @@ impl BindableKind {
             }
             .encode_into(out),
             Self::Sampler { kind } => BindingKind::Sampler { kind: *kind }.encode_into(out),
+            Self::AccelerationStructure => BindingKind::AccelerationStructure.encode_into(out),
+            Self::ExternalTexture => BindingKind::ExternalTexture.encode_into(out),
         }
     }
 }

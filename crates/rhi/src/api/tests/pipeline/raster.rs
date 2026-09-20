@@ -6,6 +6,7 @@
 //! original section banner.
 
 use super::*;
+use crate::api::pipeline::PolygonMode;
 // ---------------------------------------------------------------------------
 // Section 27.3: raster pipeline validation.
 // ---------------------------------------------------------------------------
@@ -347,4 +348,138 @@ fn a_raster_pipeline_debug_prints_portable_identity_only() {
     let text = format!("{pipeline:?}");
     assert!(text.contains("RasterPipeline"), "{text}");
     assert!(text.contains("id"), "{text}");
+}
+
+#[test]
+fn extended_raster_states_are_capability_gated_before_lowering() {
+    let state = PrimitiveState::new(PrimitiveTopology::TriangleList)
+        .with_polygon_mode(PolygonMode::Line)
+        .with_unclipped_depth(true)
+        .with_conservative(true)
+        .with_depth_bias(DepthBiasState::new(1, 1.0).with_clamp(0.5));
+    assert!(
+        check_raster(
+            &raster_with(vertex_module(1, Vec::new())).with_primitive(state),
+            &permissive(),
+        )
+        .is_ok()
+    );
+
+    for (feature, state) in [
+        (
+            OptionalFeature::PolygonModeLine,
+            PrimitiveState::new(PrimitiveTopology::TriangleList)
+                .with_polygon_mode(PolygonMode::Line),
+        ),
+        (
+            OptionalFeature::PolygonModePoint,
+            PrimitiveState::new(PrimitiveTopology::TriangleList)
+                .with_polygon_mode(PolygonMode::Point),
+        ),
+        (
+            OptionalFeature::DepthClipControl,
+            PrimitiveState::new(PrimitiveTopology::TriangleList).with_unclipped_depth(true),
+        ),
+        (
+            OptionalFeature::ConservativeRasterization,
+            PrimitiveState::new(PrimitiveTopology::TriangleList).with_conservative(true),
+        ),
+        (
+            OptionalFeature::DepthBiasClamp,
+            PrimitiveState::new(PrimitiveTopology::TriangleList)
+                .with_depth_bias(DepthBiasState::new(0, 0.0).with_clamp(1.0)),
+        ),
+    ] {
+        assert_kind(
+            check_raster(
+                &raster_with(vertex_module(1, Vec::new())).with_primitive(state),
+                &permissive().without_feature(feature),
+            ),
+            RhiErrorKind::Unsupported,
+        );
+    }
+
+    // Boundary: the default fill/clipped/non-conservative/zero-clamp state
+    // remains legal even when every extension above is absent.
+    assert!(
+        check_raster(
+            &raster_with(vertex_module(1, Vec::new())),
+            &permissive()
+                .without_feature(OptionalFeature::PolygonModeLine)
+                .without_feature(OptionalFeature::PolygonModePoint)
+                .without_feature(OptionalFeature::DepthClipControl)
+                .without_feature(OptionalFeature::ConservativeRasterization)
+                .without_feature(OptionalFeature::DepthBiasClamp),
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn dual_source_and_independent_blend_have_separate_gates() {
+    let dual = BlendState::new(
+        BlendComponent::new(
+            BlendFactor::Src1,
+            BlendFactor::OneMinusSrc1,
+            BlendOperation::Add,
+        ),
+        BlendComponent::new(BlendFactor::One, BlendFactor::Zero, BlendOperation::Add),
+    );
+    let dual_desc = raster_with(vertex_module(1, Vec::new()))
+        .with_fragment(fragment_module(2, Vec::new(), vec![float32(0, 4)]))
+        .with_color_target(
+            ShaderLocation::new(0),
+            ColorTargetState::new(TARGET).with_blend(dual),
+        );
+    assert!(check_raster(&dual_desc, &permissive()).is_ok());
+    assert_kind(
+        check_raster(
+            &dual_desc,
+            &permissive().without_feature(OptionalFeature::DualSourceBlending),
+        ),
+        RhiErrorKind::Unsupported,
+    );
+
+    let independent = raster_with(vertex_module(1, Vec::new()))
+        .with_fragment(fragment_module(
+            2,
+            Vec::new(),
+            vec![float32(0, 4), float32(1, 4)],
+        ))
+        .with_color_target(
+            ShaderLocation::new(0),
+            ColorTargetState::new(TARGET).with_blend(dual),
+        )
+        .with_color_target(ShaderLocation::new(1), ColorTargetState::new(TARGET));
+    assert!(check_raster(&independent, &permissive()).is_ok());
+    assert_kind(
+        check_raster(
+            &independent,
+            &permissive().without_feature(OptionalFeature::IndependentBlend),
+        ),
+        RhiErrorKind::Unsupported,
+    );
+
+    // Boundary: matching blend states do not require independent blending.
+    let matching = raster_with(vertex_module(1, Vec::new()))
+        .with_fragment(fragment_module(
+            2,
+            Vec::new(),
+            vec![float32(0, 4), float32(1, 4)],
+        ))
+        .with_color_target(
+            ShaderLocation::new(0),
+            ColorTargetState::new(TARGET).with_blend(dual),
+        )
+        .with_color_target(
+            ShaderLocation::new(1),
+            ColorTargetState::new(TARGET).with_blend(dual),
+        );
+    assert!(
+        check_raster(
+            &matching,
+            &permissive().without_feature(OptionalFeature::IndependentBlend)
+        )
+        .is_ok()
+    );
 }

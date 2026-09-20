@@ -1,6 +1,6 @@
 use crate::api::resource::{
     backend::SamplerBackend,
-    sampler::{AddressMode, CompareFunction, FilterMode, SamplerDescriptor},
+    sampler::{AddressMode, CompareFunction, FilterMode, SamplerBorderColor, SamplerDescriptor},
 };
 use crate::backend::vulkan::platform::device::VulkanShared;
 use ash::vk;
@@ -28,13 +28,11 @@ pub(crate) fn create_sampler(
     shared: Arc<VulkanShared>,
     desc: &SamplerDescriptor,
 ) -> Result<VulkanSampler, vk::Result> {
-    // The logical device does not enable VkPhysicalDeviceFeatures::samplerAnisotropy
-    // and its capability facts therefore reject values above one before this
-    // seam. Keep the native guard as a closure tripwire: enabling the descriptor
-    // bit without enabling the feature would be invalid Vulkan.
-    if desc.max_anisotropy > 1 {
-        return Err(vk::Result::ERROR_FEATURE_NOT_PRESENT);
-    }
+    // Descriptor validation has already checked the enabled RHI feature and
+    // its physical-device limit. The logical device enables the Vulkan feature
+    // exactly when those facts are published; mirror the requested value here
+    // rather than silently degrading an anisotropic sampler to isotropic.
+    let anisotropic = desc.max_anisotropy > 1;
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(filter(desc.mag_filter))
         .min_filter(filter(desc.min_filter))
@@ -43,13 +41,13 @@ pub(crate) fn create_sampler(
         .address_mode_v(address(desc.address_v))
         .address_mode_w(address(desc.address_w))
         .mip_lod_bias(0.0)
-        .anisotropy_enable(false)
+        .anisotropy_enable(anisotropic)
         .max_anisotropy(desc.max_anisotropy as f32)
         .compare_enable(desc.compare.is_some())
         .compare_op(compare(desc.compare))
         .min_lod(desc.lod_min)
         .max_lod(desc.lod_max)
-        .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
+        .border_color(border_color(desc.border_color))
         .unnormalized_coordinates(false);
     let sampler = unsafe { shared.device.create_sampler(&info, None) }?;
     Ok(VulkanSampler { shared, sampler })
@@ -71,6 +69,15 @@ fn address(value: AddressMode) -> vk::SamplerAddressMode {
         AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
         AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
         AddressMode::MirrorRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
+        AddressMode::ClampToBorder => vk::SamplerAddressMode::CLAMP_TO_BORDER,
+    }
+}
+fn border_color(value: SamplerBorderColor) -> vk::BorderColor {
+    match value {
+        SamplerBorderColor::TransparentBlack => vk::BorderColor::FLOAT_TRANSPARENT_BLACK,
+        SamplerBorderColor::OpaqueBlack => vk::BorderColor::FLOAT_OPAQUE_BLACK,
+        SamplerBorderColor::OpaqueWhite => vk::BorderColor::FLOAT_OPAQUE_WHITE,
+        SamplerBorderColor::Zero => vk::BorderColor::INT_TRANSPARENT_BLACK,
     }
 }
 fn compare(value: Option<CompareFunction>) -> vk::CompareOp {

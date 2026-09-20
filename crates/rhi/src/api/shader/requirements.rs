@@ -17,6 +17,141 @@ use crate::api::platform::requirements::{LimitRequirement, OptionalFeature};
 
 use super::vocabulary::{ShaderLocationInterface, ShaderStage, stage_mask};
 
+/// Inclusive subgroup-size interval reported by a device.
+///
+/// The values are grouped instead of exposed as two unrelated limits so an
+/// invalid `min > max` fact cannot be represented by a published capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SubgroupSizeRange {
+    /// Smallest supported subgroup width.
+    pub min: u32,
+    /// Largest supported subgroup width.
+    pub max: u32,
+}
+
+impl SubgroupSizeRange {
+    /// Creates a non-empty inclusive range.
+    pub fn new(min: u32, max: u32) -> Option<Self> {
+        (min != 0 && min <= max).then_some(Self { min, max })
+    }
+
+    /// Whether `size` is in the reported interval.
+    pub const fn contains(self, size: u32) -> bool {
+        self.min <= size && size <= self.max
+    }
+
+    pub(crate) fn encode_into(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.min.to_le_bytes());
+        out.extend_from_slice(&self.max.to_le_bytes());
+    }
+}
+
+/// A shader builtin whose portable semantics must be available to an entry
+/// point. Native lowering remains private; unsupported builtins are rejected by
+/// the corresponding required feature before shader compilation.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ShaderBuiltin {
+    /// Draw ordinal within a multi-draw command.
+    DrawIndex,
+    /// Raster primitive ordinal.
+    PrimitiveIndex,
+    /// Per-vertex invocation data.
+    PerVertex,
+    /// Fragment barycentric coordinates.
+    Barycentrics,
+    /// Clip-distance output.
+    ClipDistance,
+    /// Vertex positions returned by a committed ray-query intersection.
+    ///
+    /// This is separate from the acceleration-structure binding and ordinary
+    /// ray-query operation: native APIs gate fetching hit-triangle vertex data
+    /// behind an additional feature.
+    RayHitVertexPosition,
+}
+
+/// One cooperative-matrix operation required by a shader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CooperativeMatrixRequirement {
+    /// Matrix rows.
+    pub rows: u32,
+    /// Matrix columns.
+    pub columns: u32,
+    /// Contracting dimension.
+    pub depth: u32,
+    /// Stages which execute the operation.
+    pub stages: crate::api::shader::ShaderStages,
+}
+
+/// Scalar component type used by a cooperative matrix operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CooperativeMatrixComponentType {
+    /// IEEE binary16.
+    Float16,
+    /// IEEE binary32.
+    Float32,
+    /// Signed 8-bit integer.
+    Sint8,
+    /// Unsigned 8-bit integer.
+    Uint8,
+    /// Signed 16-bit integer.
+    Sint16,
+    /// Unsigned 16-bit integer.
+    Uint16,
+    /// Signed 32-bit integer.
+    Sint32,
+    /// Unsigned 32-bit integer.
+    Uint32,
+}
+
+/// Execution granularity of a cooperative matrix operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CooperativeMatrixScope {
+    /// One subgroup executes the operation cooperatively.
+    Subgroup,
+    /// One workgroup executes the operation cooperatively.
+    Workgroup,
+}
+
+/// One adapter-probed cooperative-matrix shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CooperativeMatrixProperties {
+    /// Matrix rows.
+    pub rows: u32,
+    /// Matrix columns.
+    pub columns: u32,
+    /// Contracting dimension.
+    pub depth: u32,
+    /// Operand component type.
+    pub component_type: CooperativeMatrixComponentType,
+    /// Result component type.
+    pub result_type: CooperativeMatrixComponentType,
+    /// Supported shader stages.
+    pub stages: crate::api::shader::ShaderStages,
+    /// Execution scope.
+    pub scope: CooperativeMatrixScope,
+}
+
+impl CooperativeMatrixProperties {
+    /// Returns whether this probed native shape satisfies the portable requirement.
+    pub fn satisfies(self, requirement: CooperativeMatrixRequirement) -> bool {
+        self.rows == requirement.rows
+            && self.columns == requirement.columns
+            && self.depth == requirement.depth
+            && self.stages.contains(requirement.stages)
+    }
+
+    pub(crate) fn encode_into(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.rows.to_le_bytes());
+        out.extend_from_slice(&self.columns.to_le_bytes());
+        out.extend_from_slice(&self.depth.to_le_bytes());
+        out.push(self.component_type as u8);
+        out.push(self.result_type as u8);
+        self.stages.encode_into(out);
+        out.push(self.scope as u8);
+    }
+}
+
 /// One resource an entry point requires, in the RHI binding vocabulary.
 ///
 /// Section 19.5 reuses [`BindingKind`] and [`BindingCount`] directly rather than
@@ -198,6 +333,8 @@ impl ShaderInterface {
 pub struct ShaderRequirements {
     required_features: Vec<OptionalFeature>,
     limit_requirements: Vec<LimitRequirement>,
+    builtins: Vec<ShaderBuiltin>,
+    cooperative_matrices: Vec<CooperativeMatrixRequirement>,
 }
 
 impl ShaderRequirements {
@@ -218,6 +355,18 @@ impl ShaderRequirements {
         self
     }
 
+    /// Requires a portable shader builtin.
+    pub fn require_builtin(mut self, builtin: ShaderBuiltin) -> Self {
+        self.builtins.push(builtin);
+        self
+    }
+
+    /// Requires one cooperative-matrix configuration.
+    pub fn require_cooperative_matrix(mut self, matrix: CooperativeMatrixRequirement) -> Self {
+        self.cooperative_matrices.push(matrix);
+        self
+    }
+
     /// The required optional features, in the order they were added.
     pub fn required_features(&self) -> &[OptionalFeature] {
         &self.required_features
@@ -226,5 +375,28 @@ impl ShaderRequirements {
     /// The required device limits, in the order they were added.
     pub fn limit_requirements(&self) -> &[LimitRequirement] {
         &self.limit_requirements
+    }
+
+    /// Builtins used by the entry point.
+    pub fn builtins(&self) -> &[ShaderBuiltin] {
+        &self.builtins
+    }
+
+    /// Cooperative-matrix configurations used by the entry point.
+    pub fn cooperative_matrices(&self) -> &[CooperativeMatrixRequirement] {
+        &self.cooperative_matrices
+    }
+
+    /// Feature implied by a builtin, owned here so acceptance and validation do
+    /// not grow separate tables.
+    pub(crate) fn builtin_feature(builtin: ShaderBuiltin) -> OptionalFeature {
+        match builtin {
+            ShaderBuiltin::DrawIndex => OptionalFeature::ShaderDrawIndex,
+            ShaderBuiltin::PrimitiveIndex => OptionalFeature::PrimitiveIndex,
+            ShaderBuiltin::PerVertex => OptionalFeature::ShaderPerVertex,
+            ShaderBuiltin::Barycentrics => OptionalFeature::ShaderBarycentrics,
+            ShaderBuiltin::ClipDistance => OptionalFeature::ClipDistances,
+            ShaderBuiltin::RayHitVertexPosition => OptionalFeature::RayHitVertexReturn,
+        }
     }
 }

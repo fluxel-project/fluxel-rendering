@@ -239,6 +239,9 @@ fn merge_kinds(left: &BindingKind, right: &BindingKind) -> RhiResult<(BindingKin
             Ok((left.clone(), false))
         }
 
+        (BindingKind::AccelerationStructure, BindingKind::AccelerationStructure)
+        | (BindingKind::ExternalTexture, BindingKind::ExternalTexture) => Ok((left.clone(), false)),
+
         (
             BindingKind::UniformBuffer { .. } | BindingKind::StorageBuffer { .. },
             BindingKind::SampledTexture { .. }
@@ -289,6 +292,10 @@ fn merge_kinds(left: &BindingKind, right: &BindingKind) -> RhiResult<(BindingKin
         (BindingKind::Sampler { .. }, BindingKind::StorageTexture { .. }) => {
             Err(kind_mismatch(left, right))
         }
+        (BindingKind::AccelerationStructure, _)
+        | (_, BindingKind::AccelerationStructure)
+        | (BindingKind::ExternalTexture, _)
+        | (_, BindingKind::ExternalTexture) => Err(kind_mismatch(left, right)),
     }
 }
 
@@ -435,6 +442,8 @@ fn validate_kind_against_layout(
     }
 
     match (layout_kind, required) {
+        (BindingKind::AccelerationStructure, BindingKind::AccelerationStructure)
+        | (BindingKind::ExternalTexture, BindingKind::ExternalTexture) => Ok(()),
         (
             BindingKind::UniformBuffer {
                 min_size: layout_size,
@@ -581,6 +590,10 @@ fn validate_kind_against_layout(
         | (BindingKind::Sampler { .. }, BindingKind::StorageTexture { .. }) => {
             Err(kind_mismatch(layout_kind, required))
         }
+        (BindingKind::AccelerationStructure, _)
+        | (_, BindingKind::AccelerationStructure)
+        | (BindingKind::ExternalTexture, _)
+        | (_, BindingKind::ExternalTexture) => Err(kind_mismatch(layout_kind, required)),
     }
 }
 

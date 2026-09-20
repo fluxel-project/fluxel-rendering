@@ -335,6 +335,31 @@ impl Device {
             .at("Device::submit"));
         }
 
+        // Mapping exclusivity begins when the asynchronous request is created,
+        // not only after it resolves. Refuse a pending or ready mapped buffer
+        // before native submission unless persistent mapping was negotiated.
+        if !self.capabilities().supports_feature(
+            crate::api::platform::requirements::OptionalFeature::PersistentMapping,
+        ) {
+            let mapped = plan
+                .batches()
+                .iter()
+                .flat_map(|batch| &batch.work)
+                .flat_map(|work| work.resource_uses())
+                .find_map(|use_| match use_ {
+                    ResourceUse::Buffer(use_) if use_.buffer.is_mapped() => Some(&use_.buffer),
+                    _ => None,
+                });
+            if let Some(buffer) = mapped {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a submitted buffer still owns a host mapping lease and persistent mapping is not enabled",
+                )
+                .with_object(buffer.id())
+                .at("Device::submit"));
+            }
+        }
+
         // Dedicated transient resources are materially allocated by the
         // plan-scoped allocator, before their first possible use.  The only
         // deferred markers are fact-only test fixtures; refusing one here keeps
@@ -560,6 +585,7 @@ fn validate_transient_backing(
             ResourceUse::Buffer(use_record) => is_deferred_buffer(&use_record.buffer),
             ResourceUse::Texture(use_record) => is_deferred_texture(&use_record.texture),
             ResourceUse::Frame(_) => false,
+            ResourceUse::AccelerationStructure(_) => false,
         };
         if deferred {
             return Err(RhiError::new(

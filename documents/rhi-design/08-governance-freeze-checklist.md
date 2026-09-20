@@ -1,8 +1,9 @@
 # RHI API freeze v13. Governance and freeze checklist
 
 > Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
-> specification and every affected module before using this checklist. Deferred
-> names are not P0 support claims and must not be predeclared as empty API.
+> specification and every affected module before using this checklist. Optional
+> names have complete public semantics and are admitted by capability facts;
+> unsupported backends must refuse them structurally.
 
 # 59. Capability traits explicitly absent from the public API
 
@@ -33,9 +34,10 @@ struct GpuAddress(u64);
 
 ---
 
-# 60. Deferred feature gate
+# 60. Capability-family admission gate
 
-Before any P1/P2 family enters the public API, it must submit:
+Every optional family listed in module 09 is part of the public contract. Any
+new family, or any extension which changes its portable semantic, must submit:
 
 ```text
 1. A real consumer
@@ -50,35 +52,32 @@ Before any P1/P2 family enters the public API, it must submit:
 10. Capture/Replay implications
 ```
 
-### P1 candidates
+No capability may be advertised until all ten items have implementation and
+conformance evidence. Features outside the current module map (for example
+sparse residency, device address, work graphs, multi-GPU, and XR compositor)
+must first supply this admission package; they may not be represented as empty
+traits or handles.
+
+## 60.1 Public-interface test gate
+
+No public interface is complete when only its type or implementation compiles.
+Its contract-test call sites are part of the interface review and must contain
+all three perspectives:
 
 ```text
-Typed/texel BufferView
-Query/timestamp
-Indirect/multi-draw/count
-Inline parameters
-General mapping
-External resource import/export
-Pipeline cache identity
-HDR / frame pacing
-Transient alias implementation
+positive: a supported, legal call reaches the intended portable operation
+negative: unsupported capability, wrong ownership, or illegal state is refused
+boundary: zero/exact-limit/maximum/overflow and lifecycle transition edges
 ```
 
-### P2 candidates
-
-```text
-Bindless
-Mesh/task/geometry/tessellation
-Ray tracing
-Sparse/tiled/residency
-Device address
-Work graphs
-GPU-generated commands
-External memory/sync
-Cross-device interop / multi-GPU resource sharing
-XR compositor
-Crash dump / breadcrumbs
-```
+Reviewers must read these call sites as API examples, not merely count them. If
+the tests need hidden ordering, ambiguous sentinel values, unrelated native
+concepts, late driver validation, or awkward object reconstruction, the public
+shape is not accepted yet. Tests must also prove capability-to-validation
+closure: a positive capability has a usable path, and a negative capability
+returns a structured error before native entry. Applicable asynchronous
+interfaces additionally cover pending-to-ready, cancellation, wake-on-loss,
+and stable terminal results.
 
 ---
 
@@ -239,6 +238,8 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] `create_shader`, `create_raster_pipeline`, and `create_compute_pipeline` are async; logical resource and binding creation remain synchronous.
 - [x] `submit`, `wait_completion`, and `wait_idle` are async operations.
 - [x] Readback is `readback.read().await -> ReadbackView<'_>`; the RAII view closes any backend mapping lease on Drop.
+- [x] General buffer mapping waits asynchronously for a host-visible lease;
+  pending mapping is cancellable and device loss wakes it to `DeviceLost`.
 - [x] Presentation configure/reconfigure/acquire/abandon/wait-present operations are async.
 - [x] Concurrent invocation does not imply `async fn`: capability queries, descriptor validation, command recording, statistics, and diagnostics stay synchronous.
 
@@ -279,7 +280,7 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] TextureSupport returns descriptor-specific maximum extent / mip / array-layer limits.
 - [x] TextureView format compatibility is queried separately.
 - [x] Buffer copy offset/size alignment and texel-copy row/offset alignment are both Route Facts.
-- [x] The Route key includes texture dimension/sample count that affect legality; `rows_per_image_alignment` is removed.
+- [x] The Route key includes texture dimension/sample count that affect legality; route facts separately expose array-image stride alignment and packed-3D-slice requirements rather than inventing a generic rows-per-image alignment.
 - [x] An unsupported route does not permit the backend to silently insert a shader/CPU fallback.
 - [x] Lane legality uses explicit `LaneWorkDomains`; it is not inferred from lane class.
 - [x] Lane dependencies are queried per pair and distinguish Ordered/Gpu/Collapse.
@@ -298,7 +299,8 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] Buffer / Texture creation both have descriptor-dependent capability queries.
 - [x] Buffer size > 0 and usage is non-empty; zero sizes are not accepted by relying on the backend.
 - [x] P0 Buffer is byte-addressed; `element_stride_hint` is removed.
-- [x] P0 has no public map; therefore `HostAccessIntent / HostPreferred` are removed.
+- [x] Public `map_buffer(...).await` uses a RAII mapping lease; the obsolete
+  `HostAccessIntent / HostPreferred` placement hints remain removed.
 - [x] Memory placement retains only the `Automatic / DeviceLocalPreferred` performance hint.
 - [x] Texture `extent.depth` and `array_layers` are separate.
 - [x] D1 / D2 / D3 / MSAA creation invariants are explicit.
@@ -449,7 +451,10 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
   `FrameAttachment`; direct MSAA raster resolve to it requires proved
   presentation/route facts, otherwise an intermediate resolve plus final raster
   write is used.
-- [x] Direct frame copy/blit, drawable texture, multi-acquired-frame, HDR/timing are all deferred.
+- [x] Surface capability/configuration includes view formats, HDR/color-space,
+  frame-latency, composite-alpha and generic timing facts; direct frame copy,
+  blit and multi-acquire remain capability-gated operations rather than hidden
+  restrictions.
 
 ## Statistics
 
@@ -624,7 +629,7 @@ F. Whether Capture is reconstructible without controlling execution in reverse
 | Storage access merge | merging multi-stage access for the same binding was undefined | define a ReadOnly/ReadWrite merge lattice |
 | Binding aggregate limits | per-pipeline limits were checked at the individual BGL stage, which is the wrong layer | a single BGL validates only local constraints; PipelineInterface aggregates stage/dynamic limits |
 | Integer attachment clear | `LoadOp<Color>` could not precisely express integer RT clear | add `ColorClearValue::{Float,Sint,Uint}` |
-| Basic raster state | common shadow-map depth bias was missing | P0 adds constant+slope depth bias; clamp is deferred |
+| Basic raster state | common shadow-map depth bias was missing | depth-bias clamp is a separately capability-gated raster state |
 | Fragment target linkage | it forced every shader output to have a target and did not constrain target-without-output | permit unused shader output; a target without output must have write mask NONE |
 | Alpha-to-coverage | its relation to fragment/sample-mask/target0 was not closed | add target0 alpha/output/sample-mask validation |
 | Compute diagnostics | ComputeScope lacked descriptor/label | add `ComputeScopeDescriptor` |
@@ -826,7 +831,11 @@ allowing a backend to silently execute an undeclared fallback
 allowing Statistics/Capture to alter execution results
 ```
 
-Query / Indirect / Inline Parameters / Bindless / RT / Sparse and similar features continue to be incrementally frozen as independent capability families.
+Query, indirect, immediate data, binding arrays, ray tracing and their related
+families are capability-complete public semantics under module 09. A later
+feature extension may refine only its own family after the admission gate; it
+must not reopen the v13 identity, resource, recording, submission, or
+presentation foundations.
 
 ---
 

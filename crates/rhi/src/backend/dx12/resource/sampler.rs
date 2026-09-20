@@ -8,13 +8,15 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMPARISON_FUNC_LESS_EQUAL, D3D12_COMPARISON_FUNC_NEVER, D3D12_COMPARISON_FUNC_NONE,
     D3D12_COMPARISON_FUNC_NOT_EQUAL, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_DESC,
     D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_FILTER,
-    D3D12_SAMPLER_DESC, D3D12_TEXTURE_ADDRESS_MODE, D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-    D3D12_TEXTURE_ADDRESS_MODE_MIRROR, D3D12_TEXTURE_ADDRESS_MODE_WRAP, ID3D12DescriptorHeap,
-    ID3D12Device,
+    D3D12_SAMPLER_DESC, D3D12_TEXTURE_ADDRESS_MODE, D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+    D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_MIRROR,
+    D3D12_TEXTURE_ADDRESS_MODE_WRAP, ID3D12DescriptorHeap, ID3D12Device,
 };
 
 use crate::api::resource::backend::SamplerBackend;
-use crate::api::resource::sampler::{AddressMode, CompareFunction, FilterMode, SamplerDescriptor};
+use crate::api::resource::sampler::{
+    AddressMode, CompareFunction, FilterMode, SamplerBorderColor, SamplerDescriptor,
+};
 use crate::backend::dx12::ffi;
 
 /// One CPU-visible immutable sampler descriptor.
@@ -57,7 +59,7 @@ pub(crate) fn create_sampler(
         MipLODBias: 0.0,
         MaxAnisotropy: descriptor.max_anisotropy as u32,
         ComparisonFunc: comparison(descriptor.compare),
-        BorderColor: [0.0; 4],
+        BorderColor: border_color(descriptor.border_color),
         MinLOD: descriptor.lod_min,
         MaxLOD: descriptor.lod_max,
     };
@@ -72,6 +74,14 @@ fn address(mode: AddressMode) -> D3D12_TEXTURE_ADDRESS_MODE {
         AddressMode::ClampToEdge => D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressMode::Repeat => D3D12_TEXTURE_ADDRESS_MODE_WRAP,
         AddressMode::MirrorRepeat => D3D12_TEXTURE_ADDRESS_MODE_MIRROR,
+        AddressMode::ClampToBorder => D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+    }
+}
+fn border_color(value: SamplerBorderColor) -> [f32; 4] {
+    match value {
+        SamplerBorderColor::TransparentBlack | SamplerBorderColor::Zero => [0.0; 4],
+        SamplerBorderColor::OpaqueBlack => [0.0, 0.0, 0.0, 1.0],
+        SamplerBorderColor::OpaqueWhite => [1.0; 4],
     }
 }
 

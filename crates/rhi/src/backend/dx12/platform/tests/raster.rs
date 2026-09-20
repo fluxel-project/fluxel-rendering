@@ -168,6 +168,7 @@ fn scope(view: crate::api::resource::view::TextureView) -> RasterScopeDescriptor
     RasterScopeDescriptor::new().with_color(
         ShaderLocation::new(0),
         ColorAttachment {
+            depth_slice: None,
             view: ColorAttachmentView::Texture(view),
             load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
             store: StoreOp::Store,

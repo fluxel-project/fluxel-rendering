@@ -42,9 +42,10 @@ are written down.
 | [05 Submission, completion, and presentation](rhi-design/05-submission-completion-presentation.md) | plans; plan/completion points; transient allocator access; hazards; async acceptance and completion; async presentation lifecycle | modules 01, 02, and 04 |
 | [06 Statistics, diagnostics, validation, and transient lowering](rhi-design/06-statistics-diagnostics-transient.md) | logical counters; diagnostics; canonicalization; validation; transient allocation and aliasing lowering | modules 01, 02, 04, and 05 |
 | [07 Tooling and capture prerequisites](rhi-design/07-tooling-capture-prerequisites.md) | tooling SPI; object/work descriptions; portable command/submission IR; semantic events; RHI/capture ownership split | modules 02 through 06 |
-| [08 Governance and freeze checklist](rhi-design/08-governance-freeze-checklist.md) | forbidden public shapes; deferred-feature gate; lifecycle matrix; P0 checklist; final cross-review decisions | all affected modules |
+| [08 Governance and freeze checklist](rhi-design/08-governance-freeze-checklist.md) | forbidden native public shapes; capability-family admission gate; lifecycle matrix; cross-review decisions | all affected modules |
+| [09 Capability-complete feature families](rhi-design/09-capability-complete-feature-families.md) | optional GPU feature vocabulary, capability closure, wgpu-hal 30.0.1 correspondence, backend admission, and definition of done | module 01 and every owning module named by a feature family |
 
-Section numbers 0-66 remain stable across the modules. A tool may load a module
+Section numbers 0-67 remain stable across the modules. A tool may load a module
 by section range, but it must not load a section excerpt without the module's
 introductory contract and this root file.
 
@@ -72,9 +73,12 @@ The following apply to every module and backend:
     the correct `Dedicated` baseline; `Aliasing` is an optimization capability.
 11. Async marks operations that may wait for a future event. Thread-safe or
     concurrent synchronous work does not become async merely for uniformity.
-12. P1/P2 vocabulary is absent until a real consumer, portable semantics,
-    capability facts, validation, lifetime, tests, and capture implications are
-    reviewed together.
+12. Every mature portable GPU feature family has a public semantic vocabulary.
+    Whether an adapter/device can execute it is decided by capability facts and
+    structured `Unsupported`, never by deleting the vocabulary because a
+    baseline backend lacks it. A feature may be admitted only with portable
+    semantics, validation, lifetime/loss rules, capture implications, and
+    backend conformance evidence.
 13. Public ownership is an opaque device/context identity. Its uniqueness
     includes the lifecycle generation internally; loss is terminal and a new
     device request creates a new identity rather than reviving old objects.
@@ -119,6 +123,22 @@ ledger, not an alternate API definition.
 No implementation may silently revert one of these corrections to match an old
 prototype.
 
+## 4.1 Capability-complete feature admission
+
+The v13 foundation is frozen; [module 09](rhi-design/09-capability-complete-feature-families.md)
+extends it with the feature families established by `wgpu-hal 30.0.1`. These
+families are part of the RHI contract, not a deferred/minimal subset. Each one
+has a public semantic, precise capability or descriptor-dependent support
+query, requirements negotiation, portable validation, loss behaviour, and a
+backend conformance case. A backend reports `Unsupported` before native work
+when it cannot lower a requested optional feature.
+
+HAL mechanisms which already have an RHI equivalent are deliberately not
+duplicated: HAL barriers map to `command::ResourceUse`, fences to completion,
+queues to lanes/plans, encoder recycling to private lowering, and native
+destroy to ownership plus completion-safe retirement. This is equivalence, not
+feature exclusion.
+
 ## 5. Layer ownership
 
 ```text
@@ -137,24 +157,28 @@ transient allocation semantics, device validation, submission, completion,
 presentation, retirement, logical observation, and backend lowering. A fixed
 renderer is only the first consumer of these contracts.
 
-## 5.1 Backend enhancement carrying matrix
+## 5.1 Ten-class native-lowering status matrix
 
-The v13 public surface already carries the following cross-platform backend
-enhancements. They are implementation work, not deferred public API design.
-An implementation may add private modules, traits, data structures, and tests
-for them without widening the public API.
+The v13 public surface already carries all ten cross-platform native-lowering
+classes below. They are implementation work, not deferred public API design.
+The status is deliberately about what a device may publish today, rather than
+what its native API happens to name. DX12 and Vulkan are the reference native
+backends; other backends follow the same admission rule. An implementation may
+add private modules, traits, data structures, and conformance tests without
+widening the public API.
 
-| Backend enhancement | Frozen portable carrying semantics | Public API decision | Required implementation rule |
-| --- | --- | --- | --- |
-| Persistent RTV/DSV or equivalent attachment allocator | `TextureView`, `FrameAttachment`, attachment use in `RecordedWork` | No API | Cache/retire native attachment descriptors privately; never expose native descriptor storage. |
-| Resource-state difference tracker | command-ordered `command::ResourceUse`, `RecordedWork`, PlanPoint order | No API | Derive only necessary native transitions, barriers, and memory dependencies while preserving the same actual-use trace. |
-| Shared completion/fence waiter | `CompletionPoint`, `completion_state`, `wait_completion`, `wait_idle` | No API | Multiplex native completion notification privately; every registered waiter must terminate on completion, failure, or device loss. |
-| Descriptor/resource retirement | object ownership plus last actual-use `CompletionPoint` | No API | Keep native backing/descriptors alive until completion-safe retirement; drop/loss must wake relevant waiters and may not leak native leases. |
-| Submit-lock narrowing | `submit(plan).await` acceptance and terminal-state contract | No API | Reduce private lock scope only if preflight, acceptance atomicity, cross-plan hazards, and terminal publication stay equivalent. |
-| Recorder arena/packet and state-difference cache | synchronous command recording, `RecordedWork`, canonical tooling descriptions | No API | Private packets/arenas must reconstruct the frozen commands and actual uses exactly; no public encoder or native packet type. |
-| Pipeline cache | async shader/pipeline creation and canonical shader/layout/pipeline descriptors | No API | Cache is transparent and may be memory or disk backed; cache failure is not a correctness failure and no persistent cache artifact format is frozen. |
-| Placed heap / transient aliasing | `TransientAllocationSupport`, `TransientLifetime`, `PlanPoint`, actual `ResourceUse` | Already carried | Advertise `Aliasing` only when compatible non-overlap and required alias synchronization are actually lowered; otherwise use `Dedicated`. |
-| Multiple native queues | logical `SubmissionLane`, dependency routes, `PlanPoint`, `CompletionPoint` | Already carried | Map to native queues only when the advertised route is truly lowered; ordered/collapsed lowering remains correct and native queue identity stays private. |
+| Native-lowering class | Complete public carrier | DX12 / Vulkan published status | Before-native refusal or required fallback | Admission condition for a future stronger lowering |
+| --- | --- | --- | --- | --- |
+| 1. Persistent RTV/DSV or equivalent attachment allocator | `TextureView`, `FrameAttachment`, attachment uses in `RecordedWork` | Private baseline only; neither backend publishes a public descriptor-allocator capability. | No optional public request exists: allocate/reuse private descriptors as needed and preserve attachment semantics. | A persistent pool must prove descriptor lifetime through the last use `CompletionPoint`, recycle only after retirement, survive loss without stale leases, and pass repeated view/frame attachment conformance. Native descriptor storage remains private. |
+| 2. Resource-state difference tracker | command-ordered `command::ResourceUse`, `RecordedWork`, `PlanPoint` order | Private correctness lowering; no public "state tracker" feature is published. | No optional public request exists: emit conservative legal DX12 transitions or Vulkan layouts/dependencies rather than guessing a state. | Track every accepted use, queue/layout/state boundary and alias relation; emit only legal differences; retain correct final state across batches; pass cross-batch, read/write, presentation and loss conformance. |
+| 3. Shared completion/fence waiter | `CompletionPoint`, `completion_state`, `wait_completion`, `wait_idle` | The completion API is published; waiter topology is private on both backends. | N/A to capability: each pending completion must still settle as Complete, Failed, or DeviceLost. | One native notification mechanism may multiplex waiters only after race-free registration/removal, no lost wakeups, loss wakeup of every pending future, and cancellation/idle conformance. |
+| 4. Descriptor and resource retirement | ownership plus last actual-use `CompletionPoint` | Required baseline semantic on DX12 and Vulkan; allocator strategy is private. | N/A to capability: native backing must not be reused/destroyed before completion-safe retirement. | Deferred pools/heaps may be introduced only with exact last-use retention, loss draining, no descriptor reuse while GPU-visible, bounded diagnostics, and drop/submit/readback/present conformance. |
+| 5. Submit-lock narrowing | `submit(plan).await` acceptance and terminal-state contract | Private synchronization policy; no backend publishes lock granularity. | N/A to capability: retain a conservative lock if needed. `Err` still means zero native work accepted. | Split locks only after preflight/commit atomicity, cross-plan hazard ordering, serial allocation, post-commit loss publication and simultaneous-submit conformance remain identical. |
+| 6. Recorder arena/packet plus binding/state-difference cache | synchronous recorder, `RecordedWork`, canonical tooling descriptions | Private baseline on DX12 and Vulkan; no native encoder/packet type is public. | N/A to capability: direct private recording/lowering remains valid. | Arena reuse and deduplication must reconstruct every frozen command and exact `ResourceUse`, retain every referenced backing through acceptance, invalidate on pipeline/heap/loss changes, and pass capture/replay plus state-change conformance. |
+| 7. Pipeline cache | async shader/pipeline creation; canonical shader/layout/pipeline descriptors; `PipelineCache` facts | DX12 and Vulkan currently publish cache and serialization through their wired native cache paths. A backend without that complete path publishes neither fact. | `PipelineCache` request/serialization is rejected as `Unsupported` before native work when the corresponding fact is absent; uncached pipeline creation remains the required fallback. | Probe/cache-device identity and validation key; enable/create the native cache; apply declared invalid-data policy; feed every supported pipeline creation through it; retain it through outstanding creation; serialize/restore and test invalid, loss and driver-mismatch cases. No cache-file ABI is frozen. |
+| 8. Placed heap / transient aliasing | `TransientAllocationSupport`, `TransientLifetime`, `PlanPoint`, actual `ResourceUse` | DX12 and Vulkan currently publish `Dedicated`; `Aliasing` is not published. | A requested aliasing path is Unsupported before native work; `Dedicated` is the correct universally required allocation fallback. | Probe allocation/memory requirements; create compatible placed/shared allocations; prove non-overlap from lifetime frontiers; lower DX12 alias barriers or Vulkan memory/layout dependencies; retain physical memory until all aliases retire; pass overlap, ordering, loss and reuse conformance. |
+| 9. Multiple native queues | `SubmissionLane`, dependency routes, `PlanPoint`, `CompletionPoint` | DX12 and Vulkan publish their currently implemented ordered lane set; unimplemented queue classes/routes are not published. | Unsupported route/lane requests fail before native queue work. Collapsing to one ordered native queue is valid only for already advertised semantics. | Probe queue families/classes and presentation compatibility; enable/select queues; lower every inter-lane dependency to native signal/wait and ownership transfer where needed; retain synchronization through completion; pass concurrent, dependency-cycle, presentation and loss conformance. |
+| 10. Primary-buffer mapping and persistent mapping leases | `MapMode`, range RAII, flush/invalidate, mapping capabilities, `DeviceIdentity`, completion/loss | DX12/Vulkan publish only the exact mappable primary-buffer masks their memory/heap path can uphold. `PersistentMapping` remains unadvertised until its ownership contract is met. | Unsupported map mask, range, coherence operation or persistent lease is rejected before native map; no hidden staging or implicit CPU/GPU race is permitted. | Probe legal heap/memory type and coherency; enable/select it at allocation; wait for last GPU use before grant; lower atom-aligned Vulkan flush/invalidate or truthful DX12 coherence; retain the map lease and wake/cancel it on loss; pass read/write, exact-end, non-coherent, overlap and loss conformance. |
 
 An unavailable enhancement is not an API stub. Capabilities must describe only
 lowerings that are implemented and tested: unsupported optional behavior
@@ -165,6 +189,30 @@ execution path must never use `todo!()` or `unimplemented!()` as its result.
 Private `TODO` comments are permitted only when they name the carrying
 semantics, the required fallback, and the condition for advertising the
 enhancement.
+
+## 5.2 Advanced native-lowering TODO boundary
+
+The following ten families are **not deferred public API design**: their public
+types, capability/limit vocabulary, portable validation, positive/negative/
+boundary contract tests, resource-use representation, and tooling schema are
+part of v13. What may remain for a backend is only the advanced native lowering.
+Until every admission condition in a row is met, DX12/Vulkan must keep the
+corresponding fact disabled and return structured `Unsupported` before the first
+native operation. A comment may say `TODO(native-lowering)`; a reachable
+`todo!()`, `unimplemented!()`, panic, dummy success, or silent no-op is forbidden.
+
+| Advanced family | Frozen public carrier | Current correct DX12/Vulkan behavior | Required evidence before enabling |
+| --- | --- | --- | --- |
+| Mesh / task shaders | mesh/task stages, `MeshPipeline`, direct/indirect/count mesh commands and mesh limits | Capability false and pre-native `Unsupported` unless a backend has the complete path | Native tier/extension probe and device enablement; shader acceptance; pipeline creation; dispatch lowering; argument/resource retention; loss and conformance tests. |
+| Ray system | BLAS/TLAS descriptors and sizing, build/update/copy/compaction, ray-query requirements, ray pipeline/groups, SBT and `trace_rays` | Keep each independently incomplete fact false; no AS/pipeline/dispatch placeholder may succeed | Exact size/alignment query; native allocation/build barriers; update/compaction; descriptor binding; pipeline/SBT construction; trace dispatch; lifetime/loss and positive/negative/boundary tests. |
+| Cooperative matrix | structured matrix properties and shader requirements | No matching property means Unsupported | Exact native configuration enumeration, logical-device enablement, shader compiler acceptance and a conformance shader for every published tuple. |
+| Transient physical aliasing | `TransientAllocationSupport`, `TransientLifetime`, `PlanPoint`, actual `ResourceUse` | Publish `Dedicated`; do not publish `Aliasing` | Compatible heap/memory placement, lifetime non-overlap proof, DX12 alias barrier/Vulkan dependency, completion-safe reuse and overlap/loss tests. |
+| External interop | external image/texture and typed external-memory import SPI | Capability false where platform ownership and synchronization are not implemented | Handle/source provenance, format/usage validation, ownership transfer, native synchronization, retirement and platform integration tests. |
+| NV12/P010 multiplanar | planar formats/aspects, copy layout, view and support queries | Per-format Unsupported where plane-aware views/copies are absent | Per-plane format probe, plane view/copy lowering, Vulkan YCbCr or DX12 plane semantics, row/layout validation and sampling/copy conformance. |
+| Native debugger capture | capability-gated begin/end native capture | Unsupported when PIX/RenderDoc/native integration is unavailable | Runtime integration probe, balanced begin/end state, loss/error handling and coexistence with semantic capture. |
+| Advanced allocator/memory diagnostics | allocator report with optional committed/resident/aliased/retired/budget fields | Return only truthful known fields; capability false if no useful report exists | Defined measurement source and quality, overflow-safe aggregation, loss behavior and tests distinguishing unknown from zero. |
+| HDR and presentation timing | color-space pairs, HDR display data, generic timing capabilities/timestamps | Do not advertise HDR/timing routes not consumed by swapchain/present lowering | Surface-specific probe, configuration consumption, timestamp conversion/order, reconfigure/loss behavior and real WSI tests. |
+| Advanced descriptor indexing | runtime-sized arrays, partially-bound/non-uniform indexing and their limits | Fixed arrays may remain supported; advanced facts stay false independently | Descriptor-indexing feature probe and device enablement, layout/pool flags, shader acceptance, bounds/lifetime rules and per-route conformance. |
 
 ## 6. Change control
 

@@ -12,13 +12,18 @@
 //! [`buffer`] be split further without touching its callers.
 
 mod buffer;
+mod query;
 mod readback;
 mod sampler;
 mod texture;
 mod transient;
 mod view;
 
-pub(crate) use buffer::{Dx12Buffer, StagingHeap, create_buffer, create_staging};
+pub(crate) use buffer::{
+    Dx12Buffer, Dx12BufferHeap, StagingHeap, create_buffer, create_staging, map_buffer,
+    map_resource,
+};
+pub(crate) use query::{Dx12QuerySet, create_query_set};
 pub(crate) use readback::readback_bytes;
 pub(crate) use sampler::{Dx12Sampler, create_sampler};
 pub(crate) use texture::{Dx12Texture, create_texture};

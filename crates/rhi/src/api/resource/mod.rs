@@ -6,6 +6,7 @@
 //!
 //! ```text
 //! buffer       usage bits, placement preference, buffer creation   (11.1 - 12.4)
+//! mapping      explicit host mapping leases and visibility operations
 //! texture      texture usage, dimension, descriptor, creation       (13.1 - 13.4)
 //! subresource  aspects, subresource ranges, origin, host layout     (14.1 - 14.5)
 //! view         texture views                                       (15.1 - 15.3)
@@ -67,7 +68,9 @@
 //! That keeps the rule portable and testable, and leaves the device responsible
 //! only for producing the facts.
 
+pub mod acceleration;
 pub mod buffer;
+pub mod mapping;
 pub mod route;
 pub mod sampler;
 pub mod subresource;
@@ -78,10 +81,19 @@ pub mod view;
 
 pub(crate) mod backend;
 
+pub use acceleration::{
+    AabbGeometry, AccelerationStructure, AccelerationStructureBuildMode,
+    AccelerationStructureBuildOptions, AccelerationStructureBuildSizes,
+    AccelerationStructureCopyMode, AccelerationStructureDescriptor,
+    AccelerationStructureIndexFormat, AccelerationStructureKind, AccelerationStructureVertexFormat,
+    BlasGeometry, BottomLevelAccelerationStructureDescriptor, TlasInstance,
+    TopLevelAccelerationStructureDescriptor, TrianglesGeometry,
+};
 pub use buffer::{
     Buffer, BufferBinding, BufferDescriptor, BufferRange, BufferSupport, BufferSupportLimits,
-    BufferSupportQuery, BufferUsage, ResourceMemoryPreference,
+    BufferSupportQuery, BufferUsage, MemoryPolicy, ResourceMemoryPreference,
 };
+pub use mapping::{MapBufferFuture, MapMode, MappedRange, MappedRangeMut};
 pub use route::{
     BufferCopyLayoutLimits, RouteCapabilities, RouteQuery, RouteSupport, TexelCopyLayoutLimits,
 };

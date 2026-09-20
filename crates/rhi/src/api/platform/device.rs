@@ -47,6 +47,7 @@ use crate::api::platform::backend::DeviceBackend;
 use crate::api::platform::provider::{AdapterInfo, BackendKind};
 use crate::api::platform::requirements::OptionalFeature;
 use crate::api::statistics::{CumulativeStatistics, StatisticsConfig};
+use crate::api::tooling::CapturedRecordedWork;
 use crate::api::tooling::{SemanticEvent, SemanticEventId, SemanticObserver};
 
 /// Whether a device is still usable.
@@ -181,6 +182,9 @@ pub(crate) struct RuntimeServices {
     diagnostics: Mutex<Vec<DiagnosticEvent>>,
     statistics: Mutex<StatisticsState>,
     observers: Mutex<ObserverState>,
+    pub(crate) captured_work: Mutex<HashMap<ObjectId, CapturedRecordedWork>>,
+    /// Portable state machine around an optional backend debugger capture.
+    pub(crate) native_capture_active: Mutex<bool>,
 }
 
 struct ObserverState {
@@ -213,6 +217,8 @@ impl RuntimeServices {
                 next_event: 1,
                 entries: Vec::new(),
             }),
+            captured_work: Mutex::new(HashMap::new()),
+            native_capture_active: Mutex::new(false),
         }
     }
 }
@@ -430,6 +436,11 @@ impl Device {
         &self.inner.serials
     }
 
+    /// The portable state cell for native debugger capture nesting.
+    pub(crate) fn native_capture_active(&self) -> &Mutex<bool> {
+        &self.inner.runtime.native_capture_active
+    }
+
     /// The exact compatibility tokens this domain has minted.
     ///
     /// Crate-private, and reached by the two chapters that mint from it:
@@ -449,6 +460,25 @@ impl Device {
 
     pub(crate) fn statistics_state(&self) -> &Mutex<StatisticsState> {
         &self.inner.runtime.statistics
+    }
+
+    pub(crate) fn retain_captured_work(&self, work: CapturedRecordedWork) {
+        self.inner
+            .runtime
+            .captured_work
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(work.work, work);
+    }
+
+    pub(crate) fn captured_work(&self, id: ObjectId) -> Option<CapturedRecordedWork> {
+        self.inner
+            .runtime
+            .captured_work
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&id)
+            .cloned()
     }
 
     pub(crate) fn insert_observer(&self, observer: Arc<dyn SemanticObserver>) -> u64 {

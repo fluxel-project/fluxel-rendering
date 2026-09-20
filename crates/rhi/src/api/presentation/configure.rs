@@ -26,8 +26,10 @@ use crate::api::platform::{Device, DeviceStatus};
 use crate::api::presentation::PresentationTarget;
 use crate::api::presentation::frame::{AcquireError, AcquireErrorKind, AcquiredFrameId};
 use crate::api::presentation::target::{
-    Extent2d, PresentMode, PresentationExtentControl, PresentationTargetCapabilities,
+    CompositeAlphaMode, Extent2d, PresentMode, PresentationColorSpace, PresentationExtentControl,
+    PresentationTargetCapabilities,
 };
+use crate::api::resource::texture::TextureUsage;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -48,7 +50,7 @@ pub enum PresentationExtent {
 
 /// What a target is being configured to be.
 ///
-/// Built with [`Self::new`] and the two `with_` methods, and validated by
+/// Built with [`Self::new`] and the `with_` methods, and validated by
 /// `validate_presentation_configuration` against the target's current facts.
 ///
 /// Section 43.2 fixes exactly one guarantee for a configured target: a
@@ -61,28 +63,38 @@ pub enum PresentationExtent {
 #[derive(Clone, Debug)]
 pub struct PresentationConfiguration {
     format: TextureFormat,
+    color_space: PresentationColorSpace,
     present_mode: PresentMode,
     extent: PresentationExtent,
+    maximum_frame_latency: u32,
+    composite_alpha_mode: CompositeAlphaMode,
+    usage: TextureUsage,
+    view_formats: Vec<TextureFormat>,
 }
 
 impl PresentationConfiguration {
     /// A configuration using `format`, with the portable defaults.
     ///
-    /// The defaults are the two choices that ask the target for nothing it might
-    /// not be able to give: [`PresentMode::Automatic`], the only mode every
-    /// backend supports (section 42.2), and [`PresentationExtent::HostManaged`],
-    /// which leaves the drawable size with the host. A caller that needs a
-    /// specific mode or extent adds it with the `with_` methods and accepts that
-    /// the configuration can now be refused.
+    /// The mode and extent defaults ask the target for nothing unusual:
+    /// [`PresentMode::Automatic`] is the only mode every backend supports
+    /// (section 42.2), and [`PresentationExtent::HostManaged`] leaves drawable
+    /// sizing with the host. The remaining defaults select the baseline surface
+    /// contract: sRGB, color-attachment use, automatic alpha composition and a
+    /// maximum latency of two frames. Configuration remains capability checked;
+    /// even defaults may be refused by a target whose reported facts exclude one.
     ///
-    /// Section 43.2 declares no default values, so these are a choice rather than
-    /// a transcription; they are the only pair that cannot narrow what a target
-    /// already does.
+    /// Section 43.2 declares no default values, so these are portable policy
+    /// choices rather than a transcription of one native API.
     pub fn new(format: TextureFormat) -> Self {
         Self {
             format,
+            color_space: PresentationColorSpace::Srgb,
             present_mode: PresentMode::Automatic,
             extent: PresentationExtent::HostManaged,
+            maximum_frame_latency: 2,
+            composite_alpha_mode: CompositeAlphaMode::Automatic,
+            usage: TextureUsage::COLOR_ATTACHMENT,
+            view_formats: Vec::new(),
         }
     }
 
@@ -98,9 +110,64 @@ impl PresentationConfiguration {
         self
     }
 
+    /// Sets the presentation color space paired with the configured format.
+    pub fn with_color_space(mut self, color_space: PresentationColorSpace) -> Self {
+        self.color_space = color_space;
+        self
+    }
+
+    /// Sets the maximum number of frames the presentation system may queue.
+    pub fn with_maximum_frame_latency(mut self, maximum: u32) -> Self {
+        self.maximum_frame_latency = maximum;
+        self
+    }
+
+    /// Sets how drawable alpha composes with the host surface.
+    pub fn with_composite_alpha_mode(mut self, mode: CompositeAlphaMode) -> Self {
+        self.composite_alpha_mode = mode;
+        self
+    }
+
+    /// Sets the usage bits requested for acquired surface images.
+    pub fn with_usage(mut self, usage: TextureUsage) -> Self {
+        self.usage = usage;
+        self
+    }
+
+    /// Declares alternate formats through which acquired images may be viewed.
+    pub fn with_view_formats(mut self, formats: impl IntoIterator<Item = TextureFormat>) -> Self {
+        self.view_formats = formats.into_iter().collect();
+        self
+    }
+
     /// The format a frame acquired from this configuration will be in.
     pub fn format(&self) -> TextureFormat {
         self.format
+    }
+
+    /// Requested presentation color space.
+    pub fn color_space(&self) -> PresentationColorSpace {
+        self.color_space
+    }
+
+    /// Requested maximum queued frame count.
+    pub fn maximum_frame_latency(&self) -> u32 {
+        self.maximum_frame_latency
+    }
+
+    /// Requested host-composition alpha rule.
+    pub fn composite_alpha_mode(&self) -> CompositeAlphaMode {
+        self.composite_alpha_mode
+    }
+
+    /// Requested acquired-image usage bits.
+    pub fn usage(&self) -> TextureUsage {
+        self.usage
+    }
+
+    /// Requested alternate acquired-image view formats.
+    pub fn view_formats(&self) -> &[TextureFormat] {
+        &self.view_formats
     }
 
     /// The requested present mode.
@@ -412,6 +479,9 @@ impl ConfiguredPresentation {
         &self.configuration
     }
 
+    /// Explicitly releases this configuration lease. Dropping it is equivalent.
+    pub fn close(self) {}
+
     /// Reconfigures this lease on the same device and target.
     ///
     /// Valid in two steps, because section 43.3 lists both:
@@ -639,6 +709,68 @@ pub(crate) fn validate_presentation_configuration(
         return Err(RhiError::new(
             RhiErrorKind::Unsupported,
             format!("this target cannot be configured with {:?}", config.format),
+        ));
+    }
+    if !capabilities
+        .format_color_spaces()
+        .iter()
+        .any(|pair| pair.format == config.format && pair.color_space == config.color_space)
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            format!(
+                "this target does not offer {:?} with {:?}",
+                config.format, config.color_space
+            ),
+        ));
+    }
+    if config.maximum_frame_latency == 0 {
+        return Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "maximum_frame_latency must be non-zero",
+        ));
+    }
+    if let Some(range) = capabilities.frame_latency()
+        && (config.maximum_frame_latency < range.min || config.maximum_frame_latency > range.max)
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            format!(
+                "maximum_frame_latency {} is outside this target's {}..={} range",
+                config.maximum_frame_latency, range.min, range.max
+            ),
+        ));
+    }
+    if config.composite_alpha_mode != CompositeAlphaMode::Automatic
+        && !capabilities
+            .composite_alpha_modes()
+            .contains(&config.composite_alpha_mode)
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            format!(
+                "this target does not offer {:?} composite alpha",
+                config.composite_alpha_mode
+            ),
+        ));
+    }
+    if config.usage.is_empty()
+        || !config.usage.contains(TextureUsage::COLOR_ATTACHMENT)
+        || !capabilities.usages().contains(config.usage)
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "the requested surface usage is not a supported color-attachment usage",
+        ));
+    }
+    if config
+        .view_formats
+        .iter()
+        .any(|format| !capabilities.view_formats().contains(format))
+    {
+        return Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "one or more requested surface view formats are unsupported",
         ));
     }
     if config.present_mode != PresentMode::Automatic

@@ -78,6 +78,60 @@ fn permissive_device() -> CapabilityFacts {
 }
 
 // ---------------------------------------------------------------------------
+// Trusted native passthrough.
+// ---------------------------------------------------------------------------
+
+/// Native bytecode is an accepted code *form*, not an implicit trust grant.  The
+/// explicit unsafe boundary needs its own enabled feature even where DXIL itself
+/// can be consumed by the backend.
+#[test]
+fn trusted_passthrough_requires_its_separate_capability() {
+    let artifact = unsafe {
+        using(
+            artifact_with(
+                ShaderStage::Vertex,
+                vertex_interface(),
+                shader_requirements(),
+            ),
+            dxil(),
+        )
+        .assume_trusted_passthrough(crate::api::shader::PassthroughShaderProvenance::new(
+            "trusted-test-toolchain",
+            "reflection matched this exact bytecode",
+        ))
+    };
+
+    let mut only_dxil = device_consuming(AcceptedCodeForm::Dxil);
+    assert_eq!(
+        verdict(only_dxil.clone(), &artifact),
+        ArtifactAcceptance::MissingFeature,
+        "native form acceptance alone must not enable caller-asserted reflection"
+    );
+    only_dxil.record_feature(OptionalFeature::PassthroughShaders);
+    assert_eq!(verdict(only_dxil, &artifact), ArtifactAcceptance::Accepted);
+}
+
+/// The normal native-bytecode path stays usable without the trusted boundary:
+/// backends may validate bytecode themselves, and must not be forced to advertise
+/// passthrough merely because they accept a native form.
+#[test]
+fn native_code_without_the_explicit_trust_marker_needs_no_passthrough_feature() {
+    let artifact = using(
+        artifact_with(
+            ShaderStage::Vertex,
+            vertex_interface(),
+            shader_requirements(),
+        ),
+        dxil(),
+    );
+    assert_eq!(
+        verdict(device_consuming(AcceptedCodeForm::Dxil), &artifact),
+        ArtifactAcceptance::Accepted
+    );
+    assert!(artifact.passthrough_provenance().is_none());
+}
+
+// ---------------------------------------------------------------------------
 // The code form.
 // ---------------------------------------------------------------------------
 
@@ -260,6 +314,33 @@ fn a_required_feature_that_is_not_enabled_refuses_the_artifact() {
     assert_eq!(verdict(facts, &artifact), ArtifactAcceptance::Accepted);
 }
 
+/// Ray-query intersection tests and returning the hit triangle's vertices are
+/// distinct native capabilities. Naming the latter as a builtin keeps shader
+/// reflection from silently accepting it merely because AS bindings work.
+#[test]
+fn ray_hit_vertex_return_builtin_requires_its_specific_feature() {
+    let requirements = shader_requirements()
+        .require_builtin(crate::api::shader::ShaderBuiltin::RayHitVertexPosition);
+    let artifact = artifact_with(ShaderStage::Compute, ShaderInterface::new(), requirements);
+
+    assert_eq!(
+        verdict(permissive_device(), &artifact),
+        ArtifactAcceptance::MissingFeature
+    );
+
+    let mut facts = permissive_device();
+    facts.record_feature(OptionalFeature::RayQuery);
+    assert_eq!(
+        verdict(facts, &artifact),
+        ArtifactAcceptance::MissingFeature,
+        "ordinary ray-query support must not imply hit-vertex return"
+    );
+
+    let mut facts = permissive_device();
+    facts.record_feature(OptionalFeature::RayHitVertexReturn);
+    assert_eq!(verdict(facts, &artifact), ArtifactAcceptance::Accepted);
+}
+
 // ---------------------------------------------------------------------------
 // Limits.
 // ---------------------------------------------------------------------------
@@ -343,6 +424,7 @@ fn a_resource_the_device_cannot_express_refuses_the_artifact() {
             visibility: ShaderStages::VERTEX,
             kind: BindableKind::UniformBuffer,
             array: false,
+            runtime_sized: false,
             dynamic_offset: false,
         },
         BindingSupport::Unsupported,
@@ -358,6 +440,7 @@ fn a_resource_the_device_cannot_express_refuses_the_artifact() {
             visibility: ShaderStages::VERTEX,
             kind: BindableKind::UniformBuffer,
             array: false,
+            runtime_sized: false,
             dynamic_offset: false,
         },
         BindingSupport::Supported,

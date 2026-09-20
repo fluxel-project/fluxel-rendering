@@ -125,4 +125,48 @@ fn an_interface_reports_its_groups_by_index() {
     );
 }
 
+#[test]
+fn immediate_ranges_require_order_alignment_and_the_declared_maximum() {
+    use crate::api::pipeline::ImmediateRange;
+    let base = interface_of(vec![layout(vec![])]);
+    let facts = permissive()
+        .limit(LimitKey::MaxImmediateSize, 16)
+        .limit(LimitKey::ImmediateDataAlignment, 4);
+
+    let good = PipelineInterfaceDescriptor::new(base.descriptor().groups.clone())
+        .with_immediate_range(ImmediateRange::new(0, 4, ShaderStages::VERTEX))
+        .with_immediate_range(ImmediateRange::new(4, 12, ShaderStages::FRAGMENT));
+    assert!(
+        validate_pipeline_interface_descriptor(
+            &good,
+            |key| (facts.device().limit)(key),
+            |stage, class| (facts.device().binding_limit)(stage, class)
+        )
+        .is_ok()
+    );
+
+    let unaligned = PipelineInterfaceDescriptor::new(base.descriptor().groups.clone())
+        .with_immediate_range(ImmediateRange::new(2, 4, ShaderStages::VERTEX));
+    assert_kind(
+        validate_pipeline_interface_descriptor(
+            &unaligned,
+            |key| (facts.device().limit)(key),
+            |stage, class| (facts.device().binding_limit)(stage, class),
+        ),
+        RhiErrorKind::InvalidUsage,
+    );
+
+    let overlap = PipelineInterfaceDescriptor::new(base.descriptor().groups.clone())
+        .with_immediate_range(ImmediateRange::new(0, 8, ShaderStages::VERTEX))
+        .with_immediate_range(ImmediateRange::new(4, 4, ShaderStages::VERTEX));
+    assert_kind(
+        validate_pipeline_interface_descriptor(
+            &overlap,
+            |key| (facts.device().limit)(key),
+            |stage, class| (facts.device().binding_limit)(stage, class),
+        ),
+        RhiErrorKind::InvalidUsage,
+    );
+}
+
 // ---------------------------------------------------------------------------

@@ -34,15 +34,29 @@ pub enum ShaderStage {
     Vertex,
     Fragment,
     Compute,
+    Task,
+    Mesh,
+    RayGeneration,
+    Miss,
+    ClosestHit,
+    AnyHit,
+    Intersection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ShaderStages(u8);
+pub struct ShaderStages(u16);
 
 impl ShaderStages {
     pub const VERTEX: Self = Self(1 << 0);
     pub const FRAGMENT: Self = Self(1 << 1);
     pub const COMPUTE: Self = Self(1 << 2);
+    pub const TASK: Self = Self(1 << 3);
+    pub const MESH: Self = Self(1 << 4);
+    pub const RAY_GENERATION: Self = Self(1 << 5);
+    pub const MISS: Self = Self(1 << 6);
+    pub const CLOSEST_HIT: Self = Self(1 << 7);
+    pub const ANY_HIT: Self = Self(1 << 8);
+    pub const INTERSECTION: Self = Self(1 << 9);
 
     pub fn contains(self, other: Self) -> bool;
     pub fn union(self, other: Self) -> Self;
@@ -127,6 +141,31 @@ device
     .capabilities()
     .shader_acceptance(&artifact)
 ```
+
+### Trusted native passthrough
+
+Accepting a native form is not permission to trust arbitrary caller-provided
+bytecode or reflection. Ordinary `ShaderArtifact::new` always follows normal
+artifact/interface validation. The only bypass of frontend reflection is the
+explicit unsafe admission boundary:
+
+```rust
+let artifact = unsafe {
+    artifact.assume_trusted_passthrough(
+        PassthroughShaderProvenance::new(
+            "producer identity",
+            "verification of this exact immutable code payload",
+        ),
+    )
+};
+```
+
+This additionally requires `OptionalFeature::PassthroughShaders`; code-form
+acceptance alone is insufficient. Safety requires the caller to establish that
+the exact code payload, stage, entry point, `ShaderInterface`, and
+`ShaderRequirements` agree. The RHI still validates the supplied declaration and
+device capability, but cannot discover semantics omitted by dishonest reflection.
+Provenance is retained for capture and diagnostics, not treated as authority.
 
 ---
 
@@ -556,8 +595,13 @@ Vulkan unresolved specialization constant
 Metal required function constant
 ```
 
-If values need to be supplied at pipeline creation time, that belongs to a future Specialization Constants P2 API;
-P0 must not pre-create a half-complete constants map.
+Pipeline specialization is deliberately closed before `create_shader()` in v13:
+the artifact is the exact compiled input to its pipeline. Fluxel does not expose
+a second native-specialization map because it would be an additional public
+shader ABI whose cross-backend validation has not been specified. This is a
+semantic boundary, not a deferred or partially implemented capability: callers
+that need specialization produce a distinct `ShaderArtifact` first, and cache
+identity is consequently unambiguous.
 
 ---
 
@@ -681,6 +725,9 @@ pub enum BindingCount {
     ///
     /// value >= 2.
     Fixed(u32),
+
+    /// The binding packet supplies a non-zero active element count.
+    RuntimeSized,
 }
 
 impl BindingCount {
@@ -688,7 +735,9 @@ impl BindingCount {
 }
 ```
 
-`Fixed(n)` is capability-gated vocabulary.
+Array shape is capability-gated vocabulary. `Fixed(n)` is exact-length;
+`RuntimeSized` has a non-zero active packet length and uses the device's per-stage
+binding-array ceiling as its maximum.
 
 It **does not imply**:
 
@@ -699,7 +748,12 @@ update-after-bind
 non-uniform arbitrary descriptor indexing
 ```
 
-These remain future bindless/indexing extensions.
+These are separate descriptor-indexing features. They must never be inferred from
+the existence of a Rust binding-array type: a device reports
+`RuntimeSizedBindingArrays`, `PartiallyBoundBindingArrays`, and the appropriate
+non-uniform-indexing facts independently. The current binding packet models exact
+fixed arrays and a contiguous active runtime array; a future sparse packet must be
+a separately reviewed API rather than interpreting a missing element implicitly.
 
 WebGPU core does not require a backend to support this vocabulary;
 the WebGPU backend may correctly return `BindingSupport::Unsupported`.
@@ -1419,21 +1473,12 @@ This lets Renderer share one interface among multiple Pipelines.
 
 ## 23.4 Inline parameters
 
-0.16 does not reserve any of these in PipelineInterface:
-
-~~~text
-push constants
-root constants
-immediate bytes
-~~~
-
-WebGPU now has immediate-data-like capability, but it is not Base semantics frozen across five backends; Fluxel keeps Inline Parameters as a separately reviewed capability family according to the established plan.
-
-Do not pre-add:
-
-~~~text
-reserved_inline_range
-~~~
+`PipelineInterface` declares portable `ImmediateData` byte ranges and their
+stage visibility. Raster, compute, and ray scopes set a byte subrange by offset.
+`Immediates`, `MaxImmediateSize`, and `ImmediateDataAlignment` are negotiated
+capability/limit facts. The public semantic is not called push/root constants
+and a backend without it returns `Unsupported`; it must not silently bind an
+ordinary uniform buffer. See module 09.
 
 ---
 
@@ -1449,23 +1494,20 @@ Vertex input must be verifiable against ShaderInterface.inputs at pipeline creat
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VertexFormat {
-    Float32,
-    Float32x2,
-    Float32x3,
-    Float32x4,
-
-    Uint32,
-    Uint32x2,
-    Uint32x3,
-    Uint32x4,
-
-    Sint32,
-    Sint32x2,
-    Sint32x3,
-    Sint32x4,
-
-    Unorm8x2,
-    Unorm8x4,
+    Uint8, Uint8x2, Uint8x4,
+    Sint8, Sint8x2, Sint8x4,
+    Unorm8, Unorm8x2, Unorm8x4, Unorm8x4Bgra,
+    Snorm8, Snorm8x2, Snorm8x4,
+    Uint16, Uint16x2, Uint16x4,
+    Sint16, Sint16x2, Sint16x4,
+    Unorm16, Unorm16x2, Unorm16x4,
+    Snorm16, Snorm16x2, Snorm16x4,
+    Float16, Float16x2, Float16x4,
+    Float32, Float32x2, Float32x3, Float32x4,
+    Uint32, Uint32x2, Uint32x3, Uint32x4,
+    Sint32, Sint32x2, Sint32x3, Sint32x4,
+    Float64, Float64x2, Float64x3, Float64x4,
+    Unorm10_10_10_2,
 }
 
 impl VertexFormat {
@@ -1478,17 +1520,8 @@ impl VertexFormat {
 }
 ~~~
 
-Future additions:
-
-~~~text
-Snorm8
-Uint8/Sint8
-Unorm16/Snorm16
-Uint16/Sint16
-Float16
-~~~
-
-add enum variants directly; do not create a new VertexFormat trait.
+`Float64*` requires `VertexAttribute64Bit`; every variant has exact byte size,
+numeric type, component count, capture representation and native conversion.
 
 ---
 
@@ -1582,18 +1615,12 @@ VertexInputState may contain extra attributes not consumed by the shader, provid
 
 # 25. Raster fixed state
 
-This chapter freezes the commonly used raster state of P0 and does not include it in advance:
-
-```text
-polygon mode
-depth clip control
-depth bounds
-conservative raster
-programmable sample positions
-VRS
-```
-
-It will be added by capability family in the future.
+This chapter owns portable raster state. Polygon line/point modes, depth clip
+control, conservative rasterization, depth-bias clamp, dual-source blend,
+independent blend, and multisampled shading are present as independently
+capability-gated semantics. Depth bounds, programmable sample positions and
+VRS require an equally complete admission package before they are introduced;
+they are not represented as placeholder fields.
 
 ---
 
@@ -1643,7 +1670,8 @@ pub struct PrimitiveState {
     pub front_face: FrontFace,
     pub cull_mode: CullMode,
 
-    /// P0 portable depth bias: constant + slope; clamp is deferred.
+    /// Constant, slope, and capability-gated clamp semantics are validated
+    /// against the selected raster route.
     pub depth_bias: Option<DepthBiasState>,
 
     /// Legal only for LineStrip / TriangleStrip.
@@ -1683,8 +1711,9 @@ impl PrimitiveState {
 WebGPU itself requires the indexed draw of strip topology to determine the strip index format in the pipeline;
 D3D12 PSO also has strip-cut value, so it can't be left to be guessed at draw.
 
-Depth bias P0 only allows triangle topology; `slope_scale` must be finite.
-Clamp and line/point depth bias are left to subsequent capability families.
+Depth bias validates topology and the selected route; `slope_scale` must be
+finite. Clamp and line/point variants are capability-gated rather than silently
+omitted; see module 09.
 
 ---
 
@@ -2336,9 +2365,9 @@ trait ComputeApi;
 
 ## 28.1 Pipeline / shader cache rule
 
-0.16 does not freeze the persistent pipeline cache file format.
-
-But all pipeline descriptors must be accessible by:
+v13 freezes an opaque, device-scoped `PipelineCache`; it deliberately does not
+freeze a backend pipeline-binary file format. All pipeline descriptors remain
+completely describable by:
 
 ```text
 ShaderArtifact
@@ -2347,28 +2376,31 @@ fixed state
 target signature
 ```
 
-Completely re-described.
-
-In the future Pipeline Cache can build its own:
+The cache descriptor optionally carries opaque serialized bytes together with a
+`PipelineCacheValidationKey`. These two values are supplied together or not at
+all. The key is persisted beside the blob and compared as an opaque backend /
+adapter / device contract; applications do not interpret it. Cache creation has
+an explicit invalid-data policy:
 
 ```text
-driver/device fingerprint
-shader artifact hash
-layout fingerprint
-pipeline descriptor fingerprint
+RejectInvalidData
+IgnoreInvalidData and create an empty cache
 ```
 
-You cannot use native PSO/pipeline binary as a portable correctness source.
+`PipelineCache` and restoration/serialization have distinct capability facts.
+The object may be named by shader/raster/compute/mesh/ray pipeline descriptors,
+and wrong-device use is rejected before backend creation. Serialization returns
+opaque bytes plus the cache object's validation key. Device loss terminates all
+later cache operations. You cannot use a native PSO/pipeline binary as a
+portable correctness source.
 
 ### Backend cache implementation route
 
-An in-memory or persistent backend pipeline cache is a transparent private
-optimization. It is carried by the existing asynchronous creation operations
-and canonical descriptors; it does not add cache handles, native binaries, or
-cache import/export to public v13. A cache miss, invalid entry, or unavailable
-disk cache must fall back to ordinary compilation/creation. A backend may leave
-a private TODO for persistence only when it names that uncached fallback; no
-publicly reachable pipeline creation path may terminate in `todo!()` or
-`unimplemented!()`.
+The public cache is a performance input only. A miss or an ignored invalid blob
+falls back to ordinary asynchronous pipeline creation without changing shader,
+layout, fixed-state, target-signature, or capability validation. Backends that
+do not implement the object keep both capability facts false and return
+structured `Unsupported` before native entry; no reachable path may terminate
+in `todo!()` or `unimplemented!()`.
 
 ---

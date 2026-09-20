@@ -41,9 +41,19 @@ pub(super) struct VulkanInstance {
     entry: ash::Entry,
     instance: ash::Instance,
     presentation_extensions: bool,
+    /// Vulkan 1.0 needs this instance extension to query extension feature
+    /// structs. Without it ASTC HDR remains unavailable rather than guessed.
+    physical_device_properties2: bool,
 }
 
 impl VulkanInstance {
+    pub(super) fn physical_properties(
+        &self,
+        physical: vk::PhysicalDevice,
+    ) -> vk::PhysicalDeviceProperties {
+        unsafe { self.instance.get_physical_device_properties(physical) }
+    }
+
     fn new() -> RhiResult<Self> {
         let entry = unsafe { ash::Entry::load() }.map_err(|error| {
             RhiError::new(
@@ -53,6 +63,14 @@ impl VulkanInstance {
             .at("VulkanProvider::new")
         })?;
         let application = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_0);
+        let instance_extensions = unsafe { entry.enumerate_instance_extension_properties(None) }
+            .map_err(|result| {
+                ffi::to_rhi(result, "VulkanProvider::enumerate_instance_extensions")
+            })?;
+        let physical_device_properties2 = instance_extensions.iter().any(|property| unsafe {
+            CStr::from_ptr(property.extension_name.as_ptr())
+                == ash::khr::get_physical_device_properties2::NAME
+        });
         #[cfg(windows)]
         let presentation_extensions = {
             let available = unsafe { entry.enumerate_instance_extension_properties(None) }
@@ -84,7 +102,7 @@ impl VulkanInstance {
         #[cfg(not(any(windows, target_os = "android")))]
         let presentation_extensions = false;
         #[cfg(windows)]
-        let extensions = if presentation_extensions {
+        let mut extensions = if presentation_extensions {
             vec![
                 ash::khr::surface::NAME.as_ptr(),
                 ash::khr::win32_surface::NAME.as_ptr(),
@@ -93,7 +111,7 @@ impl VulkanInstance {
             Vec::new()
         };
         #[cfg(target_os = "android")]
-        let extensions = if presentation_extensions {
+        let mut extensions = if presentation_extensions {
             vec![
                 ash::khr::surface::NAME.as_ptr(),
                 ash::khr::android_surface::NAME.as_ptr(),
@@ -102,7 +120,14 @@ impl VulkanInstance {
             Vec::new()
         };
         #[cfg(not(any(windows, target_os = "android")))]
-        let extensions = Vec::new();
+        let mut extensions = Vec::new();
+        if physical_device_properties2
+            && !extensions.iter().any(|&extension| {
+                extension == ash::khr::get_physical_device_properties2::NAME.as_ptr()
+            })
+        {
+            extensions.push(ash::khr::get_physical_device_properties2::NAME.as_ptr());
+        }
         let create = vk::InstanceCreateInfo::default()
             .application_info(&application)
             .enabled_extension_names(&extensions);
@@ -112,6 +137,7 @@ impl VulkanInstance {
             entry,
             instance,
             presentation_extensions,
+            physical_device_properties2,
         })
     }
 
@@ -146,6 +172,8 @@ struct Candidate {
     non_coherent_atom_size: u64,
     capability_limits: facts::VulkanCapabilityLimits,
     swapchain_supported: bool,
+    draw_indirect_count_supported: bool,
+    astc_hdr_supported: bool,
 }
 
 /// One Vulkan provider owns one loaded instance and may create many devices.
@@ -290,24 +318,60 @@ impl VulkanProvider {
             }) else {
                 continue;
             };
+            let graphics_timestamp_valid_bits = families[graphics_family].timestamp_valid_bits;
             let properties = unsafe {
                 self.instance
                     .instance
                     .get_physical_device_properties(physical)
             };
+            let features = unsafe {
+                self.instance
+                    .instance
+                    .get_physical_device_features(physical)
+            };
+            let extensions = unsafe {
+                self.instance
+                    .instance
+                    .enumerate_device_extension_properties(physical)
+            }
+            .map_err(|result| ffi::to_rhi(result, "VulkanProvider::enumerate_device_extensions"))?;
             let swapchain_supported = self.instance.presentation_extensions
-                && unsafe {
-                    self.instance
-                        .instance
-                        .enumerate_device_extension_properties(physical)
-                }
-                .map_err(|result| {
-                    ffi::to_rhi(result, "VulkanProvider::enumerate_device_extensions")
-                })?
-                .iter()
-                .any(|property| unsafe {
+                && extensions.iter().any(|property| unsafe {
                     CStr::from_ptr(property.extension_name.as_ptr()) == ash::khr::swapchain::NAME
                 });
+            // The provider deliberately creates a Vulkan 1.0 instance. Even
+            // where a physical device also advertises Vulkan 1.2, requesting
+            // the KHR extension keeps function loading and device enablement
+            // one explicit path instead of assuming promoted core commands.
+            let draw_indirect_count_supported = extensions.iter().any(|property| unsafe {
+                CStr::from_ptr(property.extension_name.as_ptr())
+                    == ash::khr::draw_indirect_count::NAME
+            });
+            let astc_hdr_extension_supported = extensions.iter().any(|property| unsafe {
+                CStr::from_ptr(property.extension_name.as_ptr())
+                    == ash::ext::texture_compression_astc_hdr::NAME
+            });
+            // The instance deliberately remains Vulkan 1.0-compatible. Query
+            // extension feature structs through KHR_properties2 only when the
+            // instance extension was enabled; otherwise an ASTC HDR extension
+            // name alone must not become a public capability.
+            let astc_hdr_supported = if astc_hdr_extension_supported
+                && self.instance.physical_device_properties2
+            {
+                let properties2 = ash::khr::get_physical_device_properties2::Instance::new(
+                    &self.instance.entry,
+                    &self.instance.instance,
+                );
+                let mut astc_hdr =
+                    vk::PhysicalDeviceTextureCompressionASTCHDRFeaturesEXT::default();
+                let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut astc_hdr);
+                unsafe {
+                    (properties2.fp().get_physical_device_features2_khr)(physical, &mut features2)
+                };
+                astc_hdr.texture_compression_astc_hdr == vk::TRUE
+            } else {
+                false
+            };
             let memory = unsafe {
                 self.instance
                     .instance
@@ -338,6 +402,30 @@ impl VulkanProvider {
                 storage_buffer_ceiling: u64::from(properties.limits.max_storage_buffer_range),
                 non_coherent_atom_size: properties.limits.non_coherent_atom_size,
                 capability_limits: facts::VulkanCapabilityLimits {
+                    astc_hdr: astc_hdr_supported,
+                    // A Vulkan property value is useful only if the matching
+                    // device feature can be enabled. Keep that conjunction in
+                    // the candidate so adapter facts and logical-device
+                    // creation cannot disagree.
+                    max_sampler_anisotropy: {
+                        (features.sampler_anisotropy == vk::TRUE)
+                            .then_some(properties.limits.max_sampler_anisotropy as u32)
+                    },
+                    depth_bias_clamp: features.depth_bias_clamp == vk::TRUE,
+                    dual_src_blend: features.dual_src_blend == vk::TRUE,
+                    independent_blend: features.independent_blend == vk::TRUE,
+                    pipeline_statistics_query: features.pipeline_statistics_query == vk::TRUE,
+                    timestamp_compute_and_graphics: properties
+                        .limits
+                        .timestamp_compute_and_graphics
+                        == vk::TRUE,
+                    timestamp_period: properties.limits.timestamp_period,
+                    timestamp_valid_bits: graphics_timestamp_valid_bits,
+                    max_push_constants_size: properties.limits.max_push_constants_size,
+                    draw_indirect_first_instance: features.draw_indirect_first_instance == vk::TRUE,
+                    multi_draw_indirect: features.multi_draw_indirect == vk::TRUE,
+                    draw_indirect_count: draw_indirect_count_supported,
+                    max_draw_indirect_count: properties.limits.max_draw_indirect_count,
                     max_bindings_per_group: properties.limits.max_per_stage_resources,
                     max_bound_descriptor_sets: properties.limits.max_bound_descriptor_sets,
                     // The portable interface validates each of its five
@@ -398,6 +486,8 @@ impl VulkanProvider {
                         / 4,
                 },
                 swapchain_supported,
+                draw_indirect_count_supported,
+                astc_hdr_supported,
             });
         }
         Ok(candidates)
@@ -456,11 +546,6 @@ impl VulkanProvider {
 
     fn create_native(&self, descriptor: &DeviceRequestDescriptor) -> RhiResult<VulkanDevice> {
         let mut candidate = self.select(descriptor.selection())?;
-        let facts = self.facts(&candidate)?;
-        validate_requirements(
-            descriptor.requirements(),
-            &AvailableCapabilities::from_facts(facts.clone()),
-        )?;
         if !descriptor.presentation_targets().is_empty() {
             let Some(family) =
                 self.graphics_present_family(&candidate, descriptor.presentation_targets())?
@@ -472,19 +557,56 @@ impl VulkanProvider {
                 .at("VulkanProvider::request_device"));
             };
             candidate.graphics_family = family;
+            let families = unsafe {
+                self.instance
+                    .instance
+                    .get_physical_device_queue_family_properties(candidate.physical)
+            };
+            candidate.capability_limits.timestamp_valid_bits =
+                families[family as usize].timestamp_valid_bits;
         }
+        // Presentation may have selected a different graphics-capable queue
+        // family. Timestamp valid bits are queue-family facts, so probe facts
+        // only after that choice rather than publishing the first family's
+        // timestamp contract for the device that was actually created.
+        let facts = self.facts(&candidate)?;
+        validate_requirements(
+            descriptor.requirements(),
+            &AvailableCapabilities::from_facts(facts.clone()),
+        )?;
         let priorities = [1.0];
         let queue = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(candidate.graphics_family)
             .queue_priorities(&priorities);
-        let device_extensions = candidate
+        let mut device_extensions = candidate
             .swapchain_supported
             .then_some(ash::khr::swapchain::NAME.as_ptr())
             .into_iter()
             .collect::<Vec<_>>();
-        let create = vk::DeviceCreateInfo::default()
+        if candidate.draw_indirect_count_supported {
+            device_extensions.push(ash::khr::draw_indirect_count::NAME.as_ptr());
+        }
+        if candidate.astc_hdr_supported {
+            device_extensions.push(ash::ext::texture_compression_astc_hdr::NAME.as_ptr());
+        }
+        let enabled_features = vk::PhysicalDeviceFeatures::default()
+            .sampler_anisotropy(candidate.capability_limits.max_sampler_anisotropy.is_some())
+            .depth_bias_clamp(candidate.capability_limits.depth_bias_clamp)
+            .dual_src_blend(candidate.capability_limits.dual_src_blend)
+            .independent_blend(candidate.capability_limits.independent_blend)
+            .pipeline_statistics_query(candidate.capability_limits.pipeline_statistics_query);
+        let enabled_features = enabled_features
+            .draw_indirect_first_instance(candidate.capability_limits.draw_indirect_first_instance)
+            .multi_draw_indirect(candidate.capability_limits.multi_draw_indirect);
+        let mut astc_hdr = vk::PhysicalDeviceTextureCompressionASTCHDRFeaturesEXT::default()
+            .texture_compression_astc_hdr(candidate.astc_hdr_supported);
+        let mut create = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue))
-            .enabled_extension_names(&device_extensions);
+            .enabled_extension_names(&device_extensions)
+            .enabled_features(&enabled_features);
+        if candidate.astc_hdr_supported {
+            create = create.push_next(&mut astc_hdr);
+        }
         let device = unsafe {
             self.instance
                 .instance
@@ -492,6 +614,9 @@ impl VulkanProvider {
         }
         .map_err(|result| ffi::to_rhi(result, "VulkanProvider::request_device"))?;
         let graphics_queue = unsafe { device.get_device_queue(candidate.graphics_family, 0) };
+        let draw_indirect_count = candidate
+            .draw_indirect_count_supported
+            .then(|| ash::khr::draw_indirect_count::Device::new(&self.instance.instance, &device));
         let memory_properties = unsafe {
             self.instance
                 .instance
@@ -517,6 +642,8 @@ impl VulkanProvider {
             candidate.physical,
             memory_properties,
             candidate.non_coherent_atom_size,
+            draw_indirect_count,
+            candidate.capability_limits.max_draw_indirect_count,
             facts,
             submission,
             candidate.swapchain_supported,

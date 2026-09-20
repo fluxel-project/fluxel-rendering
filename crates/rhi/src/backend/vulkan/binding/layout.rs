@@ -21,6 +21,15 @@ pub(in crate::backend::vulkan) fn layout_bindings(
 ) -> Result<Vec<vk::DescriptorSetLayoutBinding<'static>>, VulkanFailure> {
     let mut bindings = Vec::with_capacity(descriptor.entries.len());
     for entry in &descriptor.entries {
+        if matches!(
+            entry.kind,
+            BindingKind::AccelerationStructure | BindingKind::ExternalTexture
+        ) {
+            return Err(VulkanFailure::Unsupported {
+                what: "Vulkan acceleration-structure or external-texture binding",
+                why: "this device slice does not enable the required extension and descriptor lowering",
+            });
+        }
         if entry.dynamic_offset {
             return Err(VulkanFailure::Unsupported {
                 what: "Vulkan bind-group dynamic offsets",
@@ -45,6 +54,15 @@ pub(crate) fn descriptor_type(kind: &BindingKind) -> vk::DescriptorType {
         BindingKind::SampledTexture { .. } => vk::DescriptorType::SAMPLED_IMAGE,
         BindingKind::StorageTexture { .. } => vk::DescriptorType::STORAGE_IMAGE,
         BindingKind::Sampler { .. } => vk::DescriptorType::SAMPLER,
+        // `layout_bindings` rejects these before this mapping is reached. Keep
+        // this match exhaustive so new public binding vocabulary cannot turn
+        // into an accidental native descriptor declaration.
+        BindingKind::AccelerationStructure | BindingKind::ExternalTexture => {
+            // Unreachable: `layout_bindings` rejects this before asking for a
+            // descriptor type.  Use a valid sentinel rather than an invalid
+            // Vulkan enum in case a future refactor accidentally evaluates it.
+            vk::DescriptorType::SAMPLER
+        }
     }
 }
 

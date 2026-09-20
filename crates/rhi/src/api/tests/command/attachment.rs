@@ -76,6 +76,7 @@ fn a_color_clear_must_match_the_formats_clear_class() {
             ))),
             load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
             store: StoreOp::Store,
+            depth_slice: None,
             resolve: None,
         },
     );
@@ -89,6 +90,7 @@ fn a_color_clear_must_match_the_formats_clear_class() {
             ))),
             load: LoadOp::Clear(ColorClearValue::Sint([0, 0, 0, 1])),
             store: StoreOp::Store,
+            depth_slice: None,
             resolve: None,
         },
     );
@@ -108,6 +110,7 @@ fn a_color_attachment_needs_color_attachment_usage() {
             view: ColorAttachmentView::Texture(color_view_of(&sampled_only)),
             load: LoadOp::Load,
             store: StoreOp::Store,
+            depth_slice: None,
             resolve: None,
         },
     );
@@ -129,6 +132,7 @@ fn a_frame_is_not_a_proven_resolve_target() {
             view: ColorAttachmentView::Texture(color_view_of(&source)),
             load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
             store: StoreOp::Store,
+            depth_slice: None,
             resolve: Some(ColorAttachmentView::Frame(frame_attachment(
                 TextureFormat::Rgba8Unorm,
             ))),
@@ -156,6 +160,7 @@ fn a_single_sampled_source_cannot_resolve_at_all() {
             ))),
             load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
             store: StoreOp::Store,
+            depth_slice: None,
             resolve: Some(ColorAttachmentView::Frame(frame_attachment(
                 TextureFormat::Rgba8Unorm,
             ))),
@@ -174,6 +179,7 @@ fn a_frame_attachment_must_store() {
             view: ColorAttachmentView::Frame(frame_attachment(TextureFormat::Bgra8Unorm)),
             load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
             store: StoreOp::Discard,
+            depth_slice: None,
             resolve: None,
         },
     );
@@ -188,8 +194,42 @@ fn a_frame_attachment_must_store() {
             view: ColorAttachmentView::Frame(frame_attachment(TextureFormat::Bgra8Unorm)),
             load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
             store: StoreOp::Store,
+            depth_slice: None,
             resolve: None,
         },
     );
     assert!(validate_raster_scope(&stored).is_ok());
+}
+
+#[test]
+fn a_3d_color_attachment_requires_an_in_range_depth_slice() {
+    let attachment = |depth_slice| ColorAttachment {
+        view: ColorAttachmentView::Texture(volume_color_view()),
+        load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
+        store: StoreOp::Store,
+        depth_slice,
+        resolve: None,
+    };
+    // Positive: the final valid slice is an inclusive lower/exclusive upper
+    // boundary, so depth four permits slice three.
+    assert!(
+        validate_raster_scope(
+            &RasterScopeDescriptor::new().with_color(ShaderLocation::new(0), attachment(Some(3)))
+        )
+        .is_ok()
+    );
+    // Negative: a 3D view without a slice would be ambiguous to both native APIs.
+    assert_kind(
+        validate_raster_scope(
+            &RasterScopeDescriptor::new().with_color(ShaderLocation::new(0), attachment(None)),
+        ),
+        RhiErrorKind::InvalidUsage,
+    );
+    // Boundary: the first out-of-range slice must not wrap into the volume.
+    assert_kind(
+        validate_raster_scope(
+            &RasterScopeDescriptor::new().with_color(ShaderLocation::new(0), attachment(Some(4))),
+        ),
+        RhiErrorKind::InvalidUsage,
+    );
 }

@@ -16,6 +16,7 @@
 use crate::api::error::{RhiError, RhiResult};
 use crate::api::format::TextureFormat;
 use crate::api::platform::Device;
+use crate::api::resource::texture::TextureUsage;
 
 /// A present mode a caller may ask for.
 ///
@@ -41,6 +42,81 @@ pub enum PresentMode {
     Mailbox,
     /// Present as soon as the image is ready, without waiting for the display.
     Immediate,
+}
+
+/// Portable presentation color-space intent paired with a surface format.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PresentationColorSpace {
+    /// Standard sRGB / nonlinear display transfer.
+    Srgb,
+    /// Display-P3 primaries with the platform's standard nonlinear transfer.
+    DisplayP3,
+    /// Extended-range sRGB color space.
+    ExtendedSrgb,
+    /// HDR10 using the platform's HDR10 presentation contract.
+    Hdr10,
+}
+
+/// One format/color-space tuple accepted by a target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PresentationFormat {
+    /// Texture format of the acquired drawable.
+    pub format: TextureFormat,
+    /// Color-space interpretation used by the presentation system.
+    pub color_space: PresentationColorSpace,
+}
+
+/// How the surface alpha channel composes with the host window system.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CompositeAlphaMode {
+    /// Let the backend select its normal supported mode.
+    Automatic,
+    /// Treat every presented pixel as opaque.
+    Opaque,
+    /// Color channels already contain premultiplied alpha.
+    PreMultiplied,
+    /// Color channels contain straight (post-multiplied) alpha.
+    PostMultiplied,
+    /// Inherit the host surface's composition rule.
+    Inherit,
+}
+
+/// Supported range for the number of frames the presentation system may queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameLatencyRange {
+    /// Smallest accepted maximum-frame-latency request.
+    pub min: u32,
+    /// Largest accepted maximum-frame-latency request.
+    pub max: u32,
+}
+
+/// Whether presentation timestamps can be queried for this target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PresentationTimingCapabilities {
+    /// Whether [`crate::api::platform::Device::presentation_timestamp`] is available.
+    pub timestamps: bool,
+}
+
+/// A presentation-clock sample and its conversion to nanoseconds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresentationTimestamp {
+    /// Backend presentation-clock ticks.
+    pub value: u64,
+    /// Number of nanoseconds represented by one tick.
+    pub period_nanos: f64,
+}
+
+/// Display luminance and color-volume information when the host exposes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayHdrInfo {
+    /// Minimum display luminance in nits.
+    pub min_luminance_nits: f32,
+    /// Peak display luminance in nits.
+    pub max_luminance_nits: f32,
+    /// Peak sustained full-frame luminance in nits.
+    pub max_full_frame_luminance_nits: f32,
 }
 
 /// A width and height in texels.
@@ -91,8 +167,8 @@ pub enum PresentationExtentControl {
 
 /// What one device reports about one presentation target.
 ///
-/// Section 42.4 freezes this snapshot and deliberately stops at these three
-/// answers. Two things are *not* here, and their absence is the contract:
+/// Section 42.4 freezes this snapshot as portable surface facts. Two things are
+/// still *not* here, and their absence is the contract:
 ///
 /// ```text
 /// an ordinary drawable TextureView   not exposed, and not to be sneaked in
@@ -115,8 +191,15 @@ pub enum PresentationExtentControl {
 #[derive(Clone, Debug)]
 pub struct PresentationTargetCapabilities {
     formats: Vec<TextureFormat>,
+    format_color_spaces: Vec<PresentationFormat>,
     present_modes: Vec<PresentMode>,
     extent_control: PresentationExtentControl,
+    usages: TextureUsage,
+    composite_alpha_modes: Vec<CompositeAlphaMode>,
+    frame_latency: Option<FrameLatencyRange>,
+    view_formats: Vec<TextureFormat>,
+    timing: PresentationTimingCapabilities,
+    hdr: Option<DisplayHdrInfo>,
 }
 
 impl PresentationTargetCapabilities {
@@ -132,10 +215,56 @@ impl PresentationTargetCapabilities {
         extent_control: PresentationExtentControl,
     ) -> Self {
         Self {
+            format_color_spaces: formats
+                .iter()
+                .copied()
+                .map(|format| PresentationFormat {
+                    format,
+                    color_space: PresentationColorSpace::Srgb,
+                })
+                .collect(),
             formats,
             present_modes,
             extent_control,
+            usages: TextureUsage::COLOR_ATTACHMENT,
+            composite_alpha_modes: vec![CompositeAlphaMode::Automatic, CompositeAlphaMode::Opaque],
+            frame_latency: None,
+            view_formats: Vec::new(),
+            timing: PresentationTimingCapabilities::default(),
+            hdr: None,
         }
+    }
+
+    pub(crate) fn with_surface_details(
+        mut self,
+        usages: TextureUsage,
+        composite_alpha_modes: Vec<CompositeAlphaMode>,
+        frame_latency: Option<FrameLatencyRange>,
+        view_formats: Vec<TextureFormat>,
+    ) -> Self {
+        self.usages = usages;
+        self.composite_alpha_modes = composite_alpha_modes;
+        self.frame_latency = frame_latency;
+        self.view_formats = view_formats;
+        self
+    }
+
+    pub(crate) fn with_format_color_spaces(mut self, pairs: Vec<PresentationFormat>) -> Self {
+        self.formats = pairs.iter().map(|pair| pair.format).collect();
+        self.formats.sort_by_key(|format| *format as u8);
+        self.formats.dedup();
+        self.format_color_spaces = pairs;
+        self
+    }
+
+    pub(crate) fn with_timing_and_hdr(
+        mut self,
+        timing: PresentationTimingCapabilities,
+        hdr: Option<DisplayHdrInfo>,
+    ) -> Self {
+        self.timing = timing;
+        self.hdr = hdr;
+        self
     }
 
     /// The formats this target can be configured with.
@@ -144,6 +273,41 @@ impl PresentationTargetCapabilities {
     /// present in — and not a placeholder for "unknown".
     pub fn formats(&self) -> &[TextureFormat] {
         &self.formats
+    }
+
+    /// Exact format/color-space combinations accepted by this target.
+    pub fn format_color_spaces(&self) -> &[PresentationFormat] {
+        &self.format_color_spaces
+    }
+
+    /// Usage bits accepted for acquired surface images.
+    pub fn usages(&self) -> TextureUsage {
+        self.usages
+    }
+
+    /// Composite-alpha modes accepted by this target.
+    pub fn composite_alpha_modes(&self) -> &[CompositeAlphaMode] {
+        &self.composite_alpha_modes
+    }
+
+    /// Supported maximum-frame-latency range, when configurable.
+    pub fn frame_latency(&self) -> Option<FrameLatencyRange> {
+        self.frame_latency
+    }
+
+    /// Alternate view formats accepted for acquired images.
+    pub fn view_formats(&self) -> &[TextureFormat] {
+        &self.view_formats
+    }
+
+    /// Presentation-clock capabilities of this target.
+    pub fn timing(&self) -> PresentationTimingCapabilities {
+        self.timing
+    }
+
+    /// Current HDR display information, when exposed by the host.
+    pub fn hdr_info(&self) -> Option<DisplayHdrInfo> {
+        self.hdr
     }
 
     /// The present modes this target offers.
@@ -177,6 +341,7 @@ impl Device {
         &self,
         target: &crate::api::presentation::PresentationTarget,
     ) -> RhiResult<PresentationTargetCapabilities> {
+        self.require_active()?;
         self.native()
             .presentation()
             .ok_or_else(|| {
@@ -187,5 +352,29 @@ impl Device {
                 .at("Device::presentation_capabilities")
             })?
             .capabilities(target.id())
+    }
+
+    /// Samples the target's presentation clock when its capability advertises it.
+    pub fn presentation_timestamp(
+        &self,
+        target: &crate::api::presentation::PresentationTarget,
+    ) -> RhiResult<PresentationTimestamp> {
+        self.require_active()?;
+        let backend = self.native().presentation().ok_or_else(|| {
+            RhiError::new(
+                crate::api::error::RhiErrorKind::Unsupported,
+                "this backend does not implement presentation timing",
+            )
+            .at("Device::presentation_timestamp")
+        })?;
+        let capabilities = backend.capabilities(target.id())?;
+        if !capabilities.timing().timestamps {
+            return Err(RhiError::new(
+                crate::api::error::RhiErrorKind::Unsupported,
+                "this target does not expose a presentation clock",
+            )
+            .at("Device::presentation_timestamp"));
+        }
+        backend.presentation_timestamp(target.id())
     }
 }

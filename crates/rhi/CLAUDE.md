@@ -64,6 +64,22 @@ Transient lifetime、accepted work 保活与 retirement 必须统一归 submissi
 域管理；不要以 `Arc<Mutex<Vec<TransientLifetime>>>` 等独立 registry 发展第二套生命周期
 系统。
 
+### 1.2 公共接口以测试反审契约
+
+每一个新增或语义变更的 public API（包括 format、capability vocabulary、descriptor、
+command、future 与错误终态）必须同时提交三类测试：
+
+```text
+正面：合法调用得到承诺的结果。
+反面：不支持、错误设备、非法组合或错误状态结构化失败，绝不猜测/fallback。
+边界：上限、对齐、空/满、精确末端、生命周期或并发终态不漂移。
+```
+
+测试不是实现后的装饰。先用这三类可观察行为写出候选契约，再 review 测试本身：若测试
+需要 backend 名称、native handle、隐式全局状态、时序猜测或无法说明的 mock 才能表达，
+说明 public abstraction 不合理，应先修接口/契约而不是把 backend 细节泄漏出去。每项
+测试必须证明 portable semantic；backend-specific conformance 测试另行补充，不能替代它。
+
 实现任何 backend 功能时，统一遵循：
 
 ```text

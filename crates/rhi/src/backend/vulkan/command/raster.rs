@@ -21,7 +21,7 @@ use crate::api::command::attachment::{
     ColorAttachmentView, DepthAttachmentMode, StencilAttachmentMode,
 };
 use crate::api::command::geometry::{ColorClearValue, LoadOp, StoreOp};
-use crate::api::command::record::{RasterBegin, RasterDraw};
+use crate::api::command::record::{RasterBegin, RasterDraw, RasterIndirect};
 use crate::api::command::{IndexFormat, ResourceUse, TextureUse, TextureUseIntent};
 use crate::api::pipeline::RasterPipeline;
 use crate::api::presentation::FrameAttachment;
@@ -32,7 +32,7 @@ use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::format::vk_format;
 use crate::backend::vulkan::pipeline::VulkanRasterPipeline;
 use crate::backend::vulkan::platform::device::VulkanShared;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "android"))]
 use crate::backend::vulkan::presentation::VulkanFrameAttachment;
 use crate::backend::vulkan::resource::{VulkanBuffer, VulkanTextureView};
 
@@ -428,6 +428,12 @@ pub(super) fn lower_raster_draw(
                 }
             },
             ResourceUse::Frame(_) => {}
+            ResourceUse::AccelerationStructure(_) => {
+                return Err(VulkanFailure::Unsupported {
+                    what: "an acceleration structure in a Vulkan raster draw",
+                    why: "the Vulkan ray-query descriptor and synchronization extension path is not enabled",
+                });
+            }
         }
     }
     let mut sets = Vec::with_capacity(draw.groups.len());
@@ -537,6 +543,15 @@ pub(super) fn lower_raster_draw(
             vk::StencilFaceFlags::FRONT_AND_BACK,
             draw.stencil_reference,
         );
+        for immediate in &draw.immediates {
+            shared.device.cmd_push_constants(
+                command_buffer,
+                pipeline.layout(),
+                immediate_stage_flags(immediate.visibility)?,
+                immediate.offset,
+                &immediate.bytes,
+            );
+        }
         if let Some(index) = &draw.index {
             shared.device.cmd_bind_index_buffer(
                 command_buffer,
@@ -567,6 +582,293 @@ pub(super) fn lower_raster_draw(
         }
     }
     Ok(retention)
+}
+
+/// Lowers one raster indirect draw without manufacturing a direct draw first.
+///
+/// `firstInstance` is data owned by the GPU, rather than portable recorder
+/// state.  The capability gate therefore only publishes this operation when
+/// the selected Vulkan device enabled `drawIndirectFirstInstance`; reaching
+/// this lowering otherwise is an API/backend contract violation, not a place
+/// to silently discard the field.
+pub(super) fn lower_raster_indirect(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    draw: &RasterIndirect,
+    uses: &[ResourceUse],
+    scope: &RasterScopeState,
+    transfer_retention: &mut transfer::TransferRetention,
+) -> Result<RasterRetention, VulkanFailure> {
+    let pipeline = draw
+        .pipeline
+        .native()
+        .as_any()
+        .downcast_ref::<VulkanRasterPipeline>()
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a raster pipeline this Vulkan device did not create",
+            why: "its native pipeline belongs to another backend",
+        })?;
+    let arguments = native_buffer(&draw.arguments)?.buffer();
+    let count = draw
+        .count
+        .as_ref()
+        .map(|(buffer, offset, maximum)| Ok((native_buffer(buffer)?.buffer(), *offset, *maximum)))
+        .transpose()?;
+    if draw.draw_count > shared.max_draw_indirect_count {
+        return Err(VulkanFailure::Unsupported {
+            what: "a Vulkan raster indirect draw count",
+            why: "it exceeds VkPhysicalDeviceLimits::maxDrawIndirectCount",
+        });
+    }
+    if let Some((_, _, maximum)) = count {
+        if maximum > shared.max_draw_indirect_count {
+            return Err(VulkanFailure::Unsupported {
+                what: "a Vulkan raster indirect maximum draw count",
+                why: "it exceeds VkPhysicalDeviceLimits::maxDrawIndirectCount",
+            });
+        }
+        if shared.draw_indirect_count.is_none() {
+            return Err(VulkanFailure::Unsupported {
+                what: "a Vulkan raster indirect count buffer",
+                why: "VK_KHR_draw_indirect_count was not enabled on this logical device",
+            });
+        }
+    }
+    let mut retention = RasterRetention {
+        pipelines: vec![draw.pipeline.clone()],
+        bind_groups: Vec::new(),
+        buffers: vec![draw.arguments.clone()],
+        views: Vec::new(),
+        frames: Vec::new(),
+        objects: Vec::new(),
+    };
+    for resource_use in uses {
+        match resource_use {
+            ResourceUse::Buffer(use_) => {
+                transfer::barrier_raster_buffer(
+                    shared,
+                    command_buffer,
+                    &use_.buffer,
+                    use_.access,
+                    transfer_retention,
+                )?;
+                retention.buffers.push(use_.buffer.clone());
+            }
+            ResourceUse::Texture(use_) => match use_.intent {
+                TextureUseIntent::ColorAttachment
+                | TextureUseIntent::DepthStencilRead
+                | TextureUseIntent::DepthStencilWrite
+                | TextureUseIntent::ShaderRead
+                | TextureUseIntent::ShaderReadWrite => {}
+                _ => {
+                    return Err(VulkanFailure::Unsupported {
+                        what: "a Vulkan raster indirect texture use outside an attachment or shader binding",
+                        why: "copy and resolve uses have separate lowering paths",
+                    });
+                }
+            },
+            ResourceUse::Frame(_) => {}
+            ResourceUse::AccelerationStructure(_) => {
+                return Err(VulkanFailure::Unsupported {
+                    what: "an acceleration structure in a Vulkan raster indirect draw",
+                    why: "the Vulkan ray-query descriptor and synchronization extension path is not enabled",
+                });
+            }
+        }
+    }
+    let mut sets = Vec::with_capacity(draw.groups.len());
+    for bound in &draw.groups {
+        if !bound.dynamic_offsets.is_empty() {
+            return Err(VulkanFailure::Unsupported {
+                what: "a Vulkan raster bind group with dynamic offsets",
+                why: "this baseline has no dynamic-offset lowering",
+            });
+        }
+        let group = bound
+            .group
+            .native()
+            .as_any()
+            .downcast_ref::<VulkanBindGroup>()
+            .ok_or(VulkanFailure::Unsupported {
+                what: "a bind group this Vulkan device did not create",
+                why: "its descriptor set belongs to another backend",
+            })?;
+        sets.push((bound.index.get(), group.set()));
+        retention.bind_groups.push(bound.group.clone());
+    }
+    let mut vertex_buffers = Vec::with_capacity(draw.vertex_buffers.len());
+    for (slot, binding) in &draw.vertex_buffers {
+        vertex_buffers.push((
+            *slot,
+            native_buffer(&binding.buffer)?.buffer(),
+            binding.range.offset,
+        ));
+        retention.buffers.push(binding.buffer.clone());
+    }
+    unsafe {
+        shared.device.cmd_bind_pipeline(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipeline.pipeline(),
+        );
+        for (index, set) in sets {
+            shared.device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                index,
+                &[set],
+                &[],
+            );
+        }
+        for (slot, buffer, offset) in vertex_buffers {
+            shared
+                .device
+                .cmd_bind_vertex_buffers(command_buffer, slot, &[buffer], &[offset]);
+        }
+        let viewport = draw.viewport.unwrap_or_else(|| {
+            crate::api::command::Viewport::new(
+                0.0,
+                0.0,
+                scope.extent.width as f32,
+                scope.extent.height as f32,
+                0.0,
+                1.0,
+            )
+        });
+        shared.device.cmd_set_viewport(
+            command_buffer,
+            0,
+            &[vk::Viewport {
+                x: viewport.x,
+                y: viewport.y,
+                width: viewport.width,
+                height: viewport.height,
+                min_depth: viewport.min_depth,
+                max_depth: viewport.max_depth,
+            }],
+        );
+        let scissor = draw.scissor.unwrap_or_else(|| {
+            crate::api::command::Rect::new(0, 0, scope.extent.width, scope.extent.height)
+        });
+        shared.device.cmd_set_scissor(
+            command_buffer,
+            0,
+            &[vk::Rect2D {
+                offset: vk::Offset2D {
+                    x: scissor.x as i32,
+                    y: scissor.y as i32,
+                },
+                extent: vk::Extent2D {
+                    width: scissor.width,
+                    height: scissor.height,
+                },
+            }],
+        );
+        if pipeline.uses_blend_constant() {
+            shared.device.cmd_set_blend_constants(
+                command_buffer,
+                &[
+                    draw.blend_constant.r,
+                    draw.blend_constant.g,
+                    draw.blend_constant.b,
+                    draw.blend_constant.a,
+                ],
+            );
+        }
+        shared.device.cmd_set_stencil_reference(
+            command_buffer,
+            vk::StencilFaceFlags::FRONT_AND_BACK,
+            draw.stencil_reference,
+        );
+        if let Some(index) = &draw.index {
+            shared.device.cmd_bind_index_buffer(
+                command_buffer,
+                native_buffer(&index.binding.buffer)?.buffer(),
+                index.binding.range.offset,
+                match index.format {
+                    IndexFormat::Uint16 => vk::IndexType::UINT16,
+                    IndexFormat::Uint32 => vk::IndexType::UINT32,
+                },
+            );
+            retention.buffers.push(index.binding.buffer.clone());
+            if let Some((count_buffer, count_offset, maximum)) = count {
+                // No CPU readback/emulation is valid here: it would change
+                // both command order and the API's GPU-side clamp semantics.
+                shared
+                    .draw_indirect_count
+                    .as_ref()
+                    .expect("count route was checked before recording")
+                    .cmd_draw_indexed_indirect_count(
+                        command_buffer,
+                        arguments,
+                        draw.arguments_offset,
+                        count_buffer,
+                        count_offset,
+                        maximum,
+                        draw.stride,
+                    );
+                retention
+                    .buffers
+                    .push(draw.count.as_ref().expect("count tuple exists").0.clone());
+            } else {
+                shared.device.cmd_draw_indexed_indirect(
+                    command_buffer,
+                    arguments,
+                    draw.arguments_offset,
+                    draw.draw_count,
+                    draw.stride,
+                );
+            }
+        } else {
+            if let Some((count_buffer, count_offset, maximum)) = count {
+                shared
+                    .draw_indirect_count
+                    .as_ref()
+                    .expect("count route was checked before recording")
+                    .cmd_draw_indirect_count(
+                        command_buffer,
+                        arguments,
+                        draw.arguments_offset,
+                        count_buffer,
+                        count_offset,
+                        maximum,
+                        draw.stride,
+                    );
+                retention
+                    .buffers
+                    .push(draw.count.as_ref().expect("count tuple exists").0.clone());
+            } else {
+                shared.device.cmd_draw_indirect(
+                    command_buffer,
+                    arguments,
+                    draw.arguments_offset,
+                    draw.draw_count,
+                    draw.stride,
+                );
+            }
+        }
+    }
+    Ok(retention)
+}
+
+fn immediate_stage_flags(
+    stages: crate::api::shader::ShaderStages,
+) -> Result<vk::ShaderStageFlags, VulkanFailure> {
+    let mut native = vk::ShaderStageFlags::empty();
+    if stages.contains(crate::api::shader::ShaderStages::VERTEX) {
+        native |= vk::ShaderStageFlags::VERTEX;
+    }
+    if stages.contains(crate::api::shader::ShaderStages::FRAGMENT) {
+        native |= vk::ShaderStageFlags::FRAGMENT;
+    }
+    if native.is_empty() {
+        return Err(VulkanFailure::Unsupported {
+            what: "a Vulkan raster immediate write without raster visibility",
+            why: "the portable pipeline interface must declare vertex or fragment consumption",
+        });
+    }
+    Ok(native)
 }
 
 /// Rejects the unsupported feedback-loop shape before any native command is
@@ -659,7 +961,7 @@ pub(super) fn lower_raster_end(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "android"))]
 fn native_frame_image(frame: &FrameAttachment) -> Result<vk::Image, VulkanFailure> {
     frame
         .native()
@@ -672,7 +974,7 @@ fn native_frame_image(frame: &FrameAttachment) -> Result<vk::Image, VulkanFailur
         })
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "android")))]
 fn native_frame_image(_: &FrameAttachment) -> Result<vk::Image, VulkanFailure> {
     Err(VulkanFailure::Unsupported {
         what: "a Vulkan presentation frame",

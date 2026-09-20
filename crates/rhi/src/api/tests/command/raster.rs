@@ -173,7 +173,9 @@ fn a_draw_records_its_attachment_and_binding_uses() {
         ResourceUse::Buffer(buffer) => {
             (buffer.access == AccessMask::UNIFORM_READ).then_some(buffer.clone())
         }
-        ResourceUse::Texture(_) | ResourceUse::Frame(_) => None,
+        ResourceUse::Texture(_) | ResourceUse::Frame(_) | ResourceUse::AccelerationStructure(_) => {
+            None
+        }
     });
     let uniform = uniform.expect("a bound uniform produces a use");
     assert_eq!(uniform.stages, PipelineScope::VERTEX);
@@ -329,6 +331,164 @@ fn a_strip_topology_requires_the_index_format_it_declared() {
     scope
         .draw_indexed(0..3, 0, 0..1)
         .expect("the strip draw is legal");
+}
+
+fn indirect_facts(multi: bool, base_vertex: bool) -> CapabilityFacts {
+    let mut facts = CapabilityFacts::empty();
+    facts.record_feature(crate::api::platform::OptionalFeature::IndirectDraw);
+    if multi {
+        facts.record_feature(crate::api::platform::OptionalFeature::MultiDrawIndirect);
+    }
+    if base_vertex {
+        facts.record_feature(crate::api::platform::OptionalFeature::BaseVertex);
+    }
+    facts
+}
+
+#[test]
+fn indirect_draw_records_the_precise_argument_range_and_actual_read() {
+    let mut recorder = recorder_reporting(indirect_facts(false, false));
+    let layout = uniform_layout(1);
+    {
+        let mut scope = recorder.begin_raster(&color_scope("indirect")).unwrap();
+        scope
+            .set_pipeline(&raster_pipeline(layout.clone()))
+            .unwrap();
+        bind_the_uniform(&mut scope, layout);
+        let arguments = buffer_with(BufferUsage::INDIRECT, 32);
+        scope.draw_indirect(&arguments, 4).unwrap();
+        scope.end().unwrap();
+    }
+    let work = recorder.finish().unwrap();
+    assert!(
+        work.resource_uses()
+            .iter()
+            .any(|use_| matches!(use_, ResourceUse::Buffer(buffer)
+        if buffer.range == BufferRange::new(4, 16)
+            && buffer.stages == PipelineScope::VERTEX
+            && buffer.access == AccessMask::INDIRECT_READ))
+    );
+}
+
+#[test]
+fn indexed_indirect_requires_a_bound_and_strip_compatible_index_buffer() {
+    let mut recorder = recorder_reporting(indirect_facts(false, false));
+    let layout = uniform_layout(1);
+    let strip = strip_pipeline(91, 92, Some(IndexFormat::Uint32));
+    let arguments = buffer_with(BufferUsage::INDIRECT, 20);
+    let mut scope = recorder
+        .begin_raster(&color_scope("indirect strip"))
+        .unwrap();
+    scope.set_pipeline(&strip).unwrap();
+    bind_the_uniform(&mut scope, layout);
+    assert_kind(
+        scope.draw_indexed_indirect(&arguments, 0),
+        RhiErrorKind::InvalidUsage,
+    );
+    scope
+        .set_index_buffer(&index_buffer_binding(), IndexFormat::Uint16)
+        .unwrap();
+    assert_kind(
+        scope.draw_indexed_indirect(&arguments, 0),
+        RhiErrorKind::InvalidUsage,
+    );
+    scope
+        .set_index_buffer(&index_buffer_binding(), IndexFormat::Uint32)
+        .unwrap();
+    scope.draw_indexed_indirect(&arguments, 0).unwrap();
+}
+
+#[test]
+fn multi_indirect_checks_capability_stride_count_and_full_span() {
+    let arguments = buffer_with(BufferUsage::INDIRECT, 32);
+    let layout = uniform_layout(1);
+    let mut missing = recorder_reporting(indirect_facts(false, false));
+    let mut missing_scope = missing.begin_raster(&color_scope("no multi")).unwrap();
+    missing_scope
+        .set_pipeline(&raster_pipeline(layout.clone()))
+        .unwrap();
+    bind_the_uniform(&mut missing_scope, layout.clone());
+    assert_kind(
+        missing_scope.multi_draw_indirect(&arguments, 0, 1, 16),
+        RhiErrorKind::Unsupported,
+    );
+
+    let mut recorder = recorder_reporting(indirect_facts(true, false));
+    let mut scope = recorder.begin_raster(&color_scope("multi")).unwrap();
+    scope
+        .set_pipeline(&raster_pipeline(layout.clone()))
+        .unwrap();
+    bind_the_uniform(&mut scope, layout);
+    assert_kind(
+        scope.multi_draw_indirect(&arguments, 0, 0, 16),
+        RhiErrorKind::InvalidUsage,
+    );
+    assert_kind(
+        scope.multi_draw_indirect(&arguments, 0, 2, 15),
+        RhiErrorKind::InvalidUsage,
+    );
+    assert_kind(
+        scope.multi_draw_indirect(&arguments, 16, 2, 16),
+        RhiErrorKind::InvalidUsage,
+    );
+    assert_kind(
+        scope.multi_draw_indirect(&arguments, u64::MAX - 3, 1, 16),
+        RhiErrorKind::InvalidUsage,
+    );
+    scope.multi_draw_indirect(&arguments, 0, 2, 16).unwrap();
+    scope.end().unwrap();
+
+    // Indexed multi-draw has the wider native argument record and retains the
+    // ordinary indexed-strip compatibility rule.
+    let indexed_arguments = buffer_with(BufferUsage::INDIRECT, 40);
+    let indexed_layout = uniform_layout(1);
+    let indexed_pipeline = strip_pipeline(101, 102, Some(IndexFormat::Uint32));
+    let mut indexed_scope = recorder
+        .begin_raster(&color_scope("multi indexed"))
+        .unwrap();
+    indexed_scope.set_pipeline(&indexed_pipeline).unwrap();
+    bind_the_uniform(&mut indexed_scope, indexed_layout);
+    indexed_scope
+        .set_index_buffer(&index_buffer_binding(), IndexFormat::Uint32)
+        .unwrap();
+    indexed_scope
+        .multi_draw_indexed_indirect(&indexed_arguments, 0, 2, 20)
+        .unwrap();
+    indexed_scope.end().unwrap();
+}
+
+#[test]
+fn base_vertex_is_capability_gated_but_zero_remains_portable() {
+    let layout = uniform_layout(1);
+    let mut absent = recorder();
+    let mut absent_scope = absent
+        .begin_raster(&color_scope("base vertex absent"))
+        .unwrap();
+    absent_scope
+        .set_pipeline(&raster_pipeline(layout.clone()))
+        .unwrap();
+    bind_the_uniform(&mut absent_scope, layout.clone());
+    absent_scope
+        .set_index_buffer(&index_buffer_binding(), IndexFormat::Uint16)
+        .unwrap();
+    absent_scope.draw_indexed(0..1, 0, 0..1).unwrap();
+    assert_kind(
+        absent_scope.draw_indexed(0..1, -1, 0..1),
+        RhiErrorKind::Unsupported,
+    );
+
+    let mut present = recorder_reporting(indirect_facts(false, true));
+    let mut present_scope = present
+        .begin_raster(&color_scope("base vertex present"))
+        .unwrap();
+    present_scope
+        .set_pipeline(&raster_pipeline(layout.clone()))
+        .unwrap();
+    bind_the_uniform(&mut present_scope, layout);
+    present_scope
+        .set_index_buffer(&index_buffer_binding(), IndexFormat::Uint16)
+        .unwrap();
+    present_scope.draw_indexed(0..1, -1, 0..1).unwrap();
 }
 
 #[test]
