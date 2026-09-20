@@ -32,7 +32,10 @@
 //! - The persistent pipeline cache format. Section 28.1 requires every descriptor
 //!   to be re-described by artifact, interface, fixed state, and target signature,
 //!   which the types below satisfy by construction; the file format itself is not
-//!   frozen in 0.16.
+//!   frozen in 0.16. Pipeline creation remains the single async public seam: a
+//!   backend may transparently use in-memory, driver, or persistent caches, but a
+//!   cache key, blob, import/export operation, and hit/miss observation are not
+//!   portable API until cross-platform semantics require them.
 //!
 //! # The device seam
 //!

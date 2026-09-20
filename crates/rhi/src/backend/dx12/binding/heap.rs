@@ -29,6 +29,14 @@
 //! Which descriptors an allocation needs, and what gets written into them. That
 //! is [`super::layout`]'s plan and [`super::group`]'s writes. This module knows
 //! only about runs of integers.
+//!
+//! TODO(perf): This persistent shader-visible descriptor allocator is correct
+//! because a bind-group-owned range is not returned until the group drops, so a
+//! submitted list cannot see its slots rewritten. A frame/ring allocator or
+//! descriptor cache must instead defer reuse to the last `CompletionPoint` of
+//! every list that can reference a range. Rust `Drop` alone is not sufficient
+//! once a range can be recycled independently. Heap slots and retirement stay
+//! backend-private; the portable binding and completion APIs already suffice.
 
 use std::ops::Range;
 use std::sync::Mutex;

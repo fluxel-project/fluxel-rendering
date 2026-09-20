@@ -3,6 +3,11 @@
 //! Transient allocation is an RHI capability, not a render-graph service. A
 //! backend may satisfy this contract with a dedicated allocation for every
 //! resource and later add aliasing without changing this public vocabulary.
+//! `TransientLifetime` supplies the ordering input, while recorded
+//! [`crate::api::command::ResourceUse`] supplies the access input; an aliasing
+//! backend combines those facts with its own physical compatibility classes to
+//! lower native aliasing barriers or heap synchronization. Neither heap/page
+//! ownership nor a render-graph scheduling concept is part of this API.
 
 use crate::api::error::RhiResult;
 use crate::api::format::TextureSupportQuery;
@@ -24,6 +29,10 @@ pub enum TransientAllocationSupport {
     /// required correctness-complete implementation for every backend.
     Dedicated,
     /// Non-overlapping lifetimes may reuse physical memory.
+    ///
+    /// A backend reports this only after it actually lowers the required alias
+    /// synchronization. It remains free to use dedicated backing for an
+    /// individual incompatible allocation.
     Aliasing,
 }
 
@@ -83,6 +92,11 @@ pub struct TransientMemoryStatistics {
 }
 
 /// The plan-point interval in which a transient resource may be used.
+///
+/// This is deliberately execution vocabulary rather than an allocator-specific
+/// interval format. An aliasing implementation may derive placement and
+/// synchronization from this lifetime, plan ordering, and actual `ResourceUse`s;
+/// the caller never supplies native heap offsets, alias pairs, or barriers.
 #[derive(Clone, Debug)]
 pub struct TransientLifetime {
     acquire: PlanPoint,
@@ -218,7 +232,8 @@ impl<'plan> TransientAllocator<'plan> {
         self.plan
     }
 
-    /// Creates a transient buffer with dedicated native backing.
+    /// Creates a transient buffer with native backing appropriate to this
+    /// device's advertised transient capability.
     ///
     /// Dedicated is the frozen baseline: its allocation happens here so the
     /// returned handle is immediately a normal native-backed `Buffer`.  A future
@@ -258,7 +273,11 @@ impl<'plan> TransientAllocator<'plan> {
         Ok(buffer)
     }
 
-    /// Creates a transient texture with dedicated native backing.
+    /// Creates a transient texture with native backing appropriate to this
+    /// device's advertised transient capability.
+    ///
+    /// See [`Self::create_buffer`] for the dedicated-baseline and future aliasing
+    /// placement rule; texture allocation follows the same public contract.
     pub fn create_texture(
         &self,
         desc: &TextureDescriptor,

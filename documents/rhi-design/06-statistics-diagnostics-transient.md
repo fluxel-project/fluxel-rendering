@@ -1252,6 +1252,26 @@ backing and is reclaimed/recycled after plan-terminal completion. Backing must
 survive through its last actual-use `CompletionPoint`; CPU plan drop is never a
 license for early reuse.
 
+### 51.1 Placed-heap implementation route
+
+Placed heaps/pages, allocation pools, and aliasing-barrier bookkeeping are
+backend-private realizations of this section. They require no additional
+portable allocation, heap-offset, or barrier API. A native backend may first
+ship `Dedicated`, then add a placed allocator and advertise `Aliasing` only
+after it proves all of the following for every realized reuse:
+
+```text
+compatible resource/memory class and alignment
+non-overlap from TransientLifetime + PlanPoint ordering
+actual ResourceUse boundaries lowered to native synchronization
+old and new backing remain completion-safe
+device loss and submit rejection retain/retire backing safely
+```
+
+Until then, a private TODO must identify `Dedicated` as the active correct
+fallback. It must not be a `todo!()` or `unimplemented!()` reachable from
+`TransientAllocator::create_*` or `Device::submit`.
+
 ```rust
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]

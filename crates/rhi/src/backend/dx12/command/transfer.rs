@@ -50,6 +50,15 @@ use crate::backend::dx12::failure::{Dx12Failure, ref_native};
 /// recording returns would be freed while the GPU is still copying out of it.
 /// Retaining it here until the fence reports the batch finished is what keeps the
 /// list's resource references valid for the list's whole life.
+///
+/// TODO(perf): This batch retention is the current resource-retirement authority:
+/// native staging, CPU attachment heaps, and portable handles are released only
+/// after its serial completes. A general deferred-destruction queue may replace
+/// these per-kind vectors, but every native object must be retired after the
+/// maximum completion serial of all batches that reference it. Device loss is an
+/// exception: staging remains conservatively retained through teardown because a
+/// lost fence is not proof native DMA stopped. This changes no public ownership
+/// rule; `CompletionPoint` is already the portable retirement boundary.
 pub(super) struct CommittedBatch {
     /// The serial that reports this batch's completion.
     pub(super) serial: u64,

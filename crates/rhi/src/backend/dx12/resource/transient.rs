@@ -4,6 +4,14 @@
 //! dedicated committed allocations as its correct implementation; D3D12 heap
 //! placement and aliasing barriers can replace that lowering later without a
 //! public API change.
+//!
+//! TODO(perf): Upgrade to placed resources only after a device-owned heap/page
+//! allocator proves non-overlap from `TransientLifetime` and ordered `PlanPoint`s.
+//! Reusing a physical range also needs the D3D12 aliasing barrier from old to new
+//! logical resource, normal transitions from actual `ResourceUse`, and retirement
+//! through the final release-frontier completion rather than Rust `Drop`. Until
+//! all are present `Aliasing` is a correctness lie. The frozen transient API has
+//! all vocabulary this private lowering needs.
 
 use crate::api::resource::transient::{TransientAllocationSupport, TransientCapabilities};
 

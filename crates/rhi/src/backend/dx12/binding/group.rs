@@ -132,6 +132,11 @@ impl BindGroupBackend for Dx12BindGroup {
 
 impl Drop for Dx12BindGroup {
     fn drop(&mut self) {
+        // TODO(perf): Immediate release is correct while these immutable tables
+        // are owned for their full bind-group lifetime. If a descriptor cache
+        // later recycles ranges earlier, it must queue retirement behind every
+        // submitted list that bound the range. This is DX12-private: BindGroup
+        // ownership plus CompletionPoint already form the public lifetime seam.
         self.heap.release(self.start, self.count);
         self.sampler_heap
             .release(self.sampler_start, self.sampler_count);

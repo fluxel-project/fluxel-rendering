@@ -25,12 +25,17 @@
 //! - **Native submission machinery.** Section 39 opens by listing what is
 //!   deliberately absent from this surface: no queue, fence, semaphore, event, or
 //!   timeline value is public, and a logical completion point is not a native
-//!   fence value (section 41.7).
+//!   fence value (section 41.7). `SubmissionLaneId` plus explicit dependency
+//!   edges are the complete portable input for a backend that later maps lanes to
+//!   multiple native queues; a backend that has one queue may serialize them.
+//!   Native queue selection, fence waits, descriptor reuse, resource retirement,
+//!   and state tracking remain backend-private implementation choices.
 //! - **Retirement bookkeeping.** Section 41.6 defines retirement as a *property*
 //!   rather than a verb: native backing may be reclaimed once the last batch that
 //!   actually referenced an object is terminal and no CPU logical owner remains.
 //!   There is deliberately no `retire()` a caller could call, and this module adds
-//!   none.
+//!   none. This is also the seam for backend-private descriptor retirement: a
+//!   descriptor is not reusable merely because its logical handle was dropped.
 //! - **Presentation.** Section 45.1 puts `present_after` on this module's builder,
 //!   but the frame it consumes, the lease it leases, and the present outcome types
 //!   are [`crate::api::presentation`]'s.

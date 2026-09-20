@@ -31,9 +31,17 @@
 //! [`crate::backend::dx12::binding`] must agree on exactly, which is why the table
 //! shape is computed by one function that both call.
 //!
-//! The compute lowering owns the only currently frozen native pipeline seam.
-//! Raster pipelines do not yet have a backend seam in `api::pipeline::backend`, so this
-//! module deliberately does not invent a DX12-only raster handle for them.
+//! Compute and raster both lower through the private traits in
+//! `api::pipeline::backend`; root signatures and PSOs remain DX12 objects owned
+//! behind those portable handles.
+//!
+//! TODO(perf): Pipeline creation currently creates a fresh root signature and
+//! PSO. A private cache may key normalized immutable descriptors, DXIL,
+//! root-signature layout, adapter identity, and relevant driver/cache version.
+//! A hit must retain identical native objects/diagnostics; cache failure or
+//! invalidation must fall back to creation, never fabricate a pipeline. The
+//! asynchronous public creation API intentionally exposes no cache policy, so
+//! memory/disk caching can evolve without an RHI API revision.
 
 mod compute;
 mod interface;

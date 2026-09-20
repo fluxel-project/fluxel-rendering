@@ -70,6 +70,35 @@
 //! discipline 3 and section 9.4 forbid in the route case, and which does not
 //! become acceptable because the missing lowering is this backend's rather than
 //! the platform's.
+//!
+//! # Performance upgrade map (backend-private)
+//!
+//! TODO(perf): This is deliberately the correctness-first spine. Its one
+//! `Mutex<SpineState>` makes recording, fence serial issuance, submission and
+//! retirement one linear transaction, and its `COMMON -> use -> COMMON` policy
+//! makes each submitted list self-contained. A future batch-local state-diff
+//! encoder may retain final states only while this plan records, then emit only
+//! necessary transitions. It must still restore `COMMON` before an independent
+//! plan uses the resource, or atomically publish authoritative post-submit state
+//! with rollback for every pre-commit failure. `ResourceUse`, `PlanPoint`, and
+//! `SubmissionPlan` already carry the portable information; no public API grows.
+//!
+//! TODO(perf): Submission can narrow this lock to slot/serial reservation and
+//! the short Execute+Signal commit, recording into plan-owned slots outside it.
+//! The invariant must survive: before the first Execute failure accepts no work;
+//! afterwards every accepted batch owns exactly one ordered completion serial and
+//! all retirement is keyed to that serial.
+//!
+//! TODO(perf): Replace per-serial waiter threads with one device-owned fence
+//! waiter only when its lost-wakeup protocol registers under lock, arms after
+//! registration, re-samples before sleeping, and wakes every waiter on both
+//! completion and device loss. `CompletionPoint` is the full public seam.
+//!
+//! TODO(perf): Multi-queue lowering may map existing `SubmissionLane` and plan
+//! dependencies to queue-local fences and waits when workloads prove overlap.
+//! It must retain per-resource ordering/state ownership and must not advertise
+//! concurrent lanes until those dependencies lower; no new RHI vocabulary is
+//! required.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -152,6 +181,9 @@ pub(crate) struct Dx12CommandSpine {
     state: Mutex<SpineState>,
     /// Futures waiting for a fence transition. Kept separate from command state
     /// so a native event thread only needs a small portable waker registry.
+    ///
+    /// TODO(perf): The serial-keyed registry permits a future shared fence waiter
+    /// without altering completion-future semantics; see the module upgrade map.
     completion_waiters: Arc<Mutex<BTreeMap<u64, Vec<Waker>>>>,
 }
 

@@ -23,6 +23,9 @@
 //!   [`crate::api::command::CommandRecorder`]'s.
 //! - Upper-layer scheduling contracts. This module records only the portable
 //!   commands that actually happened.
+//! - Native resource states, barriers, and layouts. A backend lowers those from
+//!   these actual uses together with `SubmissionPlan` ordering; exposing a state
+//!   transition here would make callers duplicate backend synchronization policy.
 //! - Sampler participation. Section 37.2 says a sampler generates no memory
 //!   hazard but still enters command semantics; the only `ResourceUse` variants
 //!   are buffer, texture, and frame, so a sampler produces no record here. It is
@@ -225,6 +228,12 @@ pub struct FrameAttachmentUse {
 }
 
 /// One resource actually touched by recorded work.
+///
+/// This is the complete portable synchronization input for an individual
+/// command: resource/range, stage scope, access, and texture intent. Submission
+/// adds ordering between works; backend lowering then chooses native state
+/// transitions, barriers, layout changes, or caches. It must not infer an
+/// additional use from a higher-level render schedule.
 #[non_exhaustive]
 #[derive(Clone)]
 pub enum ResourceUse {

@@ -812,6 +812,29 @@ native command queue
 HostWait as lane dependency
 ~~~
 
+---
+
+## 41.13 Private execution enhancement route
+
+The following are deliberately backend-private improvements to the frozen
+submission contract. They do not justify a public fence, queue, barrier,
+descriptor heap, command packet, or synchronization API.
+
+| Improvement | Existing carrying semantics | Backend obligation before it is enabled |
+| --- | --- | --- |
+| Batch-local state-difference tracker | ordered `command::ResourceUse` and PlanPoint dependencies | Produce every required state/memory transition, including cross-submit uses, without changing the semantic use trace. |
+| Shared fence/completion waiter | `CompletionPoint` terminal observation | Multiplex native waits and wake every completion/readback/present/idle waiter on success, failure, and DeviceLost. |
+| Narrower submit synchronization | Phase A/Phase B acceptance contract | Preserve cross-plan hazard validation and ensure no accepted work is reported as a rejected plan. |
+| Multi-queue lowering | `SubmissionLane` and `LaneDependencyRoute` | Use native queue overlap only for routes that can be proven; otherwise retain ordered or Collapse lowering. |
+| Recorder arena/command packet cache | synchronous recorder and reconstructable `RecordedWork` | Preserve recorder validation, command order, actual uses, diagnostics, and tooling descriptions. |
+| Descriptor retirement | last actual-use completion rule | Keep all native descriptor/table backing live through the relevant completion point. |
+
+The implementation may introduce private `TODO` markers for one of these
+improvements, but the marker must state its current correct fallback and must
+not be reachable from a public call as `todo!()`/`unimplemented!()`. A backend
+must not advertise a capability or route merely because a private type exists;
+unsupported optional routes return structured `Unsupported`.
+
 
 # 42. Presentation surface facts
 

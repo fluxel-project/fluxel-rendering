@@ -530,7 +530,10 @@ impl Device {
     ///
     /// This is intentionally distinct from [`Self::completion_state`]: the latter
     /// is the synchronous, non-blocking observation; this verb owns the potentially
-    /// suspending completion wait.
+    /// suspending completion wait. The API makes no per-waiter threading promise:
+    /// a backend may multiplex all completion points through one fence waiter,
+    /// event loop, callback source, or polling service, provided every registered
+    /// waker is notified when its point becomes terminal (including device loss).
     pub async fn wait_completion(&self, point: CompletionPoint) -> RhiResult<CompletionState> {
         CompletionWait {
             device: self,

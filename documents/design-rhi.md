@@ -137,6 +137,35 @@ transient allocation semantics, device validation, submission, completion,
 presentation, retirement, logical observation, and backend lowering. A fixed
 renderer is only the first consumer of these contracts.
 
+## 5.1 Backend enhancement carrying matrix
+
+The v13 public surface already carries the following cross-platform backend
+enhancements. They are implementation work, not deferred public API design.
+An implementation may add private modules, traits, data structures, and tests
+for them without widening the public API.
+
+| Backend enhancement | Frozen portable carrying semantics | Public API decision | Required implementation rule |
+| --- | --- | --- | --- |
+| Persistent RTV/DSV or equivalent attachment allocator | `TextureView`, `FrameAttachment`, attachment use in `RecordedWork` | No API | Cache/retire native attachment descriptors privately; never expose native descriptor storage. |
+| Resource-state difference tracker | command-ordered `command::ResourceUse`, `RecordedWork`, PlanPoint order | No API | Derive only necessary native transitions, barriers, and memory dependencies while preserving the same actual-use trace. |
+| Shared completion/fence waiter | `CompletionPoint`, `completion_state`, `wait_completion`, `wait_idle` | No API | Multiplex native completion notification privately; every registered waiter must terminate on completion, failure, or device loss. |
+| Descriptor/resource retirement | object ownership plus last actual-use `CompletionPoint` | No API | Keep native backing/descriptors alive until completion-safe retirement; drop/loss must wake relevant waiters and may not leak native leases. |
+| Submit-lock narrowing | `submit(plan).await` acceptance and terminal-state contract | No API | Reduce private lock scope only if preflight, acceptance atomicity, cross-plan hazards, and terminal publication stay equivalent. |
+| Recorder arena/packet and state-difference cache | synchronous command recording, `RecordedWork`, canonical tooling descriptions | No API | Private packets/arenas must reconstruct the frozen commands and actual uses exactly; no public encoder or native packet type. |
+| Pipeline cache | async shader/pipeline creation and canonical shader/layout/pipeline descriptors | No API | Cache is transparent and may be memory or disk backed; cache failure is not a correctness failure and no persistent cache artifact format is frozen. |
+| Placed heap / transient aliasing | `TransientAllocationSupport`, `TransientLifetime`, `PlanPoint`, actual `ResourceUse` | Already carried | Advertise `Aliasing` only when compatible non-overlap and required alias synchronization are actually lowered; otherwise use `Dedicated`. |
+| Multiple native queues | logical `SubmissionLane`, dependency routes, `PlanPoint`, `CompletionPoint` | Already carried | Map to native queues only when the advertised route is truly lowered; ordered/collapsed lowering remains correct and native queue identity stays private. |
+
+An unavailable enhancement is not an API stub. Capabilities must describe only
+lowerings that are implemented and tested: unsupported optional behavior
+returns structured `Unsupported` at the capability/operation boundary, while a
+correct fallback (`Dedicated`, ordered lane, or private uncached lowering) is
+used where the frozen contract requires one. A public or reachable backend
+execution path must never use `todo!()` or `unimplemented!()` as its result.
+Private `TODO` comments are permitted only when they name the carrying
+semantics, the required fallback, and the condition for advertising the
+enhancement.
+
 ## 6. Change control
 
 A public RHI change is admissible only when its proposal names:

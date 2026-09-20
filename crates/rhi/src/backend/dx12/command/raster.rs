@@ -3,6 +3,16 @@
 //! The portable recorder has already validated attachment compatibility and
 //! draw bounds. This module owns only native state: attachment descriptors,
 //! COMMON-to-render transitions, IA state, and draw calls.
+//!
+//! TODO(perf): Raster lowering currently creates one CPU-only RTV/DSV heap per
+//! attachment use and retains those heaps in `CommittedBatch` until the batch
+//! fence completes. This is a correct baseline: the CPU descriptor handles stay
+//! valid for command-list execution and cannot be recycled while the list may
+//! still reference them. Replace it with persistent RTV/DSV allocators only with
+//! fence-keyed descriptor retirement, and cache/reuse views only when resource,
+//! subresource range, format, and read-only flags match exactly. Attachment
+//! ownership and `CompletionPoint` already provide the required RHI semantics;
+//! no native heap or descriptor handle belongs in the public API.
 
 use std::collections::HashMap;
 

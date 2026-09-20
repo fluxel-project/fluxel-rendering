@@ -2360,4 +2360,15 @@ pipeline descriptor fingerprint
 
 You cannot use native PSO/pipeline binary as a portable correctness source.
 
+### Backend cache implementation route
+
+An in-memory or persistent backend pipeline cache is a transparent private
+optimization. It is carried by the existing asynchronous creation operations
+and canonical descriptors; it does not add cache handles, native binaries, or
+cache import/export to public v13. A cache miss, invalid entry, or unavailable
+disk cache must fall back to ordinary compilation/creation. A backend may leave
+a private TODO for persistence only when it names that uncached fallback; no
+publicly reachable pipeline creation path may terminate in `todo!()` or
+`unimplemented!()`.
+
 ---
