@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
-use crate::base::shader::ShaderModuleBackend;
+use crate::api::shader::backend::ShaderModuleBackend;
 
 use super::requirements::{ShaderInterface, ShaderRequirements};
 use super::validation::validate_shader_artifact;

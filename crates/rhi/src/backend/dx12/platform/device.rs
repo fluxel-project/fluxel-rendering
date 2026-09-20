@@ -1,7 +1,7 @@
 //! The Direct3D 12 logical device: one `ID3D12Device`, its liveness, and the
 //! lowering verbs the portable layer reaches it through.
 //!
-//! This is the DX12 half of [`crate::base::platform::DeviceBackend`]. What it
+//! This is the DX12 half of [`crate::api::platform::backend::DeviceBackend`]. What it
 //! owns is the native device and the answers that belong to *that* device — its
 //! adapter snapshot, its object id, whether it is still alive, and its capability
 //! table. What it does not own is anything a sibling chapter already owns:
@@ -36,21 +36,22 @@
 //! through a frame. A table filled lazily would put the first capability answer
 //! on whichever call happened to arrive first.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use windows::Win32::Graphics::Direct3D12::ID3D12Device;
 
 use crate::api::capability::CapabilityFacts;
-use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::error::RhiResult;
 use crate::api::identity::ObjectId;
+use crate::api::platform::backend::DeviceBackend;
 use crate::api::platform::{AdapterInfo, BackendKind, DeviceLossInfo, DeviceStatus};
+use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::BufferDescriptor;
 use crate::api::submission::{CompletionState, SubmissionCapabilities};
-use crate::base::platform::DeviceBackend;
-use crate::base::resource::BufferBackend;
 
-use crate::backend::dx12::command::{Dx12CommandSpine, SpineFailure};
-use crate::backend::dx12::{resource, shader};
+use crate::backend::dx12::binding::DescriptorHeap;
+use crate::backend::dx12::command::Dx12CommandSpine;
+use crate::backend::dx12::{binding, pipeline, resource, shader};
 
 /// A device's liveness, as this backend observes it.
 struct Liveness {
@@ -78,6 +79,8 @@ pub(crate) struct Dx12Device {
     /// non-test build while being fulfilled in a test one, and no single
     /// attribute satisfies both.
     device: ID3D12Device,
+    /// The single shader-visible CBV/SRV/UAV heap shared by all bind groups.
+    descriptor_heap: Arc<DescriptorHeap>,
     /// The queue, fence and command-list ring every submission goes through.
     ///
     /// Held by value and never cloned: it owns the one queue this device has, and
@@ -128,6 +131,7 @@ impl Dx12Device {
     pub(super) fn new(
         adapter: AdapterInfo,
         device: ID3D12Device,
+        descriptor_heap: Arc<DescriptorHeap>,
         spine: Dx12CommandSpine,
         facts: CapabilityFacts,
         submission: SubmissionCapabilities,
@@ -136,6 +140,7 @@ impl Dx12Device {
             adapter,
             object: ObjectId::next(),
             device,
+            descriptor_heap,
             spine,
             facts,
             submission,
@@ -226,7 +231,9 @@ impl DeviceBackend for Dx12Device {
         // bounded one on a fence-signalled event rather than an `INFINITE` block,
         // because a removed device leaves fence values that will never be written
         // and a library must not turn that into a hung host.
-        self.spine.wait_idle().map_err(SpineFailure::into_rhi)
+        self.spine
+            .wait_idle()
+            .map_err(|failure| failure.into_rhi("Device::wait_idle"))
     }
 
     /// Allocates one buffer, and is the only place in this backend that acts on a
@@ -280,48 +287,20 @@ impl DeviceBackend for Dx12Device {
     fn create_shader(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
         Ok(Box::new(shader::create_shader(artifact)))
     }
 
-    /// Refuses, because this backend's descriptor lowering is not written.
-    ///
-    /// # Why this is a refusal and not a stop
-    ///
-    /// The portable contract is complete for this verb and Direct3D 12 can express
-    /// it, so the honest answer is that the *lowering* is missing — which is
-    /// [`RhiErrorKind::Unsupported`] and not a panic (discipline 3 in
-    /// `crate::base`). A caller that gets this learns it must not build the group;
-    /// a caller that got a fabricated object would learn it only at the first
-    /// dispatch that read a descriptor nothing had written.
-    ///
-    /// # What has to be built, and what it owns
-    ///
-    /// A shader-visible CBV/SRV/UAV descriptor heap with slot allocation and
-    /// release, a sampler heap, and one
-    /// [`crate::base::binding::BindGroupBackend`] per packet that writes each
-    /// entry's view into its allocated slots at `space = group index`,
-    /// `register = slot id`, `class = BindingKind` — read-write storage buffers and
-    /// storage textures as UAVs, read-only ones and sampled textures as SRVs,
-    /// uniform buffers as CBVs, samplers on the other heap. The object returned
-    /// must hold an `Arc` to every resource it wrote an address for, because a
-    /// native descriptor holds a *pointer* and section 22.2 makes the bind group
-    /// the owner of everything it binds.
-    ///
-    /// Nothing about the portable half is in question here: the layout match, the
-    /// range rules and the device's four binding limits have all run in
-    /// `Device::create_bind_group` before this is reached.
+    /// Writes a validated buffer-backed group into the shared descriptor heap.
+    /// Texture and sampler entries are refused by the binding chapter until
+    /// their native resource/view lowering exists.
     fn create_bind_group(
         &self,
-        _descriptor: &crate::api::binding::BindGroupDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::binding::BindGroupBackend>> {
-        Err(RhiError::new(
-            RhiErrorKind::Unsupported,
-            "this backend cannot lower a bind group yet: Direct3D 12 expresses it as a range of \
-             a shader-visible descriptor heap, and the heap, its slot allocation and the \
-             per-entry view writes are not built",
-        )
-        .at("Dx12Device::create_bind_group"))
+        descriptor: &crate::api::binding::BindGroupDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>> {
+        binding::create_bind_group(&self.device, &self.descriptor_heap, descriptor)
+            .map(|group| Box::new(group) as Box<dyn crate::api::binding::backend::BindGroupBackend>)
+            .map_err(|failure| failure.into_rhi("Dx12Device::create_bind_group"))
     }
 
     /// Refuses, because this backend's root-signature and pipeline-state lowering
@@ -349,15 +328,13 @@ impl DeviceBackend for Dx12Device {
     /// folded into `InvalidUsage`.
     fn create_compute_pipeline(
         &self,
-        _descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::pipeline::ComputePipelineBackend>> {
-        Err(RhiError::new(
-            RhiErrorKind::Unsupported,
-            "this backend cannot lower a compute pipeline yet: Direct3D 12 builds one from a \
-             root signature over the whole ordered group sequence plus the entry point's DXIL, \
-             and neither the root-signature builder nor the pipeline-state builder is written",
-        )
-        .at("Dx12Device::create_compute_pipeline"))
+        descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
+        pipeline::create_compute_pipeline(&self.device, descriptor)
+            .map(|pipeline| {
+                Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>
+            })
+            .map_err(|failure| failure.into_rhi("Dx12Device::create_compute_pipeline"))
     }
 
     /// Lowers a plan onto the spine's queue, and is the second place in this
@@ -378,8 +355,8 @@ impl DeviceBackend for Dx12Device {
     /// once rather than re-deriving it from a message.
     fn submit(
         &self,
-        request: &crate::base::command::SubmissionRequest<'_>,
-    ) -> RhiResult<crate::base::command::SubmissionOutcome> {
+        request: &crate::api::submission::backend::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::api::submission::backend::SubmissionOutcome> {
         match self.spine.submit(request) {
             Ok(outcome) => Ok(outcome),
             Err(failure) => {
@@ -394,7 +371,7 @@ impl DeviceBackend for Dx12Device {
                     );
                     self.mark_lost(DeviceLossInfo::new(summary));
                 }
-                Err(failure.into_rhi())
+                Err(failure.into_rhi("Dx12Device::submit"))
             }
         }
     }

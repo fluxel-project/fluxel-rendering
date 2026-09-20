@@ -1,4 +1,4 @@
-//! The platform chapter's seam (specification module 01, sections 5 through 7).
+//! Crate-private backend contract for the platform API (sections 5 through 7).
 //!
 //! Three handles in [`crate::api::platform`] reach a native implementation:
 //! [`crate::api::platform::PlatformProvider`] wraps a native instance,
@@ -6,7 +6,8 @@
 //! [`crate::api::platform::Device`] is the logical execution domain everything
 //! else is created from. Each has one trait here.
 //!
-//! Read the disciplines in [`crate::base`] first; they apply to every method.
+//! Portable validation and legality decisions remain in the public API façade;
+//! these methods only report native facts or lower already-validated requests.
 //!
 //! # What this seam deliberately does not carry
 //!
@@ -207,7 +208,7 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// retirement mechanism and as the correctness mechanism of a render loop. A
     /// backend that cannot wait must return
     /// [`crate::api::RhiErrorKind::Unsupported`] rather than pretend to have
-    /// waited — discipline 3 in [`crate::base`], applied to a verb where the
+    /// waited — the no-silent-fallback rule, applied to a verb where the
     /// substitute would be invisible.
     fn wait_idle(&self) -> RhiResult<()>;
 
@@ -236,7 +237,7 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     fn create_buffer(
         &self,
         descriptor: &crate::api::resource::buffer::BufferDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::resource::BufferBackend>>;
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::BufferBackend>>;
 
     /// Prepares the native entry point behind one shader module.
     ///
@@ -261,7 +262,7 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     fn create_shader(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>>;
+    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>>;
 
     /// Assembles the native descriptor packet behind one bind group.
     ///
@@ -289,7 +290,7 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     fn create_bind_group(
         &self,
         descriptor: &crate::api::binding::BindGroupDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::binding::BindGroupBackend>>;
+    ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>>;
 
     /// Builds the driver's pipeline state object behind one compute pipeline.
     ///
@@ -309,7 +310,7 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     fn create_compute_pipeline(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::pipeline::ComputePipelineBackend>>;
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>>;
 
     /// Lowers and submits one plan that has passed the portable preflight.
     ///
@@ -325,19 +326,19 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// So the division is: `Err` means *nothing was committed*, and it is
     /// reserved for the cases where that is true — a command this backend cannot
     /// lower ([`crate::api::RhiErrorKind::Unsupported`], discipline 3 in
-    /// [`crate::base`]), a device that ended before the commit
+    /// the backend contract), a device that ended before the commit
     /// ([`crate::api::RhiErrorKind::DeviceLost`]). A problem discovered *after*
     /// the commit is reported through [`Self::completion`] as a terminal
     /// [`crate::api::submission::CompletionState::Failed`].
     ///
-    /// The serials in the returned [`crate::base::command::SubmissionOutcome`]
+    /// The serials in the returned [`crate::api::submission::backend::SubmissionOutcome`]
     /// are this backend's own numbers. The portable layer wraps each into a
     /// completion token whose device half only it can mint, which is what keeps
     /// section 3.1's identity rule on the portable side of the seam.
     fn submit(
         &self,
-        request: &crate::base::command::SubmissionRequest<'_>,
-    ) -> RhiResult<crate::base::command::SubmissionOutcome>;
+        request: &crate::api::submission::backend::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::api::submission::backend::SubmissionOutcome>;
 
     /// The state of one completion serial this backend reported.
     ///

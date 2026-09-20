@@ -26,7 +26,7 @@ use crate::api::resource::subresource::TextureAspects;
 use crate::api::resource::texture::TextureUsage;
 use crate::api::resource::view::{TextureView, TextureViewDimension};
 
-use crate::base::binding::BindGroupBackend;
+use crate::api::binding::backend::BindGroupBackend;
 
 use super::layout::{BindGroupLayout, BindingSlot};
 use super::vocabulary::{

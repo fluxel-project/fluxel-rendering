@@ -16,7 +16,7 @@ fn a_module_reports_the_artifact_and_stage_it_was_created_from() {
         object(3),
         device(),
         artifact.clone(),
-        crate::base::mock::module_backend_for_test(&artifact),
+        crate::api::tests::mock::module_backend_for_test(&artifact),
     );
 
     assert_eq!(module.id(), object(3));
@@ -39,7 +39,7 @@ fn a_module_debug_prints_portable_identity_only() {
         object(4),
         device(),
         artifact.clone(),
-        crate::base::mock::module_backend_for_test(&artifact),
+        crate::api::tests::mock::module_backend_for_test(&artifact),
     );
     let text = format!("{module:?}");
     assert!(text.contains("ShaderModule"), "{text}");
@@ -65,7 +65,8 @@ fn a_module_debug_prints_portable_identity_only() {
 fn create_shader_reads_the_device_verdict_first_and_keeps_the_backend_object() {
     use crate::api::shader::vocabulary::AcceptedCodeForm;
 
-    let (device, native) = crate::base::mock::shaders_for_test(device(), &[AcceptedCodeForm::Wgsl]);
+    let (device, native) =
+        crate::api::tests::mock::shaders_for_test(device(), &[AcceptedCodeForm::Wgsl]);
     let artifact = artifact(ShaderStage::Vertex, vertex_interface());
 
     let module = block_on(device.create_shader(&artifact))
@@ -86,7 +87,7 @@ fn create_shader_reads_the_device_verdict_first_and_keeps_the_backend_object() {
     let held = module
         .native()
         .as_any()
-        .downcast_ref::<crate::base::mock::MockShaderModule>()
+        .downcast_ref::<crate::api::tests::mock::MockShaderModule>()
         .expect("the mock device's module is the type its own backend put there");
     assert_eq!(held.artifact().entry_point, artifact.entry_point);
     assert_eq!(held.artifact().content_hash, artifact.content_hash);
@@ -100,7 +101,7 @@ fn create_shader_reads_the_device_verdict_first_and_keeps_the_backend_object() {
 /// what separates them, and the distinction is the whole of discipline 1.
 #[test]
 fn a_device_that_records_no_code_form_refuses_before_the_backend_is_reached() {
-    let (device, native) = crate::base::mock::shaders_for_test(device(), &[]);
+    let (device, native) = crate::api::tests::mock::shaders_for_test(device(), &[]);
     let artifact = artifact(ShaderStage::Vertex, vertex_interface());
 
     let error = block_on(device.create_shader(&artifact))
@@ -125,7 +126,8 @@ fn a_cloned_module_shares_one_backend_object() {
     use crate::api::shader::vocabulary::AcceptedCodeForm;
     use std::sync::Arc;
 
-    let (device, _) = crate::base::mock::shaders_for_test(device(), &[AcceptedCodeForm::Wgsl]);
+    let (device, _) =
+        crate::api::tests::mock::shaders_for_test(device(), &[AcceptedCodeForm::Wgsl]);
     let module = block_on(device.create_shader(&artifact(ShaderStage::Vertex, vertex_interface())))
         .expect("the device records this artifact's form");
 

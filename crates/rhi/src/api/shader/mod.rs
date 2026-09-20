@@ -86,6 +86,7 @@
 
 pub(crate) mod acceptance;
 pub(crate) mod artifact;
+pub(crate) mod backend;
 pub(crate) mod requirements;
 pub(crate) mod validation;
 pub(crate) mod vocabulary;

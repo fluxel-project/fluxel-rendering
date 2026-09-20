@@ -85,6 +85,10 @@ pub mod shader;
 pub mod statistics;
 pub mod submission;
 
+// Portable implementation details shared by more than one public API domain.
+// These are deliberately not part of the exported contract.
+pub(crate) mod internal;
+
 // The capture and diagnostic tooling SPI (module 07). Doc-hidden because it is an
 // audience statement rather than a stability one: this is what a capture tool
 // consumes, not what a rendering caller learns. The semver rule for its types is
@@ -110,4 +114,4 @@ pub use error::{RhiError, RhiErrorKind, RhiResult};
 pub use identity::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

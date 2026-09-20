@@ -18,7 +18,7 @@
 //!   are *built* rather than probed and the validators take them as parameters.
 //!   The exception is the creation verb itself: whether a refusal happens *before*
 //!   a backend is touched is a claim about call order, so those tests run over
-//!   `base::mock`, which counts allocations instead of performing them.
+//!   `api::tests::mock`, which counts allocations instead of performing them.
 //! * Objects that only a test needs are assembled through `tests::fixture`, and
 //!   objects that a device verb produces are made by asking the mock device for
 //!   them — the same way `tests/identity.rs` reaches the token constructors. A

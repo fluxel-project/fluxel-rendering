@@ -49,8 +49,8 @@ use windows::Win32::Graphics::Direct3D12::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC};
 
+use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::{BufferDescriptor, BufferUsage, ResourceMemoryPreference};
-use crate::base::resource::BufferBackend;
 
 use crate::backend::dx12::ffi;
 
@@ -62,6 +62,20 @@ pub(crate) struct Dx12Buffer {
     /// last-owner rule is served by `Arc<dyn BufferBackend>` on the portable
     /// side, so dropping this is what actually frees the memory.
     resource: ID3D12Resource,
+    /// The allocation's width in bytes.
+    ///
+    /// Stored rather than asked for through `ID3D12Resource::GetDesc`, because
+    /// the descriptor writers in [`crate::backend::dx12::binding`] need it once
+    /// per *element* of a bind group and a `GetDesc` there would be a native call
+    /// per descriptor for a number that cannot have changed since creation.
+    ///
+    /// It is the authority a view must stay inside, and it is not always the
+    /// number a caller passed: a staging allocation is sized by the transfer
+    /// lowering, and a resource's width is rounded up by nobody here but is still
+    /// the driver's answer rather than the request. Reading it from the created
+    /// resource instead of trusting the request is what makes a view's bounds
+    /// check a fact about the allocation.
+    size: u64,
 }
 
 impl Dx12Buffer {
@@ -79,6 +93,16 @@ impl Dx12Buffer {
     /// allocation, and dropping it is what frees the memory.
     pub(crate) fn resource(&self) -> &ID3D12Resource {
         &self.resource
+    }
+
+    /// This allocation's width in bytes.
+    ///
+    /// Read by the descriptor writers, which must not let a view name bytes the
+    /// allocation does not have: a raw buffer view carries an element count and a
+    /// constant-buffer view a padded size, and either one reaching past the
+    /// allocation is a read the driver is entitled to fault on.
+    pub(crate) fn size(&self) -> u64 {
+        self.size
     }
 }
 
@@ -118,7 +142,7 @@ pub(crate) fn create_buffer(
         Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
         // Zero asks the driver to choose. A buffer has no mip chain, no array
         // layers, and one sample, and `Format` is `UNKNOWN` because a buffer is
-        // byte-addressed in API v1 — the element stride section 12.2 deletes is
+        // byte-addressed in v13 — the element stride section 12.2 deletes is
         // exactly the thing that would have needed a typed format here.
         Alignment: 0,
         Width: descriptor.size,
@@ -166,7 +190,10 @@ pub(crate) fn create_buffer(
         ));
     };
 
-    Ok(Dx12Buffer { resource })
+    Ok(Dx12Buffer {
+        resource,
+        size: descriptor.size,
+    })
 }
 
 /// Which host-visible heap a staging allocation lives in.
@@ -291,7 +318,7 @@ pub(crate) fn create_staging(
         ));
     };
 
-    Ok(Dx12Buffer { resource })
+    Ok(Dx12Buffer { resource, size })
 }
 
 /// The heap type `preference` lowers onto.

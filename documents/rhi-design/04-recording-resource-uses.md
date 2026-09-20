@@ -1,6 +1,6 @@
-# RHI API v1. Recording and actual resource uses
+# RHI API freeze v13. Recording and actual resource uses
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and this module in full before implementation. No other
 > document may redefine the interfaces in this module.
 
@@ -12,7 +12,7 @@ This chapter has entered **FROZEN/P0**.
 
 ```text
 not a native command list / encoder
-does not accept Graph declared uses
+does not accept an external scheduling contract
 does not expose barriers / transitions
 does not bind a submission lane
 ```
@@ -847,10 +847,19 @@ ComputeScope. A scope label establishes diagnostics nesting separately.
 
 # 37. Actual ResourceUse
 
-`ResourceUse` belongs to `graph_bridge` / tooling semantics; normal direct-RHI users do not write by hand.
+`ResourceUse` is **the RHI's own execution vocabulary**.
+
+Its public path is:
+
+```text
+rhi::command::ResourceUse
+```
+
+Callers normally do not construct it by hand; the Recorder generates it from
+the actual portable commands.
 
 ```rust
-pub mod graph_bridge {
+pub mod command {
     use super::*;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -883,10 +892,6 @@ pub mod graph_bridge {
         pub const STENCIL_WRITE: Self = Self(1 << 10);
         pub const COPY_READ: Self = Self(1 << 11);
         pub const COPY_WRITE: Self = Self(1 << 12);
-        pub const HOST_READ: Self = Self(1 << 13);
-        pub const HOST_WRITE: Self = Self(1 << 14);
-        pub const PRESENT: Self = Self(1 << 15);
-
         pub fn contains(self, other: Self) -> bool;
         pub fn union(self, other: Self) -> Self;
     }
@@ -903,7 +908,6 @@ pub mod graph_bridge {
         CopyDst,
         ResolveSrc,
         ResolveDst,
-        Present,
     }
 
     #[derive(Clone)]
@@ -923,7 +927,6 @@ pub mod graph_bridge {
         pub intent: TextureUseIntent,
     }
 
-    /// A presentation frame is not an ordinary Texture, so it enters the use model separately.
     #[derive(Clone, Copy, Debug)]
     pub struct FrameAttachmentUse {
         pub frame: AcquiredFrameId,
@@ -940,12 +943,6 @@ pub mod graph_bridge {
     }
 }
 ```
-
-`HOST_READ` and `HOST_WRITE` are reserved for Graph/tooling host observations.
-They are not emitted by normal Recorder commands. Recorder upload/readback
-actual uses use `PipelineScope::COPY` with GPU `COPY_WRITE` / `COPY_READ`
-access respectively; host staging and host completion observation are not
-represented as recorder resource uses.
 
 ## 37.1 Command-level use sequence
 
@@ -965,7 +962,7 @@ draw reads C
 
 Need to keep happens-before/hazard lowering.
 
-Public `RecordedWork::resource_uses()` only merges the summary, and cannot use the summary to infer the internal synchronization of the work.
+The merged summary cannot replace command-level ordering.
 
 ## 37.2 BindGroup use
 
@@ -981,70 +978,41 @@ dynamic offsets
 
 Not all resources in BindGroup.
 
-For `BindingCount::Fixed(n)`, actual use conservatively covers all `n`
-binding elements unless certified metadata proves that a smaller element set is
-used. P0 does not infer such a smaller set from backend reflection or dynamic
-indexing behavior.
-
 Sampler does not generate memory hazard, but still enters command semantics/statistics.
 
-## 37.3 Attachment use
+## 37.3 Attachment use / definedness
 
 ```text
 Load    -> begin read
 Clear   -> begin write
-draw    -> raster attachment read/write
-Store   -> result remains defined
+draw    -> raster attachment access
+Store   -> result preserved
 Discard -> result becomes undefined
 ```
 
-Clear+Store constitutes a valid write even without draw.
+`ResourceUse` only describes access/hazard; it does not pretend to infer
+data-dependent full-write coverage by a shader.
+
+The RHI can validate explicit command semantics:
+
+```text
+Load/Clear
+Store/Discard
+copy destination
+resolve destination
+```
+
+It cannot infer from `SHADER_WRITE` that an entire resource range was covered.
 
 ---
 
-## 37.4 Definedness is not inferred from access masks
-
-`ResourceUse` only answers hazard / access and cannot prove shader write coverage.
-
-For example:
-
-```text
-StorageBuffer SHADER_WRITE
-```
-
-It does not mean that the shader fills the entire range.
-
-So RenderGraph's:
-
-```text
-InitialContents
-WriteCoverage
-Store/Discard expectation
-export final definedness
-```
-
-Still the source of truth for Graph declaration.
-
-`validate_recorded_work()` must use RecordedWork's internal portable command semantics,
-Check for **statically verifiable** contradictions, such as:
-
-```text
-Graph declares Store, but the actual attachment uses StoreOp::Discard
-Graph declares Load-existing, but the actual attachment uses Clear
-Graph attachment identity/location differs from the actual RasterScope
-```
-
-But it cannot claim to verify shader data-dependent full-write coverage.
-
----
-
-# 38. RecordedWork / Graph validation
+# 38. RecordedWork
 
 ## 38.1 RecordedWork
 
 ```rust
 pub struct RecordedWork {
-    /* opaque, single-device, single-device */
+    /* opaque, single-device */
 }
 
 impl CommandRecorder {
@@ -1059,7 +1027,7 @@ impl RecordedWork {
     pub fn work_domains(&self) -> LaneWorkDomains;
 
     /// Merged actual-use summary.
-    pub fn resource_uses(&self) -> &[graph_bridge::ResourceUse];
+    pub fn resource_uses(&self) -> &[command::ResourceUse];
 }
 ```
 
@@ -1071,13 +1039,7 @@ Compute            -> COMPUTE
 Copy/Upload/Readback -> COPY
 ```
 
-There can be multiple bits at the same time.
-
-When submitting, lane must contain all work domains.
-
-## 38.2 Strong ownership
-
-RecordedWork must hold the logical object required for execution:
+`RecordedWork` strongly owns the logical objects required for execution:
 
 ```text
 Buffer / Texture / View / Sampler
@@ -1088,51 +1050,7 @@ Readback state
 
 Therefore, if the user drops the original resource handle after recording, it will not affect the correct submission of the RecordedWork.
 
-## 38.3 Declared-vs-actual
-
-```rust
-pub mod graph_bridge {
-    #[derive(Clone)]
-    pub struct DeclaredWorkContract {
-        pub pass_label: Label,
-        pub uses: Vec<ResourceUse>,
-
-        /// Attachment/load/store/definedness contract generated by the Graph compiler.
-        /// The concrete Graph type remains engine-internal; the RHI bridge compares only portable semantics.
-        pub content: DeclaredContentContract,
-    }
-
-    pub struct DeclaredContentContract {
-        /* opaque graph-generated semantic contract */
-    }
-
-    pub fn validate_recorded_work(
-        work: &RecordedWork,
-        declared: &DeclaredWorkContract,
-    ) -> RhiResult<()>;
-}
-```
-
-rule:
-
-```text
-actual use must be covered by declared use
-declared use may be more conservative
-cross-DeviceIdentity / lost Device fails immediately
-```
-
-coverage contains:
-
-```text
-buffer byte range
-texture mip/layer/aspect
-stage/access
-attachment/copy/present intent compatibility
-```
-
-Ordinary direct-RHI users do not need to construct it.
-
-## 38.4 Recording freeze decision
+## 38.2 Recording freeze decision
 
 0.16 does not exist:
 

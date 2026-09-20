@@ -11,4 +11,6 @@
 
 mod module;
 
-pub(crate) use module::{Dx12ShaderModule, create_shader};
+#[cfg(test)]
+pub(crate) use module::Dx12ShaderModule;
+pub(crate) use module::create_shader;

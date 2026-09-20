@@ -1,8 +1,8 @@
-# RHI API v1. Statistics, diagnostics, and RenderGraph bridge
+# RHI API freeze v13. Statistics, diagnostics, and transient resources
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and this module in full before implementation. Statistics are
-> portable logical observations; graph bridge types expose no native state.
+> portable logical observations; transient allocation is a pure RHI capability.
 
 # 47. Statistics — portable logical statistics
 
@@ -10,7 +10,7 @@ This chapter is **FROZEN / P0**.
 
 Goal:
 
-> Enable Renderer / RenderGraph / Debug HUD / benchmark to obtain **Fluxel logical statistics with the same definitions** across five backends.
+> Enable Debug HUD / benchmark / engine tooling to obtain **Fluxel logical statistics with the same definitions** across five backends.
 
 This does not replace PIX / RenderDoc / Xcode / vendor profilers.
 
@@ -54,8 +54,6 @@ backend tooling
 allocator telemetry
 present timing
 ```
-
-These will later be independently provided by:
 
 ---
 
@@ -240,6 +238,7 @@ pub struct CumulativeStatistics {
     pub submissions: SubmissionStatistics,
     pub presentation: PresentationStatistics,
     pub resources: ResourceLifecycleStatistics,
+    pub transient: TransientMemoryStatistics,
 }
 ```
 
@@ -916,7 +915,6 @@ insert GPU commands
 insert barriers
 wait for the GPU
 change lane assignment
-change Graph culling
 change aliasing
 change present behavior
 force serialization of parallel recorders
@@ -982,7 +980,7 @@ submission_calls
     = Device::submit() calls
 
 plans_accepted / rejected
-    = according to the v1 submit acceptance contract
+    = according to the freeze v13 submit acceptance contract
 
 cross_lane_dependencies
     = explicit dependency in the same plan whose logical lanes differ
@@ -1112,110 +1110,159 @@ statistics snapshot DeviceIdentity / collection epoch compatibility
 
 ---
 
-# 50. RenderGraph -> RHI engine bridge
+# 50. Transient resource model
 
-The Graph does not write native barriers.
+Transient allocation is a frozen, pure RHI capability. It creates short-lived
+ordinary `Buffer` and `Texture` handles; no external scheduling contract,
+native heap, placed-resource offset, or aliasing barrier is public.
+`ResourceUse` remains `rhi::command::ResourceUse` and is recorded from actual
+portable commands.
 
-The Graph owns:
-
-```text
-resource versions
-declared ResourceUse
-DAG / culling
-logical lane assignment
-lifetime
-present relation
-alias decision
-```
-
-The RHI owns:
-
-```text
-actual command/resource use
-portable execution
-submission/completion
-backend lowering
-```
-
-## 50.1 Import / export semantics
-
-The Graph bridge uses:
-
-```text
-initial semantic use
-final semantic use
-ownership / lease
-definedness
-```
-
-It does not use:
-
-```text
-VkImageLayout
-D3D12_RESOURCE_STATES
-Metal encoder state
-```
-
-RHI/Graph may validate only the owner declaration and Fluxel-known history; it does not promise to query the driver for the “actual current state.”
-
----
-
-# 51. Transient allocation bridge
-
-When physical aliasing within the same frame is actually enabled, the Graph must depend on target-specific opaque allocation requirements.
+## 50.1 Capability and requirements
 
 ```rust
-pub mod graph_bridge {
-    #[derive(Clone)]
-    pub enum TransientResourceDesc {
-        Buffer(BufferDescriptor),
-        Texture(TextureDescriptor),
-    }
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransientAllocationSupport {
+    /// Correctness-complete baseline: one independent backing per resource.
+    Dedicated,
+    /// Physical memory may be reused between proven non-overlapping lifetimes.
+    Aliasing,
+}
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub struct AllocationCompatibilityClass(u64);
+#[derive(Clone, Copy, Debug)]
+pub struct TransientCapabilities {
+    pub buffers: TransientAllocationSupport,
+    pub textures: TransientAllocationSupport,
+    pub mixed_resource_aliasing: bool,
+}
 
-    #[derive(Clone, Copy, Debug)]
-    pub struct AllocationRequirements {
-        pub size: u64,
-        pub alignment: u64,
-        pub compatibility_class: AllocationCompatibilityClass,
-        pub prefers_dedicated: bool,
-    }
+impl EnabledCapabilities {
+    pub fn transient(&self) -> TransientCapabilities;
+}
 
-    pub struct TransientAllocationPlan {
-        /* graph-generated logical packing plan */
-    }
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub enum TransientResourceDescriptor {
+    Buffer(BufferDescriptor),
+    Texture(TextureDescriptor),
+}
 
-    pub struct TransientRealization {
-        /* opaque realized resources */
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TransientCompatibilityClass(u64);
 
-    pub trait TransientAllocationService {
-        fn requirements(
-            &self,
-            desc: &TransientResourceDesc,
-        ) -> RhiResult<AllocationRequirements>;
+#[derive(Clone, Copy, Debug)]
+pub struct TransientAllocationRequirements {
+    pub logical_size: Option<u64>,
+    pub physical_size: Option<u64>,
+    pub alignment: Option<u64>,
+    pub class: Option<TransientCompatibilityClass>,
+}
 
-        fn realize(
-            &mut self,
-            plan: &TransientAllocationPlan,
-        ) -> RhiResult<TransientRealization>;
-    }
+impl Device {
+    pub fn transient_requirements(
+        &self,
+        desc: &TransientResourceDescriptor,
+    ) -> RhiResult<TransientAllocationRequirements>;
 }
 ```
 
-This trait is a **service implementation seam**, not a capability trait.
+`Dedicated` is mandatory whenever the corresponding ordinary descriptor is
+supported. `physical_size`, `alignment`, and `class` are device/backend facts,
+not portable capture correctness data. `mixed_resource_aliasing == false` only
+forbids buffer/texture sharing; it does not forbid aliasing within either kind.
 
-The Graph:
+## 50.2 Plan-point lifetime and allocation
 
-```text
-decides lifetime overlap
-→ queries requirements
-→ decides compatible packing
-→ RHI/backend realizes
+Transient lifetime uses the existing RHI submission vocabulary only:
+
+```rust
+let mut plan = SubmissionPlanBuilder::new(&device);
+let a = plan.reserve_batch(lane)?;
+let b = plan.reserve_batch(lane)?;
+let transient = plan.transient_allocator();
+let texture = transient.create_texture(
+    &desc,
+    TransientLifetime::new(a).release_at(b),
+)?;
 ```
 
-A no-alias fallback is always legal.
+```rust
+#[derive(Clone, Debug)]
+pub struct TransientLifetime {
+    acquire: PlanPoint,
+    release_frontier: Vec<PlanPoint>,
+}
 
----
+impl TransientLifetime {
+    pub fn new(acquire: PlanPoint) -> Self;
+    pub fn release_at(self, point: PlanPoint) -> Self;
+    pub fn acquire(&self) -> PlanPoint;
+    pub fn release_frontier(&self) -> &[PlanPoint];
+}
+
+#[derive(Clone)]
+pub struct TransientAllocator { /* Device + SubmissionPlan scoped */ }
+
+impl TransientAllocator {
+    pub fn device_identity(&self) -> DeviceIdentity;
+    pub fn plan_id(&self) -> SubmissionPlanId;
+    pub fn create_buffer(&self, desc: &BufferDescriptor, lifetime: TransientLifetime)
+        -> RhiResult<Buffer>;
+    pub fn create_texture(&self, desc: &TextureDescriptor, lifetime: TransientLifetime)
+        -> RhiResult<Texture>;
+}
+```
+
+The allocator is obtained through the `SubmissionPlanBuilder::transient_allocator`
+method defined with the complete builder interface in section 40.
+
+All lifetime points must belong to the same plan; the frontier is non-empty;
+`acquire` happens-before every frontier point. Every actual use must be after
+or equal to acquire and able to reach at least one release frontier. Otherwise
+the builder returns `InvalidUsage`. Returned handles use normal view, binding,
+recording, copy, and attachment APIs; native materialization may be deferred to
+async submit preflight.
+
+Transient handles carry their plan identity. `set_batch`/`add_batch` reject a
+recorded use belonging to another plan. On plan drop, rejection, or terminal
+completion/loss, its transient resources expire and cannot subsequently enter
+GPU execution.
+
+# 51. Transient allocation and aliasing lowering
+
+`SubmissionPlanBuilder::build()` validates the PlanPoint DAG, actual
+`ResourceUse`, and `TransientLifetime`. Physical realization may wait until
+`device.submit(plan).await` preflight. If it fails, submit returns `Err` before
+any native work from that plan is accepted.
+
+Aliasing is legal only when all release-frontier points of one resource
+happen-before the other's acquire (or vice versa), and compatibility class,
+alignment, physical size, resource type, and backend restrictions agree.
+Potentially parallel lifetimes never alias.
+
+The RHI, not the caller, lowers the physical reuse relation together with
+PlanPoint ordering and actual uses into required DX12 aliasing barriers, Vulkan
+memory/image dependencies, Metal heap/resource synchronization, or a no-op.
+An implementation that cannot lower safely must use `Dedicated`.
+
+WebGPU, OpenGL, WebGL2, and incomplete native allocators may implement
+`TransientAllocationSupport::Dedicated`: each transient gets normal independent
+backing and is reclaimed/recycled after plan-terminal completion. Backing must
+survive through its last actual-use `CompletionPoint`; CPU plan drop is never a
+license for early reuse.
+
+```rust
+#[non_exhaustive]
+#[derive(Clone, Debug, Default)]
+pub struct TransientMemoryStatistics {
+    pub logical_bytes: u64,
+    pub physical_backing_bytes: u64,
+    pub resources_realized: u64,
+    pub alias_reuses: u64,
+}
+```
+
+These are implementation-observable transient backing statistics, not VRAM or
+residency measurements. Capture records descriptor, PlanPoint lifetime, and
+normal portable commands only; replay may re-alias or use Dedicated backing.

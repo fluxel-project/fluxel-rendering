@@ -1,11 +1,11 @@
-# RHI API v1. Platform, device, and capability
+# RHI API freeze v13. Platform, device, and capability
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and this module in full before implementation. No other
 > document may redefine the interfaces in this module.
 
-> Status: **RHI API v1 — normative freeze for the 0.16 implementation target**
-> Scope: Fluxel RHI’s portable public Rust API, RenderGraph→RHI engine bridge, and Capture/Replay’s mandatory capability requirements for RHI.
+> Status: **RHI API freeze v13 — normative for the 0.16 implementation target**
+> Scope: Fluxel RHI’s portable public Rust API and Capture/Replay’s mandatory capability requirements for RHI.
 > Baseline: DX12/Vulkan/Metal/WebGPU/OpenGL/WebGL2.
 > No freezing: native lowering, backend internal objects, ABI, Capture file format, ReplayRuntime.
 
@@ -14,10 +14,6 @@
 ## 0. Final design principles
 
 ```text
-Renderer
-↓ What to draw
-RenderGraph
-   ↓ dependency / lifetime / lane / present plan
 RHI
    ↓ portable execution semantic
 Backend
@@ -30,14 +26,24 @@ RHI 0.16 freezes the following principles:
 1. **Capability is an instance fact of Device / Format / Surface / Route, not a Rust trait. **
 2. **Base only guarantees at least one ordered submission lane. **Multiple lanes are capabilities; no real hardware overlap is promised.
 3. **Ordinary public RHI does not expose barrier / fence / semaphore / native queue / descriptor heap / native heap. **
-4. **RenderGraph declares resource usage; RHI Recorder records actual resource usage. ** Both are verified by independent `graph_bridge`, and the Graph contract is not plugged into the ordinary Recorder API.
+4. **Recorder generates actual `rhi::command::ResourceUse` from portable commands.** `ResourceUse` is RHI’s own execution vocabulary; RHI knows no rendering-scheduler contract.
 5. **`BindGroup` is a logical validated resource packet and does not promise native descriptor object. **
 6. **`FrameAttachment` is not equal to `TextureView`. ** GL/WebGL2 default framebuffer can only have attachment semantics.
 7. **Present enters `SubmissionPlan` before submit. ** `PresentMode` belongs to the presentation configuration, not the frame-by-frame request parameter.
 8. **submit accepted != GPU complete != present outcome. ** The three must be separated.
-9. **RHI must make portable semantics observable and reconstructable to support Capture/Replay; but RHI does not implement Artifact/ReplayRuntime. **
-10. **Statistics is portable logical observability, not native profiler. ** RHI freezes the unified logical counting caliber and resource inventory/video memory estimation; native barrier, real queue engine, driver allocation, GPU timestamp, etc. are not disguised as portable facts.
-11. **Do not pre-build empty capability trait/empty handle. ** P1/P2 capabilities are frozen separately after having real consumers.
+9. **Transient resource API is frozen now.** Every backend implements `Dedicated`; `Aliasing` is a later optimization without an API change.
+10. **RHI must make portable semantics observable and reconstructable to support Capture/Replay; but RHI does not implement Artifact/ReplayRuntime. **
+11. **Statistics is portable logical observability, not native profiler. ** RHI freezes the unified logical counting caliber and resource inventory/video memory estimation; native barrier, real queue engine, driver allocation, GPU timestamp, etc. are not disguised as portable facts.
+12. **Async is only for operations that may await a future event, not for every concurrent operation.** Logical resource creation and recording remain synchronous.
+13. **Do not pre-build empty capability trait/empty handle. ** Known long-lived capability such as Transient freezes its complete contract now; other capabilities wait for real semantics.
+
+### 0.1 Async boundaries
+
+Async operations are adapter/device discovery, shader and pipeline compilation, submission acceptance, GPU completion, readback readiness, presentation configuration/acquisition/abandonment/present outcome, and `wait_idle`. Capability queries, descriptor validation, logical Buffer/Texture/View/Sampler/BindGroup/Layout/PipelineInterface creation, command recording, statistics, and diagnostics remain synchronous.
+
+> **Concurrency capability ≠ `async fn`.** A concurrent `create_buffer()` has no future event to await and must not be disguised as a Future.
+
+Public inherent APIs use `async fn` and require no Tokio or async-std. `Device::poll()` remains a synchronous opportunistic progress hook; normal async correctness must use backend wake integration rather than a caller busy-loop.
 
 ---
 
@@ -50,17 +56,17 @@ Platform / Adapter / Device
 Device identity
 Capability / limit / format / route / surface facts
 Buffer / Texture / TextureView / Sampler
+Transient resource allocation contract
 Upload / Readback
 ShaderArtifact
 BindGroupLayout / BindGroup / PipelineInterface
 RasterPipeline / ComputePipeline
 CommandRecorder / RasterScope / ComputeScope / Copy
-RecordedWork
+RecordedWork / ResourceUse
 Submission lanes / SubmissionPlan / Completion
 PresentationTarget / Configuration / Acquire / Present outcome
 Validation / diagnostics / labels / markers
 Statistics / frame sampling / live inventory / logical memory estimate
-RenderGraph -> RHI graph_bridge
 RHI semantic observability required for Capture/Replay
 ```
 
@@ -97,7 +103,9 @@ pub mod rhi {
     pub mod platform;
     pub mod capability;
     pub mod format;
-    pub mod resource;
+    pub mod resource {
+        pub mod transient;
+    }
     pub mod shader;
     pub mod binding;
     pub mod pipeline;
@@ -106,12 +114,6 @@ pub mod rhi {
     pub mod presentation;
     pub mod statistics;
     pub mod diagnostics;
-
-/// The engine contract between RenderGraph and RHI executor.
-    ///
-/// It is the Fluxel engine SPI visible across crates,
-/// It is not an API that ordinary applications must contact when calling RHI.
-    pub mod graph_bridge;
 
 /// Engine tooling SPI used by Capture / GPU debugger / trace.
     ///
@@ -147,32 +149,15 @@ impl DeviceInstanceId {
     pub fn as_u64(self) -> u64 { self.0 }
 }
 
-/// Opaque generation within a Fluxel logical Device execution domain.
-///
-/// A caller may compare, hash, and print this token, but cannot construct a
-/// valid generation. It is part of public identity, not a recovery counter
-/// that callers or backends may increment transparently.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct DeviceGeneration(u64);
-
-impl DeviceGeneration {
-    pub fn as_u64(self) -> u64 { self.0 }
-}
-
 /// A Fluxel logical Device execution domain.
 ///
 /// P0 does not provide transparent device recovery:
-/// Device loss is terminal; re-request_device() obtains a new identity and
-/// generation domain.
+/// Device loss is terminal; re-request_device() obtains a new identity.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct DeviceIdentity {
-    instance: DeviceInstanceId,
-    generation: DeviceGeneration,
-}
+pub struct DeviceIdentity(DeviceInstanceId);
 
 impl DeviceIdentity {
-    pub fn instance(self) -> DeviceInstanceId { self.instance }
-    pub fn generation(self) -> DeviceGeneration { self.generation }
+    pub fn instance(self) -> DeviceInstanceId { self.0 }
 }
 
 /// The in-process logical ID of the RHI object.
@@ -212,13 +197,13 @@ Device::clone()
 -> Same DeviceIdentity
 
 Standalone request_device()
--> New DeviceIdentity and generation domain
+-> New DeviceIdentity
 
 Device loss
 -> The DeviceIdentity terminal lost
 
 Retry request_device() after loss
--> New DeviceIdentity and generation domain
+-> New DeviceIdentity
 
 ```
 
@@ -226,7 +211,7 @@ P0 **None**:
 
 ```text
 The same DeviceIdentity is automatically restored
-Transparent replacement of the same instance through generation++
+Transparent replacement of a lost DeviceIdentity
 Old resources are automatically migrated to the new Device
 ```
 
@@ -395,13 +380,12 @@ Platform/Host integration
 
 canonical path:
     PlatformProvider
-        -> request_device(DeviceRequestDescriptor)
-        -> DeviceRequest::poll()
+        -> request_device(DeviceRequestDescriptor).await
         -> Device
 
 optional inspection path:
     PlatformProvider
-        -> enumerate_adapters()
+        -> enumerate_adapters().await
         -> AdapterInfo / AdapterId
         -> AdapterSelection::Explicit
 ```
@@ -528,7 +512,7 @@ impl PlatformProvider {
     ///     Enumeration itself failed.
     ///
     /// enumerate_adapters() is not a prerequisite for request_device().
-    pub fn enumerate_adapters(
+    pub async fn enumerate_adapters(
         &self,
     ) -> RhiResult<Option<Vec<AdapterInfo>>>;
 
@@ -544,10 +528,10 @@ impl PlatformProvider {
     ) -> RhiResult<bool>;
 
     /// Canonical Device creation path.
-    pub fn request_device(
+    pub async fn request_device(
         &self,
         desc: DeviceRequestDescriptor,
-    ) -> RhiResult<DeviceRequest>;
+    ) -> RhiResult<Device>;
 }
 ```
 
@@ -897,70 +881,9 @@ Unsupported
 
 ---
 
-## 5.9 Runtime-agnostic DeviceRequest
+## 5.9 Async cancellation
 
-One DeviceRequest may internally proceed through multiple stages:
-
-~~~text
-WebGPU:
-    request adapter
-        -> validate requirements
-        -> request device
-
-Vulkan / DX12 / Metal:
-    select physical/native adapter
-        -> validate
-        -> create/wrap logical device
-
-adopted GL / WebGL2:
-    inspect adopted context
-        -> validate
-        -> create Fluxel Device domain
-~~~
-
-Public API:
-
-~~~rust
-#[derive(Debug)]
-pub enum RequestStatus<T> {
-    Pending,
-    Ready(T),
-}
-
-pub struct DeviceRequest {
-    /* opaque */
-}
-
-impl DeviceRequest {
-    /// Non-blockingly observe/advance request bookkeeping controlled by RHI itself.
-    ///
-    /// Does not run the browser/OS host event loop.
-    /// The host must continue pumping its own event loop/runtime normally.
-    pub fn poll(
-        &mut self,
-    ) -> RhiResult<RequestStatus<Device>>;
-}
-~~~
-
-RHI does not bind to:
-
-~~~text
-Tokio
-async-std
-async_trait
-JS Promise ABI
-~~~
-
-DeviceRequest is single-shot:
-
-~~~text
-Pending -> Ready(Device)
-Pending -> Err(...)
-~~~
-
-Once the first Ready(Device) or terminal Err is returned, the request is complete; a later poll() returns InvalidUsage.
-
-Dropping DeviceRequest means the caller abandons receiving its result. A backend may safely complete/cancel underlying asynchronous work, but must not expose a half-initialized Device to the caller after drop.
+Dropping a `request_device().await` Future cancels receiving its result. A backend may safely complete or cancel its underlying OS/browser request, but must not leak a half-initialized Device. Cancellation does not promise to forcibly cancel an already-issued OS or browser device request.
 
 ---
 
@@ -1002,7 +925,7 @@ Device::clone()
 
 A separate request_device()
     = a new Fluxel Device domain
-    = a new DeviceIdentity and DeviceGeneration domain
+    = a new DeviceInstanceId
 ```
 
 therefore:
@@ -1036,13 +959,9 @@ impl Device {
 }
 ```
 
-All Device-owned objects must be traceable to the same identity.
-
-`DeviceIdentity` includes both its opaque `DeviceInstanceId` and opaque
-`DeviceGeneration`. A loss is terminal for that complete identity. A later
-independent or retry `request_device()` creates a new identity/generation
-domain; it does not increment a generation on an existing public Device or
-revive any old handle.
+All Device-owned objects must be traceable to the same identity. A loss is
+terminal for that identity; a later independent or retry `request_device()`
+creates a new identity and never revives an old handle.
 
 For unified verification rules, see **3.1 Multi-device isolation**.
 
@@ -1103,6 +1022,10 @@ impl Device {
     ///
     /// Returns a stable loss summary after Lost.
     pub fn loss_info(&self) -> Option<DeviceLossInfo>;
+
+    /// Waits for the Device to enter its terminal lost state.
+    /// This Future may remain pending when the Device is never lost.
+    pub async fn lost(&self) -> DeviceLossInfo;
 }
 ```
 
@@ -1118,11 +1041,9 @@ ConfiguredPresentation / AcquiredFrame / PresentReceipt
 
 All enter the terminal domain of the lost DeviceIdentity.
 
-Loss does not perform transparent `generation++` recovery. A later Device
-request obtains a new DeviceIdentity containing a new DeviceGeneration; all
-handles carrying the old identity remain invalid. They must return `WrongDevice`
-when passed to that new Device, and return `DeviceLost` when used through their
-lost original Device.
+Loss does not perform transparent recovery. A later Device request obtains a
+new DeviceIdentity; old handles return `WrongDevice` when passed to it, and
+`DeviceLost` when used through their lost original Device.
 
 Pending work cannot be pending permanently.
 
@@ -1140,7 +1061,7 @@ impl Device {
 }
 ```
 
-Error assumption:
+Normal async APIs do not require this erroneous assumption:
 
 ```text
 while pending {
@@ -1150,7 +1071,8 @@ while pending {
 
 And believe that this will definitely promote host async work on all platforms.
 
-Correct model:
+`poll()` is an opportunistic hook for hosts without an async executor,
+explicit event-loop integration, and diagnostics. Correct async operation is:
 
 ```text
 host main loop / runtime advances normally
@@ -1169,7 +1091,7 @@ impl Device {
     /// - Must not be used for per-frame retirement;
     /// - Must not become a normal render-loop correctness mechanism;
     /// - A restricted host/backend may return Unsupported.
-    pub fn wait_idle(&self) -> RhiResult<()>;
+    pub async fn wait_idle(&self) -> RhiResult<()>;
 }
 ```
 
@@ -1245,9 +1167,9 @@ old Device A Texture
 newly requested Device B Recorder
     -> WrongDevice
 
-Device A identity { instance, generation }
+Device A identity
 +
-transparent replacement with generation++
+transparent replacement after loss
     -> prohibited
 
 old Device A Recorder after Device A lost

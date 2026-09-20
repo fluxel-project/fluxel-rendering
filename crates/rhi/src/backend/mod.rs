@@ -3,12 +3,13 @@
 //! `01:126-132` fixes these names — `crate::backend::{dx12, vulkan, metal,
 //! webgpu, gl}` — and states the rule that shapes everything in them: "Backend
 //! private objects must not be returned from the portable API." A backend
-//! implements the traits in [`crate::base`] and decides nothing about legality;
+//! implements the crate-private contracts beside the corresponding
+//! [`crate::api`] domains and decides nothing about legality;
 //! read that module's four disciplines before adding one.
 //!
 //! # Why this module is crate-private
 //!
-//! Same reason [`crate::base`] is, and the same reading of
+//! The same reading of
 //! `08-governance-freeze-checklist.md` section 59: the rule bans *exporting* the
 //! capability traits and native types, and a `pub(crate)` module exports
 //! nothing. What it protects is that a caller never names a backend type, never
@@ -28,7 +29,7 @@
 //!
 //! ```text
 //! crate::api      the frozen portable contract; names no backend
-//! crate::base     the seam; names no native handle
+//! crate::api/*/backend.rs   private implementation contracts; name no native handle
 //! crate::backend  lowering; the only place a native handle exists
 //! ```
 //!

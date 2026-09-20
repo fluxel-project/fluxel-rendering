@@ -13,8 +13,8 @@ __pycache__/
 *.py[cod]
 
 # Local Codex/Claude project instructions
-/AGENTS.md
-/CLAUDE.md
+AGENTS.md
+CLAUDE.md
 /.claude
 /.codex
 /.codex-tmp

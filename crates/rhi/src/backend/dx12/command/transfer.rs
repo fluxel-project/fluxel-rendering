@@ -23,11 +23,11 @@ use crate::api::resource::transfer::{
     ReadbackRequest, ReadbackStatus, ReadbackTicket, UploadDescriptor, UploadJob,
 };
 use crate::backend::dx12::ffi;
-use crate::backend::dx12::resource::{Dx12Buffer, StagingHeap, create_staging};
+use crate::backend::dx12::resource::{Dx12Buffer, StagingHeap, create_staging, readback_bytes};
 
 use super::dx12_buffer;
-use super::failure::{SpineFailure, ref_native};
 use super::transition::Transitions;
+use crate::backend::dx12::failure::{Dx12Failure, ref_native};
 
 /// A batch that has been committed, and the host-visible memory its command list
 /// reads or writes.
@@ -76,9 +76,9 @@ pub(super) fn lower_upload(
     list: &ID3D12GraphicsCommandList,
     job: &UploadJob,
     committed: &mut CommittedBatch,
-) -> Result<(), SpineFailure> {
+) -> Result<(), Dx12Failure> {
     let UploadDescriptor::Buffer(descriptor) = job.descriptor() else {
-        return Err(SpineFailure::Unsupported {
+        return Err(Dx12Failure::Unsupported {
             what: "a texture upload",
             why: "this spine has no texture lowering at all, so there is no \
                   destination state, no region copy, and no host-layout repacking \
@@ -89,7 +89,7 @@ pub(super) fn lower_upload(
 
     let length = descriptor.bytes.len();
     let staging =
-        create_staging(device, length as u64, StagingHeap::Upload).map_err(SpineFailure::Native)?;
+        create_staging(device, length as u64, StagingHeap::Upload).map_err(Dx12Failure::Native)?;
 
     let mut pointer: *mut core::ffi::c_void = std::ptr::null_mut();
     // SAFETY: `Map` on an `UPLOAD` heap resource makes the whole allocation
@@ -103,7 +103,7 @@ pub(super) fn lower_upload(
             .map_err(|error| ref_native(&error))?;
     }
     let Some(pointer) = std::ptr::NonNull::new(pointer.cast::<u8>()) else {
-        return Err(SpineFailure::Native(
+        return Err(Dx12Failure::Native(
             ffi::NativeError::driver_contract_violation(
                 "Map reported success without producing a pointer",
                 "Dx12Device::submit",
@@ -165,9 +165,9 @@ pub(super) fn lower_readback(
     list: &ID3D12GraphicsCommandList,
     ticket: &ReadbackTicket,
     committed: &mut CommittedBatch,
-) -> Result<(), SpineFailure> {
+) -> Result<(), Dx12Failure> {
     let ReadbackRequest::Buffer { src, range, .. } = ticket.request() else {
-        return Err(SpineFailure::Unsupported {
+        return Err(Dx12Failure::Unsupported {
             what: "a texture readback",
             why: "this spine has no texture lowering at all, so there is no source \
                   state and no footprint to copy through",
@@ -176,7 +176,7 @@ pub(super) fn lower_readback(
     let source = dx12_buffer(src)?;
 
     let staging =
-        create_staging(device, range.size, StagingHeap::Readback).map_err(SpineFailure::Native)?;
+        create_staging(device, range.size, StagingHeap::Readback).map_err(Dx12Failure::Native)?;
 
     let mut entering = Transitions::default();
     entering.push(
@@ -223,46 +223,10 @@ pub(super) fn lower_readback(
 /// for a backend failure. The ticket carries no message, so the state is the
 /// whole report.
 pub(super) fn publish_readback(retention: &ReadbackRetention) {
-    // Widened before the mapping, so a range too large for this process's address
-    // space fails the ticket instead of truncating to a plausible length.
-    let Ok(length) = usize::try_from(retention.size) else {
-        retention.ticket.set_status(ReadbackStatus::Failed);
-        return;
-    };
-
-    let mut pointer: *mut core::ffi::c_void = std::ptr::null_mut();
-    // SAFETY: `Map` on a `READBACK` heap resource makes the whole allocation
-    // CPU-readable and writes the address into `pointer`; the null read range is
-    // what Direct3D 12 requires for a read-only heap. The mapping stays live until
-    // the `Unmap` below.
-    unsafe {
-        if retention
-            .staging
-            .resource()
-            .Map(0, None, Some(&mut pointer))
-            .is_err()
-        {
-            retention.ticket.set_status(ReadbackStatus::Failed);
-            return;
-        }
+    match readback_bytes(&retention.staging, retention.size) {
+        // A buffer range is tightly packed by definition, so there is no texel
+        // layout to publish beside its bytes.
+        Ok(bytes) => retention.ticket.publish(bytes, None),
+        Err(_) => retention.ticket.set_status(ReadbackStatus::Failed),
     }
-    let Some(pointer) = std::ptr::NonNull::new(pointer.cast::<u8>()) else {
-        // SAFETY: the mapping above is live and this is its one matching unmap.
-        unsafe { retention.staging.resource().Unmap(0, None) };
-        retention.ticket.set_status(ReadbackStatus::Failed);
-        return;
-    };
-
-    // SAFETY: the mapping covers `length` bytes because that is the staging
-    // resource's own width. The bytes are copied out before the unmap, which is
-    // the single matching call for the single mapping above, and the ticket takes
-    // ownership of the copy — so nothing borrows the mapping after it ends.
-    let bytes = unsafe {
-        let bytes = std::slice::from_raw_parts(pointer.as_ptr(), length).to_vec();
-        retention.staging.resource().Unmap(0, None);
-        bytes
-    };
-    // A buffer range is tightly packed by definition (section 18.3), which is why
-    // there is no layout to report.
-    retention.ticket.publish(bytes, None);
 }

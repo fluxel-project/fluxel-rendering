@@ -21,6 +21,8 @@ pub mod provider;
 pub mod request;
 pub mod requirements;
 
+pub(crate) mod backend;
+
 pub use device::{Device, DeviceLossInfo, DeviceStatus};
 pub use provider::{AdapterId, AdapterInfo, AdapterSelection, BackendKind, PlatformProvider};
 pub use request::DeviceRequestDescriptor;

@@ -34,9 +34,14 @@
 //! wrote an address for, and returns its heap slots only when the last handle to
 //! it is gone.
 //!
-//! Nothing in this chapter is written yet; the device chapter's
-//! `create_bind_group` still refuses with the list of what is missing.
+//! Buffer-backed descriptor groups are implemented. Texture and sampler
+//! descriptors remain explicit unsupported paths until their resource lowering
+//! exists; no v12 compatibility layer is kept for them.
 
-// The heap, its allocator and the one table-shape function shared with the root
-// signature builder land in `descriptor`; the object that writes views lands in
-// `group`. Declared when written.
+mod group;
+mod heap;
+pub(crate) mod layout;
+pub(crate) mod vocabulary;
+
+pub(crate) use group::create_bind_group;
+pub(crate) use heap::DescriptorHeap;

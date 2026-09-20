@@ -382,7 +382,7 @@ impl Device {
         // dropped on the way out — section 41.9's release path, and the reason
         // nothing below reads it again.
         let outcome = {
-            let request = crate::base::command::SubmissionRequest {
+            let request = crate::api::submission::backend::SubmissionRequest {
                 plan: plan.id(),
                 batches: plan.batches(),
                 dependencies: plan.dependencies(),

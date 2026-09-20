@@ -485,7 +485,7 @@ impl Device {
     /// lowering that does need layouts reads them from the
     /// [`crate::api::pipeline::PipelineInterface`] when a pipeline is created.
     /// Vulkan and WebGPU do have the object and will reach a backend port here;
-    /// `crate::base::binding` records why that trait is not declared yet.
+    /// `crate::api::binding::backend` records why that trait is not declared yet.
     ///
     /// What is left is the interning step section 21.1 requires: canonicalize,
     /// encode, and take this device's id for those bytes, so that two identical
@@ -526,7 +526,7 @@ impl Device {
         let bytes = canonical.canonical_bytes();
         let compatibility_id =
             BindGroupLayoutCompatibilityId::new(self.interning().intern_layout(&bytes));
-        let fingerprint = LayoutFingerprint(crate::base::digest::sha256(&bytes));
+        let fingerprint = LayoutFingerprint(crate::api::internal::digest::sha256(&bytes));
 
         Ok(BindGroupLayout::new(
             ObjectId::next(),

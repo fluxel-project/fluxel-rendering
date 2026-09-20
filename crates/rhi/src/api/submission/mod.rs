@@ -60,6 +60,7 @@
 use crate::api::capability::{encode_entry, write_section};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 
+pub(crate) mod backend;
 pub mod builder;
 pub mod completion;
 pub mod plan;

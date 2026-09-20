@@ -1,4 +1,4 @@
-//! The CPU/mock backend: the seam's conformance vehicle.
+//! The CPU/mock backend for portable API conformance tests.
 //!
 //! `version-plan.md` section 4 requires a "CPU/mock conformance suite shared by
 //! all three backends" as proof for 0.16, and this module is the backend half of
@@ -39,7 +39,7 @@
 //!   [`MockDevice::with_capabilities`] and a table it states itself, which is the
 //!   same thing that makes the contract under test visible.
 //! - **It lowers buffer creation and nothing else.** A
-//!   [`crate::base::resource::BufferBackend`] it hands back is a token holding
+//!   [`crate::api::resource::backend::BufferBackend`] it hands back is a token holding
 //!   the size and usage it was asked for — no memory, no address, no operation —
 //!   which is enough to prove the portable verb reached the backend and not
 //!   enough to prove anything about a GPU. Texture, view, sampler, shader,
@@ -63,11 +63,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::platform::backend::{
+    DeviceBackend, DeviceRequestBackend, ProviderBackend, RequestProgress,
+};
 use crate::api::platform::{
     AdapterId, AdapterInfo, BackendKind, Device, DeviceLossInfo, DeviceRequestDescriptor,
     DeviceStatus,
 };
 use crate::api::presentation::PresentationTarget;
+use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::{
     BufferDescriptor, BufferSupport, BufferSupportLimits, BufferUsage,
 };
@@ -76,10 +80,6 @@ use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
     SubmissionLaneInfo,
 };
-use crate::base::platform::{
-    DeviceBackend, DeviceRequestBackend, ProviderBackend, RequestProgress,
-};
-use crate::base::resource::BufferBackend;
 
 /// What a mock device request eventually reports.
 ///
@@ -379,7 +379,7 @@ impl MockShaderModule {
     }
 }
 
-impl crate::base::shader::ShaderModuleBackend for MockShaderModule {
+impl crate::api::shader::backend::ShaderModuleBackend for MockShaderModule {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -411,7 +411,7 @@ impl MockBindGroup {
     }
 }
 
-impl crate::base::binding::BindGroupBackend for MockBindGroup {
+impl crate::api::binding::backend::BindGroupBackend for MockBindGroup {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -442,7 +442,7 @@ impl MockComputePipeline {
     }
 }
 
-impl crate::base::pipeline::ComputePipelineBackend for MockComputePipeline {
+impl crate::api::pipeline::backend::ComputePipelineBackend for MockComputePipeline {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -459,7 +459,7 @@ impl crate::base::pipeline::ComputePipelineBackend for MockComputePipeline {
 /// will be seen.
 pub(crate) fn bind_group_backend_for_test(
     descriptor: crate::api::binding::BindGroupDescriptor,
-) -> Arc<dyn crate::base::binding::BindGroupBackend> {
+) -> Arc<dyn crate::api::binding::backend::BindGroupBackend> {
     Arc::new(MockBindGroup::new(descriptor))
 }
 
@@ -473,7 +473,7 @@ pub(crate) fn bind_group_backend_for_test(
 /// caller named.
 pub(crate) fn compute_pipeline_backend_for_test(
     descriptor: crate::api::pipeline::ComputePipelineDescriptor,
-) -> Arc<dyn crate::base::pipeline::ComputePipelineBackend> {
+) -> Arc<dyn crate::api::pipeline::backend::ComputePipelineBackend> {
     Arc::new(MockComputePipeline::new(descriptor))
 }
 
@@ -752,7 +752,7 @@ impl DeviceBackend for MockDevice {
     fn create_shader(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
         // No refusal here, and the absence is the same decision `create_buffer`
         // records rather than an unfinished arm: section 19.10's acceptance verdict
         // and every canonicality rule about this artifact have already run in
@@ -771,7 +771,7 @@ impl DeviceBackend for MockDevice {
     fn create_bind_group(
         &self,
         descriptor: &crate::api::binding::BindGroupDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::binding::BindGroupBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>> {
         // No refusal here, and the absence is the same decision `create_buffer`
         // records rather than an unfinished arm: the layout match, every range and
         // usage rule, the device's four binding limits and the storage-access
@@ -790,7 +790,7 @@ impl DeviceBackend for MockDevice {
     fn create_compute_pipeline(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::pipeline::ComputePipelineBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
         // No refusal here, and the absence matters more here than anywhere else in
         // this file: this is the one port in the crate whose native call a real
         // driver *can* refuse for a reason no portable check covers — whether the
@@ -828,8 +828,8 @@ impl DeviceBackend for MockDevice {
     /// to refuse refuses nothing.
     fn submit(
         &self,
-        request: &crate::base::command::SubmissionRequest<'_>,
-    ) -> RhiResult<crate::base::command::SubmissionOutcome> {
+        request: &crate::api::submission::backend::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::api::submission::backend::SubmissionOutcome> {
         if let DeviceStatus::Lost = self.status() {
             return Err(RhiError::new(
                 RhiErrorKind::DeviceLost,
@@ -855,7 +855,7 @@ impl DeviceBackend for MockDevice {
             points.push((batch.point, serial));
         }
 
-        Ok(crate::base::command::SubmissionOutcome {
+        Ok(crate::api::submission::backend::SubmissionOutcome {
             completion: overall,
             points,
         })
@@ -933,7 +933,7 @@ pub(crate) fn paired_device_for_test(identity: DeviceIdentity) -> (Device, Arc<M
 /// and nothing else: no compilation is modelled, and none is claimed.
 pub(crate) fn module_backend_for_test(
     artifact: &crate::api::shader::ShaderArtifact,
-) -> Arc<dyn crate::base::shader::ShaderModuleBackend> {
+) -> Arc<dyn crate::api::shader::backend::ShaderModuleBackend> {
     Arc::new(MockShaderModule::new(artifact.clone()))
 }
 

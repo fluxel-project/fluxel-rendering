@@ -1,4 +1,4 @@
-//! SHA-256, hand-written (specification section 7.1).
+//! SHA-256 shared by portable API fingerprints (specification section 7.1).
 //!
 //! # Why this exists rather than a `Hasher`
 //!

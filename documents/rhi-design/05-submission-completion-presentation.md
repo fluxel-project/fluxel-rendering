@@ -1,6 +1,6 @@
-# RHI API v1. Submission, completion, and presentation
+# RHI API freeze v13. Submission, completion, and presentation
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and this module in full before implementation. Submission
 > acceptance, GPU completion, and presentation outcome are distinct contracts.
 
@@ -101,7 +101,7 @@ impl SubmissionPlan {
 }
 
 pub struct SubmissionPlanBuilder {
-    /* opaque, bound to DeviceIdentity + SubmissionPlanId; owns consumed frames */
+    /* opaque, bound to DeviceIdentity + SubmissionPlanId */
 }
 
 impl SubmissionPlanBuilder {
@@ -109,12 +109,32 @@ impl SubmissionPlanBuilder {
         device: &Device,
     ) -> Self;
 
-    /// Adds a logical ordered-lane batch.
+    /// Reserves an empty logical point before its RecordedWork exists.
+    ///
+    /// This freezes transient lifetime frontiers before recording.
+    pub fn reserve_batch(
+        &mut self,
+        lane: SubmissionLaneId,
+    ) -> RhiResult<PlanPoint>;
+
+    /// Fills one previously reserved point exactly once.
+    pub fn set_batch(
+        &mut self,
+        point: PlanPoint,
+        work: Vec<RecordedWork>,
+    ) -> RhiResult<()>;
+
+    /// Convenience for reserve_batch + set_batch.
     pub fn add_batch(
         &mut self,
         lane: SubmissionLaneId,
         work: Vec<RecordedWork>,
     ) -> RhiResult<PlanPoint>;
+
+    /// Returns an allocator scoped to this plan and Device.
+    pub fn transient_allocator(
+        &self,
+    ) -> TransientAllocator;
 
     /// Adds cross-batch happens-before.
     pub fn add_dependency(
@@ -128,8 +148,8 @@ impl SubmissionPlanBuilder {
     ///
     /// A GPU-side wait, an already ordered execution domain, or a proven
     /// Collapse route is accepted. It returns Unsupported only when none of
-    /// those routes proves the required order; a caller may instead observe
-    /// completion as Complete before building/submitting this plan.
+    /// those routes proves the required order; a caller may instead wait for
+    /// completion before building/submitting this plan.
     pub fn add_external_dependency(
         &mut self,
         before: CompletionPoint,
@@ -151,9 +171,50 @@ impl SubmissionPlanBuilder {
 
 ---
 
-## 40.1 Batch invariants
+## 40.1 Transient plan integration
 
-add_batch():
+Transient allocation is an RHI capability, not a render-scheduling contract.
+`TransientAllocator` creates ordinary `Buffer` and `Texture` handles scoped to
+this builder's `SubmissionPlanId`; its full resource contract is defined in the
+resource/transient module. A lifetime uses the existing execution vocabulary:
+
+~~~rust
+let mut plan = SubmissionPlanBuilder::new(&device);
+let a = plan.reserve_batch(lane)?;
+let b = plan.reserve_batch(lane)?;
+
+let transient = plan.transient_allocator();
+let texture = transient.create_texture(
+    &desc,
+    TransientLifetime::new(a).release_at(b),
+)?;
+~~~
+
+`TransientLifetime` contains an acquire `PlanPoint` and a non-empty
+`release_frontier: Vec<PlanPoint>`. Its points must belong to this plan,
+acquire must happen-before every release point, and every actual use must lie
+within that lifetime. `set_batch`/`add_batch` reject transient resources owned
+by a different plan.
+
+At async submit preflight, RHI combines PlanPoint ordering, actual
+`command::ResourceUse`, and any physical alias relation to lower native alias
+synchronization. `Dedicated` is the required correct fallback; `Aliasing` is
+an optional performance implementation. Callers never encode alias barriers.
+
+---
+
+## 40.2 Batch invariants
+
+reserve_batch() creates an empty logical point; set_batch() fills it exactly
+once. At build():
+
+~~~text
+every reserved point has non-empty work
+~~~
+
+add_batch() is the reserve + set convenience.
+
+Batch validation:
 
 ~~~text
 work non-empty
@@ -186,7 +247,7 @@ RHI must still generate required memory/execution synchronization from actual-us
 
 ---
 
-## 40.2 Cross-lane dependencies
+## 40.3 Cross-lane dependencies
 
 Different lanes default to:
 
@@ -241,11 +302,11 @@ GPU work A
 -> GPU work B
 ~~~
 
-it belongs to a RenderGraph Host node / higher-level continuation, not a pretend GPU lane dependency.
+it belongs to an upper-layer host node / continuation, not a pretend GPU lane dependency.
 
 ---
 
-## 40.3 Cross-plan dependency
+## 40.4 Cross-plan dependency
 
 One logical lane remains lane-ordered across multiple Device::submit() calls.
 
@@ -277,7 +338,7 @@ This prevents multi-lane semantics from breaking at frame/plan boundaries. Vulka
 
 ---
 
-## 40.4 Unordered hazard validation
+## 40.5 Unordered hazard validation
 
 build() must use RecordedWork actual uses to inspect every batch pair with **no happens-before path**.
 
@@ -312,11 +373,11 @@ Err(RhiErrorKind::MissingDependency)
 
 READ/READ needs no dependency.
 
-RHI may not allow direct-RHI users to form an unsynchronized cross-queue data race merely because RenderGraph normally emits a correct DAG.
+RHI may not allow direct-RHI users to form an unsynchronized cross-queue data race.
 
 ---
 
-## 40.5 Dependency graph validation
+## 40.6 Dependency graph validation
 
 Before any native submission, build() must complete:
 
@@ -379,6 +440,12 @@ Query:
 ~~~rust
 impl Device {
     pub fn completion_state(
+        &self,
+        point: CompletionPoint,
+    ) -> RhiResult<CompletionState>;
+
+    /// Waits for this point to reach a terminal state.
+    pub async fn wait_completion(
         &self,
         point: CompletionPoint,
     ) -> RhiResult<CompletionState>;
@@ -453,7 +520,7 @@ impl Device {
     ///
     /// Err is allowed only when RHI can guarantee that:
     ///     no GPU work in this plan was accepted by native backend.
-    pub fn submit(
+    pub async fn submit(
         &self,
         plan: SubmissionPlan,
     ) -> RhiResult<SubmissionReceipt>;
@@ -548,7 +615,7 @@ For same-lane cross-submit resource transitions/memory dependency, RHI automatic
 
 ---
 
-## 41.4 Completion ordering
+## 41.5 Completion ordering
 
 completion_for(point) means:
 
@@ -573,7 +640,7 @@ Vulkan different queues likewise have no implicit ordering and require explicit 
 
 ---
 
-## 41.5 Readback binding
+## 41.6 Readback binding
 
 If a ReadbackTicket is encoded into PlanPoint P, after successful submit:
 
@@ -601,7 +668,7 @@ Failed     -> Failed
 
 ---
 
-## 41.6 Retirement
+## 41.7 Retirement
 
 RHI internal retirement may use **completion of the last batch that actually referenced the object**:
 
@@ -618,11 +685,11 @@ native backing may reclaim
 
 It need not make every resource await receipt.completion().
 
-RenderGraph transient allocator may also use completion_for(point) for fine-grained frame-to-frame reuse.
+The RHI transient allocator may also use completion_for(point) for fine-grained reuse.
 
 ---
 
-## 41.7 SubmissionPoint vs CompletionPoint
+## 41.8 SubmissionPoint vs CompletionPoint
 
 ~~~text
 SubmissionPoint
@@ -646,7 +713,7 @@ SubmissionPoint serial
 
 ---
 
-## 41.8 Device loss
+## 41.9 Device loss
 
 After Device loss, every pending CompletionPoint for that DeviceIdentity must, through bounded host/device polling progress, enter:
 
@@ -660,7 +727,7 @@ Already Complete tokens remain Complete.
 
 ---
 
-## 41.9 Plan abandonment
+## 41.10 Plan abandonment
 
 When SubmissionPlan is dropped before successful submit:
 
@@ -680,7 +747,7 @@ frame on its presentation target; a frame token must not silently leak.
 
 ---
 
-## 41.10 No blocking completion in frame loop
+## 41.11 Completion waiting is async
 
 P0 provides no:
 
@@ -688,14 +755,17 @@ P0 provides no:
 completion.wait();
 ~~~
 
-Normal frame lifetime uses:
+Normal frame lifetime uses the async wait where awaiting completion is needed:
 
 ~~~text
-completion_state()
-Device::poll()
+device.wait_completion(point).await
 ~~~
 
-wait_idle() remains only for:
+`completion_state()` remains the non-blocking fast query. `Device::poll()` is
+only an opportunistic synchronous progress hook, never the sole way an async
+future can make progress.
+
+`device.wait_idle().await` remains only for:
 
 ~~~text
 shutdown
@@ -707,7 +777,7 @@ This prevents browser/host-restricted backends from being forced to implement sy
 
 ---
 
-## 41.11 Submission freeze decision
+## 41.12 Submission freeze decision
 
 0.16 stable semantics:
 
@@ -1023,14 +1093,14 @@ impl ConfiguredPresentation {
     /// Reconfigure on the same Device + target.
     ///
     /// There must be no outstanding frame.
-    pub fn reconfigure(
+    pub async fn reconfigure(
         &mut self,
         config: &PresentationConfiguration,
     ) -> RhiResult<()>;
 }
 
 impl Device {
-    pub fn configure_presentation(
+    pub async fn configure_presentation(
         &self,
         target: &PresentationTarget,
         config: &PresentationConfiguration,
@@ -1095,8 +1165,6 @@ review it as a frame-pacing extension.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AcquireErrorKind {
-    NotReady,
-    Timeout,
     FrameOutstanding,
     ZeroSizeOrSuspended,
     Outdated,
@@ -1192,7 +1260,13 @@ pub struct AcquiredFrame {
 }
 
 impl ConfiguredPresentation {
-    pub fn acquire(
+    /// Non-blocking fast path.
+    pub fn try_acquire(
+        &mut self,
+    ) -> Result<Option<AcquiredFrame>, AcquireError>;
+
+    /// Waits until the next drawable/frame can be acquired.
+    pub async fn acquire(
         &mut self,
     ) -> Result<AcquiredFrame, AcquireError>;
 }
@@ -1210,7 +1284,7 @@ impl AcquiredFrame {
     /// The backend may release the acquired image, retire/recreate the swapchain,
     /// drop the drawable, and so on, to ensure that the presentation system does
     /// not retain the frame permanently.
-    pub fn abandon(
+    pub async fn abandon(
         self,
     ) -> RhiResult<()>;
 }
@@ -1265,10 +1339,11 @@ when necessary, mark ConfiguredPresentation as Outdated/NeedsRecovery
 
 It must not leak an acquired image / drawable permanently.
 
-The next acquire may return the following before cleanup/reconfigure completes:
+Before cleanup/reconfigure completes, `try_acquire()` may return `None`; an
+async acquire may report:
 
 ```text
-Outdated / NotReady
+Outdated
 ```
 
 ---
@@ -1337,7 +1412,7 @@ Acquired -> PlannedForPresent
 A Frame is not a Texture, so actual use must be a separate variant:
 
 ```rust
-graph_bridge::ResourceUse::Frame(
+command::ResourceUse::Frame(
     FrameAttachmentUse {
         frame,
         stages,
@@ -1353,7 +1428,7 @@ Load       -> COLOR_READ
 Clear/draw -> COLOR_WRITE
 ```
 
-This allows RenderGraph declared-use validation without disguising a frame as a Texture.
+This preserves actual RHI resource-use validation without disguising a frame as a Texture.
 
 ---
 
@@ -1442,6 +1517,12 @@ impl PresentReceipt {
 
 impl Device {
     pub fn present_state(
+        &self,
+        receipt: PresentReceiptId,
+    ) -> RhiResult<PresentState>;
+
+    /// Waits for presentation ownership to reach a terminal outcome.
+    pub async fn wait_present(
         &self,
         receipt: PresentReceiptId,
     ) -> RhiResult<PresentState>;
@@ -1535,8 +1616,7 @@ final fullscreen raster
 present
 ```
 
-Conditional direct MSAA route, only when active presentation and route facts
-prove it:
+MSAA route:
 
 ```text
 multisampled color Texture
@@ -1544,22 +1624,7 @@ multisampled color Texture
     -> FrameAttachment
 ```
 
-P0 always guarantees final single-sample raster output to `FrameAttachment`.
-The direct MSAA `RasterScope` resolve to `FrameAttachment` is legal only when
-the active presentation facts and the resolved route facts prove that target,
-format, sample count, and resolve route. When they do not, the required portable
-route is:
-
-```text
-multisampled color Texture
-    -> resolve to ordinary single-sample intermediate Texture
-    -> final single-sample raster
-    -> FrameAttachment
-```
-
-This preserves one Base final-output contract across DX12 / Vulkan / Metal /
-WebGPU / GL/WebGL2 without claiming that every presentation target accepts a
-direct MSAA resolve.
+Both routes cover DX12 / Vulkan / Metal / WebGPU / GL/WebGL2.
 
 ---
 

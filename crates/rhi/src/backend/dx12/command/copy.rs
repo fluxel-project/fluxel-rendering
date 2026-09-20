@@ -19,8 +19,8 @@ use windows::Win32::Graphics::Direct3D12::{
 use crate::api::command::copy::BufferCopy;
 
 use super::dx12_buffer;
-use super::failure::SpineFailure;
 use super::transition::Transitions;
+use crate::backend::dx12::failure::Dx12Failure;
 
 /// Lowers a buffer-to-buffer copy.
 ///
@@ -32,12 +32,12 @@ use super::transition::Transitions;
 ///
 /// # Errors
 ///
-/// [`SpineFailure::Unsupported`] when either buffer's native allocation belongs
+/// [`Dx12Failure::Unsupported`] when either buffer's native allocation belongs
 /// to another backend, which is unreachable for a plan this device accepted.
 pub(super) fn lower_buffer_copy(
     list: &ID3D12GraphicsCommandList,
     copy: &BufferCopy,
-) -> Result<(), SpineFailure> {
+) -> Result<(), Dx12Failure> {
     let source = dx12_buffer(&copy.src)?;
     let destination = dx12_buffer(&copy.dst)?;
 

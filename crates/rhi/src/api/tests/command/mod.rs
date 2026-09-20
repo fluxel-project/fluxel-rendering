@@ -74,7 +74,7 @@ use crate::api::shader::{
     ShaderInterface, ShaderLocation, ShaderModule, ShaderRequirements, ShaderStage, ShaderStages,
 };
 use crate::api::tests::fixture;
-use crate::base::mock::{
+use crate::api::tests::mock::{
     bind_group_backend_for_test, recorder_for_test, recorder_without_facts_for_test,
 };
 
@@ -364,7 +364,7 @@ fn vertex_module(_id: u64) -> ShaderModule {
             minor: 16,
         },
     );
-    let (device, _) = crate::base::mock::shaders_for_test(
+    let (device, _) = crate::api::tests::mock::shaders_for_test(
         device(),
         &[crate::api::shader::vocabulary::AcceptedCodeForm::Wgsl],
     );

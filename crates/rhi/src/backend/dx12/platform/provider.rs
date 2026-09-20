@@ -1,6 +1,6 @@
 //! The Direct3D 12 provider: adapter selection and logical device creation.
 //!
-//! This is the DX12 half of [`crate::base::platform::ProviderBackend`]. It owns
+//! This is the DX12 half of [`crate::api::platform::backend::ProviderBackend`]. It owns
 //! the DXGI factory and the one native step that turns an adapter into an
 //! `ID3D12Device`, and it decides nothing about legality — every descriptor here
 //! has already passed the portable layer.
@@ -8,7 +8,7 @@
 //! The device this module creates is [`super::device::Dx12Device`], and the
 //! request that carries it back to the portable layer is
 //! [`super::request::Dx12Request`]. Both are separate files for the reason
-//! [`crate::base`] splits its own seam: a provider is asked about the *domain*,
+//! The crate-private API contracts split by domain: a provider is asked about the *domain*,
 //! a device carries one native object, and a request is the single-shot
 //! handover between them.
 //!
@@ -69,6 +69,7 @@ use windows::Win32::Graphics::Dxgi::{
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::DeviceInstanceId;
+use crate::api::platform::backend::ProviderBackend;
 use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::platform::{AdapterId, AdapterInfo, BackendKind};
@@ -77,7 +78,6 @@ use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
     SubmissionLaneInfo,
 };
-use crate::base::platform::ProviderBackend;
 
 use crate::backend::dx12::command::Dx12CommandSpine;
 use crate::backend::dx12::ffi;
@@ -343,6 +343,10 @@ impl Dx12Provider {
         // *not* created here: those are the ring `command` grows on demand, so a
         // device that never submits never pays for one.
         let spine = Dx12CommandSpine::new(&device).map_err(|native| native.into_rhi())?;
+        let descriptor_heap = std::sync::Arc::new(
+            crate::backend::dx12::binding::DescriptorHeap::new(&device)
+                .map_err(|native| native.into_rhi())?,
+        );
 
         let submission = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
             SubmissionLaneId::new(0),
@@ -355,6 +359,7 @@ impl Dx12Provider {
         Ok(std::sync::Arc::new(Dx12Device::new(
             deferred_adapter_info(&candidate, self.instance),
             device,
+            descriptor_heap,
             spine,
             facts,
             submission,
@@ -416,7 +421,7 @@ impl ProviderBackend for Dx12Provider {
     fn request_device(
         &self,
         descriptor: &DeviceRequestDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::platform::DeviceRequestBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::platform::backend::DeviceRequestBackend>> {
         // A presentation target in the request is refused here rather than
         // ignored. Section 5.8 puts it in the descriptor precisely so that
         // creation can select the queue family and presentation route; accepting

@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::api::tests::fixture;
-use crate::base::mock::bind_group_backend_for_test;
+use crate::api::tests::mock::bind_group_backend_for_test;
 
 // ---------------------------------------------------------------------------
 // Section 22: the packet.

@@ -432,7 +432,7 @@ impl Device {
         let bytes = desc.canonical_bytes();
         let compatibility_id =
             PipelineInterfaceCompatibilityId::new(self.interning().intern_interface(&bytes));
-        let fingerprint = LayoutFingerprint(crate::base::digest::sha256(&bytes));
+        let fingerprint = LayoutFingerprint(crate::api::internal::digest::sha256(&bytes));
 
         Ok(PipelineInterface::new(
             ObjectId::next(),

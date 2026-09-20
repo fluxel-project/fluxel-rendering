@@ -7,7 +7,7 @@ use crate::api::command::{
 };
 use crate::api::pipeline::{ComputePipeline, ComputePipelineDescriptor};
 use crate::api::tests::fixture;
-use crate::base::mock::compute_pipeline_backend_for_test;
+use crate::api::tests::mock::compute_pipeline_backend_for_test;
 
 #[test]
 fn begin_compute_stops_at_the_device_capability() {

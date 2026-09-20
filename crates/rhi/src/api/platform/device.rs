@@ -42,9 +42,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, ObjectId};
+use crate::api::platform::backend::DeviceBackend;
 use crate::api::platform::provider::{AdapterInfo, BackendKind};
 use crate::api::platform::requirements::OptionalFeature;
-use crate::base::platform::DeviceBackend;
 
 /// Whether a device is still usable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

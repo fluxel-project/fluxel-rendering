@@ -76,6 +76,8 @@ pub mod transfer;
 pub mod transient;
 pub mod view;
 
+pub(crate) mod backend;
+
 pub use buffer::{
     Buffer, BufferBinding, BufferDescriptor, BufferRange, BufferSupport, BufferSupportLimits,
     BufferSupportQuery, BufferUsage, ResourceMemoryPreference,

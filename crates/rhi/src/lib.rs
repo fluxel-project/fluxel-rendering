@@ -62,16 +62,12 @@
 //! written from the specification with its validation and refusal paths fixed
 //! before any lowering exists; a verb whose body is `unimplemented!()` has its
 //! contract settled and its implementation still to arrive. Backends land under
-//! `backend/`, and the shared implementation they draw on under `base/`.
+//! `backend/`; portable defaults and crate-private implementation contracts live
+//! beside the public vocabulary in the corresponding `api/` domain.
 
 #![deny(missing_docs)]
 
 pub mod api;
-
-// The backend seam and the machinery the backends share. Crate-private by
-// decision, not by omission: see the module note for why section 59's list of
-// forbidden exports bans a public capability API rather than this.
-pub(crate) mod base;
 
 // Native lowering, one module per backend. Crate-private for the same reason,
 // and feature- and target-gated because a backend that is not being built must

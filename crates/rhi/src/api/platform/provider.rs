@@ -15,10 +15,10 @@ use std::task::Poll;
 use crate::api::capability::AvailableCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId};
+use crate::api::platform::backend::{ProviderBackend, RequestProgress};
 use crate::api::platform::device::Device;
 use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::presentation::PresentationTarget;
-use crate::base::platform::{ProviderBackend, RequestProgress};
 
 /// Process-wide source for logical device identities.
 ///

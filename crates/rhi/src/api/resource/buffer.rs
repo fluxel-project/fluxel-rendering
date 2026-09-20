@@ -37,8 +37,8 @@ use std::sync::Arc;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
+use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::transient::TransientResourceMetadata;
-use crate::base::resource::BufferBackend;
 
 /// What a buffer will be used for.
 ///
@@ -511,7 +511,7 @@ impl Device {
     /// to the object that created the resource, and the backend is handed the
     /// descriptor and nothing else precisely so that there is one place an id is
     /// minted. The backend seam that receives the descriptor is
-    /// `crate::base::resource`, which is crate-private. Both names are written
+    /// `crate::api::resource::backend`, which is crate-private. Both names are written
     /// rather than linked because a rustdoc link to a private item fails the
     /// `-D warnings` doc gate, and linking them would mean publishing the private
     /// surface to satisfy two references.

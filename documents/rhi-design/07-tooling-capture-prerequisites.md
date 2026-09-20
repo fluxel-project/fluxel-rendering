@@ -1,6 +1,6 @@
-# RHI API v1. Tooling and capture prerequisites
+# RHI API freeze v13. Tooling and capture prerequisites
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and this module in full before implementation. This module
 > freezes RHI reconstructability and tooling SPI, not artifact storage or
 > ReplayRuntime.
@@ -130,7 +130,12 @@ RHI official readback provides:
 Buffer/Texture readback
 row/image layout
 completion-aware readiness
+`readback.read().await -> ReadbackView<'_>`
 ```
+
+`ReadbackView` is an RAII mapping lease. Tooling must consume or copy the view
+while it is live; it must not model readiness as an indefinitely valid bare
+`&[u8]`, because backend Drop may need to unmap the resource.
 
 Capture Coordinator can be used to:
 
@@ -171,7 +176,24 @@ Because that cannot be Replayed.
 
 ---
 
-## 52.7 Shader provenance
+## 52.7 Transient reconstruction contract
+
+Transient resources are ordinary logical Buffer/Texture objects for command,
+binding, and capture purposes. Their capture definition additionally retains:
+
+```text
+descriptor
+TransientLifetime { acquire: PlanPoint, release_frontier }
+owning SubmissionPlan identity
+```
+
+Capture never records a native heap/page, alias offset, alias barrier, or
+backend synchronization primitive. On replay, RHI reconstructs the same
+portable transient lifetime and selects `Dedicated` or `Aliasing` internally.
+
+---
+
+## 52.8 Shader provenance
 
 Must be retained:
 
@@ -195,7 +217,7 @@ RHI does not do a cross-backend compiler.
 
 ---
 
-## 52.8 Device loss / terminal events
+## 52.9 Device loss / terminal events
 
 After Device loss:
 
@@ -452,41 +474,9 @@ pub mod tooling {
         pub interface: ObjectId,
     }
 
-    /// A capture-local key for a host object supplied by ReplayRuntime or its
-    /// Artifact-layer fixture provider. It is not an OS or native graphics
-    /// handle.
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    pub struct CapturedPresentationTargetFixture {
-        pub key: String,
-    }
-
-    #[derive(Clone)]
-    pub struct CapturedPresentationTargetDefinition {
-        pub fixture: CapturedPresentationTargetFixture,
-    }
-
-    #[derive(Clone)]
-    pub struct CapturedConfiguredPresentationDefinition {
-        pub device: DeviceIdentity,
-        pub target: ObjectId,
-        pub configuration: PresentationConfiguration,
-    }
-
     #[non_exhaustive]
     #[derive(Clone)]
     pub enum CapturedObjectDefinition {
-        /// The target is reconstructed by binding `fixture` to an external
-        /// presentation fixture; tooling never serializes a native target.
-        PresentationTarget {
-            id: ObjectId,
-            definition: CapturedPresentationTargetDefinition,
-        },
-
-        ConfiguredPresentation {
-            id: ObjectId,
-            definition: CapturedConfiguredPresentationDefinition,
-        },
-
         Buffer {
             id: ObjectId,
             descriptor: BufferDescriptor,
@@ -813,22 +803,22 @@ pub mod tooling {
         Buffer {
             buffer: ObjectId,
             range: BufferRange,
-            stages: graph_bridge::PipelineScope,
-            access: graph_bridge::AccessMask,
+            stages: command::PipelineScope,
+            access: command::AccessMask,
         },
 
         Texture {
             texture: ObjectId,
             subresources: TextureSubresourceRange,
-            stages: graph_bridge::PipelineScope,
-            access: graph_bridge::AccessMask,
-            intent: graph_bridge::TextureUseIntent,
+            stages: command::PipelineScope,
+            access: command::AccessMask,
+            intent: command::TextureUseIntent,
         },
 
         Frame {
             frame: AcquiredFrameId,
-            stages: graph_bridge::PipelineScope,
-            access: graph_bridge::AccessMask,
+            stages: command::PipelineScope,
+            access: command::AccessMask,
         },
     }
 }
@@ -1148,7 +1138,6 @@ FrozenGraphIR belongs to RenderGraph and primarily provides:
 ~~~text
 why
 pass/resource provenance
-declared-use cross-check
 visualization
 ~~~
 

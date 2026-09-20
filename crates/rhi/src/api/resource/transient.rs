@@ -8,12 +8,12 @@ use crate::api::error::RhiResult;
 use crate::api::format::TextureSupportQuery;
 use crate::api::identity::DeviceIdentity;
 use crate::api::platform::Device;
+use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::{
     Buffer, BufferDescriptor, BufferSupportQuery, validate_buffer_descriptor,
 };
 use crate::api::resource::texture::{Texture, TextureDescriptor, validate_texture_descriptor};
 use crate::api::submission::{PlanPoint, SubmissionPlanId};
-use crate::base::resource::BufferBackend;
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 

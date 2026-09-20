@@ -55,6 +55,7 @@ use crate::api::submission::{
     CompletionPoint, CompletionState, LaneWorkDomains, PlanPoint, SubmissionBatchId,
     SubmissionLaneId, SubmissionPlanId, SubmissionPoint,
 };
+use crate::api::tests::mock::{device_for_test, paired_device_for_test};
 use crate::api::tooling::definition::{
     CapturedBindGroupDefinition, CapturedBindGroupEntry, CapturedBindingResource,
     CapturedComputePipelineDefinition, CapturedObjectDefinition,
@@ -76,7 +77,6 @@ use crate::api::tooling::{
     SemanticEvent, SemanticEventId, SemanticObserver, TOOLING_SPI_VERSION, ToolingAccess,
     ToolingSpiVersion, ToolingSubscription,
 };
-use crate::base::mock::{device_for_test, paired_device_for_test};
 
 // ---------------------------------------------------------------------------
 // Fixtures

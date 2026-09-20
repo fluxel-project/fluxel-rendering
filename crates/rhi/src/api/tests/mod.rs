@@ -39,6 +39,8 @@ mod statistics;
 mod submission;
 mod tooling;
 
+pub(crate) mod mock;
+
 /// Fixtures shared by the chapter test sets.
 ///
 /// A small module rather than a `mod.rs` full of helpers: everything here exists

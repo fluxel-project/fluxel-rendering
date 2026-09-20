@@ -1,6 +1,6 @@
-# RHI API v1. Shader, binding, and pipeline
+# RHI API freeze v13. Shader, binding, and pipeline
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and this module in full before implementation. No other
 > document may redefine the interfaces in this module.
 
@@ -410,37 +410,11 @@ If a future built-in changes the pipeline contract, add metadata for it separate
 ## 19.7 ShaderRequirements
 
 ```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ComputeWorkgroupRequirements {
-    pub x: u32,
-    pub y: u32,
-    pub z: u32,
-
-    /// Must equal x * y * z without overflow.
-    pub total_invocations: u32,
-
-    /// Workgroup/shared-memory bytes required by this entry point.
-    pub workgroup_storage_bytes: u64,
-}
-
-impl ComputeWorkgroupRequirements {
-    pub fn new(
-        x: u32,
-        y: u32,
-        z: u32,
-        total_invocations: u32,
-        workgroup_storage_bytes: u64,
-    ) -> Self;
-}
-
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub struct ShaderRequirements {
     required_features: Vec<OptionalFeature>,
     limit_requirements: Vec<LimitRequirement>,
-
-    /// Required for a Compute entry point and absent for Vertex/Fragment entry points.
-    compute_workgroup: Option<ComputeWorkgroupRequirements>,
 }
 
 impl ShaderRequirements {
@@ -456,25 +430,9 @@ impl ShaderRequirements {
         requirement: LimitRequirement,
     ) -> Self;
 
-    pub fn with_compute_workgroup(
-        mut self,
-        requirements: ComputeWorkgroupRequirements,
-    ) -> Self;
-
     pub fn required_features(&self) -> &[OptionalFeature];
     pub fn limit_requirements(&self) -> &[LimitRequirement];
-    pub fn compute_workgroup(&self) -> Option<ComputeWorkgroupRequirements>;
 }
-```
-
-The stage-specific presence rule is:
-
-```text
-Compute:
-    compute_workgroup must be Some
-
-Vertex / Fragment:
-    compute_workgroup must be None
 ```
 
 Do not repeat binding capability here.
@@ -501,24 +459,6 @@ pub struct ArtifactProducerVersion {
     pub minor: u16,
 }
 
-/// Stable identity of the toolchain that produced the artifact.
-///
-/// It must not contain a temporary path, process address, or build-directory
-/// identity. The producer ID together with ArtifactProducerVersion identifies
-/// the lowering/toolchain contract for provenance and replay.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ArtifactProducerId(pub String);
-
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutableReplayAcceptanceScope {
-    /// The artifact is not an acceptable replay input.
-    Denied,
-
-    /// Replay may accept the executable only on this backend kind.
-    SameBackend(BackendKind),
-}
-
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub enum ShaderProvenance {
@@ -535,10 +475,7 @@ pub enum ShaderProvenance {
     },
 
     /// Contains only the current executable/code, with no cross-backend source/IR.
-    ExecutableOnly {
-        /// Explicit replay acceptance scope for this executable-only artifact.
-        replay_acceptance: ExecutableReplayAcceptanceScope,
-    },
+    ExecutableOnly,
 }
 
 #[non_exhaustive]
@@ -550,41 +487,8 @@ pub enum PortableShaderLanguage {
 }
 ```
 
-`ArtifactHash` is the content-address/provenance key supplied by the artifact producer.
-
-Its canonical content domain is the canonical encoding of:
-
-```text
-ArtifactProducerId + ArtifactProducerVersion
-stage + entry_point + ShaderCode + ShaderAbiVersion
-canonical ShaderInterface + ShaderRequirements
-canonical ShaderProvenance
-```
-
-`label` is explicitly excluded from that domain. `compiler_options` must have
-unique keys and be sorted lexicographically by key before they enter the
-canonical provenance encoding. The producer must not hash a display label,
-temporary path, process address, or another non-semantic build-local value.
-
-The canonical encoding uses unambiguous tagged fields and length-prefixed byte
-strings. Its collection rules are:
-
-```text
-ShaderInterface:
-    follows the canonical ordering and uniqueness rules in §19.6
-
-required_features:
-    unique and sorted by OptionalFeature discriminant
-
-limit_requirements:
-    duplicate-free and sorted by (LimitKey, requirement variant, value)
-
-compiler_options:
-    unique key and sorted lexicographically by key
-```
-
-`create_shader()` rejects an artifact that violates any of these canonical
-collection rules. It does not normalize the artifact before accepting it.
+`ArtifactHash` is the content-address/provenance key supplied by the artifact
+producer.
 
 Freeze rule:
 
@@ -615,7 +519,6 @@ pub struct ShaderArtifact {
     pub provenance: ShaderProvenance,
 
     pub content_hash: ArtifactHash,
-    pub producer: ArtifactProducerId,
     pub producer_version: ArtifactProducerVersion,
 }
 
@@ -628,7 +531,6 @@ impl ShaderArtifact {
         interface: ShaderInterface,
         requirements: ShaderRequirements,
         content_hash: ArtifactHash,
-        producer: ArtifactProducerId,
         producer_version: ArtifactProducerVersion,
     ) -> Self;
 
@@ -668,7 +570,7 @@ pub struct ShaderModule {
 }
 
 impl Device {
-    pub fn create_shader(
+    pub async fn create_shader(
         &self,
         artifact: &ShaderArtifact,
     ) -> RhiResult<ShaderModule>;
@@ -692,9 +594,6 @@ entry point
 ShaderRequirements
 ShaderInterface resource binding support
 ShaderInterface stage IO shape
-ShaderInterface canonical uniqueness and ordering
-ShaderProvenance compiler-option canonicality
-ArtifactProducerId/toolchain identity
 ```
 
 Only then may it enter backend shader/module creation.
@@ -720,10 +619,6 @@ target Device capability
 ```
 
 to determine whether it can generate target ShaderCode.
-
-For `ExecutableOnly`, ReplayRuntime must honor `replay_acceptance`; it must not
-infer cross-backend replay permission merely because a current Device accepts
-the executable.
 
 ---
 
@@ -1021,7 +916,7 @@ CompatibilityId(pub u128)
 
 This could easily be misused as “equal 128-bit hash => equal correctness”.
 
-v1 explicitly separates:
+Freeze v13 explicitly separates:
 
 ~~~rust
 /// Device-scoped exact compatibility token.
@@ -2198,7 +2093,7 @@ pub struct RasterPipeline {
 }
 
 impl Device {
-    pub fn create_raster_pipeline(
+    pub async fn create_raster_pipeline(
         &self,
         desc: &RasterPipelineDescriptor,
     ) -> RhiResult<RasterPipeline>;
@@ -2401,7 +2296,7 @@ pub struct ComputePipeline {
 }
 
 impl Device {
-    pub fn create_compute_pipeline(
+    pub async fn create_compute_pipeline(
         &self,
         desc: &ComputePipelineDescriptor,
     ) -> RhiResult<ComputePipeline>;
@@ -2429,22 +2324,7 @@ ShaderInterface:
 
 ShaderRequirements:
     features / limits satisfied
-
-ComputeWorkgroupRequirements:
-    present for the Compute entry point
-    x, y, and z are non-zero
-    total_invocations == x * y * z, with checked arithmetic
-    x <= MaxComputeWorkgroupSizeX
-    y <= MaxComputeWorkgroupSizeY
-    z <= MaxComputeWorkgroupSizeZ
-    total_invocations <= MaxComputeInvocationsPerWorkgroup
-    workgroup_storage_bytes <= MaxComputeWorkgroupStorageSize
 ```
-
-These workgroup dimensions, total invocations, and workgroup/shared-memory
-bytes are validated before `create_compute_pipeline()` enters the backend.
-They are reflection requirements of the entry point, not dispatch dimensions;
-dispatch dimensions are validated separately at `dispatch_workgroups()`.
 
 does not exist:
 

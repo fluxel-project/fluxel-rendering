@@ -98,7 +98,7 @@ impl NativeFailure {
         matches!(self, Self::Terminal)
     }
 
-    /// The API v1 error kind this failure reports as.
+    /// The portable RHI error kind this failure reports as.
     pub(super) fn kind(self) -> RhiErrorKind {
         match self {
             Self::Terminal => RhiErrorKind::DeviceLost,
@@ -120,7 +120,7 @@ impl NativeFailure {
 /// which would make the message part of the API rather than part of the
 /// diagnosis.
 pub(super) struct NativeError {
-    /// The API v1 error, already built so that the message is formatted in one
+    /// The portable RHI error, already built so that the message is formatted in one
     /// place regardless of which of the two callers asks.
     error: RhiError,
     /// What the `HRESULT` meant for the device that produced it.
@@ -128,7 +128,7 @@ pub(super) struct NativeError {
 }
 
 impl NativeError {
-    /// Classifies `error` and builds the API v1 error for `operation`.
+    /// Classifies `error` and builds the portable RHI error for `operation`.
     pub(super) fn new(error: &WinError, operation: &'static str) -> Self {
         let failure = NativeFailure::classify(error);
         Self {
@@ -168,19 +168,19 @@ impl NativeError {
         self.failure
     }
 
-    /// The API v1 error, borrowed so a caller can describe the failure before
+    /// The portable RHI error, borrowed so a caller can describe the failure before
     /// reporting it.
     pub(super) fn as_error(&self) -> &RhiError {
         &self.error
     }
 
-    /// The API v1 error.
+    /// The portable RHI error.
     pub(super) fn into_rhi(self) -> RhiError {
         self.error
     }
 }
 
-/// Turns a native failure into the API v1 error for `operation`.
+/// Turns a native failure into the portable RHI error for `operation`.
 ///
 /// A thin wrapper over [`NativeError::new`], kept because the call sites that
 /// only return an error read better without naming a type they never look at.

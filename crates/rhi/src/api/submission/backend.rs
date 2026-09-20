@@ -1,7 +1,8 @@
-//! The recording and submission chapter's seam (specification modules 04 and
+//! Crate-private recording and submission backend contract (modules 04 and
 //! 05, sections 29 through 41).
 //!
-//! Read the four disciplines in [`crate::base`] first; they bind everything here.
+//! Portable validation runs in the public API before this contract is reached;
+//! a backend lowers the validated plan and does not redefine its legality.
 //! This module adds one thing to them, and it is the thing that makes this seam
 //! different from the platform and resource ones:
 //!
@@ -47,10 +48,10 @@
 //! Section 41.10 forbids a blocking completion wait in the frame loop and
 //! section 6.7 confines `wait_idle` to shutdown, recovery and diagnostics. So the
 //! query below is a *state* rather than a wait, and a backend is expected to
-//! advance that state from [`crate::base::platform::DeviceBackend::poll`]. A
+//! advance that state from [`crate::api::platform::backend::DeviceBackend::poll`]. A
 //! backend whose platform gives it no way to observe completion without blocking
 //! has no honest implementation of
-//! [`crate::base::platform::DeviceBackend::completion`] and should say so where it
+//! [`crate::api::platform::backend::DeviceBackend::completion`] and should say so where it
 //! constructs its device rather than spin inside the query.
 
 use crate::api::submission::plan::{CompletionPoint, PlanBatch, PlanPoint, SubmissionPlanId};
@@ -143,7 +144,7 @@ pub(crate) struct SubmissionRequest<'a> {
 /// an `Err` from here would be the one outcome section 41.3 forbids — a caller
 /// told "nothing happened" while a queue has already been fed. A backend that
 /// accepts work and then discovers a problem reports it through
-/// [`crate::base::platform::DeviceBackend::completion`] as a terminal `Failed`
+/// [`crate::api::platform::backend::DeviceBackend::completion`] as a terminal `Failed`
 /// state, not by failing this call.
 pub(crate) struct SubmissionOutcome {
     /// The serial naming completion of every batch in the plan.
@@ -163,8 +164,8 @@ pub(crate) struct SubmissionOutcome {
 }
 
 // The two operations that consume the types above — `submit` and `completion` —
-// are declared on [`crate::base::platform::DeviceBackend`] rather than on a trait
-// of this module, and that follows the rule `base/resource.rs` sets out: a seam
+// are declared on [`crate::api::platform::backend::DeviceBackend`] rather than on a trait
+// of this module, following the rule `api/resource/backend.rs` sets out: a contract
 // carries the *object*, and operations belong to the device backend. A recording
 // is not an object with a native life of its own — it is a value the portable
 // layer owns outright and hands down — so there is nothing here for a trait to

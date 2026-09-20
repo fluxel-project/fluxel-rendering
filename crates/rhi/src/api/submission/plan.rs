@@ -213,7 +213,7 @@ impl CompletionPoint {
     ///
     /// Crate-private, and it is the one reader that makes the token useful: a
     /// backend reports completion by *its* serial
-    /// ([`crate::base::command::SubmissionOutcome`]), the portable layer wraps
+    /// ([`crate::api::submission::backend::SubmissionOutcome`]), the portable layer wraps
     /// that serial into this token, and asking the backend about the work again
     /// means handing the serial back. Nothing on the public surface exposes it,
     /// because section 41.7 forbids reading a completion token as a native fence

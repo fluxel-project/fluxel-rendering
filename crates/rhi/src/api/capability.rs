@@ -118,6 +118,7 @@ use std::sync::{LazyLock, Mutex};
 use crate::api::binding::vocabulary::BindableKind;
 use crate::api::binding::{BindingCount, BindingLimitClass, BindingSupport, BindingSupportQuery};
 use crate::api::format::{FormatFacts, TextureFormat, TextureSupport, TextureSupportQuery};
+use crate::api::internal::digest::sha256;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteQuery, RouteSupport};
@@ -126,7 +127,6 @@ use crate::api::resource::transient::{TransientAllocationSupport, TransientCapab
 use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderStage, ShaderStages};
 use crate::api::submission::SubmissionCapabilities;
-use crate::base::digest::sha256;
 
 /// Process-local exact capability-contract intern token.
 ///

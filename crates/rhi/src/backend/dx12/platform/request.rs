@@ -1,7 +1,7 @@
 //! The one-shot device request Direct3D 12 hands back, and the adapter that
 //! carries its device onto the seam.
 //!
-//! [`crate::base::platform::DeviceRequestBackend`] is a *polled* handover because
+//! [`crate::api::platform::backend::DeviceRequestBackend`] is a *polled* handover because
 //! some backends genuinely need one: WebGPU resolves an adapter and then a device
 //! over several turns, and the portable layer must be able to wait without
 //! knowing which backend it is talking to. Direct3D 12 has no such path —
@@ -18,12 +18,12 @@ use std::sync::Arc;
 use crate::api::capability::CapabilityFacts;
 use crate::api::error::RhiResult;
 use crate::api::identity::ObjectId;
+use crate::api::platform::backend::{DeviceBackend, DeviceRequestBackend, RequestProgress};
 use crate::api::platform::{AdapterInfo, BackendKind, DeviceLossInfo, DeviceStatus};
+use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::BufferDescriptor;
+use crate::api::submission::backend::{SubmissionOutcome, SubmissionRequest};
 use crate::api::submission::{CompletionState, SubmissionCapabilities};
-use crate::base::command::{SubmissionOutcome, SubmissionRequest};
-use crate::base::platform::{DeviceBackend, DeviceRequestBackend, RequestProgress};
-use crate::base::resource::BufferBackend;
 
 use super::device::Dx12Device;
 
@@ -126,7 +126,7 @@ impl DeviceBackend for ArcDevice {
     fn create_shader(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::base::shader::ShaderModuleBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
         self.0.create_shader(artifact)
     }
 
@@ -138,7 +138,7 @@ impl DeviceBackend for ArcDevice {
     fn create_bind_group(
         &self,
         descriptor: &crate::api::binding::BindGroupDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::binding::BindGroupBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>> {
         self.0.create_bind_group(descriptor)
     }
 
@@ -150,7 +150,7 @@ impl DeviceBackend for ArcDevice {
     fn create_compute_pipeline(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::base::pipeline::ComputePipelineBackend>> {
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
         self.0.create_compute_pipeline(descriptor)
     }
 

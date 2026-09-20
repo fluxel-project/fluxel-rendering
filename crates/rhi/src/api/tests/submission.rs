@@ -25,7 +25,7 @@
 //! ```
 //!
 //! The first row is why the acceptance tests below run against
-//! [`crate::base::mock`]'s device: that backend accepts a plan and executes none of
+//! [`crate::api::tests::mock`]'s device: that backend accepts a plan and executes none of
 //! it, which makes the *portable* half of section 41 — the phase split, the two
 //! completion levels, the polling rule — reachable today. It is evidence about
 //! this crate's logic and not about any GPU; `version-plan.md` section 4 still
@@ -58,11 +58,11 @@ use crate::api::submission::{
     SubmissionReceipt,
 };
 use crate::api::tests::fixture;
-use crate::base::mock::paired_device_for_test;
+use crate::api::tests::mock::paired_device_for_test;
 // The only import here that exists for the backend's own answer rather than the
 // portable layer's: section 41.8's per-point obligation is owed by whoever owns
 // the completion bookkeeping, and on this device that is the mock.
-use crate::base::platform::DeviceBackend;
+use crate::api::platform::backend::DeviceBackend;
 
 // ---------------------------------------------------------------------------
 // Section 10 — the lane vocabulary.

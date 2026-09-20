@@ -20,7 +20,7 @@
 //! gives instead is [`FixtureBuffer`]: a type whose only job is to exist, so that
 //! the seam has something to hand over and the field is not a lie. Nothing in
 //! these tests reads it, and a test that *does* need to observe an allocation
-//! wants a real device and the mock backend — `base::mock`'s `MockBuffer` — not
+//! wants a real device and the mock backend — `api::tests::mock`'s `MockBuffer` — not
 //! this.
 //!
 //! Saying that plainly is the point of the type having a name rather than being
@@ -31,8 +31,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::api::identity::{DeviceIdentity, ObjectId};
+use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::{Buffer, BufferDescriptor};
-use crate::base::resource::BufferBackend;
 
 /// The native side of a fixture buffer: a token that is never read.
 pub(crate) struct FixtureBuffer;

@@ -1,8 +1,8 @@
-# Fluxel RHI public API v1
+# Fluxel RHI 0.16 public API freeze v13
 
-> Status: normative target for Fluxel Rendering 0.16.
-> Scope: portable public Rust API, the RenderGraph-to-RHI engine bridge, and
-> the RHI reconstructability required by capture/replay.
+> Status: final freeze candidate v13; normative target for Fluxel Rendering 0.16.
+> Scope: portable public Rust API and the RHI observability required by
+> capture/replay tooling.
 > Baseline: DX12, Vulkan, Metal, WebGPU, OpenGL, GLES, and WebGL2.
 > Not frozen here: native lowering, backend-internal objects, ABI, persistent
 > capture artifact format, and ReplayRuntime.
@@ -36,11 +36,11 @@ are written down.
 | Module | Owns | Required with |
 | --- | --- | --- |
 | [01 Platform, device, and capability](rhi-design/01-platform-device-capability.md) | principles; freeze scope; modules; identity; errors; provider/adapter/device; capability/format/route/lane facts | always read for device, capability, error, or backend admission work |
-| [02 Resources, upload, and readback](rhi-design/02-resources-transfer.md) | buffers; textures; views; samplers; usage; host layouts; upload jobs; encoded readback; retirement | module 01; module 04 for encoding |
+| [02 Resources, upload, and readback](rhi-design/02-resources-transfer.md) | buffers; textures; views; samplers; usage; host layouts; upload jobs; readback guard; retirement | modules 01 and 04 |
 | [03 Shader, binding, and pipeline](rhi-design/03-shader-binding-pipeline.md) | shader code/interface/provenance; layouts; bind groups; pipeline interface; raster/compute pipelines | modules 01 and 02 |
-| [04 Recording and actual resource uses](rhi-design/04-recording-resource-uses.md) | recorder state machines; scopes; commands; actual uses; RecordedWork; declared-use validation | modules 02 and 03 |
-| [05 Submission, completion, and presentation](rhi-design/05-submission-completion-presentation.md) | plans; points; hazards; acceptance; receipts; completion; target/configure/acquire/present/abandon | modules 01 and 04 |
-| [06 Statistics, diagnostics, and graph bridge](rhi-design/06-statistics-diagnostics-graph-bridge.md) | logical counters; diagnostics; canonicalization; validation; Graph bridge; transient allocation service | modules 01, 04, and 05 |
+| [04 Recording and actual resource uses](rhi-design/04-recording-resource-uses.md) | recorder state machines; scopes; commands; `command::ResourceUse`; `RecordedWork` | modules 02 and 03 |
+| [05 Submission, completion, and presentation](rhi-design/05-submission-completion-presentation.md) | plans; plan/completion points; transient allocator access; hazards; async acceptance and completion; async presentation lifecycle | modules 01, 02, and 04 |
+| [06 Statistics, diagnostics, validation, and transient lowering](rhi-design/06-statistics-diagnostics-transient.md) | logical counters; diagnostics; canonicalization; validation; transient allocation and aliasing lowering | modules 01, 02, 04, and 05 |
 | [07 Tooling and capture prerequisites](rhi-design/07-tooling-capture-prerequisites.md) | tooling SPI; object/work descriptions; portable command/submission IR; semantic events; RHI/capture ownership split | modules 02 through 06 |
 | [08 Governance and freeze checklist](rhi-design/08-governance-freeze-checklist.md) | forbidden public shapes; deferred-feature gate; lifecycle matrix; P0 checklist; final cross-review decisions | all affected modules |
 
@@ -58,10 +58,8 @@ The following apply to every module and backend:
    do not promise physical queues or hardware overlap.
 3. Public RHI exposes no native handle, barrier, fence, semaphore, queue,
    descriptor heap, native memory type, heap offset, encoder, or resource state.
-4. RenderGraph owns declarations, versions, dependencies, culling, scheduling,
-   logical lifetime, and presentation intent. Recorder owns command-ordered
-   actual uses. The graph bridge validates coverage without creating a second
-   dependency truth.
+4. Recorder derives command-ordered actual `rhi::command::ResourceUse` values.
+   Upper-layer scheduling contracts and coverage checks do not enter RHI.
 5. `BindGroup` is a validated logical resource packet, not a promise of a
    native descriptor object.
 6. `FrameAttachment` is neither `Texture` nor `TextureView`.
@@ -70,59 +68,49 @@ The following apply to every module and backend:
 8. RHI retains canonical reconstructable semantics from 0.16 but does not own
    capture dependency closure, artifact storage, snapshots policy, or replay.
 9. Statistics are portable logical observations, not native profiling facts.
-10. P1/P2 vocabulary is absent until a real consumer, portable semantics,
+10. Transient allocation is a frozen RHI capability. Every backend provides
+    the correct `Dedicated` baseline; `Aliasing` is an optimization capability.
+11. Async marks operations that may wait for a future event. Thread-safe or
+    concurrent synchronous work does not become async merely for uniformity.
+12. P1/P2 vocabulary is absent until a real consumer, portable semantics,
     capability facts, validation, lifetime, tests, and capture implications are
     reviewed together.
-11. Public ownership is opaque device/context identity plus generation. Loss is
-    terminal: restoration creates a new identity/generation domain and never
-    increments a field to revive old objects.
-12. Browser and mini-game adapters use the same RHI resource model. Browser
+13. Public ownership is an opaque device/context identity. Its uniqueness
+    includes the lifecycle generation internally; loss is terminal and a new
+    device request creates a new identity rather than reviving old objects.
+14. Browser and mini-game adapters use the same RHI resource model. Browser
     session/token types are forbidden in public and backend resource
     architecture; native WebGPU/WebGL objects remain backend-private.
 
-## 4. v1 closure corrections
+## 4. v13 closure decisions
 
-The former freeze candidate was adopted in full after cross-review, with the
-following corrections. The owning modules must express these decisions
-directly; this list is the audit ledger, not an alternate API.
+The owning modules express these decisions directly. This list is an audit
+ledger, not an alternate API definition.
 
-- Device identity includes the ecosystem-required generation component while
-  preserving terminal loss and no transparent recovery.
-- An external completion dependency succeeds on `Ordered` or proven
-  `Collapse` routes as an ordered-domain relation. It is `Unsupported` only
-  when neither GPU dependency nor proven ordering/collapse can satisfy it.
-- P0 guarantees raster output to `FrameAttachment`. Direct MSAA resolve into a
-  frame is legal only when presentation/route facts prove it; otherwise the
-  portable path resolves to an intermediate texture and performs a final
-  single-sample raster write.
-- `SubmissionPlanBuilder` owns a consumed frame. Build failure or builder drop
-  performs no-submit abandonment bookkeeping; no acquired frame is leaked.
-- Presentation targets and configured-presentation leases have canonical
-  tooling definitions, so every `ObjectId` emitted by presentation events can
-  be described.
-- Recorder, raster scope, and compute scope each own an independent debug-group
-  stack; closing a scope or finishing a recorder requires its corresponding
-  stack to be empty.
-- Compute shader reflection includes workgroup dimensions, total invocations,
-  and workgroup/shared-memory requirements, which are validated before pipeline
-  creation.
-- Shader interface arrays are canonical and duplicate-free. Artifact identity
-  includes producer/toolchain identity and a specified canonical hash domain;
-  executable-only provenance states its replay acceptance scope.
-- A fixed binding array is conservatively considered fully used unless future
-  certified element-use metadata proves a narrower set.
-- Clear values are validated against attachment numeric class; depth clear is
-  finite and within the portable depth range.
-- Texture resolve has explicit source and destination origins.
-- Recorder actual uses encode upload/readback in the copy domain. Host access
-  bits are reserved for Graph/tooling host observations and are not emitted as
-  GPU-command scope uses.
-- Tooling subscription defines start/drop linearization and callback lifetime;
-  a callback cannot drop its own subscription or reenter a mutating operation
-  on the same device.
-- Logical presentation statistics distinguish acquire refusal from submitted
-  present outcomes; acquire-only failures do not increment a present-terminal
-  category.
+- The public module tree is `platform`, `capability`, `format`, `resource`
+  (including `resource::transient`), `shader`, `binding`, `pipeline`, `command`,
+  `submission`, `presentation`, `statistics`, `diagnostics`, and hidden
+  `tooling`. There is no upper-layer scheduling bridge module.
+- `ResourceUse` belongs to `rhi::command` and is derived from recorded portable
+  commands. External work declarations and coverage checks do not exist in the
+  RHI.
+- `PlatformProvider::enumerate_adapters`, `PlatformProvider::request_device`,
+  shader/pipeline creation, submission, completion waits, readback readiness,
+  presentation configuration/acquire/abandon, present waits, and `wait_idle`
+  are async. Capability queries, logical resource/binding/interface creation,
+  command recording, statistics, and diagnostics remain synchronous.
+- `ReadbackTicket::read().await` returns a `ReadbackView<'_>` RAII guard so a
+  backend can end a map/unmap lease on `Drop`.
+- Transient lifetime is expressed solely with `PlanPoint`: an acquire point and
+  a release frontier. `SubmissionPlanBuilder::reserve_batch`, `set_batch`, and
+  `transient_allocator` make that lifetime constructible before work is added.
+- RHI lowers transient reuse from PlanPoint ordering, actual `ResourceUse`, and
+  the physical alias relation. DX12/Vulkan/Metal may advertise `Aliasing`;
+  WebGPU/GL-family backends can remain correct with `Dedicated`.
+
+- Device loss is terminal. Re-requesting creates a fresh `DeviceIdentity`;
+  public APIs expose no mutable generation counter and never revive old
+  resources.
 
 No implementation may silently revert one of these corrections to match an old
 prototype.
@@ -131,19 +119,19 @@ prototype.
 
 ```text
 Renderer / material graph / custom pipeline policy
-    -> RenderGraph declaration and object recipes
-    -> GraphExecutionPlan
-    -> RHI RecordedWork + SubmissionPlan
+    -> optional upper-layer scheduling
+    -> RHI RecordedWork + SubmissionPlan + TransientLifetime
     -> backend-private lowering
     -> DX12 | Vulkan | Metal | WebGPU | GL family
 ```
 
 Materials own shader composition, parameters, variants, and authoring
 provenance. Custom render pipelines own frame topology and renderer policy.
-RenderGraph owns dependency and lifetime compilation. RHI owns portable
-execution, device validation, submission, completion, presentation, retirement,
-logical observation, and backend lowering. A fixed renderer is only the first
-consumer of these contracts.
+An upper layer may own its own declarations and scheduling, but none of that
+vocabulary enters RHI. RHI owns portable execution, actual resource uses,
+transient allocation semantics, device validation, submission, completion,
+presentation, retirement, logical observation, and backend lowering. A fixed
+renderer is only the first consumer of these contracts.
 
 ## 6. Change control
 
@@ -166,11 +154,11 @@ equivalent.
 ## 7. Delivery authority
 
 [The five-version plan](version-plan.md) controls implementation order and
-evidence gates. It cannot weaken or postpone an API v1 P0 requirement.
+evidence gates. It cannot weaken or postpone an API freeze v13 P0 requirement.
 [The foundation contract](design-foundation-interfaces.md) controls cross-layer
 ownership. [RenderGraph](design-rendergraph.md) and
-[capture/replay](design-capture-replay.md) consume the engine/tooling bridges
-defined here.
+[capture/replay](design-capture-replay.md) consume the portable RHI and hidden
+tooling seam defined here.
 
 RHI implementation starts only at 0.16 and closes native backends before 0.17
 closes WebGPU and the GL family. RenderGraph implementation starts only after

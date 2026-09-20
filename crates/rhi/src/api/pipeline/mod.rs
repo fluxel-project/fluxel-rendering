@@ -101,6 +101,7 @@
 // would obscure the owner of the rule, and this file does not carry lint
 // attributes as a substitute for a caller. Paths point at the module that
 // defines the item.
+pub(crate) mod backend;
 pub(crate) mod compute;
 pub(crate) mod interface;
 pub(crate) mod raster;

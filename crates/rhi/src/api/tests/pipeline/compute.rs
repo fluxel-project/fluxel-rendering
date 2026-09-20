@@ -6,7 +6,7 @@
 //! is the original section banner.
 
 use super::*;
-use crate::base::mock::compute_pipeline_backend_for_test;
+use crate::api::tests::mock::compute_pipeline_backend_for_test;
 // ---------------------------------------------------------------------------
 // Section 28: compute pipelines.
 // ---------------------------------------------------------------------------

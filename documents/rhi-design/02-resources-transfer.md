@@ -1,6 +1,6 @@
-# RHI API v1. Resources, upload, and readback
+# RHI API freeze v13. Resources, upload, and readback
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and this module in full before implementation. No other
 > document may redefine the interfaces in this module.
 
@@ -1924,7 +1924,7 @@ encode request
     ->
 RecordedWork
     ->
-successful submission
+successful async submit
     ->
 GPU terminal completion
     ->
@@ -1978,26 +1978,17 @@ all input DeviceIdentity values match
 
 ---
 
-## 18.2 Ticket state
+## 18.2 State
 
 ```rust
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadbackStatus {
-    /// Encoded into RecordedWork/Plan not yet successfully submitted.
     NotSubmitted,
-
-    /// Successfully submitted, awaiting terminal GPU completion.
     Pending,
-
-    /// CPU data is readable.
     Ready,
-
-    /// Corresponding RecordedWork / SubmissionPlan was discarded before successful submit.
     Abandoned,
-
     DeviceLost,
-
     Failed,
 }
 ```
@@ -2007,7 +1998,7 @@ State machine:
 ```text
 NotSubmitted
     ├─ submit accepted -> Pending
-    ├─ work/plan drop  -> Abandoned
+    ├─ owner dropped   -> Abandoned
     └─ device loss     -> DeviceLost
 
 Pending
@@ -2027,7 +2018,7 @@ And there is no owner.
 
 ---
 
-## 18.3 Readback layout/result
+## 18.3 Result layout
 
 Readback does not promise to return tightly-packed texture bytes.
 
@@ -2053,7 +2044,8 @@ pub struct ReadbackTexelLayout {
 }
 
 #[non_exhaustive]
-pub enum ReadbackData<'a> {
+#[derive(Clone, Copy, Debug)]
+pub enum ReadbackViewData<'a> {
     Buffer {
         bytes: &'a [u8],
     },
@@ -2070,7 +2062,7 @@ pub enum ReadbackData<'a> {
 Capture Artifact if required canonical tightly-packed blob:
 
 ```text
-ReadbackData
+ReadbackViewData
     -> Capture layer canonicalize/repack
     -> BlobStore
 ```
@@ -2079,7 +2071,23 @@ Don't stuff artifact policy into RHI.
 
 ---
 
-## 18.4 ReadbackTicket
+/// Scoped CPU view.
+///
+/// If a backend uses map/unmap internally, Drop releases the mapping lease.
+pub struct ReadbackView<'a> {
+    /* opaque RAII guard */
+    _marker: std::marker::PhantomData<&'a ReadbackTicket>,
+}
+
+impl<'a> ReadbackView<'a> {
+    pub fn data(&self) -> ReadbackViewData<'_>;
+}
+
+This prevents a backend mapping lifetime from escaping as a bare `&[u8]`.
+
+---
+
+## 18.4 Ticket
 
 ```rust
 #[derive(Clone)]
@@ -2091,31 +2099,17 @@ impl ReadbackTicket {
     pub fn id(&self) -> ObjectId;
     pub fn device_identity(&self) -> DeviceIdentity;
 
-    /// Original portable request.
     pub fn request(&self) -> &ReadbackRequest;
-
-    /// Device need not be passed again;
-    /// ticket already binds its own DeviceIdentity / internal state.
     pub fn status(&self) -> ReadbackStatus;
-
-    /// May associate with terminal completion after successful submit.
     pub fn completion(&self) -> Option<CompletionPoint>;
 
-    pub fn try_read<'a>(
-        &'a self,
-    ) -> RhiResult<Option<ReadbackData<'a>>>;
+    /// Non-blocking fast path.
+    pub fn try_read(&self) -> RhiResult<Option<ReadbackView<'_>>>;
+
+    /// Waits for readback data; it does not busy-loop Device::poll().
+    pub async fn read(&self) -> RhiResult<ReadbackView<'_>>;
 }
 ```
-
-The caller still needs to advance normally:
-
-```text
-host event loop/runtime
-+
-Device::poll()
-```
-
-Ticket itself does not secretly spin/wait the GPU.
 
 ---
 
@@ -2137,17 +2131,9 @@ impl CommandRecorder {
 }
 ```
 
-Both operations must enter the actual resource use of `RecordedWork`:
-
-```text
-Upload:
-    destination COPY_WRITE
-
-Readback:
-    source COPY_READ
-```
-
-When RenderGraph uses graph_bridge, you can do declared-vs-actual validation accordingly.
+Both operations enter `RecordedWork` actual resource use: Upload is destination
+`COPY_WRITE`; Readback is source `COPY_READ`. This is RHI’s own
+`rhi::command::ResourceUse` vocabulary and has no renderer-scheduler contract.
 
 ---
 
@@ -2249,6 +2235,3 @@ reclaim count
 live inventory
 logical memory estimate
 ```
-
-Only based on Fluxel logical resource, does not pretend to be backend allocation amount or real VRAM.
----

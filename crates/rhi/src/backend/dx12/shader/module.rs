@@ -40,7 +40,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::api::shader::ShaderArtifact;
-use crate::base::shader::ShaderModuleBackend;
+use crate::api::shader::backend::ShaderModuleBackend;
 
 /// The validated entry point behind a portable
 /// [`ShaderModule`](crate::api::shader::ShaderModule).

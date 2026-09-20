@@ -31,5 +31,11 @@
 //! [`crate::backend::dx12::binding`] must agree on exactly, which is why the table
 //! shape is computed by one function that both call.
 //!
-//! Nothing in this chapter is written yet; the device chapter's
-//! `create_compute_pipeline` still refuses with the list of what is missing.
+//! The compute lowering owns the only currently frozen native pipeline seam.
+//! Raster pipelines do not yet have a backend seam in `api::pipeline::backend`, so this
+//! module deliberately does not invent a DX12-only raster handle for them.
+
+mod compute;
+mod interface;
+
+pub(crate) use compute::create_compute_pipeline;

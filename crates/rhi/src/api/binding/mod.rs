@@ -89,6 +89,7 @@
 //! a caller — so a crate-internal caller names the file that defines the item, e.g.
 //! `crate::api::binding::group::validate_bind_group_descriptor`.
 
+pub(crate) mod backend;
 pub(crate) mod group;
 pub(crate) mod layout;
 pub(crate) mod vocabulary;

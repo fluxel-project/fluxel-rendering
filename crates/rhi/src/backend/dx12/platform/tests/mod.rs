@@ -35,7 +35,10 @@
 //! Allocation is exercised below too, and it is a prerequisite for the byte
 //! movement rather than a part of it.
 
+use std::future::Future;
+use std::pin::pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
@@ -52,11 +55,12 @@ use crate::api::command::{BlitFilter, BufferCopy, RecorderDescriptor};
 use crate::api::error::RhiErrorKind;
 use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::identity::{DeviceInstanceId, Label, ObjectId};
+use crate::api::platform::backend::{DeviceBackend, ProviderBackend, RequestProgress};
 use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{
-    AdapterId, BackendKind, DeviceLossInfo, DeviceStatus, PlatformProvider, RequestStatus,
+    AdapterId, BackendKind, DeviceLossInfo, DeviceStatus, PlatformProvider,
 };
 use crate::api::presentation::PresentationTarget;
 use crate::api::resource::buffer::{
@@ -66,22 +70,33 @@ use crate::api::resource::buffer::{
 use crate::api::resource::route::RouteQuery;
 use crate::api::resource::subresource::TextureAspect;
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
-use crate::api::resource::transfer::{BufferUploadDescriptor, ReadbackData, ReadbackRequest};
+use crate::api::resource::transfer::{BufferUploadDescriptor, ReadbackRequest, ReadbackViewData};
 use crate::api::resource::view::TextureViewDimension;
 use crate::api::shader::{
-    ArtifactHash, ArtifactProducerId, ArtifactProducerVersion, ComputeWorkgroupRequirements,
-    ShaderAbiVersion, ShaderArtifact, ShaderInterface, ShaderRequirements, ShaderStage,
-    ShaderStages,
+    ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderInterface,
+    ShaderRequirements, ShaderStage, ShaderStages,
 };
 use crate::api::submission::{
     CompletionPoint, CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
 };
 use crate::backend::dx12::resource::Dx12Buffer;
-use crate::base::platform::{DeviceBackend, ProviderBackend, RequestProgress};
 
 /// A fresh provider instance identity, as host integration would mint.
 fn instance() -> DeviceInstanceId {
     DeviceInstanceId::new(0x0D12_0001)
+}
+
+/// Minimal executor for the synchronous DX12 request future in these evidence tests.
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut future = pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => {}
+        }
+    }
 }
 
 /// A provider over this machine's DXGI factory.
@@ -93,7 +108,7 @@ fn provider() -> Dx12Provider {
 ///
 /// This is what makes the tests below evidence about the *portable* path rather
 /// than only about this backend: the identity check, the request retirement and
-/// the device handle all come from the API v1 layer.
+/// the device handle all come from the portable v13 RHI layer.
 fn portable_provider() -> PlatformProvider {
     PlatformProvider::new(
         BackendKind::Dx12,
@@ -118,22 +133,15 @@ fn default_candidate(provider: &Dx12Provider) -> Candidate {
 /// A portable device over this machine's default adapter, through the full path.
 ///
 /// Built the way host integration builds one — the portable `PlatformProvider`
-/// asked for a device, its request polled to completion — rather than by reaching
-/// for the backend directly, so a test using this observes the capability facts
+/// awaited a device — rather than by reaching for the backend directly, so a
+/// test using this observes the capability facts
 /// the *portable* layer would hand a caller. The capability table is filled
 /// during device creation, so anything that wants to examine it has to come
 /// through a created device.
 fn portable_device() -> crate::api::platform::Device {
     let provider = portable_provider();
-    let mut request = provider
-        .request_device(headless_request(AdapterSelection::Default))
-        .expect("a headless device request must succeed on a machine with DXGI");
-
-    let RequestStatus::Ready(device) = request.poll().expect("the first poll succeeds") else {
-        panic!("the DX12 path is synchronous, so the first poll must be Ready");
-    };
-
-    device
+    block_on(provider.request_device(headless_request(AdapterSelection::Default)))
+        .expect("a headless device request must succeed on a machine with DXGI")
 }
 
 #[test]
@@ -205,25 +213,12 @@ fn a_headless_device_is_created_on_the_default_adapter() {
 }
 
 #[test]
-fn the_portable_path_produces_a_real_device_and_retires_its_request() {
+fn the_portable_path_produces_a_real_device() {
     // The end-to-end shape: a portable `PlatformProvider` over this real DX12
-    // backend, the portable `DeviceRequest` in the middle, and a portable
-    // `Device` at the end that is backed by an actual `ID3D12Device`.
-    //
-    // The single-shot rule is checked *here* and not against the backend's own
-    // `poll`, because section 5.9 makes it a portable contract: a backend's
-    // `DeviceRequestBackend::poll` has no such rule and this one would happily
-    // answer `Ready` twice. An earlier version of this test asserted it against
-    // the backend and failed — correctly. The layer that owns an invariant is the
-    // layer that must be asked about it.
+    // backend and an awaited portable `Device` backed by an actual `ID3D12Device`.
     let provider = portable_provider();
-    let mut request = provider
-        .request_device(headless_request(AdapterSelection::Default))
+    let device = block_on(provider.request_device(headless_request(AdapterSelection::Default)))
         .expect("a headless device request must succeed on a machine with DXGI");
-
-    let RequestStatus::Ready(device) = request.poll().expect("the first poll succeeds") else {
-        panic!("the DX12 path is synchronous, so the first poll must be Ready");
-    };
 
     assert_eq!(device.backend(), BackendKind::Dx12);
     assert_eq!(device.status(), DeviceStatus::Active);
@@ -233,17 +228,7 @@ fn the_portable_path_produces_a_real_device_and_retires_its_request() {
         "the portable device must carry the adapter its native device was created on"
     );
     assert!(device.poll().is_ok());
-    assert!(device.wait_idle().is_ok());
-
-    // `let .. else` rather than `expect_err`: the `Ok` side holds a
-    // `Box<dyn Device>`, which has no `Debug` for `expect_err` to print, and a
-    // backend object deliberately has no portable rendering.
-    let Err(error) = request.poll() else {
-        panic!("a request is single-shot, so a second poll must be refused");
-    };
-
-    assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
-    assert_eq!(error.operation(), Some("DeviceRequest::poll"));
+    assert!(block_on(device.wait_idle()).is_ok());
 }
 
 /// The checked-in DXIL blob, summarised rather than only embedded.
@@ -258,20 +243,14 @@ const FILL_CS_DXIL: &[u8] =
 
 /// A compute artifact over the DXIL fixture: the closure's payload.
 fn fill_cs_artifact(code: crate::api::shader::ShaderCode) -> ShaderArtifact {
-    // The workgroup requirements match `[numthreads(8, 8, 1)]` in the source that
-    // produced the blob, because section 19.7 makes them a *statement about the
-    // entry point* rather than a hint: a dispatch is lowered from the artifact's
-    // declared size and the shader's own `numthreads` must agree with it.
     ShaderArtifact::new(
         ShaderStage::Compute,
         "main",
         code,
         ShaderAbiVersion { major: 1, minor: 0 },
         ShaderInterface::new(),
-        ShaderRequirements::new()
-            .with_compute_workgroup(ComputeWorkgroupRequirements::new(8, 8, 1, 64, 0)),
+        ShaderRequirements::new(),
         ArtifactHash([0x51; 32]),
-        ArtifactProducerId("fluxel-dx12-evidence".to_string()),
         ArtifactProducerVersion {
             major: 0,
             minor: 16,
@@ -304,11 +283,10 @@ fn a_real_device_accepts_the_dxil_form_and_refuses_another() {
         "this evidence is about the Direct3D 12 backend"
     );
 
-    let dxil = device
-        .create_shader(&fill_cs_artifact(crate::api::shader::ShaderCode::Dxil(
-            Arc::from(FILL_CS_DXIL),
-        )))
-        .expect("a real DX12 device consumes DXIL, which its own facts record");
+    let dxil = block_on(device.create_shader(&fill_cs_artifact(
+        crate::api::shader::ShaderCode::Dxil(Arc::from(FILL_CS_DXIL)),
+    )))
+    .expect("a real DX12 device consumes DXIL, which its own facts record");
 
     assert_eq!(dxil.stage(), ShaderStage::Compute);
     assert_eq!(dxil.artifact().entry_point, "main");
@@ -331,11 +309,12 @@ fn a_real_device_accepts_the_dxil_form_and_refuses_another() {
     // portable rules pass — and this device still cannot consume it, so the refusal
     // is `Unsupported` and it is the *device's* answer rather than a complaint about
     // the artifact.
-    let error = device
-        .create_shader(&fill_cs_artifact(crate::api::shader::ShaderCode::Wgsl(
-            Arc::from("@compute @workgroup_size(8, 8, 1) fn main() {}"),
-        )))
-        .expect_err("a DX12 device has no WGSL compiler, and says so");
+    let error = block_on(device.create_shader(&fill_cs_artifact(
+        crate::api::shader::ShaderCode::Wgsl(Arc::from(
+            "@compute @workgroup_size(8, 8, 1) fn main() {}",
+        )),
+    )))
+    .expect_err("a DX12 device has no WGSL compiler, and says so");
     assert_eq!(error.kind(), RhiErrorKind::Unsupported);
     assert_eq!(error.operation(), Some("Device::create_shader"));
     assert!(
@@ -419,10 +398,10 @@ fn a_presentation_requirement_is_refused_rather_than_dropped() {
     let descriptor = headless_request(AdapterSelection::Default)
         .require_presentation_target(PresentationTarget::new(ObjectId::new(0x9002)));
 
-    // `.err().expect(..)` rather than `expect_err`: a `DeviceRequest` holds a
-    // `Box<dyn DeviceRequestBackend>`, which is deliberately not `Debug` — a
-    // backend object has no portable rendering, and printing one would be the
-    // native leak the seam exists to prevent.
+    // `.err().expect(..)` rather than `expect_err`: the private backend request
+    // result owns a trait object that is deliberately not `Debug`. A backend
+    // object has no portable rendering, and printing one would be the native leak
+    // the seam exists to prevent.
     let error = provider().request_device(&descriptor).err().expect(
         "a device required to present cannot be created while presentation cannot be resolved",
     );
@@ -1656,7 +1635,7 @@ fn what_the_binding_enumeration_actually_reported() {
 // Buffer allocation on real hardware.
 //
 // The portable half of this verb — that a refusal happens before a backend is
-// touched, and what a created handle reports — is asserted over `base::mock` in
+// touched, and what a created handle reports — is asserted over `api::tests::mock` in
 // `api::tests::resource::buffer`. What only this module can show is that the
 // lowering itself works: that Direct3D 12 accepts the descriptors the portable
 // rules admit, that the native description is the one the caller asked for, and
@@ -2010,8 +1989,7 @@ fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
         .build()
         .expect("a single batch has no edge that could be cyclic");
 
-    let receipt = device
-        .submit(plan)
+    let receipt = block_on(device.submit(plan))
         .expect("acceptance does not await completion, and section 41.7 forbids it doing so");
     let token = receipt
         .completion_for(point)
@@ -2053,11 +2031,11 @@ fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
 
     // The bytes themselves. Section 18.4 makes a ticket the only place they live,
     // so this is where the GPU's answer becomes comparable to the CPU's input.
-    let data = ticket
+    let view = ticket
         .try_read()
         .expect("a completed readback with published bytes is readable, not terminal")
         .expect("the ticket is Ready once its work reached a terminal Complete state");
-    let ReadbackData::Buffer { bytes } = data else {
+    let ReadbackViewData::Buffer { bytes } = view.data() else {
         panic!("the request was a buffer range, so the data must be a buffer range too");
     };
     assert_eq!(
@@ -2170,8 +2148,7 @@ fn one_upload_job_encodes_repeatedly_and_each_encoding_writes_its_own_bytes() {
         // because the spine allocates staging per batch: a second plan submitted
         // while the first is still in flight is the case where a spine that
         // reused one staging allocation would corrupt the first copy.
-        let receipt = device
-            .submit(plan)
+        let receipt = block_on(device.submit(plan))
             .expect("a second submission is accepted while the first may still be running");
         tokens.push(
             receipt
@@ -2192,11 +2169,11 @@ fn one_upload_job_encodes_repeatedly_and_each_encoding_writes_its_own_bytes() {
     }
 
     for ticket in &tickets {
-        let data = ticket
+        let view = ticket
             .try_read()
             .expect("a completed readback with published bytes is readable")
             .expect("the ticket is Ready once its work completed");
-        let ReadbackData::Buffer { bytes } = data else {
+        let ReadbackViewData::Buffer { bytes } = view.data() else {
             panic!("the request was a buffer range, so the data must be a buffer range too");
         };
         assert_eq!(

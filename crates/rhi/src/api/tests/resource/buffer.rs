@@ -471,17 +471,17 @@ fn the_usage_enumeration_covers_every_declared_bit() {
 /// The downcast is the seam working: only a caller that knows which backend made
 /// this handle can name the type behind it, and this test set is inside the crate
 /// that does.
-fn mock_native(buffer: &Buffer) -> &crate::base::mock::MockBuffer {
+fn mock_native(buffer: &Buffer) -> &crate::api::tests::mock::MockBuffer {
     buffer
         .native()
         .as_any()
-        .downcast_ref::<crate::base::mock::MockBuffer>()
+        .downcast_ref::<crate::api::tests::mock::MockBuffer>()
         .expect("a buffer created through the mock device carries the mock allocation")
 }
 
 #[test]
 fn a_created_buffer_reports_the_device_and_the_descriptor_it_was_made_from() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
+    let (device, _) = crate::api::tests::mock::buffers_for_test(identity(1), 4096);
     let descriptor = BufferDescriptor::new(2048, BufferUsage::VERTEX)
         .with_label("vertices")
         .with_memory_preference(ResourceMemoryPreference::DeviceLocalPreferred);
@@ -508,7 +508,7 @@ fn a_created_buffer_reports_the_device_and_the_descriptor_it_was_made_from() {
 
 #[test]
 fn two_buffers_from_one_device_have_different_ids() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
+    let (device, _) = crate::api::tests::mock::buffers_for_test(identity(1), 4096);
 
     let first = device
         .create_buffer(&BufferDescriptor::new(64, BufferUsage::UNIFORM))
@@ -527,7 +527,7 @@ fn two_buffers_from_one_device_have_different_ids() {
 
 #[test]
 fn a_clone_is_the_same_allocation_and_not_a_second_one() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
+    let (device, _) = crate::api::tests::mock::buffers_for_test(identity(1), 4096);
     let buffer = device
         .create_buffer(&BufferDescriptor::new(256, BufferUsage::COPY_DST))
         .expect("a 256-byte copy destination is legal");
@@ -548,7 +548,7 @@ fn a_clone_is_the_same_allocation_and_not_a_second_one() {
 
 #[test]
 fn the_backend_receives_the_descriptor_the_caller_wrote() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
+    let (device, _) = crate::api::tests::mock::buffers_for_test(identity(1), 4096);
     let usage = BufferUsage::STORAGE.union(BufferUsage::COPY_SRC);
 
     let buffer = device
@@ -573,7 +573,7 @@ fn a_refused_descriptor_never_reaches_the_backend() {
     // `OutOfMemory` would look to a caller just like one that was never called —
     // so it is observed by counting, which is what `MockDevice::allocations` is
     // for.
-    let (device, native) = crate::base::mock::buffers_for_test(identity(1), 4096);
+    let (device, native) = crate::api::tests::mock::buffers_for_test(identity(1), 4096);
 
     let refused = device
         .create_buffer(&BufferDescriptor::new(0, BufferUsage::VERTEX))
@@ -610,7 +610,7 @@ fn a_lost_device_refuses_creation_and_never_allocates() {
     // Section 6.5: loss is terminal, so a verb that would allocate must refuse
     // rather than ask a dead backend. The check runs before the capability read
     // and before the allocation, so no buffer is minted and nothing is allocated.
-    let (device, native) = crate::base::mock::paired_device_for_test(identity(2));
+    let (device, native) = crate::api::tests::mock::paired_device_for_test(identity(2));
     native.mark_lost(DeviceLossInfo::new(
         "the host reported that the adapter was removed".to_string(),
     ));

@@ -1,6 +1,6 @@
-# RHI API v1. Governance and freeze checklist
+# RHI API freeze v13. Governance and freeze checklist
 
-> Normative module of [Fluxel RHI API v1](../design-rhi.md). Read the root
+> Normative module of [Fluxel RHI API freeze v13](../design-rhi.md). Read the root
 > specification and every affected module before using this checklist. Deferred
 > names are not P0 support claims and must not be predeclared as empty API.
 
@@ -85,100 +85,66 @@ Crash dump / breadcrumbs
 # 61. Minimal direct-RHI example
 
 ```rust
-let mut request = provider.request_device(
-    DeviceRequestDescriptor::new(
-        AdapterSelection::PreferHighPerformance,
-        DeviceRequirements::new(),
-    )
-    .require_presentation_target(target.clone()),
-)?;
+async fn render_one_frame(
+    provider: &PlatformProvider,
+    target: PresentationTarget,
+) -> RhiResult<()> {
+    let device = provider.request_device(
+        DeviceRequestDescriptor::new(
+            AdapterSelection::PreferHighPerformance,
+            DeviceRequirements::new(),
+        ).require_presentation_target(target.clone()),
+    ).await?;
 
-let device = loop {
-    match request.poll()? {
-        RequestStatus::Pending => continue,
-        RequestStatus::Ready(device) => break device,
-    }
-};
+    let format = device.presentation_capabilities(&target)?.formats()[0];
+    let mut surface = device.configure_presentation(
+        &target, &PresentationConfiguration::new(format),
+    ).await?;
 
-let vertex = device.create_buffer(
-    &BufferDescriptor::new(
-        1024,
-        BufferUsage::VERTEX.union(BufferUsage::COPY_DST),
-    )
-    .with_label("triangle vertices")
-    .with_memory_preference(ResourceMemoryPreference::DeviceLocalPreferred),
-)?;
-
-let upload = device.create_buffer_upload(BufferUploadDescriptor {
-    label: Label(Some("triangle upload".into())),
-    dst: vertex.clone(),
-    dst_offset: 0,
-    bytes: vertex_bytes.into(),
-})?;
-
-let mut surface = device.configure_presentation(
-    &target,
-    &PresentationConfiguration::new(surface_format),
-)?;
-let frame = surface.acquire()?;
-
-let mut recorder = device.create_recorder(
-    &RecorderDescriptor::new().with_label("frame"),
-)?;
-
-recorder.encode_upload(&upload)?;
-
-{
-    let mut raster = recorder.begin_raster(
-        &RasterScopeDescriptor::new()
-            .with_label("main raster")
-            .with_color(
-                ShaderLocation::new(0),
-                ColorAttachment {
-                    view: ColorAttachmentView::Frame(frame.attachment()),
-                    load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
-                    store: StoreOp::Store,
-                    resolve: None,
-                },
-            ),
+    let vertex_shader = device.create_shader(&make_vertex_artifact()).await?;
+    let fragment_shader = device.create_shader(&make_fragment_artifact()).await?;
+    let interface = device.create_pipeline_interface(
+        &PipelineInterfaceDescriptor::new(vec![]),
     )?;
+    let pipeline = device.create_raster_pipeline(
+        &RasterPipelineDescriptor::new(vertex_shader, interface)
+            .with_fragment(fragment_shader)
+            .with_color_target(ShaderLocation::new(0), ColorTargetState::new(format)),
+    ).await?;
 
-    raster.set_pipeline(&pipeline)?;
-    raster.set_vertex_buffer(
-        0,
-        &BufferBinding::new(
-            vertex.clone(),
-            BufferRange::new(0, 1024),
+    let frame = surface.acquire().await?;
+    let mut recorder = device.create_recorder(&RecorderDescriptor::new())?;
+    let mut raster = recorder.begin_raster(
+        &RasterScopeDescriptor::new().with_color(
+            ShaderLocation::new(0),
+            ColorAttachment {
+                view: ColorAttachmentView::Frame(frame.attachment()),
+                load: LoadOp::Clear(ColorClearValue::Float([0.1, 0.1, 0.1, 1.0])),
+                store: StoreOp::Store,
+                resolve: None,
+            },
         ),
     )?;
+    raster.set_pipeline(&pipeline)?;
     raster.draw(0..3, 0..1)?;
     raster.end()?;
-}
 
-let work = recorder.finish()?;
+    let work = recorder.finish()?;
+    let lane = device.capabilities().submission().lanes().iter()
+        .find(|lane| lane.domains().contains(LaneWorkDomains::RASTER))
+        .ok_or_else(|| RhiError::unsupported("no raster lane"))?.id();
+    let mut plan = SubmissionPlanBuilder::new(&device);
+    let point = plan.add_batch(lane, vec![work])?;
+    plan.present_after(frame, point)?;
+    let receipt = device.submit(plan.build()?).await?;
 
-let graphics_lane = device
-    .capabilities()
-    .submission()
-    .lanes()
-    .iter()
-    .find(|lane| lane.domains().contains(LaneWorkDomains::RASTER))
-    .expect("Base RHI contract guarantees a raster-capable lane")
-    .id();
-
-let mut plan = SubmissionPlanBuilder::new(&device);
-let point = plan.add_batch(graphics_lane, vec![work])?;
-let _present = plan.present_after(frame, point)?;
-
-let receipt = device.submit(plan.build()?)?;
-
-loop {
-    match device.completion_state(receipt.completion())? {
-        CompletionState::Pending => device.poll()?,
-        CompletionState::Complete => break,
-        CompletionState::DeviceLost(info) => return Err(/* map info */),
-        CompletionState::Failed(failure) => return Err(/* map failure */),
+    match device.wait_completion(receipt.completion()).await? {
+        CompletionState::Complete => {}
+        CompletionState::DeviceLost(info) => return Err(RhiError::device_lost(info.message())),
+        CompletionState::Failed(err) => return Err(RhiError::backend(err.message())),
+        CompletionState::Pending => unreachable!(),
     }
+    Ok(())
 }
 ```
 
@@ -193,7 +159,50 @@ native queue
 swapchain image state
 ```
 
-The RHI generates use/hazard semantics from actual commands; RenderGraph users additionally validate declared-versus-actual coverage through `graph_bridge`.
+The RHI generates `rhi::command::ResourceUse` and hazard semantics exclusively from actual portable commands. RenderGraph remains an RHI client and is not part of the RHI public object model.
+
+---
+
+## 61.1 Minimal transient example
+
+```rust
+async fn transient_example(
+    device: &Device,
+    lane: SubmissionLaneId,
+) -> RhiResult<()> {
+    let mut plan = SubmissionPlanBuilder::new(device);
+
+    let produce = plan.reserve_batch(lane)?;
+    let consume = plan.reserve_batch(lane)?;
+    plan.add_dependency(produce, consume)?;
+
+    let transient = plan.transient_allocator();
+    let temp = transient.create_texture(
+        &TextureDescriptor::new_2d(
+            1920,
+            1080,
+            TextureFormat::Rgba16Float,
+            TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::SAMPLED),
+        ),
+        TransientLifetime::new(produce).release_at(consume),
+    )?;
+
+    let view = device.create_texture_view(
+        &temp,
+        &TextureViewDescriptor::whole(
+            &temp,
+            TextureViewDimension::D2,
+        )?,
+    )?;
+
+    // Record work that uses `view`, then fill both reserved points.
+    // plan.set_batch(produce, vec![...])?;
+    // plan.set_batch(consume, vec![...])?;
+
+    // Physical backing and aliasing are realized during async submit preflight.
+    Ok(())
+}
+```
 
 ---
 
@@ -222,6 +231,17 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 
 # 63. Freeze checklist
 
+## Platform / Device / Async
+
+- [x] Provider is backend-family scoped; multiple backend Devices may coexist in one process.
+- [x] `enumerate_adapters().await` and `request_device(...).await` are the async discovery/creation boundary; no public poll-state request object exists.
+- [x] `Device::poll()` is only an opportunistic synchronous progress hook and normal completion does not require a busy loop.
+- [x] `create_shader`, `create_raster_pipeline`, and `create_compute_pipeline` are async; logical resource and binding creation remain synchronous.
+- [x] `submit`, `wait_completion`, and `wait_idle` are async operations.
+- [x] Readback is `readback.read().await -> ReadbackView<'_>`; the RAII view closes any backend mapping lease on Drop.
+- [x] Presentation configure/reconfigure/acquire/abandon/wait-present operations are async.
+- [x] Concurrent invocation does not imply `async fn`: capability queries, descriptor validation, command recording, statistics, and diagnostics stay synchronous.
+
 ## Identity
 
 - [x] `DeviceIdentity` contains opaque instance plus generation and names one
@@ -234,13 +254,13 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 ## Platform / Adapter / Device
 
 - [x] One `PlatformProvider` corresponds to one backend family.
-- [x] `request_device()` is the canonical path; Adapter enumeration is optional inspection.
+- [x] `request_device().await` is the canonical path; adapter enumeration is optional async inspection.
 - [x] WebGPU / adopted contexts are not forced to fabricate complete Adapter enumeration.
 - [x] `AdapterId` is a Provider-scoped opaque token, not an index/native handle.
 - [x] The presentation requirement enters the request at Device creation.
-- [x] `DeviceRequest` is not bound to a specific async runtime.
+- [x] Device-request futures are not bound to a specific async runtime.
 - [x] Device loss moves pending completion/readback/present into a terminal state.
-- [x] `wait_idle()` is only for shutdown/diagnostics.
+- [x] `wait_idle().await` is only for shutdown/diagnostics.
 
 ## Capability / Format / Route / Surface
 
@@ -295,6 +315,17 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] Resource backing retires safely with respect to completion.
 - [x] Device loss terminates pending readback state.
 - [x] Descriptor/Upload mutation/Readback layout satisfy Capture observability.
+- [x] `ReadbackView` exposes the ready bytes and layout only while its RAII lease is held; it is not a bare borrowed slice detached from backend unmap requirements.
+
+## Transient resource / aliasing
+
+- [x] The public transient API is frozen in 0.16; it is not a deferred graph/service contract.
+- [x] `TransientAllocationSupport::{Dedicated, Aliasing}` is capability data: Dedicated is the required correct fallback and Aliasing is an optimization.
+- [x] `TransientLifetime { acquire: PlanPoint, release_frontier: Vec<PlanPoint> }` uses only RHI execution vocabulary.
+- [x] `SubmissionPlanBuilder::reserve_batch`, `set_batch`, and `transient_allocator` allow lifetime reservation before recording work.
+- [x] Transient allocation returns ordinary Buffer/Texture handles, is bound to its plan, and does not fork binding or command APIs.
+- [x] Backends lower aliasing from PlanPoint ordering, actual `rhi::command::ResourceUse`, and physical alias relations; native heaps, offsets, and barriers remain private.
+- [x] Aliasing is permitted only for proven non-overlap and otherwise falls back to Dedicated; realization occurs during async submission preflight before acceptance.
 
 ## Shader / Binding / Pipeline
 
@@ -331,7 +362,7 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 
 ## Recording / Raster / Compute / Copy
 
-- [x] Ordinary Recorders do not accept Graph declared uses and are not bound to a submission lane.
+- [x] Ordinary Recorders accept no external scheduling contract and are not bound to a submission lane.
 - [x] The Recorder state machine explicitly distinguishes Open / RasterScope / ComputeScope / Poisoned.
 - [x] Parameter validation errors do not automatically poison; only backend finalize/internal failure poisons.
 - [x] Scopes must explicitly `end()`; Drop does not perform potentially failing native finalization.
@@ -356,12 +387,11 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] Debug groups must be balanced and cannot carry state across scopes covertly.
 - [x] Recorder-open, RasterScope, and ComputeScope own independent debug stacks;
   each corresponding finish/end operation requires its own stack to be empty.
-- [x] Upload/readback command actual uses are COPY-domain GPU uses;
-  `HOST_READ`/`HOST_WRITE` are reserved for Graph/tooling host observations.
+- [x] Upload/readback command actual uses are COPY-domain GPU uses; P0 `ResourceUse` contains no graph/host scheduling vocabulary.
 - [x] RHI internals retain a command-level actual-use sequence; the public summary does not carry synchronization lowering.
 - [x] RecordedWork exposes `work_domains()` for Submission lane legality validation.
 - [x] RecordedWork strongly retains execution dependencies.
-- [x] Graph validates declared-versus-actual coverage only through the bridge.
+- [x] `ResourceUse` is `rhi::command::ResourceUse`; RHI derives its command-level actual-use sequence without an external cross-check layer.
 
 ## Submission / Completion
 
@@ -375,7 +405,7 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] A `CompletionPoint -> PlanPoint` external dependency resolves cross-plan
   happens-before through GPU wait, an already ordered domain, or a proven
   order-preserving collapse; only the absence of all three is `Unsupported`.
-- [x] An Err from `Device::submit()` guarantees that no plan work was accepted by the backend.
+- [x] An Err from `Device::submit(...).await` guarantees that no plan work was accepted by the backend.
 - [x] Once any native work is accepted, a subsequent immediate failure is reported through the Receipt/Completion terminal state rather than returning an ambiguous Err.
 - [x] Builder ownership of a frame is total: `build()` failure or builder Drop
   performs no-submit abandonment/recovery bookkeeping.
@@ -391,7 +421,7 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
       backend port lands, while the contract and the accessor are frozen.
 - [x] RHI retirement may depend on the completion of the last batch actually used, without forcing whole-plan completion.
 - [x] Pending completion must become terminal after DeviceLost, not remain Pending forever.
-- [x] P0 provides no blocking completion wait; `wait_idle` remains only for shutdown/diagnostics.
+- [x] P0 provides no blocking completion wait; `wait_completion().await` and `wait_idle().await` are async.
 - [x] Present outcome is independent from GPU Completion, and `Accepted` does not mean scan-out completion.
 
 ## Presentation
@@ -399,11 +429,11 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] `PresentMode` is in configuration; `Automatic` is the only all-platform-required policy.
 - [x] Surface facts are queried by Device + target and are only snapshots.
 - [x] A PresentationTarget has only one active configuration lease at a time.
-- [x] `ConfiguredPresentation::reconfigure()` requires no outstanding frame.
+- [x] `ConfiguredPresentation::reconfigure(...).await` requires no outstanding frame.
 - [x] P0 permits at most one outstanding frame per ConfiguredPresentation and does not imply a swapchain image count.
 - [x] AcquiredFrame is non-Clone and is the unique ownership token; FrameAttachment is only a Cloneable reference.
 - [x] `drawable_view()` is removed; a surface image is not smuggled into an ordinary TextureView.
-- [x] `discard()` is removed and replaced with the explicit `abandon()` lifecycle escape; backend cost is not promised.
+- [x] `discard()` is removed and replaced with the explicit `abandon().await` lifecycle escape; backend cost is not promised.
 - [x] AcquiredFrame Drop has a no-throw recovery path and does not leak an acquired image permanently.
 - [x] FrameAttachment has format/extent/sample-count, but is not a Texture.
 - [x] FrameAttachment use state is validated with the frame lifecycle and cannot be reused after present/abandon.
@@ -477,9 +507,11 @@ The stable public surface of Fluxel RHI 0.16 should be understood as:
 
 ```text
 portable GPU execution vocabulary
++ async lifecycle operations
 + instance capability facts
++ persistent / transient resource model
 + strict validation
- + opaque logical handles
++ opaque logical handles
 + explicit hazard/dependency validation
 + logical submission/completion/presentation
 + portable logical statistics / inventory
@@ -495,16 +527,21 @@ UE RHI clone
 the greatest common denominator of all platforms
 ```
 
-The relationship between RenderGraph and the RHI:
+The frozen RHI module layout is:
 
 ```text
-Graph declared uses / dependency / lifetime / lane
-                    ↓
-             graph_bridge
-                    ↓
-RHI actual command uses / RecordedWork / SubmissionPlan
-                    ↓
-                 Backend
+rhi
+├─ platform / capability / format
+├─ resource
+│  └─ transient
+├─ shader / binding / pipeline
+├─ command                 (`ResourceUse`)
+├─ submission / presentation
+├─ statistics / diagnostics
+└─ tooling                 (hidden SPI)
+
+backend
+└─ DX12 / Vulkan / Metal / WebGPU / GL
 ```
 
 The relationship between Capture/Replay and the RHI:
@@ -523,8 +560,10 @@ After this version, adding Query, Indirect, Bindless, RT, Sparse, and similar ca
 
 ```text
 Platform / Adapter / Device                    ✅ FROZEN
+Async lifecycle contract                       ✅ FROZEN
 Capability / Format / Route / Surface Facts   ✅ FROZEN
-Resource / Upload / Readback                   ✅ FROZEN
+Persistent Resource / Upload / Readback       ✅ FROZEN
+Transient Resource / Aliasing Contract         ✅ FROZEN
 Shader / Binding / Pipeline                    ✅ FROZEN
 Recording / Raster / Compute / Copy            ✅ FROZEN
 Submission / Completion                        ✅ FROZEN
@@ -536,10 +575,10 @@ Capture / Replay tooling seam                  ✅ FROZEN
 Next item:
 
 ```text
-Global cross-review / public type closure / normative v1 freeze
+Global cross-review / public type closure / normative freeze v13
 ```
 
-# 65. v1 global cross-review conclusions
+# 65. v13 global cross-review conclusions
 
 This pass does not merely continue confirming earlier conclusions; it re-derives the design from the following six chains:
 
@@ -552,9 +591,26 @@ E. Whether Statistics only observes and does not alter semantics
 F. Whether Capture is reconstructible without controlling execution in reverse
 ```
 
-## 65.1 P0 issues found and resolved in this pass
+## 65.1 Key corrections from v12 to v13
 
-| Issue | Earlier-draft risk | v1 decision |
+| Area | v12 | v13 |
+|---|---|---|
+| RHI module boundary | extra upper-layer bridge module | removed; RHI knows only its own types |
+| Resource use | bridge namespace | `rhi::command::ResourceUse` |
+| external work coverage | public RHI validation contract | removed from RHI |
+| Transient | partial bridge/service | frozen first-class RHI API |
+| Transient implementation | API coupled to aliasing | `Dedicated` baseline; `Aliasing` optimization |
+| Transient lifetime | external opaque plan | `PlanPoint` acquire/release frontier |
+| Device creation | hand-written poll state | `request_device().await` |
+| Shader/pipeline | synchronous create | asynchronous create |
+| Submit | synchronous | async, allowing deferred realization in preflight |
+| Completion | query/poll centered | query plus `wait_completion().await` |
+| Readback | borrowed bytes without a guard | async read plus RAII `ReadbackView` |
+| Presentation | synchronous configure/acquire | async lifecycle |
+
+### Additional P0 cross-review ledger
+
+| Issue | Earlier-draft risk | v13 decision |
 |---|---|---|
 | Device generation | generation++ recovery semantics were defined without a recovery API | P0 loss is terminal; requesting again obtains a new DeviceIdentity |
 | Capability fingerprint | a hash was described as carrying plan correctness | add exact `CapabilityCompatibilityId`; fingerprint is only for cache/tooling |
@@ -571,8 +627,8 @@ F. Whether Capture is reconstructible without controlling execution in reverse
 | Alpha-to-coverage | its relation to fragment/sample-mask/target0 was not closed | add target0 alpha/output/sample-mask validation |
 | Compute diagnostics | ComputeScope lacked descriptor/label | add `ComputeScopeDescriptor` |
 | Scope debug markers | draw/dispatch could not be marked inside a scope | add debug group/marker to Raster/Compute scopes |
-| Graph ResourceUse | HOST/PRESENT were half-frozen while P0 had no corresponding execution path | remove from P0 ResourceUse; separate definedness from access |
-| Graph definedness | `uses` alone could not validate Store/Discard and similar contradictions | `DeclaredContentContract` + internal command-semantic cross-check |
+| ResourceUse vocabulary | HOST/PRESENT were half-frozen while P0 had no corresponding execution path | remove them from P0 `rhi::command::ResourceUse` |
+| Command semantic closure | attachment Store/Discard and similar contradictions could escape validation | recorder validates portable command semantics while deriving actual uses |
 | Cross-lane hazards | direct RHI could omit a dependency and form a data race | build validates overlap/write hazards; a missing edge returns `MissingDependency` |
 | Cross-plan in-flight hazard | the second submission could not see pending resource use from a prior plan | `Device::submit` performs global hazard preflight over pending submissions |
 | Cross-plan multi-lane | Completion could not be the GPU predecessor of the next plan | add `add_external_dependency(CompletionPoint, PlanPoint)` |
@@ -582,9 +638,81 @@ F. Whether Capture is reconstructible without controlling execution in reverse
 | Capture command/use | commands and actual uses were flattened, losing their one-to-one ordering | `CapturedCommand { command, actual_uses }` |
 | Capture pre-recorded work | `describe_work(&RecordedWork)` required the caller to retain a handle | change to `describe_work(ObjectId)` |
 | Capture cross-plan dependency | tooling IR could represent only PlanPoint->PlanPoint | dependency source also supports a prior CompletionPoint |
-| Document coherence | the minimal example still used removed legacy API | update everything to the v1 frozen API |
+| Document coherence | the minimal example still used removed legacy API | update everything to the v13 frozen API |
 
-## 65.2 Five-backend cross-cutting conclusions
+## 65.2 Pure-RHI source of truth
+
+```text
+Capability facts
+    -> whether an operation is supported
+Descriptors / interfaces
+    -> what an object is
+Portable commands + actual ResourceUse
+    -> what was actually done
+Submission dependencies
+    -> which work happens before which work
+Transient lifetime
+    -> which short-lived resources may safely reuse backing
+Completion / PresentState
+    -> what finally happened
+Statistics
+    -> how much happened
+Tooling
+    -> how those semantics are copied for diagnostics/reconstruction
+```
+
+No other module owns barrier state, native state, or resource identity truth.
+
+## 65.3 Final async boundary
+
+```text
+enumerate_adapters / request_device                       async
+create_shader / create_raster_pipeline / create_compute_pipeline async
+submit / wait_completion / wait_idle                      async
+readback.read                                              async
+configure / reconfigure / acquire / abandon / wait_present async
+```
+
+Logical resource creation, binding/layout/interface creation, command
+recording, capability queries, state queries and `try_*` fast paths,
+statistics snapshots, and diagnostics pulls remain synchronous. Concurrency
+support by itself does not give an operation future-event semantics.
+
+## 65.4 Transient cross-backend check
+
+- DX12 may use placed resources, heap reuse, and aliasing barriers.
+- Vulkan may use aliased device memory plus explicit execution/memory dependencies.
+- Metal may use `MTLHeap` and resource aliasability strategies.
+- WebGPU, OpenGL, and WebGL2 remain correct with
+  `TransientAllocationSupport::Dedicated`.
+
+The same public semantics therefore support both optimized native aliasing and
+the minimum correct dedicated implementation without a later API change.
+
+## 65.5 Final gates
+
+```text
+Pure RHI layering                    PASS
+No upper scheduling contract in RHI PASS
+Public type closure                  PASS
+Async lifecycle closure              PASS
+Multi-device structured errors       PASS
+Capability single-source             PASS
+Persistent resource closure          PASS
+Transient resource closure           PASS
+Resource/binding/pipeline closure     PASS
+Command state machine                PASS
+Cross-lane/cross-plan hazard safety  PASS
+Completion/retirement closure        PASS
+Presentation ownership closure       PASS
+Statistics observer-only boundary    PASS
+Capture reconstructability           PASS
+Backend-private boundary             PASS
+```
+
+> **Fluxel RHI 0.16 public semantic API: FINAL FREEZE CANDIDATE V13.**
+
+### Additional five-backend conclusions
 
 ### DX12 / Vulkan / Metal
 
@@ -625,9 +753,9 @@ FrameAttachment may be only the default framebuffer
 no explicit native barrier/fence vocabulary exposed to callers
 ```
 
-Therefore, v1 remains a **capability-layered RHI**, rather than cutting native backends down to the lowest common public API.
+Therefore, v13 remains a **capability-layered RHI**, rather than cutting native backends down to the lowest common public API.
 
-## 65.3 Final source-of-truth layering
+### Additional source-of-truth notes
 
 ```text
 Capability facts
@@ -654,7 +782,7 @@ Capture tooling
 
 No two layers simultaneously own the source of truth for barriers/native state.
 
-## 65.4 Final freeze gates
+### Additional detailed freeze gates
 
 ```text
 Public type graph                      PASS
@@ -672,9 +800,9 @@ Capture reconstructability            PASS
 Backend-private boundary              PASS
 ```
 
-## 65.5 Final status
+### Change-control status
 
-> **Fluxel RHI 0.16 public semantic API: NORMATIVE V1 FREEZE.**
+> **Fluxel RHI 0.16 public semantic API: FINAL FREEZE CANDIDATE V13.**
 
 Afterwards, the 0.16 implementation phase permits:
 
@@ -700,7 +828,7 @@ Query / Indirect / Inline Parameters / Bindless / RT / Sparse and similar featur
 
 ---
 
-# 66. References used for v1 cross-validation
+# 66. References used for v13 cross-validation
 
 This pass uses these materials only as evidence that native semantics can support the Fluxel contract; it does not copy their API shapes.
 

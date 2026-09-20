@@ -9,9 +9,9 @@
 //!
 //! What a single step *is* — the transitions a copy needs, the staging an upload
 //! or a readback allocates — lives in the sibling modules this chapter declares:
-//! [`super::copy`], [`super::transfer`], [`super::transition`], and the refusal
-//! they all report through, [`super::failure`]. This file is the machinery those
-//! steps are recorded onto.
+//! [`super::copy`], [`super::transfer`], [`super::transition`], and the shared
+//! [`crate::backend::dx12::failure::Dx12Failure`]. This file is the machinery
+//! those steps are recorded onto.
 //!
 //! # Record everything, then commit
 //!
@@ -57,7 +57,7 @@
 //!   layer's capability snapshot, and this module is only reached for a plan that
 //!   already passed it.
 //! - Whether a copy is legal. Section 34's checks ran at record time.
-//! - Batch order and happens-before edges. [`crate::base::command`] documents why
+//! - Batch order and happens-before edges. [`crate::api::submission::backend`] documents why
 //!   one native queue supplies all of them for free: the queue executes its lists
 //!   in the order they were handed to it, and a batch is handed over before the
 //!   next one is recorded.
@@ -86,14 +86,14 @@ use windows::core::PCWSTR;
 
 use crate::api::command::record::{CopyRecord, RecordedPayload};
 use crate::api::resource::transfer::ReadbackStatus;
+use crate::api::submission::backend::{SubmissionOutcome, SubmissionRequest};
 use crate::api::submission::plan::PlanBatch;
 use crate::api::submission::{CompletionFailure, CompletionState};
 use crate::backend::dx12::ffi;
-use crate::base::command::{SubmissionOutcome, SubmissionRequest};
 
 use super::copy::lower_buffer_copy;
-use super::failure::{SpineFailure, ref_native};
 use super::transfer::{CommittedBatch, lower_readback, lower_upload, publish_readback};
+use crate::backend::dx12::failure::{Dx12Failure, ref_native};
 
 /// How long `wait_idle` will block before it reports that the GPU never got
 /// there.
@@ -167,7 +167,7 @@ struct SpineState {
     /// Only the *first* such serial is kept, because it is the bound below which
     /// the fence still answers truthfully: later signals are queued behind the
     /// same broken queue and would each name a larger serial.
-    unobservable: Option<(u64, SpineFailure)>,
+    unobservable: Option<(u64, Dx12Failure)>,
     /// Committed batches whose staging must outlive the fence reaching `serial`.
     ///
     /// In serial order, so the drain at the front is the whole of the reclaim
@@ -342,7 +342,7 @@ impl Dx12CommandSpine {
     pub(crate) fn submit(
         &self,
         request: &SubmissionRequest<'_>,
-    ) -> Result<SubmissionOutcome, SpineFailure> {
+    ) -> Result<SubmissionOutcome, Dx12Failure> {
         let mut state = self.lock();
         // Read once: a slot may be reused exactly when the fence has passed the
         // batch last recorded into it.
@@ -359,7 +359,7 @@ impl Dx12CommandSpine {
         for _ in request.batches {
             let index = state
                 .claim(&self.device, completed, &claimed)
-                .map_err(SpineFailure::Native)?;
+                .map_err(Dx12Failure::Native)?;
             claimed.push(index);
         }
 
@@ -427,7 +427,7 @@ impl Dx12CommandSpine {
                         // than the bound below which the fence still answers.
                         state.unobservable = Some((
                             serial,
-                            SpineFailure::Native(ffi::NativeError::new(
+                            Dx12Failure::Native(ffi::NativeError::new(
                                 &error,
                                 "Dx12Device::submit",
                             )),
@@ -474,7 +474,7 @@ impl Dx12CommandSpine {
         list: &ID3D12GraphicsCommandList,
         batch: &PlanBatch,
         committed: &mut CommittedBatch,
-    ) -> Result<(), SpineFailure> {
+    ) -> Result<(), Dx12Failure> {
         for work in &batch.work {
             for command in work.commands() {
                 match &command.payload {
@@ -488,7 +488,7 @@ impl Dx12CommandSpine {
                         lower_readback(&self.device, list, ticket, committed)?;
                     }
                     other => {
-                        return Err(SpineFailure::Unsupported {
+                        return Err(Dx12Failure::Unsupported {
                             what: payload_name(other),
                             why: NOT_LOWERED,
                         });
@@ -577,7 +577,7 @@ impl Dx12CommandSpine {
     /// why nothing in the frame path calls it. The wait is on an event rather
     /// than a spin over `GetCompletedValue`, because a spin would burn a core for
     /// the whole wait — a cost a shutdown path should not impose on the host.
-    pub(crate) fn wait_idle(&self) -> Result<(), SpineFailure> {
+    pub(crate) fn wait_idle(&self) -> Result<(), Dx12Failure> {
         let issued = self.lock().issued;
         if issued == 0 {
             // Nothing has ever been submitted, so there is no fence value to
@@ -591,7 +591,7 @@ impl Dx12CommandSpine {
         // security attributes is the documented shape for a one-shot wait.
         let event =
             unsafe { CreateEventW(None, false, false, PCWSTR::null()) }.map_err(|error| {
-                SpineFailure::Native(ffi::NativeError::new(&error, "Device::wait_idle"))
+                Dx12Failure::Native(ffi::NativeError::new(&error, "Device::wait_idle"))
             })?;
         let event = OwnedEvent(event);
 
@@ -600,7 +600,7 @@ impl Dx12CommandSpine {
         // without recording anything if it cannot. The handle stays alive in
         // `event` for the whole wait below.
         unsafe { self.fence.SetEventOnCompletion(issued, event.0) }.map_err(|error| {
-            SpineFailure::Native(ffi::NativeError::new(&error, "Device::wait_idle"))
+            Dx12Failure::Native(ffi::NativeError::new(&error, "Device::wait_idle"))
         })?;
 
         // SAFETY: `WaitForSingleObject` blocks this thread on a handle this
@@ -608,7 +608,7 @@ impl Dx12CommandSpine {
         // value will never be written — from hanging the host forever.
         let waited = unsafe { WaitForSingleObject(event.0, WAIT_BOUND_MS) };
         if waited != WAIT_OBJECT_0 {
-            return Err(SpineFailure::Stalled {
+            return Err(Dx12Failure::Stalled {
                 bound_ms: WAIT_BOUND_MS,
             });
         }

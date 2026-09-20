@@ -19,7 +19,7 @@ use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderModule, ShaderStage};
 
-use crate::base::pipeline::ComputePipelineBackend;
+use crate::api::pipeline::backend::ComputePipelineBackend;
 
 use super::interface::{PipelineInterface, validate_pipeline_interface_descriptor};
 use super::resources::{merge_shader_resources, validate_shader_resource_requirements};
@@ -77,7 +77,7 @@ pub struct ComputePipeline {
     ///
     /// Nothing portable reads it. A dispatch is lowered by the *device's* backend,
     /// which downcasts this and the bound groups in one place, which is why
-    /// `crate::base::pipeline` carries no dispatch verb.
+    /// `crate::api::pipeline::backend` carries no dispatch verb.
     native: Arc<dyn ComputePipelineBackend>,
 }
 
@@ -247,7 +247,7 @@ impl Device {
     /// passed every portable check is a fact about the driver. Folding it into
     /// `InvalidUsage` would tell the caller its descriptor was wrong when the
     /// portable layer has already said otherwise (discipline 4 in
-    /// `crate::base`).
+    /// the crate-private backend contract).
     ///
     /// The descriptor the backend receives is the caller's. Unlike a bind group
     /// there is no canonical form to hand it — an interface's order is already

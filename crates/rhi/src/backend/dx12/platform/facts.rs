@@ -14,7 +14,7 @@
 //! resource-binding tiers and multisample quality levels all come from
 //! `ID3D12Device::CheckFeatureSupport`, and there is no adapter-level spelling of
 //! them. That dependency — not a preference — is why
-//! [`crate::base::platform::ProviderBackend::enumerate_adapters`] refuses while
+//! [`crate::api::platform::backend::ProviderBackend::enumerate_adapters`] refuses while
 //! `request_device` works, and why an [`crate::api::platform::AdapterInfo`] built
 //! from `DXGI` alone carries no capability snapshot yet.
 //!
@@ -235,6 +235,7 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
     let options = options(device)?;
 
     let mut facts = CapabilityFacts::empty();
+    facts.record_transient_capabilities(crate::backend::dx12::resource::transient_capabilities());
     record_features(&mut facts);
     record_code_forms(&mut facts);
     record_limits(&options, &mut facts);

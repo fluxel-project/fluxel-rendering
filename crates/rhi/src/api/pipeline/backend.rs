@@ -1,8 +1,8 @@
-//! The pipeline chapter's seam: the native pipeline state object behind one
+//! Crate-private backend contract: the native pipeline state object behind one
 //! [`ComputePipeline`](crate::api::pipeline::ComputePipeline).
 //!
-//! A separate module from [`crate::base::shader`] for the reason that one is
-//! separate from [`crate::base::resource`]: a pipeline is reached from its own
+//! A separate module from [`crate::api::shader::backend`] for the reason that one is
+//! separate from [`crate::api::resource::backend`]: a pipeline is reached from its own
 //! handle and grows for its own reason. The shader seam carries what a producer's
 //! compiler produced; this one carries what the *driver* built out of it, which is
 //! the first object in this crate whose creation the driver can refuse for a reason
@@ -20,8 +20,8 @@
 //! # What this seam deliberately does not do
 //!
 //! It carries no `create`-shaped method, for the reason
-//! [`crate::base::shader`] gives. The creation call lives on
-//! [`DeviceBackend`](crate::base::platform::DeviceBackend), next to
+//! [`crate::api::shader::backend`] gives. The creation call lives on
+//! [`DeviceBackend`](crate::api::platform::backend::DeviceBackend), next to
 //! `create_buffer`, because every portable check section 28 lists sits *before*
 //! it — the capability gate, the two device-identity comparisons, the interface
 //! and merged-requirement checks, the workgroup shape and its five limits. A
@@ -39,7 +39,7 @@ use std::any::Any;
 /// [`ComputePipeline`](crate::api::pipeline::ComputePipeline).
 ///
 /// Implemented by a backend, held by the portable handle, and never reachable from
-/// outside the crate. Like [`crate::base::resource::BufferBackend`] it carries the
+/// outside the crate. Like [`crate::api::resource::backend::BufferBackend`] it carries the
 /// object and not the operations: a dispatch is lowered by *the device's* backend,
 /// which downcasts the pipeline and every bound group in one place, so a method
 /// here would put one pipeline's binding operation behind an arbitrary receiver.

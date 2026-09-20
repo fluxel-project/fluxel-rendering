@@ -35,7 +35,7 @@ use crate::api::presentation::{
 };
 use crate::api::resource::texture::Extent3d;
 use crate::api::submission::{CompletionPoint, SubmissionPlanId, SubmissionPoint};
-use crate::base::mock::paired_device_for_test;
+use crate::api::tests::mock::paired_device_for_test;
 
 // ---------------------------------------------------------------------------
 // Section 43 — configuration.

@@ -1,7 +1,7 @@
-//! The resource chapter's seam (specification module 02, sections 11 through 15).
+//! Crate-private backend contract for the resource API (sections 11 through 15).
 //!
-//! Read the four disciplines in [`crate::base`] first; they bind every trait
-//! here. This module adds one thing to them, and it is the thing that makes the
+//! Portable validation runs in the public API before these traits are reached.
+//! This module adds the ownership rule that makes the
 //! resource seam different from the platform one:
 //!
 //! # What a resource handle already owns, and what is left for the backend

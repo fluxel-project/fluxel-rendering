@@ -1,8 +1,8 @@
-//! The binding chapter's seam: the native descriptor packet behind one
+//! Crate-private backend contract: the native descriptor packet behind one
 //! [`BindGroup`](crate::api::binding::BindGroup).
 //!
-//! A separate module from [`crate::base::resource`] for the reason that one is
-//! separate from [`crate::base::platform`]: a bind group is reached from its own
+//! A separate module from [`crate::api::resource::backend`] for the reason that one is
+//! separate from [`crate::api::platform::backend`]: a bind group is reached from its own
 //! handle and grows for its own reason. The resource seam carries the allocations a
 //! caller asked for; this one carries the *packet that points at them*, which is
 //! assembled at bind-group creation and read when a command binds it.
@@ -27,8 +27,8 @@
 //! # What this seam deliberately does not do
 //!
 //! It carries no `create`-shaped method, for the reason
-//! [`crate::base::shader`] gives: the creation call lives on
-//! [`DeviceBackend`](crate::base::platform::DeviceBackend), next to
+//! [`crate::api::shader::backend`] gives: the creation call lives on
+//! [`DeviceBackend`](crate::api::platform::backend::DeviceBackend), next to
 //! `create_buffer`, because everything section 22.3 checks — the layout match, the
 //! range rules, the device's binding limits — sits *before* it. A method here that
 //! took a descriptor would be a second place a group could be created, and the
@@ -44,7 +44,7 @@ use std::any::Any;
 /// [`BindGroup`](crate::api::binding::BindGroup).
 ///
 /// Implemented by a backend, held by the portable handle, and never reachable from
-/// outside the crate. Like [`crate::base::resource::BufferBackend`] it carries the
+/// outside the crate. Like [`crate::api::resource::backend::BufferBackend`] it carries the
 /// object and not the operations: a command is lowered by *the device's* backend,
 /// which downcasts this and every other group in one place, so a method here would
 /// put one group's binding operation behind an arbitrary receiver.

@@ -6,7 +6,7 @@
 //!
 //! - [`provider`] — the DXGI factory, adapter selection and `D3D12CreateDevice`.
 //! - [`device`] — the native device, its liveness cell, and the lowering verbs
-//!   behind [`crate::base::platform::DeviceBackend`].
+//!   behind [`crate::api::platform::backend::DeviceBackend`].
 //! - [`request`] — the one-shot handover of that device to the portable layer.
 //!
 //! What this chapter does not own: the capability tables themselves

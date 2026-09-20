@@ -7,7 +7,7 @@
 //! down for a driver to discover. Everything else in this chapter panics with a
 //! documented message and is covered by shape tests instead.
 //!
-//! The verbs that *are* backed run against [`crate::base::mock`], which is the
+//! The verbs that *are* backed run against [`crate::api::tests::mock`], which is the
 //! conformance vehicle described in that module: it answers from memory, so the
 //! portable rules it exercises are checked on every platform in the same run.
 //! It proves nothing about hardware, and nothing here should be read as if it
@@ -32,7 +32,7 @@ use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
     SubmissionLaneInfo,
 };
-use crate::base::mock::{MockDevice, MockEnumeration, MockProvider};
+use crate::api::tests::mock::{MockDevice, MockEnumeration, MockProvider};
 
 /// A device identity under the single v13 device-instance token.
 fn identity(instance: u64) -> DeviceIdentity {
@@ -124,7 +124,7 @@ fn enumeration_distinguishes_unsupported_from_empty() {
         .shared();
     let listed = MockProvider::new(BackendKind::Dx12, instance).shared();
 
-    let provider = |native: Arc<dyn crate::base::platform::ProviderBackend>| {
+    let provider = |native: Arc<dyn crate::api::platform::backend::ProviderBackend>| {
         PlatformProvider::new(BackendKind::Dx12, instance, native)
     };
 

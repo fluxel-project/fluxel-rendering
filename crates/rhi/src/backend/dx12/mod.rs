@@ -1,6 +1,6 @@
-//! The Direct3D 12 backend: API v1 lowering onto `ID3D12Device` and DXGI.
+//! The Direct3D 12 backend: v13 RHI lowering onto `ID3D12Device` and DXGI.
 //!
-//! This module owns exactly one thing: turning an already-validated API v1
+//! This module owns exactly one thing: turning an already-validated v13 RHI
 //! request into Direct3D 12 objects and calls. It decides nothing about
 //! legality. Every descriptor reaching this module has already passed the
 //! `Device` façade's identity check, canonicalization, portable validation and
@@ -16,8 +16,8 @@
 //! `ID3D12Device`, `ID3D12Resource`, descriptor heaps, root signatures, command
 //! allocators, fences, `D3D12_RESOURCE_STATES`, and every memory offset live
 //! behind this boundary. None of them is reachable from a public type, a public
-//! error, a diagnostic, or a tooling event: API v1's public model is
-//! device-identity plus generation, and a native handle in it would make a
+//! error, a diagnostic, or a tooling event: v13's public model is
+//! device identity, and a native handle in it would make a
 //! second, DX12-shaped architecture for the next platform to copy.
 //!
 //! # Lifetime
@@ -27,7 +27,7 @@
 //! `DXGI_ERROR_DEVICE_RESET`) from the next call that touches it, so this
 //! backend learns about loss the way it learns about every other failure: from a
 //! return code. The mapping from those codes to a terminal device status lives in
-//! [`ffi`] so that the one place a `HRESULT` becomes an API v1 error is also the
+//! [`ffi`] so that the one place a `HRESULT` becomes an RHI error is also the
 //! one place that decides whether the device has ended.
 //!
 //! # What this backend does not own
@@ -38,7 +38,7 @@
 //! a swapchain-before-request. Format/route facts are *not* invented here — they
 //! are read from the device and recorded as instance data, because a capability
 //! that is asserted from a trait's presence rather than queried is the exact
-//! failure API v1 exists to prevent.
+//! failure the portable RHI boundary exists to prevent.
 //!
 //! # The shape of this tree
 //!
@@ -47,9 +47,9 @@
 //! face, and each file named for the one thing it owns. The correspondence is not
 //! decoration — it is how a reader moves between a portable rule and the lowering
 //! that serves it — and it is not exact either, because Direct3D 12 does not split
-//! its work the way API v1 splits its model:
+//! its work the way the portable API splits its model:
 //!
-//! - [`platform`] answers API v1's `platform` — the DXGI provider, the logical
+//! - [`platform`] answers the RHI `platform` module — the DXGI provider, the logical
 //!   device, the device request, and the capability table that device reports.
 //! - [`resource`] answers `resource`, and today holds only [`resource`]'s buffer
 //!   half.
@@ -61,18 +61,22 @@
 //!   groups written into them.
 //! - [`pipeline`] answers `pipeline`, and owns root signatures and state objects
 //!   — the two portable pipeline verbs that D3D12 has no separate object for.
-//! - [`ffi`] answers nothing in API v1: it is the one place a `HRESULT` becomes
-//!   an API v1 error, which is why it sits outside the chapter directories.
+//! - [`ffi`] and [`failure`] answer no portable module: together they are the one
+//!   place a `HRESULT` becomes an error and the one vocabulary the answer is given
+//!   in. Both sit outside the chapter directories because every chapter uses them,
+//!   and `failure` was moved here from `command` on exactly that ground when
+//!   `binding` and `pipeline` became its second and third users.
 //!
 //! # Where this tree stands, stated plainly
 //!
 //! **The native boundary ([`ffi`]), the platform chapter ([`platform`]), buffer
-//! allocation ([`resource`]), the command spine ([`command`]), and shader entry
-//! points ([`shader`]) are written. [`binding`] and [`pipeline`] are declared and
-//! not written** — the device chapter's two verbs refuse with a list of what is
-//! missing rather than fabricating an object. There is no texture or presentation
-//! lowering yet, and no claim of DX12 support exists until the shared contract
-//! suite and a real Windows run close on one revision.
+//! allocation ([`resource`]), the command spine ([`command`]), shader entry
+//! points ([`shader`]), and buffer-backed descriptor groups ([`binding`]) are
+//! written. Compute pipeline ownership is wired through [`pipeline`], while its
+//! native PSO/root-signature creation remains an explicit `unimplemented!()`.
+//! There is no texture or presentation lowering yet, and no claim of complete
+//! DX12 support exists until the shared contract suite and a real Windows run
+//! close on one revision.
 //!
 //! [`shader`] is the smallest of the written chapters and the one whose size is
 //! easiest to misread: Direct3D 12 has no shader-module object, so preparing an
@@ -109,6 +113,7 @@
 
 mod binding;
 mod command;
+mod failure;
 mod ffi;
 mod pipeline;
 mod platform;

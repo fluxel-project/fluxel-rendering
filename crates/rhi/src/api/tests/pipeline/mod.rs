@@ -297,7 +297,7 @@ fn module_on(
         object(id),
         device,
         artifact.clone(),
-        crate::base::mock::module_backend_for_test(&artifact),
+        crate::api::tests::mock::module_backend_for_test(&artifact),
     )
 }
 
