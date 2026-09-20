@@ -24,3 +24,5 @@ pub(crate) mod shader;
 
 #[cfg(test)]
 mod compute_tests;
+#[cfg(test)]
+mod raster_tests;

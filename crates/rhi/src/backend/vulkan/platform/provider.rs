@@ -172,6 +172,17 @@ impl VulkanProvider {
                     max_compute_shared_memory_size: properties
                         .limits
                         .max_compute_shared_memory_size,
+                    max_color_attachments: properties.limits.max_color_attachments,
+                    max_vertex_input_bindings: properties.limits.max_vertex_input_bindings,
+                    max_vertex_input_attributes: properties.limits.max_vertex_input_attributes,
+                    max_vertex_input_binding_stride: properties
+                        .limits
+                        .max_vertex_input_binding_stride,
+                    max_inter_stage_variables: properties
+                        .limits
+                        .max_vertex_output_components
+                        .min(properties.limits.max_fragment_input_components)
+                        / 4,
                 },
             });
         }

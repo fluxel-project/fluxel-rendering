@@ -243,7 +243,7 @@ struct RasterPipelineInner {
     target_signature: RenderTargetSignature,
     /// Native graphics state retained by the portable handle.  It is only
     /// reachable by crate-private command lowering.
-    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "dx12", feature = "vulkan")), allow(dead_code))]
     native: Box<dyn RasterPipelineBackend>,
 }
 
@@ -301,7 +301,7 @@ impl RasterPipeline {
     }
 
     /// The backend graphics state used by native command lowering.
-    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "dx12", feature = "vulkan")), allow(dead_code))]
     pub(crate) fn native(&self) -> &dyn RasterPipelineBackend {
         self.inner.native.as_ref()
     }

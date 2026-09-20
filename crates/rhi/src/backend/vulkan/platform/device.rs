@@ -426,9 +426,13 @@ impl DeviceBackend for VulkanDevice {
 
     fn create_raster_pipeline(
         &self,
-        _: &crate::api::pipeline::RasterPipelineDescriptor,
+        descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
     ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
-        self.unsupported("raster-pipeline creation")
+        pipeline::create_raster_pipeline(self.shared.clone(), descriptor)
+            .map(|value| {
+                Box::new(value) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
+            })
+            .map_err(|failure| self.observe_failure(failure))
     }
 
     fn submit(

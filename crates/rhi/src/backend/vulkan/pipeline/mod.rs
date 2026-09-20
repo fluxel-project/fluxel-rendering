@@ -6,5 +6,7 @@
 //! layouts and `VkPipelineLayout` required to consume that contract.
 
 mod compute;
+mod raster;
 
 pub(in crate::backend::vulkan) use compute::{VulkanComputePipeline, create_compute_pipeline};
+pub(in crate::backend::vulkan) use raster::{VulkanRasterPipeline, create_raster_pipeline};

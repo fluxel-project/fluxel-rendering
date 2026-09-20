@@ -11,6 +11,7 @@ use std::sync::Arc;
 use ash::vk;
 
 use crate::api::binding::BindGroup;
+use crate::api::command::AccessMask;
 use crate::api::command::copy::{BufferCopy, BufferTextureCopy, TextureCopy};
 use crate::api::format::logical_bytes_per_block;
 use crate::api::identity::ObjectId;
@@ -22,6 +23,7 @@ use crate::api::resource::transfer::{
     ReadbackRequest, ReadbackStatus, ReadbackTexelLayout, ReadbackTicket, UploadDescriptor,
     UploadJob,
 };
+use crate::api::resource::view::TextureView;
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::platform::device::VulkanShared;
 use crate::backend::vulkan::resource::{
@@ -40,6 +42,7 @@ pub(super) struct TransferRetention {
     pub(super) readbacks: Vec<ReadbackRetention>,
     pub(super) compute_pipelines: Vec<ComputePipeline>,
     pub(super) bind_groups: Vec<BindGroup>,
+    pub(super) raster: Vec<super::raster::RasterRetention>,
     /// Per-subresource layout knowledge seeded from the queue-domain tracker.
     /// Fluxel object identity, rather than a recyclable `VkImage` handle, makes
     /// retained entries safe after a texture is destroyed.
@@ -53,6 +56,8 @@ pub(super) struct ImageLayoutState {
     mip_level: u32,
     array_layer: u32,
     layout: vk::ImageLayout,
+    stage: vk::PipelineStageFlags,
+    access: vk::AccessFlags,
 }
 
 impl TransferRetention {
@@ -74,6 +79,10 @@ impl TransferRetention {
     pub(super) fn retain_compute(&mut self, compute: super::compute::ComputeRetention) {
         self.compute_pipelines.extend(compute.pipelines);
         self.bind_groups.extend(compute.bind_groups);
+    }
+
+    pub(super) fn retain_raster(&mut self, raster: super::raster::RasterRetention) {
+        self.raster.push(raster);
     }
 }
 
@@ -252,6 +261,12 @@ pub(super) fn lower_buffer_texture_copy(
         &copy.texture,
         copy.texture_subresource,
         layout,
+        vk::PipelineStageFlags::TRANSFER,
+        if to_texture {
+            vk::AccessFlags::TRANSFER_WRITE
+        } else {
+            vk::AccessFlags::TRANSFER_READ
+        },
         retention,
     );
     let bytes = logical_bytes_per_block(copy.texture.descriptor().format).ok_or(
@@ -307,6 +322,8 @@ pub(super) fn lower_texture_copy(
         &copy.src,
         copy.src_subresource,
         vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        vk::PipelineStageFlags::TRANSFER,
+        vk::AccessFlags::TRANSFER_READ,
         retention,
     );
     transition_image(
@@ -316,6 +333,8 @@ pub(super) fn lower_texture_copy(
         &copy.dst,
         copy.dst_subresource,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        vk::PipelineStageFlags::TRANSFER,
+        vk::AccessFlags::TRANSFER_WRITE,
         retention,
     );
     let region = vk::ImageCopy::default()
@@ -397,6 +416,8 @@ pub(super) fn lower_texture_upload(
         &desc.dst,
         desc.subresource,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        vk::PipelineStageFlags::TRANSFER,
+        vk::AccessFlags::TRANSFER_WRITE,
         retention,
     );
     let region = vk::BufferImageCopy::default()
@@ -471,6 +492,8 @@ pub(super) fn lower_texture_readback(
         src,
         *subresource,
         vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        vk::PipelineStageFlags::TRANSFER,
+        vk::AccessFlags::TRANSFER_READ,
         retention,
     );
     let region = vk::BufferImageCopy::default()
@@ -578,13 +601,15 @@ fn image_extent(value: crate::api::resource::texture::Extent3d) -> vk::Extent3D 
     }
 }
 
-fn transition_image(
+pub(super) fn transition_image(
     shared: &VulkanShared,
     command_buffer: vk::CommandBuffer,
     image: vk::Image,
     texture: &Texture,
     layers: TextureSubresourceLayers,
     new_layout: vk::ImageLayout,
+    dst_stage: vk::PipelineStageFlags,
+    dst_access: vk::AccessFlags,
     retention: &mut TransferRetention,
 ) {
     for array_layer in layers.base_layer..layers.base_layer + layers.layer_count {
@@ -596,33 +621,16 @@ fn transition_image(
         });
         let old_layout = existing
             .as_ref()
-            .map(|known| known.layout)
-            .unwrap_or(vk::ImageLayout::UNDEFINED);
-        if old_layout == new_layout {
+            .map_or(vk::ImageLayout::UNDEFINED, |known| known.layout);
+        let src_stage = existing
+            .as_ref()
+            .map_or(vk::PipelineStageFlags::TOP_OF_PIPE, |known| known.stage);
+        let src_access = existing
+            .as_ref()
+            .map_or(vk::AccessFlags::empty(), |known| known.access);
+        if old_layout == new_layout && src_stage == dst_stage && src_access == dst_access {
             continue;
         }
-        let (src_access, src_stage) = if old_layout == vk::ImageLayout::UNDEFINED {
-            (
-                vk::AccessFlags::empty(),
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-            )
-        } else {
-            (
-                vk::AccessFlags::TRANSFER_READ | vk::AccessFlags::TRANSFER_WRITE,
-                vk::PipelineStageFlags::TRANSFER,
-            )
-        };
-        let (dst_access, dst_stage) = match new_layout {
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL => (
-                vk::AccessFlags::TRANSFER_READ,
-                vk::PipelineStageFlags::TRANSFER,
-            ),
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL => (
-                vk::AccessFlags::TRANSFER_WRITE,
-                vk::PipelineStageFlags::TRANSFER,
-            ),
-            _ => unreachable!("transfer slice only selects transfer layouts"),
-        };
         let barrier = vk::ImageMemoryBarrier::default()
             .src_access_mask(src_access)
             .dst_access_mask(dst_access)
@@ -652,6 +660,8 @@ fn transition_image(
         }
         if let Some(entry) = existing {
             entry.layout = new_layout;
+            entry.stage = dst_stage;
+            entry.access = dst_access;
         } else {
             retention.image_layouts.push(ImageLayoutState {
                 texture: texture.id(),
@@ -659,9 +669,119 @@ fn transition_image(
                 mip_level: layers.mip_level,
                 array_layer,
                 layout: new_layout,
+                stage: dst_stage,
+                access: dst_access,
             });
         }
     }
+}
+
+/// Routes a raster attachment transition through the queue-domain image-state
+/// authority used by transfer commands. A view may cover several layers or
+/// depth/stencil aspects; each physical subresource gets an independent state.
+pub(super) fn transition_raster_attachment(
+    shared: &Arc<VulkanShared>,
+    command_buffer: vk::CommandBuffer,
+    view: &TextureView,
+    new_layout: vk::ImageLayout,
+    dst_stage: vk::PipelineStageFlags,
+    dst_access: vk::AccessFlags,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let texture = view.texture();
+    let native = native_texture(texture)?;
+    let descriptor = view.descriptor();
+    let mut aspects = Vec::with_capacity(2);
+    if descriptor
+        .aspects
+        .contains(crate::api::resource::TextureAspects::COLOR)
+    {
+        aspects.push(TextureAspect::Color);
+    }
+    if descriptor
+        .aspects
+        .contains(crate::api::resource::TextureAspects::DEPTH)
+    {
+        aspects.push(TextureAspect::Depth);
+    }
+    if descriptor
+        .aspects
+        .contains(crate::api::resource::TextureAspects::STENCIL)
+    {
+        aspects.push(TextureAspect::Stencil);
+    }
+    for aspect in aspects {
+        for mip_level in descriptor.base_mip..descriptor.base_mip + descriptor.mip_count {
+            transition_image(
+                shared,
+                command_buffer,
+                native.image(),
+                texture,
+                TextureSubresourceLayers {
+                    aspect,
+                    mip_level,
+                    base_layer: descriptor.base_layer,
+                    layer_count: descriptor.layer_count,
+                },
+                new_layout,
+                dst_stage,
+                dst_access,
+                retention,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Conservative raster buffer dependency until the range-aware state tracker
+/// can narrow stage/access masks. The destination mask is still derived from
+/// the actual portable use so validation and native synchronization cannot
+/// silently disagree about vertex/index/uniform/storage roles.
+pub(super) fn barrier_raster_buffer(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    buffer: &Buffer,
+    access: AccessMask,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let native = native_buffer(buffer)?;
+    let mut destination = vk::AccessFlags::empty();
+    if access.contains(AccessMask::VERTEX_READ) {
+        destination |= vk::AccessFlags::VERTEX_ATTRIBUTE_READ;
+    }
+    if access.contains(AccessMask::INDEX_READ) {
+        destination |= vk::AccessFlags::INDEX_READ;
+    }
+    if access.contains(AccessMask::UNIFORM_READ) {
+        destination |= vk::AccessFlags::UNIFORM_READ;
+    }
+    if access.contains(AccessMask::SHADER_READ) {
+        destination |= vk::AccessFlags::SHADER_READ;
+    }
+    if access.contains(AccessMask::SHADER_WRITE) {
+        destination |= vk::AccessFlags::SHADER_WRITE;
+    }
+    let barrier = vk::BufferMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
+        .dst_access_mask(destination)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .buffer(native.buffer())
+        .offset(0)
+        .size(vk::WHOLE_SIZE);
+    unsafe {
+        shared.device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::ALL_GRAPHICS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[barrier],
+            &[],
+        );
+    }
+    retention.buffers.push(buffer.clone());
+    Ok(())
 }
 
 fn repack_rows(

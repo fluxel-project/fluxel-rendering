@@ -29,6 +29,7 @@ use crate::backend::vulkan::ffi;
 use crate::backend::vulkan::platform::device::VulkanShared;
 
 use super::compute;
+use super::raster;
 use super::transfer::{self, ImageLayoutState, TransferRetention};
 
 /// One single-queue Vulkan command domain.
@@ -425,9 +426,53 @@ impl VulkanCommandSpine {
         batch: &PlanBatch,
         retention: &mut TransferRetention,
     ) -> Result<(), VulkanFailure> {
+        let mut raster_scope = None;
         for work in &batch.work {
             for command in work.commands() {
                 match &command.payload {
+                    RecordedPayload::RasterBegin(begin) => {
+                        if raster_scope.is_some() {
+                            return Err(VulkanFailure::Unsupported {
+                                what: "nested Vulkan raster scopes",
+                                why: "portable recording should keep raster scopes linear",
+                            });
+                        }
+                        raster_scope = Some(raster::lower_raster_begin(
+                            Arc::clone(&self.inner.shared),
+                            command_buffer,
+                            begin,
+                            retention,
+                        )?);
+                    }
+                    RecordedPayload::RasterDraw(draw) => {
+                        let scope = raster_scope.as_ref().ok_or(VulkanFailure::Unsupported {
+                            what: "a Vulkan raster draw outside a render pass",
+                            why: "portable recording should emit RasterBegin first",
+                        })?;
+                        let draw_retention = raster::lower_raster_draw(
+                            &self.inner.shared,
+                            command_buffer,
+                            draw,
+                            &command.uses,
+                            scope,
+                            retention,
+                        )?;
+                        retention.retain_raster(draw_retention);
+                    }
+                    RecordedPayload::RasterEnd => {
+                        let scope = raster_scope.take().ok_or(VulkanFailure::Unsupported {
+                            what: "a Vulkan raster-scope end without a begin",
+                            why: "portable recording should keep raster scopes balanced",
+                        })?;
+                        let mut raster_retention = raster::RasterRetention::default();
+                        raster::lower_raster_end(
+                            command_buffer,
+                            scope,
+                            &mut raster_retention,
+                            retention,
+                        )?;
+                        retention.retain_raster(raster_retention);
+                    }
                     RecordedPayload::ComputeBegin(_) | RecordedPayload::ComputeEnd => {}
                     RecordedPayload::ComputeDispatch(dispatch) => {
                         let compute = compute::lower_compute_dispatch(
@@ -516,6 +561,12 @@ impl VulkanCommandSpine {
                     }
                 }
             }
+        }
+        if raster_scope.is_some() {
+            return Err(VulkanFailure::Unsupported {
+                what: "an unterminated Vulkan raster scope",
+                why: "portable recording should emit RasterEnd before finish",
+            });
         }
         Ok(())
     }

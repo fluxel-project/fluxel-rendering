@@ -20,7 +20,8 @@ use crate::api::binding::{BindingLimitClass, BindingSupport, BufferBindingAccess
 use crate::api::capability::{BindingSupportKey, CapabilityFacts};
 use crate::api::error::RhiResult;
 use crate::api::format::{
-    TextureSupport, TextureSupportLimits, TextureSupportQuery, format_aspects,
+    FormatFacts, StorageAccessSupport, TextureSupport, TextureSupportLimits, TextureSupportQuery,
+    format_aspects,
 };
 use crate::api::platform::{LimitKey, OptionalFeature};
 use crate::api::resource::TextureAspects;
@@ -49,6 +50,11 @@ pub(super) struct VulkanCapabilityLimits {
     pub(super) max_compute_work_group_size: [u32; 3],
     pub(super) max_compute_work_group_count: [u32; 3],
     pub(super) max_compute_shared_memory_size: u32,
+    pub(super) max_color_attachments: u32,
+    pub(super) max_vertex_input_bindings: u32,
+    pub(super) max_vertex_input_attributes: u32,
+    pub(super) max_vertex_input_binding_stride: u32,
+    pub(super) max_inter_stage_variables: u32,
 }
 
 /// Probes the resource-creation subset of Vulkan 1.0 exposed by this backend.
@@ -62,7 +68,7 @@ pub(super) fn probe(
 ) -> RhiResult<CapabilityFacts> {
     let mut facts = CapabilityFacts::empty();
     facts.record_code_form(AcceptedCodeForm::SpirV);
-    record_compute_and_binding(&mut facts, limits);
+    record_pipeline_and_binding(&mut facts, limits);
     facts.record_limit(LimitKey::MaxUniformBufferBindingSize, uniform_ceiling);
     record_buffer_support(
         &mut facts,
@@ -84,11 +90,25 @@ pub(super) fn probe(
         let native = vk_format(format).expect("FORMATS contains only mapped Vulkan formats");
         let properties =
             unsafe { instance.get_physical_device_format_properties(physical, native) };
+        let features = properties.optimal_tiling_features;
+        let aspects = format_aspects(format);
+        let storage = features.contains(vk::FormatFeatureFlags::STORAGE_IMAGE);
+        let depth_stencil = features.contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT);
+        facts.record_format(
+            format,
+            FormatFacts::new(
+                format,
+                StorageAccessSupport::new(storage, storage, storage),
+                features.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT),
+                depth_stencil && aspects.contains(TextureAspects::DEPTH),
+                depth_stencil && aspects.contains(TextureAspects::STENCIL),
+                features.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND),
+            ),
+        );
         // These routes are only published after the exact native format has
         // reported the matching optimal-tiling transfer feature.  The command
         // spine has real `vkCmdCopy*` lowering for this subset; resolve and
         // blit deliberately remain absent until their own conformance slices.
-        let features = properties.optimal_tiling_features;
         let texel_limits = Some(TexelCopyLayoutLimits::new(4, 4));
         for dimension in [
             TextureDimension::D1,
@@ -162,7 +182,10 @@ pub(super) fn probe(
                     // native image tuple once and returns its whole sample-mask.
                     // The RHI key then selects a member from that mask; querying
                     // the driver again for each member would be identical work.
-                    for sample_count in [1, 2, 4, 8, 16, 32, 64] {
+                    // v13's portable sample mask is one u32, so sample counts
+                    // above 32 are outside the frozen portable contract even if
+                    // a Vulkan implementation exposes a wider native mask.
+                    for sample_count in [1, 2, 4, 8, 16, 32] {
                         // Keep requirements queries inside the public P0
                         // descriptor domain too: only 2D images may be
                         // multisampled, and cube-compatible images must be 1x.
@@ -201,7 +224,7 @@ pub(super) fn probe(
     Ok(facts)
 }
 
-fn record_compute_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabilityLimits) {
+fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabilityLimits) {
     facts.record_feature(OptionalFeature::Compute);
     facts.record_limit(
         LimitKey::MaxBindGroups,
@@ -255,6 +278,26 @@ fn record_compute_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabil
     facts.record_limit(
         LimitKey::MaxComputeWorkgroupStorageSize,
         u64::from(limits.max_compute_shared_memory_size),
+    );
+    facts.record_limit(
+        LimitKey::MaxColorAttachments,
+        u64::from(limits.max_color_attachments),
+    );
+    facts.record_limit(
+        LimitKey::MaxVertexBuffers,
+        u64::from(limits.max_vertex_input_bindings),
+    );
+    facts.record_limit(
+        LimitKey::MaxVertexAttributes,
+        u64::from(limits.max_vertex_input_attributes),
+    );
+    facts.record_limit(
+        LimitKey::MaxVertexBufferArrayStride,
+        u64::from(limits.max_vertex_input_binding_stride),
+    );
+    facts.record_limit(
+        LimitKey::MaxInterStageShaderVariables,
+        u64::from(limits.max_inter_stage_variables),
     );
     facts.record_binding_limit(
         ShaderStage::Compute,

@@ -11,5 +11,6 @@
 //! individual refusal arms; they do not change the transaction boundary here.
 
 mod compute;
+mod raster;
 pub(crate) mod spine;
 mod transfer;
