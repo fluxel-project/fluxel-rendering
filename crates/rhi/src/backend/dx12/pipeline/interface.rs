@@ -11,8 +11,9 @@ use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::Win32::Graphics::Direct3D12::{
     D3D_ROOT_SIGNATURE_VERSION_1, D3D12_DESCRIPTOR_RANGE, D3D12_ROOT_DESCRIPTOR_TABLE,
     D3D12_ROOT_PARAMETER, D3D12_ROOT_PARAMETER_0, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-    D3D12_ROOT_SIGNATURE_DESC, D3D12_ROOT_SIGNATURE_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL,
-    D3D12SerializeRootSignature, ID3D12Device, ID3D12RootSignature,
+    D3D12_ROOT_SIGNATURE_DESC, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+    D3D12_ROOT_SIGNATURE_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL, D3D12SerializeRootSignature,
+    ID3D12Device, ID3D12RootSignature,
 };
 
 use crate::api::binding::BindGroupLayout;
@@ -57,6 +58,7 @@ impl Dx12RootSignature {
 pub(crate) fn build_root_signature(
     device: &ID3D12Device,
     groups: &[BindGroupLayout],
+    uses_input_assembler: bool,
 ) -> Result<Dx12RootSignature, Dx12Failure> {
     // The vectors own every pointer handed to the serializer.  They remain alive
     // until it has copied the description, which is the complete lifetime the
@@ -139,7 +141,14 @@ pub(crate) fn build_root_signature(
         pParameters: parameters.as_ptr(),
         NumStaticSamplers: 0,
         pStaticSamplers: std::ptr::null(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
+        // A graphics PSO with an input layout is invalid unless this root
+        // signature explicitly permits input-assembler bindings. Compute never
+        // needs that permission, so it retains the narrower native contract.
+        Flags: if uses_input_assembler {
+            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+        } else {
+            D3D12_ROOT_SIGNATURE_FLAG_NONE
+        },
     };
     let mut serialized: Option<ID3DBlob> = None;
     // `description` points only at the vectors above, which stay live for this

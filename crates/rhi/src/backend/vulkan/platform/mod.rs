@@ -11,7 +11,7 @@ mod facts;
 mod provider;
 mod request;
 
-#[cfg(test)]
+#[cfg(any(test, all(target_os = "android", feature = "android-wsi-evidence")))]
 pub(crate) use provider::VulkanProvider;
 
 #[cfg(test)]

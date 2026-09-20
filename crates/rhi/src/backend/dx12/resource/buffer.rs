@@ -62,20 +62,26 @@ pub(crate) struct Dx12Buffer {
     /// last-owner rule is served by `Arc<dyn BufferBackend>` on the portable
     /// side, so dropping this is what actually frees the memory.
     resource: ID3D12Resource,
-    /// The allocation's width in bytes.
+    /// The portable allocation's width in bytes.
     ///
     /// Stored rather than asked for through `ID3D12Resource::GetDesc`, because
     /// the descriptor writers in [`crate::backend::dx12::binding`] need it once
     /// per *element* of a bind group and a `GetDesc` there would be a native call
     /// per descriptor for a number that cannot have changed since creation.
     ///
-    /// It is the authority a view must stay inside, and it is not always the
-    /// number a caller passed: a staging allocation is sized by the transfer
-    /// lowering, and a resource's width is rounded up by nobody here but is still
-    /// the driver's answer rather than the request. Reading it from the created
-    /// resource instead of trusting the request is what makes a view's bounds
-    /// check a fact about the allocation.
+    /// It is the authority for portable bounds checks.  It deliberately stays
+    /// equal to the caller's descriptor even when the native resource below is
+    /// enlarged for a DX12-only view granularity: allocation padding must never
+    /// become logically readable through a portable `BufferRange`.
     size: u64,
+    /// The physical resource width.
+    ///
+    /// CBVs require a 256-byte `SizeInBytes`.  A logical uniform buffer may end
+    /// at byte 1, so a resource of the logical width alone cannot host its final
+    /// CBV even though the caller made a valid portable binding.  This private
+    /// padding absorbs that DX12 representation detail without changing the
+    /// public buffer size or relaxing raw-view range semantics.
+    allocation_size: u64,
 }
 
 impl Dx12Buffer {
@@ -104,6 +110,11 @@ impl Dx12Buffer {
     pub(crate) fn size(&self) -> u64 {
         self.size
     }
+
+    /// The native allocation width, including any private CBV tail padding.
+    pub(crate) fn allocation_size(&self) -> u64 {
+        self.allocation_size
+    }
 }
 
 impl BufferBackend for Dx12Buffer {
@@ -126,6 +137,7 @@ pub(crate) fn create_buffer(
     device: &ID3D12Device,
     descriptor: &BufferDescriptor,
 ) -> Result<Dx12Buffer, ffi::NativeError> {
+    let allocation_size = native_allocation_size(descriptor);
     let heap = D3D12_HEAP_PROPERTIES {
         Type: heap_type(descriptor.memory),
         CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
@@ -145,7 +157,7 @@ pub(crate) fn create_buffer(
         // byte-addressed in v13 — the element stride section 12.2 deletes is
         // exactly the thing that would have needed a typed format here.
         Alignment: 0,
-        Width: descriptor.size,
+        Width: allocation_size,
         Height: 1,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -193,6 +205,7 @@ pub(crate) fn create_buffer(
     Ok(Dx12Buffer {
         resource,
         size: descriptor.size,
+        allocation_size,
     })
 }
 
@@ -318,7 +331,31 @@ pub(crate) fn create_staging(
         ));
     };
 
-    Ok(Dx12Buffer { resource, size })
+    Ok(Dx12Buffer {
+        resource,
+        size,
+        allocation_size: size,
+    })
+}
+
+/// Returns the backing width a portable buffer needs on DX12.
+///
+/// Only a buffer that declares `UNIFORM` can ever reach a CBV writer.  Its
+/// backing is therefore rounded to the native CBV granularity, while every
+/// public bound remains `BufferDescriptor::size`.  The portable creation limit
+/// is far below `u64::MAX`, so the checked addition cannot fail for a valid
+/// descriptor; retaining the fallback keeps this helper total if that limit is
+/// widened in a future API revision.
+fn native_allocation_size(descriptor: &BufferDescriptor) -> u64 {
+    const CBV_ALIGNMENT: u64 = 256;
+    if !descriptor.usage.contains(BufferUsage::UNIFORM) {
+        return descriptor.size;
+    }
+    descriptor
+        .size
+        .checked_add(CBV_ALIGNMENT - 1)
+        .map(|value| value & !(CBV_ALIGNMENT - 1))
+        .unwrap_or(descriptor.size)
 }
 
 /// The heap type `preference` lowers onto.
@@ -344,5 +381,31 @@ fn resource_flags(usage: BufferUsage) -> D3D12_RESOURCE_FLAGS {
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
     } else {
         D3D12_RESOURCE_FLAG_NONE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_allocation_size;
+    use crate::api::resource::buffer::{BufferDescriptor, BufferUsage};
+
+    #[test]
+    fn uniform_backing_rounds_up_without_changing_non_uniform_buffers() {
+        assert_eq!(
+            native_allocation_size(&BufferDescriptor::new(1, BufferUsage::UNIFORM)),
+            256
+        );
+        assert_eq!(
+            native_allocation_size(&BufferDescriptor::new(256, BufferUsage::UNIFORM)),
+            256
+        );
+        assert_eq!(
+            native_allocation_size(&BufferDescriptor::new(257, BufferUsage::UNIFORM)),
+            512
+        );
+        assert_eq!(
+            native_allocation_size(&BufferDescriptor::new(257, BufferUsage::STORAGE)),
+            257
+        );
     }
 }

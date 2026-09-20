@@ -29,7 +29,9 @@ struct Liveness {
     info: Option<DeviceLossInfo>,
     completion_waiters: BTreeMap<u64, Vec<Waker>>,
     pending_readbacks: Vec<ReadbackTicket>,
-    loss_waiters: Vec<Waker>,
+    // One replaceable entry per pending backend operation. Unlike a Vec this
+    // cannot retain every executor task that ever polled an acquire future.
+    loss_waiters: BTreeMap<u64, Waker>,
 }
 
 /// A Vulkan device with exactly one loss authority.
@@ -45,7 +47,7 @@ pub(crate) struct VulkanDevice {
     command: VulkanCommandSpine,
     facts: CapabilityFacts,
     submission: SubmissionCapabilities,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "android"))]
     presentation: Option<crate::backend::vulkan::presentation::VulkanPresentation>,
 }
 
@@ -77,9 +79,9 @@ pub(crate) struct VulkanShared {
     /// does not advertise HOST_COHERENT.
     pub(crate) non_coherent_atom_size: vk::DeviceSize,
     liveness: Mutex<Liveness>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "android"))]
     presentation_retirements:
-        Mutex<Vec<crate::backend::vulkan::presentation::win32::VulkanSwapchainRetirement>>,
+        Mutex<Vec<crate::backend::vulkan::presentation::VulkanSwapchainRetirement>>,
 }
 
 impl VulkanDevice {
@@ -96,7 +98,7 @@ impl VulkanDevice {
         facts: CapabilityFacts,
         submission: SubmissionCapabilities,
         presentation_enabled: bool,
-        #[cfg(windows)] targets: std::sync::Arc<
+        #[cfg(any(windows, target_os = "android"))] targets: std::sync::Arc<
             crate::backend::vulkan::presentation::VulkanTargetRegistry,
         >,
     ) -> Result<Self, VulkanFailure> {
@@ -114,13 +116,13 @@ impl VulkanDevice {
                 info: None,
                 completion_waiters: BTreeMap::new(),
                 pending_readbacks: Vec::new(),
-                loss_waiters: Vec::new(),
+                loss_waiters: BTreeMap::new(),
             }),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "android"))]
             presentation_retirements: Mutex::new(Vec::new()),
         });
         let command = VulkanCommandSpine::new(std::sync::Arc::clone(&shared))?;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "android"))]
         let presentation = presentation_enabled.then(|| {
             crate::backend::vulkan::presentation::VulkanPresentation::new(
                 instance.entry(),
@@ -129,7 +131,7 @@ impl VulkanDevice {
                 targets,
             )
         });
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "android")))]
         let _ = presentation_enabled;
         Ok(Self {
             adapter,
@@ -138,7 +140,7 @@ impl VulkanDevice {
             command,
             facts,
             submission,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "android"))]
             presentation,
         })
     }
@@ -206,30 +208,36 @@ impl VulkanShared {
         for ticket in readbacks {
             ticket.set_status(ReadbackStatus::DeviceLost);
         }
-        for waker in loss_waiters {
+        for (_, waker) in loss_waiters {
             waker.wake();
         }
     }
 
-    pub(crate) fn register_loss_waker(&self, waker: &Waker) -> Result<(), DeviceLossInfo> {
+    /// Replaces the outstanding loss waiter in `slot`. A caller must remove it
+    /// when its pending operation becomes ready or is otherwise abandoned.
+    pub(crate) fn register_loss_waker(
+        &self,
+        slot: u64,
+        waker: &Waker,
+    ) -> Result<(), DeviceLossInfo> {
         let mut state = self.liveness();
         if let Some(info) = &state.info {
             return Err(info.clone());
         }
-        if !state
-            .loss_waiters
-            .iter()
-            .any(|known| known.will_wake(waker))
-        {
-            state.loss_waiters.push(waker.clone());
-        }
+        state.loss_waiters.insert(slot, waker.clone());
         Ok(())
     }
 
-    #[cfg(windows)]
+    /// Cancels a pending loss wake registration without affecting any other
+    /// future. This is intentionally idempotent for completion/drop paths.
+    pub(crate) fn unregister_loss_waker(&self, slot: u64) {
+        self.liveness().loss_waiters.remove(&slot);
+    }
+
+    #[cfg(any(windows, target_os = "android"))]
     pub(crate) fn retire_swapchain(
         &self,
-        retirement: crate::backend::vulkan::presentation::win32::VulkanSwapchainRetirement,
+        retirement: crate::backend::vulkan::presentation::VulkanSwapchainRetirement,
     ) {
         self.presentation_retirements
             .lock()
@@ -329,7 +337,7 @@ impl Drop for VulkanShared {
         // proves all resource, staging and command-spine owners are gone. Future
         // descriptor pools/pipeline caches must join this same ownership domain
         // rather than introducing a second device lifetime registry.
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "android"))]
         for retirement in std::mem::take(
             self.presentation_retirements
                 .get_mut()
@@ -508,13 +516,13 @@ impl DeviceBackend for VulkanDevice {
     }
 
     fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "android"))]
         {
             self.presentation.as_ref().map(|presentation| {
                 presentation as &dyn crate::api::presentation::backend::PresentationBackend
             })
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "android")))]
         {
             None
         }

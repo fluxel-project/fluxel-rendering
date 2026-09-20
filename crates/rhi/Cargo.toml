@@ -19,6 +19,7 @@ repository = "https://github.com/fluxel-project/fluxel-rendering"
 default = ["dx12", "vulkan"]
 dx12 = ["dep:windows"]
 vulkan = ["dep:ash"]
+android-wsi-evidence = ["vulkan"]
 gl-family = []
 native-gl-wgl = ["gl-family"]
 native-gles-egl = ["gl-family"]

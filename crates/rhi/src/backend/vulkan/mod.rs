@@ -18,7 +18,7 @@ pub(crate) mod ffi;
 mod format;
 pub(crate) mod pipeline;
 pub(crate) mod platform;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "android"))]
 pub(crate) mod presentation;
 pub(crate) mod resource;
 pub(crate) mod shader;

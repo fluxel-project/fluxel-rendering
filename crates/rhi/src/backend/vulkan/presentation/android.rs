@@ -1,11 +1,11 @@
-//! `VK_KHR_win32_surface` / `VK_KHR_swapchain` presentation implementation.
+//! `VK_KHR_android_surface` / `VK_KHR_swapchain` presentation implementation.
 //!
 //! This is a correctness-first WSI owner.  It deliberately does not expose a
 //! swapchain image as `Texture`/`TextureView`: only `VulkanFrameAttachment`
 //! carries it and raster lowering may downcast that private backing.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Poll, Waker};
 use std::time::Duration;
@@ -27,6 +27,12 @@ use crate::api::presentation::{
 };
 use crate::backend::vulkan::platform::device::VulkanShared;
 
+#[link(name = "android")]
+unsafe extern "C" {
+    fn ANativeWindow_acquire(window: *mut core::ffi::c_void);
+    fn ANativeWindow_release(window: *mut core::ffi::c_void);
+}
+
 /// Command-spine supplied synchronization for presenting one acquired image.
 ///
 /// `acquire_wait` is waited by the first submission which writes the frame;
@@ -39,17 +45,49 @@ pub(crate) struct VulkanPresentSync {
     pub(crate) render_finished: vk::Semaphore,
 }
 
-#[derive(Clone, Copy)]
-struct Win32Target {
-    // Raw Win32 handles are not `Send` on all Rust targets. Store their opaque
+pub(crate) struct AndroidTarget {
+    // Raw Android handles are not `Send` on all Rust targets. Store their opaque
     // numeric representation under the registry mutex and reconstruct them at
     // the Vulkan FFI boundary, exactly where they become native again.
-    hwnd: usize,
-    hinstance: usize,
+    window: usize,
+    // The registry acquires exactly one ANativeWindow reference.  Surfaces and
+    // configured presentations retain this Arc, so unregistering a target can
+    // make it terminal without invalidating a Vulkan surface still being
+    // dismantled on the callback thread.
+    alive: AtomicBool,
+}
+
+impl AndroidTarget {
+    fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for AndroidTarget {
+    fn drop(&mut self) {
+        // Paired with `ANativeWindow_acquire` in `register`.  The registry and
+        // all Vulkan surface owners use Arc ownership, so this is the one and
+        // only release for the reference owned by Fluxel.
+        unsafe { ANativeWindow_release(self.window as *mut core::ffi::c_void) };
+    }
 }
 
 pub(crate) struct VulkanTargetRegistry {
-    targets: Mutex<HashMap<ObjectId, Win32Target>>,
+    targets: Mutex<HashMap<ObjectId, Arc<AndroidTarget>>>,
+}
+
+/// Host-lifecycle ownership for one registry entry. This remains wholly below
+/// the portable presentation API: it exists so Android's destroy callback can
+/// release the native window reference at the precise framework boundary.
+pub(crate) struct AndroidTargetRegistration {
+    registry: Arc<VulkanTargetRegistry>,
+    id: ObjectId,
+}
+
+impl Drop for AndroidTargetRegistration {
+    fn drop(&mut self) {
+        self.registry.unregister(self.id);
+    }
 }
 
 impl VulkanTargetRegistry {
@@ -59,31 +97,63 @@ impl VulkanTargetRegistry {
         }
     }
 
-    pub(crate) fn register(&self, hwnd: vk::HWND, hinstance: vk::HINSTANCE) -> PresentationTarget {
+    /// Registers one host-owned Android native window.  This is backend-private:
+    /// callers receive only the portable target identity.
+    pub(crate) fn register(&self, window: *mut core::ffi::c_void) -> RhiResult<PresentationTarget> {
+        if window.is_null() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "cannot register a null ANativeWindow",
+            ));
+        }
+        // NativeActivity only lends its callback pointer.  Hold our own native
+        // reference until target unregister and all dependent surfaces retire.
+        unsafe { ANativeWindow_acquire(window) };
         let id = ObjectId::next();
         self.targets
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .insert(
                 id,
-                Win32Target {
-                    hwnd: hwnd as usize,
-                    hinstance: hinstance as usize,
-                },
+                Arc::new(AndroidTarget {
+                    window: window as usize,
+                    alive: AtomicBool::new(true),
+                }),
             );
-        PresentationTarget::new(id)
+        Ok(PresentationTarget::new(id))
     }
 
-    fn target(&self, id: ObjectId) -> RhiResult<Win32Target> {
+    /// Makes a target terminal and releases the registry's reference. Existing
+    /// surface owners retain the acquired native reference only long enough to
+    /// destroy their Vulkan objects safely.
+    pub(crate) fn unregister(&self, id: ObjectId) {
+        if let Some(target) = self
+            .targets
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&id)
+        {
+            target.alive.store(false, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn registration(self: &Arc<Self>, id: ObjectId) -> AndroidTargetRegistration {
+        AndroidTargetRegistration {
+            registry: Arc::clone(self),
+            id,
+        }
+    }
+
+    fn target(&self, id: ObjectId) -> RhiResult<Arc<AndroidTarget>> {
         self.targets
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get(&id)
-            .copied()
+            .cloned()
             .ok_or_else(|| {
                 RhiError::new(
                     RhiErrorKind::TargetLost,
-                    "the Win32 target is not registered with this Vulkan provider",
+                    "the Android target is not registered with this Vulkan provider",
                 )
             })
     }
@@ -93,25 +163,38 @@ impl VulkanTargetRegistry {
         entry: &ash::Entry,
         instance: &ash::Instance,
         id: ObjectId,
-    ) -> RhiResult<vk::SurfaceKHR> {
+    ) -> RhiResult<(vk::SurfaceKHR, Arc<AndroidTarget>)> {
         let target = self.target(id)?;
-        let loader = ash::khr::win32_surface::Instance::new(entry, instance);
-        let create = vk::Win32SurfaceCreateInfoKHR::default()
-            .hinstance(target.hinstance as vk::HINSTANCE)
-            .hwnd(target.hwnd as vk::HWND);
-        unsafe { loader.create_win32_surface(&create, None) }
-            .map_err(|result| native_error(result, "vkCreateWin32SurfaceKHR"))
+        if !target.is_alive() {
+            return Err(RhiError::new(
+                RhiErrorKind::TargetLost,
+                "the Android native window was destroyed",
+            ));
+        }
+        let loader = ash::khr::android_surface::Instance::new(entry, instance);
+        let create = vk::AndroidSurfaceCreateInfoKHR::default()
+            .window(target.window as *mut core::ffi::c_void);
+        unsafe { loader.create_android_surface(&create, None) }
+            .map(|surface| (surface, target))
+            .map_err(|result| native_error(result, "vkCreateAndroidSurfaceKHR"))
     }
 }
 
 struct SurfaceOwner {
     loader: ash::khr::surface::Instance,
     surface: vk::SurfaceKHR,
+    _target: Arc<AndroidTarget>,
 }
 
 impl Drop for SurfaceOwner {
     fn drop(&mut self) {
         unsafe { self.loader.destroy_surface(self.surface, None) };
+    }
+}
+
+impl SurfaceOwner {
+    fn is_target_alive(&self) -> bool {
+        self._target.is_alive()
     }
 }
 
@@ -215,11 +298,11 @@ struct AcquireWake {
 }
 
 /// Device presentation facet. `entry`/`instance` outlive this object; callers
-/// construct it only after enabling `VK_KHR_surface` and `VK_KHR_win32_surface`.
+/// construct it only after enabling `VK_KHR_surface` and `VK_KHR_android_surface`.
 pub(crate) struct VulkanPresentation {
     shared: Arc<VulkanShared>,
     surface: ash::khr::surface::Instance,
-    win32_surface: ash::khr::win32_surface::Instance,
+    android_surface: ash::khr::android_surface::Instance,
     swapchain: ash::khr::swapchain::Device,
     targets: Arc<VulkanTargetRegistry>,
     leased: Arc<Mutex<HashSet<ObjectId>>>,
@@ -230,8 +313,8 @@ pub(crate) struct VulkanPresentation {
 }
 
 impl VulkanPresentation {
-    /// The integration boundary deliberately takes raw Win32 handles. Host glue
-    /// owns window creation; no Win32/window type leaks into Fluxel's API.
+    /// The integration boundary deliberately takes raw Android handles. Host glue
+    /// owns window creation; no Android/window type leaks into Fluxel's API.
     pub(crate) fn new(
         entry: &ash::Entry,
         instance: &ash::Instance,
@@ -240,7 +323,7 @@ impl VulkanPresentation {
     ) -> Self {
         Self {
             surface: ash::khr::surface::Instance::new(entry, instance),
-            win32_surface: ash::khr::win32_surface::Instance::new(entry, instance),
+            android_surface: ash::khr::android_surface::Instance::new(entry, instance),
             swapchain: ash::khr::swapchain::Device::new(instance, &shared.device),
             shared,
             targets,
@@ -249,20 +332,26 @@ impl VulkanPresentation {
         }
     }
 
-    fn create_surface(&self, target: ObjectId) -> RhiResult<vk::SurfaceKHR> {
+    fn create_surface(&self, target: ObjectId) -> RhiResult<(vk::SurfaceKHR, Arc<AndroidTarget>)> {
         let target = self.targets.target(target)?;
-        let create = vk::Win32SurfaceCreateInfoKHR::default()
-            .hinstance(target.hinstance as vk::HINSTANCE)
-            .hwnd(target.hwnd as vk::HWND);
-        unsafe { self.win32_surface.create_win32_surface(&create, None) }
-            .map_err(|result| native_error(result, "vkCreateWin32SurfaceKHR"))
+        if !target.is_alive() {
+            return Err(RhiError::new(
+                RhiErrorKind::TargetLost,
+                "the Android native window was destroyed",
+            ));
+        }
+        let create = vk::AndroidSurfaceCreateInfoKHR::default()
+            .window(target.window as *mut core::ffi::c_void);
+        unsafe { self.android_surface.create_android_surface(&create, None) }
+            .map(|surface| (surface, target))
+            .map_err(|result| native_error(result, "vkCreateAndroidSurfaceKHR"))
     }
 
     fn facts(&self, target: ObjectId) -> RhiResult<PresentationTargetCapabilities> {
         if self.shared.loss_info().is_some() {
             return Err(lost_error());
         }
-        let surface = self.create_surface(target)?;
+        let (surface, _target) = self.create_surface(target)?;
         let answer = surface_capabilities(
             &self.surface,
             self.shared.physical_device,
@@ -296,9 +385,10 @@ impl PresentationBackend for VulkanPresentation {
             ));
         }
         let surface = match self.create_surface(target) {
-            Ok(surface) => Arc::new(SurfaceOwner {
+            Ok((surface, target_ref)) => Arc::new(SurfaceOwner {
                 loader: self.surface.clone(),
                 surface,
+                _target: target_ref,
             }),
             Err(error) => {
                 leased.remove(&target);
@@ -508,6 +598,12 @@ impl ConfiguredPresentationBackend for VulkanConfiguredPresentation {
         if self.shared.loss_info().is_some() {
             return Err(lost_error());
         }
+        if !self.surface.is_target_alive() {
+            return Err(RhiError::new(
+                RhiErrorKind::TargetLost,
+                "the Android native window was destroyed",
+            ));
+        }
         surface_capabilities(
             &self.surface_loader,
             self.shared.physical_device,
@@ -524,6 +620,12 @@ impl ConfiguredPresentationBackend for VulkanConfiguredPresentation {
         Poll::Ready((|| {
             if self.shared.loss_info().is_some() {
                 return Err(lost_error());
+            }
+            if !self.surface.is_target_alive() {
+                return Err(RhiError::new(
+                    RhiErrorKind::TargetLost,
+                    "the Android native window was destroyed",
+                ));
             }
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             if state.acquired.is_some() {
@@ -554,6 +656,12 @@ impl ConfiguredPresentationBackend for VulkanConfiguredPresentation {
             return Err(AcquireError::new(
                 AcquireErrorKind::DeviceLost,
                 "the Vulkan device was lost; this presentation lease is terminal",
+            ));
+        }
+        if !self.surface.is_target_alive() {
+            return Err(AcquireError::new(
+                AcquireErrorKind::TargetLost,
+                "the Android native window was destroyed",
             ));
         }
         if device != self.device {
@@ -839,7 +947,7 @@ fn create_swapchain_with_old(
     if !queue_supported {
         return Err(RhiError::new(
             RhiErrorKind::Unsupported,
-            "the selected Vulkan graphics queue cannot present to this Win32 surface",
+            "the selected Vulkan graphics queue cannot present to this Android surface",
         ));
     }
     if !caps

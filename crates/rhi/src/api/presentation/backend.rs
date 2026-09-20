@@ -40,7 +40,23 @@ pub(crate) trait FrameAttachmentBackend: Send + Sync + 'static {
 /// explicit and no-throw abandonment paths reach the same native owner.
 pub(crate) trait ConfiguredPresentationBackend: Send + Sync + 'static {
     fn capabilities(&self) -> RhiResult<PresentationTargetCapabilities>;
-    fn reconfigure(&self, config: &PresentationConfiguration) -> RhiResult<()>;
+    /// Attempts a reconfiguration without blocking an executor thread.
+    ///
+    /// A native surface may have backend-private retirement work before it can
+    /// resize (DXGI `ResizeBuffers` is the important case).  Returning
+    /// `Pending` is valid only after retaining `waker` for every event that can
+    /// make the resize legal, including device loss.  The public operation is
+    /// already async; this seam keeps that fact real without exposing native
+    /// fences, swapchain generations, or retirement tokens.
+    ///
+    /// Every backend implements this one async seam. Backends whose native
+    /// operation is immediate return `Poll::Ready`; a second synchronous trait
+    /// verb would create two authorities for the same lease transition.
+    fn reconfigure_or_register_waker(
+        &self,
+        config: &PresentationConfiguration,
+        waker: &Waker,
+    ) -> Poll<RhiResult<()>>;
     /// Samples acquisition without waiting. `Ok(None)` is the only answer for a
     /// drawable that is not ready yet; a backend must not turn that normal race
     /// into a busy wait or a synthetic error.

@@ -17,11 +17,11 @@
 //!   below compares what the GPU wrote against the pattern the CPU uploaded. That is
 //!   `version-plan.md` section 4's copy/upload/readback requirement met with a
 //!   read-back result rather than with an absence of errors.
-//! - **Nothing is rasterized or dispatched.** `RasterBegin`/`RasterDraw` and
-//!   `ComputeBegin`/`ComputeDispatch` have no lowering — the spine refuses a plan
-//!   containing one rather than skipping it — so section 4's other two
-//!   requirements, real headless raster and compute on Windows DX12, are **not
-//!   met by this module** and no test here may be read as if they were.
+//! - **Compute and raster both produce read-back evidence.** The compute fixture
+//!   writes a storage buffer; [`raster`] draws a deterministic triangle into an
+//!   offscreen RGBA8 target and separately samples a texture through a sampler.
+//!   Both paths compare native GPU output rather than treating submission success
+//!   as proof of lowering.
 //! - **A shader entry point is accepted, not compiled.** Section 19.10's verdict
 //!   is exercised against a real device by
 //!   `a_real_device_accepts_the_dxil_form_and_refuses_another`, and what that
@@ -38,7 +38,8 @@
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Wake, Waker};
 
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
@@ -90,6 +91,8 @@ use crate::api::submission::{
 };
 use crate::backend::dx12::resource::Dx12Buffer;
 
+mod raster;
+
 /// A fresh provider instance identity, as host integration would mint.
 fn instance() -> DeviceInstanceId {
     DeviceInstanceId::new(0x0D12_0001)
@@ -105,6 +108,21 @@ fn block_on<F: Future>(future: F) -> F::Output {
             Poll::Ready(value) => return value,
             Poll::Pending => {}
         }
+    }
+}
+
+/// Records the native retirement wake used by the reconfigure-future evidence
+/// test. A no-op waker could prove the second poll succeeds, but not that the
+/// backend supplied the wake which lets a real executor make that second poll.
+struct WakeCounter(AtomicUsize);
+
+impl Wake for WakeCounter {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -265,14 +283,33 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
         block_on(device.wait_present(receipt.presents()[0].id())),
         Ok(crate::api::presentation::PresentState::Accepted)
     ));
-    assert!(matches!(
-        block_on(device.wait_completion(receipt.completion())),
-        Ok(crate::api::submission::CompletionState::Complete)
-    ));
-    // `scope` owns a FrameAttachment clone. DXGI requires every old backbuffer
-    // reference to be released before ResizeBuffers, including this recorded
-    // description after its submitted work is complete.
-    drop(scope);
+    // `reconfigure` is a real future rather than a synchronous DXGI call hidden
+    // behind `async`: accepted GPU work and this still-live recorded scope retain
+    // the old backbuffer, so `ResizeBuffers` is not legal yet. Its first poll
+    // must register for the attachment retirement and return Pending.
+    {
+        let mut reconfigure = pin!(surface.reconfigure(&config));
+        let wake_count = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wake_count));
+        let mut context = Context::from_waker(&waker);
+        assert!(matches!(
+            reconfigure.as_mut().poll(&mut context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            block_on(device.wait_completion(receipt.completion())),
+            Ok(crate::api::submission::CompletionState::Complete)
+        ));
+        // `scope` owns the final FrameAttachment clone after the committed
+        // batch retires. Its drop releases the native reference and wakes the
+        // pending reconfigure future, which can now perform ResizeBuffers.
+        drop(scope);
+        assert_eq!(wake_count.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            reconfigure.as_mut().poll(&mut context),
+            Poll::Ready(Ok(()))
+        ));
+    }
     // Flip-model DXGI permits only one HWND-associated swapchain.  Change the
     // native client size, reconfigure the *same* portable lease, then prove the
     // resized chain can again acquire and present rather than merely being
@@ -289,8 +326,6 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
         )
     }
     .expect("resize hidden HWND");
-    block_on(surface.reconfigure(&config)).expect("ResizeBuffers reconfigure");
-
     let frame = block_on(surface.acquire()).expect("acquire after resize");
     let attachment = frame.attachment();
     let scope = crate::api::command::RasterScopeDescriptor::new().with_color(

@@ -931,15 +931,19 @@ impl crate::api::presentation::backend::ConfiguredPresentationBackend
         ))
     }
 
-    fn reconfigure(&self, _: &PresentationConfiguration) -> crate::api::error::RhiResult<()> {
-        if self.device_lost() {
+    fn reconfigure_or_register_waker(
+        &self,
+        _: &PresentationConfiguration,
+        _: &std::task::Waker,
+    ) -> std::task::Poll<crate::api::error::RhiResult<()>> {
+        std::task::Poll::Ready(if self.device_lost() {
             Err(crate::api::error::RhiError::new(
                 RhiErrorKind::DeviceLost,
                 "the mock device was lost",
             ))
         } else {
             Ok(())
-        }
+        })
     }
 
     fn try_acquire(

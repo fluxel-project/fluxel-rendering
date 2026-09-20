@@ -13,7 +13,8 @@
 //! `Failed` (or `DeviceLost`) from completion instead.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::Waker;
 
 use ash::vk;
@@ -34,9 +35,9 @@ use super::compute;
 use super::raster;
 use super::transfer::{self, ImageLayoutState, TransferRetention};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "android"))]
 use crate::backend::vulkan::presentation::{VulkanFrameAttachment, VulkanPresentSync};
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "android")))]
 #[derive(Clone, Copy)]
 struct VulkanPresentSync {
     acquire_wait: vk::Semaphore,
@@ -46,6 +47,7 @@ struct VulkanPresentSync {
 /// One single-queue Vulkan command domain.
 pub(in crate::backend::vulkan) struct VulkanCommandSpine {
     inner: Arc<SpineInner>,
+    waiter: Option<std::thread::JoinHandle<()>>,
 }
 
 /// Queue-local native objects retained by completion waiter threads.
@@ -53,6 +55,8 @@ struct SpineInner {
     shared: Arc<VulkanShared>,
     command_pool: vk::CommandPool,
     state: Mutex<SpineState>,
+    pending_changed: Condvar,
+    shutdown: AtomicBool,
 }
 
 /// Mutable submission state guarded as one transaction.
@@ -78,11 +82,6 @@ struct SpineState {
     /// Entries may outlive the logical texture; retirement is a bounded-memory
     /// optimization and must not weaken cross-submit layout correctness.
     image_layouts: Vec<ImageLayoutState>,
-    /// Join handles make device destruction wait until every detached native
-    /// fence wait has returned. This is observable on Android process teardown:
-    /// letting the test/runtime exit while a waiter still unwinds can race the
-    /// loader's native mutex destruction even after the logical point woke.
-    waiters: Vec<std::thread::JoinHandle<()>>,
 }
 
 struct PendingBatch {
@@ -107,6 +106,13 @@ struct BatchPresentation {
     presents: Vec<usize>,
 }
 
+/// A fence wait is deliberately bounded even though the normal completion path
+/// has no deadline.  `VulkanCommandSpine::drop` must be able to join its sole
+/// waiter before it destroys the command pool, and Vulkan has no operation that
+/// cancels an in-progress `vkWaitForFences`.  A finite wait is therefore the
+/// shutdown observation point; it is *not* a completion timeout.
+const FENCE_WAITER_POLL_NS: u64 = 50_000_000;
+
 impl VulkanCommandSpine {
     /// Creates the private command pool for the device's selected graphics
     /// family.  The pool is reset only after its fence reaches completion; the
@@ -129,20 +135,33 @@ impl VulkanCommandSpine {
                     "VulkanCommandSpine::create_command_pool",
                 ))
             })?;
-        Ok(Self {
-            inner: Arc::new(SpineInner {
-                shared: Arc::clone(&shared),
-                command_pool,
-                state: Mutex::new(SpineState {
-                    issued: 0,
-                    completed: 0,
-                    finished: BTreeSet::new(),
-                    poison: None,
-                    pending: BTreeMap::new(),
-                    image_layouts: Vec::new(),
-                    waiters: Vec::new(),
-                }),
+        let inner = Arc::new(SpineInner {
+            shared: Arc::clone(&shared),
+            command_pool,
+            pending_changed: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            state: Mutex::new(SpineState {
+                issued: 0,
+                completed: 0,
+                finished: BTreeSet::new(),
+                poison: None,
+                pending: BTreeMap::new(),
+                image_layouts: Vec::new(),
             }),
+        });
+        let worker = Arc::clone(&inner);
+        let waiter = std::thread::Builder::new()
+            .name("fluxel-vulkan-fence".into())
+            .spawn(move || fence_wait_loop(worker))
+            .map_err(|_| {
+                VulkanFailure::Native(ffi::NativeError::new(
+                    vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+                    "VulkanCommandSpine::spawn fence waiter",
+                ))
+            })?;
+        Ok(Self {
+            inner,
+            waiter: Some(waiter),
         })
     }
 
@@ -163,16 +182,43 @@ impl VulkanCommandSpine {
     /// satisfies Vulkan's external synchronization rule for queue idle against
     /// concurrent submission on the same logical device.
     pub(in crate::backend::vulkan) fn wait_idle(&self) -> Result<(), VulkanFailure> {
-        let _state = self.lock();
-        let _queue = self.inner.shared.queue_guard();
-        unsafe { self.inner.shared.device.device_wait_idle() }.map_err(|result| {
-            VulkanFailure::Native(ffi::NativeError::new(
-                result,
-                "VulkanCommandSpine::wait_idle",
-            ))
-        })?;
-        // Fence waiters publish terminal completion independently of poll.
-        drop(_state);
+        let issued = self.lock().issued;
+        if issued == 0 {
+            return Ok(());
+        }
+        {
+            let _queue = self.inner.shared.queue_guard();
+            unsafe { self.inner.shared.device.device_wait_idle() }.map_err(|result| {
+                VulkanFailure::Native(ffi::NativeError::new(
+                    result,
+                    "VulkanCommandSpine::wait_idle",
+                ))
+            })?;
+        }
+
+        // `vkDeviceWaitIdle` proves the queue is idle, but it does not transfer
+        // ownership of the worker's host fence wait or of its `PendingBatch`.
+        // Let that one authority observe the signalled fences, publish readbacks,
+        // wake futures, and free the native objects. Returning before this loop
+        // would make `wait_idle().await` falsely imply a still-Pending completion
+        // or readback. The bounded wait also observes a loss discovered by another
+        // native entry point even if it did not notify this spine's condition
+        // variable.
+        let mut state = self.lock();
+        while state.completed < issued {
+            if self.inner.shared.loss_info().is_some() {
+                return Err(VulkanFailure::Native(ffi::NativeError::new(
+                    vk::Result::ERROR_DEVICE_LOST,
+                    "VulkanCommandSpine::wait_idle after device loss",
+                )));
+            }
+            let (next, _) = self
+                .inner
+                .pending_changed
+                .wait_timeout(state, std::time::Duration::from_nanos(FENCE_WAITER_POLL_NS))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = next;
+        }
         Ok(())
     }
 
@@ -191,6 +237,17 @@ impl VulkanCommandSpine {
                 vk::Result::ERROR_DEVICE_LOST,
                 "VulkanCommandSpine::submit after device loss",
             )));
+        }
+
+        // An empty plan is a legal portable no-op with its own plan identity.
+        // Keep native command-buffer allocation and queue submission entirely
+        // out of this path; serial zero is the completed identity frontier of a
+        // fresh device, and a later empty plan observes the current frontier.
+        if request.batches.is_empty() {
+            return Ok(SubmissionOutcome {
+                completion: state.issued,
+                points: Vec::new(),
+            });
         }
 
         let recorded = self.allocate_and_record(request.batches, &state.image_layouts)?;
@@ -295,36 +352,7 @@ impl VulkanCommandSpine {
                         },
                     );
                     self.inner.shared.register_readbacks(&readbacks);
-                    match spawn_fence_waiter(Arc::clone(&self.inner), serial, fence) {
-                        Ok(waiter) => state.waiters.push(waiter),
-                        Err(error) => {
-                            state.poison = Some((
-                                serial,
-                                CompletionFailure::new(format!(
-                                    "could not start Vulkan fence waiter: {error}"
-                                )),
-                            ));
-                            poisoned = Some(DeviceLossInfo::new(format!(
-                                "Vulkan work was accepted but its completion waiter could not start: {error}"
-                            )));
-                            let remaining_buffers = recorded
-                                .by_ref()
-                                .map(|batch| batch.command_buffer)
-                                .collect::<Vec<_>>();
-                            if !remaining_buffers.is_empty() {
-                                unsafe {
-                                    self.inner.shared.device.free_command_buffers(
-                                        self.inner.command_pool,
-                                        &remaining_buffers,
-                                    )
-                                };
-                            }
-                            for fence in fences.by_ref() {
-                                unsafe { self.inner.shared.device.destroy_fence(fence, None) };
-                            }
-                            break;
-                        }
-                    }
+                    self.inner.pending_changed.notify_one();
                     for &present_index in &batch_presentation.presents {
                         let present = &request.presents[present_index];
                         present.attachment.present(present.receipt);
@@ -411,6 +439,7 @@ impl VulkanCommandSpine {
         drop(state);
         if let Some(info) = poisoned {
             self.inner.shared.mark_lost(info);
+            self.inner.pending_changed.notify_all();
         }
         if let Some(info) = self.inner.shared.loss_info() {
             for (index, present) in request.presents.iter().enumerate() {
@@ -749,11 +778,9 @@ impl VulkanCommandSpine {
 
 impl Drop for VulkanCommandSpine {
     fn drop(&mut self) {
-        let waiters = {
-            let mut state = self.lock();
-            std::mem::take(&mut state.waiters)
-        };
-        for waiter in waiters {
+        self.inner.shutdown.store(true, Ordering::Release);
+        self.inner.pending_changed.notify_all();
+        if let Some(waiter) = self.waiter.take() {
             let _ = waiter.join();
         }
     }
@@ -792,30 +819,62 @@ impl Drop for SpineInner {
     }
 }
 
-/// Waits independently of `Device::poll`, then advances both completion and
-/// readback state.  This is intentionally one waiter per batch for the first
-/// Vulkan vertical slice.  A shared fence waiter may replace it later without
-/// changing the completion contract; this baseline's important property is that
-/// a `CompletionPoint` or `ReadbackTicket` future always makes progress.
-fn spawn_fence_waiter(
-    inner: Arc<SpineInner>,
-    serial: u64,
-    fence: vk::Fence,
-) -> std::io::Result<std::thread::JoinHandle<()>> {
-    let worker = Arc::clone(&inner);
-    std::thread::Builder::new()
-        .name("fluxel-vulkan-fence".into())
-        .spawn(move || {
-            // SAFETY: `worker` retains both the command pool and VulkanShared;
-            // the fence was inserted into its state before this thread starts.
-            let result = unsafe {
-                worker
-                    .shared
-                    .device
-                    .wait_for_fences(&[fence], true, u64::MAX)
-            };
-            finish_waited_batch(&worker, serial, result);
-        })
+/// One device-owned progress worker replaces one OS thread per batch. The
+/// single queue issues serials in order, so waiting for the earliest pending
+/// fence advances the exact portable frontier without sacrificing per-batch
+/// completion points.
+fn fence_wait_loop(inner: Arc<SpineInner>) {
+    loop {
+        let (serial, fence) = {
+            let mut state = inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            loop {
+                if inner.shutdown.load(Ordering::Acquire) || inner.shared.loss_info().is_some() {
+                    return;
+                }
+                if let Some((&serial, pending)) = state.pending.first_key_value() {
+                    break (serial, pending.fence);
+                }
+                state = inner
+                    .pending_changed
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        };
+        // SAFETY: the pending map retains this fence until this sole worker
+        // publishes its terminal result. Shutdown joins this worker before the
+        // command pool or fences are destroyed.
+        let result = unsafe {
+            inner
+                .shared
+                .device
+                .wait_for_fences(&[fence], true, FENCE_WAITER_POLL_NS)
+        };
+        // A finite host wait only means this worker should resample shutdown,
+        // loss, and the same earliest fence. It proves neither completion nor
+        // failure, so in particular it must not remove `pending` or release the
+        // command buffer/staging retained by that accepted batch.
+        if fence_wait_timed_out(&result) {
+            continue;
+        }
+        finish_waited_batch(&inner, serial, result);
+        // The synchronous `wait_idle` path waits for the worker, rather than
+        // touching a fence concurrently with it. Notify after every terminal
+        // observation, including loss, so it need not wait for its bounded
+        // resample interval in the usual case.
+        inner.pending_changed.notify_all();
+    }
+}
+
+/// Classifies the one non-terminal result of the bounded worker wait.
+///
+/// Keeping this separate makes it hard for a future refactor to accidentally
+/// hand `TIMEOUT` to `finish_waited_batch`, where any error is deliberately a
+/// terminal execution-domain failure.
+fn fence_wait_timed_out(result: &Result<(), vk::Result>) -> bool {
+    matches!(result, Err(vk::Result::TIMEOUT))
 }
 
 fn finish_waited_batch(inner: &SpineInner, serial: u64, result: Result<(), vk::Result>) {
@@ -942,9 +1001,7 @@ fn finish_waited_batch(inner: &SpineInner, serial: u64, result: Result<(), vk::R
 
 fn completion_from_state(state: &SpineState, serial: u64) -> CompletionState {
     if serial == 0 {
-        CompletionState::Failed(CompletionFailure::new(
-            "Vulkan completion serial zero is reserved and was never issued",
-        ))
+        CompletionState::Complete
     } else if serial <= state.completed {
         CompletionState::Complete
     } else if let Some((first, failure)) = &state.poison {
@@ -1006,7 +1063,7 @@ fn prepare_presentations(
     Ok(batches)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "android"))]
 fn frame_present_sync(attachment: &FrameAttachment) -> Result<VulkanPresentSync, VulkanFailure> {
     attachment
         .native()
@@ -1019,7 +1076,7 @@ fn frame_present_sync(attachment: &FrameAttachment) -> Result<VulkanPresentSync,
         })
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "android")))]
 fn frame_present_sync(_: &FrameAttachment) -> Result<VulkanPresentSync, VulkanFailure> {
     Err(VulkanFailure::Unsupported {
         what: "a Vulkan presentation attachment",
@@ -1138,5 +1195,19 @@ fn payload_name(payload: &RecordedPayload) -> &'static str {
         RecordedPayload::DebugPush(_) => "a debug-group push",
         RecordedPayload::DebugPop => "a debug-group pop",
         RecordedPayload::DebugMarker(_) => "a debug marker",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ash::vk;
+
+    use super::fence_wait_timed_out;
+
+    #[test]
+    fn bounded_fence_wait_timeout_is_not_an_execution_failure() {
+        assert!(fence_wait_timed_out(&Err(vk::Result::TIMEOUT)));
+        assert!(!fence_wait_timed_out(&Ok(())));
+        assert!(!fence_wait_timed_out(&Err(vk::Result::ERROR_DEVICE_LOST)));
     }
 }

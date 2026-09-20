@@ -17,6 +17,8 @@ use ash::vk::Handle;
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::DeviceInstanceId;
+#[cfg(target_os = "android")]
+use crate::api::identity::ObjectId;
 use crate::api::platform::backend::ProviderBackend;
 use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
@@ -65,7 +67,21 @@ impl VulkanInstance {
                     })
                 })
         };
-        #[cfg(not(windows))]
+        #[cfg(target_os = "android")]
+        let presentation_extensions = {
+            let available = unsafe { entry.enumerate_instance_extension_properties(None) }
+                .map_err(|result| {
+                    ffi::to_rhi(result, "VulkanProvider::enumerate_instance_extensions")
+                })?;
+            [ash::khr::surface::NAME, ash::khr::android_surface::NAME]
+                .iter()
+                .all(|required| {
+                    available.iter().any(|property| unsafe {
+                        CStr::from_ptr(property.extension_name.as_ptr()) == *required
+                    })
+                })
+        };
+        #[cfg(not(any(windows, target_os = "android")))]
         let presentation_extensions = false;
         #[cfg(windows)]
         let extensions = if presentation_extensions {
@@ -76,7 +92,16 @@ impl VulkanInstance {
         } else {
             Vec::new()
         };
-        #[cfg(not(windows))]
+        #[cfg(target_os = "android")]
+        let extensions = if presentation_extensions {
+            vec![
+                ash::khr::surface::NAME.as_ptr(),
+                ash::khr::android_surface::NAME.as_ptr(),
+            ]
+        } else {
+            Vec::new()
+        };
+        #[cfg(not(any(windows, target_os = "android")))]
         let extensions = Vec::new();
         let create = vk::InstanceCreateInfo::default()
             .application_info(&application)
@@ -90,12 +115,12 @@ impl VulkanInstance {
         })
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "android"))]
     pub(crate) fn entry(&self) -> &ash::Entry {
         &self.entry
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "android"))]
     pub(crate) fn instance(&self) -> &ash::Instance {
         &self.instance
     }
@@ -127,7 +152,7 @@ struct Candidate {
 pub(crate) struct VulkanProvider {
     provider: DeviceInstanceId,
     instance: Arc<VulkanInstance>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "android"))]
     targets: Arc<crate::backend::vulkan::presentation::VulkanTargetRegistry>,
 }
 
@@ -136,7 +161,7 @@ impl VulkanProvider {
         Ok(Self {
             provider,
             instance: Arc::new(VulkanInstance::new()?),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "android"))]
             targets: Arc::new(crate::backend::vulkan::presentation::VulkanTargetRegistry::new()),
         })
     }
@@ -151,7 +176,26 @@ impl VulkanProvider {
             .register(hwnd as ash::vk::HWND, hinstance as ash::vk::HINSTANCE)
     }
 
-    #[cfg(windows)]
+    /// Android host glue passes its owned ANativeWindow only to this private
+    /// backend registration seam. The returned value is platform-neutral.
+    #[cfg(target_os = "android")]
+    pub(crate) fn register_android_presentation_target(
+        &self,
+        window: *mut core::ffi::c_void,
+    ) -> RhiResult<PresentationTarget> {
+        self.targets.register(window)
+    }
+
+    /// Retains a registration until Android's native-window-destroyed callback.
+    #[cfg(target_os = "android")]
+    pub(crate) fn retain_android_presentation_target(
+        &self,
+        target: ObjectId,
+    ) -> crate::backend::vulkan::presentation::android::AndroidTargetRegistration {
+        self.targets.registration(target)
+    }
+
+    #[cfg(any(windows, target_os = "android"))]
     fn candidate_supports_target(
         &self,
         candidate: &Candidate,
@@ -162,7 +206,7 @@ impl VulkanProvider {
             .is_some())
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "android"))]
     fn graphics_present_family(
         &self,
         candidate: &Candidate,
@@ -184,7 +228,14 @@ impl VulkanProvider {
                 continue;
             }
             for target in targets {
+                #[cfg(windows)]
                 let surface = self.targets.create_surface(
+                    self.instance.entry(),
+                    self.instance.instance(),
+                    target.id(),
+                )?;
+                #[cfg(target_os = "android")]
+                let (surface, _target) = self.targets.create_surface(
                     self.instance.entry(),
                     self.instance.instance(),
                     target.id(),
@@ -210,12 +261,12 @@ impl VulkanProvider {
         Ok(selected)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "android")))]
     fn candidate_supports_target(&self, _: &Candidate, _: &PresentationTarget) -> RhiResult<bool> {
         Ok(false)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "android")))]
     fn graphics_present_family(
         &self,
         _: &Candidate,
@@ -469,7 +520,7 @@ impl VulkanProvider {
             facts,
             submission,
             candidate.swapchain_supported,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "android"))]
             Arc::clone(&self.targets),
         )
         .map_err(|failure| failure.into_rhi("VulkanProvider::request_device"))

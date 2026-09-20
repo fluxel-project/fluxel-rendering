@@ -135,6 +135,33 @@ fn copy_lane(device: &crate::api::platform::Device) -> SubmissionLaneId {
 }
 
 #[test]
+fn an_empty_plan_is_a_completed_noop_without_native_submission() {
+    let Some(provider) = provider() else {
+        return;
+    };
+    if ready(provider.enumerate_adapters())
+        .expect("Vulkan enumeration failed")
+        .as_ref()
+        .is_none_or(Vec::is_empty)
+    {
+        return;
+    }
+    let device = ready(provider.request_device(DeviceRequestDescriptor::new(
+        AdapterSelection::Default,
+        DeviceRequirements::new(),
+    )))
+    .expect("default Vulkan device request failed");
+    let plan = SubmissionPlanBuilder::new(&device)
+        .build()
+        .expect("the portable contract permits an empty plan");
+    let receipt = ready(device.submit(plan)).expect("an empty Vulkan plan is an accepted no-op");
+    assert!(matches!(
+        device.completion_state(receipt.completion()).unwrap(),
+        CompletionState::Complete
+    ));
+}
+
+#[test]
 fn upload_copy_and_readback_move_bytes_on_a_real_vulkan_queue() {
     const SIZE: u64 = 4096;
     let Some(provider) = provider() else {

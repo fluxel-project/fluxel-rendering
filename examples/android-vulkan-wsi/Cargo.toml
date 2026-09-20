@@ -1,0 +1,14 @@
+[package]
+name = "fluxel-android-vulkan-wsi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+
+[dependencies]
+libc = "0.2"
+fluxel-rhi = { path = "../../crates/rhi", default-features = false, features = ["android-wsi-evidence"] }

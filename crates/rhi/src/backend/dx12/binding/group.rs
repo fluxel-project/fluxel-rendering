@@ -30,10 +30,11 @@
 //! neither is rounded silently: a range that cannot be expressed is refused
 //! rather than moved, because moving it would change which bytes the shader reads.
 //!
-//! Widening a constant buffer is the one asymmetry, and it is safe in the
-//! direction that matters: the view is what the shader *may* read, the shader's
-//! declared need is inside the caller's range, so a longer view still contains
-//! everything the contract promised. Narrowing would not.
+//! Widening a constant buffer is the one asymmetry.  `Dx12Buffer` privately
+//! pads a uniform-capable native allocation, so the widened tail is backed
+//! without changing the portable buffer's logical size.  Raw views receive no
+//! equivalent widening: their DWORD tail must be exact, because that descriptor
+//! would otherwise expose logical bytes outside the caller's `BufferRange`.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -100,6 +101,57 @@ pub(crate) struct Dx12BindGroup {
     _samplers: Vec<Sampler>,
 }
 
+/// An uncommitted descriptor run.
+///
+/// A group needs one range from each of D3D12's two shader-visible heap types.
+/// Those claims are one logical operation: publishing only one would strand
+/// descriptors whenever the second allocation or a subsequent descriptor write
+/// fails.  Keeping the rollback in this small RAII value makes every early
+/// return transactional, including future descriptor kinds added below.
+struct DescriptorReservation {
+    start: u32,
+    count: u32,
+    heap: Arc<DescriptorHeap>,
+    committed: bool,
+}
+
+impl DescriptorReservation {
+    fn claim(
+        heap: &Arc<DescriptorHeap>,
+        count: u32,
+        what: Dx12Failure,
+    ) -> Result<Self, Dx12Failure> {
+        let start = if count == 0 {
+            0
+        } else {
+            heap.allocate(count).ok_or(what)?
+        };
+        Ok(Self {
+            start,
+            count,
+            heap: Arc::clone(heap),
+            committed: false,
+        })
+    }
+
+    fn start(&self) -> u32 {
+        self.start
+    }
+
+    fn commit(mut self) -> (u32, u32, Arc<DescriptorHeap>) {
+        self.committed = true;
+        (self.start, self.count, Arc::clone(&self.heap))
+    }
+}
+
+impl Drop for DescriptorReservation {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.heap.release(self.start, self.count);
+        }
+    }
+}
+
 impl Dx12BindGroup {
     /// The GPU address of this group's view table, for the dispatch lowering.
     ///
@@ -163,56 +215,53 @@ pub(crate) fn create_bind_group(
     let plan = TablePlan::of(descriptor.layout.descriptor())?;
     let count = plan.view_descriptors();
     let sampler_count = plan.sampler_descriptors();
-    let start = if count == 0 {
-        // Empty layouts are meaningful placeholders in a PipelineInterface and
-        // an empty group for one owns no native descriptor range.
-        0
-    } else {
-        heap.allocate(count).ok_or(Dx12Failure::Unsupported {
+    let views = DescriptorReservation::claim(
+        heap,
+        count,
+        Dx12Failure::Unsupported {
             what: "a bind group larger than this device's free descriptor slots",
             why: "this backend's descriptor heap is a fixed 65536 descriptors, and every \
                   live bind group holds its range until the last handle to it is dropped",
-        })?
-    };
-    let sampler_start = if sampler_count == 0 {
-        0
-    } else {
-        sampler_heap.allocate(sampler_count).ok_or(Dx12Failure::Unsupported {
+        },
+    )?;
+    let samplers_reservation = DescriptorReservation::claim(
+        sampler_heap,
+        sampler_count,
+        Dx12Failure::Unsupported {
             what: "a bind group's samplers larger than this device's free descriptor slots",
             why: "the DX12 sampler heap is fixed-size and every live bind group retains its range",
-        })?
-    };
+        },
+    )?;
 
     let mut buffers = Vec::with_capacity(descriptor.entries.len());
     let mut textures = Vec::with_capacity(descriptor.entries.len());
     let mut samplers = Vec::with_capacity(descriptor.entries.len());
-    // The run is released on a failure below rather than leaked: the
-    // `Dx12BindGroup` that would have owned it is never built, so nothing else
-    // can give it back.
-    if let Err(failure) = write_entries(
+    write_entries(
         device,
         heap,
-        start,
+        views.start(),
         sampler_heap,
-        sampler_start,
+        samplers_reservation.start(),
         &plan,
         descriptor,
         &mut buffers,
         &mut textures,
         &mut samplers,
-    ) {
-        heap.release(start, count);
-        sampler_heap.release(sampler_start, sampler_count);
-        return Err(failure);
-    }
+    )?;
+
+    // Committing is deliberately the final fallible-operation boundary.  Until
+    // here either reservation's Drop returns its range, so a failed group never
+    // consumes descriptor capacity visible to the next group.
+    let (start, count, heap) = views.commit();
+    let (sampler_start, sampler_count, sampler_heap) = samplers_reservation.commit();
 
     Ok(Dx12BindGroup {
         start,
         count,
-        heap: Arc::clone(heap),
+        heap,
         sampler_start,
         sampler_count,
-        sampler_heap: Arc::clone(sampler_heap),
+        sampler_heap,
         _buffers: buffers,
         _textures: textures,
         _samplers: samplers,
@@ -331,7 +380,6 @@ fn write_element(
                   makes that a refusal rather than a migration",
         });
     };
-    let size = native.size();
     let destination = heap.cpu(slot);
 
     // The view is chosen from the *layout's* kind rather than from the resource
@@ -345,7 +393,7 @@ fn write_element(
     // calls that rely on those invariants.
     match &range.kind {
         BindingKind::UniformBuffer { .. } => {
-            write_constant_buffer(device, destination, native, binding, size)
+            write_constant_buffer(device, destination, native, binding)
         }
         BindingKind::StorageBuffer { .. } => match range.class {
             RegisterClass::ShaderResource => write_raw_view(
@@ -353,7 +401,6 @@ fn write_element(
                 destination,
                 native,
                 binding,
-                size,
                 RawView::ShaderResource,
             ),
             RegisterClass::UnorderedAccess => write_raw_view(
@@ -361,7 +408,6 @@ fn write_element(
                 destination,
                 native,
                 binding,
-                size,
                 RawView::UnorderedAccess,
             ),
             RegisterClass::ConstantBuffer | RegisterClass::Sampler => {
@@ -537,18 +583,35 @@ fn write_constant_buffer(
     destination: D3D12_CPU_DESCRIPTOR_HANDLE,
     native: &Dx12Buffer,
     binding: &BufferBinding,
-    size: u64,
 ) -> Result<(), Dx12Failure> {
     let offset = binding.range.offset;
-    let padded = binding.range.size.div_ceil(CONSTANT_BUFFER_ALIGNMENT) * CONSTANT_BUFFER_ALIGNMENT;
+    if offset
+        .checked_add(binding.range.size)
+        .is_none_or(|end| end > native.size())
+    {
+        return Err(Dx12Failure::Unsupported {
+            what: "a uniform buffer range outside its logical buffer",
+            why: "native CBV tail padding is private backing and cannot make an out-of-range portable BufferRange valid",
+        });
+    }
+    let padded = aligned_view_size(binding.range.size, CONSTANT_BUFFER_ALIGNMENT).ok_or(
+        Dx12Failure::Unsupported {
+            what: "a uniform buffer range whose constant-buffer view size overflows",
+            why: "Direct3D 12 requires a 256-byte-multiple view size, and rounding this range would exceed the representable native size",
+        },
+    )?;
     // Both bounds are Direct3D 12's and neither is the caller's: the view must
     // stay inside the allocation, and `SizeInBytes` is a `u32` on the native side.
-    if offset + padded > size || padded > u32::MAX as u64 {
+    if offset
+        .checked_add(padded)
+        .is_none_or(|end| end > native.allocation_size())
+        || padded > u32::MAX as u64
+    {
         return Err(Dx12Failure::Unsupported {
             what: "a uniform buffer range with no constant-buffer view it fits in",
             why: "Direct3D 12 requires a constant-buffer view's SizeInBytes to be a \
                   multiple of 256, so a range shorter than that is widened — and this \
-                  one cannot be widened without running past the end of its buffer",
+                  one cannot be widened without running past the native allocation",
         });
     }
     let description = D3D12_CONSTANT_BUFFER_VIEW_DESC {
@@ -586,10 +649,18 @@ fn write_raw_view(
     destination: D3D12_CPU_DESCRIPTOR_HANDLE,
     native: &Dx12Buffer,
     binding: &BufferBinding,
-    size: u64,
     view: RawView,
 ) -> Result<(), Dx12Failure> {
     let offset = binding.range.offset;
+    if offset
+        .checked_add(binding.range.size)
+        .is_none_or(|end| end > native.size())
+    {
+        return Err(Dx12Failure::Unsupported {
+            what: "a storage buffer range outside its logical buffer",
+            why: "private native allocation padding cannot make an out-of-range portable BufferRange valid",
+        });
+    }
     if offset % RAW_VIEW_ALIGNMENT != 0 {
         return Err(Dx12Failure::Unsupported {
             what: "a storage buffer range that is not four-byte aligned",
@@ -597,20 +668,24 @@ fn write_raw_view(
                   them and an offset that is not a multiple of four has no view",
         });
     }
-    // The requested length rounds *up* to whole DWORDs, then clamps to what the
-    // allocation has left. Both halves are needed: rounding up alone could name
-    // bytes past the end, and clamping alone could hand the shader fewer bytes
-    // than the caller's range promised.
-    let wanted = binding.range.size.div_ceil(RAW_VIEW_ALIGNMENT);
-    let available = (size - offset) / RAW_VIEW_ALIGNMENT;
-    let elements = wanted.min(available);
-    if elements < wanted || elements > u32::MAX as u64 {
+    // A raw descriptor's end is a DWORD boundary.  Rounding the requested range
+    // up would make shader loads observe bytes outside the portable
+    // `BufferRange` whenever the range ends before the resource does.  Native
+    // allocation padding is intentionally *not* permission to expose those
+    // logical bytes, so this lowering refuses an inexact tail.
+    if binding.range.size % RAW_VIEW_ALIGNMENT != 0 {
+        return Err(Dx12Failure::Unsupported {
+            what: "a storage buffer range whose size is not four-byte aligned",
+            why: "a raw buffer view has whole DWORD elements; rounding its tail up would expose bytes outside the portable BufferRange",
+        });
+    }
+    let elements = binding.range.size / RAW_VIEW_ALIGNMENT;
+    if elements > u32::MAX as u64 {
         return Err(Dx12Failure::Unsupported {
             what: "a storage buffer range with no raw view that covers it",
             why: "a raw buffer view is a count of DWORDs, so a range whose length is \
-                  not a whole number of DWORDs cannot be covered by one — and this \
-                  one cannot be rounded up without running past the end of its \
-                  buffer",
+                  not a whole number of DWORDs cannot be represented exactly, and \
+                  one raw view cannot name more than u32::MAX DWORDs",
         });
     }
     let first = offset / RAW_VIEW_ALIGNMENT;
@@ -676,4 +751,32 @@ fn write_raw_view(
         }
     }
     Ok(())
+}
+
+/// Rounds a native view extent without relying on an overflowing `size + mask`.
+fn aligned_view_size(size: u64, alignment: u64) -> Option<u64> {
+    let quotient = size / alignment;
+    let remainder = size % alignment;
+    quotient
+        .checked_add(u64::from(remainder != 0))?
+        .checked_mul(alignment)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RAW_VIEW_ALIGNMENT, aligned_view_size};
+
+    #[test]
+    fn constant_buffer_rounding_is_exact_at_boundaries_and_never_wraps() {
+        assert_eq!(aligned_view_size(1, 256), Some(256));
+        assert_eq!(aligned_view_size(256, 256), Some(256));
+        assert_eq!(aligned_view_size(257, 256), Some(512));
+        assert_eq!(aligned_view_size(u64::MAX, 256), None);
+    }
+
+    #[test]
+    fn raw_views_require_an_exact_dword_tail() {
+        assert_eq!(16 % RAW_VIEW_ALIGNMENT, 0);
+        assert_ne!(17 % RAW_VIEW_ALIGNMENT, 0);
+    }
 }

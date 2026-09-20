@@ -154,15 +154,7 @@ impl DescriptorHeap {
             return None;
         }
         let mut free = self.free();
-        let index = free.iter().position(|run| run.len() as u32 >= count)?;
-        let run = free[index].clone();
-        let start = run.start;
-        if run.len() as u32 == count {
-            free.remove(index);
-        } else {
-            free[index] = run.start + count..run.end;
-        }
-        Some(start)
+        allocate_from_free(&mut free, count)
     }
 
     /// Returns a run claimed by [`Self::allocate`].
@@ -174,29 +166,7 @@ impl DescriptorHeap {
             return;
         }
         let mut free = self.free();
-        let end = start + count;
-        // `partition_point` on a list sorted by start gives the one index the run
-        // belongs at, so the insert costs no comparison of its own.
-        let at = free.partition_point(|run| run.start < start);
-        // The merge is written as "absorb the next, then absorb the previous"
-        // rather than as four cases, because the two absorptions are independent
-        // and doing them in this order means each touches only the index it is
-        // given. A run adjacent to neither is simply inserted.
-        let mut merged = start..end;
-        if let Some(next) = free.get(at) {
-            if next.start == merged.end {
-                merged.end = next.end;
-                free.remove(at);
-            }
-        }
-        if at > 0 {
-            let previous = &mut free[at - 1];
-            if previous.end == merged.start {
-                previous.end = merged.end;
-                return;
-            }
-        }
-        free.insert(at, merged);
+        release_to_free(&mut free, start, count);
     }
 
     /// The CPU address of the descriptor at `index`.
@@ -226,5 +196,74 @@ impl DescriptorHeap {
         self.free
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Claims one run from a sorted, coalesced free list.
+fn allocate_from_free(free: &mut Vec<Range<u32>>, count: u32) -> Option<u32> {
+    let index = free.iter().position(|run| run.len() as u32 >= count)?;
+    let run = free[index].clone();
+    let start = run.start;
+    if run.len() as u32 == count {
+        free.remove(index);
+    } else {
+        free[index] = run.start + count..run.end;
+    }
+    Some(start)
+}
+
+/// Returns one run to a sorted, coalesced free list.
+fn release_to_free(free: &mut Vec<Range<u32>>, start: u32, count: u32) {
+    let Some(end) = start.checked_add(count) else {
+        // All callers pass a range this heap handed out, so this branch is only
+        // defensive against a future backend bug.  Refusing to corrupt the free
+        // list is safer than wrapping a descriptor address into slot zero.
+        return;
+    };
+    // `partition_point` on a list sorted by start gives the one index the run
+    // belongs at, so the insert costs no comparison of its own.
+    let at = free.partition_point(|run| run.start < start);
+    // The merge is written as "absorb the next, then absorb the previous"
+    // rather than as four cases, because the two absorptions are independent.
+    let mut merged = start..end;
+    if let Some(next) = free.get(at) {
+        if next.start == merged.end {
+            merged.end = next.end;
+            free.remove(at);
+        }
+    }
+    if at > 0 {
+        let previous = &mut free[at - 1];
+        if previous.end == merged.start {
+            previous.end = merged.end;
+            return;
+        }
+    }
+    free.insert(at, merged);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Range;
+
+    use super::{allocate_from_free, release_to_free};
+
+    #[test]
+    fn a_rolled_back_first_heap_claim_is_immediately_reusable() {
+        // This is the allocator half of bind-group transactionality: if the
+        // sampler-heap claim fails, DescriptorReservation drops this first run.
+        let mut free: Vec<Range<u32>> = vec![0..8];
+        let view_start = allocate_from_free(&mut free, 3).expect("first claim");
+        assert_eq!(free, vec![3..8]);
+        release_to_free(&mut free, view_start, 3);
+        assert_eq!(free, vec![0..8]);
+        assert_eq!(allocate_from_free(&mut free, 8), Some(0));
+    }
+
+    #[test]
+    fn releasing_adjacent_descriptor_ranges_recreates_a_large_table_run() {
+        let mut free = vec![4..8];
+        release_to_free(&mut free, 0, 4);
+        assert_eq!(free, vec![0..8]);
     }
 }

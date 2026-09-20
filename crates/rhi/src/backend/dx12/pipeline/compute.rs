@@ -66,8 +66,11 @@ pub(crate) fn create_compute_pipeline(
     device: &ID3D12Device,
     descriptor: &ComputePipelineDescriptor,
 ) -> Result<Dx12ComputePipeline, Dx12Failure> {
-    let root_signature =
-        super::interface::build_root_signature(device, &descriptor.interface.descriptor().groups)?;
+    let root_signature = super::interface::build_root_signature(
+        device,
+        &descriptor.interface.descriptor().groups,
+        false,
+    )?;
     let Some(shader) = descriptor
         .shader
         .native()

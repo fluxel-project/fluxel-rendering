@@ -436,7 +436,12 @@ impl ConfiguredPresentation {
         validate_reconfigure_allowed(self.outstanding_frame())?;
         let capabilities = self.inner.native().capabilities()?;
         validate_presentation_configuration(config, &capabilities)?;
-        self.inner.native().reconfigure(config)?;
+        std::future::poll_fn(|context| {
+            self.inner
+                .native()
+                .reconfigure_or_register_waker(config, context.waker())
+        })
+        .await?;
         self.configuration = config.clone();
         Ok(())
     }
@@ -497,8 +502,12 @@ impl crate::api::presentation::backend::ConfiguredPresentationBackend
         ))
     }
 
-    fn reconfigure(&self, _: &PresentationConfiguration) -> RhiResult<()> {
-        Ok(())
+    fn reconfigure_or_register_waker(
+        &self,
+        _: &PresentationConfiguration,
+        _: &std::task::Waker,
+    ) -> std::task::Poll<RhiResult<()>> {
+        std::task::Poll::Ready(Ok(()))
     }
 
     fn try_acquire(

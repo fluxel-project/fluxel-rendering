@@ -52,8 +52,11 @@ pub(crate) fn create_raster_pipeline(
     device: &ID3D12Device,
     descriptor: &RasterPipelineDescriptor,
 ) -> Result<Dx12RasterPipeline, Dx12Failure> {
-    let root_signature =
-        super::interface::build_root_signature(device, &descriptor.interface.descriptor().groups)?;
+    let root_signature = super::interface::build_root_signature(
+        device,
+        &descriptor.interface.descriptor().groups,
+        !descriptor.vertex_input.buffers.is_empty(),
+    )?;
     let vertex = dxil(&descriptor.vertex, "vertex")?;
     let fragment = match descriptor.fragment.as_ref() {
         Some(shader) => Some(dxil(shader, "fragment")?),
@@ -68,7 +71,11 @@ pub(crate) fn create_raster_pipeline(
         .buffers
         .iter()
         .flat_map(|buffer| buffer.attributes.iter())
-        .map(|attribute| format!("LOCATION{}\0", attribute.location.get()).into_bytes())
+        // HLSL parses `LOCATION<n>` as semantic name `LOCATION` plus semantic
+        // index `<n>`; spelling the digit in `SemanticName` would instead name a
+        // different D3D input semantic and makes CreateGraphicsPipelineState
+        // reject a perfectly matching DXIL signature.
+        .map(|_| hlsl_location_semantic_name().to_vec())
         .collect();
     let mut semantic_index = 0usize;
     let input_elements: Vec<D3D12_INPUT_ELEMENT_DESC> = descriptor
@@ -87,7 +94,7 @@ pub(crate) fn create_raster_pipeline(
             semantic_index += 1;
             Ok(D3D12_INPUT_ELEMENT_DESC {
                 SemanticName: windows::core::PCSTR(semantic.as_ptr()),
-                SemanticIndex: 0,
+                SemanticIndex: hlsl_location_semantic_index(attribute.location),
                 Format: vertex_format(attribute.format)?,
                 InputSlot: slot as u32,
                 AlignedByteOffset: u32::try_from(attribute.offset)
@@ -189,6 +196,17 @@ fn topology(value: PrimitiveTopology) -> D3D12_PRIMITIVE_TOPOLOGY_TYPE {
         }
     }
 }
+
+/// Lowers Fluxel's logical vertex location to HLSL's split semantic spelling.
+/// `LOCATION2` in HLSL is not the literal semantic name `LOCATION2`: it is the
+/// name `LOCATION` and semantic index `2`.
+fn hlsl_location_semantic_name() -> &'static [u8] {
+    b"LOCATION\0"
+}
+
+fn hlsl_location_semantic_index(location: crate::api::shader::ShaderLocation) -> u32 {
+    location.get()
+}
 fn vertex_format(value: VertexFormat) -> Result<DXGI_FORMAT, Dx12Failure> {
     Ok(match value {
         VertexFormat::Float32 => DXGI_FORMAT_R32_FLOAT,
@@ -259,6 +277,25 @@ fn blend_state(desc: &RasterPipelineDescriptor) -> D3D12_BLEND_DESC {
         IndependentBlendEnable: TRUE,
         ..Default::default()
     };
+    // D3D12 validates the complete fixed-size RenderTarget array, not merely
+    // `NumRenderTargets` entries.  Rust's zeroed default would leave the seven
+    // unused records with invalid enum value zero (notably BlendOp), making even
+    // a one-target graphics PSO fail CreateGraphicsPipelineState(E_INVALIDARG).
+    // Start every record at D3D12's legal disabled baseline, then specialize the
+    // portable targets below.
+    let disabled = D3D12_RENDER_TARGET_BLEND_DESC {
+        BlendEnable: FALSE,
+        LogicOpEnable: FALSE,
+        SrcBlend: D3D12_BLEND_ONE,
+        DestBlend: D3D12_BLEND_ZERO,
+        BlendOp: D3D12_BLEND_OP_ADD,
+        SrcBlendAlpha: D3D12_BLEND_ONE,
+        DestBlendAlpha: D3D12_BLEND_ZERO,
+        BlendOpAlpha: D3D12_BLEND_OP_ADD,
+        LogicOp: D3D12_LOGIC_OP_NOOP,
+        RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
+    };
+    result.RenderTarget = [disabled; 8];
     for (index, target) in desc.color_targets.iter().enumerate() {
         if let Some(target) = target {
             let blend = target.blend;
@@ -384,5 +421,18 @@ fn stencil_op(value: crate::api::pipeline::StencilOperation) -> D3D12_STENCIL_OP
         DecrementClamp => D3D12_STENCIL_OP_DECR_SAT,
         IncrementWrap => D3D12_STENCIL_OP_INCR,
         DecrementWrap => D3D12_STENCIL_OP_DECR,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hlsl_location_semantic_index, hlsl_location_semantic_name};
+    use crate::api::shader::ShaderLocation;
+
+    #[test]
+    fn vertex_locations_lower_to_hlsl_name_plus_semantic_index() {
+        assert_eq!(hlsl_location_semantic_name(), b"LOCATION\0");
+        assert_eq!(hlsl_location_semantic_index(ShaderLocation::new(0)), 0);
+        assert_eq!(hlsl_location_semantic_index(ShaderLocation::new(7)), 7);
     }
 }

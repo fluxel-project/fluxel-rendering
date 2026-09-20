@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.fluxel.vulkanwsi">
+  <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+  <uses-feature android:name="android.hardware.vulkan.version" android:required="true" android:version="0x00400000" />
+  <application android:label="Fluxel Vulkan WSI" android:hasCode="false">
+    <activity android:name="android.app.NativeActivity" android:screenOrientation="landscape" android:exported="true">
+      <meta-data android:name="android.app.lib_name" android:value="fluxel_android_vulkan_wsi" />
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

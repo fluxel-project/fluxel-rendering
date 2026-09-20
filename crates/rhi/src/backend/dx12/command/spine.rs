@@ -89,10 +89,11 @@
 //! afterwards every accepted batch owns exactly one ordered completion serial and
 //! all retirement is keyed to that serial.
 //!
-//! TODO(perf): Replace per-serial waiter threads with one device-owned fence
-//! waiter only when its lost-wakeup protocol registers under lock, arms after
-//! registration, re-samples before sleeping, and wakes every waiter on both
-//! completion and device loss. `CompletionPoint` is the full public seam.
+//! The device-owned fence waiter registers under lock, arms only after
+//! registration, and re-samples the lowest serial after every one-shot native
+//! event.  It wakes every registered future on device loss.  `CompletionPoint`
+//! remains the full public seam; a future optimization may replace the worker's
+//! per-event handle allocation, not its bounded-thread ownership model.
 //!
 //! TODO(perf): Multi-queue lowering may map existing `SubmissionLane` and plan
 //! dependencies to queue-local fences and waits when workloads prove overlap.
@@ -144,6 +145,12 @@ use crate::backend::dx12::failure::{Dx12Failure, ref_native};
 /// and the only thing being ruled out is waiting forever.
 const WAIT_BOUND_MS: u32 = 30_000;
 
+/// The completion bridge never needs to wake merely to make progress: the fence
+/// event is its completion notification.  This finite re-arm bound exists only
+/// so dropping the spine can make its detached bridge observe shutdown without
+/// retaining a thread or fence indefinitely.
+const COMPLETION_WAITER_POLL_MS: u32 = 250;
+
 /// The Direct3D 12 objects one device submits through.
 ///
 /// One queue, one fence, and a ring of command-list slots. The queue is the
@@ -185,9 +192,9 @@ pub(crate) struct Dx12CommandSpine {
     /// Futures waiting for a fence transition. Kept separate from command state
     /// so a native event thread only needs a small portable waker registry.
     ///
-    /// TODO(perf): The serial-keyed registry permits a future shared fence waiter
-    /// without altering completion-future semantics; see the module upgrade map.
-    completion_waiters: Arc<Mutex<BTreeMap<u64, Vec<Waker>>>>,
+    /// The serial-keyed registry feeds one shared fence waiter without changing
+    /// the portable completion-future semantics.
+    completion_waiters: Arc<Mutex<CompletionWaiters>>,
     /// The device-wide terminal-loss authority. Fence removal is itself a loss
     /// observation, so it must update the same state queried by `Device`.
     loss: Arc<Dx12LossState>,
@@ -225,6 +232,19 @@ struct SpineState {
     /// policy: a batch's staging is released exactly when the fence reports that
     /// batch finished, and never earlier.
     pending: VecDeque<CommittedBatch>,
+}
+
+/// All async-completion bookkeeping is one ownership domain: the registry and
+/// whether its single native waiter is armed have no useful independent life.
+/// Keeping them behind one mutex also makes the empty-registry handoff atomic.
+#[derive(Default)]
+struct CompletionWaiters {
+    by_serial: BTreeMap<u64, Vec<Waker>>,
+    active: bool,
+    /// Owned by the spine rather than by a particular completion future. The
+    /// worker samples it between bounded native waits, after which no detached
+    /// thread retains the fence or registry.
+    shutdown: bool,
 }
 
 impl SpineState {
@@ -369,7 +389,7 @@ impl Dx12CommandSpine {
                 unobservable: None,
                 pending: VecDeque::new(),
             }));
-            let completion_waiters = Arc::new(Mutex::new(BTreeMap::new()));
+            let completion_waiters = Arc::new(Mutex::new(CompletionWaiters::default()));
             let cleanup_state = Arc::clone(&state);
             let cleanup_waiters = Arc::clone(&completion_waiters);
             loss.register_handler(Arc::new(move || {
@@ -445,6 +465,16 @@ impl Dx12CommandSpine {
         let completed = self.completed_value()?;
         let mut state = self.lock();
 
+        // An empty plan is a legal portable no-op.  In particular, do not let
+        // `first_serial + len - 1` underflow here: serial zero is the completed
+        // identity token and no D3D12 queue operation is necessary.
+        if request.batches.is_empty() {
+            return Ok(SubmissionOutcome {
+                completion: state.issued,
+                points: Vec::new(),
+            });
+        }
+
         // Phase A. Every batch is recorded into its own list before a single
         // list is executed, so a refusal below leaves the queue untouched — which
         // is what makes "an `Err` from submit proves nothing was accepted"
@@ -458,50 +488,68 @@ impl Dx12CommandSpine {
         }
 
         let first_serial = state.issued + 1;
-        let mut recorded: Vec<(ID3D12CommandList, CommittedBatch)> =
-            Vec::with_capacity(request.batches.len());
-        for (offset, batch) in request.batches.iter().enumerate() {
-            let serial = first_serial + offset as u64;
-            let slot = &mut state.slots[claimed[offset]];
-            // SAFETY: the slot was claimed as free — the fence has passed the
-            // batch last recorded into it — so this reset touches neither an
-            // allocator nor a list the GPU can still be reading. `Reset` on the
-            // list returns it to the recording state it must be in before
-            // commands are appended, and the null initial state means no pipeline
-            // is bound.
-            unsafe {
-                slot.allocator.Reset().map_err(|error| ref_native(&error))?;
-                slot.list
-                    .Reset(&slot.allocator, None::<&ID3D12PipelineState>)
-                    .map_err(|error| ref_native(&error))?;
+        let phase_a = (|| {
+            let mut recorded: Vec<(ID3D12CommandList, CommittedBatch)> =
+                Vec::with_capacity(request.batches.len());
+            for (offset, batch) in request.batches.iter().enumerate() {
+                let serial = first_serial + offset as u64;
+                let slot = &mut state.slots[claimed[offset]];
+                // SAFETY: the slot was claimed as free — the fence has passed the
+                // batch last recorded into it — so this reset touches neither an
+                // allocator nor a list the GPU can still be reading. `Reset` on the
+                // list returns it to the recording state it must be in before
+                // commands are appended, and the null initial state means no pipeline
+                // is bound.
+                unsafe {
+                    slot.allocator.Reset().map_err(|error| ref_native(&error))?;
+                    slot.list
+                        .Reset(&slot.allocator, None::<&ID3D12PipelineState>)
+                        .map_err(|error| ref_native(&error))?;
+                }
+
+                let mut committed = CommittedBatch {
+                    serial,
+                    staging: Vec::new(),
+                    readbacks: Vec::new(),
+                    compute_pipelines: Vec::new(),
+                    raster_pipelines: Vec::new(),
+                    raster_buffers: Vec::new(),
+                    raster_views: Vec::new(),
+                    raster_frames: Vec::new(),
+                    raster_textures: Vec::new(),
+                    raster_descriptor_heaps: Vec::new(),
+                    bind_groups: Vec::new(),
+                };
+                self.record_batch(&slot.list, batch, &mut committed)?;
+
+                // SAFETY: closing a list in the recording state is always valid and
+                // is what makes it executable; the list is not executed until the
+                // loop below.
+                unsafe { slot.list.Close() }.map_err(|error| ref_native(&error))?;
+                recorded.push((ID3D12CommandList::from(slot.list.clone()), committed));
             }
+            Ok::<_, Dx12Failure>(recorded)
+        })();
 
-            let mut committed = CommittedBatch {
-                serial,
-                staging: Vec::new(),
-                readbacks: Vec::new(),
-                compute_pipelines: Vec::new(),
-                raster_pipelines: Vec::new(),
-                raster_buffers: Vec::new(),
-                raster_views: Vec::new(),
-                raster_frames: Vec::new(),
-                raster_textures: Vec::new(),
-                raster_descriptor_heaps: Vec::new(),
-                bind_groups: Vec::new(),
-            };
-            self.record_batch(&slot.list, batch, &mut committed)?;
-
-            // SAFETY: closing a list in the recording state is always valid and
-            // is what makes it executable; the list is not executed until the
-            // loop below.
-            unsafe { slot.list.Close() }.map_err(|error| ref_native(&error))?;
-            slot.in_flight_until = serial;
-            recorded.push((ID3D12CommandList::from(slot.list.clone()), committed));
-        }
+        let recorded = match phase_a {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                // No list reached ExecuteCommandLists, therefore no native work
+                // retains any of these allocators/lists.  Dropping every claimed
+                // slot (rather than trying to Close an unknown recording state)
+                // is the transactional rollback: a failed Reset/record/Close
+                // cannot poison the next otherwise-valid submission.
+                rollback_claimed_slots(&mut state, &claimed);
+                return Err(error);
+            }
+        };
 
         // Phase B. From the first execute onward this may not fail: section 41.3
         // forbids telling a caller nothing happened once a queue has been fed.
         state.issued = first_serial + request.batches.len() as u64 - 1;
+        for (offset, slot_index) in claimed.iter().enumerate() {
+            state.slots[*slot_index].in_flight_until = first_serial + offset as u64;
+        }
         let mut signals_intact = true;
         let mut terminal_signal_loss = None;
         for (offset, (list, committed)) in recorded.into_iter().enumerate() {
@@ -767,14 +815,27 @@ impl Dx12CommandSpine {
         }
 
         let spawn_waiter = {
+            // Registry insertion and arming share one lock.  The worker's empty
+            // exit therefore either observes this serial itself or publishes an
+            // inactive bridge before this registration decides to spawn one.
             let mut waiters = self
                 .completion_waiters
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let entry = waiters.entry(serial).or_default();
-            let first = entry.is_empty();
-            entry.push(waker.clone());
-            first
+            let registered = waiters.by_serial.entry(serial).or_default();
+            // A future may be polled repeatedly before the fence changes.
+            // Retaining every equivalent executor waker makes one long GPU
+            // operation consume unbounded host memory; `will_wake` is the
+            // standard identity relation for this registry.
+            if !registered.iter().any(|known| known.will_wake(waker)) {
+                registered.push(waker.clone());
+            }
+            if waiters.active {
+                false
+            } else {
+                waiters.active = true;
+                true
+            }
         };
 
         // Close the race where loss cleanup drained the registry immediately
@@ -782,6 +843,13 @@ impl Dx12CommandSpine {
         // returned Pending state to DeviceLost; waking here guarantees a future
         // already handed to an executor is polled again.
         if self.loss.loss_info().is_some() {
+            if spawn_waiter {
+                let mut waiters = self
+                    .completion_waiters
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                waiters.active = false;
+            }
             wake_serial(&self.completion_waiters, serial);
             return CompletionState::Pending;
         }
@@ -791,30 +859,7 @@ impl Dx12CommandSpine {
             let waiters = Arc::clone(&self.completion_waiters);
             let loss = Arc::clone(&self.loss);
             std::thread::spawn(move || {
-                // A fence event is one-shot. The bounded wait also guarantees a
-                // device removal cannot strand an OS thread forever; the wake at
-                // the bound causes a fresh state sample and, if still live,
-                // registration for a new native event.
-                let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) };
-                if let Ok(event) = event {
-                    let event = OwnedEvent(event);
-                    match unsafe { fence.SetEventOnCompletion(serial, event.0) } {
-                        Ok(()) => {
-                            let _ = unsafe { WaitForSingleObject(event.0, WAIT_BOUND_MS) };
-                        }
-                        Err(error) => {
-                            let native =
-                                ffi::NativeError::new(&error, "ID3D12Fence::SetEventOnCompletion");
-                            if native.failure().is_terminal() {
-                                loss.mark_lost(DeviceLossInfo::new(format!(
-                                    "Direct3D 12 reported a terminal failure while registering a completion waiter: {}",
-                                    native.as_error()
-                                )));
-                            }
-                        }
-                    }
-                }
-                wake_serial(&waiters, serial);
+                run_completion_waiter(fence, waiters, loss);
             });
         }
         CompletionState::Pending
@@ -886,6 +931,29 @@ impl Dx12CommandSpine {
     }
 }
 
+impl Drop for Dx12CommandSpine {
+    fn drop(&mut self) {
+        // The worker owns only cloned fence/registry handles, so it cannot be
+        // joined without introducing a second native lifetime authority. Mark it
+        // closed and wake registered futures; its bounded wait observes this
+        // state before the registry/fence can remain retained indefinitely.
+        let pending = {
+            let mut waiters = self
+                .completion_waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            waiters.shutdown = true;
+            waiters.active = false;
+            core::mem::take(&mut waiters.by_serial)
+        };
+        for (_, wakers) in pending {
+            for waker in wakers {
+                waker.wake();
+            }
+        }
+    }
+}
+
 /// Microsoft reserves `UINT64_MAX` as the fence reading after device removal;
 /// it is never a completion serial emitted by this spine.
 const fn is_removed_fence_value(value: u64) -> bool {
@@ -921,10 +989,11 @@ fn lower_debug_marker(list: &ID3D12GraphicsCommandList, label: &Label) {
 }
 
 /// Removes and wakes the futures waiting for one fence value.
-fn wake_serial(waiters: &Mutex<BTreeMap<u64, Vec<Waker>>>, serial: u64) {
+fn wake_serial(waiters: &Mutex<CompletionWaiters>, serial: u64) {
     let registered = waiters
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .by_serial
         .remove(&serial)
         .unwrap_or_default();
     for waker in registered {
@@ -932,12 +1001,134 @@ fn wake_serial(waiters: &Mutex<BTreeMap<u64, Vec<Waker>>>, serial: u64) {
     }
 }
 
+/// Drops all list/allocator pairs that Phase A reserved but never committed.
+///
+/// A command list whose lowering failed may still be open; calling `Close` as a
+/// cleanup operation would itself have an error path and leaves the next reset
+/// dependent on undocumented list state.  No queue owns these lists yet, so
+/// removing their slots is both simpler and stronger: COM releases the old pair,
+/// and the next submission creates a known-closed replacement when it needs one.
+fn rollback_claimed_slots(state: &mut SpineState, claimed: &[usize]) {
+    for index in rollback_indices(claimed) {
+        state.slots.remove(index);
+    }
+}
+
+/// The stable removal order for a Phase-A transaction.  Removing from the end
+/// keeps every still-to-remove slot index valid, including when a future claim
+/// implementation happens to return duplicates.
+fn rollback_indices(claimed: &[usize]) -> Vec<usize> {
+    let mut indices = claimed.to_vec();
+    indices.sort_unstable();
+    indices.dedup();
+    indices.reverse();
+    indices
+}
+
+/// The sole fence-to-waker bridge for one device.
+///
+/// Each fence event is one-shot, but one worker loops over the lowest registered
+/// serial, waking that serial after the event (or the bounded resample timeout),
+/// then arms the next.  Consequently pending futures are unbounded in number but
+/// waiter threads are bounded at one per `Dx12CommandSpine`.
+fn run_completion_waiter(
+    fence: ID3D12Fence,
+    waiters: Arc<Mutex<CompletionWaiters>>,
+    loss: Arc<Dx12LossState>,
+) {
+    loop {
+        let serial = {
+            let registry = waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if registry.shutdown {
+                return;
+            }
+            registry
+                .by_serial
+                .first_key_value()
+                .map(|(serial, _)| *serial)
+        };
+        let Some(serial) = serial else {
+            // This is the same mutex registration uses.  A new future can
+            // therefore never observe an active-but-departed worker.
+            let mut registry = waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if registry.shutdown || registry.by_serial.is_empty() {
+                registry.active = false;
+                return;
+            }
+            continue;
+        };
+
+        let event = match unsafe { CreateEventW(None, false, false, PCWSTR::null()) } {
+            Ok(event) => OwnedEvent(event),
+            Err(_) => {
+                // Host event allocation failed. It is not proof that the GPU
+                // completed, and a retry loop here would spin under OOM; let the
+                // future be scheduled once to retry/observe its normal state.
+                stop_waiter_and_wake_all(&waiters);
+                return;
+            }
+        };
+        match unsafe { fence.SetEventOnCompletion(serial, event.0) } {
+            Ok(()) => match unsafe { WaitForSingleObject(event.0, COMPLETION_WAITER_POLL_MS) } {
+                WAIT_OBJECT_0 => wake_serial(&waiters, serial),
+                // This is only the shutdown resample. Retain this serial's
+                // wakers and re-arm its event rather than synthesizing progress.
+                windows::Win32::Foundation::WAIT_TIMEOUT => {}
+                _ => {
+                    // A failed host wait gives no completion fact. Leave the
+                    // serial pending and stop this worker so a later poll can
+                    // establish a fresh bridge instead of hot-looping.
+                    stop_waiter_and_wake_all(&waiters);
+                    return;
+                }
+            },
+            Err(error) => {
+                let native = ffi::NativeError::new(&error, "ID3D12Fence::SetEventOnCompletion");
+                if native.failure().is_terminal() {
+                    loss.mark_lost(DeviceLossInfo::new(format!(
+                        "Direct3D 12 reported a terminal failure while registering a completion waiter: {}",
+                        native.as_error()
+                    )));
+                }
+                // Whether terminal or not, no event was registered. Do not
+                // pretend this serial completed, and do not spin on a broken
+                // host/native boundary.
+                stop_waiter_and_wake_all(&waiters);
+                return;
+            }
+        }
+    }
+}
+
+/// Removes every pending wake set while making the sole worker re-armable.
+///
+/// This is for host-side event failures only. Every pending future needs a
+/// chance to rebuild the bridge: removing only the lowest serial and setting
+/// `active = false` would strand later registrations if that one future is then
+/// dropped. The wake asks each future to poll its authoritative completion/loss
+/// state again; it does not claim any fence reached its serial.
+fn stop_waiter_and_wake_all(waiters: &Mutex<CompletionWaiters>) {
+    let registered = {
+        let mut registry = waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registry.active = false;
+        core::mem::take(&mut registry.by_serial)
+    };
+    for (_, wakers) in registered {
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+}
+
 /// Shared by direct spine callers and the device-wide loss authority. It never
 /// releases staging because loss provides no proof that native DMA has stopped.
-fn terminate_pending(
-    state: &Mutex<SpineState>,
-    completion_waiters: &Mutex<BTreeMap<u64, Vec<Waker>>>,
-) {
+fn terminate_pending(state: &Mutex<SpineState>, completion_waiters: &Mutex<CompletionWaiters>) {
     let state = state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -950,7 +1141,7 @@ fn terminate_pending(
     let mut waiters = completion_waiters
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let pending = core::mem::take(&mut *waiters);
+    let pending = core::mem::take(&mut waiters.by_serial);
     drop(waiters);
     for (_, wakers) in pending {
         for waker in wakers {
@@ -1066,12 +1257,20 @@ fn payload_name(payload: &RecordedPayload) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::is_removed_fence_value;
+    use super::{is_removed_fence_value, rollback_indices};
 
     #[test]
     fn dx12_removal_fence_sentinel_is_never_a_completed_serial() {
         assert!(is_removed_fence_value(u64::MAX));
         assert!(!is_removed_fence_value(u64::MAX - 1));
         assert!(!is_removed_fence_value(0));
+    }
+
+    #[test]
+    fn phase_a_rollback_removes_claimed_slots_back_to_front() {
+        // This is the index discipline the live transaction depends on: if an
+        // early batch records and a later batch refuses, all claimed pairs are
+        // dropped without shifting an index that is still waiting to be removed.
+        assert_eq!(rollback_indices(&[1, 4, 2, 4]), vec![4, 2, 1]);
     }
 }

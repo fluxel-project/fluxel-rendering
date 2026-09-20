@@ -10,7 +10,17 @@
 #[cfg(windows)]
 pub(crate) mod win32;
 
+#[cfg(target_os = "android")]
+pub(crate) mod android;
+
 #[cfg(windows)]
 pub(crate) use win32::{
-    VulkanFrameAttachment, VulkanPresentSync, VulkanPresentation, VulkanTargetRegistry,
+    VulkanFrameAttachment, VulkanPresentSync, VulkanPresentation, VulkanSwapchainRetirement,
+    VulkanTargetRegistry,
+};
+
+#[cfg(target_os = "android")]
+pub(crate) use android::{
+    VulkanFrameAttachment, VulkanPresentSync, VulkanPresentation, VulkanSwapchainRetirement,
+    VulkanTargetRegistry,
 };

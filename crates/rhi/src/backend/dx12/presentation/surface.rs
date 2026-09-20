@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device};
@@ -185,21 +186,50 @@ impl PresentationBackend for Dx12Presentation {
 struct SwapchainState {
     swapchain: IDXGISwapChain3,
     acquired: Option<u64>,
+    /// Native back-buffer leases which can still hold an `ID3D12Resource` from
+    /// this swapchain generation.
+    ///
+    /// `ResizeBuffers` has a stronger precondition than "no `AcquiredFrame`":
+    /// every reference to an old backbuffer must be released.  A submitted
+    /// raster scope deliberately retains its `FrameAttachment` until its fence
+    /// completes, and a recorded scope may retain a clone for longer still.
+    /// Tracking the backend attachment's final drop turns that DXGI precondition
+    /// into a deterministic, retryable RHI refusal instead of relying on a
+    /// driver-specific `ResizeBuffers` failure.
+    live_backbuffers: HashSet<u64>,
+    /// The future waiting for the final portable/native attachment lease to
+    /// retire. Registration and the `live_backbuffers` observation share one
+    /// lock, which closes the classic "dropped just before waker registration"
+    /// lost-wake race.
+    // `ConfiguredPresentation::reconfigure` takes `&mut self`, so one lease
+    // can have only one live reconfigure future. Keep only that task's latest
+    // waker: executors are allowed to replace it across polls, and retaining
+    // old ones would turn a long-running resize loop into a waker leak.
+    reconfigure_waiter: Option<Waker>,
 }
 
 /// One acquired DXGI backbuffer. Kept strictly behind FrameAttachment's private
 /// backend seam; public RHI code never observes an ID3D12Resource.
 pub(crate) struct Dx12FrameAttachment {
-    resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
-    swapchain: IDXGISwapChain3,
+    // Options let `Drop` release the COM references before it makes the
+    // corresponding liveness bit observable as clear to a concurrent resize.
+    // A direct field would be dropped *after* `Drop::drop` returns, leaving a
+    // small but real window where `ResizeBuffers` could race a live reference.
+    resource: Option<windows::Win32::Graphics::Direct3D12::ID3D12Resource>,
+    swapchain: Option<IDXGISwapChain3>,
     presents: Arc<Mutex<HashMap<PresentReceiptId, PresentState>>>,
     loss: Arc<Dx12LossState>,
     state: Arc<Mutex<SwapchainState>>,
+    serial: u64,
 }
 
 impl Dx12FrameAttachment {
     pub(crate) fn resource(&self) -> &windows::Win32::Graphics::Direct3D12::ID3D12Resource {
-        &self.resource
+        // `resource` is taken only by this object's `Drop`; a live shared
+        // FrameAttachment can therefore always provide its native backing.
+        self.resource
+            .as_ref()
+            .expect("live DX12 frame attachment has a backbuffer resource")
     }
 }
 
@@ -212,6 +242,8 @@ impl FrameAttachmentBackend for Dx12FrameAttachment {
             Some(info) => PresentState::DeviceLost(info),
             None => match unsafe {
                 self.swapchain
+                    .as_ref()
+                    .expect("live DX12 frame attachment has its swapchain")
                     .Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
                     .ok()
             } {
@@ -231,7 +263,58 @@ impl FrameAttachmentBackend for Dx12FrameAttachment {
         self.state
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .acquired = None;
+            .clear_acquired(self.serial);
+    }
+
+    fn terminate_present(&self, receipt: PresentReceiptId, state: PresentState) {
+        // A Phase-B device loss can happen after an earlier batch was executed
+        // but before this relation is reached.  The portable receipt must still
+        // have a terminal answer; silently leaving it unknown would strand
+        // `wait_present` even though the execution domain is already lost.
+        self.presents
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(receipt, state);
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear_acquired(self.serial);
+    }
+}
+
+impl Drop for Dx12FrameAttachment {
+    fn drop(&mut self) {
+        // This is the only object that owns the acquired backbuffer COM
+        // reference behind the portable `FrameAttachment`.  Clones share its
+        // enclosing `FrameAttachmentInner`, therefore this callback runs only
+        // after recorded scopes and accepted GPU work stopped retaining it.
+        // Drop the resource and swapchain COM references *before* publishing
+        // their absence.  Field drops ordinarily happen after this method, so
+        // leaving them in place while removing `live_backbuffers` would permit
+        // a concurrent `ResizeBuffers` to observe a false precondition.
+        drop(self.resource.take());
+        drop(self.swapchain.take());
+        let waiter = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.live_backbuffers.remove(&self.serial);
+            state.clear_acquired(self.serial);
+            if state.live_backbuffers.is_empty() {
+                state.reconfigure_waiter.take()
+            } else {
+                None
+            }
+        };
+        if let Some(waker) = waiter {
+            waker.wake();
+        }
+    }
+}
+
+impl SwapchainState {
+    fn clear_acquired(&mut self, serial: u64) {
+        if self.acquired == Some(serial) {
+            self.acquired = None;
+        }
     }
 }
 
@@ -263,6 +346,23 @@ impl Dx12ConfiguredPresentation {
         config: &PresentationConfiguration,
     ) -> RhiResult<Self> {
         let swapchain = create_swapchain(&factory, &queue, hwnd, config, &loss)?;
+        let state = Arc::new(Mutex::new(SwapchainState {
+            swapchain,
+            acquired: None,
+            live_backbuffers: HashSet::new(),
+            reconfigure_waiter: None,
+        }));
+        // Loss can be the event that makes a reconfiguration future terminal
+        // while a lost queue still retains its old command work.  Do not retain
+        // a lease through the device's one-way handler registry: a weak state
+        // reference lets a released surface disappear normally.
+        let lost_state = Arc::downgrade(&state);
+        loss.register_handler(Arc::new(move || {
+            let Some(state) = lost_state.upgrade() else {
+                return;
+            };
+            wake_reconfigure_waiters(&state);
+        }));
         Ok(Self {
             _device: device_native,
             leased,
@@ -270,10 +370,7 @@ impl Dx12ConfiguredPresentation {
             loss,
             device,
             target,
-            state: Arc::new(Mutex::new(SwapchainState {
-                swapchain,
-                acquired: None,
-            })),
+            state,
             serial: AtomicU64::new(1),
         })
     }
@@ -289,38 +386,64 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
             PresentationExtentControl::HostManaged { current: None },
         ))
     }
-    fn reconfigure(&self, config: &PresentationConfiguration) -> RhiResult<()> {
+    fn reconfigure_or_register_waker(
+        &self,
+        config: &PresentationConfiguration,
+        waker: &Waker,
+    ) -> Poll<RhiResult<()>> {
         if self.loss.loss_info().is_some() {
-            return Err(RhiError::new(
+            return Poll::Ready(Err(RhiError::new(
                 RhiErrorKind::DeviceLost,
                 "the Direct3D 12 device was lost; this presentation lease is terminal",
-            ));
+            )));
         }
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.acquired.is_some() {
-            return Err(RhiError::new(
+            return Poll::Ready(Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 "cannot resize a DXGI swapchain while an image is acquired",
-            ));
+            )));
         }
-        let format = swapchain_format(config)?;
+        if !state.live_backbuffers.is_empty() {
+            register_reconfigure_waker(&mut state.reconfigure_waiter, waker);
+            // The lock makes this test and registration atomic with attachment
+            // `Drop`. A drop either sees our registered waker, or completed
+            // first and leaves the next poll able to resize immediately.
+            if !state.live_backbuffers.is_empty() {
+                if let Some(info) = self.loss.loss_info() {
+                    return Poll::Ready(Err(RhiError::new(
+                        RhiErrorKind::DeviceLost,
+                        info.message().to_owned(),
+                    )));
+                }
+                return Poll::Pending;
+            }
+        }
+        let format = match swapchain_format(config) {
+            Ok(format) => format,
+            Err(error) => return Poll::Ready(Err(error)),
+        };
         let (width, height) = swapchain_extent(config);
-        let desc = unsafe { state.swapchain.GetDesc1() }.map_err(|error| {
+        let desc = match unsafe { state.swapchain.GetDesc1() }.map_err(|error| {
             native_rhi_error(
                 &self.loss,
                 &error,
                 "IDXGISwapChain3::GetDesc1 before ResizeBuffers",
             )
-        })?;
+        }) {
+            Ok(desc) => desc,
+            Err(error) => return Poll::Ready(Err(error)),
+        };
         // A flip-model HWND may have only one associated swapchain.  In
         // particular, do not create a replacement while `state.swapchain` is
         // alive: DXGI rejects that arrangement.  `ResizeBuffers` retains the
         // existing association and changes the format/size in place.  The
-        // portable lease has already rejected an outstanding frame; callers
-        // must also retire recorded work that retains a FrameAttachment before
-        // reconfiguring, just as DXGI requires all back-buffer references to be
-        // released before this call.
-        unsafe {
+        // portable lease has already rejected an outstanding frame, and the
+        // `live_backbuffers` guard above additionally proves no portable
+        // attachment owner in this lowering still retains a backbuffer. Command
+        // submission retirement is represented by that same attachment owner,
+        // which `CommittedBatch` keeps alive through its fence.
+        let resize = unsafe {
             state.swapchain.ResizeBuffers(
                 desc.BufferCount,
                 width,
@@ -329,9 +452,12 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
                 DXGI_SWAP_CHAIN_FLAG(desc.Flags as i32),
             )
         }
-        .map_err(|error| native_rhi_error(&self.loss, &error, "IDXGISwapChain3::ResizeBuffers"))?;
+        .map_err(|error| native_rhi_error(&self.loss, &error, "IDXGISwapChain3::ResizeBuffers"));
+        if let Err(error) = resize {
+            return Poll::Ready(Err(error));
+        }
         state.acquired = None;
-        Ok(())
+        Poll::Ready(Ok(()))
     }
     fn try_acquire(
         &self,
@@ -376,6 +502,8 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
             acquire_error_from_native(&self.loss, &error, "IDXGISwapChain3::GetBuffer")
         })?;
         state.acquired = Some(serial);
+        let inserted = state.live_backbuffers.insert(serial);
+        debug_assert!(inserted, "each acquired DXGI frame serial is unique");
         Ok(Some(AcquiredSurfaceFrame {
             serial,
             extent: Extent2d {
@@ -383,11 +511,12 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
                 height: desc.Height,
             },
             attachment: Box::new(Dx12FrameAttachment {
-                resource,
-                swapchain: state.swapchain.clone(),
+                resource: Some(resource),
+                swapchain: Some(state.swapchain.clone()),
                 presents: Arc::clone(&self.presents),
                 loss: Arc::clone(&self.loss),
                 state: Arc::clone(&self.state),
+                serial,
             }),
         }))
     }
@@ -434,6 +563,31 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&self.target);
+    }
+}
+
+/// Registers one runtime task without retaining duplicate wakers across its
+/// repeated polls.  A future may replace its waker when it migrates executors;
+/// `will_wake` keeps one registration per actual wake target.
+fn register_reconfigure_waker(slot: &mut Option<Waker>, waker: &Waker) {
+    if !slot
+        .as_ref()
+        .is_some_and(|registered| registered.will_wake(waker))
+    {
+        *slot = Some(waker.clone());
+    }
+}
+
+/// Drains waiters outside the swapchain-state lock. A task may synchronously
+/// poll and enter `ResizeBuffers` from `wake`, so retaining that lock here would
+/// deadlock the exact progress path this callback supplies.
+fn wake_reconfigure_waiters(state: &Arc<Mutex<SwapchainState>>) {
+    let waiter = {
+        let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
+        state.reconfigure_waiter.take()
+    };
+    if let Some(waker) = waiter {
+        waker.wake();
     }
 }
 
