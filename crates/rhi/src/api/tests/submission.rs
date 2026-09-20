@@ -33,13 +33,13 @@
 //! readback before this chapter is closed.
 
 use crate::api::command::RecordedWork;
-use crate::api::error::{RhiErrorKind, RhiResult};
-use crate::api::format::TextureFormat;
-use crate::api::graph_bridge::{
+use crate::api::command::{
     AccessMask, BufferUse, FrameAttachmentUse, PipelineScope, ResourceUse, TextureUse,
     TextureUseIntent,
 };
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::error::{RhiErrorKind, RhiResult};
+use crate::api::format::TextureFormat;
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::platform::{Device, DeviceLossInfo};
 use crate::api::presentation::{
     AcquiredFrame, AcquiredFrameId, AcquiredFrameState, PresentPlanId, PresentReceipt,
@@ -48,6 +48,7 @@ use crate::api::presentation::{
 use crate::api::resource::buffer::{Buffer, BufferDescriptor, BufferRange, BufferUsage};
 use crate::api::resource::subresource::{TextureAspects, TextureSubresourceRange};
 use crate::api::resource::texture::{Extent3d, Texture, TextureDescriptor, TextureUsage};
+use crate::api::resource::transient::TransientLifetime;
 use crate::api::submission::builder::validate_plan_graph;
 use crate::api::submission::plan::{PlanBatch, PlanPresent};
 use crate::api::submission::{
@@ -176,7 +177,7 @@ fn domain_sets_contain_union_print_and_report_emptiness() {
 /// and nothing to order.
 #[test]
 fn add_batch_refuses_an_empty_batch() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
 
     let error = builder
@@ -191,7 +192,7 @@ fn add_batch_refuses_an_empty_batch() {
 /// device-scoped: one obtained from another device cannot be a lane of this one.
 #[test]
 fn add_batch_refuses_a_lane_the_device_does_not_offer() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
 
     let error = builder
@@ -205,8 +206,8 @@ fn add_batch_refuses_a_lane_the_device_does_not_offer() {
 /// batch-level form of section 3.3: P0 has no path that moves work between devices.
 #[test]
 fn add_batch_refuses_work_recorded_on_another_device() {
-    let device = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let device = device_identity(1);
+    let other = device_identity(2);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
 
     let error = builder
@@ -221,7 +222,7 @@ fn add_batch_refuses_work_recorded_on_another_device() {
 /// set is the legality answer.
 #[test]
 fn add_batch_refuses_work_whose_domains_the_lane_does_not_accept() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(
         device,
         vec![lane(0, LaneWorkDomains::COPY), lane(1, everything())],
@@ -247,7 +248,7 @@ fn add_batch_refuses_work_whose_domains_the_lane_does_not_accept() {
 /// frame's recording.
 #[test]
 fn a_batch_may_contain_several_domains_at_once() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
 
     let mixed = RecordedWork::new(
@@ -274,7 +275,7 @@ fn a_batch_may_contain_several_domains_at_once() {
 /// upload, its draws, and its present — expressible without a dependency graph.
 #[test]
 fn one_lane_orders_its_batches_without_an_explicit_edge() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
 
     let texture = texture_handle(1, device);
@@ -309,7 +310,7 @@ fn one_lane_orders_its_batches_without_an_explicit_edge() {
 /// 40.4 names outright.
 #[test]
 fn two_lanes_that_both_write_one_texture_need_an_edge() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let texture = texture_handle(1, device);
 
     // The raster half draws into the texture as a color attachment; the compute
@@ -378,7 +379,7 @@ fn two_lanes_that_both_write_one_texture_need_an_edge() {
 /// disjoint ranges, and two reads.
 #[test]
 fn unrelated_disjoint_and_read_only_pairs_need_no_edge() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
 
     // Two different textures.
     let a = texture_handle(1, device);
@@ -550,7 +551,7 @@ fn unrelated_disjoint_and_read_only_pairs_need_no_edge() {
 /// frame is a hazard, not a present-plan question.
 #[test]
 fn two_lanes_that_both_write_one_frame_need_an_edge() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let frame_id = AcquiredFrameId::new(device, 1);
 
     let mut builder = routed_builder(device, 1);
@@ -596,7 +597,7 @@ fn two_lanes_that_both_write_one_frame_need_an_edge() {
 /// both batches on one lane, or observes completion first.
 #[test]
 fn add_dependency_refuses_a_route_the_device_never_reported() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(
         device,
         vec![lane(0, everything()), lane(1, everything())],
@@ -622,7 +623,7 @@ fn add_dependency_refuses_a_route_the_device_never_reported() {
 /// separate wait primitive for a pair it already orders must not refuse the edge.
 #[test]
 fn add_dependency_accepts_a_pair_the_device_already_orders() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
     let first = builder
         .add_batch(lane_id(0), vec![raster_work(device, Vec::new())])
@@ -641,7 +642,7 @@ fn add_dependency_accepts_a_pair_the_device_already_orders() {
 /// same reason: an edge that says a batch runs before itself states no order.
 #[test]
 fn add_dependency_refuses_a_foreign_point_and_a_self_loop() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let foreign = {
         let mut other = builder(device, vec![lane(0, everything())], 99);
         other
@@ -685,7 +686,7 @@ fn add_dependency_refuses_a_foreign_point_and_a_self_loop() {
 /// whose order was never written down.
 #[test]
 fn a_cycle_through_the_implicit_lane_order_is_refused() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
 
     // Insertion order puts `first` before `second` on one lane.
@@ -710,8 +711,8 @@ fn a_cycle_through_the_implicit_lane_order_is_refused() {
 /// `WrongDevice` when it does not.
 #[test]
 fn add_external_dependency_checks_the_earlier_work_device() {
-    let device = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let device = device_identity(1);
+    let other = device_identity(2);
     let mut builder = builder(device, vec![lane(0, everything())], 1);
     let after = builder
         .add_batch(lane_id(0), vec![raster_work(device, Vec::new())])
@@ -744,7 +745,7 @@ fn add_external_dependency_checks_the_earlier_work_device() {
 /// presents it, and handed to the plan.
 #[test]
 fn a_frame_is_consumed_by_present_after_and_the_plan_owns_it() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let frame = acquired_frame(1, device);
     let frame_id = frame.id();
 
@@ -788,8 +789,8 @@ fn a_frame_is_consumed_by_present_after_and_the_plan_owns_it() {
 /// A frame acquired on another device cannot be presented by this plan.
 #[test]
 fn present_after_refuses_a_frame_from_another_device() {
-    let device = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let device = device_identity(1);
+    let other = device_identity(2);
     let frame = acquired_frame(1, other);
 
     let mut builder = builder(device, vec![lane(0, everything())], 1);
@@ -809,7 +810,7 @@ fn present_after_refuses_a_frame_from_another_device() {
 /// The after-point belongs to this plan, like every other point.
 #[test]
 fn present_after_refuses_a_foreign_after_point() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let foreign = {
         let mut other = builder(device, vec![lane(0, everything())], 99);
         other
@@ -831,7 +832,7 @@ fn present_after_refuses_a_foreign_after_point() {
 /// section 40.5 puts the rule.
 #[test]
 fn build_refuses_two_presents_of_one_frame() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let frame_id = AcquiredFrameId::new(device, 7);
 
     let mut builder = builder(device, vec![lane(0, everything())], 1);
@@ -862,7 +863,7 @@ fn build_refuses_two_presents_of_one_frame() {
 /// would carry it to a display and its ownership would have no end.
 #[test]
 fn build_refuses_a_frame_use_the_plan_never_presents() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let frame_id = AcquiredFrameId::new(device, 7);
 
     let mut builder = builder(device, vec![lane(0, everything())], 1);
@@ -895,7 +896,7 @@ fn build_refuses_a_frame_use_the_plan_never_presents() {
 /// refused even though nothing in the plan is unordered in the hazard sense.
 #[test]
 fn build_refuses_a_frame_use_after_the_present_point() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let frame = acquired_frame(1, device);
     let frame_id = frame.id();
 
@@ -935,7 +936,7 @@ fn build_refuses_a_frame_use_after_the_present_point() {
 /// builder of its own.
 #[test]
 fn a_failed_build_drops_the_frames_it_consumed() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let frame = acquired_frame(1, device);
     let frame_id = frame.id();
 
@@ -971,7 +972,7 @@ fn a_failed_build_drops_the_frames_it_consumed() {
 /// analysed.
 #[test]
 fn validate_plan_graph_refuses_edges_outside_the_plan() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let plan = plan_id(device, 1);
     let foreign = PlanPoint::new(plan_id(device, 2), SubmissionBatchId::new(0));
     let local = PlanPoint::new(plan, SubmissionBatchId::new(0));
@@ -995,7 +996,7 @@ fn validate_plan_graph_refuses_edges_outside_the_plan() {
 /// closure rule cannot be stated without it.
 #[test]
 fn validate_plan_graph_refuses_a_present_with_no_after_batch() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let plan = plan_id(device, 1);
     let frame_id = AcquiredFrameId::new(device, 1);
     let batches = vec![batch(plan, 0, lane_id(0), raster_work(device, Vec::new()))];
@@ -1018,7 +1019,7 @@ fn validate_plan_graph_refuses_a_present_with_no_after_batch() {
 /// and the one a backend reads.
 #[test]
 fn a_built_plan_carries_what_it_validated() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut builder = routed_builder(device, 1);
     let first = builder
         .add_batch(lane_id(0), vec![raster_work(device, Vec::new())])
@@ -1064,8 +1065,8 @@ fn a_built_plan_carries_what_it_validated() {
 /// A plan identity is device-scoped, and a point names a batch inside one plan.
 #[test]
 fn plan_identity_is_device_scoped_and_points_name_their_batch() {
-    let device = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let device = device_identity(1);
+    let other = device_identity(2);
     let point = PlanPoint::new(plan_id(device, 3), SubmissionBatchId::new(5));
 
     assert_eq!(point.batch(), SubmissionBatchId::new(5));
@@ -1084,7 +1085,7 @@ fn plan_identity_is_device_scoped_and_points_name_their_batch() {
 /// both without conflating them.
 #[test]
 fn a_receipt_reports_acceptance_and_completion_separately() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let plan = plan_id(device, 1);
     let submitted = SubmissionPoint::new(device, 10);
     let overall = CompletionPoint::new(device, 10);
@@ -1110,7 +1111,7 @@ fn a_receipt_reports_acceptance_and_completion_separately() {
 /// coarse in the safe direction.
 #[test]
 fn completion_for_falls_back_to_the_overall_token_and_refuses_a_foreign_plan() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let plan = plan_id(device, 1);
     let overall = CompletionPoint::new(device, 10);
     let per_batch = CompletionPoint::new(device, 11);
@@ -1143,7 +1144,7 @@ fn completion_for_falls_back_to_the_overall_token_and_refuses_a_foreign_plan() {
 /// independent other half of the plan's fate.
 #[test]
 fn a_receipt_carries_the_presents_of_its_plan() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let plan = plan_id(device, 1);
     let present = PresentPlanId::new(plan, 0);
 
@@ -1201,6 +1202,129 @@ fn a_terminal_completion_carries_its_reason() {
 // Section 41.3 — Phase A refusals that need no backend.
 // ---------------------------------------------------------------------------
 
+/// Reserved points make a transient lifetime expressible before recording, but
+/// never make an empty batch executable.
+#[test]
+fn a_reserved_batch_must_be_filled_exactly_once_before_build() {
+    let identity = device_identity(1);
+    let mut first_builder = builder(identity, vec![lane(0, everything())], 1);
+    let _point = first_builder.reserve_batch(lane_id(0)).unwrap();
+
+    assert_eq!(
+        first_builder.build().unwrap_err().kind(),
+        RhiErrorKind::InvalidUsage,
+        "a reserved point is not an empty batch"
+    );
+
+    let mut second_builder = builder(identity, vec![lane(0, everything())], 2);
+    let point = second_builder.reserve_batch(lane_id(0)).unwrap();
+    second_builder
+        .set_batch(point, vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    assert_eq!(
+        second_builder
+            .set_batch(point, vec![raster_work(identity, Vec::new())])
+            .unwrap_err()
+            .kind(),
+        RhiErrorKind::InvalidUsage,
+        "a point has exactly one work payload"
+    );
+}
+
+/// The allocator is plan-scoped and validates even a transient resource that no
+/// command ultimately uses; allocation cannot hide an invalid lifetime from the
+/// builder merely by leaving the handle unrecorded.
+#[test]
+fn an_unused_transient_lifetime_still_obeys_the_plan_dag() {
+    let identity = device_identity(1);
+    let mut builder = builder(
+        identity,
+        vec![lane(0, everything()), lane(1, everything())],
+        1,
+    );
+    let acquire = builder.reserve_batch(lane_id(0)).unwrap();
+    let release = builder.reserve_batch(lane_id(1)).unwrap();
+    let allocator = builder.transient_allocator();
+
+    assert_eq!(allocator.device_identity(), identity);
+    assert_eq!(allocator.plan_id(), acquire.plan());
+    allocator
+        .create_buffer(
+            &BufferDescriptor::new(64, BufferUsage::COPY_DST),
+            TransientLifetime::new(acquire).release_at(release),
+        )
+        .unwrap();
+    builder
+        .set_batch(acquire, vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    builder
+        .set_batch(release, vec![raster_work(identity, Vec::new())])
+        .unwrap();
+
+    assert_eq!(
+        builder.build().unwrap_err().kind(),
+        RhiErrorKind::InvalidUsage,
+        "points on unordered lanes do not form a transient lifetime"
+    );
+}
+
+/// Same-lane reservation order is happens-before, so it is sufficient for a
+/// legal lifetime even when Dedicated backing performs no aliasing.
+#[test]
+fn a_transient_lifetime_uses_submission_ordering() {
+    let identity = device_identity(1);
+    let mut builder = builder(identity, vec![lane(0, everything())], 1);
+    let acquire = builder.reserve_batch(lane_id(0)).unwrap();
+    let release = builder.reserve_batch(lane_id(0)).unwrap();
+    let allocator = builder.transient_allocator();
+    let buffer = allocator
+        .create_buffer(
+            &BufferDescriptor::new(64, BufferUsage::COPY_DST),
+            TransientLifetime::new(acquire).release_at(release),
+        )
+        .unwrap();
+
+    assert_eq!(buffer.device_identity(), identity);
+    assert_eq!(buffer.descriptor().size, 64);
+    builder
+        .set_batch(acquire, vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    builder
+        .set_batch(release, vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    builder.build().unwrap();
+}
+
+/// A lifetime must be complete and entirely owned by the allocator's plan.
+#[test]
+fn a_transient_allocator_refuses_empty_and_foreign_lifetimes() {
+    let identity = device_identity(1);
+    let mut first = builder(identity, vec![lane(0, everything())], 1);
+    let first_point = first.reserve_batch(lane_id(0)).unwrap();
+    let mut second = builder(identity, vec![lane(0, everything())], 2);
+    let foreign_point = second.reserve_batch(lane_id(0)).unwrap();
+    let allocator = first.transient_allocator();
+    let descriptor = BufferDescriptor::new(64, BufferUsage::COPY_DST);
+
+    assert_eq!(
+        allocator
+            .create_buffer(&descriptor, TransientLifetime::new(first_point))
+            .unwrap_err()
+            .kind(),
+        RhiErrorKind::InvalidUsage
+    );
+    assert_eq!(
+        allocator
+            .create_buffer(
+                &descriptor,
+                TransientLifetime::new(first_point).release_at(foreign_point),
+            )
+            .unwrap_err()
+            .kind(),
+        RhiErrorKind::InvalidUsage
+    );
+}
+
 /// A plan built for another device is refused before anything native is reached,
 /// and a plan submitted to a lost device is refused as terminal.
 ///
@@ -1209,8 +1333,8 @@ fn a_terminal_completion_carries_its_reason() {
 /// to make.
 #[test]
 fn submit_refuses_a_foreign_plan_and_a_lost_device() {
-    let device_identity_value = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let device_identity_value = device_identity(1);
+    let other = device_identity(2);
 
     let mut builder = builder(other, vec![lane(0, everything())], 1);
     builder
@@ -1223,7 +1347,7 @@ fn submit_refuses_a_foreign_plan_and_a_lost_device() {
     // The device is checked after its own liveness, so a lost device answers
     // `DeviceLost` for any plan, foreign or not.
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
-    let error = device.submit(plan).unwrap_err();
+    let error = block_on(device.submit(plan)).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
     assert_eq!(error.operation(), Some("Device::submit"));
 }
@@ -1236,8 +1360,8 @@ fn submit_refuses_a_foreign_plan_and_a_lost_device() {
 /// itself, which is terminal for the whole identity.
 #[test]
 fn completion_state_refuses_a_foreign_point_and_reports_a_lost_device() {
-    let device_identity_value = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let device_identity_value = device_identity(1);
+    let other = device_identity(2);
     let (device, native) = paired_device_for_test(device_identity_value);
 
     let error = device
@@ -1267,7 +1391,7 @@ fn completion_state_refuses_a_foreign_point_and_reports_a_lost_device() {
     dead_code,
     reason = "a shape test; compiled to check the interface, never called"
 )]
-fn shape_frame_loop_through_submission(
+async fn shape_frame_loop_through_submission(
     device: &Device,
     recorded: Vec<RecordedWork>,
     lane: SubmissionLaneId,
@@ -1278,7 +1402,7 @@ fn shape_frame_loop_through_submission(
     let present = builder.present_after(frame, drawing)?;
     let plan = builder.build()?;
 
-    let receipt = device.submit(plan)?;
+    let receipt = device.submit(plan).await?;
     let completion = receipt.completion_for(drawing)?;
     let _ = receipt.completion();
     for presented in receipt.presents() {
@@ -1290,6 +1414,7 @@ fn shape_frame_loop_through_submission(
     device.poll()?;
     let state = device.completion_state(completion)?;
     let _ = state;
+    let _ = device.wait_completion(completion).await?;
 
     let _ = present;
     Ok(())
@@ -1301,7 +1426,7 @@ fn shape_frame_loop_through_submission(
     dead_code,
     reason = "a shape test; compiled to check the interface, never called"
 )]
-fn shape_two_presents_in_one_plan(
+async fn shape_two_presents_in_one_plan(
     device: &Device,
     first: AcquiredFrame,
     second: AcquiredFrame,
@@ -1317,7 +1442,7 @@ fn shape_two_presents_in_one_plan(
 
     // A caller reading the two outcomes after a submit must go through the
     // receipt's present list, because `present_after` consumed the frame tokens.
-    let receipt = device.submit(plan)?;
+    let receipt = device.submit(plan).await?;
     for present in receipt.presents() {
         let _ = present.plan_id();
     }
@@ -1342,7 +1467,7 @@ fn shape_two_presents_in_one_plan(
 /// can give it, and `completion_for`'s fallback is a separate test below.
 #[test]
 fn a_validated_plan_is_accepted_and_its_receipt_reports_every_batch() {
-    let identity = device_identity(1, 1);
+    let identity = device_identity(1);
     let (device, native) = paired_device_for_test(identity);
 
     let mut builder = SubmissionPlanBuilder::new(&device);
@@ -1354,8 +1479,7 @@ fn a_validated_plan_is_accepted_and_its_receipt_reports_every_batch() {
         .expect("the mock's lane 0 accepts raster work");
     let plan = builder.build().expect("a batch with no edge is acyclic");
 
-    let receipt = device
-        .submit(plan)
+    let receipt = block_on(device.submit(plan))
         .expect("the mock backend accepts a plan the portable layer validated");
 
     assert_eq!(native.submissions(), 1);
@@ -1399,7 +1523,7 @@ fn a_validated_plan_is_accepted_and_its_receipt_reports_every_batch() {
 /// `completion_state` that always answered `Complete` pass every test here.
 #[test]
 fn completion_is_pending_until_the_device_reports_it() {
-    let identity = device_identity(1, 1);
+    let identity = device_identity(1);
     let (device, native) = paired_device_for_test(identity);
 
     native.hold_completion();
@@ -1413,9 +1537,7 @@ fn completion_is_pending_until_the_device_reports_it() {
     // Section 41.7: acceptance happens *while* the work is unfinished. A submit
     // that waited for completion here would be the blocking frame-loop call
     // section 41.10 forbids.
-    let receipt = device
-        .submit(plan)
-        .expect("acceptance does not await completion");
+    let receipt = block_on(device.submit(plan)).expect("acceptance does not await completion");
     let token = receipt.completion_for(point).unwrap();
     assert!(
         matches!(
@@ -1446,7 +1568,7 @@ fn completion_is_pending_until_the_device_reports_it() {
 /// why the per-point half is asserted against the backend directly.
 #[test]
 fn device_loss_reaches_every_reported_serial() {
-    let identity = device_identity(1, 1);
+    let identity = device_identity(1);
     let (device, native) = paired_device_for_test(identity);
 
     native.hold_completion();
@@ -1455,7 +1577,7 @@ fn device_loss_reaches_every_reported_serial() {
         .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
-    let receipt = device.submit(plan).unwrap();
+    let receipt = block_on(device.submit(plan)).unwrap();
     let token = receipt.completion_for(point).unwrap();
 
     assert!(matches!(
@@ -1487,7 +1609,7 @@ fn device_loss_reaches_every_reported_serial() {
 /// arrives at one.
 #[test]
 fn a_serial_the_device_never_reported_is_terminal() {
-    let identity = device_identity(1, 1);
+    let identity = device_identity(1);
     let (device, _native) = paired_device_for_test(identity);
 
     let mut builder = SubmissionPlanBuilder::new(&device);
@@ -1495,7 +1617,7 @@ fn a_serial_the_device_never_reported_is_terminal() {
         .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
-    let receipt = device.submit(plan).unwrap();
+    let receipt = block_on(device.submit(plan)).unwrap();
 
     // A serial above anything this device minted. Constructed through the same
     // crate-private constructor the portable layer uses, because that is the only
@@ -1522,8 +1644,8 @@ fn a_serial_the_device_never_reported_is_terminal() {
 /// refusal is decided after both.
 #[test]
 fn a_refused_plan_never_reaches_the_backend() {
-    let identity = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let identity = device_identity(1);
+    let other = device_identity(2);
     let (device, native) = paired_device_for_test(identity);
 
     // A plan built for another device.
@@ -1532,7 +1654,7 @@ fn a_refused_plan_never_reaches_the_backend() {
         .add_batch(lane_id(0), vec![raster_work(other, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
-    let error = device.submit(plan).unwrap_err();
+    let error = block_on(device.submit(plan)).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::WrongDevice);
     assert_eq!(
         native.submissions(),
@@ -1549,7 +1671,7 @@ fn a_refused_plan_never_reaches_the_backend() {
         .present_after(acquired_frame(1, identity), point)
         .expect("the frame is this device's");
     let plan = builder.build().unwrap();
-    let error = device.submit(plan).unwrap_err();
+    let error = block_on(device.submit(plan)).unwrap_err();
     assert_eq!(
         error.kind(),
         RhiErrorKind::Unsupported,
@@ -1575,7 +1697,7 @@ fn a_refused_plan_never_reaches_the_backend() {
         .unwrap();
     let plan = builder.build().unwrap();
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
-    let error = device.submit(plan).unwrap_err();
+    let error = block_on(device.submit(plan)).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
     assert_eq!(native.submissions(), 0);
 }
@@ -1590,7 +1712,7 @@ fn a_refused_plan_never_reaches_the_backend() {
 /// indistinguishable to every check that compares them.
 #[test]
 fn two_plans_on_one_device_are_distinguishable() {
-    let identity = device_identity(1, 1);
+    let identity = device_identity(1);
     let (device, _native) = paired_device_for_test(identity);
 
     let mut first = SubmissionPlanBuilder::new(&device);
@@ -1620,7 +1742,7 @@ fn two_plans_on_one_device_are_distinguishable() {
     // than the receipt's, and section 41.9 makes dropping an unsubmitted plan
     // legal — it submits nothing and abandons only what it consumed.
     drop(third);
-    let receipt = device.submit(first).unwrap();
+    let receipt = block_on(device.submit(first)).unwrap();
     assert_eq!(
         receipt.completion_for(foreign).unwrap_err().kind(),
         RhiErrorKind::InvalidUsage
@@ -1635,12 +1757,21 @@ fn two_plans_on_one_device_are_distinguishable() {
 // this chapter: if a constructor's shape is wrong, these stop compiling.
 // ---------------------------------------------------------------------------
 
+fn block_on<T>(future: impl core::future::Future<Output = T>) -> T {
+    use core::task::{Context, Poll, Waker};
+
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut future = core::pin::pin!(future);
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("the mock submission future unexpectedly suspended"),
+    }
+}
+
 /// A device identity, as the platform layer mints one.
-fn device_identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn device_identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 /// A plan identity.

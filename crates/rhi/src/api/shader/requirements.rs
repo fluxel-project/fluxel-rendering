@@ -1,8 +1,8 @@
 //! Sections 19.5-19.7: what one entry point requires.
 //!
 //! The resource requirements in the binding vocabulary, the location interface,
-//! the compute workgroup shape, and the optional features and device limits the
-//! entry point needs. This is the caller's statement; it is deliberately not a
+//! and the optional features and device limits the entry point needs. This is the
+//! caller's statement; it is deliberately not a
 //! verdict about any device.
 //!
 //! Not owned here: the vocabulary the requirements are written in (19.1-19.4, in
@@ -182,54 +182,6 @@ impl ShaderInterface {
     }
 }
 
-/// What one compute entry point requires of a workgroup.
-///
-/// Section 19.7 requires this to be reflection output of the *entry point*, not a
-/// dispatch decision: it says what the shader was compiled to need. The dispatch
-/// dimensions a caller later passes to `dispatch` are validated separately, and
-/// conflating the two would let a pipeline that cannot run be created.
-///
-/// The public constructor is deliberate: this is prober/producer data that the
-/// artifact itself carries, not a device fact, so there is nothing to forge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ComputeWorkgroupRequirements {
-    /// Workgroup size on X.
-    pub x: u32,
-    /// Workgroup size on Y.
-    pub y: u32,
-    /// Workgroup size on Z.
-    pub z: u32,
-
-    /// Total invocations per workgroup.
-    ///
-    /// Must equal `x * y * z` without overflow: the two spellings of the same
-    /// number are both carried because a backend needs each of them, and a
-    /// mismatch means the reflection is internally inconsistent.
-    pub total_invocations: u32,
-
-    /// Workgroup/shared-memory bytes this entry point requires.
-    pub workgroup_storage_bytes: u64,
-}
-
-impl ComputeWorkgroupRequirements {
-    /// Assembles one entry point's workgroup requirements.
-    pub fn new(
-        x: u32,
-        y: u32,
-        z: u32,
-        total_invocations: u32,
-        workgroup_storage_bytes: u64,
-    ) -> Self {
-        Self {
-            x,
-            y,
-            z,
-            total_invocations,
-            workgroup_storage_bytes,
-        }
-    }
-}
-
 /// What an entry point requires of the device beyond its interface.
 ///
 /// Section 19.7 keeps binding capability *out* of this type: a resource
@@ -246,7 +198,6 @@ impl ComputeWorkgroupRequirements {
 pub struct ShaderRequirements {
     required_features: Vec<OptionalFeature>,
     limit_requirements: Vec<LimitRequirement>,
-    compute_workgroup: Option<ComputeWorkgroupRequirements>,
 }
 
 impl ShaderRequirements {
@@ -267,12 +218,6 @@ impl ShaderRequirements {
         self
     }
 
-    /// Declares the workgroup requirements of a compute entry point.
-    pub fn with_compute_workgroup(mut self, requirements: ComputeWorkgroupRequirements) -> Self {
-        self.compute_workgroup = Some(requirements);
-        self
-    }
-
     /// The required optional features, in the order they were added.
     pub fn required_features(&self) -> &[OptionalFeature] {
         &self.required_features
@@ -281,13 +226,5 @@ impl ShaderRequirements {
     /// The required device limits, in the order they were added.
     pub fn limit_requirements(&self) -> &[LimitRequirement] {
         &self.limit_requirements
-    }
-
-    /// The workgroup requirements, for a compute entry point.
-    ///
-    /// Required to be `Some` for compute and `None` for vertex and fragment; the
-    /// two halves of that rule are checked by `validate_shader_artifact`.
-    pub fn compute_workgroup(&self) -> Option<ComputeWorkgroupRequirements> {
-        self.compute_workgroup
     }
 }

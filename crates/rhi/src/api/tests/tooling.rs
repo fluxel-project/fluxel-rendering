@@ -32,12 +32,13 @@
 use std::sync::Arc;
 
 use crate::api::binding::BindingSlotId;
-use crate::api::command::{ColorClearValue, LoadOp, StoreOp};
+use crate::api::command::{
+    AccessMask, ColorClearValue, LoadOp, PipelineScope, StoreOp, TextureUseIntent,
+};
 use crate::api::diagnostics::{DiagnosticEvent, DiagnosticSeverity};
 use crate::api::error::{RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
-use crate::api::graph_bridge::{AccessMask, PipelineScope, TextureUseIntent};
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, Label, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};
 use crate::api::pipeline::{
     ColorTargetState, MultisampleState, PrimitiveState, PrimitiveTopology, VertexInputState,
 };
@@ -56,10 +57,8 @@ use crate::api::submission::{
 };
 use crate::api::tooling::definition::{
     CapturedBindGroupDefinition, CapturedBindGroupEntry, CapturedBindingResource,
-    CapturedComputePipelineDefinition, CapturedConfiguredPresentationDefinition,
-    CapturedObjectDefinition, CapturedPipelineInterfaceDefinition,
-    CapturedPresentationTargetDefinition, CapturedPresentationTargetFixture,
-    CapturedRasterPipelineDefinition,
+    CapturedComputePipelineDefinition, CapturedObjectDefinition,
+    CapturedPipelineInterfaceDefinition, CapturedRasterPipelineDefinition,
 };
 use crate::api::tooling::mutation::{
     CapturedBufferCopy, CapturedBufferTextureCopy, CapturedColorAttachment,
@@ -90,7 +89,7 @@ use crate::base::mock::{device_for_test, paired_device_for_test};
 // ---------------------------------------------------------------------------
 
 fn identity(instance: u64) -> DeviceIdentity {
-    DeviceIdentity::new(DeviceInstanceId::new(instance), DeviceGeneration::new(0))
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 fn object(value: u64) -> ObjectId {
@@ -431,9 +430,7 @@ impl SemanticObserver for CaptureQueue {
             // cannot race a later lazy query (section 58.1).
             SemanticEvent::ObjectCreated { definition, .. } => {
                 let name = match definition {
-                    CapturedObjectDefinition::PresentationTarget { id, .. }
-                    | CapturedObjectDefinition::ConfiguredPresentation { id, .. }
-                    | CapturedObjectDefinition::Buffer { id, .. }
+                    CapturedObjectDefinition::Buffer { id, .. }
                     | CapturedObjectDefinition::Texture { id, .. }
                     | CapturedObjectDefinition::TextureView { id, .. }
                     | CapturedObjectDefinition::Sampler { id, .. }
@@ -527,12 +524,11 @@ fn an_observer_keeps_what_it_copies_and_drops_every_borrow() {
     let present = PresentPlanId::new(plan, 0);
     let receipt_id = PresentReceiptId::new(device, 1);
 
-    let target = CapturedObjectDefinition::PresentationTarget {
+    let target = CapturedObjectDefinition::PipelineInterface {
         id: object(71),
-        definition: CapturedPresentationTargetDefinition {
-            fixture: CapturedPresentationTargetFixture {
-                key: String::from("main-window"),
-            },
+        definition: CapturedPipelineInterfaceDefinition {
+            label: Label::default(),
+            groups: Vec::new(),
         },
     };
     let upload = CapturedUploadDefinition::Buffer {
@@ -835,45 +831,6 @@ fn a_captured_plan_states_the_relation_rather_than_the_counts() {
     assert_eq!(captured.presents[0].frame, frame);
     assert_eq!(captured.device, receipt.submitted.device_identity());
     assert_eq!(receipt.overall_completion.device_identity(), device);
-}
-
-#[test]
-fn a_captured_object_graph_reaches_an_external_fixture_without_a_host_handle() {
-    // Section 58.1's chain: a FrameAcquired event names a target and a configured
-    // presentation, and both must be describable. The chain ends at a fixture key
-    // that the ReplayRuntime or its fixture provider owns, which is how a record
-    // describes a swapchain without serializing one.
-    let fixture = CapturedPresentationTargetFixture {
-        key: String::from("main-window"),
-    };
-    let target = CapturedObjectDefinition::PresentationTarget {
-        id: object(71),
-        definition: CapturedPresentationTargetDefinition {
-            fixture: fixture.clone(),
-        },
-    };
-    let configured = CapturedObjectDefinition::ConfiguredPresentation {
-        id: object(72),
-        definition: CapturedConfiguredPresentationDefinition {
-            device: identity(5),
-            target: object(71),
-            configuration: PresentationConfiguration::new(TextureFormat::Bgra8UnormSrgb),
-        },
-    };
-
-    match configured {
-        CapturedObjectDefinition::ConfiguredPresentation { definition, .. } => {
-            assert_eq!(definition.target, object(71));
-        }
-        _ => panic!("built a configured presentation"),
-    }
-    match target {
-        CapturedObjectDefinition::PresentationTarget { definition, .. } => {
-            assert_eq!(definition.fixture, fixture);
-        }
-        _ => panic!("built a target"),
-    }
-    assert_eq!(fixture.key, "main-window");
 }
 
 #[test]
@@ -1253,44 +1210,6 @@ fn shape_a_capture_tool_subscribes_walks_events_and_pulls_definitions(
     // by the RHI.
     drop(subscription);
     Ok(())
-}
-
-/// Section 58.1's eager-description rule, as a call site: a tool that sees a
-/// `FrameAcquired` event can reach a fixture key for every identity it carries.
-#[expect(
-    dead_code,
-    reason = "a shape test; compiled to check the interface, never called"
-)]
-fn shape_follow_a_frame_back_to_its_fixture(
-    access: &ToolingAccess,
-    frame_event: SemanticEvent<'_>,
-) {
-    let SemanticEvent::FrameAcquired {
-        target,
-        configured_presentation,
-        ..
-    } = frame_event
-    else {
-        return;
-    };
-
-    let Ok(CapturedObjectDefinition::ConfiguredPresentation {
-        definition: configured,
-        ..
-    }) = access.describe_object(configured_presentation)
-    else {
-        return;
-    };
-
-    let Ok(CapturedObjectDefinition::PresentationTarget {
-        definition: target_definition,
-        ..
-    }) = access.describe_object(target)
-    else {
-        return;
-    };
-
-    let _ = (configured.target, target_definition.fixture.key);
 }
 
 /// Section 58.1's keying rule, as a call site: work recorded before the tool

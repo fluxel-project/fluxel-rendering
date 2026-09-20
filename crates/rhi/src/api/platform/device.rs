@@ -101,7 +101,7 @@ impl DeviceLossInfo {
 ///
 /// ```text
 /// Device::clone()        the same domain, the same DeviceIdentity
-/// request_device() again a new domain, a new identity and generation
+/// request_device() again a new domain and a new identity
 /// ```
 ///
 /// Section 6.1 makes that a portable contract rather than an implementation
@@ -109,9 +109,9 @@ impl DeviceLossInfo {
 /// successful requests still produce two isolated logical domains that must not
 /// accept each other's objects.
 ///
-/// Loss is terminal for the whole identity. There is no path that increments a
-/// generation on an existing public device or revives an old handle — a retry is
-/// a new [`crate::api::platform::DeviceRequest`] and therefore a new identity.
+/// Loss is terminal for the whole identity. There is no transparent replacement
+/// of an existing public device; a retry is a new
+/// `PlatformProvider::request_device()` and therefore a new identity.
 #[derive(Clone)]
 pub struct Device {
     identity: DeviceIdentity,
@@ -476,6 +476,26 @@ impl Device {
         self.native.loss_info()
     }
 
+    /// Waits for this device to enter its terminal lost state.
+    ///
+    /// The future remains pending while the device stays active. Once loss is
+    /// observed, all clones return the same stable summary.
+    pub async fn lost(&self) -> DeviceLossInfo {
+        std::future::poll_fn(|context| {
+            if let Some(info) = self.loss_info() {
+                return std::task::Poll::Ready(info);
+            }
+
+            // `poll` is only an opportunistic progress hook. The self-wake is a
+            // compatibility bridge for the current private backend seam; native
+            // event/fence based backends can wake this future directly.
+            let _ = self.poll();
+            context.waker().wake_by_ref();
+            std::task::Poll::Pending
+        })
+        .await
+    }
+
     /// Non-blockingly advances completion, loss, and callback bookkeeping.
     ///
     /// This is RHI-owned bookkeeping, not the host's event loop. Section 6.6
@@ -489,7 +509,7 @@ impl Device {
         self.native.poll()
     }
 
-    /// Blocks until the device is idle.
+    /// Waits until the device is idle.
     ///
     /// For shutdown and diagnostics only. Section 6.7 forbids it as a per-frame
     /// retirement mechanism and as the correctness mechanism of a render loop:
@@ -498,7 +518,7 @@ impl Device {
     /// retirement. On a restricted host or backend this returns
     /// [`crate::api::error::RhiErrorKind::Unsupported`] rather than pretending to
     /// have waited.
-    pub fn wait_idle(&self) -> RhiResult<()> {
+    pub async fn wait_idle(&self) -> RhiResult<()> {
         self.native.wait_idle()
     }
 
@@ -580,9 +600,8 @@ impl core::fmt::Debug for Device {
     ///
     /// Hand-written rather than derived, for the reason recorded as adjudication
     /// A16 in the 0.16 plan. The trait is required rather than optional: section
-    /// 5.9's `DeviceRequest::poll` returns `RhiResult<RequestStatus<Device>>`, and
-    /// a caller that unwraps or logs a failed request needs the payload to be
-    /// printable. Printing the execution domain instead would be wrong on two
+    /// an awaited device request may yield this value to a caller that logs it,
+    /// so the payload must be printable. Printing the execution domain instead would be wrong on two
     /// counts — the backend port will add a native field that has no reason to be
     /// `Debug`, and a device's native state is not something a log should
     /// describe.

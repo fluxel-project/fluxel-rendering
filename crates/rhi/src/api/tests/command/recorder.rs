@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::api::command::RecordedWork;
-use crate::api::graph_bridge::{AccessMask, PipelineScope, ResourceUse};
+use crate::api::command::{AccessMask, PipelineScope, ResourceUse};
 use crate::api::submission::LaneWorkDomains;
 use crate::api::tests::fixture;
 

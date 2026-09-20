@@ -47,7 +47,7 @@ mod snapshot;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::resource::buffer::{Buffer, BufferDescriptor, BufferUsage};
 use crate::api::resource::texture::{Texture, TextureDescriptor, TextureUsage};
 use crate::api::statistics::{
@@ -59,21 +59,18 @@ use crate::api::tests::fixture;
 // Fixtures.
 // ---------------------------------------------------------------------------
 
-fn identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 fn device() -> DeviceIdentity {
-    identity(1, 1)
+    identity(1)
 }
 
 /// A second device, so that "the domains are independent" is a statement about
 /// two real identities rather than about one identity compared with itself.
 fn other_device() -> DeviceIdentity {
-    identity(2, 1)
+    identity(2)
 }
 
 fn object(value: u64) -> ObjectId {
@@ -150,15 +147,13 @@ fn a_statistics_service_refuses_a_resource_from_another_device() {
     }
 }
 
-/// A generation bump is a different device, for the same reason it is in the
-/// bridge: identity is instance *and* generation, which is what makes device loss
-/// recoverable without a stale handle resolving.
+/// Re-requesting after terminal loss creates a different logical device domain.
 #[test]
 fn a_lost_and_recreated_device_is_not_the_same_domain() {
-    let stale = DeviceStatistics::new(identity(1, 1));
-    let current = DeviceStatistics::new(identity(1, 2));
+    let stale = DeviceStatistics::new(identity(1));
+    let current = DeviceStatistics::new(identity(3));
 
-    let recorded_before_loss = buffer_on(identity(1, 1), 4096);
+    let recorded_before_loss = buffer_on(identity(1), 4096);
 
     assert!(stale.estimate_buffer_memory(&recorded_before_loss).is_ok());
     assert_kind(

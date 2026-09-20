@@ -1,4 +1,4 @@
-//! Fluxel RHI API v1 — the frozen portable interface.
+//! Fluxel RHI API freeze v13 — the portable interface.
 //!
 //! This tree is written from `documents/rhi-design/01`–`08` and from nothing
 //! else. Where the rest of this crate holds an implementation, this module holds
@@ -14,7 +14,7 @@
 //! ```text
 //! platform      capability    format        resource      shader
 //! binding       pipeline      command       submission    presentation
-//! statistics    diagnostics   graph_bridge  tooling (doc-hidden)
+//! statistics    diagnostics   tooling (doc-hidden)
 //! ```
 //!
 //! and the backend tree it names is `crate::backend::{dx12, vulkan, metal,
@@ -28,12 +28,11 @@
 //!
 //! # What this module owns
 //!
-//! Section 5 of the root specification gives the layering: RenderGraph owns
-//! declarations, versions, dependencies, culling, scheduling, logical lifetime,
-//! and presentation intent; the recorder owns command-ordered actual uses; the
-//! backend owns lowering only. Capability is instance data for an adapter,
-//! device, format, surface, or route, and is never inferred from the presence of
-//! a Rust trait (root section 3.1).
+//! The recorder derives command-ordered actual resource uses from portable
+//! commands, and the backend owns lowering only. No upper-layer scheduling
+//! contract enters this API. Capability is instance data for an adapter, device,
+//! format, surface, or route, and is never inferred from the presence of a Rust
+//! trait (root section 3.1).
 //!
 //! Two rules from the root specification decide most of the shape below:
 //!
@@ -77,7 +76,6 @@ pub mod command;
 pub mod diagnostics;
 pub mod error;
 pub mod format;
-pub mod graph_bridge;
 pub mod identity;
 pub mod pipeline;
 pub mod platform;
@@ -104,12 +102,12 @@ pub mod tooling;
 // All seven chapters are written as of 2026-09-20: 01 (platform, capability,
 // identity, error), 02 (format, resource), 03 (shader, binding, pipeline), 04
 // (command), 05 (submission, presentation), 06 (statistics, diagnostics,
-// graph_bridge), and 07 (tooling). Each carries a module note recording how far
+// transient resources), and 07 (tooling). Each carries a module note recording how far
 // it got and what it could not close; the open items are collected as numbered
 // adjudications in `documents/draft/0.16-plan.md`.
 
 pub use error::{RhiError, RhiErrorKind, RhiResult};
-pub use identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, Label, ObjectId};
+pub use identity::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};
 
 #[cfg(test)]
 mod tests;

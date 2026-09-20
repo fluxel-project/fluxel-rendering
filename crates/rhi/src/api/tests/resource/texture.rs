@@ -337,10 +337,10 @@ fn the_devices_limits_bound_the_extent_mips_and_layers() {
 #[test]
 fn a_texture_reports_its_own_id_device_and_descriptor() {
     let descriptor = simple_texture_descriptor(TextureUsage::SAMPLED).with_label("albedo");
-    let texture = Texture::new(object(11), identity(2, 3), descriptor);
+    let texture = Texture::new(object(11), identity(2), descriptor);
 
     assert_eq!(texture.id(), object(11));
-    assert_eq!(texture.device_identity(), identity(2, 3));
+    assert_eq!(texture.device_identity(), identity(2));
     assert_eq!(texture.descriptor().label.as_deref(), Some("albedo"));
     assert_eq!(texture.descriptor().extent, Extent3d::d2(4, 4));
     assert_eq!(texture.clone().id(), texture.id());

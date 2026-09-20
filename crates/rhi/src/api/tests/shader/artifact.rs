@@ -1,31 +1,13 @@
 //! Sections 19.9-19.10: the artifact as a value, and the module handle.
 //!
-//! The default provenance and the created module's identity. `use super::*`
-//! brings in the fixtures.
+//! The artifact and the created module's identity. `use super::*` brings in the
+//! fixtures.
 
 use super::*;
 
 // ---------------------------------------------------------------------------
 // Section 19.9 / 19.10: the artifact as a value, and the module handle.
 // ---------------------------------------------------------------------------
-
-#[test]
-fn an_artifact_defaults_to_the_most_restrictive_provenance() {
-    // Section 19.9's constructor list has no provenance parameter and supplies only
-    // a builder, so the constructor must choose something. It fails closed: an
-    // artifact nobody described as replayable is not replayable.
-    let artifact = artifact(ShaderStage::Vertex, vertex_interface());
-    match artifact.provenance {
-        ShaderProvenance::ExecutableOnly { replay_acceptance } => assert_eq!(
-            replay_acceptance,
-            ExecutableReplayAcceptanceScope::Denied,
-            "an artifact with no stated provenance must not be replayable"
-        ),
-        ShaderProvenance::PortableSource { .. } => {
-            panic!("the default provenance must not claim portable source")
-        }
-    }
-}
 
 #[test]
 fn a_module_reports_the_artifact_and_stage_it_was_created_from() {
@@ -43,7 +25,6 @@ fn a_module_reports_the_artifact_and_stage_it_was_created_from() {
     assert_eq!(module.artifact().entry_point, "main");
     assert_eq!(module.artifact().content_hash, ArtifactHash([7; 32]));
     assert!(module.artifact().interface.writes_position());
-    assert!(module.artifact().requirements.compute_workgroup().is_none());
 }
 
 #[test]
@@ -87,8 +68,7 @@ fn create_shader_reads_the_device_verdict_first_and_keeps_the_backend_object() {
     let (device, native) = crate::base::mock::shaders_for_test(device(), &[AcceptedCodeForm::Wgsl]);
     let artifact = artifact(ShaderStage::Vertex, vertex_interface());
 
-    let module = device
-        .create_shader(&artifact)
+    let module = block_on(device.create_shader(&artifact))
         .expect("a device that records the artifact's form and states no limits accepts it");
 
     assert_eq!(
@@ -123,8 +103,7 @@ fn a_device_that_records_no_code_form_refuses_before_the_backend_is_reached() {
     let (device, native) = crate::base::mock::shaders_for_test(device(), &[]);
     let artifact = artifact(ShaderStage::Vertex, vertex_interface());
 
-    let error = device
-        .create_shader(&artifact)
+    let error = block_on(device.create_shader(&artifact))
         .expect_err("a device that consumes no code form cannot accept any artifact");
 
     assert_eq!(error.kind(), RhiErrorKind::Unsupported);
@@ -147,8 +126,7 @@ fn a_cloned_module_shares_one_backend_object() {
     use std::sync::Arc;
 
     let (device, _) = crate::base::mock::shaders_for_test(device(), &[AcceptedCodeForm::Wgsl]);
-    let module = device
-        .create_shader(&artifact(ShaderStage::Vertex, vertex_interface()))
+    let module = block_on(device.create_shader(&artifact(ShaderStage::Vertex, vertex_interface())))
         .expect("the device records this artifact's form");
 
     let clone = module.clone();

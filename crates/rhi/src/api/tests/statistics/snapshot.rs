@@ -349,7 +349,7 @@ fn a_sample_carries_its_interval_and_its_rate_together() {
 /// without exposing anything but portable state.
 #[test]
 fn a_snapshot_prints_its_portable_observation() {
-    let rendered = format!("{:?}", snapshot_on(identity(4, 2), 5, 6, 7));
+    let rendered = format!("{:?}", snapshot_on(identity(4), 5, 6, 7));
 
     // A snapshot is not an opaque handle — every field is a portable number or a
     // device identity — so this one derives `Debug` rather than writing it by

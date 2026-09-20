@@ -46,7 +46,7 @@ use crate::api::binding::{
 };
 use crate::api::error::{RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::resource::buffer::{
     Buffer, BufferBinding, BufferDescriptor, BufferRange, BufferUsage,
 };
@@ -60,15 +60,12 @@ use crate::api::tests::fixture;
 // Fixtures.
 // ---------------------------------------------------------------------------
 
-fn identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 fn device() -> DeviceIdentity {
-    identity(1, 1)
+    identity(1)
 }
 
 fn object(value: u64) -> ObjectId {

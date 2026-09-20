@@ -30,9 +30,8 @@ use crate::api::command::record::{BoundGroup, ComputeBegin, ComputeDispatch, Rec
 use crate::api::command::uses::{
     bound_group_uses, require_valid_dynamic_offsets, validate_bound_groups,
 };
-use crate::api::command::{CommandRecorder, RecorderPhase, require_device};
+use crate::api::command::{CommandRecorder, RecorderPhase, ResourceUse, require_device};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::graph_bridge::ResourceUse;
 use crate::api::identity::Label;
 use crate::api::pipeline::ComputePipeline;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};

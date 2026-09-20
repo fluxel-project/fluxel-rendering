@@ -2,8 +2,7 @@
 //!
 //! Section 19's rules are the ones a producer most often gets wrong, because
 //! every one of them is a *canonicality* rule: a duplicate `(group, slot)`, a
-//! non-ascending location list, a workgroup whose total is not the product of its
-//! dimensions, an unsorted compiler-option list. Section 19.6 is explicit that the
+//! non-ascending location list, or an unsorted requirement list. Section 19.6 is explicit that the
 //! RHI must not repair any of them silently, so each test below drives the
 //! refusal path as well as the accepting one and asserts the exact
 //! [`RhiErrorKind`].
@@ -32,41 +31,54 @@
 //! does.
 
 use std::sync::Arc;
+use std::{
+    future::Future,
+    pin::pin,
+    task::{Context, Poll, Waker},
+};
 
 use crate::api::binding::{
     BindGroupIndex, BindingCount, BindingKind, BindingSlotId, BindingSupport, BindingSupportQuery,
     BufferBindingAccess,
 };
 use crate::api::error::{RhiErrorKind, RhiResult};
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::platform::requirements::{LimitKey, LimitRequirement, OptionalFeature};
 use crate::api::shader::validation::validate_shader_artifact;
 use crate::api::shader::vocabulary::stage_mask;
 use crate::api::shader::{
-    ArtifactHash, ArtifactProducerId, ArtifactProducerVersion, ComputeWorkgroupRequirements,
-    ExecutableReplayAcceptanceScope, InterpolationMode, InterpolationSampling,
-    PortableShaderLanguage, ShaderAbiVersion, ShaderArtifact, ShaderCode, ShaderInterface,
-    ShaderInterpolation, ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
-    ShaderProvenance, ShaderResourceRequirement, ShaderStage, ShaderStages,
+    ArtifactHash, ArtifactProducerVersion, InterpolationMode, InterpolationSampling,
+    ShaderAbiVersion, ShaderArtifact, ShaderCode, ShaderInterface, ShaderInterpolation,
+    ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
+    ShaderResourceRequirement, ShaderStage, ShaderStages,
 };
 
 // ---------------------------------------------------------------------------
 // Fixtures.
 // ---------------------------------------------------------------------------
 
-fn identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 fn device() -> DeviceIdentity {
-    identity(1, 1)
+    identity(1)
 }
 
 fn object(value: u64) -> ObjectId {
     ObjectId::new(value)
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut future = pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => {}
+        }
+    }
 }
 
 fn assert_kind(result: RhiResult<()>, expected: RhiErrorKind) {
@@ -137,13 +149,8 @@ struct ShaderRequirementsBuilder;
 
 impl ShaderRequirementsBuilder {
     fn plain(stage: ShaderStage) -> crate::api::shader::ShaderRequirements {
-        match stage {
-            ShaderStage::Compute => crate::api::shader::ShaderRequirements::new()
-                .with_compute_workgroup(ComputeWorkgroupRequirements::new(8, 8, 1, 64, 0)),
-            ShaderStage::Vertex | ShaderStage::Fragment => {
-                crate::api::shader::ShaderRequirements::new()
-            }
-        }
+        let _ = stage;
+        crate::api::shader::ShaderRequirements::new()
     }
 }
 
@@ -160,7 +167,6 @@ fn artifact_with(
         interface,
         requirements,
         ArtifactHash([7; 32]),
-        ArtifactProducerId("fluxel-shaderc".to_string()),
         ArtifactProducerVersion {
             major: 0,
             minor: 16,

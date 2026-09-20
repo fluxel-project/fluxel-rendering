@@ -29,6 +29,7 @@
 //! start of every raster or compute scope, so setting the same pipeline in two
 //! scopes is two changes.
 
+use crate::api::resource::transient::TransientMemoryStatistics;
 use crate::api::submission::SubmissionLaneId;
 
 /// Everything a device has counted since the current collection epoch began.
@@ -49,6 +50,8 @@ pub struct CumulativeStatistics {
     pub presentation: PresentationStatistics,
     /// Logical object lifecycle counts.
     pub resources: ResourceLifecycleStatistics,
+    /// Transient logical/backing/aliasing observations.
+    pub transient: TransientMemoryStatistics,
 }
 
 /// Commands and scopes the RHI was asked to record (specification 47.6).

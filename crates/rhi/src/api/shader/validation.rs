@@ -2,8 +2,7 @@
 //!
 //! Everything `Device::create_shader` must refuse before a backend sees the
 //! artifact: the canonical-interface and stage-shape rules, the location-list
-//! canonicality, the requirement collections, the two spellings of the workgroup
-//! identity, the compiler-option canonicality, and the provenance rules. The
+//! canonicality, and the requirement collections. The
 //! device-owned checks (capability, ABI, target support) are deliberately absent
 //! — they are the device's, and they arrive as its answers.
 //!
@@ -17,8 +16,8 @@ use crate::api::binding::{BindingSupport, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::platform::requirements::LimitRequirement;
 
-use super::artifact::{ShaderArtifact, ShaderProvenance};
-use super::requirements::{ComputeWorkgroupRequirements, ShaderInterface, ShaderRequirements};
+use super::artifact::ShaderArtifact;
+use super::requirements::{ShaderInterface, ShaderRequirements};
 use super::vocabulary::{
     InterpolationMode, ShaderLocationInterface, ShaderNumericType, ShaderStage,
 };
@@ -42,7 +41,6 @@ use super::vocabulary::{
 /// resource binding support    BindingSupportQuery == Supported for each resource
 /// requirements canonical      features unique and sorted by discriminant,
 ///                             limits duplicate-free and sorted
-/// provenance canonical        compiler option keys unique and sorted
 /// ```
 ///
 /// Every refusal is [`RhiErrorKind::InvalidUsage`] except an unsupported binding,
@@ -65,8 +63,7 @@ pub(crate) fn validate_shader_artifact(
     }
 
     validate_interface(&artifact.interface, artifact.stage)?;
-    validate_requirements(&artifact.requirements, artifact.stage)?;
-    validate_provenance(&artifact.provenance)?;
+    validate_requirements(&artifact.requirements)?;
 
     // Section 19.7: binding capability is not repeated in `ShaderRequirements`; it
     // is answered here, by asking about each required resource. The query itself is
@@ -237,27 +234,8 @@ fn validate_locations(locations: &[ShaderLocationInterface], side: &str) -> RhiR
     Ok(())
 }
 
-/// Section 19.7's stage-specific presence rule and the workgroup identity.
-fn validate_requirements(requirements: &ShaderRequirements, stage: ShaderStage) -> RhiResult<()> {
-    match (stage, requirements.compute_workgroup()) {
-        (ShaderStage::Compute, None) => {
-            return Err(RhiError::new(
-                RhiErrorKind::InvalidUsage,
-                "a compute entry point must declare its workgroup requirements",
-            ));
-        }
-        (ShaderStage::Vertex | ShaderStage::Fragment, Some(_)) => {
-            return Err(RhiError::new(
-                RhiErrorKind::InvalidUsage,
-                "only a compute entry point declares workgroup requirements",
-            ));
-        }
-        (ShaderStage::Compute, Some(workgroup)) => {
-            validate_compute_workgroup(&workgroup)?;
-        }
-        (ShaderStage::Vertex | ShaderStage::Fragment, None) => {}
-    }
-
+/// Validates the canonical requirement collections.
+fn validate_requirements(requirements: &ShaderRequirements) -> RhiResult<()> {
     // Section 19.8's canonical collection rules for the two requirement lists.
     // `OptionalFeature` and `LimitRequirement` are fieldless, so the discriminant
     // is the declaration order of the variant, which is what the specification's
@@ -319,81 +297,4 @@ fn limit_variant_rank(requirement: LimitRequirement) -> u16 {
         LimitRequirement::AtLeast { .. } => 0,
         LimitRequirement::AtMost { .. } => 1,
     }
-}
-
-/// Section 19.7's identity between the two spellings of the workgroup size.
-///
-/// The non-zero rule belongs to pipeline creation (section 28) as well, and is
-/// applied here too because an artifact whose reflection says a workgroup has a
-/// zero dimension is internally inconsistent whichever verb reads it first.
-pub(crate) fn validate_compute_workgroup(
-    workgroup: &ComputeWorkgroupRequirements,
-) -> RhiResult<()> {
-    if workgroup.x == 0 || workgroup.y == 0 || workgroup.z == 0 {
-        return Err(RhiError::new(
-            RhiErrorKind::InvalidUsage,
-            "compute workgroup dimensions must all be non-zero",
-        ));
-    }
-    let product = (workgroup.x as u64)
-        .checked_mul(workgroup.y as u64)
-        .and_then(|product| product.checked_mul(workgroup.z as u64))
-        .ok_or_else(|| {
-            RhiError::new(
-                RhiErrorKind::InvalidUsage,
-                format!(
-                    "compute workgroup size {}x{}x{} overflows",
-                    workgroup.x, workgroup.y, workgroup.z
-                ),
-            )
-        })?;
-    if product != workgroup.total_invocations as u64 {
-        return Err(RhiError::new(
-            RhiErrorKind::InvalidUsage,
-            format!(
-                "compute workgroup declares {} total invocations but {}x{}x{} is {}",
-                workgroup.total_invocations, workgroup.x, workgroup.y, workgroup.z, product
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// Section 19.8's compiler-option canonicality.
-fn validate_provenance(provenance: &ShaderProvenance) -> RhiResult<()> {
-    let ShaderProvenance::PortableSource {
-        compiler_options, ..
-    } = provenance
-    else {
-        return Ok(());
-    };
-
-    let mut previous: Option<&str> = None;
-    for (key, _) in compiler_options {
-        if key.is_empty() {
-            return Err(RhiError::new(
-                RhiErrorKind::InvalidUsage,
-                "shader compiler option keys must not be empty",
-            ));
-        }
-        if let Some(previous) = previous {
-            if key == previous {
-                return Err(RhiError::new(
-                    RhiErrorKind::InvalidUsage,
-                    format!("shader compiler option {key:?} appears twice"),
-                ));
-            }
-            if key.as_str() < previous {
-                return Err(RhiError::new(
-                    RhiErrorKind::InvalidUsage,
-                    format!(
-                        "shader compiler options are not sorted lexicographically: {key:?} \
-                         follows {previous:?}"
-                    ),
-                ));
-            }
-        }
-        previous = Some(key);
-    }
-    Ok(())
 }

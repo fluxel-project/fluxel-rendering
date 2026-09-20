@@ -34,7 +34,7 @@ mod transfer;
 mod view;
 use crate::api::error::{RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupport, TextureSupportLimits};
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::resource::buffer::{
     Buffer, BufferDescriptor, BufferSupport, BufferSupportLimits, BufferUsage,
 };
@@ -42,11 +42,8 @@ use crate::api::resource::route::BufferCopyLayoutLimits;
 use crate::api::resource::texture::{Extent3d, Texture, TextureDescriptor, TextureUsage};
 use crate::api::tests::fixture;
 
-fn identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 fn object(value: u64) -> ObjectId {
@@ -55,7 +52,7 @@ fn object(value: u64) -> ObjectId {
 
 /// The identity every fixture object belongs to.
 fn device() -> DeviceIdentity {
-    identity(1, 1)
+    identity(1)
 }
 
 /// Asserts a validation result is the exact kind the specification's mapping

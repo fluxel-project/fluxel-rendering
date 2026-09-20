@@ -10,13 +10,22 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::Poll;
 
 use crate::api::capability::AvailableCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId};
-use crate::api::platform::request::{DeviceRequest, DeviceRequestDescriptor};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId};
+use crate::api::platform::device::Device;
+use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::presentation::PresentationTarget;
-use crate::base::platform::ProviderBackend;
+use crate::base::platform::{ProviderBackend, RequestProgress};
+
+/// Process-wide source for logical device identities.
+///
+/// A provider identity scopes adapters; it does not name a device. In
+/// particular, two successful requests from one provider must not compare equal
+/// merely because they used the same backend instance.
+static NEXT_DEVICE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// The backend family a provider or device speaks.
 ///
@@ -249,24 +258,15 @@ pub enum AdapterSelection {
 /// State behind a [`PlatformProvider`], shared by every clone of it.
 ///
 /// Two halves, and the split is the whole design: the facts the *portable* rules
-/// decide with — which family this provider speaks, which provider an [`AdapterId`]
-/// must belong to, and where the generation counter has got to — are fields here,
-/// and everything native is behind [`ProviderBackend`]. Nothing on this side
+/// decide with — which family this provider speaks and which provider an
+/// [`AdapterId`] must belong to — are fields here, and everything native is
+/// behind [`ProviderBackend`]. Nothing on this side
 /// names a `IDXGIFactory`, a `VkInstance`, a `MTLDevice`, a GPU object, or a
 /// rendering context.
 struct ProviderState {
     backend: BackendKind,
-    /// This provider's instance identity. Section 3 makes it process-local and
-    /// never derived from a native handle, which is why it is minted by the layer
-    /// that opens the instance rather than read off the thing it opened.
-    instance: DeviceInstanceId,
-    /// The next [`DeviceGeneration`] to mint.
-    ///
-    /// An atomic rather than a `Cell` because [`PlatformProvider`] is `Clone` and
-    /// `request_device` takes `&self`: two clones must hand out different
-    /// generations, and section 3.1's "a standalone `request_device()` always
-    /// yields a new identity" has to hold across them.
-    next_generation: AtomicU64,
+    /// This provider's process-local identity, used to scope adapter tokens.
+    provider_id: DeviceInstanceId,
     /// The native instance this provider wraps.
     native: Arc<dyn ProviderBackend>,
 }
@@ -287,9 +287,8 @@ struct ProviderState {
 /// the seam.
 #[derive(Clone)]
 pub struct PlatformProvider {
-    /// Shared, not cloned into each handle: two clones are one provider that
-    /// hands out distinct generations, which is only possible if they count in
-    /// the same place.
+    /// Shared rather than cloned into each handle, so each clone refers to the
+    /// same provider identity and native provider state.
     state: Arc<ProviderState>,
 }
 
@@ -313,23 +312,20 @@ impl PlatformProvider {
         Self {
             state: Arc::new(ProviderState {
                 backend,
-                instance,
-                next_generation: AtomicU64::new(0),
+                provider_id: instance,
                 native,
             }),
         }
     }
 
-    /// Mints the identity of the next logical device this provider hands out.
+    /// Mints the identity of a newly created logical device.
     ///
-    /// This is the portable half of section 6.1's rule that a completed device
-    /// request is what produces an identity. The backend produces the native
-    /// device and reports that it exists; the pair that names it is composed
-    /// here, so a backend cannot hand two domains the same identity or revive an
-    /// old one by choosing a generation itself.
+    /// v13 deliberately has no public generation component and no transparent
+    /// recovery. Each independent request gets a fresh process-local identity.
     pub(crate) fn mint_identity(&self) -> DeviceIdentity {
-        let generation = self.state.next_generation.fetch_add(1, Ordering::Relaxed);
-        DeviceIdentity::new(self.state.instance, DeviceGeneration::new(generation))
+        DeviceIdentity::new(DeviceInstanceId::new(
+            NEXT_DEVICE_INSTANCE.fetch_add(1, Ordering::Relaxed),
+        ))
     }
 
     /// The backend family this provider speaks.
@@ -355,7 +351,7 @@ impl PlatformProvider {
     /// This is not a prerequisite for [`Self::request_device`]. A caller that
     /// only wants a device — the common case — never calls it, which is what
     /// lets a provider that cannot enumerate stay fully usable.
-    pub fn enumerate_adapters(&self) -> RhiResult<Option<Vec<AdapterInfo>>> {
+    pub async fn enumerate_adapters(&self) -> RhiResult<Option<Vec<AdapterInfo>>> {
         self.state.native.enumerate_adapters()
     }
 
@@ -375,7 +371,7 @@ impl PlatformProvider {
         // the provider that produced it, and section 3.1 requires the portable
         // checks to run in O(1) before any backend call. This one is portable,
         // so it is decided here rather than left for a driver to notice.
-        if adapter.provider != self.state.instance.as_u64() {
+        if adapter.provider != self.state.provider_id.as_u64() {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 "adapter belongs to a different provider",
@@ -387,8 +383,8 @@ impl PlatformProvider {
 
     /// The canonical path to a device.
     ///
-    /// Returns a [`DeviceRequest`] rather than a device, because creation may be
-    /// genuinely asynchronous on the platforms this crate serves.
+    /// Device creation may wait for adapter selection, OS/device opening, or a
+    /// browser Promise, so the public operation is an async boundary.
     ///
     /// # Errors
     ///
@@ -400,9 +396,9 @@ impl PlatformProvider {
     /// serials of two providers are independent counters — a foreign id could
     /// match one of them and quietly select a *different* adapter than the one
     /// the caller meant.
-    pub fn request_device(&self, desc: DeviceRequestDescriptor) -> RhiResult<DeviceRequest> {
+    pub async fn request_device(&self, desc: DeviceRequestDescriptor) -> RhiResult<Device> {
         if let AdapterSelection::Explicit(adapter) = desc.selection() {
-            if adapter.provider != self.state.instance.as_u64() {
+            if adapter.provider != self.state.provider_id.as_u64() {
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
                     "adapter belongs to a different provider",
@@ -410,7 +406,22 @@ impl PlatformProvider {
                 .at("PlatformProvider::request_device"));
             }
         }
-        let native = self.state.native.request_device(&desc)?;
-        Ok(DeviceRequest::new(self.clone(), native))
+        let mut request = self.state.native.request_device(&desc)?;
+
+        // The current crate-private backend seam still represents an in-flight
+        // request with `RequestProgress`. Keep that compatibility detail wholly
+        // inside the provider: public callers await `Device`, never manually poll
+        // a request state machine. Native async backends may replace this bridge
+        // with future erasure without changing the public API.
+        std::future::poll_fn(move |context| match request.poll()? {
+            RequestProgress::Pending => {
+                context.waker().wake_by_ref();
+                Poll::Pending
+            }
+            RequestProgress::Ready(native) => {
+                Poll::Ready(Device::new(self.mint_identity(), Arc::from(native)))
+            }
+        })
+        .await
     }
 }

@@ -7,7 +7,7 @@
 //! ```text
 //! provider      adapter discovery, and the provider that owns it   (5.2 - 5.6)
 //! requirements  what a caller asks for before a device exists      (5.7)
-//! request       asking for a device, and waiting for the answer    (5.8 - 5.9)
+//! request       device-request descriptor                           (5.8)
 //! device        the shared logical execution domain                (6)
 //! ```
 //!
@@ -23,7 +23,7 @@ pub mod requirements;
 
 pub use device::{Device, DeviceLossInfo, DeviceStatus};
 pub use provider::{AdapterId, AdapterInfo, AdapterSelection, BackendKind, PlatformProvider};
-pub use request::{DeviceRequest, DeviceRequestDescriptor, RequestStatus};
+pub use request::DeviceRequestDescriptor;
 pub use requirements::{DeviceRequirements, LimitKey, LimitRequirement, OptionalFeature};
 
 #[cfg(test)]

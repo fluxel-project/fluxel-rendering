@@ -536,7 +536,7 @@ impl AcquiredFrame {
     ///
     /// Consuming `self` is what makes double abandonment impossible: after this
     /// call there is no token left to abandon again.
-    pub fn abandon(mut self) -> RhiResult<()> {
+    pub async fn abandon(mut self) -> RhiResult<()> {
         match self.state {
             AcquiredFrameState::Acquired => self.state = AcquiredFrameState::Abandoned,
             AcquiredFrameState::PlannedForPresent => {
@@ -701,13 +701,22 @@ impl ConfiguredPresentation {
     /// everything below it: the frame the surface returns is recorded in this lease
     /// and linked to the record its own `Drop` reports its ending to, because section
     /// 44.5's report is what ends the refusal above.
-    pub fn acquire(&mut self) -> Result<AcquiredFrame, AcquireError> {
+    /// Attempts a non-blocking acquisition.
+    pub fn try_acquire(&mut self) -> Result<Option<AcquiredFrame>, AcquireError> {
         validate_acquire_allowed(self.outstanding_frame())?;
         let frame = self.acquire_from_surface()?;
         // Recording and linking are one step, and the record is what section 44.5's
         // drop path writes: a frame handed to a caller without it would be a frame
         // whose abandonment the lease could not see, and the lease would refuse the
         // next acquire forever — the state section 46.3 forbids.
+        let record = self.set_outstanding_frame(Some(frame.id()));
+        Ok(Some(frame.reporting_to(record)))
+    }
+
+    /// Waits until the next drawable/frame can be acquired.
+    pub async fn acquire(&mut self) -> Result<AcquiredFrame, AcquireError> {
+        validate_acquire_allowed(self.outstanding_frame())?;
+        let frame = self.acquire_from_surface()?;
         let record = self.set_outstanding_frame(Some(frame.id()));
         Ok(frame.reporting_to(record))
     }

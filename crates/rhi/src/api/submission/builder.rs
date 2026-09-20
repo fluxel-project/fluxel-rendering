@@ -53,13 +53,16 @@
 //! can only hold if one counter serves every builder over it.
 
 use crate::api::command::RecordedWork;
+use crate::api::command::{AccessMask, ResourceUse};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::graph_bridge::{AccessMask, ResourceUse};
 use crate::api::identity::DeviceIdentity;
 use crate::api::platform::Device;
 use crate::api::presentation::{AcquiredFrame, AcquiredFrameId, PresentPlanId};
 use crate::api::resource::buffer::BufferRange;
 use crate::api::resource::subresource::{TextureAspects, TextureSubresourceRange};
+use crate::api::resource::transient::{
+    TransientAllocator, TransientLifetime, TransientLifetimeRegistry,
+};
 use crate::api::submission::plan::{
     CompletionPoint, PlanBatch, PlanBody, PlanPoint, PlanPresent, SubmissionPlan, SubmissionPlanId,
 };
@@ -107,6 +110,9 @@ pub struct SubmissionPlanBuilder {
     presents: Vec<PlanPresent>,
     /// The frames `present_after` consumed, in the same order.
     frames: Vec<AcquiredFrame>,
+    /// Every transient lifetime allocated for this plan, including resources
+    /// that never enter recorded work.
+    transient_lifetimes: TransientLifetimeRegistry,
 }
 
 impl SubmissionPlanBuilder {
@@ -154,7 +160,62 @@ impl SubmissionPlanBuilder {
             external_dependencies: Vec::new(),
             presents: Vec::new(),
             frames: Vec::new(),
+            transient_lifetimes: TransientLifetimeRegistry::default(),
         }
+    }
+
+    /// Reserves an empty logical batch point before its recorded work exists.
+    ///
+    /// A reserved point is deliberately not a submit-able empty batch: it must be
+    /// filled exactly once through [`Self::set_batch`] before [`Self::build`].
+    /// Reserving points first lets transient lifetimes be expressed in the same
+    /// `PlanPoint` vocabulary that submission already uses.
+    pub fn reserve_batch(&mut self, lane: SubmissionLaneId) -> RhiResult<PlanPoint> {
+        if self.lanes.lane(lane).is_none() {
+            return Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                format!("{lane:?} is not a lane this device offers"),
+            )
+            .at("SubmissionPlanBuilder::reserve_batch"));
+        }
+        let index = u32::try_from(self.batches.len()).map_err(|_| {
+            RhiError::new(
+                RhiErrorKind::OutOfMemory,
+                "this plan already holds the maximum number of batches",
+            )
+            .at("SubmissionPlanBuilder::reserve_batch")
+        })?;
+        let point = PlanPoint::new(self.plan, SubmissionBatchId::new(index));
+        self.batches.push(PlanBatch {
+            point,
+            lane,
+            work: Vec::new(),
+        });
+        Ok(point)
+    }
+
+    /// Fills one previously reserved batch point exactly once.
+    pub fn set_batch(&mut self, point: PlanPoint, work: Vec<RecordedWork>) -> RhiResult<()> {
+        let lane = self.lane_of(point, "SubmissionPlanBuilder::set_batch")?;
+        if self
+            .batches
+            .iter()
+            .find(|batch| batch.point == point)
+            .is_some_and(|batch| !batch.work.is_empty())
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a reserved batch may only be filled once",
+            )
+            .at("SubmissionPlanBuilder::set_batch"));
+        }
+        self.validate_batch_work(lane, &work, "SubmissionPlanBuilder::set_batch")?;
+        self.batches
+            .iter_mut()
+            .find(|batch| batch.point == point)
+            .expect("lane_of proved the point is a batch of this plan")
+            .work = work;
+        Ok(())
     }
 
     /// Adds a batch of recorded work to one lane.
@@ -185,13 +246,36 @@ impl SubmissionPlanBuilder {
         lane: SubmissionLaneId,
         work: Vec<RecordedWork>,
     ) -> RhiResult<PlanPoint> {
+        self.validate_batch_work(lane, &work, "SubmissionPlanBuilder::add_batch")?;
+        let point = self.reserve_batch(lane)?;
+        // Validation happened before reserving, so this cannot leave a failed
+        // convenience call behind as an unfilled point.
+        self.set_batch(point, work)?;
+        Ok(point)
+    }
+
+    /// Returns an allocator scoped to this builder's Device and plan identity.
+    pub fn transient_allocator(&self) -> TransientAllocator {
+        TransientAllocator::new_with_registry(
+            self.device,
+            self.plan,
+            self.transient_lifetimes.clone(),
+        )
+    }
+
+    fn validate_batch_work(
+        &self,
+        lane: SubmissionLaneId,
+        work: &[RecordedWork],
+        operation: &'static str,
+    ) -> RhiResult<()> {
         if work.is_empty() {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 "a batch must contain at least one recorded work; an empty batch has \
                  nothing to submit and no reason to exist",
             )
-            .at("SubmissionPlanBuilder::add_batch"));
+            .at(operation));
         }
         let accepted = match self.lanes.lane(lane) {
             Some(info) => info.domains(),
@@ -203,10 +287,10 @@ impl SubmissionPlanBuilder {
                          device-scoped, so this one belongs to another device"
                     ),
                 )
-                .at("SubmissionPlanBuilder::add_batch"));
+                .at(operation));
             }
         };
-        for item in &work {
+        for item in work {
             if item.device_identity() != self.device {
                 return Err(RhiError::new(
                     RhiErrorKind::WrongDevice,
@@ -216,10 +300,10 @@ impl SubmissionPlanBuilder {
                         item.id()
                     ),
                 )
-                .at("SubmissionPlanBuilder::add_batch"));
+                .at(operation));
             }
         }
-        for item in &work {
+        for item in work {
             let domains = item.work_domains();
             if !accepted.contains(domains) {
                 return Err(RhiError::new(
@@ -230,19 +314,10 @@ impl SubmissionPlanBuilder {
                         item.id()
                     ),
                 )
-                .at("SubmissionPlanBuilder::add_batch"));
+                .at(operation));
             }
         }
-        let index = u32::try_from(self.batches.len()).map_err(|_| {
-            RhiError::new(
-                RhiErrorKind::OutOfMemory,
-                "this plan already holds the maximum number of batches",
-            )
-            .at("SubmissionPlanBuilder::add_batch")
-        })?;
-        let point = PlanPoint::new(self.plan, SubmissionBatchId::new(index));
-        self.batches.push(PlanBatch { point, lane, work });
-        Ok(point)
+        Ok(())
     }
 
     /// Adds happens-before from `before` to `after`.
@@ -421,7 +496,26 @@ impl SubmissionPlanBuilder {
     /// holds a `DeviceIdentity` and not a `Device`, and `Device::submit`'s Phase A
     /// is where a live device answers them.
     pub fn build(self) -> RhiResult<SubmissionPlan> {
+        if self.batches.iter().any(|batch| batch.work.is_empty()) {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "every reserved batch must be filled exactly once before building a plan",
+            )
+            .at("SubmissionPlanBuilder::build"));
+        }
         validate_plan_graph(&self.batches, &self.dependencies, &self.presents)?;
+        let transient_lifetimes = self
+            .transient_lifetimes
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        validate_transient_lifetimes(
+            &self.batches,
+            &self.dependencies,
+            self.plan,
+            &transient_lifetimes,
+        )?;
+        validate_transient_uses(&self.batches, &self.dependencies, self.plan)?;
         Ok(SubmissionPlan::new(
             self.plan,
             self.device,
@@ -461,6 +555,171 @@ impl SubmissionPlanBuilder {
                 .at(operation)
             })
     }
+}
+
+fn validate_transient_lifetimes(
+    batches: &[PlanBatch],
+    dependencies: &[(PlanPoint, PlanPoint)],
+    plan: SubmissionPlanId,
+    lifetimes: &[TransientLifetime],
+) -> RhiResult<()> {
+    let successors = plan_successors(batches, dependencies)?;
+    for lifetime in lifetimes {
+        if lifetime.acquire().plan() != plan {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a transient lifetime belongs to a different submission plan",
+            )
+            .at("SubmissionPlanBuilder::build"));
+        }
+        let acquire = index_of(batches, lifetime.acquire()).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a transient lifetime acquire point is not a batch of this plan",
+            )
+            .at("SubmissionPlanBuilder::build")
+        })?;
+        if lifetime.release_frontier().is_empty() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a transient lifetime requires at least one release frontier point",
+            )
+            .at("SubmissionPlanBuilder::build"));
+        }
+        for release in lifetime.release_frontier() {
+            let release = index_of(batches, *release).ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a transient lifetime release point is not a batch of this plan",
+                )
+                .at("SubmissionPlanBuilder::build")
+            })?;
+            if !reaches(&successors, acquire, release) {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a transient acquire point must happen before every release frontier point",
+                )
+                .at("SubmissionPlanBuilder::build"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates the plan-scoped lifetime carried by every transient resource use.
+///
+/// This is intentionally submission validation, rather than a resource-creation
+/// check: only the completed batch DAG knows whether an actual use lies between
+/// the acquire point and at least one release frontier point.
+fn validate_transient_uses(
+    batches: &[PlanBatch],
+    dependencies: &[(PlanPoint, PlanPoint)],
+    plan: SubmissionPlanId,
+) -> RhiResult<()> {
+    let successors = plan_successors(batches, dependencies)?;
+
+    for (use_index, batch) in batches.iter().enumerate() {
+        for use_record in batch.work.iter().flat_map(RecordedWork::resource_uses) {
+            let lifetime = match use_record {
+                ResourceUse::Buffer(use_record) => use_record.buffer.transient_lifetime(),
+                ResourceUse::Texture(use_record) => use_record.texture.transient_lifetime(),
+                ResourceUse::Frame(_) => None,
+            };
+            let Some(lifetime) = lifetime else {
+                continue;
+            };
+
+            if lifetime.acquire().plan() != plan {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a transient resource belongs to a different submission plan",
+                )
+                .at("SubmissionPlanBuilder::build"));
+            }
+            let acquire = index_of(batches, lifetime.acquire()).ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a transient lifetime acquire point is not a batch of this plan",
+                )
+                .at("SubmissionPlanBuilder::build")
+            })?;
+            if lifetime.release_frontier().is_empty() {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a transient lifetime requires at least one release frontier point",
+                )
+                .at("SubmissionPlanBuilder::build"));
+            }
+
+            let mut use_reaches_release = false;
+            for release in lifetime.release_frontier() {
+                let release = index_of(batches, *release).ok_or_else(|| {
+                    RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "a transient lifetime release point is not a batch of this plan",
+                    )
+                    .at("SubmissionPlanBuilder::build")
+                })?;
+                if !reaches(&successors, acquire, release) {
+                    return Err(RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "a transient acquire point must happen before every release frontier point",
+                    )
+                    .at("SubmissionPlanBuilder::build"));
+                }
+                use_reaches_release |=
+                    use_index == release || reaches(&successors, use_index, release);
+            }
+            if use_index != acquire && !reaches(&successors, acquire, use_index) {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a transient resource use occurs before or unordered with its acquire point",
+                )
+                .at("SubmissionPlanBuilder::build"));
+            }
+            if !use_reaches_release {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a transient resource use cannot reach any release frontier point",
+                )
+                .at("SubmissionPlanBuilder::build"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn plan_successors(
+    batches: &[PlanBatch],
+    dependencies: &[(PlanPoint, PlanPoint)],
+) -> RhiResult<Vec<Vec<usize>>> {
+    let mut successors = vec![Vec::new(); batches.len()];
+    for (index, batch) in batches.iter().enumerate() {
+        for earlier in (0..index).rev() {
+            if batches[earlier].lane == batch.lane {
+                successors[earlier].push(index);
+                break;
+            }
+        }
+    }
+    for (before, after) in dependencies {
+        let from = index_of(batches, *before).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a dependency names a plan point that is not a batch of this plan",
+            )
+            .at("SubmissionPlanBuilder::build")
+        })?;
+        let to = index_of(batches, *after).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a dependency names a plan point that is not a batch of this plan",
+            )
+            .at("SubmissionPlanBuilder::build")
+        })?;
+        successors[from].push(to);
+    }
+    Ok(successors)
 }
 
 impl core::fmt::Debug for SubmissionPlanBuilder {
@@ -753,11 +1012,8 @@ fn shared_resource(one: &ResourceUse, other: &ResourceUse) -> Option<String> {
 /// Section 40.4's three hazardous combinations are `READ/WRITE`, `WRITE/READ`, and
 /// `WRITE/WRITE`, so the whole test is "does either side write".
 ///
-/// [`AccessMask::PRESENT`] is deliberately not among the write bits: presenting
-/// reads the image rather than writing it, and section 45.2 expresses a frame's
-/// present-time use as `COLOR_WRITE` on [`ResourceUse::Frame`] rather than through
-/// that bit. The bit is kept in the vocabulary because section 37 writes it; it is
-/// not a write here.
+/// Presentation is not an access-mask bit. A frame's render use is expressed as
+/// `COLOR_WRITE` on [`ResourceUse::Frame`]; presentation itself is a plan action.
 fn writes(use_record: &ResourceUse) -> bool {
     let access = match use_record {
         ResourceUse::Buffer(use_record) => use_record.access,
@@ -770,7 +1026,6 @@ fn writes(use_record: &ResourceUse) -> bool {
         AccessMask::DEPTH_WRITE,
         AccessMask::STENCIL_WRITE,
         AccessMask::COPY_WRITE,
-        AccessMask::HOST_WRITE,
     ]
     .into_iter()
     .any(|bit| access.contains(bit))

@@ -44,11 +44,10 @@
 
 use crate::api::binding::layout::BindGroupLayoutDescriptor;
 use crate::api::binding::vocabulary::BindingSlotId;
-use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::identity::{Label, ObjectId};
 use crate::api::pipeline::{
     ColorTargetState, DepthStencilState, MultisampleState, PrimitiveState, VertexInputState,
 };
-use crate::api::presentation::PresentationConfiguration;
 use crate::api::resource::buffer::{BufferDescriptor, BufferRange};
 use crate::api::resource::sampler::SamplerDescriptor;
 use crate::api::resource::texture::TextureDescriptor;
@@ -214,57 +213,6 @@ pub struct CapturedComputePipelineDefinition {
     pub interface: ObjectId,
 }
 
-/// A capture-local key for a host object supplied by an external fixture.
-///
-/// Explicitly not an OS or native graphics handle (section 54). It is a string
-/// key into whatever the ReplayRuntime or its artifact layer is holding, which is
-/// why it is the one type in this module that a caller may construct freely: it
-/// names *their* object, not ours, and minting one forges nothing.
-///
-/// This is the seam that lets a captured presentation target be described
-/// without serializing a surface: the record says "the target the fixture
-/// provider calls `main-window`", and the provider decides what that is.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct CapturedPresentationTargetFixture {
-    /// The fixture provider's key.
-    pub key: String,
-}
-
-/// What a captured presentation target is.
-///
-/// One field, and that is the whole answer: a target has no portable descriptor
-/// to record, because section 42.1 keeps every native surface type out of the
-/// portable API. Reconstructing the target is binding the fixture, and there is
-/// nothing else to say about it.
-#[derive(Clone)]
-pub struct CapturedPresentationTargetDefinition {
-    /// The external fixture this target is reconstructed from.
-    pub fixture: CapturedPresentationTargetFixture,
-}
-
-/// What a captured configured presentation is.
-///
-/// The edge back to the target is `target`, which is why section 58.1 can require
-/// a `FrameAcquired` event's `configured_presentation` to be describable: it
-/// names its own target, and the target names its fixture, so the chain reaches
-/// an external fixture without ever holding a host handle.
-#[derive(Clone)]
-pub struct CapturedConfiguredPresentationDefinition {
-    /// The device that holds the lease.
-    pub device: DeviceIdentity,
-
-    /// The target the lease is over.
-    pub target: ObjectId,
-
-    /// The configuration the lease was taken with.
-    ///
-    /// The whole configuration, not its parts:
-    /// [`PresentationConfiguration`] is the value a reconfigure replaces and the
-    /// value a present was made under, so recording it as a whole is what lets a
-    /// record say which configuration a frame was presented with.
-    pub configuration: PresentationConfiguration,
-}
-
 /// One object's complete definition, as the tooling side sees it.
 ///
 /// Section 54's enum, and the answer to both halves of the lazy seam:
@@ -294,23 +242,6 @@ pub struct CapturedConfiguredPresentationDefinition {
 #[non_exhaustive]
 #[derive(Clone)]
 pub enum CapturedObjectDefinition {
-    /// The target is reconstructed by binding `fixture` to an external
-    /// presentation fixture; tooling never serializes a native target.
-    PresentationTarget {
-        /// The target's identity.
-        id: ObjectId,
-        /// What it is.
-        definition: CapturedPresentationTargetDefinition,
-    },
-
-    /// A configured presentation lease.
-    ConfiguredPresentation {
-        /// The lease's identity.
-        id: ObjectId,
-        /// What it is.
-        definition: CapturedConfiguredPresentationDefinition,
-    },
-
     /// A buffer.
     Buffer {
         /// The buffer's identity.

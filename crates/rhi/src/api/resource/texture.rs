@@ -45,6 +45,7 @@ use crate::api::format::{TextureFormat, TextureSupport, TextureSupportQuery};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
 use crate::api::resource::buffer::ResourceMemoryPreference;
+use crate::api::resource::transient::TransientResourceMetadata;
 
 /// What a texture will be used for.
 ///
@@ -421,6 +422,8 @@ pub struct Texture {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: TextureDescriptor,
+    /// Plan-scoped transient execution metadata, when this is not persistent.
+    transient: Option<TransientResourceMetadata>,
 }
 
 impl Texture {
@@ -443,7 +446,32 @@ impl Texture {
             id,
             device,
             descriptor,
+            transient: None,
         }
+    }
+
+    /// Assembles a logical texture owned by one transient submission plan.
+    pub(crate) fn new_transient(
+        id: ObjectId,
+        device: DeviceIdentity,
+        descriptor: TextureDescriptor,
+        transient: TransientResourceMetadata,
+    ) -> Self {
+        Self {
+            id,
+            device,
+            descriptor,
+            transient: Some(transient),
+        }
+    }
+
+    /// Internal transient lifetime for submission-plan validation.
+    pub(crate) fn transient_lifetime(
+        &self,
+    ) -> Option<&crate::api::resource::transient::TransientLifetime> {
+        self.transient
+            .as_ref()
+            .map(TransientResourceMetadata::lifetime)
     }
 
     /// This texture's process-local object ID.

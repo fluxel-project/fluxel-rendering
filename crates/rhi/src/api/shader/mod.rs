@@ -1,5 +1,5 @@
-//! Shader code, entry-point interface, requirements, provenance, and the
-//! artifact a device accepts (specification section 19).
+//! Shader code, entry-point interface, requirements, and the artifact a device
+//! accepts (specification section 19).
 //!
 //! Section 19 opens by refusing to conflate three layers that a "portable shader
 //! blob" would merge, and this module is organised along those three:
@@ -7,12 +7,11 @@
 //! ```text
 //! ShaderCode        a code form the current backend can consume
 //! ShaderInterface   the portable semantics of one entry point
-//! ShaderProvenance  whether Capture/Replay can regenerate code elsewhere
 //! ```
 //!
 //! The RHI is not a shader cross-compiler. It never converts one of those code
 //! forms into another, which is why there is no `ShaderCode::Portable`: SPIR-V
-//! may be toolchain-portable *provenance* without any browser being able to
+//! may be toolchain-portable without any browser being able to
 //! execute it. Whether the current device accepts a code form is a question for
 //! `EnabledCapabilities::shader_acceptance`, not for a property of `ShaderCode`.
 //!
@@ -24,9 +23,8 @@
 //! - The 32-bit stage IO vocabulary ([`ShaderNumericType`], [`ShaderLocation`],
 //!   [`ShaderInterpolation`], [`ShaderLocationInterface`]).
 //! - The entry-point description ([`ShaderInterface`]) and what it needs from the
-//!   device ([`ShaderRequirements`], [`ComputeWorkgroupRequirements`]).
-//! - Artifact provenance and identity ([`ArtifactHash`],
-//!   [`ArtifactProducerId`], [`ArtifactProducerVersion`], [`ShaderProvenance`]).
+//!   device ([`ShaderRequirements`]).
+//! - Artifact identity ([`ArtifactHash`], [`ArtifactProducerVersion`]).
 //! - The artifact itself ([`ShaderArtifact`]) and the created module
 //!   ([`ShaderModule`]).
 //!
@@ -72,7 +70,7 @@
 //! mod.rs          declarations and re-exports, no rule of its own
 //! vocabulary.rs   sections 19.1-19.4, stages, code forms, and locations
 //! requirements.rs section 19.5-19.7, what an entry point requires
-//! artifact.rs     sections 19.8-19.9, provenance and the created module
+//! artifact.rs     sections 19.8-19.9, artifact identity and the created module
 //! validation.rs   sections 19.6-19.10, the portable validators
 //! acceptance.rs   section 19.8, the device's verdict on one artifact
 //! ```
@@ -82,11 +80,9 @@
 //!
 //! `validate_shader_artifact` and `stage_mask` are crate-private and are not
 //! re-exported. Each submodule stays crate-visible rather than private because the
-//! validators it owns are crate-private entry points of their own: a `pub(crate)
-//! use` of one would be an unused import in a non-test build, since the device
-//! verbs that call it are not written yet, and this module does not carry lint
-//! attributes as a substitute for a caller — so a crate-internal caller names the
-//! file that defines the item.
+//! validators it owns are crate-private entry points of their own. Keeping their
+//! paths at the defining file makes ownership explicit, so a crate-internal
+//! caller names the file that defines the item.
 
 pub(crate) mod acceptance;
 pub(crate) mod artifact;
@@ -94,13 +90,8 @@ pub(crate) mod requirements;
 pub(crate) mod validation;
 pub(crate) mod vocabulary;
 
-pub use artifact::{
-    ArtifactHash, ArtifactProducerId, ArtifactProducerVersion, ExecutableReplayAcceptanceScope,
-    PortableShaderLanguage, ShaderArtifact, ShaderModule, ShaderProvenance,
-};
-pub use requirements::{
-    ComputeWorkgroupRequirements, ShaderInterface, ShaderRequirements, ShaderResourceRequirement,
-};
+pub use artifact::{ArtifactHash, ArtifactProducerVersion, ShaderArtifact, ShaderModule};
+pub use requirements::{ShaderInterface, ShaderRequirements, ShaderResourceRequirement};
 pub use vocabulary::{
     ArtifactAcceptance, GlslProfile, InterpolationMode, InterpolationSampling, ShaderAbiVersion,
     ShaderCode, ShaderInterpolation, ShaderLocation, ShaderLocationInterface, ShaderNumericType,

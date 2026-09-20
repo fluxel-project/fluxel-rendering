@@ -807,7 +807,7 @@ impl Device {
     /// Panics until a backend port exists. Both steps above still run first,
     /// because each refusal they produce is a statement about the descriptor that
     /// a caller can act on without any device object having been allocated.
-    pub fn create_raster_pipeline(
+    pub async fn create_raster_pipeline(
         &self,
         desc: &RasterPipelineDescriptor,
     ) -> RhiResult<RasterPipeline> {

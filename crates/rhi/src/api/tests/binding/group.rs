@@ -50,7 +50,7 @@ fn a_resource_from_another_device_is_refused() {
     let layout = layout_from(vec![uniform_slot(0, 64)]);
     let foreign = fixture::buffer(
         object(1),
-        identity(2, 1),
+        identity(2),
         BufferDescriptor::new(256, BufferUsage::UNIFORM),
     );
     let group = group_with(

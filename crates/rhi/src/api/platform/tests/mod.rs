@@ -13,15 +13,18 @@
 //! It proves nothing about hardware, and nothing here should be read as if it
 //! did.
 
+use std::future::Future;
+use std::pin::pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
 use crate::api::capability::{CapabilityFacts, EnabledCapabilities};
 use crate::api::error::RhiErrorKind;
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{
-    AdapterId, AdapterSelection, BackendKind, Device, DeviceLossInfo, DeviceRequest,
-    DeviceRequestDescriptor, DeviceStatus, PlatformProvider, RequestStatus,
+    AdapterId, AdapterSelection, BackendKind, Device, DeviceLossInfo, DeviceRequestDescriptor,
+    DeviceStatus, PlatformProvider,
 };
 use crate::api::presentation::PresentationTarget;
 use crate::api::resource::buffer::{BufferDescriptor, BufferUsage};
@@ -31,12 +34,22 @@ use crate::api::submission::{
 };
 use crate::base::mock::{MockDevice, MockEnumeration, MockProvider};
 
-/// A device identity under the instance/generation pair section 3 defines.
-fn identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+/// A device identity under the single v13 device-instance token.
+fn identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
+}
+
+/// Minimal executor for the mock-only futures in this module.
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut future = pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => {}
+        }
+    }
 }
 
 /// A mock backend under the instance every other fixture in this file uses.
@@ -62,7 +75,7 @@ fn provider() -> PlatformProvider {
 fn live_device() -> (Device, Arc<MockDevice>) {
     let native = MockDevice::new(BackendKind::Dx12, mock_provider().adapter());
     (
-        Device::new(identity(1, 1), native.clone())
+        Device::new(identity(1), native.clone())
             .expect("the mock backend offers a lane accepting raster and copy work"),
         native,
     )
@@ -116,22 +129,22 @@ fn enumeration_distinguishes_unsupported_from_empty() {
     };
 
     assert!(
-        provider(not_exposed)
-            .enumerate_adapters()
+        block_on(provider(not_exposed).enumerate_adapters())
             .unwrap()
             .is_none(),
         "a provider with no portable enumeration must say so rather than report no adapters"
     );
     assert_eq!(
-        provider(empty)
-            .enumerate_adapters()
+        block_on(provider(empty).enumerate_adapters())
             .unwrap()
             .map(|adapters| adapters.len()),
         Some(0),
         "a provider that can enumerate and has no candidate reports an empty list"
     );
 
-    let adapters = provider(listed).enumerate_adapters().unwrap().unwrap();
+    let adapters = block_on(provider(listed).enumerate_adapters())
+        .unwrap()
+        .unwrap();
     assert_eq!(adapters.len(), 1);
     assert_eq!(
         adapters[0].id(),
@@ -191,26 +204,13 @@ fn a_provider_reports_an_adapter_that_cannot_present() {
 #[test]
 fn a_resolved_request_yields_a_device_under_a_minted_identity() {
     let provider = provider();
-    let mut request = provider.request_device(headless_request()).unwrap();
+    let device = block_on(provider.request_device(headless_request())).unwrap();
 
-    let device = match request.poll().unwrap() {
-        crate::api::platform::RequestStatus::Pending => {
-            panic!("a mock request with no pending steps must resolve on the first poll")
-        }
-        crate::api::platform::RequestStatus::Ready(device) => device,
-    };
-
-    assert_eq!(device.identity().instance(), DeviceInstanceId::new(1));
-    assert_eq!(device.identity().generation(), DeviceGeneration::new(0));
     assert_eq!(device.status(), DeviceStatus::Active);
     assert_eq!(device.backend(), BackendKind::Dx12);
 
-    // A second request off the same provider is a *new* domain, which section 3.1
-    // spells out as a new generation rather than a revived one.
-    let mut second = provider.request_device(headless_request()).unwrap();
-    let crate::api::platform::RequestStatus::Ready(second) = second.poll().unwrap() else {
-        panic!("a mock request with no pending steps must resolve on the first poll");
-    };
+    // A second request off the same provider is a new domain.
+    let second = block_on(provider.request_device(headless_request())).unwrap();
     assert_ne!(
         second.identity(),
         device.identity(),
@@ -218,33 +218,15 @@ fn a_resolved_request_yields_a_device_under_a_minted_identity() {
     );
 }
 
-/// A request reports `Pending` for as long as its backend says it is, and no
-/// sooner.
-///
-/// This is the shape WebGPU actually has — an adapter and then a device resolve
-/// over several host turns — so a façade that resolved eagerly would be wrong on
-/// the one platform that made the type asynchronous in the first place.
+/// A backend request that needs progress is exposed only as an awaited result.
 #[test]
-fn a_pending_request_does_not_resolve_early() {
+fn a_pending_request_resolves_through_the_async_boundary() {
     let instance = DeviceInstanceId::new(1);
     let native = MockProvider::new(BackendKind::Dx12, instance)
         .pending_steps(2)
         .shared();
     let provider = PlatformProvider::new(BackendKind::Dx12, instance, native);
-    let mut request = provider.request_device(headless_request()).unwrap();
-
-    assert!(matches!(
-        request.poll().unwrap(),
-        crate::api::platform::RequestStatus::Pending
-    ));
-    assert!(matches!(
-        request.poll().unwrap(),
-        crate::api::platform::RequestStatus::Pending
-    ));
-    assert!(matches!(
-        request.poll().unwrap(),
-        crate::api::platform::RequestStatus::Ready(_)
-    ));
+    assert!(block_on(provider.request_device(headless_request())).is_ok());
 }
 
 /// A failed request is terminal, and the failure reaches the caller intact.
@@ -253,27 +235,19 @@ fn a_pending_request_does_not_resolve_early() {
 /// pollable after its backend had given up would invite a caller to keep asking a
 /// question that has already been answered.
 #[test]
-fn a_failed_request_is_terminal_and_carries_its_error() {
+fn a_failed_request_carries_its_error() {
     let instance = DeviceInstanceId::new(1);
     let native = MockProvider::new(BackendKind::Dx12, instance)
         .failing("the adapter was removed while the request was in flight")
         .shared();
     let provider = PlatformProvider::new(BackendKind::Dx12, instance, native);
-    let mut request = provider.request_device(headless_request()).unwrap();
-
-    let error = request
-        .poll()
+    let error = block_on(provider.request_device(headless_request()))
         .expect_err("the request was configured to fail");
     assert_eq!(error.kind(), RhiErrorKind::Unsupported);
     assert_eq!(
         error.message(),
         "the adapter was removed while the request was in flight"
     );
-
-    let second = request
-        .poll()
-        .expect_err("a request that has reported its outcome is complete");
-    assert_eq!(second.kind(), RhiErrorKind::InvalidUsage);
 }
 
 /// A device answers provenance, identity, and progress from its backend.
@@ -295,7 +269,7 @@ fn a_device_reports_backend_facts() {
     assert_eq!(device.status(), DeviceStatus::Active);
     assert!(device.loss_info().is_none());
     assert!(device.poll().is_ok());
-    assert!(device.wait_idle().is_ok());
+    assert!(block_on(device.wait_idle()).is_ok());
 
     // Section 7.1 asks tooling to describe what it observes by a process-local
     // object ID, and this is where a device says what its own is.
@@ -324,10 +298,8 @@ fn a_device_reports_backend_facts() {
 /// the mistake `api::tests::capability` explains in its own header.
 #[test]
 fn a_created_device_reports_the_contract_its_backend_enumerated() {
-    let mut request = request_over(declared_facts(), declared_submission());
-    let RequestStatus::Ready(device) = request.poll().expect("the first poll resolves") else {
-        panic!("the mock provider needs no further polls");
-    };
+    let device = block_on(request_over(declared_facts(), declared_submission()))
+        .expect("the mock request resolves");
 
     let capabilities = device.capabilities();
     assert!(
@@ -364,9 +336,7 @@ fn a_device_whose_enumeration_violates_the_base_guarantee_is_refused() {
         LaneWorkDomains::RASTER,
     )]);
 
-    let mut defective = request_over(declared_facts(), lanes_without_copy);
-    let error = defective
-        .poll()
+    let error = block_on(request_over(declared_facts(), lanes_without_copy))
         .expect_err("the base guarantee is violated, so no device may be published");
     assert_eq!(error.kind(), RhiErrorKind::BackendFailure);
     assert!(
@@ -374,30 +344,23 @@ fn a_device_whose_enumeration_violates_the_base_guarantee_is_refused() {
         "the error names which half of the guarantee was violated: {}",
         error.message()
     );
-
-    // The request is retired by the failure, exactly as it is by a backend that
-    // reports an error: section 5.9's diagram has two terminal outcomes, and a
-    // request left looking in-flight would invite a caller to poll a request that
-    // has already given up.
-    assert_eq!(
-        defective.poll().expect_err("completed").kind(),
-        RhiErrorKind::InvalidUsage
-    );
 }
 
-/// A device request over a mock provider that enumerates `facts` and `lanes`.
-fn request_over(facts: CapabilityFacts, lanes: SubmissionCapabilities) -> DeviceRequest {
+/// An async device request over a mock provider that enumerates `facts` and `lanes`.
+async fn request_over(
+    facts: CapabilityFacts,
+    lanes: SubmissionCapabilities,
+) -> crate::api::error::RhiResult<Device> {
     let instance = DeviceInstanceId::new(1);
-    PlatformProvider::new(
+    let provider = PlatformProvider::new(
         BackendKind::Dx12,
         instance,
         mock_provider()
             .with_capability_facts(facts)
             .with_submission_capabilities(lanes)
             .shared(),
-    )
-    .request_device(headless_request())
-    .expect("the mock provider starts a request")
+    );
+    provider.request_device(headless_request()).await
 }
 
 /// The facts the contract test has the provider enumerate, built a second time so
@@ -440,10 +403,7 @@ fn a_clone_is_the_same_domain_and_a_new_request_is_not() {
     assert_eq!(clone.object_id(), device.object_id());
 
     let provider = provider();
-    let mut request = provider.request_device(headless_request()).unwrap();
-    let crate::api::platform::RequestStatus::Ready(fresh) = request.poll().unwrap() else {
-        panic!("a mock request with no pending steps must resolve on the first poll");
-    };
+    let fresh = block_on(provider.request_device(headless_request())).unwrap();
     assert_ne!(fresh.identity(), device.identity());
 }
 
@@ -493,21 +453,6 @@ fn a_device_request_descriptor_round_trips_its_contents() {
     assert!(headless.presentation_targets().is_empty());
 }
 
-/// A request is single-shot: once it has reported its outcome, asking again is a
-/// usage error rather than another look at a finished result.
-#[test]
-fn a_completed_device_request_refuses_a_second_poll() {
-    let provider = provider();
-    let mut request = provider.request_device(headless_request()).unwrap();
-    request.mark_complete();
-
-    let error = request
-        .poll()
-        .expect_err("a completed request must not appear to still be in flight");
-
-    assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
-}
-
 /// A lost device refuses creation itself, and the refusal carries the reason.
 ///
 /// This is the rule section 6.5 states for the handles it lists: they "must
@@ -534,6 +479,11 @@ fn a_lost_device_refuses_creation_and_says_why() {
         device.loss_info().map(|loss| loss.message().to_string()),
         Some("the driver reset the adapter".to_string()),
         "section 6.5 makes the summary stable, so a later ask must match an earlier one"
+    );
+    assert_eq!(
+        block_on(device.lost()).message(),
+        "the driver reset the adapter",
+        "the async loss wait returns the same stable terminal summary"
     );
 
     let error = device

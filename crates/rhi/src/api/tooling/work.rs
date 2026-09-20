@@ -55,8 +55,8 @@
 use core::ops::Range;
 
 use crate::api::binding::BindGroupIndex;
+use crate::api::command::{AccessMask, PipelineScope, TextureUseIntent};
 use crate::api::command::{Color, IndexFormat, Rect, Viewport};
-use crate::api::graph_bridge::{AccessMask, PipelineScope, TextureUseIntent};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::presentation::AcquiredFrameId;
 use crate::api::resource::buffer::BufferRange;
@@ -221,8 +221,7 @@ pub enum PortableCommand {
 ///
 /// The pairing is section 37.1's, carried through to the capture side: a flat use
 /// list cannot say which command produced a use, and "this draw consumed that
-/// binding" is exactly the question a RenderGraph diagnostics pass and a
-/// declared-versus-actual comparison both ask.
+/// binding" is exactly the question a diagnostics pass asks.
 ///
 /// A command that reads nothing in particular — a viewport change, a debug
 /// marker — has an empty `actual_uses`, because actual use is generated at draw
@@ -247,8 +246,8 @@ pub struct CapturedCommand {
 /// ```
 ///
 /// The merged summary is the live [`crate::api::command::RecordedWork`]'s own
-/// public answer (`resource_uses`) and the one a declared-versus-actual check
-/// compares against; the per-command lists are what a *diagnostic* needs. A
+/// public answer (`resource_uses`); the per-command lists are what a
+/// *diagnostic* needs. A
 /// capture that kept only the merged form could say that a texture was written
 /// but not by which draw.
 ///
@@ -277,17 +276,14 @@ pub struct CapturedRecordedWork {
 /// One resource use, named rather than held.
 ///
 /// The tooling-side counterpart of
-/// [`crate::api::graph_bridge::ResourceUse`], and the difference is this chapter's
+/// [`crate::api::command::ResourceUse`], and the difference is this chapter's
 /// whole invariant: the live type holds `Buffer`, `Texture`, and `AcquiredFrameId`
 /// — a live handle in two of the three arms — and this one holds [`ObjectId`]s.
 /// Section 56 states the rule directly: a tooling-owned value may not retain a
 /// live `Buffer` or `Texture` handle.
 ///
-/// The stage and access fields are the graph-bridge types themselves
-/// ([`PipelineScope`], [`AccessMask`]) rather than tooling copies, because a
-/// capture's use record has to be comparable with a graph's declared use record —
-/// they are the two sides of the declared-versus-actual check, and two
-/// vocabularies would make the comparison a translation.
+/// The stage and access fields reuse the RHI command vocabulary
+/// ([`PipelineScope`], [`AccessMask`]) rather than creating tooling copies.
 #[non_exhaustive]
 #[derive(Clone)]
 pub enum CapturedResourceUse {
@@ -317,9 +313,8 @@ pub enum CapturedResourceUse {
         ///
         /// Carried in addition to `access` because the two answer different
         /// questions: `access` is a hazard class, and the intent is the role the
-        /// use played. A declared-versus-actual comparison and a snapshot
-        /// decision both need the role, and neither can recover it from the
-        /// hazard class alone.
+        /// use played. A snapshot decision needs the role and cannot recover it
+        /// from the hazard class alone.
         intent: TextureUseIntent,
     },
 

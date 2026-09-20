@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::api::binding::BindGroupIndex;
+use crate::api::command::{AccessMask, PipelineScope, ResourceUse, TextureUseIntent};
 use crate::api::command::{IndexFormat, Rect, Viewport};
-use crate::api::graph_bridge::{AccessMask, PipelineScope, ResourceUse, TextureUseIntent};
 use crate::api::pipeline::{
     PrimitiveState, PrimitiveTopology, VertexAttribute, VertexBufferLayout, VertexFormat,
     VertexInputState, VertexStepMode,

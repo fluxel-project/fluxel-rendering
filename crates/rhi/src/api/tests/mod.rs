@@ -34,7 +34,6 @@ mod shader;
 // nothing; the alternative is that the chapter cannot be compiled at all while it
 // is being written, and a chapter written without compiling cannot be reviewed.
 mod diagnostics;
-mod graph_bridge;
 mod presentation;
 mod statistics;
 mod submission;

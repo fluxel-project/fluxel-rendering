@@ -122,6 +122,7 @@ use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteQuery, RouteSupport};
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
+use crate::api::resource::transient::{TransientAllocationSupport, TransientCapabilities};
 use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderStage, ShaderStages};
 use crate::api::submission::SubmissionCapabilities;
@@ -416,6 +417,7 @@ pub(crate) struct CapabilityFacts {
     /// compatible, and there is no third answer to store. This is the shape
     /// [`Self::features`] has, and for the same reason.
     view_compatibility: HashSet<(TextureFormat, TextureFormat)>,
+    transient: TransientCapabilities,
 }
 
 impl CapabilityFacts {
@@ -451,6 +453,11 @@ impl CapabilityFacts {
             binding_limits: HashMap::new(),
             routes: HashMap::new(),
             view_compatibility: HashSet::new(),
+            transient: TransientCapabilities {
+                buffers: TransientAllocationSupport::Dedicated,
+                textures: TransientAllocationSupport::Dedicated,
+                mixed_resource_aliasing: false,
+            },
         }
     }
 
@@ -617,6 +624,24 @@ impl CapabilityFacts {
                 .iter()
                 .map(|form| encode_entry(|out| form.encode_into(out), |_| {}))
                 .collect(),
+        );
+
+        write_section(
+            &mut out,
+            vec![encode_entry(
+                |out| out.push(0),
+                |out| {
+                    out.push(match self.transient.buffers {
+                        TransientAllocationSupport::Dedicated => 0,
+                        TransientAllocationSupport::Aliasing => 1,
+                    });
+                    out.push(match self.transient.textures {
+                        TransientAllocationSupport::Dedicated => 0,
+                        TransientAllocationSupport::Aliasing => 1,
+                    });
+                    out.push(u8::from(self.transient.mixed_resource_aliasing));
+                },
+            )],
         );
 
         submission.encode_into(&mut out);
@@ -863,6 +888,18 @@ impl CapabilityFacts {
     )]
     pub(crate) fn record_view_compatibility(&mut self, base: TextureFormat, view: TextureFormat) {
         self.view_compatibility.insert((base, view));
+    }
+
+    /// Records the device's transient allocation strategy.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "backend capability enumeration will record aliasing support when a backend exposes it"
+        )
+    )]
+    pub(crate) fn record_transient_capabilities(&mut self, transient: TransientCapabilities) {
+        self.transient = transient;
     }
 }
 
@@ -1216,6 +1253,11 @@ pub struct EnabledCapabilities {
 }
 
 impl EnabledCapabilities {
+    /// The device's transient resource allocation capabilities.
+    pub fn transient(&self) -> TransientCapabilities {
+        self.facts.transient
+    }
+
     /// The device's facts, interned and fingerprinted.
     ///
     /// Crate-private: the two tokens are minted here and nowhere else, because a

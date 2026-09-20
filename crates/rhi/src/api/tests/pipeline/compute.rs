@@ -1,7 +1,7 @@
 //! Section 28: compute pipelines.
 //!
-//! The capability gate, the stage and acceptance checks, the workgroup limits, and
-//! the interface rules the raster path shares. `use super::*` brings in the
+//! The capability gate, stage and acceptance checks, and interface rules the
+//! raster path shares. `use super::*` brings in the
 //! fixtures and the vocabulary the whole chapter's tests share; the banner below
 //! is the original section banner.
 
@@ -12,10 +12,7 @@ use crate::base::mock::compute_pipeline_backend_for_test;
 // ---------------------------------------------------------------------------
 
 fn compute_descriptor() -> ComputePipelineDescriptor {
-    ComputePipelineDescriptor::new(
-        compute_module(1, ComputeWorkgroupRequirements::new(8, 8, 1, 64, 0)),
-        no_bindings(),
-    )
+    ComputePipelineDescriptor::new(compute_module(1), no_bindings())
 }
 
 #[test]
@@ -46,32 +43,6 @@ fn a_compute_pipeline_refuses_a_shader_the_device_does_not_accept() {
 }
 
 #[test]
-fn a_compute_workgroup_must_fit_the_device_limits() {
-    let desc = ComputePipelineDescriptor::new(
-        compute_module(1, ComputeWorkgroupRequirements::new(8, 8, 1, 64, 1024)),
-        no_bindings(),
-    );
-
-    for key in [
-        LimitKey::MaxComputeWorkgroupSizeX,
-        LimitKey::MaxComputeWorkgroupSizeY,
-        LimitKey::MaxComputeInvocationsPerWorkgroup,
-    ] {
-        let facts = permissive().limit(key, 1);
-        assert_kind(check_compute(&desc, &facts), RhiErrorKind::InvalidUsage);
-    }
-
-    let facts = permissive().limit(LimitKey::MaxComputeWorkgroupStorageSize, 512);
-    assert_kind(check_compute(&desc, &facts), RhiErrorKind::InvalidUsage);
-
-    let facts = permissive()
-        .limit(LimitKey::MaxComputeInvocationsPerWorkgroup, 64)
-        .limit(LimitKey::MaxComputeWorkgroupSizeX, 8)
-        .limit(LimitKey::MaxComputeWorkgroupStorageSize, 1024);
-    assert!(check_compute(&desc, &facts).is_ok());
-}
-
-#[test]
 fn a_compute_pipeline_shares_the_interface_rules_with_raster() {
     // The same §23 interface and merge rules apply, so a compute shader requiring a
     // binding the interface does not declare is refused here too.
@@ -85,8 +56,7 @@ fn a_compute_pipeline_shares_the_interface_rules_with_raster() {
             BufferBindingAccess::ReadWrite,
             64,
         )]),
-        ShaderRequirements::new()
-            .with_compute_workgroup(ComputeWorkgroupRequirements::new(1, 1, 1, 1, 0)),
+        ShaderRequirements::new(),
     );
     let desc = ComputePipelineDescriptor::new(module, no_bindings());
     assert_kind(
@@ -105,8 +75,7 @@ fn a_compute_pipeline_shares_the_interface_rules_with_raster() {
                 BufferBindingAccess::ReadWrite,
                 64,
             )]),
-            ShaderRequirements::new()
-                .with_compute_workgroup(ComputeWorkgroupRequirements::new(1, 1, 1, 1, 0)),
+            ShaderRequirements::new(),
         ),
         interface_of(vec![layout(vec![layout_slot(
             0,

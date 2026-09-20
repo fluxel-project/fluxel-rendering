@@ -19,18 +19,16 @@
 //! format can do against what a descriptor may be created as without learning
 //! two shapes.
 //!
-//! # The device verbs this chapter assigns to `Device`, and why they are not
-//! # written yet
+//! # The device verbs this chapter assigns to `Device`
 //!
 //! Sections 12 through 18 declare their creation verbs in `impl Device` blocks,
 //! because that is where a caller looks for them. Rust allows that inherent impl
 //! to live in another module of the same crate, so each verb belongs next to the
 //! descriptor it consumes — which is here.
 //!
-//! None of them can be written yet. `impl Device` requires `crate::api::platform`,
-//! which is written but not declared (see [`crate::api`]), and every one of them
-//! must reach a backend. The verbs are therefore listed here by their exact
-//! specification signatures, so that the debt is named rather than implied:
+//! The logical creation verbs remain synchronous under v13: concurrency support
+//! does not turn an operation into `async fn` unless it waits for a future event.
+//! Their exact public signatures are:
 //!
 //! ```text
 //! Device::create_buffer(&self, desc: &BufferDescriptor) -> RhiResult<Buffer>
@@ -56,13 +54,12 @@
 //!     -- section 8.5; the receiver is owned by module 01
 //! ```
 //!
-//! What *is* written here is everything a descriptor can be asked about without a
-//! device: the descriptor types and their builders, the opaque resource tokens
-//! and their readback accessors, the usage bitsets, and the portable validation
-//! rules. The rules are `pub(crate) fn validate_*` functions in the module that
-//! owns the descriptor they check, so that the device façade calls one rule
-//! rather than restating it, and so that the contract tests in
-//! `crate::api::tests` can drive every accept and reject path without a GPU.
+//! The descriptor types and builders, opaque resource handles, readback
+//! accessors, usage bitsets, and portable validation rules live beside those
+//! façades. The rules are `pub(crate) fn validate_*` functions in the module that
+//! owns the descriptor they check, so the device façade calls one rule rather
+//! than restating it and contract tests can drive accept and reject paths without
+//! a GPU.
 //!
 //! One consequence of section 3.1 is visible in those signatures: a validator
 //! takes the *capability answer* it must respect (`&BufferSupport`,
@@ -76,6 +73,7 @@ pub mod sampler;
 pub mod subresource;
 pub mod texture;
 pub mod transfer;
+pub mod transient;
 pub mod view;
 
 pub use buffer::{
@@ -94,7 +92,12 @@ pub use texture::{
     Extent3d, Texture, TextureDescriptor, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
 pub use transfer::{
-    BufferUploadDescriptor, ReadbackData, ReadbackRequest, ReadbackStatus, ReadbackTexelLayout,
-    ReadbackTicket, TextureUploadDescriptor, UploadDescriptor, UploadJob,
+    BufferUploadDescriptor, ReadbackRequest, ReadbackStatus, ReadbackTexelLayout, ReadbackTicket,
+    ReadbackView, ReadbackViewData, TextureUploadDescriptor, UploadDescriptor, UploadJob,
+};
+pub use transient::{
+    TransientAllocationRequirements, TransientAllocationSupport, TransientAllocator,
+    TransientCapabilities, TransientCompatibilityClass, TransientLifetime,
+    TransientMemoryStatistics, TransientResourceDescriptor,
 };
 pub use view::{TextureView, TextureViewDescriptor, TextureViewDimension};

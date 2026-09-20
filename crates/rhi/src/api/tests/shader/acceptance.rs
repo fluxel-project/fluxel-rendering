@@ -69,12 +69,6 @@ fn shader_requirements() -> crate::api::shader::ShaderRequirements {
     crate::api::shader::ShaderRequirements::new()
 }
 
-fn compute_requirements(
-    workgroup: ComputeWorkgroupRequirements,
-) -> crate::api::shader::ShaderRequirements {
-    crate::api::shader::ShaderRequirements::new().with_compute_workgroup(workgroup)
-}
-
 /// A device ready to accept anything except the rule under test: it consumes
 /// WGSL, has compute, and states no limits of its own.
 fn permissive_device() -> CapabilityFacts {
@@ -237,7 +231,7 @@ fn a_compute_entry_point_needs_the_compute_feature_even_when_it_asks_for_nothing
     let artifact = artifact_with(
         ShaderStage::Compute,
         ShaderInterface::new(),
-        compute_requirements(ComputeWorkgroupRequirements::new(8, 8, 1, 64, 0)),
+        shader_requirements(),
     );
     assert!(artifact.requirements.required_features().is_empty());
 
@@ -331,41 +325,6 @@ fn a_limit_the_contract_does_not_define_is_not_a_refusal() {
     assert_eq!(
         verdict(permissive_device(), &artifact),
         ArtifactAcceptance::Accepted
-    );
-}
-
-/// Section 19.7's five workgroup keys, compared as two axes rather than one: a
-/// device can allow a 1024-wide workgroup and still cap the total invocations
-/// below the artifact's product, and the artifact must fit both.
-#[test]
-fn a_workgroup_is_compared_against_both_its_size_and_its_invocation_count() {
-    let artifact = artifact_with(
-        ShaderStage::Compute,
-        ShaderInterface::new(),
-        compute_requirements(ComputeWorkgroupRequirements::new(32, 32, 1, 1024, 4096)),
-    );
-
-    let mut wide = permissive_device();
-    wide.record_limit(LimitKey::MaxComputeWorkgroupSizeX, 1024);
-    wide.record_limit(LimitKey::MaxComputeWorkgroupSizeY, 1024);
-    wide.record_limit(LimitKey::MaxComputeWorkgroupSizeZ, 64);
-    wide.record_limit(LimitKey::MaxComputeInvocationsPerWorkgroup, 1024);
-    wide.record_limit(LimitKey::MaxComputeWorkgroupStorageSize, 4096);
-    assert_eq!(verdict(wide, &artifact), ArtifactAcceptance::Accepted);
-
-    let mut too_few_invocations = permissive_device();
-    too_few_invocations.record_limit(LimitKey::MaxComputeWorkgroupSizeX, 1024);
-    too_few_invocations.record_limit(LimitKey::MaxComputeInvocationsPerWorkgroup, 512);
-    assert_eq!(
-        verdict(too_few_invocations, &artifact),
-        ArtifactAcceptance::LimitExceeded
-    );
-
-    let mut too_little_storage = permissive_device();
-    too_little_storage.record_limit(LimitKey::MaxComputeWorkgroupStorageSize, 4095);
-    assert_eq!(
-        verdict(too_little_storage, &artifact),
-        ArtifactAcceptance::LimitExceeded
     );
 }
 

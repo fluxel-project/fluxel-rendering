@@ -1,6 +1,6 @@
 //! Identity-token contract tests (specification sections 3, 3.1, and 3.4).
 
-use crate::api::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, Label, ObjectId};
+use crate::api::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};
 
 /// A process-local instance value, for tests that need one.
 ///
@@ -10,10 +10,6 @@ use crate::api::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, Label, Obje
 /// of the rule.
 fn instance(value: u64) -> DeviceInstanceId {
     DeviceInstanceId::new(value)
-}
-
-fn generation(value: u64) -> DeviceGeneration {
-    DeviceGeneration::new(value)
 }
 
 #[test]
@@ -26,11 +22,10 @@ fn every_token_is_comparable_hashable_and_printable() {
     fn assert_usable<T: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug>() {}
 
     assert_usable::<DeviceInstanceId>();
-    assert_usable::<DeviceGeneration>();
     assert_usable::<DeviceIdentity>();
     assert_usable::<ObjectId>();
 
-    let identity = DeviceIdentity::new(instance(7), generation(1));
+    let identity = DeviceIdentity::new(instance(7));
     assert_eq!(identity, identity);
     assert!(!format!("{identity:?}").is_empty());
 
@@ -40,41 +35,24 @@ fn every_token_is_comparable_hashable_and_printable() {
 }
 
 #[test]
-fn the_same_instance_and_generation_compose_the_same_identity() {
+fn the_same_instance_composes_the_same_identity() {
     // Section 3.1's first row: `Device::clone()` yields the same
     // `DeviceIdentity`. That is only usable as the `WrongDevice` discriminator if
     // identity is a value rather than a handle, so equal components must compose
     // equal identities.
-    let first = DeviceIdentity::new(instance(7), generation(1));
-    let second = DeviceIdentity::new(instance(7), generation(1));
+    let first = DeviceIdentity::new(instance(7));
+    let second = DeviceIdentity::new(instance(7));
 
     assert_eq!(first, second);
     assert_eq!(first.instance(), second.instance());
-    assert_eq!(first.generation(), second.generation());
 }
 
 #[test]
-fn two_generations_of_one_instance_are_different_domains() {
-    // A generation is not a recovery counter — section 3.1 puts generation++
-    // recovery under "P0 None" — but two identities differing only in generation
-    // are still two terminal execution domains, not one, and must compare
-    // unequal. This is the assertion that would catch a future "revive by
-    // incrementing" shortcut.
-    let older = DeviceIdentity::new(instance(7), generation(1));
-    let newer = DeviceIdentity::new(instance(7), generation(2));
-
-    assert_eq!(older.instance(), newer.instance());
-    assert_ne!(older, newer);
-}
-
-#[test]
-fn two_instances_are_different_domains_even_at_the_same_generation() {
-    // The mirror of the test above, and the one section 3.1's multi-device table
-    // is really about: a DX12 device and a Vulkan device are two instances, and
-    // resource exchange between them must be `WrongDevice` regardless of
-    // generation numbering.
-    let dx12 = DeviceIdentity::new(instance(7), generation(1));
-    let vulkan = DeviceIdentity::new(instance(8), generation(1));
+fn two_instances_are_different_domains() {
+    // A DX12 device and a Vulkan device are distinct execution domains. A
+    // recreated device likewise receives a fresh instance identity.
+    let dx12 = DeviceIdentity::new(instance(7));
+    let vulkan = DeviceIdentity::new(instance(8));
 
     assert_ne!(dx12, vulkan);
     assert_ne!(dx12.instance(), vulkan.instance());

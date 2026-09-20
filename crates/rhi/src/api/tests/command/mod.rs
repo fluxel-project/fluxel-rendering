@@ -32,6 +32,11 @@ mod recorder;
 mod transfer;
 
 use std::sync::Arc;
+use std::{
+    future::Future,
+    pin::pin,
+    task::{Context, Poll, Waker},
+};
 
 use crate::api::binding::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
@@ -46,7 +51,7 @@ use crate::api::command::{
 };
 use crate::api::error::{RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, Label, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};
 use crate::api::pipeline::{
     ColorTargetState, PipelineInterface, PipelineInterfaceCompatibilityId,
     PipelineInterfaceDescriptor, RasterPipeline, RasterPipelineDescriptor,
@@ -65,28 +70,38 @@ use crate::api::resource::texture::{Extent3d, Texture, TextureDescriptor, Textur
 use crate::api::resource::transfer::{BufferUploadDescriptor, UploadDescriptor, UploadJob};
 use crate::api::resource::view::{TextureView, TextureViewDescriptor, TextureViewDimension};
 use crate::api::shader::{
-    ArtifactHash, ArtifactProducerId, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact,
-    ShaderCode, ShaderInterface, ShaderLocation, ShaderModule, ShaderRequirements, ShaderStage,
-    ShaderStages,
+    ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderCode,
+    ShaderInterface, ShaderLocation, ShaderModule, ShaderRequirements, ShaderStage, ShaderStages,
 };
 use crate::api::tests::fixture;
 use crate::base::mock::{
     bind_group_backend_for_test, recorder_for_test, recorder_without_facts_for_test,
 };
 
-fn identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 fn device() -> DeviceIdentity {
-    identity(1, 1)
+    identity(1)
 }
 
 fn other_device() -> DeviceIdentity {
-    identity(2, 1)
+    identity(2)
+}
+
+/// Minimal executor for immediately-ready mock futures used by async creation
+/// verbs in this command test group.
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut future = pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => {}
+        }
+    }
 }
 
 fn object(value: u64) -> ObjectId {
@@ -335,7 +350,7 @@ fn color_scope(label: &str) -> RasterScopeDescriptor {
     )
 }
 
-fn vertex_module(id: u64) -> ShaderModule {
+fn vertex_module(_id: u64) -> ShaderModule {
     let artifact = ShaderArtifact::new(
         ShaderStage::Vertex,
         "main",
@@ -344,18 +359,17 @@ fn vertex_module(id: u64) -> ShaderModule {
         ShaderInterface::new().with_writes_position(true),
         ShaderRequirements::new(),
         ArtifactHash([3; 32]),
-        ArtifactProducerId("fluxel-shaderc".to_string()),
         ArtifactProducerVersion {
             major: 0,
             minor: 16,
         },
     );
-    ShaderModule::new(
-        object(id),
+    let (device, _) = crate::base::mock::shaders_for_test(
         device(),
-        artifact.clone(),
-        crate::base::mock::module_backend_for_test(&artifact),
-    )
+        &[crate::api::shader::vocabulary::AcceptedCodeForm::Wgsl],
+    );
+    block_on(device.create_shader(&artifact))
+        .expect("the command fixture device accepts its WGSL vertex artifact")
 }
 
 /// A one-slot layout: slot 0 is a uniform buffer visible to the vertex stage.

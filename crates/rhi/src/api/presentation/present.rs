@@ -303,4 +303,15 @@ impl Device {
              fixed, the bookkeeping is not built"
         )
     }
+
+    /// Waits for presentation ownership to reach a terminal outcome.
+    pub async fn wait_present(&self, receipt: PresentReceiptId) -> RhiResult<PresentState> {
+        let state = self.present_state(receipt)?;
+        match state {
+            PresentState::Pending => unimplemented!(
+                "waiting for presentation outcome requires backend async presentation plumbing"
+            ),
+            terminal => Ok(terminal),
+        }
+    }
 }

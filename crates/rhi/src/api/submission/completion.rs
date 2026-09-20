@@ -314,7 +314,7 @@ impl Device {
     /// terminal path — the frame's own `Drop` performs the no-throw abandonment
     /// bookkeeping, so a caller that ignores the error still does not leak a
     /// drawable. No submission happens on that path, by construction.
-    pub fn submit(&self, plan: SubmissionPlan) -> RhiResult<SubmissionReceipt> {
+    pub async fn submit(&self, plan: SubmissionPlan) -> RhiResult<SubmissionReceipt> {
         if let DeviceStatus::Lost = self.status() {
             return Err(RhiError::new(
                 RhiErrorKind::DeviceLost,
@@ -505,5 +505,23 @@ impl Device {
         // non-blocking, so nothing below waits: a backend advances its
         // bookkeeping from `Device::poll` and reports what it has observed.
         Ok(self.native().completion(point.serial()))
+    }
+
+    /// Waits until one completion point reaches a terminal state.
+    ///
+    /// This is intentionally distinct from [`Self::completion_state`]: the latter
+    /// is the synchronous, non-blocking observation; this verb owns the potentially
+    /// suspending completion wait.
+    pub async fn wait_completion(&self, point: CompletionPoint) -> RhiResult<CompletionState> {
+        // The portable identity and loss checks are shared with the non-blocking
+        // query. A backend-specific waiter will replace this single observation;
+        // keeping the public boundary async now prevents a later API split.
+        let state = self.completion_state(point)?;
+        match state {
+            CompletionState::Pending => unimplemented!(
+                "waiting for GPU completion requires backend async completion plumbing"
+            ),
+            terminal => Ok(terminal),
+        }
     }
 }

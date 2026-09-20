@@ -20,16 +20,13 @@
 //!
 //! ```text
 //! not a native command list / encoder
-//! does not accept Graph declared uses
+//! does not accept an upper-layer scheduling contract
 //! does not expose barriers / transitions
 //! does not bind a submission lane
 //! ```
 //!
 //! A recorder records *what happened*, never what a caller promised would happen.
-//! The declared-versus-actual comparison is
-//! [`crate::api::graph_bridge::validate_recorded_work`], which reads this chapter's
-//! output rather than being trusted by it (section 37.4), and barrier and lane
-//! decisions belong to the submission plan (section 40).
+//! Barrier and lane decisions belong to the submission plan (section 40).
 //!
 //! # Submodules
 //!
@@ -84,12 +81,15 @@ pub use copy::{
 pub use geometry::{Color, ColorClearValue, LoadOp, Rect, StoreOp, Viewport};
 pub use raster::RasterScope;
 pub use record::RecordedWork;
+pub use uses::{
+    AccessMask, BufferUse, FrameAttachmentUse, PipelineScope, ResourceUse, TextureUse,
+    TextureUseIntent,
+};
 
 use std::sync::Arc;
 
 use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::graph_bridge::{AccessMask, PipelineScope, ResourceUse};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
 use crate::api::resource::buffer::BufferRange;
@@ -442,9 +442,8 @@ impl CommandRecorder {
     /// `Device::create_buffer_upload` and `create_texture_upload`, and section
     /// 17.2 makes a job repeatable rather than one-shot), so what is left is
     /// section 35's mapping: the destination becomes a `COPY_WRITE` use in the
-    /// `COPY` scope, and the job is recorded. HOST_WRITE is deliberately *not*
-    /// emitted — section 37 reserves the host bits for graph and tooling
-    /// observation, and an upload's GPU-side effect is the copy.
+    /// `COPY` scope, and the job is recorded. Host writes are deliberately not
+    /// emitted: an upload's GPU-side effect is the copy.
     pub fn encode_upload(&mut self, upload: &UploadJob) -> RhiResult<()> {
         self.require_open("encode_upload")?;
         if upload.device_identity() != self.device {
@@ -509,7 +508,7 @@ impl CommandRecorder {
                 limits
                     .validate(range.offset, range.size)
                     .map_err(|e| e.at("encode_readback"))?;
-                vec![ResourceUse::Buffer(crate::api::graph_bridge::BufferUse {
+                vec![ResourceUse::Buffer(BufferUse {
                     buffer: src.clone(),
                     range: *range,
                     stages: PipelineScope::COPY,
@@ -525,7 +524,7 @@ impl CommandRecorder {
             } => {
                 validate_texture_readback(src, *subresource, *origin, *extent, self.device)?;
                 self.require_route(texture_to_buffer_route(src, subresource), "encode_readback")?;
-                vec![ResourceUse::Texture(crate::api::graph_bridge::TextureUse {
+                vec![ResourceUse::Texture(TextureUse {
                     texture: src.clone(),
                     subresources: crate::api::resource::subresource::TextureSubresourceRange {
                         aspects: crate::api::resource::subresource::aspect_bits(subresource.aspect),
@@ -536,7 +535,7 @@ impl CommandRecorder {
                     },
                     stages: PipelineScope::COPY,
                     access: AccessMask::COPY_READ,
-                    intent: crate::api::graph_bridge::TextureUseIntent::CopySrc,
+                    intent: TextureUseIntent::CopySrc,
                 })]
             }
         };
@@ -904,7 +903,7 @@ pub(crate) fn require_device(
 fn upload_uses(upload: &UploadJob) -> Vec<ResourceUse> {
     match upload.descriptor() {
         UploadDescriptor::Buffer(buffer) => {
-            vec![ResourceUse::Buffer(crate::api::graph_bridge::BufferUse {
+            vec![ResourceUse::Buffer(BufferUse {
                 buffer: buffer.dst.clone(),
                 range: BufferRange::new(buffer.dst_offset, buffer.bytes.len() as u64),
                 stages: PipelineScope::COPY,
@@ -913,7 +912,7 @@ fn upload_uses(upload: &UploadJob) -> Vec<ResourceUse> {
         }
         UploadDescriptor::Texture(texture) => {
             let aspect = texture.subresource.aspect;
-            vec![ResourceUse::Texture(crate::api::graph_bridge::TextureUse {
+            vec![ResourceUse::Texture(TextureUse {
                 texture: texture.dst.clone(),
                 subresources: crate::api::resource::subresource::TextureSubresourceRange {
                     aspects: crate::api::resource::subresource::aspect_bits(aspect),
@@ -924,7 +923,7 @@ fn upload_uses(upload: &UploadJob) -> Vec<ResourceUse> {
                 },
                 stages: PipelineScope::COPY,
                 access: AccessMask::COPY_WRITE,
-                intent: crate::api::graph_bridge::TextureUseIntent::CopyDst,
+                intent: TextureUseIntent::CopyDst,
             })]
         }
     }

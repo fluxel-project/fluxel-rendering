@@ -26,7 +26,7 @@ use crate::api::error::{RhiErrorKind, RhiResult};
 use crate::api::format::{
     TextureFormat, TextureSupport, TextureSupportLimits, TextureSupportQuery,
 };
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::pipeline::compute::validate_compute_pipeline_descriptor;
 use crate::api::pipeline::interface::validate_pipeline_interface_descriptor;
 use crate::api::pipeline::raster::validate_raster_pipeline_descriptor;
@@ -50,30 +50,26 @@ use crate::api::resource::sampler::CompareFunction;
 use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
 use crate::api::resource::view::TextureViewDimension;
 use crate::api::shader::{
-    ArtifactAcceptance, ArtifactHash, ArtifactProducerId, ArtifactProducerVersion,
-    ComputeWorkgroupRequirements, InterpolationMode, InterpolationSampling, ShaderAbiVersion,
-    ShaderArtifact, ShaderCode, ShaderInterface, ShaderInterpolation, ShaderLocation,
-    ShaderLocationInterface, ShaderModule, ShaderNumericType, ShaderRequirements,
-    ShaderResourceRequirement, ShaderStage, ShaderStages,
+    ArtifactAcceptance, ArtifactHash, ArtifactProducerVersion, InterpolationMode,
+    InterpolationSampling, ShaderAbiVersion, ShaderArtifact, ShaderCode, ShaderInterface,
+    ShaderInterpolation, ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
+    ShaderRequirements, ShaderResourceRequirement, ShaderStage, ShaderStages,
 };
 
 // ---------------------------------------------------------------------------
 // Fixtures.
 // ---------------------------------------------------------------------------
 
-fn identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 fn device() -> DeviceIdentity {
-    identity(1, 1)
+    identity(1)
 }
 
 fn other_device() -> DeviceIdentity {
-    identity(2, 1)
+    identity(2)
 }
 
 fn object(value: u64) -> ObjectId {
@@ -282,7 +278,6 @@ fn artifact(
         interface,
         requirements,
         ArtifactHash([3; 32]),
-        ArtifactProducerId("fluxel-shaderc".to_string()),
         ArtifactProducerVersion {
             major: 0,
             minor: 16,
@@ -354,13 +349,13 @@ fn depth_writing_fragment(id: u64) -> ShaderModule {
     )
 }
 
-fn compute_module(id: u64, workgroup: ComputeWorkgroupRequirements) -> ShaderModule {
+fn compute_module(id: u64) -> ShaderModule {
     module_on(
         device(),
         id,
         ShaderStage::Compute,
         ShaderInterface::new(),
-        ShaderRequirements::new().with_compute_workgroup(workgroup),
+        ShaderRequirements::new(),
     )
 }
 

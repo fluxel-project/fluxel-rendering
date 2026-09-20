@@ -56,13 +56,6 @@ impl DeviceInstanceId {
     ///
     /// Crate-private: only the platform layer that opened the instance may mint
     /// one. The value is process-local and never derived from a native handle.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by the contract tests; the platform layer that opens an instance is not written"
-        )
-    )]
     pub(crate) fn new(value: u64) -> Self {
         Self(value)
     }
@@ -76,76 +69,31 @@ impl DeviceInstanceId {
     }
 }
 
-/// Opaque generation within a Fluxel logical Device execution domain.
-///
-/// A caller may compare, hash, and print this token, but cannot construct a
-/// valid generation. It is part of public identity, not a recovery counter that
-/// callers or backends may increment transparently: section 3.1 removes
-/// generation++ recovery from P0 entirely, and section 65.1 records the decision
-/// that a lost device is terminal and re-requested rather than revived.
-///
-/// ```compile_fail
-/// use fluxel_rhi::api::DeviceGeneration;
-/// let _ = DeviceGeneration::new(2);
-/// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct DeviceGeneration(u64);
-
-impl DeviceGeneration {
-    /// Mints a generation.
-    ///
-    /// Crate-private because the *only* legal mint is "one new generation domain
-    /// for a device that was just requested". Nothing in the crate may mint a
-    /// generation in order to revive an existing identity — section 3.1 lists
-    /// that under "P0 None".
-    pub(crate) fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    /// Returns the process-local value for diagnostics and logging.
-    pub fn as_u64(self) -> u64 {
-        self.0
-    }
-}
-
 /// A Fluxel logical Device execution domain.
 ///
 /// P0 provides no transparent device recovery: device loss is terminal and
-/// re-requesting a device obtains a new identity and a new generation domain.
-/// Two `Device`s may therefore share a [`DeviceInstanceId`] — `Device::clone()`
-/// yields the same identity — while a standalone `request_device()` always
-/// yields a new one.
+/// re-requesting a device obtains a new identity. `Device::clone()` yields the
+/// same identity; every independent `request_device()` mints a new instance ID.
 ///
 /// Every operation that accepts a resource and a target device compares this
 /// value first, in O(1), before any backend is touched (section 3.1).
 ///
 /// ```compile_fail
 /// use fluxel_rhi::api::DeviceIdentity;
-/// let _ = DeviceIdentity::new(1, 1);
+/// let _ = DeviceIdentity::new(1);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct DeviceIdentity {
-    instance: DeviceInstanceId,
-    generation: DeviceGeneration,
-}
+pub struct DeviceIdentity(DeviceInstanceId);
 
 impl DeviceIdentity {
     /// Composes the identity of one logical device execution domain.
-    pub(crate) fn new(instance: DeviceInstanceId, generation: DeviceGeneration) -> Self {
-        Self {
-            instance,
-            generation,
-        }
+    pub(crate) fn new(instance: DeviceInstanceId) -> Self {
+        Self(instance)
     }
 
     /// Returns the instance component.
     pub fn instance(self) -> DeviceInstanceId {
-        self.instance
-    }
-
-    /// Returns the generation component.
-    pub fn generation(self) -> DeviceGeneration {
-        self.generation
+        self.0
     }
 }
 

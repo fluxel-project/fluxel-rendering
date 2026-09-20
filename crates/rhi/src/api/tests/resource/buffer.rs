@@ -367,11 +367,11 @@ fn a_buffer_from_another_device_is_wrong_device() {
     let buffer = buffer_with(BufferUsage::COPY_SRC, 64);
     assert!(validate_buffer_ownership(&buffer, device()).is_ok());
     assert_kind(
-        validate_buffer_ownership(&buffer, identity(1, 2)),
+        validate_buffer_ownership(&buffer, identity(2)),
         RhiErrorKind::WrongDevice,
     );
     assert_kind(
-        validate_buffer_ownership(&buffer, identity(2, 1)),
+        validate_buffer_ownership(&buffer, identity(2)),
         RhiErrorKind::WrongDevice,
     );
 }
@@ -379,10 +379,10 @@ fn a_buffer_from_another_device_is_wrong_device() {
 #[test]
 fn a_buffer_reports_its_own_id_device_and_descriptor() {
     let descriptor = BufferDescriptor::new(128, BufferUsage::INDEX).with_label("indices");
-    let buffer = fixture::buffer(object(7), identity(3, 4), descriptor.clone());
+    let buffer = fixture::buffer(object(7), identity(3), descriptor.clone());
 
     assert_eq!(buffer.id(), object(7));
-    assert_eq!(buffer.device_identity(), identity(3, 4));
+    assert_eq!(buffer.device_identity(), identity(3));
     assert_eq!(buffer.descriptor().size, 128);
     assert_eq!(buffer.descriptor().label.as_deref(), Some("indices"));
 
@@ -481,7 +481,7 @@ fn mock_native(buffer: &Buffer) -> &crate::base::mock::MockBuffer {
 
 #[test]
 fn a_created_buffer_reports_the_device_and_the_descriptor_it_was_made_from() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
     let descriptor = BufferDescriptor::new(2048, BufferUsage::VERTEX)
         .with_label("vertices")
         .with_memory_preference(ResourceMemoryPreference::DeviceLocalPreferred);
@@ -508,7 +508,7 @@ fn a_created_buffer_reports_the_device_and_the_descriptor_it_was_made_from() {
 
 #[test]
 fn two_buffers_from_one_device_have_different_ids() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
 
     let first = device
         .create_buffer(&BufferDescriptor::new(64, BufferUsage::UNIFORM))
@@ -527,7 +527,7 @@ fn two_buffers_from_one_device_have_different_ids() {
 
 #[test]
 fn a_clone_is_the_same_allocation_and_not_a_second_one() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
     let buffer = device
         .create_buffer(&BufferDescriptor::new(256, BufferUsage::COPY_DST))
         .expect("a 256-byte copy destination is legal");
@@ -548,7 +548,7 @@ fn a_clone_is_the_same_allocation_and_not_a_second_one() {
 
 #[test]
 fn the_backend_receives_the_descriptor_the_caller_wrote() {
-    let (device, _) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let (device, _) = crate::base::mock::buffers_for_test(identity(1), 4096);
     let usage = BufferUsage::STORAGE.union(BufferUsage::COPY_SRC);
 
     let buffer = device
@@ -573,7 +573,7 @@ fn a_refused_descriptor_never_reaches_the_backend() {
     // `OutOfMemory` would look to a caller just like one that was never called —
     // so it is observed by counting, which is what `MockDevice::allocations` is
     // for.
-    let (device, native) = crate::base::mock::buffers_for_test(identity(1, 1), 4096);
+    let (device, native) = crate::base::mock::buffers_for_test(identity(1), 4096);
 
     let refused = device
         .create_buffer(&BufferDescriptor::new(0, BufferUsage::VERTEX))
@@ -610,7 +610,7 @@ fn a_lost_device_refuses_creation_and_never_allocates() {
     // Section 6.5: loss is terminal, so a verb that would allocate must refuse
     // rather than ask a dead backend. The check runs before the capability read
     // and before the allocation, so no buffer is minted and nothing is allocated.
-    let (device, native) = crate::base::mock::paired_device_for_test(identity(2, 1));
+    let (device, native) = crate::base::mock::paired_device_for_test(identity(2));
     native.mark_lost(DeviceLossInfo::new(
         "the host reported that the adapter was removed".to_string(),
     ));

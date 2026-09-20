@@ -367,7 +367,7 @@ impl ConfiguredPresentation {
     /// The lease keeps its identity across a reconfigure: this is the same lease,
     /// with the same [`Self::id`], which is what distinguishes it from dropping
     /// the lease and configuring again.
-    pub fn reconfigure(&mut self, config: &PresentationConfiguration) -> RhiResult<()> {
+    pub async fn reconfigure(&mut self, config: &PresentationConfiguration) -> RhiResult<()> {
         let _ = config;
         validate_reconfigure_allowed(self.outstanding_frame())?;
         unimplemented!(
@@ -516,7 +516,7 @@ impl Device {
     /// still performed first — a lost device is terminal (section 3.1), and a
     /// caller that gets [`RhiErrorKind::DeviceLost`] learns something true even
     /// though no surface was touched.
-    pub fn configure_presentation(
+    pub async fn configure_presentation(
         &self,
         target: &PresentationTarget,
         config: &PresentationConfiguration,

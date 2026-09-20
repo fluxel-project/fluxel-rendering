@@ -30,6 +30,7 @@ use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteCapabilities, RouteQuery, RouteSupport};
 use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
+use crate::api::resource::transient::{TransientAllocationSupport, TransientCapabilities};
 use crate::api::resource::view::TextureViewDimension;
 use crate::api::shader::ShaderStages;
 use crate::api::submission::{
@@ -61,6 +62,34 @@ fn available_and_enabled_answer_the_same_questions() {
     // A key neither level defines is `None` on both — a fact, not a failure.
     assert_eq!(available.limit(LimitKey::MaxTexture2dDimension), None);
     assert_eq!(enabled.limit(LimitKey::MaxTexture2dDimension), None);
+}
+
+#[test]
+fn transient_capabilities_default_to_the_portable_dedicated_baseline() {
+    let enabled = enabled_capabilities();
+    let transient = enabled.transient();
+    assert_eq!(transient.buffers, TransientAllocationSupport::Dedicated);
+    assert_eq!(transient.textures, TransientAllocationSupport::Dedicated);
+    assert!(!transient.mixed_resource_aliasing);
+}
+
+#[test]
+fn transient_capabilities_are_part_of_the_enabled_contract() {
+    let baseline = enabled_capabilities().compatibility_id();
+    let mut facts = CapabilityFacts::empty();
+    facts.record_transient_capabilities(TransientCapabilities {
+        buffers: TransientAllocationSupport::Aliasing,
+        textures: TransientAllocationSupport::Aliasing,
+        mixed_resource_aliasing: true,
+    });
+    let enabled = enabled_from(facts);
+
+    assert_ne!(baseline, enabled.compatibility_id());
+    assert_eq!(
+        enabled.transient().buffers,
+        TransientAllocationSupport::Aliasing
+    );
+    assert!(enabled.transient().mixed_resource_aliasing);
 }
 
 /// Section 7.2's WebGPU case, which is why `format` returns `Option` where the

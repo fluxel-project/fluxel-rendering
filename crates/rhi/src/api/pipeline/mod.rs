@@ -36,10 +36,11 @@
 //!
 //! # The device seam
 //!
-//! The three verbs of this chapter — `Device::create_pipeline_interface`,
-//! `Device::create_raster_pipeline`, `Device::create_compute_pipeline` — wait on
-//! `api::platform`, so the portable halves live here as validators that take the
-//! device's answers as `PipelineDeviceFacts`:
+//! The three verbs of this chapter are `Device::create_pipeline_interface`,
+//! `Device::create_raster_pipeline`, and `Device::create_compute_pipeline`.
+//! Interface creation is synchronous logical creation; raster and compute
+//! pipeline creation are async. Their portable halves live here as validators
+//! that take the device's answers as `PipelineDeviceFacts`:
 //!
 //! ```text
 //! limit               EnabledCapabilities::limit(key) -> Option<u64>
@@ -64,7 +65,7 @@
 //!
 //! Section 23.1's aggregate counts, section 23.3's merge lattice, section 24.2's
 //! vertex-input checks, section 27.3's ten validation blocks, and section 28's
-//! capability gate and workgroup limits. Every one of them runs before a backend
+//! capability gate. Every one of them runs before a backend
 //! is touched, because section 4 forbids handing a backend a problem portable
 //! validation could have found.
 //!
@@ -91,15 +92,15 @@
 //! The submodules are `pub(crate)` and nothing crate-private is re-exported, so a
 //! crate-internal caller names the file that defines the item, e.g.
 //! `merge_shader_resources`. A
-//! `pub(crate) use` of one would be an unused import in a non-test build — the
-//! device verbs that call them are not written — and this module does not carry
-//! lint attributes as a substitute for a caller.
+//! `pub(crate) use` of one would only obscure which file owns the validation
+//! rule, so this module does not carry lint attributes as a substitute for a
+//! caller.
 
 // The submodules stay crate-visible rather than private because the validators
 // they own are crate-private entry points of their own: a `pub(crate) use` of one
-// would be an unused import in a non-test build, since the device verbs that call
-// it are not written yet, and this file does not carry lint attributes as a
-// substitute for a caller. Paths point at the module that defines the item.
+// would obscure the owner of the rule, and this file does not carry lint
+// attributes as a substitute for a caller. Paths point at the module that
+// defines the item.
 pub(crate) mod compute;
 pub(crate) mod interface;
 pub(crate) mod raster;

@@ -115,10 +115,10 @@ fn anisotropy_above_one_needs_the_optional_feature_and_the_devices_ceiling() {
 #[test]
 fn a_sampler_reports_its_own_id_device_and_descriptor() {
     let descriptor = SamplerDescriptor::new().with_label("linear");
-    let sampler = Sampler::new(object(51), identity(5, 6), descriptor);
+    let sampler = Sampler::new(object(51), identity(5), descriptor);
 
     assert_eq!(sampler.id(), object(51));
-    assert_eq!(sampler.device_identity(), identity(5, 6));
+    assert_eq!(sampler.device_identity(), identity(5));
     assert_eq!(sampler.descriptor().label.as_deref(), Some("linear"));
     assert_eq!(sampler.descriptor().max_anisotropy, 1);
     assert_eq!(sampler.clone().id(), sampler.id());

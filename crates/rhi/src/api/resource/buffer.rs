@@ -37,6 +37,7 @@ use std::sync::Arc;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
+use crate::api::resource::transient::TransientResourceMetadata;
 use crate::base::resource::BufferBackend;
 
 /// What a buffer will be used for.
@@ -345,6 +346,8 @@ pub struct Buffer {
     /// unfulfilled; what is genuinely unreached is the accessor, which is where
     /// the reason is written.
     native: Arc<dyn BufferBackend>,
+    /// Plan-scoped transient execution metadata, when this is not persistent.
+    transient: Option<TransientResourceMetadata>,
 }
 
 impl Buffer {
@@ -366,7 +369,34 @@ impl Buffer {
             device,
             descriptor,
             native,
+            transient: None,
         }
+    }
+
+    /// Assembles a logical buffer owned by one transient submission plan.
+    pub(crate) fn new_transient(
+        id: ObjectId,
+        device: DeviceIdentity,
+        descriptor: BufferDescriptor,
+        native: Arc<dyn BufferBackend>,
+        transient: TransientResourceMetadata,
+    ) -> Self {
+        Self {
+            id,
+            device,
+            descriptor,
+            native,
+            transient: Some(transient),
+        }
+    }
+
+    /// Internal transient lifetime for submission-plan validation.
+    pub(crate) fn transient_lifetime(
+        &self,
+    ) -> Option<&crate::api::resource::transient::TransientLifetime> {
+        self.transient
+            .as_ref()
+            .map(TransientResourceMetadata::lifetime)
     }
 
     /// The native allocation behind this buffer.

@@ -35,9 +35,8 @@
 //! [`BackendKind`]: crate::api::platform::provider::BackendKind
 
 use crate::api::capability::CapabilityFacts;
-use crate::api::platform::requirements::{LimitKey, LimitRequirement, OptionalFeature};
+use crate::api::platform::requirements::{LimitRequirement, OptionalFeature};
 use crate::api::shader::artifact::ShaderArtifact;
-use crate::api::shader::requirements::ComputeWorkgroupRequirements;
 use crate::api::shader::vocabulary::{
     AcceptedCodeForm, ArtifactAcceptance, IMPLEMENTED_ABI, ShaderAbiVersion, ShaderStage,
 };
@@ -88,12 +87,6 @@ pub(crate) fn decide(facts: &CapabilityFacts, artifact: &ShaderArtifact) -> Arti
         .any(|requirement| !limit_satisfied(facts, *requirement))
     {
         return ArtifactAcceptance::LimitExceeded;
-    }
-
-    if let Some(workgroup) = artifact.requirements.compute_workgroup() {
-        if !workgroup_satisfied(facts, &workgroup) {
-            return ArtifactAcceptance::LimitExceeded;
-        }
     }
 
     for resource in artifact.interface.resources() {
@@ -163,31 +156,4 @@ fn limit_satisfied(facts: &CapabilityFacts, requirement: LimitRequirement) -> bo
         LimitRequirement::AtLeast { value, .. } => actual >= value,
         LimitRequirement::AtMost { value, .. } => actual <= value,
     }
-}
-
-/// Whether the workgroup an entry point was compiled for fits this device.
-///
-/// The five keys section 19.7 makes the workgroup contract, compared the same way
-/// and with the same rule for an unstated limit. `total_invocations` is compared as
-/// well as the three dimensions even though `validate_shader_artifact` has already
-/// proved it is their product: the two are separate device limits, and a device
-/// whose `MaxComputeWorkgroupSizeX` allows 1024 while its
-/// `MaxComputeInvocationsPerWorkgroup` allows 256 is a real device the artifact
-/// must fit on both axes.
-fn workgroup_satisfied(facts: &CapabilityFacts, workgroup: &ComputeWorkgroupRequirements) -> bool {
-    let at_least = |key: LimitKey, value: u64| match facts.limit(key) {
-        Some(actual) => actual >= value,
-        None => true,
-    };
-    at_least(LimitKey::MaxComputeWorkgroupSizeX, u64::from(workgroup.x))
-        && at_least(LimitKey::MaxComputeWorkgroupSizeY, u64::from(workgroup.y))
-        && at_least(LimitKey::MaxComputeWorkgroupSizeZ, u64::from(workgroup.z))
-        && at_least(
-            LimitKey::MaxComputeInvocationsPerWorkgroup,
-            u64::from(workgroup.total_invocations),
-        )
-        && at_least(
-            LimitKey::MaxComputeWorkgroupStorageSize,
-            workgroup.workgroup_storage_bytes,
-        )
 }

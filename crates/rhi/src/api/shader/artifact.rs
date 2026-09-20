@@ -1,8 +1,7 @@
-//! Sections 19.8-19.9: provenance, the artifact, and the created module.
+//! Sections 19.8-19.9: the artifact and the created module.
 //!
-//! What an artifact may be regenerated from, the content hash the producer
-//! computed, the toolchain identity, and the finished [`ShaderArtifact`] —
-//! entry point, code, ABI, interface, provenance and hash in one value. The
+//! The content hash the producer computed, the toolchain version, and the finished
+//! [`ShaderArtifact`] — entry point, code, ABI, interface, and hash in one value. The
 //! created [`ShaderModule`] is here too, because it is an artifact plus the
 //! device identity that accepted it.
 //!
@@ -16,14 +15,13 @@ use std::sync::Arc;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
-use crate::api::platform::provider::BackendKind;
 use crate::base::shader::ShaderModuleBackend;
 
 use super::requirements::{ShaderInterface, ShaderRequirements};
 use super::validation::validate_shader_artifact;
 use super::vocabulary::{ArtifactAcceptance, ShaderAbiVersion, ShaderCode, ShaderStage};
 
-/// The content-address/provenance key computed by the artifact producer.
+/// The content-address key computed by the artifact producer.
 ///
 /// A newtype with a public array field, unlike the identity tokens of section 3,
 /// and section 19.8 says why in the same breath as it defines it: it is supplied
@@ -35,10 +33,8 @@ use super::vocabulary::{ArtifactAcceptance, ShaderAbiVersion, ShaderCode, Shader
 /// The canonical content domain is fixed by section 19.8:
 ///
 /// ```text
-/// ArtifactProducerId + ArtifactProducerVersion
 /// stage + entry_point + ShaderCode + ShaderAbiVersion
 /// canonical ShaderInterface + ShaderRequirements
-/// canonical ShaderProvenance
 /// ```
 ///
 /// `label` is explicitly excluded from it, as are temporary paths, process
@@ -53,81 +49,6 @@ pub struct ArtifactProducerVersion {
     pub major: u16,
     /// Compatible-extension component of the toolchain's own version.
     pub minor: u16,
-}
-
-/// Stable identity of the toolchain that produced an artifact.
-///
-/// Section 19.8 requires this to be stable: it must not contain a temporary path,
-/// a process address, or a build-directory identity. Together with
-/// [`ArtifactProducerVersion`] it identifies the lowering contract that the
-/// artifact was built against, which is what Replay needs in order to decide
-/// whether the provenance can be regenerated.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ArtifactProducerId(pub String);
-
-/// What a replay runtime may do with an executable-only artifact.
-///
-/// Section 19.10 requires the scope to be explicit, because a current device
-/// accepting an executable says nothing about another backend being able to
-/// replay it: an executable-only artifact carries no cross-backend source or IR to
-/// regenerate from.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutableReplayAcceptanceScope {
-    /// The artifact is not an acceptable replay input.
-    Denied,
-
-    /// Replay may accept the executable only on this backend kind.
-    SameBackend(BackendKind),
-}
-
-/// Where the code in an artifact came from, and what may be regenerated from it.
-///
-/// The third of the three layers section 19 opens with. The question it answers is
-/// not "is this good code" but "can a toolchain produce code for a *different*
-/// device from this artifact".
-#[non_exhaustive]
-#[derive(Clone, Debug)]
-pub enum ShaderProvenance {
-    /// The toolchain can regenerate [`ShaderCode`] for other backends from this.
-    PortableSource {
-        /// The language the portable source is written in.
-        language: PortableShaderLanguage,
-        /// The portable source or IR itself.
-        bytes: Arc<[u8]>,
-
-        /// The compiler options the artifact was built with.
-        ///
-        /// A producer must canonicalize this list: keys unique, sorted
-        /// lexicographically by key, and free of temporary absolute paths and
-        /// process addresses. Section 19.8 makes a non-canonical list a
-        /// `create_shader` rejection rather than something the RHI repairs,
-        /// because the list feeds the canonical provenance encoding.
-        compiler_options: Vec<(String, String)>,
-    },
-
-    /// Contains only the current executable/code, with no cross-backend source.
-    ExecutableOnly {
-        /// The explicit replay acceptance scope for this artifact.
-        replay_acceptance: ExecutableReplayAcceptanceScope,
-    },
-}
-
-/// A language a [`ShaderProvenance::PortableSource`] may be written in.
-///
-/// Distinct from [`ShaderCode`]'s variants even where a spelling repeats: this
-/// names something a toolchain can *regenerate from*, while `ShaderCode` names
-/// something the current device can *consume*. SPIR-V appears in both, which is
-/// exactly the asymmetry section 19.2 warns about rather than a redundancy.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PortableShaderLanguage {
-    /// WGSL source.
-    Wgsl,
-    /// SPIR-V module.
-    SpirV,
-    /// Fluxel's own intermediate representation.
-    FluxelIr,
 }
 
 /// One entry point, fully described, ready to be accepted or refused.
@@ -163,13 +84,8 @@ pub struct ShaderArtifact {
     /// What this entry point needs from the device.
     pub requirements: ShaderRequirements,
 
-    /// What may be regenerated from this artifact.
-    pub provenance: ShaderProvenance,
-
     /// The producer-computed content hash.
     pub content_hash: ArtifactHash,
-    /// The toolchain that produced the artifact.
-    pub producer: ArtifactProducerId,
     /// That toolchain's version.
     pub producer_version: ArtifactProducerVersion,
 }
@@ -180,14 +96,7 @@ impl ShaderArtifact {
     /// Checks nothing: `validate_shader_artifact` is the check, and it is run by
     /// `create_shader` before the artifact reaches a backend.
     ///
-    /// The provenance is initialized to the most restrictive value,
-    /// [`ShaderProvenance::ExecutableOnly`] with
-    /// [`ExecutableReplayAcceptanceScope::Denied`]. Section 19.9's constructor
-    /// list has no provenance parameter and supplies only
-    /// [`Self::with_provenance`] to set one, so this constructor has to choose
-    /// something; it fails closed, because the alternative would grant a replay
-    /// permission that no producer asked for.
-    // Section 19.9 freezes this constructor with its nine parameters and no
+    // Section 19.9 freezes this constructor with its eight parameters and no
     // builder for the fields it sets, so the clippy suggestion to fold them into
     // an argument struct is declined: that struct would be public API the
     // specification did not declare. `expect` rather than `allow`, for the same
@@ -195,7 +104,7 @@ impl ShaderArtifact {
     // suppression nobody re-checks.
     #[expect(
         clippy::too_many_arguments,
-        reason = "section 19.9 freezes this constructor with nine parameters and no builder; folding them into a struct would add public API the specification did not declare"
+        reason = "section 19.9 freezes this constructor with eight parameters and no builder; folding them into a struct would add public API the specification did not declare"
     )]
     pub fn new(
         stage: ShaderStage,
@@ -205,7 +114,6 @@ impl ShaderArtifact {
         interface: ShaderInterface,
         requirements: ShaderRequirements,
         content_hash: ArtifactHash,
-        producer: ArtifactProducerId,
         producer_version: ArtifactProducerVersion,
     ) -> Self {
         Self {
@@ -216,11 +124,7 @@ impl ShaderArtifact {
             abi_version,
             interface,
             requirements,
-            provenance: ShaderProvenance::ExecutableOnly {
-                replay_acceptance: ExecutableReplayAcceptanceScope::Denied,
-            },
             content_hash,
-            producer,
             producer_version,
         }
     }
@@ -230,19 +134,13 @@ impl ShaderArtifact {
         self.label = Label(Some(label.into()));
         self
     }
-
-    /// Declares what may be regenerated from this artifact.
-    pub fn with_provenance(mut self, provenance: ShaderProvenance) -> Self {
-        self.provenance = provenance;
-        self
-    }
 }
 
 /// A created entry point on one device.
 ///
 /// Opaque, cloneable, and identified by [`ObjectId`] plus the
 /// [`DeviceIdentity`] that created it. It owns its artifact rather than borrowing
-/// it, because a module's interface and provenance outlive the call that created
+/// it, because a module's interface outlives the call that created
 /// it: section 28.1 requires everything a pipeline needs to be re-describable from
 /// the artifacts and interfaces it was built from.
 #[derive(Clone)]
@@ -331,7 +229,7 @@ impl ShaderModule {
     /// The artifact this module was created from.
     ///
     /// Still needed after creation: a pipeline re-describes its stages from their
-    /// artifacts (section 28.1), and Replay reads the provenance from here.
+    /// artifacts (section 28.1).
     pub fn artifact(&self) -> &ShaderArtifact {
         &self.artifact
     }
@@ -411,7 +309,7 @@ impl Device {
     /// `DiagnosticEvent`), but for a form a backend copies through to a later
     /// native call there is nothing to compile yet, and a backend must not pretend
     /// otherwise — `Dx12ShaderModule` records the concrete case.
-    pub fn create_shader(&self, artifact: &ShaderArtifact) -> RhiResult<ShaderModule> {
+    pub async fn create_shader(&self, artifact: &ShaderArtifact) -> RhiResult<ShaderModule> {
         // Section 6.5 refuses creation through a lost device. There is no
         // ownership comparison ahead of it here because a `ShaderArtifact`
         // carries no `DeviceIdentity` — it is producer-side data with a content

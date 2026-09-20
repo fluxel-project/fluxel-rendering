@@ -7,7 +7,7 @@
 //! upload     caller bytes -> Device::create_*_upload -> UploadJob
 //!            -> CommandRecorder::encode_upload -> submitted work
 //! readback   ReadbackRequest -> CommandRecorder::encode_readback -> ReadbackTicket
-//!            -> terminal completion -> ReadbackData (scoped CPU read)
+//!            -> terminal completion -> ReadbackView (scoped CPU read)
 //! ```
 //!
 //! # Upload is a workflow, not a copy command
@@ -55,16 +55,15 @@
 //! path callers already use, and owns the one rule they share.
 //!
 //! Both halves stay crate-visible rather than private because the validators they
-//! own are crate-private entry points of their own: a `pub(crate) use` of one
-//! would be an unused import in a non-test build, since the device façade that
-//! calls it is not written yet, and this module does not carry lint attributes as
-//! a substitute for a caller.
+//! own are crate-private entry points of their own. Callers name the defining
+//! module directly so ownership remains visible.
 
 pub(crate) mod readback;
 pub(crate) mod upload;
 
 pub use readback::{
-    ReadbackData, ReadbackRequest, ReadbackStatus, ReadbackTexelLayout, ReadbackTicket,
+    ReadbackRequest, ReadbackStatus, ReadbackTexelLayout, ReadbackTicket, ReadbackView,
+    ReadbackViewData,
 };
 pub use upload::{BufferUploadDescriptor, TextureUploadDescriptor, UploadDescriptor, UploadJob};
 

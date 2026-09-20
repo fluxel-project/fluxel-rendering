@@ -42,9 +42,11 @@ use crate::api::command::uses::{
     bound_group_uses, buffer_use, frame_use, require_valid_dynamic_offsets, texture_use_of_view,
     validate_bound_groups,
 };
-use crate::api::command::{CommandRecorder, IndexFormat, RecorderPhase, require_device};
+use crate::api::command::{
+    AccessMask, CommandRecorder, IndexFormat, PipelineScope, RecorderPhase, ResourceUse,
+    TextureUseIntent, require_device,
+};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::graph_bridge::{AccessMask, PipelineScope, ResourceUse, TextureUseIntent};
 use crate::api::identity::Label;
 use crate::api::pipeline::{RasterPipeline, RenderTargetSignature, VertexStepMode};
 use crate::api::resource::buffer::{BufferBinding, BufferUsage, validate_buffer_range};

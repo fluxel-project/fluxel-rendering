@@ -14,10 +14,6 @@
 //!
 //! # What this module does not own
 //!
-//! - Whether the recorded uses are covered by a graph's declaration. That
-//!   comparison is [`crate::api::graph_bridge::validate_recorded_work`], which
-//!   reads the sequence below through its crate-private accessor instead of
-//!   re-deriving it.
 //! - Whether a lane accepts the work. Section 40.1's
 //!   `lane.domains().contains(work.work_domains())` is the submission plan's
 //!   check; this module only reports the domains.
@@ -34,13 +30,12 @@
 //! consumes the recorder rather than lending from it.
 
 use crate::api::binding::{BindGroup, BindGroupIndex};
-use crate::api::command::IndexFormat;
 use crate::api::command::attachment::{ColorAttachment, DepthStencilAttachment};
 use crate::api::command::copy::{
     BufferCopy, BufferTextureCopy, TextureBlit, TextureCopy, TextureResolve,
 };
 use crate::api::command::geometry::{Color, Rect, Viewport};
-use crate::api::graph_bridge::ResourceUse;
+use crate::api::command::{IndexFormat, ResourceUse};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::pipeline::{ComputePipeline, RasterPipeline};
 use crate::api::resource::buffer::BufferBinding;
@@ -222,8 +217,8 @@ pub(crate) enum CopyRecord {
 /// The two accessors that carry the interesting answers are
 /// [`RecordedWork::work_domains`] and [`RecordedWork::resource_uses`]. The first
 /// decides which lanes may accept the work (section 40.1); the second is the
-/// merged actual-use summary a graph's declared uses are checked against
-/// (section 38.3). Neither is a correctness proof of its own: section 37.4 is
+/// merged actual-use summary consumed by submission validation and tooling.
+/// Neither is a correctness proof of its own: section 37.4 is
 /// explicit that a `SHADER_WRITE` use does not claim the shader filled the
 /// range, so a caller may read coverage here only as a hazard statement.
 pub struct RecordedWork {

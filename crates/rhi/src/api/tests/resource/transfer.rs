@@ -16,12 +16,22 @@ use crate::api::resource::transfer::readback::{
 };
 use crate::api::resource::transfer::upload::{validate_buffer_upload, validate_texture_upload};
 use crate::api::resource::transfer::{
-    BufferUploadDescriptor, ReadbackData, ReadbackRequest, ReadbackStatus, ReadbackTexelLayout,
-    ReadbackTicket, TextureUploadDescriptor, UploadDescriptor, UploadJob,
+    BufferUploadDescriptor, ReadbackRequest, ReadbackStatus, ReadbackTexelLayout, ReadbackTicket,
+    ReadbackViewData, TextureUploadDescriptor, UploadDescriptor, UploadJob,
 };
 use crate::api::submission::CompletionPoint;
 use crate::api::tests::fixture;
 use crate::base::mock::{device_for_test, paired_device_for_test};
+
+// Shape-check the frozen async boundary without requiring a particular async
+// runtime in this contract-test crate.
+#[allow(dead_code)]
+async fn async_readback_shape(ticket: &ReadbackTicket) -> crate::api::RhiResult<usize> {
+    let view = ticket.read().await?;
+    Ok(match view.data() {
+        ReadbackViewData::Buffer { bytes } | ReadbackViewData::Texture { bytes, .. } => bytes.len(),
+    })
+}
 
 #[test]
 fn a_legal_buffer_upload_is_accepted() {
@@ -121,7 +131,7 @@ fn a_buffer_upload_from_another_device_is_wrong_device() {
         bytes: vec![0u8; 16].into(),
     };
     assert_kind(
-        validate_buffer_upload(&descriptor, identity(9, 9), &copy_limits()),
+        validate_buffer_upload(&descriptor, identity(9), &copy_limits()),
         RhiErrorKind::WrongDevice,
     );
 }
@@ -148,7 +158,7 @@ fn the_upload_verb_refuses_a_foreign_buffer_before_it_asks_the_route() {
     let live = device_for_test(device());
     let foreign = fixture::buffer(
         object(91),
-        identity(9, 9),
+        identity(9),
         BufferDescriptor::new(64, BufferUsage::COPY_DST),
     );
     let error = match live.create_buffer_upload(BufferUploadDescriptor {
@@ -190,7 +200,7 @@ fn a_foreign_buffer_stays_wrong_device_even_on_a_lost_device() {
 
     let foreign = fixture::buffer(
         object(92),
-        identity(9, 9),
+        identity(9),
         BufferDescriptor::new(64, BufferUsage::COPY_DST),
     );
     let error = match lost.create_buffer_upload(BufferUploadDescriptor {
@@ -391,7 +401,7 @@ fn a_buffer_readback_needs_copy_source_usage_and_a_valid_range() {
     // Ownership, which the O(1) identity step also covers — asserted here as well
     // because a validator that dropped it would still pass the verb's own test.
     assert_kind(
-        validate_buffer_readback(&src, BufferRange::new(0, 16), identity(3, 3)),
+        validate_buffer_readback(&src, BufferRange::new(0, 16), identity(3)),
         RhiErrorKind::WrongDevice,
     );
 
@@ -446,7 +456,7 @@ fn a_texture_readback_needs_copy_source_usage_and_a_single_sample() {
     );
 
     assert_kind(
-        validate_texture_readback(&src, region.0, region.1, region.2, identity(4, 4)),
+        validate_texture_readback(&src, region.0, region.1, region.2, identity(4)),
         RhiErrorKind::WrongDevice,
     );
 }
@@ -476,9 +486,9 @@ fn a_ticket_walks_its_state_machine_and_reports_data_only_when_ready() {
 
     ticket.publish(vec![1, 2, 3, 4], None);
     assert_eq!(ticket.status(), ReadbackStatus::Ready);
-    match ticket.try_read().expect("ready").expect("data") {
-        ReadbackData::Buffer { bytes } => assert_eq!(bytes, &[1, 2, 3, 4]),
-        ReadbackData::Texture { .. } => panic!("a buffer request returns buffer bytes"),
+    match ticket.try_read().expect("ready").expect("data").data() {
+        ReadbackViewData::Buffer { bytes } => assert_eq!(bytes, &[1, 2, 3, 4]),
+        ReadbackViewData::Texture { .. } => panic!("a buffer request returns buffer bytes"),
     }
 }
 
@@ -532,9 +542,9 @@ fn a_cloned_ticket_observes_the_same_state() {
     assert_eq!(ticket.status(), ReadbackStatus::Pending);
 
     clone.publish(vec![9, 9], None);
-    match ticket.try_read().expect("ready").expect("data") {
-        ReadbackData::Buffer { bytes } => assert_eq!(bytes, &[9, 9]),
-        ReadbackData::Texture { .. } => panic!("a buffer request returns buffer bytes"),
+    match ticket.try_read().expect("ready").expect("data").data() {
+        ReadbackViewData::Buffer { bytes } => assert_eq!(bytes, &[9, 9]),
+        ReadbackViewData::Texture { .. } => panic!("a buffer request returns buffer bytes"),
     }
 }
 
@@ -571,8 +581,8 @@ fn a_texture_ticket_reports_the_layout_alongside_the_bytes() {
     };
     ticket.publish(vec![7u8; 512], Some(layout));
 
-    match ticket.try_read().expect("ready").expect("data") {
-        ReadbackData::Texture {
+    match ticket.try_read().expect("ready").expect("data").data() {
+        ReadbackViewData::Texture {
             bytes,
             layout: reported,
         } => {
@@ -583,7 +593,7 @@ fn a_texture_ticket_reports_the_layout_alongside_the_bytes() {
             assert_eq!(reported.bytes_per_row, 256);
             assert_eq!(reported.total_size, 512);
         }
-        ReadbackData::Buffer { .. } => panic!("a texture request returns texel layout"),
+        ReadbackViewData::Buffer { .. } => panic!("a texture request returns texel layout"),
     }
 }
 

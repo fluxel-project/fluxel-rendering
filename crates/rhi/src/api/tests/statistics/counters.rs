@@ -105,7 +105,7 @@ fn every_counter_group_defaults_to_a_record_of_nothing() {
     assert_eq!(working_set.unique_submission_lanes, 0);
 }
 
-/// The five groups are five subjects, and a snapshot has to be able to hold one
+/// The six groups are six subjects, and a snapshot has to be able to hold one
 /// without disturbing the others.
 ///
 /// This is the reason the record is not one flat struct of sixty fields: a caller
@@ -123,6 +123,7 @@ fn the_cumulative_record_keeps_its_five_subjects_apart() {
         submissions: SubmissionStatistics::default(),
         presentation: PresentationStatistics::default(),
         resources: ResourceLifecycleStatistics::default(),
+        transient: Default::default(),
     };
 
     assert_eq!(cumulative.commands.draw_calls, 7);
@@ -133,6 +134,7 @@ fn the_cumulative_record_keeps_its_five_subjects_apart() {
     assert_eq!(cumulative.submissions.submission_calls, 0);
     assert_eq!(cumulative.presentation.acquires_succeeded, 0);
     assert_eq!(cumulative.resources.buffers_created, 0);
+    assert_eq!(cumulative.transient.alias_reuses, 0);
 
     // And the whole record is `Default`, so a backend starts an epoch with one
     // call rather than five.

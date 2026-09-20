@@ -149,12 +149,9 @@ pub enum SemanticEvent<'a> {
 
     /// A frame was acquired.
     ///
-    /// Section 58.1 requires `target` and `configured_presentation` to each name
-    /// a describable `CapturedObjectDefinition` variant — `PresentationTarget` and
-    /// `ConfiguredPresentation` respectively — and the latter references the
-    /// former through its `target` field. So every identity this event carries is
-    /// reachable to a logical definition, and no host handle has to be
-    /// serialized for a record to say what was acquired.
+    /// Presentation remains observable by its portable target/configuration and
+    /// frame identities; tooling never serializes a host or native surface
+    /// handle.
     FrameAcquired {
         /// This event's identity.
         event: SemanticEventId,

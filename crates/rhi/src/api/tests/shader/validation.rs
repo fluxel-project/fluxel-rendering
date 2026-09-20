@@ -1,7 +1,7 @@
 //! Sections 19.6-19.7: what an acceptable artifact is.
 //!
-//! The stage shape, the canonical interface lists, the binding capability the
-//! device must answer for, and the workgroup identity. `use super::*` brings in
+//! The stage shape, canonical interface lists, binding capability, and requirement
+//! collections. `use super::*` brings in
 //! the fixtures; the banners below are the original section banners.
 
 use super::*;
@@ -47,36 +47,6 @@ fn a_compute_entry_point_may_declare_no_locations() {
 fn a_compute_entry_point_may_not_declare_stage_locations() {
     let interface = ShaderInterface::new().with_input(float32(0, 4));
     let artifact = artifact(ShaderStage::Compute, interface);
-    assert_kind(
-        validate_shader_artifact(&artifact, permissive),
-        RhiErrorKind::InvalidUsage,
-    );
-}
-
-#[test]
-fn a_compute_entry_point_must_declare_its_workgroup_requirements() {
-    // Section 19.7's presence rule, which is a fact about the stage rather than
-    // about the numbers: absence is refused here, the numbers are checked
-    // separately.
-    let artifact = artifact_with(
-        ShaderStage::Compute,
-        ShaderInterface::new(),
-        crate::api::shader::ShaderRequirements::new(),
-    );
-    assert_kind(
-        validate_shader_artifact(&artifact, permissive),
-        RhiErrorKind::InvalidUsage,
-    );
-}
-
-#[test]
-fn a_non_compute_entry_point_may_not_declare_workgroup_requirements() {
-    let artifact = artifact_with(
-        ShaderStage::Vertex,
-        vertex_interface(),
-        crate::api::shader::ShaderRequirements::new()
-            .with_compute_workgroup(ComputeWorkgroupRequirements::new(1, 1, 1, 1, 0)),
-    );
     assert_kind(
         validate_shader_artifact(&artifact, permissive),
         RhiErrorKind::InvalidUsage,
@@ -202,7 +172,7 @@ fn integer_inter_stage_io_must_be_flat() {
 }
 
 // ---------------------------------------------------------------------------
-// Section 19.7: binding capability, and the workgroup identity.
+// Section 19.7: binding capability and requirements.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -246,55 +216,6 @@ fn a_fixed_binding_count_of_one_is_refused_in_favour_of_one() {
     });
     assert_kind(
         validate_shader_artifact(&artifact(ShaderStage::Vertex, interface), permissive),
-        RhiErrorKind::InvalidUsage,
-    );
-}
-
-#[test]
-fn a_workgroup_total_must_be_the_product_of_its_dimensions() {
-    // Section 19.7 carries both spellings of the same number because a backend
-    // needs each of them; disagreeing spellings mean the reflection is internally
-    // inconsistent, which no backend can act on.
-    let artifact = artifact_with(
-        ShaderStage::Compute,
-        ShaderInterface::new(),
-        crate::api::shader::ShaderRequirements::new()
-            .with_compute_workgroup(ComputeWorkgroupRequirements::new(8, 8, 1, 63, 0)),
-    );
-    assert_kind(
-        validate_shader_artifact(&artifact, permissive),
-        RhiErrorKind::InvalidUsage,
-    );
-}
-
-#[test]
-fn a_workgroup_dimension_must_not_be_zero() {
-    let artifact = artifact_with(
-        ShaderStage::Compute,
-        ShaderInterface::new(),
-        crate::api::shader::ShaderRequirements::new()
-            .with_compute_workgroup(ComputeWorkgroupRequirements::new(8, 0, 1, 0, 0)),
-    );
-    assert_kind(
-        validate_shader_artifact(&artifact, permissive),
-        RhiErrorKind::InvalidUsage,
-    );
-}
-
-#[test]
-fn workgroup_size_overflow_is_refused_rather_than_wrapped() {
-    // `x * y * z` is computed with checked arithmetic, so a product that does not
-    // fit in u64 is a refusal instead of a wrapped value that could compare equal
-    // to a legal `total_invocations`.
-    let artifact = artifact_with(
-        ShaderStage::Compute,
-        ShaderInterface::new(),
-        crate::api::shader::ShaderRequirements::new().with_compute_workgroup(
-            ComputeWorkgroupRequirements::new(u32::MAX, u32::MAX, u32::MAX, 0, 0),
-        ),
-    );
-    assert_kind(
-        validate_shader_artifact(&artifact, permissive),
         RhiErrorKind::InvalidUsage,
     );
 }

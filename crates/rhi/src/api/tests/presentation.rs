@@ -24,7 +24,7 @@
 
 use crate::api::error::RhiErrorKind;
 use crate::api::format::TextureFormat;
-use crate::api::identity::{DeviceGeneration, DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
 use crate::api::platform::{Device, DeviceLossInfo};
 use crate::api::presentation::{
     AcquireErrorKind, AcquiredFrame, AcquiredFrameId, AcquiredFrameState, ConfiguredPresentation,
@@ -263,7 +263,7 @@ fn an_outstanding_frame_blocks_both_the_next_acquire_and_a_reconfigure() {
     assert!(configure::validate_acquire_allowed(None).is_ok());
     assert!(configure::validate_reconfigure_allowed(None).is_ok());
 
-    let frame = AcquiredFrameId::new(device_identity(1, 1), 1);
+    let frame = AcquiredFrameId::new(device_identity(1), 1);
 
     assert_eq!(
         configure::validate_acquire_allowed(Some(frame))
@@ -287,7 +287,7 @@ fn an_outstanding_frame_blocks_both_the_next_acquire_and_a_reconfigure() {
 /// lease exists only because a device configured a surface.
 #[test]
 fn a_lease_keeps_the_frame_it_has_outstanding_and_its_own_identity() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let target_id = ObjectId::new(4);
     let config = PresentationConfiguration::new(TextureFormat::Bgra8Unorm);
     let mut lease =
@@ -327,13 +327,13 @@ fn a_lease_keeps_the_frame_it_has_outstanding_and_its_own_identity() {
 /// native is touched.
 #[test]
 fn configure_presentation_on_a_lost_device_is_device_lost() {
-    let (device, native) = paired_device_for_test(device_identity(1, 1));
+    let (device, native) = paired_device_for_test(device_identity(1));
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
 
     let target = PresentationTarget::new(ObjectId::new(1));
     let config = PresentationConfiguration::new(TextureFormat::Bgra8Unorm);
 
-    let error = device.configure_presentation(&target, &config).unwrap_err();
+    let error = block_on(device.configure_presentation(&target, &config)).unwrap_err();
 
     assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
     assert_eq!(error.operation(), Some("Device::configure_presentation"));
@@ -405,7 +405,7 @@ fn not_ready_and_timeout_are_distinct_kinds() {
 /// conferring ownership.
 #[test]
 fn a_frame_starts_acquired_and_its_attachment_describes_the_drawable() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let frame = acquired_frame(3, device, 1280, 720);
 
     assert_eq!(frame.state(), AcquiredFrameState::Acquired);
@@ -438,7 +438,7 @@ fn a_frame_starts_acquired_and_its_attachment_describes_the_drawable() {
 /// half of the rule is in `tests::submission`.
 #[test]
 fn a_planned_frame_cannot_be_planned_again_or_abandoned() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let mut frame = acquired_frame(1, device, 64, 64);
 
     assert!(frame.mark_planned_for_present().is_ok());
@@ -454,7 +454,7 @@ fn a_planned_frame_cannot_be_planned_again_or_abandoned() {
     // can do with the frame — and the refusal is the point: a plan being built is
     // abandoned as a whole, not frame by frame.
     assert_eq!(
-        frame.abandon().unwrap_err().kind(),
+        block_on(frame.abandon()).unwrap_err().kind(),
         RhiErrorKind::InvalidUsage
     );
 }
@@ -468,7 +468,7 @@ fn a_planned_frame_cannot_be_planned_again_or_abandoned() {
 /// reaches for a channel that does not exist yet.
 #[test]
 fn dropping_a_frame_performs_no_throw_abandonment() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
 
     // Section 44.5: acquired, never presented, never abandoned.
     let unplanned = acquired_frame(1, device, 64, 64);
@@ -487,8 +487,8 @@ fn dropping_a_frame_performs_no_throw_abandonment() {
 /// Section 44.6's whole table, decided from the facts the recorder holds.
 #[test]
 fn a_frame_attachment_use_follows_the_frame_state_table() {
-    let device = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let device = device_identity(1);
+    let other = device_identity(2);
     let attachment = acquired_frame(1, device, 64, 64).attachment();
 
     assert!(
@@ -625,7 +625,7 @@ fn an_empty_format_list_refuses_every_configuration() {
 /// names it back.
 #[test]
 fn a_present_receipt_reports_the_presentation_it_is_about() {
-    let device = device_identity(1, 1);
+    let device = device_identity(1);
     let plan = SubmissionPlanId::new(device, 1);
     let present = PresentPlanId::new(plan, 0);
     let receipt = PresentReceipt::new(PresentReceiptId::new(device, 5), present);
@@ -667,8 +667,8 @@ fn a_failed_presentation_carries_its_reason() {
 /// lost device is terminal for every receipt.
 #[test]
 fn present_state_refuses_a_foreign_receipt_and_reports_a_lost_device() {
-    let identity = device_identity(1, 1);
-    let other = device_identity(1, 2);
+    let identity = device_identity(1);
+    let other = device_identity(2);
     let (device, native) = paired_device_for_test(identity);
 
     assert_eq!(
@@ -707,7 +707,7 @@ fn present_state_refuses_a_foreign_receipt_and_reports_a_lost_device() {
     dead_code,
     reason = "a shape test; compiled to check the interface, never called"
 )]
-fn shape_frame_loop_through_presentation(
+async fn shape_frame_loop_through_presentation(
     device: &Device,
     target: &PresentationTarget,
     receipt: PresentReceiptId,
@@ -725,9 +725,13 @@ fn shape_frame_loop_through_presentation(
 
     let mut lease = device
         .configure_presentation(target, &config)
+        .await
         .expect("the surface is still there");
 
-    let frame = lease.acquire()?;
+    let frame = match lease.try_acquire()? {
+        Some(frame) => frame,
+        None => lease.acquire().await?,
+    };
     let attachment: FrameAttachment = frame.attachment();
     let _ = (attachment.format(), attachment.extent());
 
@@ -745,9 +749,10 @@ fn shape_frame_loop_through_presentation(
 
     // Reconfiguring is a request like any other: it may be refused because the
     // surface moved, and the lease keeps its identity either way.
-    let _ = lease.reconfigure(&config);
+    let _ = lease.reconfigure(&config).await;
     let _ = lease.outstanding_frame();
     let _ = device.present_state(receipt);
+    let _ = device.wait_present(receipt).await;
     Ok(())
 }
 
@@ -791,12 +796,21 @@ fn shape_three_independent_outcomes(
 // Helpers.
 // ---------------------------------------------------------------------------
 
+fn block_on<T>(future: impl core::future::Future<Output = T>) -> T {
+    use core::task::{Context, Poll, Waker};
+
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut future = core::pin::pin!(future);
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("the test future unexpectedly suspended"),
+    }
+}
+
 /// A device identity, as the platform layer mints one.
-fn device_identity(instance: u64, generation: u64) -> DeviceIdentity {
-    DeviceIdentity::new(
-        DeviceInstanceId::new(instance),
-        DeviceGeneration::new(generation),
-    )
+fn device_identity(instance: u64) -> DeviceIdentity {
+    DeviceIdentity::new(DeviceInstanceId::new(instance))
 }
 
 /// A surface-facts snapshot, as the presentation backend reports one.

@@ -11,6 +11,7 @@ use crate::api::resource::texture::{Extent3d, Texture, TextureUsage, validate_te
 use crate::api::submission::CompletionPoint;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::task::{Context, Poll, Waker};
 
 /// A readback request: one buffer range, or one texture region.
 ///
@@ -150,7 +151,7 @@ pub struct ReadbackTexelLayout {
 /// it with `#[non_exhaustive]` alone. A byte buffer that large should not be
 /// cloned implicitly, and its `Debug` form would be a multi-megabyte log line.
 #[non_exhaustive]
-pub enum ReadbackData<'a> {
+pub enum ReadbackViewData<'a> {
     /// A buffer range's bytes, tightly packed by definition.
     Buffer {
         /// The bytes read.
@@ -164,6 +165,48 @@ pub enum ReadbackData<'a> {
         /// Where the valid rows are inside `bytes`.
         layout: ReadbackTexelLayout,
     },
+}
+
+/// A scoped CPU mapping lease for a completed readback.
+///
+/// The view deliberately owns neither the bytes nor the ticket.  It borrows the
+/// ticket's shared state, and its `Drop` is therefore the one place where a
+/// backend that maps native staging memory may end that mapping lease.  The
+/// current portable payload is already CPU-owned, so no backend action is needed
+/// on drop; keeping the guard as a distinct type freezes the required lifetime
+/// before a mapped backend is introduced.
+pub struct ReadbackView<'a> {
+    payload: &'a ReadbackPayload,
+    _ticket: core::marker::PhantomData<&'a ReadbackTicket>,
+}
+
+impl<'a> ReadbackView<'a> {
+    fn new(payload: &'a ReadbackPayload) -> Self {
+        Self {
+            payload,
+            _ticket: core::marker::PhantomData,
+        }
+    }
+
+    /// The ready bytes and, for a texture, the backend-produced texel layout.
+    pub fn data(&self) -> ReadbackViewData<'_> {
+        match self.payload.layout {
+            Some(layout) => ReadbackViewData::Texture {
+                bytes: &self.payload.bytes,
+                layout,
+            },
+            None => ReadbackViewData::Buffer {
+                bytes: &self.payload.bytes,
+            },
+        }
+    }
+}
+
+impl Drop for ReadbackView<'_> {
+    fn drop(&mut self) {
+        // The portable payload has no native mapping to close. Backends that map
+        // a staging allocation attach their unmap lease to this guard.
+    }
 }
 /// The CPU bytes a completed readback published.
 struct ReadbackPayload {
@@ -203,6 +246,10 @@ struct TicketState {
     /// caller — a clone that kept its own copy of the point would report `None`
     /// for work the device had already accepted.
     completion: std::sync::OnceLock<CompletionPoint>,
+    /// Wakers registered by [`ReadbackTicket::read`].  Completion publishes a
+    /// terminal state and wakes them, so async read never polls `Device::poll()`
+    /// in a loop.
+    waiters: std::sync::Mutex<Vec<Waker>>,
 }
 /// A handle to a pending, then completed, readback.
 ///
@@ -233,6 +280,7 @@ impl ReadbackTicket {
                 status: AtomicU8::new(ReadbackStatus::NotSubmitted.to_raw()),
                 data: std::sync::OnceLock::new(),
                 completion: std::sync::OnceLock::new(),
+                waiters: std::sync::Mutex::new(Vec::new()),
             }),
         }
     }
@@ -297,7 +345,7 @@ impl ReadbackTicket {
     /// The borrowing is why this is not `Result<Option<Vec<u8>>>`: the bytes live
     /// in the ticket's shared state, and copying them out would double the peak
     /// memory of the one operation whose purpose is moving bytes to the CPU.
-    pub fn try_read<'a>(&'a self) -> RhiResult<Option<ReadbackData<'a>>> {
+    pub fn try_read<'a>(&'a self) -> RhiResult<Option<ReadbackView<'a>>> {
         match self.status() {
             ReadbackStatus::Ready => {
                 let payload = self.state.data.get().ok_or_else(|| {
@@ -308,15 +356,7 @@ impl ReadbackTicket {
                     )
                     .with_object(self.id)
                 })?;
-                Ok(Some(match &payload.layout {
-                    Some(layout) => ReadbackData::Texture {
-                        bytes: &payload.bytes,
-                        layout: *layout,
-                    },
-                    None => ReadbackData::Buffer {
-                        bytes: &payload.bytes,
-                    },
-                }))
+                Ok(Some(ReadbackView::new(payload)))
             }
             ReadbackStatus::NotSubmitted | ReadbackStatus::Pending => Ok(None),
             ReadbackStatus::Abandoned => Err(RhiError::new(
@@ -338,6 +378,42 @@ impl ReadbackTicket {
         }
     }
 
+    /// Waits for a terminal readback result without driving the device itself.
+    ///
+    /// The completion path wakes this future after it publishes data or a
+    /// terminal failure. A caller must continue to run the platform event loop;
+    /// this method does not turn it into a busy `Device::poll()` loop.
+    pub async fn read(&self) -> RhiResult<ReadbackView<'_>> {
+        std::future::poll_fn(|context| self.poll_read(context)).await
+    }
+
+    fn poll_read<'a>(&'a self, context: &mut Context<'_>) -> Poll<RhiResult<ReadbackView<'a>>> {
+        match self.try_read() {
+            Ok(Some(view)) => return Poll::Ready(Ok(view)),
+            Err(error) => return Poll::Ready(Err(error)),
+            Ok(None) => {}
+        }
+
+        let mut waiters = self
+            .state
+            .waiters
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        // Recheck while holding the waiter lock. This closes the interval where
+        // completion could otherwise publish immediately before our waker is
+        // registered and leave the future asleep forever.
+        match self.try_read() {
+            Ok(Some(view)) => Poll::Ready(Ok(view)),
+            Err(error) => Poll::Ready(Err(error)),
+            Ok(None) => {
+                if !waiters.iter().any(|waker| waker.will_wake(context.waker())) {
+                    waiters.push(context.waker().clone());
+                }
+                Poll::Pending
+            }
+        }
+    }
+
     /// Advances the ticket's state.
     ///
     /// Crate-private, and reached by the device when it observes a submit, a
@@ -346,6 +422,12 @@ impl ReadbackTicket {
     /// and `try_read` reports it as a backend fault.
     pub(crate) fn set_status(&self, status: ReadbackStatus) {
         self.state.status.store(status.to_raw(), Ordering::Release);
+        if matches!(
+            status,
+            ReadbackStatus::Abandoned | ReadbackStatus::DeviceLost | ReadbackStatus::Failed
+        ) {
+            self.wake_waiters();
+        }
     }
 
     /// Records the completion point the ticket was accepted under.
@@ -406,6 +488,21 @@ impl ReadbackTicket {
         // because the status a caller already acted on stays true.
         let _ = self.state.data.set(ReadbackPayload { bytes, layout });
         self.set_status(ReadbackStatus::Ready);
+        self.wake_waiters();
+    }
+
+    fn wake_waiters(&self) {
+        let waiters = {
+            let mut waiters = self
+                .state
+                .waiters
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            core::mem::take(&mut *waiters)
+        };
+        for waker in waiters {
+            waker.wake();
+        }
     }
 }
 /// Checks a buffer readback.

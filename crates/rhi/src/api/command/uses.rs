@@ -21,10 +21,8 @@
 //!   and not at the state-setting verbs; that "when" is
 //!   [`crate::api::command::raster`]'s, [`crate::api::command::compute`]'s, and
 //!   [`crate::api::command::CommandRecorder`]'s.
-//! - Whether the use is *covered* by a graph's declaration. This module states
-//!   what happened; [`crate::api::graph_bridge::validate_recorded_work`] compares
-//!   it against what was declared, and section 37.4 forbids this side from
-//!   claiming more than hazard and access.
+//! - Upper-layer scheduling contracts. This module records only the portable
+//!   commands that actually happened.
 //! - Sampler participation. Section 37.2 says a sampler generates no memory
 //!   hazard but still enters command semantics; the only `ResourceUse` variants
 //!   are buffer, texture, and frame, so a sampler produces no record here. It is
@@ -46,10 +44,6 @@ use crate::api::binding::{
 use crate::api::command::copy::BufferTextureCopy;
 use crate::api::command::record::{BoundGroup, CopyRecord};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::graph_bridge::{
-    AccessMask, BufferUse, FrameAttachmentUse, PipelineScope, ResourceUse, TextureUse,
-    TextureUseIntent,
-};
 use crate::api::pipeline::PipelineInterface;
 use crate::api::presentation::FrameAttachment;
 use crate::api::resource::buffer::{Buffer, BufferRange};
@@ -59,6 +53,210 @@ use crate::api::resource::subresource::{
 use crate::api::resource::texture::{Texture, TextureDimension};
 use crate::api::resource::view::TextureView;
 use crate::api::shader::ShaderStages;
+
+/// Which pipeline domains one actual resource use is visible to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PipelineScope(u32);
+
+impl PipelineScope {
+    /// Vertex-stage access.
+    pub const VERTEX: Self = Self(1 << 0);
+    /// Fragment-stage access.
+    pub const FRAGMENT: Self = Self(1 << 1);
+    /// Compute-stage access.
+    pub const COMPUTE: Self = Self(1 << 2);
+    /// Copy, upload, or readback access.
+    pub const COPY: Self = Self(1 << 3);
+
+    /// Returns whether this scope contains every bit in `other`.
+    pub fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Returns the union of two pipeline scopes.
+    pub fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+impl core::fmt::Display for PipelineScope {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_bit_names(
+            formatter,
+            self.0,
+            &[
+                (Self::VERTEX.0, "VERTEX"),
+                (Self::FRAGMENT.0, "FRAGMENT"),
+                (Self::COMPUTE.0, "COMPUTE"),
+                (Self::COPY.0, "COPY"),
+            ],
+        )
+    }
+}
+
+/// How an actual resource use accesses memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AccessMask(u32);
+
+impl AccessMask {
+    /// Vertex-buffer read access.
+    pub const VERTEX_READ: Self = Self(1 << 0);
+    /// Index-buffer read access.
+    pub const INDEX_READ: Self = Self(1 << 1);
+    /// Uniform-buffer read access.
+    pub const UNIFORM_READ: Self = Self(1 << 2);
+    /// Shader resource read access.
+    pub const SHADER_READ: Self = Self(1 << 3);
+    /// Shader storage write access.
+    pub const SHADER_WRITE: Self = Self(1 << 4);
+    /// Color-attachment read access.
+    pub const COLOR_READ: Self = Self(1 << 5);
+    /// Color-attachment write access.
+    pub const COLOR_WRITE: Self = Self(1 << 6);
+    /// Depth-attachment read access.
+    pub const DEPTH_READ: Self = Self(1 << 7);
+    /// Depth-attachment write access.
+    pub const DEPTH_WRITE: Self = Self(1 << 8);
+    /// Stencil-attachment read access.
+    pub const STENCIL_READ: Self = Self(1 << 9);
+    /// Stencil-attachment write access.
+    pub const STENCIL_WRITE: Self = Self(1 << 10);
+    /// Copy-source read access.
+    pub const COPY_READ: Self = Self(1 << 11);
+    /// Copy-destination write access.
+    pub const COPY_WRITE: Self = Self(1 << 12);
+
+    /// Returns whether this mask contains every bit in `other`.
+    pub fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Returns the union of two access masks.
+    pub fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+impl core::fmt::Display for AccessMask {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_bit_names(
+            formatter,
+            self.0,
+            &[
+                (Self::VERTEX_READ.0, "VERTEX_READ"),
+                (Self::INDEX_READ.0, "INDEX_READ"),
+                (Self::UNIFORM_READ.0, "UNIFORM_READ"),
+                (Self::SHADER_READ.0, "SHADER_READ"),
+                (Self::SHADER_WRITE.0, "SHADER_WRITE"),
+                (Self::COLOR_READ.0, "COLOR_READ"),
+                (Self::COLOR_WRITE.0, "COLOR_WRITE"),
+                (Self::DEPTH_READ.0, "DEPTH_READ"),
+                (Self::DEPTH_WRITE.0, "DEPTH_WRITE"),
+                (Self::STENCIL_READ.0, "STENCIL_READ"),
+                (Self::STENCIL_WRITE.0, "STENCIL_WRITE"),
+                (Self::COPY_READ.0, "COPY_READ"),
+                (Self::COPY_WRITE.0, "COPY_WRITE"),
+            ],
+        )
+    }
+}
+
+/// The portable role a texture played in an actual command.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureUseIntent {
+    /// Shader sampled or read-only access.
+    ShaderRead,
+    /// Shader read/write storage access.
+    ShaderReadWrite,
+    /// Color-attachment access.
+    ColorAttachment,
+    /// Read-only depth/stencil attachment access.
+    DepthStencilRead,
+    /// Writable depth/stencil attachment access.
+    DepthStencilWrite,
+    /// Copy-source access.
+    CopySrc,
+    /// Copy-destination access.
+    CopyDst,
+    /// Multisample resolve source.
+    ResolveSrc,
+    /// Multisample resolve destination.
+    ResolveDst,
+}
+
+/// One buffer range used by recorded work.
+#[derive(Clone)]
+pub struct BufferUse {
+    /// The buffer being used.
+    pub buffer: Buffer,
+    /// The byte range being used.
+    pub range: BufferRange,
+    /// Pipeline domains issuing the access.
+    pub stages: PipelineScope,
+    /// Memory access performed by the command.
+    pub access: AccessMask,
+}
+
+/// One texture subresource range used by recorded work.
+#[derive(Clone)]
+pub struct TextureUse {
+    /// The texture being used.
+    pub texture: Texture,
+    /// The subresources being used.
+    pub subresources: TextureSubresourceRange,
+    /// Pipeline domains issuing the access.
+    pub stages: PipelineScope,
+    /// Memory access performed by the command.
+    pub access: AccessMask,
+    /// Portable role of the texture in the command.
+    pub intent: TextureUseIntent,
+}
+
+/// An acquired frame used by recorded work.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameAttachmentUse {
+    /// Identity of the acquired frame.
+    pub frame: crate::api::presentation::AcquiredFrameId,
+    /// Pipeline domains issuing the access.
+    pub stages: PipelineScope,
+    /// Memory access performed by the command.
+    pub access: AccessMask,
+}
+
+/// One resource actually touched by recorded work.
+#[non_exhaustive]
+#[derive(Clone)]
+pub enum ResourceUse {
+    /// A buffer-range access.
+    Buffer(BufferUse),
+    /// A texture-subresource access.
+    Texture(TextureUse),
+    /// An acquired-frame attachment access.
+    Frame(FrameAttachmentUse),
+}
+
+fn write_bit_names(
+    formatter: &mut core::fmt::Formatter<'_>,
+    bits: u32,
+    names: &[(u32, &str)],
+) -> core::fmt::Result {
+    let mut separator = "";
+    let mut any = false;
+    for &(bit, name) in names {
+        if bits & bit != 0 {
+            formatter.write_str(separator)?;
+            formatter.write_str(name)?;
+            separator = "|";
+            any = true;
+        }
+    }
+    if any {
+        Ok(())
+    } else {
+        formatter.write_str("<none>")
+    }
+}
 
 /// A buffer-range use.
 pub(crate) fn buffer_use(
@@ -505,7 +703,7 @@ pub(crate) fn validate_bound_groups(
 /// Section 34.6: "a Copy-family command is itself an actual resource-use point."
 /// The direction of each pair is what the verb means — a source is read and a
 /// destination is written — and the scope is always
-/// [`PipelineScope::COPY`](crate::api::graph_bridge::PipelineScope::COPY), which
+/// [`PipelineScope::COPY`], which
 /// is the one scope no shader stage can name and therefore the one that makes a
 /// copy distinguishable from a shader access in the merged summary.
 ///

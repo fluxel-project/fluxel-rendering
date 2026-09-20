@@ -565,7 +565,7 @@ impl SubmissionCapabilities {
 }
 
 // `submission/builder.rs` implements section 40's builder against the real
-// `crate::api::command::RecordedWork` and `crate::api::graph_bridge::ResourceUse`,
+// `crate::api::command::{RecordedWork, ResourceUse}`,
 // so it is red until module 04 declares `mod record;` in `command.rs`. The lane
 // vocabulary at the top of this file is separated out first because module 04's
 // `RecordedWork::work_domains` names `LaneWorkDomains`, so the type has to exist

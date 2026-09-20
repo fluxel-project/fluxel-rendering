@@ -1,13 +1,12 @@
 //! Section 28: `ComputePipeline` and its validator.
 //!
-//! The capability gate, the interface and merged-requirement checks shared with
-//! the raster path, and the workgroup limits. A compute pipeline has no target
+//! The capability gate and the interface and merged-requirement checks shared with
+//! the raster path. A compute pipeline has no target
 //! signature and no fixed state, and that absence is the whole of the difference
 //! between the two descriptors.
 //!
 //! Not owned here: the raster-only rules (section 27, `raster.rs`) and the
-//! workgroup shape rules themselves, which belong to the shader artifact's own
-//! validator (section 19.7) and are asked through it rather than copied.
+//! shader artifact validation, which remains owned by the shader chapter.
 
 use core::fmt;
 use std::sync::Arc;
@@ -18,13 +17,9 @@ use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
-use crate::api::shader::{
-    ArtifactAcceptance, ComputeWorkgroupRequirements, ShaderArtifact, ShaderModule, ShaderStage,
-};
+use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderModule, ShaderStage};
 
 use crate::base::pipeline::ComputePipelineBackend;
-
-use crate::api::shader::validation::validate_compute_workgroup;
 
 use super::interface::{PipelineInterface, validate_pipeline_interface_descriptor};
 use super::resources::{merge_shader_resources, validate_shader_resource_requirements};
@@ -165,20 +160,8 @@ impl fmt::Debug for ComputePipeline {
 /// ShaderInterface: location inputs/outputs are empty
 ///                  resources compatible with PipelineInterface
 /// ShaderRequirements: features / limits satisfied
-/// ComputeWorkgroupRequirements: present, non-zero, x*y*z == total_invocations,
-///                               and within the five workgroup limits
 /// ```
 ///
-/// The workgroup shape rules — non-zero dimensions and the checked
-/// `x * y * z == total_invocations` identity — are applied by the shader
-/// artifact's own validator and are applied again here through the same function,
-/// because section 28 states them as conditions of *pipeline creation*: an
-/// artifact that reached a device by another path must fail here rather than
-/// become a pipeline whose reflection disagrees with itself.
-///
-/// These are reflection requirements of the entry point, not dispatch dimensions
-/// (section 28), which is why the device limits they are compared against are the
-/// workgroup-size limits and not the workgroups-per-dimension limit.
 pub(crate) fn validate_compute_pipeline_descriptor(
     desc: &ComputePipelineDescriptor,
     facts: PipelineDeviceFacts<'_>,
@@ -236,51 +219,7 @@ pub(crate) fn validate_compute_pipeline_descriptor(
         ));
     }
 
-    let Some(workgroup) = artifact.requirements.compute_workgroup() else {
-        return Err(RhiError::new(
-            RhiErrorKind::InvalidUsage,
-            "a compute entry point must declare its workgroup requirements",
-        ));
-    };
-    validate_workgroup_shape(&workgroup)?;
-
-    let limit = facts.limit;
-    for (key, value) in [
-        (LimitKey::MaxComputeWorkgroupSizeX, workgroup.x as u64),
-        (LimitKey::MaxComputeWorkgroupSizeY, workgroup.y as u64),
-        (LimitKey::MaxComputeWorkgroupSizeZ, workgroup.z as u64),
-        (
-            LimitKey::MaxComputeInvocationsPerWorkgroup,
-            workgroup.total_invocations as u64,
-        ),
-        (
-            LimitKey::MaxComputeWorkgroupStorageSize,
-            workgroup.workgroup_storage_bytes,
-        ),
-    ] {
-        if let Some(max) = limit(key) {
-            if value > max {
-                return Err(RhiError::new(
-                    RhiErrorKind::InvalidUsage,
-                    format!(
-                        "the compute entry point requires {value} for {key:?}, over the device \
-                         maximum of {max}"
-                    ),
-                ));
-            }
-        }
-    }
-
     Ok(())
-}
-
-/// The workgroup shape rules, shared with the shader artifact's own validator.
-///
-/// Section 28 lists them among the conditions of pipeline creation and section
-/// 19.7 among the conditions of an artifact being internally consistent; both
-/// call [`validate_compute_workgroup`], so the two readings cannot drift.
-fn validate_workgroup_shape(workgroup: &ComputeWorkgroupRequirements) -> RhiResult<()> {
-    validate_compute_workgroup(workgroup)
 }
 
 /// Section 28's creation verb, defined in the chapter that owns the type it
@@ -298,8 +237,8 @@ impl Device {
     /// it, a descriptor whose two parts agree with each other but belong to
     /// another device would validate and say nothing about this one.
     ///
-    /// The compute gate, the merged-requirement checks and the workgroup limits
-    /// then run, through `validate_compute_pipeline_descriptor`, against the
+    /// The compute gate and merged-requirement checks then run through
+    /// `validate_compute_pipeline_descriptor` against the
     /// seven device answers the descriptor-bag carries.
     ///
     /// The backend is asked last, and its failure is *not* wrapped or reworded:
@@ -314,7 +253,7 @@ impl Device {
     /// there is no canonical form to hand it — an interface's order is already
     /// semantic and its groups are already canonical — so the packet validated is
     /// the packet stored and the packet lowered.
-    pub fn create_compute_pipeline(
+    pub async fn create_compute_pipeline(
         &self,
         desc: &ComputePipelineDescriptor,
     ) -> RhiResult<ComputePipeline> {
