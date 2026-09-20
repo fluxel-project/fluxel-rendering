@@ -12,7 +12,7 @@
 //! portable caller.  The spine poisons the accepted serial range and reports
 //! `Failed` (or `DeviceLost`) from completion instead.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::Waker;
 
@@ -28,7 +28,8 @@ use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::ffi;
 use crate::backend::vulkan::platform::device::VulkanShared;
 
-use super::transfer::{self, TransferRetention};
+use super::compute;
+use super::transfer::{self, ImageLayoutState, TransferRetention};
 
 /// One single-queue Vulkan command domain.
 pub(in crate::backend::vulkan) struct VulkanCommandSpine {
@@ -48,6 +49,11 @@ struct SpineState {
     issued: u64,
     /// Last serial known complete by an explicit fence query.
     completed: u64,
+    /// Fence waiters are independent host threads and may report a later
+    /// single-queue fence before an earlier waiter gets scheduled. Keep those
+    /// observations here; the public completion frontier advances only across
+    /// a contiguous prefix, after each batch's readbacks have been published.
+    finished: BTreeSet<u64>,
     /// First serial whose queue outcome cannot safely be observed.  All later
     /// serials are behind it on the same queue and are terminal for the same
     /// reason.
@@ -55,6 +61,11 @@ struct SpineState {
     /// One fence per accepted batch.  Per-batch fences preserve v13's finer
     /// completion without exposing a Vulkan fence as a public token.
     pending: BTreeMap<u64, PendingBatch>,
+    /// Last queue-accepted layout of every transferred texture subresource.
+    /// ObjectId never aliases a later texture, unlike a recycled VkImage handle.
+    /// Entries may outlive the logical texture; retirement is a bounded-memory
+    /// optimization and must not weaken cross-submit layout correctness.
+    image_layouts: Vec<ImageLayoutState>,
 }
 
 struct PendingBatch {
@@ -101,8 +112,10 @@ impl VulkanCommandSpine {
                 state: Mutex::new(SpineState {
                     issued: 0,
                     completed: 0,
+                    finished: BTreeSet::new(),
                     poison: None,
                     pending: BTreeMap::new(),
+                    image_layouts: Vec::new(),
                 }),
             }),
         })
@@ -154,7 +167,7 @@ impl VulkanCommandSpine {
             )));
         }
 
-        let recorded = self.allocate_and_record(request.batches)?;
+        let recorded = self.allocate_and_record(request.batches, &state.image_layouts)?;
         let first_serial = state
             .issued
             .checked_add(1)
@@ -231,6 +244,7 @@ impl VulkanCommandSpine {
             match result {
                 Ok(()) => {
                     let readbacks = batch_recording.retention.readback_tickets();
+                    state.image_layouts = batch_recording.retention.image_layouts();
                     state.pending.insert(
                         serial,
                         PendingBatch {
@@ -312,6 +326,7 @@ impl VulkanCommandSpine {
     fn allocate_and_record(
         &self,
         batches: &[PlanBatch],
+        initial_image_layouts: &[ImageLayoutState],
     ) -> Result<Vec<RecordedBatch>, VulkanFailure> {
         let allocation = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.inner.command_pool)
@@ -337,6 +352,11 @@ impl VulkanCommandSpine {
             ))
         })?;
         let mut recorded = Vec::with_capacity(buffers.len());
+        // The plan's command buffers are submitted in this exact queue order.
+        // Seed from the queue's accepted cross-submit state, then carry changes
+        // across Phase-A batches. Phase B publishes a batch's final table only
+        // after vkQueueSubmit accepts that batch.
+        let mut plan_image_layouts = initial_image_layouts.to_vec();
         for (buffer, batch) in buffers.iter().copied().zip(batches) {
             let begin = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -359,6 +379,7 @@ impl VulkanCommandSpine {
                 )));
             }
             let mut retention = TransferRetention::default();
+            retention.seed_image_layouts(&plan_image_layouts);
             if let Err(error) = self.record_batch(buffer, batch, &mut retention) {
                 unsafe {
                     self.inner
@@ -386,6 +407,11 @@ impl VulkanCommandSpine {
                 command_buffer: buffer,
                 retention,
             });
+            plan_image_layouts = recorded
+                .last()
+                .expect("the just-recorded batch exists")
+                .retention
+                .image_layouts();
         }
         Ok(recorded)
     }
@@ -402,6 +428,16 @@ impl VulkanCommandSpine {
         for work in &batch.work {
             for command in work.commands() {
                 match &command.payload {
+                    RecordedPayload::ComputeBegin(_) | RecordedPayload::ComputeEnd => {}
+                    RecordedPayload::ComputeDispatch(dispatch) => {
+                        let compute = compute::lower_compute_dispatch(
+                            &self.inner.shared,
+                            command_buffer,
+                            dispatch,
+                            &command.uses,
+                        )?;
+                        retention.retain_compute(compute);
+                    }
                     RecordedPayload::Copy(CopyRecord::Buffer(copy)) => {
                         transfer::lower_buffer_copy(
                             &self.inner.shared,
@@ -410,17 +446,68 @@ impl VulkanCommandSpine {
                             retention,
                         )?;
                     }
-                    RecordedPayload::Upload(job) => {
-                        transfer::lower_upload(&self.inner.shared, command_buffer, job, retention)?;
-                    }
-                    RecordedPayload::Readback(ticket) => {
-                        transfer::lower_readback(
+                    RecordedPayload::Copy(CopyRecord::BufferToTexture(copy)) => {
+                        transfer::lower_buffer_texture_copy(
                             &self.inner.shared,
                             command_buffer,
-                            ticket,
+                            copy,
+                            true,
                             retention,
                         )?;
                     }
+                    RecordedPayload::Copy(CopyRecord::TextureToBuffer(copy)) => {
+                        transfer::lower_buffer_texture_copy(
+                            &self.inner.shared,
+                            command_buffer,
+                            copy,
+                            false,
+                            retention,
+                        )?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::Texture(copy)) => {
+                        transfer::lower_texture_copy(
+                            &self.inner.shared,
+                            command_buffer,
+                            copy,
+                            retention,
+                        )?;
+                    }
+                    RecordedPayload::Upload(job) => match job.descriptor() {
+                        crate::api::resource::transfer::UploadDescriptor::Buffer(_) => {
+                            transfer::lower_upload(
+                                &self.inner.shared,
+                                command_buffer,
+                                job,
+                                retention,
+                            )?
+                        }
+                        crate::api::resource::transfer::UploadDescriptor::Texture(_) => {
+                            transfer::lower_texture_upload(
+                                &self.inner.shared,
+                                command_buffer,
+                                job,
+                                retention,
+                            )?
+                        }
+                    },
+                    RecordedPayload::Readback(ticket) => match ticket.request() {
+                        crate::api::resource::transfer::ReadbackRequest::Buffer { .. } => {
+                            transfer::lower_readback(
+                                &self.inner.shared,
+                                command_buffer,
+                                ticket,
+                                retention,
+                            )?
+                        }
+                        crate::api::resource::transfer::ReadbackRequest::Texture { .. } => {
+                            transfer::lower_texture_readback(
+                                &self.inner.shared,
+                                command_buffer,
+                                ticket,
+                                retention,
+                            )?
+                        }
+                    },
                     other => {
                         return Err(VulkanFailure::Unsupported {
                             what: payload_name(other),
@@ -569,9 +656,6 @@ fn finish_waited_batch(inner: &SpineInner, serial: u64, result: Result<(), vk::R
                         }
                     }
                 }
-                if terminal_loss.is_none() {
-                    state.completed = state.completed.max(serial);
-                }
                 terminal_loss
             });
             let terminal_loss = match committed {
@@ -613,8 +697,22 @@ fn finish_waited_batch(inner: &SpineInner, serial: u64, result: Result<(), vk::R
                     .mark_lost(DeviceLossInfo::new(message.to_owned()));
                 return;
             }
+            state.finished.insert(serial);
+            let previous_frontier = state.completed;
+            loop {
+                let Some(next) = state.completed.checked_add(1) else {
+                    break;
+                };
+                if !state.finished.remove(&next) {
+                    break;
+                }
+                state.completed += 1;
+            }
+            let completed_frontier = state.completed;
             drop(state);
-            inner.shared.wake_completion(serial);
+            for completed in previous_frontier + 1..=completed_frontier {
+                inner.shared.wake_completion(completed);
+            }
         }
         Err(result) if result == vk::Result::ERROR_DEVICE_LOST => {
             for readback in &pending.retention.readbacks {

@@ -742,12 +742,13 @@ impl CapabilityFacts {
     ///
     /// Some backends have nothing to ask here and record a structural fact — the
     /// DX12 port records `Dxil` because Direct3D 12's only shader input is
-    /// bytecode — which is why this method takes no device and no probe result.
+    /// bytecode, while Vulkan records `SpirV`; this is why the method takes no
+    /// device and no probe result.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller until Vulkan shader lowering publishes an accepted code form"
+            reason = "DX12 and Vulkan record the code forms their implemented module paths consume; without either backend this is test-only"
         )
     )]
     pub(crate) fn record_code_form(&mut self, form: AcceptedCodeForm) {

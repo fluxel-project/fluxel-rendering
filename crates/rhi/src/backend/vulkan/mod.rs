@@ -7,13 +7,20 @@
 //!
 //! The implementation grows by end-to-end vertical slices. Dedicated buffer,
 //! texture, view and sampler ownership exists; the published slice covers
-//! dedicated resource creation plus BufferToBuffer transfer. Binding, pipeline
-//! and presentation facts remain closed until their lowerings are complete. An
+//! buffer/texture transfer, SPIR-V shaders, immutable descriptor sets, and
+//! buffer-backed compute dispatch. Raster command/pipeline lowering and
+//! presentation remain closed until their vertical slices are complete. An
 //! available Vulkan feature is not yet a Fluxel capability by itself.
 
+pub(crate) mod binding;
 pub(crate) mod command;
 pub(crate) mod failure;
 pub(crate) mod ffi;
 mod format;
+pub(crate) mod pipeline;
 pub(crate) mod platform;
 pub(crate) mod resource;
+pub(crate) mod shader;
+
+#[cfg(test)]
+mod compute_tests;

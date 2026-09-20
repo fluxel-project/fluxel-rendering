@@ -12,4 +12,7 @@ mod provider;
 mod request;
 
 #[cfg(test)]
+pub(crate) use provider::VulkanProvider;
+
+#[cfg(test)]
 mod tests;

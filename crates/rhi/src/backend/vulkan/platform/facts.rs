@@ -15,20 +15,41 @@
 
 use ash::vk;
 
-use crate::api::capability::CapabilityFacts;
+use crate::api::binding::vocabulary::BindableKind;
+use crate::api::binding::{BindingLimitClass, BindingSupport, BufferBindingAccess};
+use crate::api::capability::{BindingSupportKey, CapabilityFacts};
 use crate::api::error::RhiResult;
-use crate::api::format::{TextureSupport, TextureSupportLimits, TextureSupportQuery};
-use crate::api::platform::LimitKey;
+use crate::api::format::{
+    TextureSupport, TextureSupportLimits, TextureSupportQuery, format_aspects,
+};
+use crate::api::platform::{LimitKey, OptionalFeature};
+use crate::api::resource::TextureAspects;
 use crate::api::resource::buffer::{BufferSupport, BufferSupportLimits, BufferUsage};
 use crate::api::resource::route::{
-    BufferCopyLayoutLimits, RouteCapabilities, RouteQuery, RouteSupport,
+    BufferCopyLayoutLimits, RouteCapabilities, RouteQuery, RouteSupport, TexelCopyLayoutLimits,
 };
 use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
+use crate::api::shader::vocabulary::AcceptedCodeForm;
+use crate::api::shader::{ShaderStage, ShaderStages};
 use crate::backend::vulkan::ffi;
 
 use crate::backend::vulkan::format::{FORMATS, vk_format};
+
+#[derive(Clone, Copy)]
+pub(super) struct VulkanCapabilityLimits {
+    pub(super) max_bindings_per_group: u32,
+    pub(super) max_bound_descriptor_sets: u32,
+    pub(super) max_per_stage_uniform_buffers: u32,
+    pub(super) max_per_stage_storage_buffers: u32,
+    pub(super) min_uniform_buffer_offset_alignment: u64,
+    pub(super) min_storage_buffer_offset_alignment: u64,
+    pub(super) max_compute_work_group_invocations: u32,
+    pub(super) max_compute_work_group_size: [u32; 3],
+    pub(super) max_compute_work_group_count: [u32; 3],
+    pub(super) max_compute_shared_memory_size: u32,
+}
 
 /// Probes the resource-creation subset of Vulkan 1.0 exposed by this backend.
 pub(super) fn probe(
@@ -37,8 +58,12 @@ pub(super) fn probe(
     general_ceiling: u64,
     uniform_ceiling: u64,
     storage_ceiling: u64,
+    limits: VulkanCapabilityLimits,
 ) -> RhiResult<CapabilityFacts> {
     let mut facts = CapabilityFacts::empty();
+    facts.record_code_form(AcceptedCodeForm::SpirV);
+    record_compute_and_binding(&mut facts, limits);
+    facts.record_limit(LimitKey::MaxUniformBufferBindingSize, uniform_ceiling);
     record_buffer_support(
         &mut facts,
         general_ceiling,
@@ -59,6 +84,58 @@ pub(super) fn probe(
         let native = vk_format(format).expect("FORMATS contains only mapped Vulkan formats");
         let properties =
             unsafe { instance.get_physical_device_format_properties(physical, native) };
+        // These routes are only published after the exact native format has
+        // reported the matching optimal-tiling transfer feature.  The command
+        // spine has real `vkCmdCopy*` lowering for this subset; resolve and
+        // blit deliberately remain absent until their own conformance slices.
+        let features = properties.optimal_tiling_features;
+        let texel_limits = Some(TexelCopyLayoutLimits::new(4, 4));
+        for dimension in [
+            TextureDimension::D1,
+            TextureDimension::D2,
+            TextureDimension::D3,
+        ]
+        .into_iter()
+        .filter(|_| format_aspects(format).contains(TextureAspects::COLOR))
+        {
+            if features.contains(vk::FormatFeatureFlags::TRANSFER_DST) {
+                facts.record_route(
+                    RouteQuery::BufferToTexture {
+                        dimension,
+                        format,
+                        aspect: crate::api::resource::subresource::TextureAspect::Color,
+                    },
+                    RouteSupport::Supported(RouteCapabilities::new(None, texel_limits)),
+                );
+            }
+            if features.contains(vk::FormatFeatureFlags::TRANSFER_SRC) {
+                facts.record_route(
+                    RouteQuery::TextureToBuffer {
+                        dimension,
+                        format,
+                        aspect: crate::api::resource::subresource::TextureAspect::Color,
+                    },
+                    RouteSupport::Supported(RouteCapabilities::new(None, texel_limits)),
+                );
+            }
+            if features.contains(
+                vk::FormatFeatureFlags::TRANSFER_SRC | vk::FormatFeatureFlags::TRANSFER_DST,
+            ) {
+                facts.record_route(
+                    RouteQuery::TextureToTexture {
+                        src_dimension: dimension,
+                        src_format: format,
+                        src_aspect: crate::api::resource::subresource::TextureAspect::Color,
+                        src_sample_count: 1,
+                        dst_dimension: dimension,
+                        dst_format: format,
+                        dst_aspect: crate::api::resource::subresource::TextureAspect::Color,
+                        dst_sample_count: 1,
+                    },
+                    RouteSupport::Supported(RouteCapabilities::new(None, None)),
+                );
+            }
+        }
         for dimension in [
             TextureDimension::D1,
             TextureDimension::D2,
@@ -122,6 +199,102 @@ pub(super) fn probe(
         }
     }
     Ok(facts)
+}
+
+fn record_compute_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabilityLimits) {
+    facts.record_feature(OptionalFeature::Compute);
+    facts.record_limit(
+        LimitKey::MaxBindGroups,
+        u64::from(limits.max_bound_descriptor_sets),
+    );
+    // The portable key bounds both entry count and slot number, while Vulkan
+    // separates sparse binding numbers from descriptor-count limits. Publish a
+    // conservative buffer-only subset derived from both per-stage and per-set
+    // limits; accepting fewer sparse slot numbers is preferable to validating a
+    // layout the device cannot populate.
+    facts.record_limit(
+        LimitKey::MaxBindingsPerGroup,
+        u64::from(limits.max_bindings_per_group),
+    );
+    facts.record_limit(LimitKey::MaxDynamicUniformBuffersPerPipelineLayout, 0);
+    facts.record_limit(LimitKey::MaxDynamicStorageBuffersPerPipelineLayout, 0);
+    facts.record_limit(
+        LimitKey::MinUniformBufferOffsetAlignment,
+        limits.min_uniform_buffer_offset_alignment,
+    );
+    facts.record_limit(
+        LimitKey::MinStorageBufferOffsetAlignment,
+        limits.min_storage_buffer_offset_alignment,
+    );
+    facts.record_limit(
+        LimitKey::MaxComputeInvocationsPerWorkgroup,
+        u64::from(limits.max_compute_work_group_invocations),
+    );
+    facts.record_limit(
+        LimitKey::MaxComputeWorkgroupSizeX,
+        u64::from(limits.max_compute_work_group_size[0]),
+    );
+    facts.record_limit(
+        LimitKey::MaxComputeWorkgroupSizeY,
+        u64::from(limits.max_compute_work_group_size[1]),
+    );
+    facts.record_limit(
+        LimitKey::MaxComputeWorkgroupSizeZ,
+        u64::from(limits.max_compute_work_group_size[2]),
+    );
+    facts.record_limit(
+        LimitKey::MaxComputeWorkgroupsPerDimension,
+        u64::from(
+            *limits
+                .max_compute_work_group_count
+                .iter()
+                .min()
+                .unwrap_or(&0),
+        ),
+    );
+    facts.record_limit(
+        LimitKey::MaxComputeWorkgroupStorageSize,
+        u64::from(limits.max_compute_shared_memory_size),
+    );
+    facts.record_binding_limit(
+        ShaderStage::Compute,
+        BindingLimitClass::UniformBuffers,
+        limits.max_per_stage_uniform_buffers,
+    );
+    facts.record_binding_limit(
+        ShaderStage::Compute,
+        BindingLimitClass::StorageBuffers,
+        limits.max_per_stage_storage_buffers,
+    );
+    // Fixed descriptor arrays are implemented by the descriptor writer, but
+    // remain unadvertised until a native conformance case closes that route.
+    // Capability publication follows proven lowering, not Vulkan's theoretical
+    // descriptor-set vocabulary.
+    for array in [false] {
+        facts.record_binding_support(
+            BindingSupportKey {
+                visibility: ShaderStages::COMPUTE,
+                kind: BindableKind::UniformBuffer,
+                array,
+                dynamic_offset: false,
+            },
+            BindingSupport::Supported,
+        );
+        for access in [
+            BufferBindingAccess::ReadOnly,
+            BufferBindingAccess::ReadWrite,
+        ] {
+            facts.record_binding_support(
+                BindingSupportKey {
+                    visibility: ShaderStages::COMPUTE,
+                    kind: BindableKind::StorageBuffer { access },
+                    array,
+                    dynamic_offset: false,
+                },
+                BindingSupport::Supported,
+            );
+        }
+    }
 }
 
 fn record_buffer_support(

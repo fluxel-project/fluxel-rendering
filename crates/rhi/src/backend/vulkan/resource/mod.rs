@@ -6,6 +6,6 @@ mod sampler;
 mod texture;
 mod view;
 pub(crate) use buffer::{VulkanBuffer, VulkanStagingBuffer, create_buffer, create_staging_buffer};
-pub(crate) use sampler::create_sampler;
+pub(crate) use sampler::{VulkanSampler, create_sampler};
 pub(crate) use texture::{VulkanTexture, create_texture};
-pub(crate) use view::create_texture_view;
+pub(crate) use view::{VulkanTextureView, create_texture_view};

@@ -78,6 +78,7 @@ struct Candidate {
     uniform_buffer_ceiling: u64,
     storage_buffer_ceiling: u64,
     non_coherent_atom_size: u64,
+    capability_limits: facts::VulkanCapabilityLimits,
 }
 
 /// One Vulkan provider owns one loaded instance and may create many devices.
@@ -143,6 +144,35 @@ impl VulkanProvider {
                 uniform_buffer_ceiling: u64::from(properties.limits.max_uniform_buffer_range),
                 storage_buffer_ceiling: u64::from(properties.limits.max_storage_buffer_range),
                 non_coherent_atom_size: properties.limits.non_coherent_atom_size,
+                capability_limits: facts::VulkanCapabilityLimits {
+                    max_bindings_per_group: properties.limits.max_per_stage_resources.min(
+                        properties
+                            .limits
+                            .max_descriptor_set_uniform_buffers
+                            .saturating_add(properties.limits.max_descriptor_set_storage_buffers),
+                    ),
+                    max_bound_descriptor_sets: properties.limits.max_bound_descriptor_sets,
+                    max_per_stage_uniform_buffers: properties
+                        .limits
+                        .max_per_stage_descriptor_uniform_buffers,
+                    max_per_stage_storage_buffers: properties
+                        .limits
+                        .max_per_stage_descriptor_storage_buffers,
+                    min_uniform_buffer_offset_alignment: properties
+                        .limits
+                        .min_uniform_buffer_offset_alignment,
+                    min_storage_buffer_offset_alignment: properties
+                        .limits
+                        .min_storage_buffer_offset_alignment,
+                    max_compute_work_group_invocations: properties
+                        .limits
+                        .max_compute_work_group_invocations,
+                    max_compute_work_group_size: properties.limits.max_compute_work_group_size,
+                    max_compute_work_group_count: properties.limits.max_compute_work_group_count,
+                    max_compute_shared_memory_size: properties
+                        .limits
+                        .max_compute_shared_memory_size,
+                },
             });
         }
         Ok(candidates)
@@ -195,6 +225,7 @@ impl VulkanProvider {
             candidate.buffer_ceiling,
             candidate.uniform_buffer_ceiling,
             candidate.storage_buffer_ceiling,
+            candidate.capability_limits,
         )
     }
 
@@ -233,7 +264,14 @@ impl VulkanProvider {
         let submission = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
             SubmissionLaneId::new(0),
             SubmissionLaneClass::Graphics,
-            LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
+            // v13's base submission invariant requires a graphics lane that
+            // carries RASTER|COPY. COMPUTE is now closed by native lowering on
+            // this same queue. Raster payload lowering is the next Vulkan
+            // vertical slice; until then its required base-domain declaration
+            // is guarded by explicit Phase-A Unsupported rather than a no-op.
+            LaneWorkDomains::RASTER
+                .union(LaneWorkDomains::COMPUTE)
+                .union(LaneWorkDomains::COPY),
         )]);
         VulkanDevice::new(
             self.adapter_info(&candidate, facts.clone()),

@@ -14,7 +14,6 @@ pub(crate) struct VulkanTextureView {
     view: vk::ImageView,
 }
 impl VulkanTextureView {
-    #[expect(dead_code, reason = "reserved for Vulkan descriptor-set lowering")]
     pub(crate) fn view(&self) -> vk::ImageView {
         self.view
     }

@@ -1,15 +1,16 @@
 //! Native Vulkan platform smoke tests.
 //!
 //! The smoke path covers platform ownership plus the first capability-closed
-//! resource slice: Dedicated resource allocation and core sampler creation. It
-//! is not evidence for binding, pipeline, raster, compute, or presentation support.
+//! resource slice: Dedicated allocation, core sampler creation, and transfer.
+//! Compute has its own native conformance module; these tests are not evidence
+//! for raster or presentation support.
 
 use core::future::Future;
 use core::task::{Context, Poll, Waker};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::api::command::{BufferCopy, RecorderDescriptor};
+use crate::api::command::{BufferCopy, RecorderDescriptor, TextureCopy};
 use crate::api::error::RhiErrorKind;
 use crate::api::format::TextureFormat;
 use crate::api::identity::{DeviceInstanceId, Label};
@@ -21,8 +22,13 @@ use crate::api::resource::buffer::{
     BufferDescriptor, BufferRange, BufferSupportQuery, BufferUsage,
 };
 use crate::api::resource::sampler::SamplerDescriptor;
+use crate::api::resource::subresource::{
+    HostTexelLayout, Origin3d, TextureAspect, TextureSubresourceLayers,
+};
 use crate::api::resource::texture::{TextureDescriptor, TextureUsage};
-use crate::api::resource::transfer::{BufferUploadDescriptor, ReadbackRequest, ReadbackViewData};
+use crate::api::resource::transfer::{
+    BufferUploadDescriptor, ReadbackRequest, ReadbackViewData, TextureUploadDescriptor,
+};
 use crate::api::resource::view::{TextureViewDescriptor, TextureViewDimension};
 use crate::api::submission::{
     CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
@@ -209,4 +215,139 @@ fn upload_copy_and_readback_move_bytes_on_a_real_vulkan_queue() {
         bytes.len(),
         &bytes[..8]
     );
+}
+
+#[test]
+fn texture_upload_copy_and_readback_move_texels_on_a_real_vulkan_queue() {
+    const WIDTH: u32 = 8;
+    const HEIGHT: u32 = 4;
+    let Some(provider) = provider() else {
+        return;
+    };
+    if ready(provider.enumerate_adapters())
+        .expect("Vulkan enumeration failed")
+        .as_ref()
+        .is_none_or(Vec::is_empty)
+    {
+        return;
+    }
+    let device = ready(provider.request_device(DeviceRequestDescriptor::new(
+        AdapterSelection::Default,
+        DeviceRequirements::new(),
+    )))
+    .unwrap();
+    let usage = TextureUsage::COPY_SRC.union(TextureUsage::COPY_DST);
+    let source = device
+        .create_texture(&TextureDescriptor::new_2d(
+            WIDTH,
+            HEIGHT,
+            TextureFormat::Rgba8Unorm,
+            usage,
+        ))
+        .unwrap();
+    let destination = device
+        .create_texture(&TextureDescriptor::new_2d(
+            WIDTH,
+            HEIGHT,
+            TextureFormat::Rgba8Unorm,
+            usage,
+        ))
+        .unwrap();
+    let bytes = (0..WIDTH * HEIGHT * 4)
+        .map(|i| ((i * 29 + 7) & 0xff) as u8)
+        .collect::<Vec<_>>();
+    let layers = TextureSubresourceLayers {
+        aspect: TextureAspect::Color,
+        mip_level: 0,
+        base_layer: 0,
+        layer_count: 1,
+    };
+    let origin = Origin3d { x: 0, y: 0, z: 0 };
+    let extent = crate::api::resource::texture::Extent3d::d2(WIDTH, HEIGHT);
+    let upload = device
+        .create_texture_upload(TextureUploadDescriptor {
+            label: Label(Some("Vulkan texture upload".into())),
+            dst: source.clone(),
+            subresource: layers,
+            origin,
+            extent,
+            source_layout: HostTexelLayout {
+                bytes_per_row: WIDTH * 4,
+                rows_per_image: HEIGHT,
+            },
+            bytes: Arc::from(bytes.as_slice()),
+        })
+        .unwrap();
+    let mut upload_recorder = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+    upload_recorder.encode_upload(&upload).unwrap();
+    let upload_work = upload_recorder.finish().unwrap();
+    let mut upload_plan = SubmissionPlanBuilder::new(&device);
+    let upload_point = upload_plan
+        .add_batch(copy_lane(&device), vec![upload_work])
+        .unwrap();
+    let upload_receipt = ready(device.submit(upload_plan.build().unwrap())).unwrap();
+    let upload_completion = upload_receipt.completion_for(upload_point).unwrap();
+    let upload_deadline = Instant::now() + Duration::from_secs(10);
+    while matches!(
+        device.completion_state(upload_completion).unwrap(),
+        CompletionState::Pending
+    ) && Instant::now() < upload_deadline
+    {
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        device.completion_state(upload_completion).unwrap(),
+        CompletionState::Complete
+    ));
+
+    // A second submit must start from the first submit's accepted image layout,
+    // not UNDEFINED: using UNDEFINED here would legally discard the uploaded
+    // texels and make this cross-submit comparison fail nondeterministically.
+    let mut recorder = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+    recorder
+        .copy_texture(&TextureCopy {
+            src: source,
+            src_subresource: layers,
+            src_origin: origin,
+            dst: destination.clone(),
+            dst_subresource: layers,
+            dst_origin: origin,
+            extent,
+        })
+        .unwrap();
+    let ticket = recorder
+        .encode_readback(ReadbackRequest::Texture {
+            label: Label(Some("Vulkan texture readback".into())),
+            src: destination,
+            subresource: layers,
+            origin,
+            extent,
+        })
+        .unwrap();
+    let work = recorder.finish().unwrap();
+    let mut plan = SubmissionPlanBuilder::new(&device);
+    let point = plan.add_batch(copy_lane(&device), vec![work]).unwrap();
+    let receipt = ready(device.submit(plan.build().unwrap())).unwrap();
+    let completion = receipt.completion_for(point).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while matches!(
+        device.completion_state(completion).unwrap(),
+        CompletionState::Pending
+    ) && Instant::now() < deadline
+    {
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        device.completion_state(completion).unwrap(),
+        CompletionState::Complete
+    ));
+    let view = ticket
+        .try_read()
+        .unwrap()
+        .expect("texture readback was not published");
+    let ReadbackViewData::Texture { bytes: got, layout } = view.data() else {
+        panic!("texture readback returned buffer data")
+    };
+    assert_eq!(layout.bytes_per_row, WIDTH * 4);
+    assert_eq!(got, bytes.as_slice());
 }

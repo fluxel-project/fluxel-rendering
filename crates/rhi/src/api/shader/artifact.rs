@@ -212,7 +212,7 @@ impl ShaderModule {
     /// rather than an accident: the attribute's reason has stopped being true, and
     /// `expect` is what makes that a compile error instead of a stale comment.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(dead_code, reason = "read by backend pipeline lowering")
     )]
     pub(crate) fn native(&self) -> &dyn ShaderModuleBackend {

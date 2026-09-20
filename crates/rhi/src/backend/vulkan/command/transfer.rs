@@ -10,14 +10,23 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::api::command::copy::BufferCopy;
+use crate::api::binding::BindGroup;
+use crate::api::command::copy::{BufferCopy, BufferTextureCopy, TextureCopy};
+use crate::api::format::logical_bytes_per_block;
+use crate::api::identity::ObjectId;
+use crate::api::pipeline::ComputePipeline;
 use crate::api::resource::buffer::Buffer;
+use crate::api::resource::subresource::{HostTexelLayout, TextureAspect, TextureSubresourceLayers};
+use crate::api::resource::texture::{Texture, TextureDimension};
 use crate::api::resource::transfer::{
-    ReadbackRequest, ReadbackStatus, ReadbackTicket, UploadDescriptor, UploadJob,
+    ReadbackRequest, ReadbackStatus, ReadbackTexelLayout, ReadbackTicket, UploadDescriptor,
+    UploadJob,
 };
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::platform::device::VulkanShared;
-use crate::backend::vulkan::resource::{VulkanBuffer, VulkanStagingBuffer, create_staging_buffer};
+use crate::backend::vulkan::resource::{
+    VulkanBuffer, VulkanStagingBuffer, VulkanTexture, create_staging_buffer,
+};
 
 /// Resources whose portable handles have to outlive accepted GPU work.
 ///
@@ -25,9 +34,25 @@ use crate::backend::vulkan::resource::{VulkanBuffer, VulkanStagingBuffer, create
 /// clones therefore remain in `PendingBatch` until its fence is terminal.
 #[derive(Default)]
 pub(super) struct TransferRetention {
-    pub(super) resources: Vec<Buffer>,
+    pub(super) buffers: Vec<Buffer>,
+    pub(super) textures: Vec<Texture>,
     pub(super) staging: Vec<VulkanStagingBuffer>,
     pub(super) readbacks: Vec<ReadbackRetention>,
+    pub(super) compute_pipelines: Vec<ComputePipeline>,
+    pub(super) bind_groups: Vec<BindGroup>,
+    /// Per-subresource layout knowledge seeded from the queue-domain tracker.
+    /// Fluxel object identity, rather than a recyclable `VkImage` handle, makes
+    /// retained entries safe after a texture is destroyed.
+    image_layouts: Vec<ImageLayoutState>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ImageLayoutState {
+    texture: ObjectId,
+    aspect: TextureAspect,
+    mip_level: u32,
+    array_layer: u32,
+    layout: vk::ImageLayout,
 }
 
 impl TransferRetention {
@@ -37,17 +62,31 @@ impl TransferRetention {
             .map(|retention| retention.ticket.clone())
             .collect()
     }
+
+    pub(super) fn seed_image_layouts(&mut self, layouts: &[ImageLayoutState]) {
+        self.image_layouts.extend_from_slice(layouts);
+    }
+
+    pub(super) fn image_layouts(&self) -> Vec<ImageLayoutState> {
+        self.image_layouts.clone()
+    }
+
+    pub(super) fn retain_compute(&mut self, compute: super::compute::ComputeRetention) {
+        self.compute_pipelines.extend(compute.pipelines);
+        self.bind_groups.extend(compute.bind_groups);
+    }
 }
 
 pub(super) struct ReadbackRetention {
     pub(super) staging: VulkanStagingBuffer,
     pub(super) ticket: ReadbackTicket,
+    pub(super) layout: Option<ReadbackTexelLayout>,
 }
 
-/// Lowers a direct buffer copy with conservative transfer-domain memory
-/// dependencies. Future graphics/compute lowering must replace this local
-/// transfer-only state model with a unified resource-state tracker; it must not
-/// silently assume this barrier covers shader or attachment accesses.
+/// Lowers a direct buffer copy with conservative whole-command-buffer memory
+/// dependencies. This baseline deliberately covers preceding shader writes as
+/// well as transfers; narrowing it requires the future unified buffer access
+/// tracker to prove the previous stage/access for each range.
 pub(super) fn lower_buffer_copy(
     shared: &VulkanShared,
     command_buffer: vk::CommandBuffer,
@@ -60,14 +99,12 @@ pub(super) fn lower_buffer_copy(
         shared,
         command_buffer,
         source.buffer(),
-        vk::AccessFlags::TRANSFER_WRITE,
         vk::AccessFlags::TRANSFER_READ,
     );
     transfer_dependency(
         shared,
         command_buffer,
         destination.buffer(),
-        vk::AccessFlags::TRANSFER_WRITE,
         vk::AccessFlags::TRANSFER_WRITE,
     );
     let region = vk::BufferCopy::default()
@@ -85,8 +122,8 @@ pub(super) fn lower_buffer_copy(
             &[region],
         );
     }
-    retention.resources.push(copy.src.clone());
-    retention.resources.push(copy.dst.clone());
+    retention.buffers.push(copy.src.clone());
+    retention.buffers.push(copy.dst.clone());
     Ok(())
 }
 
@@ -118,7 +155,6 @@ pub(super) fn lower_upload(
         command_buffer,
         destination.buffer(),
         vk::AccessFlags::TRANSFER_WRITE,
-        vk::AccessFlags::TRANSFER_WRITE,
     );
     let region = vk::BufferCopy::default()
         .src_offset(0)
@@ -134,7 +170,7 @@ pub(super) fn lower_upload(
             &[region],
         );
     }
-    retention.resources.push(descriptor.dst.clone());
+    retention.buffers.push(descriptor.dst.clone());
     retention.staging.push(staging);
     Ok(())
 }
@@ -162,7 +198,6 @@ pub(super) fn lower_readback(
         shared,
         command_buffer,
         source.buffer(),
-        vk::AccessFlags::TRANSFER_WRITE,
         vk::AccessFlags::TRANSFER_READ,
     );
     let region = vk::BufferCopy::default()
@@ -177,10 +212,290 @@ pub(super) fn lower_readback(
             .cmd_copy_buffer(command_buffer, source.buffer(), staging.buffer(), &[region]);
     }
     transfer_write_to_host_read(shared, command_buffer, staging.buffer());
-    retention.resources.push(src.clone());
+    retention.buffers.push(src.clone());
     retention.readbacks.push(ReadbackRetention {
         staging,
         ticket: ticket.clone(),
+        layout: None,
+    });
+    Ok(())
+}
+
+/// Lowers direct image transfer commands. Layouts are keyed by the portable
+/// texture `ObjectId` plus subresource and persist across accepted submissions;
+/// using a recycled `VkImage` handle as identity, or restarting every submit at
+/// `UNDEFINED`, would allow Vulkan to discard live texture contents.
+///
+/// This remains a transfer-only correctness tracker. Before raster or
+/// texture-backed compute is advertised it must become one backend-private
+/// access/stage/layout authority covering all image uses. Merely adding another
+/// local table would create contradictory layout histories. Stale `ObjectId`
+/// retirement is a bounded-memory TODO and must be completion-safe.
+pub(super) fn lower_buffer_texture_copy(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    copy: &BufferTextureCopy,
+    to_texture: bool,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let buffer = native_buffer(&copy.buffer)?;
+    let texture = native_texture(&copy.texture)?;
+    let layout = if to_texture {
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL
+    } else {
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+    };
+    transition_image(
+        shared,
+        command_buffer,
+        texture.image(),
+        &copy.texture,
+        copy.texture_subresource,
+        layout,
+        retention,
+    );
+    let bytes = logical_bytes_per_block(copy.texture.descriptor().format).ok_or(
+        VulkanFailure::Unsupported {
+            what: "a texture transfer format",
+            why: "the format has no Vulkan byte-copy block size",
+        },
+    )?;
+    let row_length = copy.bytes_per_row / bytes;
+    let region = vk::BufferImageCopy::default()
+        .buffer_offset(copy.buffer_offset)
+        .buffer_row_length(row_length)
+        .buffer_image_height(copy.rows_per_image)
+        .image_subresource(image_layers(copy.texture_subresource))
+        .image_offset(image_offset(copy.texture_origin))
+        .image_extent(image_extent(copy.extent));
+    unsafe {
+        if to_texture {
+            shared.device.cmd_copy_buffer_to_image(
+                command_buffer,
+                buffer.buffer(),
+                texture.image(),
+                layout,
+                &[region],
+            );
+        } else {
+            shared.device.cmd_copy_image_to_buffer(
+                command_buffer,
+                texture.image(),
+                layout,
+                buffer.buffer(),
+                &[region],
+            );
+        }
+    }
+    retention.buffers.push(copy.buffer.clone());
+    retention.textures.push(copy.texture.clone());
+    Ok(())
+}
+
+pub(super) fn lower_texture_copy(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    copy: &TextureCopy,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let source = native_texture(&copy.src)?;
+    let destination = native_texture(&copy.dst)?;
+    transition_image(
+        shared,
+        command_buffer,
+        source.image(),
+        &copy.src,
+        copy.src_subresource,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        retention,
+    );
+    transition_image(
+        shared,
+        command_buffer,
+        destination.image(),
+        &copy.dst,
+        copy.dst_subresource,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        retention,
+    );
+    let region = vk::ImageCopy::default()
+        .src_subresource(image_layers(copy.src_subresource))
+        .src_offset(image_offset(copy.src_origin))
+        .dst_subresource(image_layers(copy.dst_subresource))
+        .dst_offset(image_offset(copy.dst_origin))
+        .extent(image_extent(copy.extent));
+    unsafe {
+        shared.device.cmd_copy_image(
+            command_buffer,
+            source.image(),
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            destination.image(),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &[region],
+        );
+    }
+    retention.textures.push(copy.src.clone());
+    retention.textures.push(copy.dst.clone());
+    Ok(())
+}
+
+pub(super) fn lower_texture_upload(
+    shared: &Arc<VulkanShared>,
+    command_buffer: vk::CommandBuffer,
+    job: &UploadJob,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let UploadDescriptor::Texture(desc) = job.descriptor() else {
+        return Err(VulkanFailure::Unsupported {
+            what: "a buffer upload",
+            why: "not a texture upload",
+        });
+    };
+    let block =
+        logical_bytes_per_block(desc.dst.descriptor().format).ok_or(VulkanFailure::Unsupported {
+            what: "a texture upload format",
+            why: "the format has no Vulkan byte-copy block size",
+        })? as usize;
+    let tight_row = desc.extent.width as usize * block;
+    let rows = desc.extent.height as usize;
+    let images = if desc.dst.descriptor().dimension == TextureDimension::D3 {
+        desc.extent.depth as usize
+    } else {
+        desc.subresource.layer_count as usize
+    };
+    let tight_size = tight_row
+        .checked_mul(rows)
+        .and_then(|v| v.checked_mul(images))
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a texture upload",
+            why: "the packed staging size overflows usize",
+        })?;
+    let mut packed = vec![0u8; tight_size];
+    repack_rows(
+        &desc.bytes,
+        desc.source_layout,
+        tight_row,
+        rows,
+        images,
+        &mut packed,
+    )?;
+    let staging = create_staging_buffer(
+        Arc::clone(shared),
+        packed.len() as u64,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+    )
+    .map_err(native("Vulkan texture-upload staging allocation"))?;
+    staging
+        .write(&packed)
+        .map_err(native("Vulkan texture-upload staging map/flush"))?;
+    host_write_to_transfer_read(shared, command_buffer, staging.buffer());
+    let texture = native_texture(&desc.dst)?;
+    transition_image(
+        shared,
+        command_buffer,
+        texture.image(),
+        &desc.dst,
+        desc.subresource,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        retention,
+    );
+    let region = vk::BufferImageCopy::default()
+        .image_subresource(image_layers(desc.subresource))
+        .image_offset(image_offset(desc.origin))
+        .image_extent(image_extent(desc.extent));
+    unsafe {
+        shared.device.cmd_copy_buffer_to_image(
+            command_buffer,
+            staging.buffer(),
+            texture.image(),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &[region],
+        );
+    }
+    retention.textures.push(desc.dst.clone());
+    retention.staging.push(staging);
+    Ok(())
+}
+
+pub(super) fn lower_texture_readback(
+    shared: &Arc<VulkanShared>,
+    command_buffer: vk::CommandBuffer,
+    ticket: &ReadbackTicket,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let ReadbackRequest::Texture {
+        src,
+        subresource,
+        origin,
+        extent,
+        ..
+    } = ticket.request()
+    else {
+        return Err(VulkanFailure::Unsupported {
+            what: "a buffer readback",
+            why: "not a texture readback",
+        });
+    };
+    let block =
+        logical_bytes_per_block(src.descriptor().format).ok_or(VulkanFailure::Unsupported {
+            what: "a texture readback format",
+            why: "the format has no Vulkan byte-copy block size",
+        })?;
+    let row = extent
+        .width
+        .checked_mul(block)
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a texture readback",
+            why: "row pitch overflows u32",
+        })?;
+    let images = if src.descriptor().dimension == TextureDimension::D3 {
+        extent.depth
+    } else {
+        subresource.layer_count
+    };
+    let size = u64::from(row)
+        .checked_mul(u64::from(extent.height))
+        .and_then(|v| v.checked_mul(u64::from(images)))
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a texture readback",
+            why: "staging size overflows u64",
+        })?;
+    let staging =
+        create_staging_buffer(Arc::clone(shared), size, vk::BufferUsageFlags::TRANSFER_DST)
+            .map_err(native("Vulkan texture-readback staging allocation"))?;
+    let texture = native_texture(src)?;
+    transition_image(
+        shared,
+        command_buffer,
+        texture.image(),
+        src,
+        *subresource,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        retention,
+    );
+    let region = vk::BufferImageCopy::default()
+        .image_subresource(image_layers(*subresource))
+        .image_offset(image_offset(*origin))
+        .image_extent(image_extent(*extent));
+    unsafe {
+        shared.device.cmd_copy_image_to_buffer(
+            command_buffer,
+            texture.image(),
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            staging.buffer(),
+            &[region],
+        );
+    }
+    transfer_write_to_host_read(shared, command_buffer, staging.buffer());
+    retention.textures.push(src.clone());
+    retention.readbacks.push(ReadbackRetention {
+        staging,
+        ticket: ticket.clone(),
+        layout: Some(ReadbackTexelLayout {
+            bytes_per_row: row,
+            rows_per_image: extent.height,
+            total_size: size,
+        }),
     });
     Ok(())
 }
@@ -191,7 +506,7 @@ pub(super) fn lower_readback(
 pub(super) fn publish_readback(retention: &ReadbackRetention) -> Result<(), vk::Result> {
     match retention.staging.read() {
         Ok(bytes) => {
-            retention.ticket.publish(bytes, None);
+            retention.ticket.publish(bytes, retention.layout);
             Ok(())
         }
         Err(error) => {
@@ -226,15 +541,178 @@ fn native_buffer(buffer: &Buffer) -> Result<&VulkanBuffer, VulkanFailure> {
         })
 }
 
+fn native_texture(texture: &Texture) -> Result<&VulkanTexture, VulkanFailure> {
+    texture
+        .native()
+        .as_any()
+        .downcast_ref::<VulkanTexture>()
+        .ok_or(VulkanFailure::Unsupported {
+            what: "a non-Vulkan texture",
+            why: "a Vulkan submission may only lower textures created by the same Vulkan device",
+        })
+}
+
+fn image_layers(value: TextureSubresourceLayers) -> vk::ImageSubresourceLayers {
+    vk::ImageSubresourceLayers::default()
+        .aspect_mask(match value.aspect {
+            TextureAspect::Color => vk::ImageAspectFlags::COLOR,
+            TextureAspect::Depth => vk::ImageAspectFlags::DEPTH,
+            TextureAspect::Stencil => vk::ImageAspectFlags::STENCIL,
+        })
+        .mip_level(value.mip_level)
+        .base_array_layer(value.base_layer)
+        .layer_count(value.layer_count)
+}
+fn image_offset(value: crate::api::resource::subresource::Origin3d) -> vk::Offset3D {
+    vk::Offset3D {
+        x: value.x as i32,
+        y: value.y as i32,
+        z: value.z as i32,
+    }
+}
+fn image_extent(value: crate::api::resource::texture::Extent3d) -> vk::Extent3D {
+    vk::Extent3D {
+        width: value.width,
+        height: value.height,
+        depth: value.depth,
+    }
+}
+
+fn transition_image(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    image: vk::Image,
+    texture: &Texture,
+    layers: TextureSubresourceLayers,
+    new_layout: vk::ImageLayout,
+    retention: &mut TransferRetention,
+) {
+    for array_layer in layers.base_layer..layers.base_layer + layers.layer_count {
+        let existing = retention.image_layouts.iter_mut().find(|known| {
+            known.texture == texture.id()
+                && known.aspect == layers.aspect
+                && known.mip_level == layers.mip_level
+                && known.array_layer == array_layer
+        });
+        let old_layout = existing
+            .as_ref()
+            .map(|known| known.layout)
+            .unwrap_or(vk::ImageLayout::UNDEFINED);
+        if old_layout == new_layout {
+            continue;
+        }
+        let (src_access, src_stage) = if old_layout == vk::ImageLayout::UNDEFINED {
+            (
+                vk::AccessFlags::empty(),
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+            )
+        } else {
+            (
+                vk::AccessFlags::TRANSFER_READ | vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TRANSFER,
+            )
+        };
+        let (dst_access, dst_stage) = match new_layout {
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL => (
+                vk::AccessFlags::TRANSFER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+            ),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL => (
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TRANSFER,
+            ),
+            _ => unreachable!("transfer slice only selects transfer layouts"),
+        };
+        let barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(src_access)
+            .dst_access_mask(dst_access)
+            .old_layout(old_layout)
+            .new_layout(new_layout)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(image_layers(layers).aspect_mask)
+                    .base_mip_level(layers.mip_level)
+                    .level_count(1)
+                    .base_array_layer(array_layer)
+                    .layer_count(1),
+            );
+        unsafe {
+            shared.device.cmd_pipeline_barrier(
+                command_buffer,
+                src_stage,
+                dst_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        }
+        if let Some(entry) = existing {
+            entry.layout = new_layout;
+        } else {
+            retention.image_layouts.push(ImageLayoutState {
+                texture: texture.id(),
+                aspect: layers.aspect,
+                mip_level: layers.mip_level,
+                array_layer,
+                layout: new_layout,
+            });
+        }
+    }
+}
+
+fn repack_rows(
+    source: &[u8],
+    layout: HostTexelLayout,
+    tight_row: usize,
+    rows: usize,
+    images: usize,
+    destination: &mut [u8],
+) -> Result<(), VulkanFailure> {
+    let source_row = layout.bytes_per_row as usize;
+    let source_image = layout.rows_per_image as usize;
+    for image in 0..images {
+        for row in 0..rows {
+            let src = image
+                .checked_mul(source_image)
+                .and_then(|v| v.checked_add(row))
+                .and_then(|v| v.checked_mul(source_row))
+                .ok_or(VulkanFailure::Unsupported {
+                    what: "a texture upload",
+                    why: "source layout offset overflows usize",
+                })?;
+            let dst = (image * rows + row) * tight_row;
+            let end = src
+                .checked_add(tight_row)
+                .ok_or(VulkanFailure::Unsupported {
+                    what: "a texture upload",
+                    why: "source layout end overflows usize",
+                })?;
+            let target_end = dst + tight_row;
+            let bytes = source.get(src..end).ok_or(VulkanFailure::Unsupported {
+                what: "a texture upload",
+                why: "validated source layout was not readable during lowering",
+            })?;
+            destination[dst..target_end].copy_from_slice(bytes);
+        }
+    }
+    Ok(())
+}
+
 fn transfer_dependency(
     shared: &VulkanShared,
     command_buffer: vk::CommandBuffer,
     buffer: vk::Buffer,
-    src_access: vk::AccessFlags,
     dst_access: vk::AccessFlags,
 ) {
     let barrier = vk::BufferMemoryBarrier::default()
-        .src_access_mask(src_access)
+        // A dispatch may have been the preceding writer. Until a persistent
+        // range tracker exists, ALL_COMMANDS/MEMORY_* is the conservative
+        // correctness bridge from any earlier buffer use to this transfer.
+        .src_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
         .dst_access_mask(dst_access)
         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -246,7 +724,7 @@ fn transfer_dependency(
     unsafe {
         shared.device.cmd_pipeline_barrier(
             command_buffer,
-            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::ALL_COMMANDS,
             vk::PipelineStageFlags::TRANSFER,
             vk::DependencyFlags::empty(),
             &[],

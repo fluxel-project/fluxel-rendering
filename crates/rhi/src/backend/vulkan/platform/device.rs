@@ -14,10 +14,13 @@ use crate::api::platform::{AdapterInfo, BackendKind, DeviceLossInfo, DeviceStatu
 use crate::api::resource::transfer::{ReadbackStatus, ReadbackTicket};
 use crate::api::submission::{CompletionState, SubmissionCapabilities};
 
+use crate::backend::vulkan::binding;
 use crate::backend::vulkan::command::spine::VulkanCommandSpine;
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::ffi;
+use crate::backend::vulkan::pipeline;
 use crate::backend::vulkan::resource;
+use crate::backend::vulkan::shader;
 
 use super::provider::VulkanInstance;
 
@@ -387,23 +390,38 @@ impl DeviceBackend for VulkanDevice {
 
     fn create_shader(
         &self,
-        _: &crate::api::shader::ShaderArtifact,
+        artifact: &crate::api::shader::ShaderArtifact,
     ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
-        self.unsupported("shader creation")
+        shader::create_shader(self.shared.clone(), artifact)
+            .map(|value| {
+                Box::new(value) as Box<dyn crate::api::shader::backend::ShaderModuleBackend>
+            })
+            .map_err(|result| {
+                self.observe_failure(VulkanFailure::Native(ffi::NativeError::new(
+                    result,
+                    "VulkanDevice::create_shader_module",
+                )))
+            })
     }
 
     fn create_bind_group(
         &self,
-        _: &crate::api::binding::BindGroupDescriptor,
+        descriptor: &crate::api::binding::BindGroupDescriptor,
     ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>> {
-        self.unsupported("bind-group creation")
+        binding::create_bind_group(self.shared.clone(), descriptor)
+            .map(|value| Box::new(value) as Box<dyn crate::api::binding::backend::BindGroupBackend>)
+            .map_err(|failure| self.observe_failure(failure))
     }
 
     fn create_compute_pipeline(
         &self,
-        _: &crate::api::pipeline::ComputePipelineDescriptor,
+        descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
     ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
-        self.unsupported("compute-pipeline creation")
+        pipeline::create_compute_pipeline(self.shared.clone(), descriptor)
+            .map(|value| {
+                Box::new(value) as Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>
+            })
+            .map_err(|failure| self.observe_failure(failure))
     }
 
     fn create_raster_pipeline(

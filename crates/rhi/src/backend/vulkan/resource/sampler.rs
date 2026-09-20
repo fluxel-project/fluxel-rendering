@@ -9,6 +9,11 @@ pub(crate) struct VulkanSampler {
     shared: Arc<VulkanShared>,
     sampler: vk::Sampler,
 }
+impl VulkanSampler {
+    pub(crate) fn sampler(&self) -> vk::Sampler {
+        self.sampler
+    }
+}
 impl SamplerBackend for VulkanSampler {
     fn as_any(&self) -> &dyn Any {
         self

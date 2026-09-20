@@ -10,5 +10,6 @@
 //! Future `copy`, `raster`, `compute`, and `transfer` siblings replace the
 //! individual refusal arms; they do not change the transaction boundary here.
 
+mod compute;
 pub(crate) mod spine;
 mod transfer;

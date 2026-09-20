@@ -180,7 +180,7 @@ pub(crate) struct ComputeBegin {
 
 /// One dispatch, with the state that was current when it was issued.
 #[cfg_attr(
-    all(not(test), not(feature = "dx12")),
+    all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
     expect(dead_code, reason = "read by backend compute command lowering")
 )]
 pub(crate) struct ComputeDispatch {
