@@ -10,13 +10,15 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory4, IDXGISwapChain3,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    IDXGIFactory4, IDXGISwapChain3,
 };
 use windows::core::Interface;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
 use crate::api::identity::{DeviceIdentity, ObjectId};
+use crate::api::platform::DeviceLossInfo;
 use crate::api::presentation::backend::{
     AcquiredSurfaceFrame, ConfiguredPresentationBackend, FrameAttachmentBackend,
     PresentationBackend,
@@ -100,7 +102,10 @@ impl Dx12Presentation {
         let _ = self.hwnd(target)?;
         Ok(PresentationTargetCapabilities::new(
             vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
-            vec![PresentMode::Fifo, PresentMode::Immediate],
+            // This flip-model path currently calls `Present(1, 0)`.  Do not
+            // advertise Immediate until the lowering selects sync interval 0
+            // (and the required tearing policy) for that request.
+            vec![PresentMode::Fifo],
             PresentationExtentControl::HostManaged { current: None },
         ))
     }
@@ -211,9 +216,12 @@ impl FrameAttachmentBackend for Dx12FrameAttachment {
                     .ok()
             } {
                 Ok(()) => PresentState::Accepted,
-                Err(error) => PresentState::Failed(crate::api::presentation::PresentFailure::new(
-                    error.to_string(),
-                )),
+                Err(error) => match observed_loss(&self.loss, &error, "IDXGISwapChain3::Present") {
+                    Some(info) => PresentState::DeviceLost(info),
+                    None => PresentState::Failed(crate::api::presentation::PresentFailure::new(
+                        error.to_string(),
+                    )),
+                },
             },
         };
         self.presents
@@ -232,14 +240,11 @@ struct Dx12ConfiguredPresentation {
     // native device keeps the DXGI objects valid even if the device wrapper is
     // dropped before its frame lease is finished.
     _device: ID3D12Device,
-    factory: IDXGIFactory4,
-    queue: ID3D12CommandQueue,
     leased: Arc<Mutex<HashSet<ObjectId>>>,
     presents: Arc<Mutex<HashMap<PresentReceiptId, PresentState>>>,
     loss: Arc<Dx12LossState>,
     device: DeviceIdentity,
     target: ObjectId,
-    hwnd: isize,
     state: Arc<Mutex<SwapchainState>>,
     serial: AtomicU64,
 }
@@ -257,17 +262,14 @@ impl Dx12ConfiguredPresentation {
         hwnd: HWND,
         config: &PresentationConfiguration,
     ) -> RhiResult<Self> {
-        let swapchain = create_swapchain(&factory, &queue, hwnd, config)?;
+        let swapchain = create_swapchain(&factory, &queue, hwnd, config, &loss)?;
         Ok(Self {
             _device: device_native,
-            factory,
-            queue,
             leased,
             presents,
             loss,
             device,
             target,
-            hwnd: hwnd.0 as isize,
             state: Arc::new(Mutex::new(SwapchainState {
                 swapchain,
                 acquired: None,
@@ -281,7 +283,9 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
     fn capabilities(&self) -> RhiResult<PresentationTargetCapabilities> {
         Ok(PresentationTargetCapabilities::new(
             vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
-            vec![PresentMode::Fifo, PresentMode::Immediate],
+            // Keep these facts in lockstep with `Dx12FrameAttachment::present`.
+            // `Present(1, 0)` is FIFO; Immediate is not silently substituted.
+            vec![PresentMode::Fifo],
             PresentationExtentControl::HostManaged { current: None },
         ))
     }
@@ -292,14 +296,40 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
                 "the Direct3D 12 device was lost; this presentation lease is terminal",
             ));
         }
-        let fresh = create_swapchain(
-            &self.factory,
-            &self.queue,
-            HWND(self.hwnd as *mut _),
-            config,
-        )?;
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        state.swapchain = fresh;
+        if state.acquired.is_some() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "cannot resize a DXGI swapchain while an image is acquired",
+            ));
+        }
+        let format = swapchain_format(config)?;
+        let (width, height) = swapchain_extent(config);
+        let desc = unsafe { state.swapchain.GetDesc1() }.map_err(|error| {
+            native_rhi_error(
+                &self.loss,
+                &error,
+                "IDXGISwapChain3::GetDesc1 before ResizeBuffers",
+            )
+        })?;
+        // A flip-model HWND may have only one associated swapchain.  In
+        // particular, do not create a replacement while `state.swapchain` is
+        // alive: DXGI rejects that arrangement.  `ResizeBuffers` retains the
+        // existing association and changes the format/size in place.  The
+        // portable lease has already rejected an outstanding frame; callers
+        // must also retire recorded work that retains a FrameAttachment before
+        // reconfiguring, just as DXGI requires all back-buffer references to be
+        // released before this call.
+        unsafe {
+            state.swapchain.ResizeBuffers(
+                desc.BufferCount,
+                width,
+                height,
+                format,
+                DXGI_SWAP_CHAIN_FLAG(desc.Flags as i32),
+            )
+        }
+        .map_err(|error| native_rhi_error(&self.loss, &error, "IDXGISwapChain3::ResizeBuffers"))?;
         state.acquired = None;
         Ok(())
     }
@@ -326,8 +356,9 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
                 "DXGI swapchain image remains acquired",
             ));
         }
-        let desc = unsafe { state.swapchain.GetDesc1() }
-            .map_err(|e| AcquireError::new(AcquireErrorKind::TargetLost, e.to_string()))?;
+        let desc = unsafe { state.swapchain.GetDesc1() }.map_err(|error| {
+            acquire_error_from_native(&self.loss, &error, "IDXGISwapChain3::GetDesc1")
+        })?;
         if desc.Width == 0 || desc.Height == 0 {
             return Err(AcquireError::new(
                 AcquireErrorKind::ZeroSizeOrSuspended,
@@ -341,7 +372,9 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
                 .swapchain
                 .GetBuffer::<windows::Win32::Graphics::Direct3D12::ID3D12Resource>(index)
         }
-        .map_err(|e| AcquireError::new(AcquireErrorKind::TargetLost, e.to_string()))?;
+        .map_err(|error| {
+            acquire_error_from_native(&self.loss, &error, "IDXGISwapChain3::GetBuffer")
+        })?;
         state.acquired = Some(serial);
         Ok(Some(AcquiredSurfaceFrame {
             serial,
@@ -384,8 +417,9 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
                 format!("frame {:?} is not the acquired DXGI image", frame),
             ));
         }
-        // Flip-model DXGI has no release-acquired-image call. Marking it free is safe
-        // because no native resource leaves this backend until raster lowering exists.
+        // Flip-model DXGI has no release-acquired-image call. The frame attachment
+        // owns the back-buffer COM reference and is consumed here; command batches
+        // that recorded it retain their own reference through fence completion.
         Ok(())
     }
     fn abandon_no_throw(&self, _frame: AcquiredFrameId) {
@@ -408,21 +442,10 @@ fn create_swapchain(
     queue: &ID3D12CommandQueue,
     hwnd: HWND,
     config: &PresentationConfiguration,
+    loss: &Dx12LossState,
 ) -> RhiResult<IDXGISwapChain3> {
-    let format = match config.format() {
-        TextureFormat::Bgra8Unorm => DXGI_FORMAT_B8G8R8A8_UNORM,
-        TextureFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-        _ => {
-            return Err(RhiError::new(
-                RhiErrorKind::Unsupported,
-                "DXGI swapchains support only the queried 8-bit presentation formats",
-            ));
-        }
-    };
-    let (width, height) = match config.extent() {
-        PresentationExtent::Exact(extent) => (extent.width, extent.height),
-        PresentationExtent::HostManaged => (0, 0),
-    };
+    let format = swapchain_format(config)?;
+    let (width, height) = swapchain_extent(config);
     let desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: width,
         Height: height,
@@ -439,12 +462,77 @@ fn create_swapchain(
         AlphaMode: DXGI_ALPHA_MODE_IGNORE,
         Flags: 0,
     };
-    let chain =
-        unsafe { factory.CreateSwapChainForHwnd(queue, hwnd, &desc, None, None) }.map_err(|e| {
-            RhiError::new(RhiErrorKind::BackendFailure, e.to_string())
-                .at("IDXGIFactory4::CreateSwapChainForHwnd")
-        })?;
-    chain.cast().map_err(|e| {
-        RhiError::new(RhiErrorKind::BackendFailure, e.to_string()).at("IDXGISwapChain1::cast")
-    })
+    let chain = unsafe { factory.CreateSwapChainForHwnd(queue, hwnd, &desc, None, None) }
+        .map_err(|error| native_rhi_error(loss, &error, "IDXGIFactory4::CreateSwapChainForHwnd"))?;
+    chain
+        .cast()
+        .map_err(|error| native_rhi_error(loss, &error, "IDXGISwapChain1::cast"))
+}
+
+fn swapchain_format(
+    config: &PresentationConfiguration,
+) -> RhiResult<windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT> {
+    match config.format() {
+        TextureFormat::Bgra8Unorm => Ok(DXGI_FORMAT_B8G8R8A8_UNORM),
+        TextureFormat::Rgba8Unorm => Ok(DXGI_FORMAT_R8G8B8A8_UNORM),
+        _ => {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "DXGI swapchains support only the queried 8-bit presentation formats",
+            ));
+        }
+    }
+}
+
+fn swapchain_extent(config: &PresentationConfiguration) -> (u32, u32) {
+    match config.extent() {
+        PresentationExtent::Exact(extent) => (extent.width, extent.height),
+        PresentationExtent::HostManaged => (0, 0),
+    }
+}
+
+/// Observes a native HRESULT at the presentation boundary before exposing it.
+///
+/// DXGI has no separate loss callback: `Present`, `GetBuffer`, or
+/// `ResizeBuffers` may be the first call to see a removed/reset/hung device.
+/// The loss cell is shared with command submission, so recording it here also
+/// wakes its pending completion/readback futures. A later observer keeps the
+/// first diagnosis stable rather than overwriting it with a secondary error.
+fn observed_loss(
+    loss: &Dx12LossState,
+    error: &windows::core::Error,
+    operation: &'static str,
+) -> Option<DeviceLossInfo> {
+    let native = crate::backend::dx12::ffi::NativeError::new(error, operation);
+    if native.failure().is_terminal() {
+        loss.mark_lost(DeviceLossInfo::new(format!(
+            "Direct3D 12 reported a terminal failure in {operation}: {}",
+            native.as_error().message()
+        )));
+    }
+    loss.loss_info()
+}
+
+fn native_rhi_error(
+    loss: &Dx12LossState,
+    error: &windows::core::Error,
+    operation: &'static str,
+) -> RhiError {
+    match observed_loss(loss, error, operation) {
+        Some(info) => {
+            RhiError::new(RhiErrorKind::DeviceLost, info.message().to_owned()).at(operation)
+        }
+        None => RhiError::new(RhiErrorKind::BackendFailure, error.to_string()).at(operation),
+    }
+}
+
+fn acquire_error_from_native(
+    loss: &Dx12LossState,
+    error: &windows::core::Error,
+    operation: &'static str,
+) -> AcquireError {
+    match observed_loss(loss, error, operation) {
+        Some(info) => AcquireError::new(AcquireErrorKind::DeviceLost, info.message().to_owned()),
+        None => AcquireError::new(AcquireErrorKind::TargetLost, error.to_string()),
+    }
 }

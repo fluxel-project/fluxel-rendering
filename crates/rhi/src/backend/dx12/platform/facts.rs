@@ -139,19 +139,18 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS, D3D12_FEATURE_FORMAT_SUPPORT,
     D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, D3D12_FORMAT_SUPPORT1,
     D3D12_FORMAT_SUPPORT1_BLENDABLE, D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL,
-    D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE, D3D12_FORMAT_SUPPORT1_RENDER_TARGET,
-    D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE, D3D12_FORMAT_SUPPORT1_TEXTURE1D,
-    D3D12_FORMAT_SUPPORT1_TEXTURE2D, D3D12_FORMAT_SUPPORT1_TEXTURE3D,
-    D3D12_FORMAT_SUPPORT1_TEXTURECUBE, D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW,
-    D3D12_FORMAT_SUPPORT2, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD,
-    D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE, D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
-    D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT, D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS,
-    D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT, D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT,
-    D3D12_REQ_MIP_LEVELS, D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES,
-    D3D12_REQ_TEXTURE1D_U_DIMENSION, D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION,
-    D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION, D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION,
-    D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT,
-    D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, ID3D12Device,
+    D3D12_FORMAT_SUPPORT1_RENDER_TARGET, D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE,
+    D3D12_FORMAT_SUPPORT1_TEXTURE1D, D3D12_FORMAT_SUPPORT1_TEXTURE2D,
+    D3D12_FORMAT_SUPPORT1_TEXTURE3D, D3D12_FORMAT_SUPPORT1_TEXTURECUBE,
+    D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW, D3D12_FORMAT_SUPPORT2,
+    D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE,
+    D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT,
+    D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS, D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT,
+    D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT, D3D12_REQ_MIP_LEVELS,
+    D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES, D3D12_REQ_TEXTURE1D_U_DIMENSION,
+    D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION, D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION,
+    D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT,
+    D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, ID3D12Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
@@ -216,8 +215,9 @@ use crate::backend::dx12::ffi;
 /// worth knowing about. A binding answer of `Unsupported` is not conservative the
 /// way those two are: it is a refusal of a legal layout, so an unrecorded legal
 /// binding would silently forbid something the device can do. That is why
-/// [`record_binding_support`] walks every combination rather than recording the
-/// ones a driver happened to make convenient. What remains absent from the
+/// [`record_binding_support`] walks every combination and records an explicit
+/// answer matching the currently implemented lowering, rather than recording
+/// only the shapes a driver happened to make convenient. What remains absent from the
 /// binding chapter is `binding_limit`, whose absence costs the *opposite* — no
 /// per-stage ceiling is imposed, because Direct3D 12 does not state one — and
 /// whose consequence belongs to the layer that does allocate descriptors: a
@@ -262,17 +262,16 @@ pub(super) fn probe(device: &ID3D12Device) -> RhiResult<CapabilityFacts> {
 
         let support = format_support(device, dxgi)?;
 
-        // The quality levels per sample count, asked once per format rather than
-        // once per table. Two tables key on a sample count — the texture-support
-        // walk and the resolve route — and `NumQualityLevels == 0` is the API's
-        // way of saying the combination does not exist, which both of them need
-        // to know. Asking the driver twice for one fact is how two entries in a
-        // table start to disagree.
+        // The quality levels per sample count are still queried even though this
+        // correctness baseline deliberately refuses multisampled textures below.
+        // Keeping the probe here makes the eventual MSAA lowering change local;
+        // it must add RTV/DSV/resolve lowering and conformance coverage before
+        // this table may publish a non-1x texture again.
         let quality = quality_levels(device, dxgi)?;
 
         record_format_facts(format, &support, &mut facts);
         record_texture_support(format, &support, &quality, &mut facts);
-        record_format_routes(format, &support, &quality, &mut facts);
+        record_format_routes(format, &mut facts);
         record_storage_texture_bindings(format, &support, &mut facts);
     }
 
@@ -411,9 +410,14 @@ fn record_buffer_support(facts: &mut CapabilityFacts) {
 ///
 /// Capability records what this backend can lower end to end, rather than every
 /// shape the native API could theoretically express. Static buffer descriptor
-/// tables are implemented. Dynamic offsets need root descriptors, while texture
-/// and sampler bindings need native resource/view creation; those rows remain
-/// unsupported until those paths exist.
+/// tables are implemented. Dynamic offsets need root descriptors.
+///
+/// Texture descriptor writing exists, but compute command lowering currently
+/// refuses texture uses. Raster lowering can consume texture descriptor tables.
+/// Sampler descriptor writing and both compute and graphics sampler-table binding
+/// exist. The visibility-sensitive texture answers below make the remaining
+/// compute-texture boundary part of the immutable device contract instead of
+/// discovering it after native work was accepted.
 ///
 /// Two limitations this API does have are recorded as the negatives they are, and
 /// both come from the header rather than from a driver reading:
@@ -464,7 +468,7 @@ fn record_binding_support(facts: &mut CapabilityFacts) {
             TextureSampleType::Depth,
         ] {
             for multisampled in [false, true] {
-                record_bindable(
+                record_texture_bindable(
                     facts,
                     BindableKind::SampledTexture {
                         dimension,
@@ -472,12 +476,10 @@ fn record_binding_support(facts: &mut CapabilityFacts) {
                         multisampled,
                     },
                     false,
-                    if multisampled
-                        && !matches!(
-                            dimension,
-                            TextureViewDimension::D2 | TextureViewDimension::D2Array
-                        )
-                    {
+                    // The texture table deliberately refuses MSAA until its
+                    // full raster/resolve lifecycle is lowered, so an MSAA
+                    // binding shape cannot be useful before that same work.
+                    if multisampled {
                         BindingSupport::Unsupported
                     } else {
                         BindingSupport::Supported
@@ -575,7 +577,7 @@ fn record_storage_texture_bindings(
             } else {
                 BindingSupport::Unsupported
             };
-            record_bindable(
+            record_texture_bindable(
                 facts,
                 BindableKind::StorageTexture {
                     dimension,
@@ -583,6 +585,39 @@ fn record_storage_texture_bindings(
                     access,
                 },
                 false,
+                answer,
+            );
+        }
+    }
+}
+
+/// Records a texture binding only where its command lowering exists today.
+///
+/// The binding packet itself is stage-agnostic, but the recorded command is not:
+/// `lower_compute_dispatch` explicitly refuses `ResourceUse::Texture`, whereas
+/// raster lowering transitions and retains sampled/storage textures. A capability
+/// answer that ignored that distinction would let a compute pipeline pass all
+/// public validation only to be rejected during submission.
+fn record_texture_bindable(
+    facts: &mut CapabilityFacts,
+    kind: BindableKind,
+    dynamic_offset: bool,
+    answer: BindingSupport,
+) {
+    for visibility in visibilities() {
+        let answer = if visibility.contains(crate::api::shader::ShaderStages::COMPUTE) {
+            BindingSupport::Unsupported
+        } else {
+            answer
+        };
+        for array in [false, true] {
+            facts.record_binding_support(
+                BindingSupportKey {
+                    visibility,
+                    kind: kind.clone(),
+                    array,
+                    dynamic_offset,
+                },
                 answer,
             );
         }
@@ -884,6 +919,26 @@ fn texture_answer(
         return TextureSupport::Unsupported;
     }
 
+    // D3D12 itself can create multisampled resources, but this backend cannot
+    // yet lower their attachment lifecycle: RTV/DSV creation and raster scope
+    // transitions deliberately refuse them, and resolve has no command lowering.
+    // Capability is an end-to-end promise, so publishing the native allocation
+    // fact here would be a lie until all of those paths and their conformance
+    // tests exist.
+    if sample_count > 1 {
+        return TextureSupport::Unsupported;
+    }
+
+    // The current RTV/DSV lowering deliberately implements 2D attachments.
+    // Reporting D1 or D3 attachment usage from native format bits would be a
+    // capability promise that submission cannot keep.
+    if dimension_bit != D3D12_FORMAT_SUPPORT1_TEXTURE2D
+        && (usage.contains(TextureUsage::COLOR_ATTACHMENT)
+            || usage.contains(TextureUsage::DEPTH_STENCIL_ATTACHMENT))
+    {
+        return TextureSupport::Unsupported;
+    }
+
     // The dimension must be expressible at all before anything else is asked: a
     // format with no `TEXTURE3D` bit cannot back a 3D texture whatever its usage
     // or sample count.
@@ -1133,12 +1188,7 @@ fn record_buffer_route(facts: &mut CapabilityFacts) {
 ///   count; a differently-typed pair is not a copy that needs a capability, it is
 ///   a copy the API does not offer. The sample counts are therefore walked once
 ///   and used for both sides rather than crossed with each other.
-fn record_format_routes(
-    format: TextureFormat,
-    support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
-    quality: &SampleQuality,
-    facts: &mut CapabilityFacts,
-) {
+fn record_format_routes(format: TextureFormat, facts: &mut CapabilityFacts) {
     let aspects = format_aspects(format);
 
     // A buffer-texture copy is a placed footprint, and the two numbers are the
@@ -1193,44 +1243,20 @@ fn record_format_routes(
                 if !aspects.contains(aspect_bits(dst_aspect)) {
                     continue;
                 }
-                for sample_count in SAMPLE_COUNTS {
-                    facts.record_route(
-                        RouteQuery::TextureToTexture {
-                            src_dimension: dimension,
-                            src_format: format,
-                            src_aspect,
-                            src_sample_count: sample_count,
-                            dst_dimension: dimension,
-                            dst_format: format,
-                            dst_aspect,
-                            dst_sample_count: sample_count,
-                        },
-                        RouteSupport::Supported(none),
-                    );
-                }
+                facts.record_route(
+                    RouteQuery::TextureToTexture {
+                        src_dimension: dimension,
+                        src_format: format,
+                        src_aspect,
+                        src_sample_count: 1,
+                        dst_dimension: dimension,
+                        dst_format: format,
+                        dst_aspect,
+                        dst_sample_count: 1,
+                    },
+                    RouteSupport::Supported(none),
+                );
             }
-        }
-    }
-
-    // Whether the device can resolve this format at all is a probed bit rather
-    // than a rule, and it is the one place in this function where the answer comes
-    // from the hardware instead of from the API's shape. The sample counts are
-    // then narrowed to the ones the format actually exists at, because a resolve
-    // key naming a count the format has no texture for is a `Supported` answer to
-    // a question no caller can act on.
-    if has_support1(support, D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE) {
-        for (index, sample_count) in SAMPLE_COUNTS.iter().enumerate() {
-            if *sample_count == 1 || quality[index] == 0 {
-                continue;
-            }
-
-            facts.record_route(
-                RouteQuery::Resolve {
-                    format,
-                    src_sample_count: *sample_count,
-                },
-                RouteSupport::Supported(none),
-            );
         }
     }
 }
@@ -1370,6 +1396,9 @@ fn record_api_shape_limits(facts: &mut CapabilityFacts) {
 mod tests {
     use super::*;
 
+    use crate::api::binding::{
+        BindingCount, BindingKind, BindingSupportQuery, SamplerKind, TextureSampleType,
+    };
     use crate::api::capability::EnabledCapabilities;
     use crate::api::command::BlitFilter;
     use crate::api::submission::SubmissionCapabilities;
@@ -1409,7 +1438,7 @@ mod tests {
         let word = support(bits, 0);
 
         assert!(
-            answer(
+            !answer(
                 D3D12_FORMAT_SUPPORT1_TEXTURE2D,
                 &word,
                 TextureUsage::COLOR_ATTACHMENT,
@@ -1417,8 +1446,8 @@ mod tests {
                 1
             )
             .is_supported(),
-            "a format that renders at 4x with a quality level is the case Direct3D 12 \
-             mandates, and the rule must not refuse it"
+            "the baseline must not advertise native MSAA allocation before its raster \
+             attachment and resolve lowering are implemented"
         );
 
         assert!(
@@ -1447,6 +1476,25 @@ mod tests {
             "a single-sampled texture has no quality levels to have, so the zero that \
              means \"absent\" for a multisampled key means nothing here"
         );
+    }
+
+    #[test]
+    fn attachment_support_matches_the_implemented_2d_rtv_dsv_lowering() {
+        let bits = D3D12_FORMAT_SUPPORT1_TEXTURE1D.0
+            | D3D12_FORMAT_SUPPORT1_TEXTURE2D.0
+            | D3D12_FORMAT_SUPPORT1_TEXTURE3D.0
+            | D3D12_FORMAT_SUPPORT1_RENDER_TARGET.0
+            | D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL.0;
+        let word = support(bits, 0);
+
+        for usage in [
+            TextureUsage::COLOR_ATTACHMENT,
+            TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+        ] {
+            assert!(!answer(D3D12_FORMAT_SUPPORT1_TEXTURE1D, &word, usage, 1, 0).is_supported());
+            assert!(answer(D3D12_FORMAT_SUPPORT1_TEXTURE2D, &word, usage, 1, 0).is_supported());
+            assert!(!answer(D3D12_FORMAT_SUPPORT1_TEXTURE3D, &word, usage, 1, 0).is_supported());
+        }
     }
 
     #[test]
@@ -1654,20 +1702,10 @@ mod tests {
         EnabledCapabilities::from_facts(facts, SubmissionCapabilities::new(Vec::new()))
     }
 
-    /// A quality-level reading that has every sample count the format can carry.
-    fn every_sample_count() -> SampleQuality {
-        [1u32; SAMPLE_COUNTS.len()]
-    }
-
     /// Whether the formatted routes include `query`.
-    fn routed(
-        format: TextureFormat,
-        support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
-        quality: &SampleQuality,
-        query: &RouteQuery,
-    ) -> bool {
+    fn routed(format: TextureFormat, query: &RouteQuery) -> bool {
         let mut facts = CapabilityFacts::empty();
-        record_format_routes(format, support, quality, &mut facts);
+        record_format_routes(format, &mut facts);
         enabled_from(facts).route(query).is_supported()
     }
 
@@ -1683,14 +1721,10 @@ mod tests {
     /// records nothing — every blit key falls to the refusal.
     #[test]
     fn a_filtered_blit_has_no_direct_route_and_the_walk_records_none() {
-        let word = support(D3D12_FORMAT_SUPPORT1_TEXTURE2D.0, 0);
-
         for filter in [BlitFilter::Nearest, BlitFilter::Linear] {
             assert!(
                 !routed(
                     TextureFormat::Rgba8Unorm,
-                    &word,
-                    &every_sample_count(),
                     &RouteQuery::Blit {
                         src_dimension: TextureDimension::D2,
                         src_format: TextureFormat::Rgba8Unorm,
@@ -1704,77 +1738,91 @@ mod tests {
         }
     }
 
-    /// The resolve route follows the probed bit rather than the format's name.
-    ///
-    /// A deletion-shaped probe needs a case the device cannot supply: this
-    /// machine's adapter reports `MULTISAMPLE_RESOLVE` for every format the
-    /// portable set names, so removing the bit test would leave every real-device
-    /// assertion green. Handing the rule a support word without the bit is what
-    /// makes that removal visible.
+    /// Resolve remains absent until a command lowering exists. A D3D12 format
+    /// support bit alone is not an end-to-end backend capability.
     #[test]
-    fn a_resolve_route_exists_only_where_the_device_reports_one() {
-        let resolvable = support(
-            D3D12_FORMAT_SUPPORT1_TEXTURE2D.0 | D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE.0,
-            0,
-        );
-        let not_resolvable = support(D3D12_FORMAT_SUPPORT1_TEXTURE2D.0, 0);
-
+    fn resolve_is_not_advertised_before_command_lowering_exists() {
         let key = RouteQuery::Resolve {
             format: TextureFormat::Rgba8Unorm,
             src_sample_count: 4,
         };
-
-        assert!(routed(
-            TextureFormat::Rgba8Unorm,
-            &resolvable,
-            &every_sample_count(),
-            &key
-        ));
         assert!(
-            !routed(
-                TextureFormat::Rgba8Unorm,
-                &not_resolvable,
-                &every_sample_count(),
-                &key
-            ),
-            "a device that does not report MULTISAMPLE_RESOLVE for a format has no \
-             resolve route for it, however the format is named"
+            !routed(TextureFormat::Rgba8Unorm, &key),
+            "a route must stay unsupported until Dx12CommandSpine lowers ResolveSubresource"
         );
     }
 
-    /// A resolve key is recorded at the sample counts the format exists at.
-    ///
-    /// The second half of the same rule, and the half a real device hides for the
-    /// same reason: a resolve from a sample count the format cannot be created at
-    /// is a `Supported` answer to a question no caller can act on, so recording
-    /// one would be the table claiming a route the texture query has already
-    /// refused.
+    /// The dedicated baseline refuses MSAA resources as well as MSAA copies.
     #[test]
-    fn a_resolve_route_is_recorded_only_at_counts_the_format_has() {
-        let word = support(
-            D3D12_FORMAT_SUPPORT1_TEXTURE2D.0 | D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE.0,
-            0,
+    fn texture_copy_is_advertised_only_for_the_1x_baseline() {
+        let supported = RouteQuery::TextureToTexture {
+            src_dimension: TextureDimension::D2,
+            src_format: TextureFormat::Rgba8Unorm,
+            src_aspect: TextureAspect::Color,
+            src_sample_count: 1,
+            dst_dimension: TextureDimension::D2,
+            dst_format: TextureFormat::Rgba8Unorm,
+            dst_aspect: TextureAspect::Color,
+            dst_sample_count: 1,
+        };
+        let multisampled = RouteQuery::TextureToTexture {
+            src_dimension: TextureDimension::D2,
+            src_format: TextureFormat::Rgba8Unorm,
+            src_aspect: TextureAspect::Color,
+            src_sample_count: 4,
+            dst_dimension: TextureDimension::D2,
+            dst_format: TextureFormat::Rgba8Unorm,
+            dst_aspect: TextureAspect::Color,
+            dst_sample_count: 4,
+        };
+        assert!(routed(TextureFormat::Rgba8Unorm, &supported));
+        assert!(!routed(TextureFormat::Rgba8Unorm, &multisampled));
+    }
+
+    #[test]
+    fn binding_facts_follow_the_command_lowering_stage_boundary() {
+        let mut facts = CapabilityFacts::empty();
+        record_binding_support(&mut facts);
+        let enabled = enabled_from(facts);
+        let sampled = |visibility| BindingSupportQuery {
+            visibility,
+            kind: BindingKind::SampledTexture {
+                dimension: TextureViewDimension::D2,
+                sample_type: TextureSampleType::Float,
+                multisampled: false,
+            },
+            count: BindingCount::One,
+            dynamic_offset: false,
+        };
+        let sampler = |visibility| BindingSupportQuery {
+            visibility,
+            kind: BindingKind::Sampler {
+                kind: SamplerKind::Filtering,
+            },
+            count: BindingCount::One,
+            dynamic_offset: false,
+        };
+
+        assert_eq!(
+            enabled.binding_support(&sampled(crate::api::shader::ShaderStages::FRAGMENT)),
+            BindingSupport::Supported,
+            "raster lowering transitions and binds sampled texture descriptor tables"
         );
-
-        // Only 1x and 4x exist for this format, which is the shape a device with
-        // partial multisample coverage reports.
-        let mut quality = [0u32; SAMPLE_COUNTS.len()];
-        quality[0] = 1;
-        quality[2] = 1;
-
-        for (index, sample_count) in SAMPLE_COUNTS.iter().enumerate() {
-            let key = RouteQuery::Resolve {
-                format: TextureFormat::Rgba8Unorm,
-                src_sample_count: *sample_count,
-            };
-            let exists = *sample_count > 1 && quality[index] > 0;
-
-            assert_eq!(
-                routed(TextureFormat::Rgba8Unorm, &word, &quality, &key),
-                exists,
-                "{sample_count}x exists for this format: {exists}"
-            );
-        }
+        assert_eq!(
+            enabled.binding_support(&sampled(crate::api::shader::ShaderStages::COMPUTE)),
+            BindingSupport::Unsupported,
+            "compute lowering refuses texture ResourceUse until texture transitions are lowered"
+        );
+        assert_eq!(
+            enabled.binding_support(&sampler(crate::api::shader::ShaderStages::COMPUTE)),
+            BindingSupport::Supported,
+            "compute lowering binds both descriptor heaps and the sampler root table"
+        );
+        assert_eq!(
+            enabled.binding_support(&sampler(crate::api::shader::ShaderStages::FRAGMENT)),
+            BindingSupport::Supported,
+            "raster lowering binds both descriptor heaps and its graphics sampler root table"
+        );
     }
 
     /// A route names a plane, and only a plane the format has.
@@ -1785,14 +1833,9 @@ mod tests {
     /// stencil route, a colour format does not.
     #[test]
     fn a_copy_route_exists_only_for_a_plane_the_format_has() {
-        let word = support(D3D12_FORMAT_SUPPORT1_TEXTURE2D.0, 0);
-        let quality = every_sample_count();
-
         let stencil_of = |format: TextureFormat, aspect: TextureAspect| {
             routed(
                 format,
-                &word,
-                &quality,
                 &RouteQuery::TextureToBuffer {
                     dimension: TextureDimension::D2,
                     format,

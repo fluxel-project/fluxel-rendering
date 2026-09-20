@@ -31,10 +31,12 @@
 //!
 //! # The state invariant, and why there is no persistent tracker
 //!
-//! **Every command list this spine records leaves every buffer it touched in
-//! `D3D12_RESOURCE_STATE_COMMON`.** Buffers are committed in `COMMON`
-//! ([`crate::backend::dx12::resource`]), and each command transitions what it uses out of
-//! `COMMON` and back before it is done.
+//! **Every command list this spine records restores ordinary resources to
+//! `D3D12_RESOURCE_STATE_COMMON` and swapchain resources to `PRESENT`.** Buffers
+//! and ordinary textures are created in `COMMON`
+//! ([`crate::backend::dx12::resource`]); each command transitions what it uses out
+//! and back before it is done. `PRESENT` is numerically the same state value as
+//! `COMMON`, but remains a distinct ownership invariant in the lowering.
 //!
 //! The alternative — a persistent per-resource tracker that remembers where each
 //! resource was left — buys one thing: half the barriers. It costs a map that
@@ -64,12 +66,10 @@
 //!
 //! # Why a payload with no lowering is refused rather than skipped
 //!
-//! The recorder can also hold texture copies, resolves, presentation images, and
-//! debug markup which this spine does not lower yet. Skipping one would leave the
-//! caller holding a receipt for work that never happened — the silent substitution
-//! discipline 3 and section 9.4 forbid in the route case, and which does not
-//! become acceptable because the missing lowering is this backend's rather than
-//! the platform's.
+//! The recorder can grow payload variants before this backend has their native
+//! lowering (resolve is the current example). Skipping one would leave the caller
+//! holding a receipt for work that never happened — the silent-substitution rule
+//! forbids that regardless of whether the gap belongs to the API or this backend.
 //!
 //! # Performance upgrade map (backend-private)
 //!
@@ -115,11 +115,14 @@ use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::core::PCWSTR;
 
 use crate::api::command::record::{CopyRecord, RecordedPayload};
+use crate::api::identity::Label;
+use crate::api::platform::DeviceLossInfo;
 use crate::api::resource::transfer::ReadbackStatus;
 use crate::api::submission::backend::{SubmissionOutcome, SubmissionRequest};
 use crate::api::submission::plan::PlanBatch;
 use crate::api::submission::{CompletionFailure, CompletionState};
 use crate::backend::dx12::ffi;
+use crate::backend::dx12::platform::device::Dx12LossState;
 
 use super::compute::lower_compute_dispatch;
 use super::copy::lower_buffer_copy;
@@ -178,13 +181,16 @@ pub(crate) struct Dx12CommandSpine {
     /// is written from the same submission — and splitting them would let a
     /// reader observe a slot reserved under one fence value and released under
     /// another.
-    state: Mutex<SpineState>,
+    state: Arc<Mutex<SpineState>>,
     /// Futures waiting for a fence transition. Kept separate from command state
     /// so a native event thread only needs a small portable waker registry.
     ///
     /// TODO(perf): The serial-keyed registry permits a future shared fence waiter
     /// without altering completion-future semantics; see the module upgrade map.
     completion_waiters: Arc<Mutex<BTreeMap<u64, Vec<Waker>>>>,
+    /// The device-wide terminal-loss authority. Fence removal is itself a loss
+    /// observation, so it must update the same state queried by `Device`.
+    loss: Arc<Dx12LossState>,
 }
 
 /// The mutable half of a spine.
@@ -198,6 +204,10 @@ struct SpineState {
     /// query for a serial at or below this one is a query about work that has
     /// been committed even when the fence has not reached it yet.
     issued: u64,
+    /// Highest fence value observed and drained before any later device loss.
+    /// A point already known complete stays complete after the native fence
+    /// switches to DX12's removal sentinel.
+    completed: u64,
     /// The first serial that was executed but could not be signalled.
     ///
     /// Set only by a `Signal` that failed after its `ExecuteCommandLists` had
@@ -324,7 +334,10 @@ impl Dx12CommandSpine {
     /// The ring starts empty: slots are made on demand, so a device that never
     /// submits never pays for a command allocator, and a device that keeps a
     /// hundred batches in flight makes exactly as many as it needs.
-    pub(crate) fn new(device: &ID3D12Device) -> Result<Self, ffi::NativeError> {
+    pub(crate) fn new(
+        device: &ID3D12Device,
+        loss: Arc<Dx12LossState>,
+    ) -> Result<Self, ffi::NativeError> {
         let description = D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
             // Normal priority, and `Priority` is an `i32` here rather than the
@@ -349,17 +362,26 @@ impl Dx12CommandSpine {
             let fence = device
                 .CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE)
                 .map_err(|error| ffi::NativeError::new(&error, "Dx12Provider::request_device"))?;
+            let state = Arc::new(Mutex::new(SpineState {
+                slots: Vec::new(),
+                issued: 0,
+                completed: 0,
+                unobservable: None,
+                pending: VecDeque::new(),
+            }));
+            let completion_waiters = Arc::new(Mutex::new(BTreeMap::new()));
+            let cleanup_state = Arc::clone(&state);
+            let cleanup_waiters = Arc::clone(&completion_waiters);
+            loss.register_handler(Arc::new(move || {
+                terminate_pending(&cleanup_state, &cleanup_waiters);
+            }));
             Ok(Self {
                 queue,
                 fence,
                 device: device.clone(),
-                state: Mutex::new(SpineState {
-                    slots: Vec::new(),
-                    issued: 0,
-                    unobservable: None,
-                    pending: VecDeque::new(),
-                }),
-                completion_waiters: Arc::new(Mutex::new(BTreeMap::new())),
+                state,
+                completion_waiters,
+                loss,
             })
         }
     }
@@ -377,6 +399,35 @@ impl Dx12CommandSpine {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Reads the fence without ever interpreting the device-removal sentinel as
+    /// a normal serial. D3D12 sets a removed fence to `UINT64_MAX`; draining at
+    /// that value would publish every retained readback as ready even though DMA
+    /// may have been aborted. The native device reason is queried before loss is
+    /// recorded so diagnostics retain the driver's HRESULT.
+    fn completed_value(&self) -> Result<u64, Dx12Failure> {
+        // SAFETY: `GetCompletedValue` reads a counter and takes no argument.
+        let reached = unsafe { self.fence.GetCompletedValue() };
+        if !is_removed_fence_value(reached) {
+            return Ok(reached);
+        }
+
+        let detail = match unsafe { self.device.GetDeviceRemovedReason() } {
+            Ok(()) => "GetCompletedValue returned UINT64_MAX (device removal)".to_owned(),
+            Err(error) => format!(
+                "GetCompletedValue returned UINT64_MAX (device removal); GetDeviceRemovedReason: {error} (HRESULT {:#010x})",
+                error.code().0
+            ),
+        };
+        let info = DeviceLossInfo::new(detail.clone());
+        self.loss.mark_lost(info);
+        Err(Dx12Failure::Native(
+            ffi::NativeError::driver_contract_violation(
+                &detail,
+                "Dx12CommandSpine::GetCompletedValue",
+            ),
+        ))
+    }
+
     /// Lowers a whole plan and commits it.
     ///
     /// # Errors
@@ -389,13 +440,10 @@ impl Dx12CommandSpine {
         &self,
         request: &SubmissionRequest<'_>,
     ) -> Result<SubmissionOutcome, Dx12Failure> {
+        // Read before taking the state lock: observing the removal sentinel also
+        // terminates retained readbacks, which needs that lock.
+        let completed = self.completed_value()?;
         let mut state = self.lock();
-        // Read once: a slot may be reused exactly when the fence has passed the
-        // batch last recorded into it.
-        //
-        // SAFETY: `GetCompletedValue` reads a counter from the fence and takes no
-        // argument.
-        let completed = unsafe { self.fence.GetCompletedValue() };
 
         // Phase A. Every batch is recorded into its own list before a single
         // list is executed, so a refusal below leaves the queue untouched — which
@@ -455,6 +503,7 @@ impl Dx12CommandSpine {
         // forbids telling a caller nothing happened once a queue has been fed.
         state.issued = first_serial + request.batches.len() as u64 - 1;
         let mut signals_intact = true;
+        let mut terminal_signal_loss = None;
         for (offset, (list, committed)) in recorded.into_iter().enumerate() {
             let serial = first_serial + offset as u64;
             // SAFETY: the list was closed above and is executed exactly once. The
@@ -491,13 +540,17 @@ impl Dx12CommandSpine {
                         // are skipped: they are queued behind the same broken
                         // queue, and a later failure would name a larger serial
                         // than the bound below which the fence still answers.
-                        state.unobservable = Some((
-                            serial,
-                            Dx12Failure::Native(ffi::NativeError::new(
-                                &error,
-                                "Dx12Device::submit",
-                            )),
+                        let failure = Dx12Failure::Native(ffi::NativeError::new(
+                            &error,
+                            "Dx12Device::submit",
                         ));
+                        if failure.is_terminal() {
+                            terminal_signal_loss = Some(DeviceLossInfo::new(format!(
+                                "Direct3D 12 queue Signal failed after work was accepted: {}",
+                                failure.message()
+                            )));
+                        }
+                        state.unobservable = Some((serial, failure));
                         signals_intact = false;
                     }
                 }
@@ -510,12 +563,21 @@ impl Dx12CommandSpine {
             state.pending.push_back(committed);
         }
 
+        // `Signal` is Phase B: its failure cannot become a submit error, but a
+        // terminal HRESULT is still observable immediately through status and
+        // completion. Drop the spine lock before terminating retained readbacks.
+        let completion = state.issued;
+        drop(state);
+        if let Some(info) = terminal_signal_loss {
+            self.loss.mark_lost(info);
+        }
+
         Ok(SubmissionOutcome {
             // The last serial of this plan, signalled or not. Reporting the last
             // one that *was* signalled would claim the whole plan complete while
             // later batches could still be running, which is the one direction
             // section 41.7 forbids.
-            completion: state.issued,
+            completion,
             points: request
                 .batches
                 .iter()
@@ -594,6 +656,13 @@ impl Dx12CommandSpine {
                     RecordedPayload::ComputeDispatch(dispatch) => {
                         lower_compute_dispatch(list, dispatch, &command.uses, committed)?;
                     }
+                    // D3D12's event methods copy the marker payload during the
+                    // call. They are legal on every command list and carry no
+                    // capability bit, so refusing a valid portable debug command
+                    // here would make otherwise supported recordings fail.
+                    RecordedPayload::DebugPush(label) => lower_debug_push(list, label),
+                    RecordedPayload::DebugPop => lower_debug_pop(list),
+                    RecordedPayload::DebugMarker(label) => lower_debug_marker(list, label),
                     other => {
                         return Err(Dx12Failure::Unsupported {
                             what: payload_name(other),
@@ -637,37 +706,48 @@ impl Dx12CommandSpine {
     /// section 65.3's one-authority requirement applied to "what a reached fence
     /// value implies" rather than duplicated across the two entry points.
     pub(crate) fn completion(&self, serial: u64) -> CompletionState {
-        let mut state = self.lock();
-        // SAFETY: `GetCompletedValue` reads a counter from the fence and takes no
-        // argument.
-        let reached = unsafe { self.fence.GetCompletedValue() };
-        drain(&mut state, reached);
-
-        // Serial zero is the "nothing has been submitted" identity: serials start
-        // at one, so it is reachable only from the receipt of a plan that carried
-        // no batches, and for that plan "everything submitted so far" really is
-        // nothing. Answering `Complete` is what keeps an empty plan's receipt
-        // pollable instead of sending a caller looking for a failure.
-        if serial == 0 {
-            return CompletionState::Complete;
+        // Preserve facts already established before loss. This check also keeps
+        // the empty-plan identity complete without touching a removed fence.
+        {
+            let state = self.lock();
+            if serial == 0 || serial <= state.completed {
+                return CompletionState::Complete;
+            }
         }
+        let reached = match self.completed_value() {
+            Ok(reached) => reached,
+            // The shared loss cell now carries the terminal reason. The device
+            // wrapper upgrades this non-complete answer to `DeviceLost`.
+            Err(_) => return CompletionState::Pending,
+        };
+        let mut state = self.lock();
+        let readback_loss = drain(&mut state, reached);
 
         // Checked before the fence, because a serial at or beyond this bound can
         // never be observed: the fence value it names was never written, so
         // asking the fence would answer `Pending` forever (section 41.8), and
         // asking it about a *later* serial would answer about work that is
         // unrelated to this one.
-        if let Some((bound, failure)) = state.unobservable.as_ref() {
+        let answer = if let Some((bound, failure)) = state.unobservable.as_ref() {
             if serial >= *bound {
-                return CompletionState::Failed(CompletionFailure::new(failure.message()));
+                CompletionState::Failed(CompletionFailure::new(failure.message()))
+            } else if serial <= reached {
+                CompletionState::Complete
+            } else {
+                CompletionState::Pending
             }
-        }
-
-        if serial <= reached {
+        } else if serial <= reached {
             CompletionState::Complete
         } else {
             CompletionState::Pending
+        };
+        // `mark_lost` invokes the cleanup handler, which locks this same spine
+        // state. Never call it while the drain lock is held.
+        drop(state);
+        if let Some(info) = readback_loss {
+            self.loss.mark_lost(info);
         }
+        answer
     }
 
     /// Samples one serial and subscribes a runtime waker if it remains pending.
@@ -697,9 +777,19 @@ impl Dx12CommandSpine {
             first
         };
 
+        // Close the race where loss cleanup drained the registry immediately
+        // before this waiter was inserted. The device wrapper will upgrade the
+        // returned Pending state to DeviceLost; waking here guarantees a future
+        // already handed to an executor is polled again.
+        if self.loss.loss_info().is_some() {
+            wake_serial(&self.completion_waiters, serial);
+            return CompletionState::Pending;
+        }
+
         if spawn_waiter {
             let fence = self.fence.clone();
             let waiters = Arc::clone(&self.completion_waiters);
+            let loss = Arc::clone(&self.loss);
             std::thread::spawn(move || {
                 // A fence event is one-shot. The bounded wait also guarantees a
                 // device removal cannot strand an OS thread forever; the wake at
@@ -708,8 +798,20 @@ impl Dx12CommandSpine {
                 let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) };
                 if let Ok(event) = event {
                     let event = OwnedEvent(event);
-                    if unsafe { fence.SetEventOnCompletion(serial, event.0) }.is_ok() {
-                        let _ = unsafe { WaitForSingleObject(event.0, WAIT_BOUND_MS) };
+                    match unsafe { fence.SetEventOnCompletion(serial, event.0) } {
+                        Ok(()) => {
+                            let _ = unsafe { WaitForSingleObject(event.0, WAIT_BOUND_MS) };
+                        }
+                        Err(error) => {
+                            let native =
+                                ffi::NativeError::new(&error, "ID3D12Fence::SetEventOnCompletion");
+                            if native.failure().is_terminal() {
+                                loss.mark_lost(DeviceLossInfo::new(format!(
+                                    "Direct3D 12 reported a terminal failure while registering a completion waiter: {}",
+                                    native.as_error()
+                                )));
+                            }
+                        }
                     }
                 }
                 wake_serial(&waiters, serial);
@@ -718,48 +820,23 @@ impl Dx12CommandSpine {
         CompletionState::Pending
     }
 
-    /// Wakes all registered futures after device loss. Their next poll is what
-    /// observes `DeviceLost` (or preserves an already-complete serial).
-    pub(crate) fn wake_completion_waiters(&self) {
-        let mut waiters = self
-            .completion_waiters
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let pending = core::mem::take(&mut *waiters);
-        drop(waiters);
-        for (_, wakers) in pending {
-            for waker in wakers {
-                waker.wake();
-            }
-        }
-    }
-
-    /// Terminates every readback retained by work whose fence can no longer
-    /// advance, then wakes completion futures. Retained staging stays alive until
-    /// device teardown: loss gives no proof that native DMA has stopped.
-    pub(crate) fn terminate_pending_for_device_loss(&self) {
-        let state = self.lock();
-        for batch in &state.pending {
-            for retention in &batch.readbacks {
-                retention.ticket.set_status(ReadbackStatus::DeviceLost);
-            }
-        }
-        drop(state);
-        self.wake_completion_waiters();
-    }
-
     /// Publishes whatever the fence has reported finished.
     ///
     /// Called from the device's `poll`, which is the portable layer's only
     /// progress verb, and from `wait_idle` after its wait. Both callers are
     /// non-blocking here, and this holds the lock for the whole drain so a
     /// concurrent `submit` cannot see a half-drained queue.
-    pub(crate) fn advance(&self) {
+    pub(crate) fn advance(&self) -> Result<(), Dx12Failure> {
+        let reached = self.completed_value()?;
         let mut state = self.lock();
-        // SAFETY: `GetCompletedValue` reads a counter from the fence and takes no
-        // argument.
-        let reached = unsafe { self.fence.GetCompletedValue() };
-        drain(&mut state, reached);
+        let readback_loss = drain(&mut state, reached);
+        drop(state);
+        if let Some(info) = readback_loss {
+            let reason = info.message().to_owned();
+            self.loss.mark_lost(info);
+            return Err(Dx12Failure::DeviceLost { reason });
+        }
+        Ok(())
     }
 
     /// Blocks until every submitted batch has finished, or the bound expires.
@@ -805,9 +882,42 @@ impl Dx12CommandSpine {
         }
 
         // The wait proves the fence moved, so the drain has something to publish.
-        self.advance();
-        Ok(())
+        self.advance()
     }
+}
+
+/// Microsoft reserves `UINT64_MAX` as the fence reading after device removal;
+/// it is never a completion serial emitted by this spine.
+const fn is_removed_fence_value(value: u64) -> bool {
+    value == u64::MAX
+}
+
+/// Lowers portable diagnostic labels through the standard D3D12 command-list
+/// marker ABI. PIX understands richer metadata values, but metadata `0` plus
+/// UTF-8 is still a real native event and preserves the ordering/nesting RHI
+/// records. The COM method consumes the bytes synchronously.
+fn debug_label_bytes(label: &Label) -> (*const core::ffi::c_void, u32) {
+    let bytes = label.as_deref().unwrap_or("<unlabeled>").as_bytes();
+    let size = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    (bytes.as_ptr().cast(), size)
+}
+
+fn lower_debug_push(list: &ID3D12GraphicsCommandList, label: &Label) {
+    let (data, size) = debug_label_bytes(label);
+    // SAFETY: `data` points into `label`, which lives for this call; D3D12
+    // copies marker data synchronously and retains no pointer afterwards.
+    unsafe { list.BeginEvent(0, Some(data), size) };
+}
+
+fn lower_debug_pop(list: &ID3D12GraphicsCommandList) {
+    // SAFETY: closes the event opened by the recorder-validated debug stack.
+    unsafe { list.EndEvent() };
+}
+
+fn lower_debug_marker(list: &ID3D12GraphicsCommandList, label: &Label) {
+    let (data, size) = debug_label_bytes(label);
+    // SAFETY: identical synchronous-copy argument as `lower_debug_push`.
+    unsafe { list.SetMarker(0, Some(data), size) };
 }
 
 /// Removes and wakes the futures waiting for one fence value.
@@ -819,6 +929,33 @@ fn wake_serial(waiters: &Mutex<BTreeMap<u64, Vec<Waker>>>, serial: u64) {
         .unwrap_or_default();
     for waker in registered {
         waker.wake();
+    }
+}
+
+/// Shared by direct spine callers and the device-wide loss authority. It never
+/// releases staging because loss provides no proof that native DMA has stopped.
+fn terminate_pending(
+    state: &Mutex<SpineState>,
+    completion_waiters: &Mutex<BTreeMap<u64, Vec<Waker>>>,
+) {
+    let state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for batch in &state.pending {
+        for retention in &batch.readbacks {
+            retention.ticket.set_status(ReadbackStatus::DeviceLost);
+        }
+    }
+    drop(state);
+    let mut waiters = completion_waiters
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let pending = core::mem::take(&mut *waiters);
+    drop(waiters);
+    for (_, wakers) in pending {
+        for waker in wakers {
+            waker.wake();
+        }
     }
 }
 
@@ -837,7 +974,8 @@ fn wake_serial(waiters: &Mutex<BTreeMap<u64, Vec<Waker>>>, serial: u64) {
 ///
 /// The caller must hold the lock, and the drain runs to completion under it, so a
 /// concurrent `submit` cannot observe a half-drained queue.
-fn drain(state: &mut SpineState, reached: u64) {
+fn drain(state: &mut SpineState, reached: u64) -> Option<DeviceLossInfo> {
+    state.completed = state.completed.max(reached);
     loop {
         let Some(front) = state.pending.front() else {
             break;
@@ -852,8 +990,23 @@ fn drain(state: &mut SpineState, reached: u64) {
         // may: the fence has reported that the batch reading it finished. The
         // readback staging is dropped the same way, after its bytes have been
         // copied out.
-        for retention in finished.readbacks {
-            publish_readback(&retention);
+        let mut readbacks = finished.readbacks.into_iter();
+        while let Some(retention) = readbacks.next() {
+            if let Some(info) = publish_readback(&retention) {
+                // Mapping was the first native call to observe loss. Do not let
+                // later tickets from the same drain become Ready: loss is the
+                // execution domain's terminal state, and their DMA/mapping state
+                // can no longer be trusted.
+                for remaining in readbacks {
+                    remaining.ticket.set_status(ReadbackStatus::DeviceLost);
+                }
+                for batch in &state.pending {
+                    for remaining in &batch.readbacks {
+                        remaining.ticket.set_status(ReadbackStatus::DeviceLost);
+                    }
+                }
+                return Some(info);
+            }
         }
     }
 
@@ -882,13 +1035,12 @@ fn drain(state: &mut SpineState, reached: u64) {
             }
         }
     }
+    None
 }
 
 /// The reason every unlifted payload reports.
-const NOT_LOWERED: &str = "this Direct3D 12 spine lowers buffer copies, buffer uploads, and \
-                           buffer readbacks; everything else the recorder can hold is not \
-                           lowered yet, and section 9.4 forbids executing a plan while \
-                           silently dropping part of it";
+const NOT_LOWERED: &str = "this recorded operation has no Direct3D 12 lowering yet, and \
+                           section 9.4 forbids executing a plan while silently dropping it";
 
 /// What an unlifted payload asked for, for the refusal's first clause.
 ///
@@ -909,5 +1061,17 @@ fn payload_name(payload: &RecordedPayload) -> &'static str {
         RecordedPayload::DebugPush(_) => "a debug group",
         RecordedPayload::DebugPop => "the end of a debug group",
         RecordedPayload::DebugMarker(_) => "a debug marker",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_removed_fence_value;
+
+    #[test]
+    fn dx12_removal_fence_sentinel_is_never_a_completed_serial() {
+        assert!(is_removed_fence_value(u64::MAX));
+        assert!(!is_removed_fence_value(u64::MAX - 1));
+        assert!(!is_removed_fence_value(0));
     }
 }

@@ -34,6 +34,12 @@ impl Dx12RasterPipeline {
     pub(crate) fn view_root_parameter(&self, group: u32) -> Option<u32> {
         self.root_signature.view_parameter(group)
     }
+    /// Samplers live in D3D12's separate shader-visible heap.  Graphics and
+    /// compute use the same root-signature mapping; keeping this accessor here
+    /// prevents a raster path from accidentally binding only CBV/SRV/UAV tables.
+    pub(crate) fn sampler_root_parameter(&self, group: u32) -> Option<u32> {
+        self.root_signature.sampler_parameter(group)
+    }
 }
 
 impl RasterPipelineBackend for Dx12RasterPipeline {

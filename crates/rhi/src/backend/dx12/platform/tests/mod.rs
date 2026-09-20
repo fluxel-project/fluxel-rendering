@@ -169,8 +169,8 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
     use windows::Win32::Foundation::{HINSTANCE, HWND};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, RegisterClassW, UnregisterClassW, WINDOW_EX_STYLE,
-        WNDCLASSW, WS_OVERLAPPED,
+        CreateWindowExW, DestroyWindow, RegisterClassW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+        SetWindowPos, UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
     };
     use windows::core::w;
 
@@ -222,11 +222,18 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
         .downcast_ref::<super::device::Dx12Device>()
         .expect("DX12 device");
     let target = native.register_test_presentation_target(hwnd);
-    let mut surface = block_on(device.configure_presentation(
-        &target,
-        &crate::api::presentation::PresentationConfiguration::new(TextureFormat::Bgra8Unorm),
-    ))
-    .expect("configure");
+    let capabilities = device
+        .presentation_capabilities(&target)
+        .expect("presentation facts");
+    assert_eq!(
+        capabilities.present_modes(),
+        &[crate::api::presentation::PresentMode::Fifo],
+        "DX12 may only report modes that its Present arguments actually implement",
+    );
+    let config =
+        crate::api::presentation::PresentationConfiguration::new(TextureFormat::Bgra8Unorm)
+            .with_present_mode(crate::api::presentation::PresentMode::Fifo);
+    let mut surface = block_on(device.configure_presentation(&target, &config)).expect("configure");
     let frame = block_on(surface.acquire()).expect("acquire");
     let attachment = frame.attachment();
     let scope = crate::api::command::RasterScopeDescriptor::new().with_color(
@@ -258,7 +265,67 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
         block_on(device.wait_present(receipt.presents()[0].id())),
         Ok(crate::api::presentation::PresentState::Accepted)
     ));
-    let _again = block_on(surface.acquire()).expect("second acquire");
+    assert!(matches!(
+        block_on(device.wait_completion(receipt.completion())),
+        Ok(crate::api::submission::CompletionState::Complete)
+    ));
+    // `scope` owns a FrameAttachment clone. DXGI requires every old backbuffer
+    // reference to be released before ResizeBuffers, including this recorded
+    // description after its submitted work is complete.
+    drop(scope);
+    // Flip-model DXGI permits only one HWND-associated swapchain.  Change the
+    // native client size, reconfigure the *same* portable lease, then prove the
+    // resized chain can again acquire and present rather than merely being
+    // recreated beside the old chain.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            96,
+            80,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    }
+    .expect("resize hidden HWND");
+    block_on(surface.reconfigure(&config)).expect("ResizeBuffers reconfigure");
+
+    let frame = block_on(surface.acquire()).expect("acquire after resize");
+    let attachment = frame.attachment();
+    let scope = crate::api::command::RasterScopeDescriptor::new().with_color(
+        crate::api::shader::ShaderLocation::new(0),
+        crate::api::command::ColorAttachment {
+            view: crate::api::command::ColorAttachmentView::Frame(attachment),
+            load: crate::api::command::LoadOp::Clear(crate::api::command::ColorClearValue::Float(
+                [0.0, 0.0, 0.0, 1.0],
+            )),
+            store: crate::api::command::StoreOp::Store,
+            resolve: None,
+        },
+    );
+    let mut recorder = device
+        .create_recorder(&crate::api::command::RecorderDescriptor::new())
+        .expect("recorder after resize");
+    recorder
+        .begin_raster(&scope)
+        .expect("raster after resize")
+        .end()
+        .expect("end after resize");
+    let work = recorder.finish().expect("finish after resize");
+    let mut plan = crate::api::submission::SubmissionPlanBuilder::new(&device);
+    let point = plan
+        .add_batch(lane, vec![work])
+        .expect("batch after resize");
+    plan.present_after(frame, point)
+        .expect("present plan after resize");
+    let receipt = block_on(device.submit(plan.build().expect("plan after resize")))
+        .expect("submit after resize");
+    assert!(matches!(
+        block_on(device.wait_present(receipt.presents()[0].id())),
+        Ok(crate::api::presentation::PresentState::Accepted)
+    ));
+    let _again = block_on(surface.acquire()).expect("reacquire after resize and present");
 }
 
 #[test]
@@ -979,17 +1046,17 @@ fn a_real_device_answers_the_routes_a_renderer_asks() {
         "CopyTextureRegion moves texels between like formats; it is not a converter"
     );
 
-    // A resolve is gated by a probed bit, and this machine's adapter reports it.
-    // The gate itself is exercised without a device in `facts`; what this pins is
-    // that the bit is read and that a 4x resolve is reachable here.
+    // The native adapter can expose ResolveSubresource, but this correctness
+    // baseline has no command lowering for it yet. Capability is an end-to-end
+    // promise, not a raw CheckFeatureSupport mirror.
     assert!(
-        capabilities
+        !capabilities
             .route(&RouteQuery::Resolve {
                 format: TextureFormat::Rgba8Unorm,
                 src_sample_count: 4,
             })
             .is_supported(),
-        "the adapter reports MULTISAMPLE_RESOLVE for Rgba8Unorm"
+        "resolve stays unavailable until Dx12CommandSpine lowers it"
     );
     assert!(
         !capabilities
@@ -1350,12 +1417,9 @@ fn a_real_device_answers_the_texture_questions_a_renderer_asks() {
         "a volume texture has no array of layers to index"
     );
 
-    // The multisample answers are the ones that come from the device rather than
-    // from the enumeration shape: each sample count is asked for its quality
-    // levels, and a count with none does not exist. Four is the level Direct3D 12
-    // mandates for a render target, so it is the one count that can be asserted
-    // on any device; the counts above it vary and are printed by the evidence
-    // test instead.
+    // Native MSAA facts are probed, but the capability is deliberately withheld
+    // until attachment and resolve lowering are complete. Capability is an
+    // end-to-end promise, not merely an allocation fact.
     let multisampled = |sample_count| {
         capabilities
             .texture_support(&TextureSupportQuery::new(
@@ -1366,11 +1430,9 @@ fn a_real_device_answers_the_texture_questions_a_renderer_asks() {
             ))
             .is_supported()
     };
-    assert!(
-        multisampled(1) && multisampled(2) && multisampled(4),
-        "Direct3D 12 requires a 4x multisampled render target, and the walk must \
-         have asked the device for its quality levels to record it"
-    );
+    assert!(multisampled(1));
+    assert!(!multisampled(2));
+    assert!(!multisampled(4));
 }
 
 /// Every legal usage combination is recorded rather than left to the negative.
@@ -1625,7 +1687,11 @@ fn a_real_device_answers_the_binding_questions_a_renderer_asks() {
             BindingCount::One,
             false,
         );
-        assert!(capabilities.binding_support(&query).is_supported());
+        assert_eq!(
+            capabilities.binding_support(&query).is_supported(),
+            visibility != ShaderStages::COMPUTE,
+            "compute texture uses remain unsupported until command lowering can transition them"
+        );
     }
 
     for kind in [
@@ -1771,9 +1837,10 @@ fn every_binding_shape_matches_the_current_dx12_lowering() {
                     false,
                 );
                 seen += 1;
-                let expected = capabilities
-                    .format(TextureFormat::Rgba8Unorm)
-                    .is_some_and(|facts| facts.storage_access().supports(access));
+                let expected = visibility != ShaderStages::COMPUTE
+                    && capabilities
+                        .format(TextureFormat::Rgba8Unorm)
+                        .is_some_and(|facts| facts.storage_access().supports(access));
                 assert_eq!(
                     capabilities.binding_support(&query).is_supported(),
                     expected

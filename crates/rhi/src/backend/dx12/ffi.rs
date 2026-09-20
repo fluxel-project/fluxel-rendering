@@ -41,7 +41,8 @@
 
 use windows::Win32::Foundation::E_OUTOFMEMORY;
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+    DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
+    DXGI_ERROR_DRIVER_INTERNAL_ERROR,
 };
 use windows::core::Error as WinError;
 
@@ -69,17 +70,16 @@ pub(super) enum NativeFailure {
 impl NativeFailure {
     /// Classifies one Direct3D 12 return code.
     ///
-    /// `DXGI_ERROR_DEVICE_HUNG` is deliberately not terminal. A hung device
-    /// that the driver recovers from continues to serve calls, and reporting it
-    /// as terminal would retire a device that is still usable — the expensive
-    /// direction of the mistake. It is reported as [`NativeFailure::Refused`]
-    /// with its own code preserved in the message, so a caller that does know
-    /// the device is finished can still see what happened.
+    /// `DXGI_ERROR_DEVICE_HUNG` is terminal for this `ID3D12Device`. Windows may
+    /// recover the adapter after a TDR, but that does not resurrect the failed
+    /// D3D12 device identity: callers must request a new device before issuing
+    /// further work.
     pub(super) fn classify(error: &WinError) -> Self {
         match error.code() {
             DXGI_ERROR_DEVICE_REMOVED
             | DXGI_ERROR_DEVICE_RESET
-            | DXGI_ERROR_DRIVER_INTERNAL_ERROR => Self::Terminal,
+            | DXGI_ERROR_DRIVER_INTERNAL_ERROR
+            | DXGI_ERROR_DEVICE_HUNG => Self::Terminal,
             E_OUTOFMEMORY => Self::OutOfMemory,
             _ => Self::Refused,
         }
@@ -87,13 +87,8 @@ impl NativeFailure {
 
     /// Whether this failure ends the producing device's identity.
     ///
-    /// The device layer is its caller — the one that must both set a terminal
-    /// status and return the error — and it is the half of this module's split
-    /// that [`to_rhi`] deliberately does not use. This used to carry an
-    /// `expect(dead_code)` because that layer was not written; the buffer
-    /// allocation path is now such a caller, and an expectation that is no longer
-    /// fulfilled is an error, so the attribute is gone rather than left to
-    /// outlive its reason.
+    /// Backend boundaries use this classification to update the shared loss
+    /// authority before exposing the operation's structured error.
     pub(super) fn is_terminal(self) -> bool {
         matches!(self, Self::Terminal)
     }
@@ -110,15 +105,11 @@ impl NativeFailure {
 
 /// One native failure, classified once and not yet reported.
 ///
-/// `to_rhi` is enough for a call site that only has to return an error, and most
-/// have only that to do. The allocation path is the exception: it must *also*
-/// ask whether the failure ended the device, because `DXGI_ERROR_DEVICE_REMOVED`
-/// arrives from an arbitrary call rather than from a dedicated notification, so
-/// a failure that reads as an ordinary refusal may be the device ending. This
-/// type is how that call site reads the classification without classifying the
-/// same `HRESULT` twice — or worse, recovering it from the formatted message,
-/// which would make the message part of the API rather than part of the
-/// diagnosis.
+/// Provider setup may convert this directly because no device identity has been
+/// returned yet. Once a device exists, native boundaries inspect the stored
+/// classification and update its shared loss authority before returning the
+/// structured error. This avoids classifying an `HRESULT` twice or recovering it
+/// from diagnostic text.
 pub(super) struct NativeError {
     /// The portable RHI error, already built so that the message is formatted in one
     /// place regardless of which of the two callers asks.
@@ -229,11 +220,11 @@ mod tests {
     }
 
     #[test]
-    fn a_hung_device_is_not_terminal_because_the_driver_may_recover() {
+    fn a_hung_device_is_terminal_for_this_device_identity() {
         let failure = NativeFailure::classify(&error(DXGI_ERROR_DEVICE_HUNG.0));
 
-        assert!(!failure.is_terminal());
-        assert_eq!(failure.kind(), RhiErrorKind::BackendFailure);
+        assert!(failure.is_terminal());
+        assert_eq!(failure.kind(), RhiErrorKind::DeviceLost);
     }
 
     #[test]

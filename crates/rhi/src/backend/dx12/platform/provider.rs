@@ -322,9 +322,10 @@ impl Dx12Provider {
         // exists. The three command allocators this device will end up making are
         // *not* created here: those are the ring `command` grows on demand, so a
         // device that never submits never pays for one.
-        let spine = Dx12CommandSpine::new(&device).map_err(|native| native.into_rhi())?;
         let loss =
             std::sync::Arc::new(crate::backend::dx12::platform::device::Dx12LossState::new());
+        let spine = Dx12CommandSpine::new(&device, std::sync::Arc::clone(&loss))
+            .map_err(|native| native.into_rhi())?;
         let presentation = crate::backend::dx12::presentation::Dx12Presentation::new(
             device.clone(),
             spine.queue(),

@@ -1,10 +1,9 @@
 //! Why this backend could not lower a request.
 //!
-//! Three variants, mirroring [`ffi::NativeFailure`]'s split: one is a fact about
-//! what this backend has built, one is a fact about how long the GPU took, and
-//! one is a fact about the driver. Only the third can end the device, which is
-//! why the distinction survives to this type rather than being flattened into an
-//! [`RhiError`] where the failure is produced.
+//! Variants preserve whether a refusal is about lowering, bounded waiting, an
+//! already-observed device loss, or a native call. This distinction is what lets
+//! the device layer terminate the execution domain without treating ordinary
+//! unsupported work or timeout as loss.
 //!
 //! # Why this sits at the chapter root, beside `ffi`
 //!
@@ -28,11 +27,9 @@ use crate::backend::dx12::ffi;
 
 /// Why the backend could not lower or observe a request.
 ///
-/// Three variants, mirroring [`ffi::NativeFailure`]'s split: one is a fact about
-/// what this backend has built, one is a fact about how long the GPU took, and
-/// one is a fact about the driver. Only the third can end the device, which is
-/// why the distinction survives to this type rather than being flattened into an
-/// [`RhiError`] here.
+/// The variants keep backend support, bounded waiting, an already-published loss,
+/// and a newly returned native failure distinct. Only the latter two can end the
+/// device identity.
 pub(crate) enum Dx12Failure {
     /// The request names something this backend has no lowering for.
     ///
@@ -50,12 +47,16 @@ pub(crate) enum Dx12Failure {
     ///
     /// Only [`crate::backend::dx12::command::Dx12CommandSpine::wait_idle`]
     /// produces this. It is deliberately not terminal: a GPU that is merely slow
-    /// and a GPU that has hung are indistinguishable from here, and
-    /// [`ffi::NativeFailure`] already records why treating a hung device as alive
-    /// is the cheaper of the two mistakes.
+    /// and a GPU that has hung are indistinguishable from here until a native
+    /// terminal HRESULT is observed.
     Stalled {
         /// The bound that expired, so the message states what was waited for.
         bound_ms: u32,
+    },
+    /// A helper below a native boundary already observed and published loss.
+    DeviceLost {
+        /// Stable diagnostic captured by the first observer.
+        reason: String,
     },
     /// A Direct3D 12 call failed.
     Native(ffi::NativeError),
@@ -71,6 +72,7 @@ impl Dx12Failure {
     pub(crate) fn is_terminal(&self) -> bool {
         match self {
             Self::Unsupported { .. } | Self::Stalled { .. } => false,
+            Self::DeviceLost { .. } => true,
             Self::Native(native) => native.failure().is_terminal(),
         }
     }
@@ -87,6 +89,7 @@ impl Dx12Failure {
             Self::Stalled { bound_ms } => {
                 format!("the GPU did not reach the last submitted serial within {bound_ms} ms")
             }
+            Self::DeviceLost { reason } => reason.clone(),
             Self::Native(native) => native.as_error().to_string(),
         }
     }
@@ -107,6 +110,7 @@ impl Dx12Failure {
                 RhiErrorKind::BackendFailure,
                 format!("the GPU did not reach the last submitted serial within {bound_ms} ms"),
             ),
+            Self::DeviceLost { reason } => RhiError::new(RhiErrorKind::DeviceLost, reason),
             Self::Native(native) => return native.into_rhi(),
         }
         .at(operation)

@@ -21,11 +21,10 @@
 //!
 //! What a device does carry is a one-way cell recording that loss once it has
 //! been observed, because section 6.5 makes loss terminal for the whole identity
-//! and [`DeviceBackend::status`] is how a caller reads it. The two verbs that can
-//! observe a terminal `HRESULT` — allocation and submission — are the only
-//! writers, and each writes only on the `Terminal` classification: marking a
-//! device lost because one allocation ran out of memory would retire a usable
-//! device on a transient failure.
+//! and [`DeviceBackend::status`] is how a caller reads it. Every native boundary
+//! shares that authority: allocation, pipeline creation, submission, fence
+//! progress, readback mapping, and presentation all publish the same stable first
+//! reason and terminate pending asynchronous state.
 //!
 //! # Why the capability probe runs here, once, at creation
 //!
@@ -36,12 +35,15 @@
 //! through a frame. A table filled lazily would put the first capability answer
 //! on whichever call happened to arrive first.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use windows::Win32::Graphics::Direct3D12::ID3D12Device;
 
 use crate::api::capability::CapabilityFacts;
-use crate::api::error::RhiResult;
+use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::ObjectId;
 use crate::api::platform::backend::DeviceBackend;
 use crate::api::platform::{AdapterInfo, BackendKind, DeviceLossInfo, DeviceStatus};
@@ -61,18 +63,27 @@ struct Liveness {
 }
 
 /// The sole loss authority shared by a DX12 device and presentation leases.
-pub(crate) struct Dx12LossState(Mutex<Liveness>);
+pub(crate) struct Dx12LossState {
+    liveness: Mutex<Liveness>,
+    /// Backend-private subscribers which must terminate native asynchronous
+    /// state on the *first* loss regardless of the native call that observed it
+    /// (fence, allocation, pipeline creation, or presentation).
+    handlers: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
+}
 
 impl Dx12LossState {
     pub(crate) fn new() -> Self {
-        Self(Mutex::new(Liveness {
-            status: DeviceStatus::Active,
-            loss: None,
-        }))
+        Self {
+            liveness: Mutex::new(Liveness {
+                status: DeviceStatus::Active,
+                loss: None,
+            }),
+            handlers: Mutex::new(Vec::new()),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Liveness> {
-        self.0
+        self.liveness
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -87,9 +98,46 @@ impl Dx12LossState {
 
     pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
         let mut liveness = self.lock();
-        if matches!(liveness.status, DeviceStatus::Active) {
-            liveness.status = DeviceStatus::Lost;
-            liveness.loss = Some(info);
+        if !matches!(liveness.status, DeviceStatus::Active) {
+            return;
+        }
+        liveness.status = DeviceStatus::Lost;
+        liveness.loss = Some(info);
+        drop(liveness);
+        let handlers = self
+            .handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        for handler in handlers {
+            handler();
+        }
+    }
+
+    /// Registers a one-way loss cleanup. If loss won the race with setup, invoke
+    /// it immediately so no pending native work can escape termination.
+    pub(crate) fn register_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
+        // Registration can race `mark_lost` between publication and its status
+        // check. Wrap the caller's cleanup so both paths may attempt delivery
+        // without ever terminating the same ticket/waker registry twice.
+        let invoked = Arc::new(AtomicBool::new(false));
+        let invoked_once = Arc::clone(&invoked);
+        let once: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            if !invoked_once.swap(true, Ordering::AcqRel) {
+                handler();
+            }
+        });
+        self.handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(Arc::clone(&once));
+        // Do not retain the handler lock while reading liveness: `mark_lost`
+        // writes liveness before snapshotting handlers, and this order prevents
+        // a presentation-loss/setup race from becoming a lock inversion.
+        // Checking after publication closes the setup race: loss either sees
+        // this handler in its snapshot, or it has already become visible here.
+        if matches!(self.status(), DeviceStatus::Lost) {
+            once();
         }
     }
 }
@@ -203,16 +251,51 @@ impl Dx12Device {
     /// One-way, like the loss it records: section 6.5 makes device loss terminal
     /// for the whole identity, so there is no matching `mark_active`.
     ///
-    /// Crate-private and reached from the failure path that observes a terminal
-    /// `HRESULT`. That path is now written for allocation — see
-    /// [`Self::create_buffer`] — and the command lowering will be the next
-    /// caller; until it lands, allocation failures are the only ones that can
-    /// end a device's identity here.
+    /// Crate-private and reached from every backend path that observes a terminal
+    /// `HRESULT`, including presentation leases that do not hold `Dx12Device`.
     pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
         self.loss.mark_lost(info);
-        // A native fence may never signal after removal. Wake every async waiter
-        // now so it re-polls and observes the terminal per-serial loss state.
-        self.spine.terminate_pending_for_device_loss();
+    }
+
+    /// The sole device-layer authority for terminal native failures. Every
+    /// native-call boundary must pass its failure here before exposing it: DX12
+    /// reports removal from whichever call happens to notice first, while v13
+    /// requires `status`, `loss_info`, pending futures and later operations to
+    /// agree on one terminal identity.
+    fn observe_failure(
+        &self,
+        failure: crate::backend::dx12::failure::Dx12Failure,
+        operation: &'static str,
+    ) -> RhiError {
+        if failure.is_terminal() {
+            self.mark_lost(DeviceLossInfo::new(format!(
+                "Direct3D 12 reported a terminal failure in {operation}: {}",
+                failure.message()
+            )));
+        }
+        if let Some(info) = self.loss_info() {
+            RhiError::new(RhiErrorKind::DeviceLost, info.message().to_owned()).at(operation)
+        } else {
+            failure.into_rhi(operation)
+        }
+    }
+
+    fn observe_native_failure(
+        &self,
+        failure: crate::backend::dx12::ffi::NativeError,
+        operation: &'static str,
+    ) -> RhiError {
+        if failure.failure().is_terminal() {
+            self.mark_lost(DeviceLossInfo::new(format!(
+                "Direct3D 12 reported a terminal failure in {operation}: {}",
+                failure.as_error()
+            )));
+        }
+        if let Some(info) = self.loss_info() {
+            RhiError::new(RhiErrorKind::DeviceLost, info.message().to_owned()).at(operation)
+        } else {
+            failure.into_rhi()
+        }
     }
 }
 
@@ -261,8 +344,9 @@ impl DeviceBackend for Dx12Device {
         // verb (section 6.7 keeps a blocking wait out of the frame loop), so it is
         // the only place those bytes can be published. `advance` reads the fence
         // and copies out whatever it reports finished — it never waits.
-        self.spine.advance();
-        Ok(())
+        self.spine
+            .advance()
+            .map_err(|failure| self.observe_failure(failure, "Device::poll"))
     }
 
     fn wait_idle(&self) -> RhiResult<()> {
@@ -272,40 +356,15 @@ impl DeviceBackend for Dx12Device {
         // and a library must not turn that into a hung host.
         self.spine
             .wait_idle()
-            .map_err(|failure| failure.into_rhi("Device::wait_idle"))
+            .map_err(|failure| self.observe_failure(failure, "Device::wait_idle"))
     }
 
-    /// Allocates one buffer, and is the only place in this backend that acts on a
-    /// terminal native failure.
-    ///
-    /// The `HRESULT` alone cannot answer the question that matters here: a
-    /// removed device reports that from an arbitrary call, and this one is as
-    /// likely as any other, so a failure that looks like a plain allocation
-    /// refusal may be the device ending. [`crate::backend::dx12::ffi::NativeError`] carries the
-    /// classification beside the error so this reads it once rather than
-    /// re-deriving it, and `Terminal` is the only case that is recorded: marking
-    /// a device lost because one allocation ran out of memory would retire a
-    /// usable device on a transient failure, which is the expensive direction of
-    /// the mistake and the same reasoning [`crate::backend::dx12::ffi::NativeFailure`] gives for
-    /// treating a hung device as alive.
+    /// Allocates one buffer and routes any native failure through the device-wide
+    /// loss authority.
     fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
-        match resource::create_buffer(&self.device, descriptor) {
-            Ok(buffer) => Ok(Box::new(buffer) as Box<dyn BufferBackend>),
-            Err(native) => {
-                if native.failure().is_terminal() {
-                    // Built before the error is consumed, because the summary is
-                    // about the same failure the error reports and the port read
-                    // that follows must answer the same thing.
-                    let summary = format!(
-                        "Direct3D 12 reported a terminal failure while allocating a buffer, \
-                         and section 6.5 makes loss terminal for the identity: {}",
-                        native.as_error()
-                    );
-                    self.mark_lost(DeviceLossInfo::new(summary));
-                }
-                Err(native.into_rhi())
-            }
-        }
+        resource::create_buffer(&self.device, descriptor)
+            .map(|buffer| Box::new(buffer) as Box<dyn BufferBackend>)
+            .map_err(|failure| self.observe_native_failure(failure, "Dx12Device::create_buffer"))
     }
 
     fn create_texture(
@@ -316,7 +375,7 @@ impl DeviceBackend for Dx12Device {
             .map(|texture| {
                 Box::new(texture) as Box<dyn crate::api::resource::backend::TextureBackend>
             })
-            .map_err(|failure| failure.into_rhi())
+            .map_err(|failure| self.observe_native_failure(failure, "Dx12Device::create_texture"))
     }
 
     fn create_texture_view(
@@ -339,7 +398,9 @@ impl DeviceBackend for Dx12Device {
             .map(|view| {
                 Box::new(view) as Box<dyn crate::api::resource::backend::TextureViewBackend>
             })
-            .map_err(|failure| failure.into_rhi())
+            .map_err(|failure| {
+                self.observe_native_failure(failure, "Dx12Device::create_texture_view")
+            })
     }
 
     fn create_sampler(
@@ -350,7 +411,7 @@ impl DeviceBackend for Dx12Device {
             .map(|sampler| {
                 Box::new(sampler) as Box<dyn crate::api::resource::backend::SamplerBackend>
             })
-            .map_err(|failure| failure.into_rhi())
+            .map_err(|failure| self.observe_native_failure(failure, "Dx12Device::create_sampler"))
     }
 
     /// Prepares one shader entry point, and cannot fail.
@@ -387,32 +448,12 @@ impl DeviceBackend for Dx12Device {
             descriptor,
         )
         .map(|group| Box::new(group) as Box<dyn crate::api::binding::backend::BindGroupBackend>)
-        .map_err(|failure| failure.into_rhi("Dx12Device::create_bind_group"))
+        .map_err(|failure| self.observe_failure(failure, "Dx12Device::create_bind_group"))
     }
 
-    /// Refuses, because this backend's root-signature and pipeline-state lowering
-    /// is not written.
-    ///
-    /// The refusal is [`RhiErrorKind::Unsupported`] rather than a native-failure
-    /// kind, and the distinction is the honest one: nothing was handed to the
-    /// driver, so there is no driver verdict to report. [`Self::create_buffer`]'s
-    /// note records that a failure here can also mean the device ended, and this
-    /// method never gets far enough to find out.
-    ///
-    /// # What has to be built
-    ///
-    /// Direct3D 12 has no bind-group-layout object and no pipeline-interface
-    /// object, so both portable verbs before this one do their native work here, at
-    /// once: the whole ordered group sequence is lowered into one root signature
-    /// (`space = group index`, `register = slot id`, one descriptor table per
-    /// group), and the compute state object binds that root signature to the
-    /// entry point's DXIL through `D3D12_SHADER_BYTECODE`.
-    ///
-    /// The driver's verdict arrives from `CreateComputePipelineState`, and that is
-    /// why this method's failure is the first in the crate that can be about the
-    /// *program* rather than about a descriptor — see the seam's documentation. A
-    /// native failure must be reported as it arrives, with its own kind, and never
-    /// folded into `InvalidUsage`.
+    /// Builds the root signature and compute PSO, observing terminal driver
+    /// failures through the same device loss authority as every other native
+    /// creation path.
     fn create_compute_pipeline(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
@@ -421,7 +462,7 @@ impl DeviceBackend for Dx12Device {
             .map(|pipeline| {
                 Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>
             })
-            .map_err(|failure| failure.into_rhi("Dx12Device::create_compute_pipeline"))
+            .map_err(|failure| self.observe_failure(failure, "Dx12Device::create_compute_pipeline"))
     }
 
     fn create_raster_pipeline(
@@ -432,15 +473,14 @@ impl DeviceBackend for Dx12Device {
             .map(|pipeline| {
                 Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
             })
-            .map_err(|failure| failure.into_rhi("Dx12Device::create_raster_pipeline"))
+            .map_err(|failure| self.observe_failure(failure, "Dx12Device::create_raster_pipeline"))
     }
 
     fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
         Some(&self.presentation)
     }
 
-    /// Lowers a plan onto the spine's queue, and is the second place in this
-    /// backend that acts on a terminal native failure.
+    /// Lowers a plan onto the spine's queue.
     ///
     /// The two directions of section 41.3 meet here. Phase A — everything
     /// recorded, nothing committed — is [`Dx12CommandSpine::submit`]'s, and its
@@ -449,32 +489,16 @@ impl DeviceBackend for Dx12Device {
     /// which is why a post-commit `Signal` failure comes back as `Ok` and is
     /// reported through [`Self::completion`] instead.
     ///
-    /// What is left for this layer is the one question only the device can
-    /// answer: whether a failure ended it. `Terminal` marks the device lost, for
-    /// the same reason and in the same shape as [`Self::create_buffer`] — a
-    /// failure that looks like a plain refusal may be the device ending, and
-    /// `ffi::NativeFailure` already carries the classification so this reads it
-    /// once rather than re-deriving it from a message.
+    /// Phase-A failures flow through the shared loss observer. A terminal Phase-B
+    /// `Signal` failure is recorded inside the spine after native acceptance and
+    /// therefore still returns `Ok`, while status/completion become terminal.
     fn submit(
         &self,
         request: &crate::api::submission::backend::SubmissionRequest<'_>,
     ) -> RhiResult<crate::api::submission::backend::SubmissionOutcome> {
         match self.spine.submit(request) {
             Ok(outcome) => Ok(outcome),
-            Err(failure) => {
-                if failure.is_terminal() {
-                    // Built before the failure is consumed, because the summary is
-                    // about the same failure the error reports and the port read
-                    // that follows must answer the same thing.
-                    let summary = format!(
-                        "Direct3D 12 reported a terminal failure while lowering a plan, and \
-                         section 6.5 makes loss terminal for the identity: {}",
-                        failure.message()
-                    );
-                    self.mark_lost(DeviceLossInfo::new(summary));
-                }
-                Err(failure.into_rhi("Dx12Device::submit"))
-            }
+            Err(failure) => Err(self.observe_failure(failure, "Dx12Device::submit")),
         }
     }
 
@@ -517,5 +541,44 @@ impl DeviceBackend for Dx12Device {
             Some(info) => CompletionState::DeviceLost(info),
             None => spine,
         }
+    }
+}
+
+#[cfg(test)]
+mod loss_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::*;
+
+    #[test]
+    fn loss_authority_notifies_each_handler_once_and_preserves_first_reason() {
+        let loss = Dx12LossState::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observer_calls = Arc::clone(&calls);
+        loss.register_handler(Arc::new(move || {
+            observer_calls.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        loss.mark_lost(DeviceLossInfo::new("first loss".to_owned()));
+        loss.mark_lost(DeviceLossInfo::new("later loss".to_owned()));
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(loss.status(), DeviceStatus::Lost));
+        assert_eq!(loss.loss_info().unwrap().message(), "first loss");
+    }
+
+    #[test]
+    fn handler_registered_after_loss_is_terminated_immediately() {
+        let loss = Dx12LossState::new();
+        loss.mark_lost(DeviceLossInfo::new("lost".to_owned()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observer_calls = Arc::clone(&calls);
+        loss.register_handler(Arc::new(move || {
+            observer_calls.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

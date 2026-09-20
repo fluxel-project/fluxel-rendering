@@ -1,4 +1,9 @@
 //! Lowering a validated compute dispatch onto a Direct3D 12 command list.
+//!
+//! TODO(perf): Dispatch lowering currently rebinds the root signature, PSO,
+//! descriptor heaps and every root table for every dispatch. A future
+//! command-list-local state cache may skip unchanged native bindings, but must be
+//! invalidated on command-list reset and remain entirely backend-private.
 
 use std::collections::HashMap;
 

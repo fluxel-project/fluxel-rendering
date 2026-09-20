@@ -246,17 +246,32 @@ pub(super) fn lower_readback(
 
 /// Copies one finished readback's bytes off the GPU and hands them to its ticket.
 ///
-/// A failure here is reported as [`ReadbackStatus::Failed`] rather than as a
-/// device loss: mapping a readback heap can fail for reasons that say nothing
-/// about the device, and section 18.2 makes `Failed` exactly the terminal state
-/// for a backend failure. The ticket carries no message, so the state is the
-/// whole report.
-pub(super) fn publish_readback(retention: &ReadbackRetention) {
+/// A non-terminal mapping refusal becomes [`ReadbackStatus::Failed`]. A removal,
+/// reset, hang, or driver-internal failure becomes `DeviceLost` and returns its
+/// diagnosis to the caller so it can update the shared loss authority after
+/// releasing the command-spine lock.
+pub(super) fn publish_readback(
+    retention: &ReadbackRetention,
+) -> Option<crate::api::platform::DeviceLossInfo> {
     match readback_bytes(&retention.staging, retention.size) {
         // A buffer range is tightly packed by definition, so there is no texel
         // layout to publish beside its bytes.
-        Ok(bytes) => retention.ticket.publish(bytes, retention.layout),
-        Err(_) => retention.ticket.set_status(ReadbackStatus::Failed),
+        Ok(bytes) => {
+            retention.ticket.publish(bytes, retention.layout);
+            None
+        }
+        Err(failure) if failure.failure().is_terminal() => {
+            let info = crate::api::platform::DeviceLossInfo::new(format!(
+                "Direct3D 12 reported a terminal failure while mapping completed readback data: {}",
+                failure.as_error()
+            ));
+            retention.ticket.set_status(ReadbackStatus::DeviceLost);
+            Some(info)
+        }
+        Err(_) => {
+            retention.ticket.set_status(ReadbackStatus::Failed);
+            None
+        }
     }
 }
 

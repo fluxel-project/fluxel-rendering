@@ -20,9 +20,9 @@
 //!
 //! Which transition a step needs, and in which order relative to the command it
 //! brackets. That is the invariant
-//! [`crate::backend::dx12::command`] documents — every list leaves every buffer
-//! it touched in `D3D12_RESOURCE_STATE_COMMON` — and it belongs to the lowering
-//! that knows what the step is, not to the barrier holder.
+//! [`crate::backend::dx12::command`] documents — every list restores ordinary
+//! resources to `COMMON` and presentation resources to `PRESENT` — and it belongs
+//! to the lowering that knows what the step is, not to the barrier holder.
 
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
