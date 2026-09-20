@@ -79,10 +79,10 @@ impl CompletionFailure {
             // The backend features that actually compile a lowering. A feature
             // that selects nothing must not appear here: it would remove this
             // expectation in a configuration where the item really is dead, and
-            // the gate would then be silent about it. When Vulkan lands and starts
-            // calling this, its feature joins the list — which is rule 4.6's
-            // "the matrix gets the row" applied to the attribute itself.
-            feature = "dx12"
+            // the gate would then be silent about it. Vulkan completion also
+            // creates structured terminal failures.
+            feature = "dx12",
+            feature = "vulkan"
         )),
         expect(
             dead_code,

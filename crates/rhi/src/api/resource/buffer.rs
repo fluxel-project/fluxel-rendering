@@ -119,10 +119,10 @@ impl BufferUsage {
     /// leaving it out of the walk would leave it out of whatever table the walk
     /// fills, which is the one outcome the completeness rule exists to prevent.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports enumerate this complete key space; without either feature it is unreachable outside tests"
         )
     )]
     pub(crate) fn all() -> impl Iterator<Item = Self> {
@@ -228,10 +228,10 @@ impl BufferSupportLimits {
     /// Crate-private: the number is a probed device answer, and a caller-built
     /// one would be a capability claim about hardware nobody asked.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports construct probed buffer ceilings; without either backend this is test-only"
         )
     )]
     pub(crate) fn new(max_size: u64) -> Self {
@@ -434,7 +434,8 @@ impl Buffer {
             // the gate would then be silent about it. When Vulkan lands and starts
             // calling this, its feature joins the list — which is rule 4.6's
             // "the matrix gets the row" applied to the attribute itself.
-            feature = "dx12"
+            feature = "dx12",
+            feature = "vulkan"
         )),
         expect(
             dead_code,

@@ -114,10 +114,10 @@ impl TextureUsage {
     /// be filled in full. Section 13.4's P0 set is six bits, so the walk is
     /// sixty-four masks.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports enumerate texture-usage keys; without either backend this is test-only"
         )
     )]
     pub(crate) fn all() -> impl Iterator<Item = Self> {

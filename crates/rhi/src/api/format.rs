@@ -209,7 +209,7 @@ impl StorageAccessSupport {
         all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 capability port is the only caller until Vulkan publishes storage access facts"
         )
     )]
     pub(crate) fn new(read_only: bool, write_only: bool, read_write: bool) -> Self {
@@ -271,10 +271,10 @@ impl FormatFacts {
     /// Device/Adapter contract", so only the device that probed them may
     /// assemble them.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports construct probed texture limits; without either backend this is test-only"
         )
     )]
     pub(crate) fn new(

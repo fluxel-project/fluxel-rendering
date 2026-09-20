@@ -126,15 +126,15 @@ impl SubmissionLaneId {
     ///
     /// The expectation is gated on `all(not(test), not(feature = "dx12"))` rather
     /// than on either alone, for the reason `api::capability` records on
-    /// `AvailableCapabilities::from_facts`: with the DX12 backend compiled out, the
+    /// `AvailableCapabilities::from_facts`: with DX12 and Vulkan compiled out, the
     /// only remaining enumeration is the mock's, which lives in the test build —
     /// so a `not(test)` expectation would sit unfulfilled as soon as `dx12` is on,
     /// and an ungated constructor is a hard error in the lib when both are off.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "minted by the two backends that enumerate lanes: the DX12 provider and the test-build mock"
+            reason = "minted by the DX12/Vulkan providers that enumerate lanes and the test-build mock"
         )
     )]
     pub(crate) fn new(value: u16) -> Self {
@@ -282,10 +282,10 @@ impl SubmissionLaneInfo {
     ///
     /// Gated on the same pair as [`SubmissionLaneId::new`], for the same reason.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "assembled by the two backends that enumerate lanes: the DX12 provider and the test-build mock"
+            reason = "assembled by the DX12/Vulkan providers that enumerate lanes and the test-build mock"
         )
     )]
     pub(crate) fn new(
@@ -434,10 +434,10 @@ impl SubmissionCapabilities {
     ///
     /// Gated on the same pair as [`SubmissionLaneId::new`], for the same reason.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "assembled by the two backends that enumerate lanes: the DX12 provider and the test-build mock"
+            reason = "assembled by the DX12/Vulkan providers that enumerate lanes and the test-build mock"
         )
     )]
     pub(crate) fn new(lanes: Vec<SubmissionLaneInfo>) -> Self {

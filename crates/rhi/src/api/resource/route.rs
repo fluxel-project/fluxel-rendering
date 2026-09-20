@@ -163,10 +163,10 @@ impl BufferCopyLayoutLimits {
     /// Crate-private: the numbers are a probed device answer, and a
     /// caller-built pair would describe hardware that was never asked.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports construct buffer-copy alignment facts; without either backend this is test-only"
         )
     )]
     pub(crate) fn new(offset_alignment: u64, size_alignment: u64) -> Self {
@@ -307,10 +307,10 @@ impl RouteCapabilities {
     /// Crate-private: these are probed device facts, and a caller-built answer
     /// would be a capability claim about hardware nobody asked.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports construct implemented route facts; without either backend this is test-only"
         )
     )]
     pub(crate) fn new(

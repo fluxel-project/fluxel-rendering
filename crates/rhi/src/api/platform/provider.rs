@@ -97,15 +97,15 @@ impl AdapterId {
     /// Crate-private: section 3 forbids a caller constructing a token, and only
     /// the provider that owns the adapter can know either half.
     ///
-    /// The DX12 provider's snapshot construction and the contract tests are its
-    /// callers, so the expectation is gated on `all(not(test), not(feature =
-    /// "dx12"))`: it is absent whenever either kind of caller can exist. See
-    /// `backend::dx12::provider` for why neither half is sufficient alone.
+    /// The DX12/Vulkan providers' snapshot construction and the contract tests
+    /// are its callers, so the expectation is gated on `all(not(test),
+    /// not(any(feature = "dx12", feature = "vulkan")))`: it is absent whenever
+    /// either kind of caller can exist.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the only callers are the contract tests and the DX12 provider's snapshot construction; with that backend compiled out, adapter enumeration is what will publish one"
+            reason = "the only callers are the contract tests and the DX12/Vulkan providers' snapshot construction; with both backends compiled out, adapter enumeration is what will publish one"
         )
     )]
     pub(crate) fn new(provider: u64, serial: u64) -> Self {
@@ -121,10 +121,10 @@ impl AdapterId {
     /// entitled to decide whether an id belongs to it, because section 3.1 puts
     /// that check in the portable layer before any backend call.
     ///
-    /// The DX12 provider's adapter selection is its caller. What makes the
+    /// DX12 and Vulkan adapter selection are its callers. What makes the
     /// expectation below true is not whether a caller *exists* but whether it is
-    /// *compiled*: with `dx12` off, the provider is not built and nothing reaches
-    /// this.
+    /// *compiled*: with both `dx12` and `vulkan` off, neither provider is built
+    /// and nothing reaches this.
     ///
     /// The gate here names the feature alone, unlike the four items beside it,
     /// and the difference is not an oversight: the contract tests call those four
@@ -133,10 +133,10 @@ impl AdapterId {
     /// the portable layer agreed on — which is the provider's business, not the
     /// portable layer's.
     #[cfg_attr(
-        not(feature = "dx12"),
+        not(any(feature = "dx12", feature = "vulkan")),
         expect(
             dead_code,
-            reason = "the only non-test caller is the DX12 provider's adapter selection; with that backend compiled out, nothing reaches this"
+            reason = "the only non-test callers are DX12 and Vulkan adapter selection; with both backends compiled out, nothing reaches this"
         )
     )]
     pub(crate) fn serial(self) -> u64 {
@@ -170,15 +170,15 @@ impl AdapterInfo {
     /// Crate-private: snapshots come from a provider's enumeration, and a
     /// caller-built one would describe hardware that was never probed.
     ///
-    /// A real backend is now among its callers — the DX12 provider assembles one
+    /// Real backends are now among its callers — the DX12 and Vulkan providers assemble one
     /// from an adapter it actually selected — but the provider still does not
     /// *publish* it, so the expectation stands, gated on that backend being
     /// compiled out and the build not being a test one.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the only callers are the contract tests and the DX12 provider, which never publishes the snapshot; with that backend compiled out, adapter enumeration is what will"
+            reason = "the only callers are the contract tests and the DX12/Vulkan providers; with both backends compiled out, adapter enumeration is what will publish the snapshot"
         )
     )]
     pub(crate) fn new(

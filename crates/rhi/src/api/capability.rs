@@ -433,10 +433,10 @@ impl CapabilityFacts {
     /// [`Self::recorded`], and see the note in `backend::dx12::provider` about why
     /// the provider that builds one today does not publish it.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 provider starts its enumeration here and the mock backend starts its own here, so with that backend compiled out nothing reaches this"
+            reason = "the DX12 and Vulkan providers start enumeration here and the mock backend starts its own here; with those backends compiled out nothing reaches this"
         )
     )]
     pub(crate) fn empty() -> Self {
@@ -731,7 +731,7 @@ impl CapabilityFacts {
         all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 capability port is the only caller until Vulkan publishes an implemented optional feature"
         )
     )]
     pub(crate) fn record_feature(&mut self, feature: OptionalFeature) {
@@ -747,7 +747,7 @@ impl CapabilityFacts {
         all(not(test), not(feature = "dx12")),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 capability port is the only caller until Vulkan shader lowering publishes an accepted code form"
         )
     )]
     pub(crate) fn record_code_form(&mut self, form: AcceptedCodeForm) {
@@ -756,10 +756,10 @@ impl CapabilityFacts {
 
     /// Records the value for `key`.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports record probed native limits; without either backend this is test-only"
         )
     )]
     pub(crate) fn record_limit(&mut self, key: LimitKey, value: u64) {
@@ -780,10 +780,10 @@ impl CapabilityFacts {
 
     /// Records the answer to a buffer support query.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports call this while building their complete buffer-support tables; without either feature it is unreachable outside tests"
         )
     )]
     pub(crate) fn record_buffer_support(&mut self, usage: BufferUsage, support: BufferSupport) {
@@ -801,10 +801,10 @@ impl CapabilityFacts {
     /// answers for one key would be stating that its own probe is unstable, and no
     /// shape of table can repair that.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports record probed texture support; without either backend this is test-only"
         )
     )]
     pub(crate) fn record_texture_support(
@@ -863,10 +863,10 @@ impl CapabilityFacts {
 
     /// Records the answer to a route query.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
+            reason = "the DX12 and Vulkan capability ports record implemented routes; without either backend this is test-only"
         )
     )]
     pub(crate) fn record_route(&mut self, query: RouteQuery, support: RouteSupport) {
@@ -1152,14 +1152,14 @@ impl AvailableCapabilities {
     ///
     /// The expectation is absent whenever *any* caller could exist, and the
     /// contract tests are callers too: it is gated on `all(not(test), not(feature
-    /// = "dx12"))` rather than on either alone. See `backend::dx12::provider` for
-    /// why a `not(test)` expectation on an item the provider references would sit
+    /// = "dx12", feature = "vulkan"))` rather than on either alone. See the
+    /// providers for why a `not(test)` expectation on an item they reference would sit
     /// unfulfilled whenever that backend is compiled.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "the only callers are the contract tests and the DX12 provider; with that backend compiled out, adapter enumeration is what will publish one"
+            reason = "the only callers are the contract tests and the DX12/Vulkan providers; with both backends compiled out, adapter enumeration is what will publish one"
         )
     )]
     pub(crate) fn from_facts(facts: CapabilityFacts) -> Self {

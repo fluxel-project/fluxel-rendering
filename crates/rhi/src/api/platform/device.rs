@@ -74,18 +74,18 @@ impl DeviceLossInfo {
     ///
     /// Crate-private: only the code that observed the loss may summarize it.
     ///
-    /// The DX12 backend's allocation path is now such an observer, so the
-    /// expectation below is gated on the backend feature as well as on the test
+    /// The DX12 backend's allocation path and Vulkan's native boundaries are
+    /// such observers, so the expectation below is gated on their features as well as on the test
     /// build. A module-scope expectation in that backend makes references *out*
     /// of it count as live for the items they point at, so with `dx12` on this
     /// constructor is reached in a non-test build too and a `not(test)`-only
     /// expectation would sit unfulfilled — the same trap the provider's module
     /// documentation records for its own callees.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
         expect(
             dead_code,
-            reason = "called by the contract tests and by the DX12 allocation path; with that backend compiled out, the code that observes a native loss is not written"
+            reason = "called by the contract tests and DX12/Vulkan native-loss observers; with both backends compiled out, the code that observes native loss is not written"
         )
     )]
     pub(crate) fn new(message: String) -> Self {

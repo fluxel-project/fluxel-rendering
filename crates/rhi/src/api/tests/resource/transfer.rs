@@ -680,6 +680,50 @@ fn device_loss_wakes_a_pending_readback_future() {
 }
 
 #[test]
+fn a_terminal_readback_status_cannot_be_overwritten_by_a_late_publisher() {
+    let ticket = ReadbackTicket::new(
+        object(77),
+        device(),
+        ReadbackRequest::Buffer {
+            label: Label::default(),
+            src: buffer_with(BufferUsage::COPY_SRC, 64),
+            range: BufferRange::new(0, 4),
+        },
+    );
+    ticket.set_status(ReadbackStatus::Pending);
+    ticket.set_status(ReadbackStatus::DeviceLost);
+    ticket.publish(vec![1, 2, 3, 4], None);
+
+    assert_eq!(ticket.status(), ReadbackStatus::DeviceLost);
+    match ticket.try_read() {
+        Err(error) => assert_eq!(error.kind(), RhiErrorKind::DeviceLost),
+        Ok(_) => panic!("a late mapping result must not resurrect lost readback data"),
+    }
+}
+
+#[test]
+fn portable_submit_handoff_cannot_downgrade_an_already_ready_ticket() {
+    let ticket = ReadbackTicket::new(
+        object(78),
+        device(),
+        ReadbackRequest::Buffer {
+            label: Label::default(),
+            src: buffer_with(BufferUsage::COPY_SRC, 64),
+            range: BufferRange::new(0, 4),
+        },
+    );
+    ticket.publish(vec![9, 8, 7, 6], None);
+    ticket.set_status(ReadbackStatus::Pending);
+
+    assert_eq!(ticket.status(), ReadbackStatus::Ready);
+    let view = ticket.try_read().expect("ready ticket").expect("bytes");
+    match view.data() {
+        ReadbackViewData::Buffer { bytes } => assert_eq!(bytes, &[9, 8, 7, 6]),
+        ReadbackViewData::Texture { .. } => panic!("buffer readback returned texture data"),
+    }
+}
+
+#[test]
 fn a_ready_ticket_without_bytes_is_reported_as_a_backend_fault() {
     // `publish` is the only correct way to reach Ready, so this state is
     // unreachable through the crate's own writers — but the reader must not

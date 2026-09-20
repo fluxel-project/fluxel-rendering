@@ -42,3 +42,6 @@
 // without having the binding crate at all.
 #[cfg(all(feature = "dx12", windows))]
 pub(crate) mod dx12;
+
+#[cfg(all(feature = "vulkan", not(target_arch = "wasm32")))]
+pub(crate) mod vulkan;

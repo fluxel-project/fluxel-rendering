@@ -421,12 +421,47 @@ impl ReadbackTicket {
     /// reach [`ReadbackStatus::Ready`]: a state without bytes is not readable,
     /// and `try_read` reports it as a backend fault.
     pub(crate) fn set_status(&self, status: ReadbackStatus) {
-        self.inner.status.store(status.to_raw(), Ordering::Release);
-        if matches!(
-            status,
-            ReadbackStatus::Abandoned | ReadbackStatus::DeviceLost | ReadbackStatus::Failed
-        ) {
+        if self.transition_to(status)
+            && matches!(
+                status,
+                ReadbackStatus::Abandoned | ReadbackStatus::DeviceLost | ReadbackStatus::Failed
+            )
+        {
             self.wake_waiters();
+        }
+    }
+
+    /// Performs the monotone half of the readback state machine.
+    ///
+    /// Native completion and device-loss observation may race on different
+    /// threads. The first terminal transition wins permanently: a late portable
+    /// `Pending` handoff cannot erase `Ready`, and a late mapping result cannot
+    /// turn `DeviceLost` back into readable data.
+    fn transition_to(&self, next: ReadbackStatus) -> bool {
+        let mut current = self.inner.status.load(Ordering::Acquire);
+        loop {
+            let status = ReadbackStatus::from_raw(current);
+            if status == next {
+                return false;
+            }
+            if !matches!(
+                status,
+                ReadbackStatus::NotSubmitted | ReadbackStatus::Pending
+            ) {
+                return false;
+            }
+            if next == ReadbackStatus::Pending && status != ReadbackStatus::NotSubmitted {
+                return false;
+            }
+            match self.inner.status.compare_exchange_weak(
+                current,
+                next.to_raw(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => current = observed,
+            }
         }
     }
 
@@ -474,7 +509,8 @@ impl ReadbackTicket {
             // the gate would then be silent about it. When Vulkan lands and starts
             // calling this, its feature joins the list — which is rule 4.6's
             // "the matrix gets the row" applied to the attribute itself.
-            feature = "dx12"
+            feature = "dx12",
+            feature = "vulkan"
         )),
         expect(
             dead_code,
@@ -487,8 +523,9 @@ impl ReadbackTicket {
         // first one's bytes; keeping the first is the conservative choice,
         // because the status a caller already acted on stays true.
         let _ = self.inner.data.set(ReadbackPayload { bytes, layout });
-        self.set_status(ReadbackStatus::Ready);
-        self.wake_waiters();
+        if self.transition_to(ReadbackStatus::Ready) {
+            self.wake_waiters();
+        }
     }
 
     fn wake_waiters(&self) {
