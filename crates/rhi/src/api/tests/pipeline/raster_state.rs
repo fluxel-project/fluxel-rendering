@@ -93,7 +93,12 @@ fn adding_a_color_target_fills_the_locations_before_it_with_nothing() {
 fn a_created_pipeline_stores_the_canonical_signature() {
     let mut desc = raster_with(vertex_module(1, Vec::new()));
     desc.color_targets = vec![Some(ColorTargetState::new(TARGET)), None];
-    let pipeline = RasterPipeline::new(object(50), device(), desc);
+    let pipeline = RasterPipeline::new(
+        object(50),
+        device(),
+        desc,
+        crate::api::tests::mock::raster_pipeline_backend_for_test(),
+    );
 
     assert_eq!(
         pipeline.target_signature().color_formats,

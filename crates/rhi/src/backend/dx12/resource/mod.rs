@@ -13,8 +13,14 @@
 
 mod buffer;
 mod readback;
+mod sampler;
+mod texture;
 mod transient;
+mod view;
 
 pub(crate) use buffer::{Dx12Buffer, StagingHeap, create_buffer, create_staging};
 pub(crate) use readback::readback_bytes;
+pub(crate) use sampler::{Dx12Sampler, create_sampler};
+pub(crate) use texture::{Dx12Texture, create_texture};
 pub(crate) use transient::transient_capabilities;
+pub(crate) use view::{Dx12TextureView, create_texture_view};

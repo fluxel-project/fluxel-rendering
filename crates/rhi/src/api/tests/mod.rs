@@ -1,18 +1,10 @@
 //! Contract tests for the portable API surface.
 //!
-//! Two kinds of test live here, and the distinction matters:
-//!
-//! * **Behavioural tests** exercise the parts of the surface that are already
-//!   real — the identity tokens and the error model. They run.
-//! * **Shape tests** are the review instrument for the parts whose bodies are
-//!   still `unimplemented!()`. They are ordinary functions that are *compiled*
-//!   but never called, and they are written as realistic call sites rather than
-//!   as assertions about types. Their job is to answer "is this interface usable
-//!   from the caller's side" before a backend exists to answer it with
-//!   behaviour: if a call site needs an extra construction step, a lifetime it
-//!   should not have to name, or a state precondition it cannot check, the fault
-//!   is in the interface and the fix is to change the interface, not to write the
-//!   call site differently.
+//! Behavioural tests exercise the portable rules and mock-backed default
+//! implementations. Shape tests remain useful as realistic caller-side
+//! compilation checks: if a call site needs an extra construction step, a
+//! lifetime it should not name, or a state precondition it cannot check, the
+//! fault is in the interface rather than in the call site.
 //!
 //! A shape test that stops compiling because the interface changed is this
 //! module working as intended. A shape test that stops compiling because the

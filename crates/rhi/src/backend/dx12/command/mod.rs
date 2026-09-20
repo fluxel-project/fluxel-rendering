@@ -5,9 +5,9 @@
 //!
 //! * [`spine`] owns the queue, the fence, the command-list ring, and the order a
 //!   plan's batches go through them. It is the lifecycle, not the steps.
-//! * [`copy`] and [`transfer`] are the implemented steps. Raster and compute
-//!   lowering have no DX12 pipeline implementation yet and are refused by the
-//!   spine before any native list is committed.
+//! * [`copy`], [`transfer`], [`compute`], and [`raster`] lower the corresponding
+//!   recorded payloads. Unsupported texture transfers, resolves, presentation
+//!   images, and debug markup remain explicit pre-commit refusals.
 //! * [`transition`] is the barrier lifetime problem, which is a resource-ownership
 //!   question and not a copy question: every step needs it and none of them own
 //!   it.
@@ -28,7 +28,9 @@
 //! for a plan that already passed both, so every refusal it produces is one only
 //! Direct3D 12 could know.
 
+mod compute;
 mod copy;
+mod raster;
 mod spine;
 mod transfer;
 mod transition;
@@ -64,5 +66,20 @@ pub(super) fn dx12_buffer(buffer: &Buffer) -> Result<&Dx12Buffer, Dx12Failure> {
             what: "a buffer this device did not allocate",
             why: "its native allocation belongs to another backend, and section 3.3 makes \
                   that a refusal rather than a migration",
+        })
+}
+
+use crate::api::resource::texture::Texture;
+use crate::backend::dx12::resource::Dx12Texture;
+
+/// The native allocation behind a portable texture.
+pub(super) fn dx12_texture(texture: &Texture) -> Result<&Dx12Texture, Dx12Failure> {
+    texture
+        .native()
+        .as_any()
+        .downcast_ref::<Dx12Texture>()
+        .ok_or(Dx12Failure::Unsupported {
+            what: "a texture this device did not allocate",
+            why: "its native allocation belongs to another backend",
         })
 }

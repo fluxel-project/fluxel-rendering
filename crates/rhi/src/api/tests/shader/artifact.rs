@@ -118,13 +118,12 @@ fn a_device_that_records_no_code_form_refuses_before_the_backend_is_reached() {
 
 /// A module's clone is the same logical object, not a second one.
 ///
-/// Section 18.6's last-owner rule is why the backend object sits behind an `Arc`:
+/// Section 18.6's last-owner rule is why the module has one shared inner object:
 /// two clones each owning a native entry point would be two modules wearing one
 /// identity, and the point at which the last one drops would have no single moment.
 #[test]
 fn a_cloned_module_shares_one_backend_object() {
     use crate::api::shader::vocabulary::AcceptedCodeForm;
-    use std::sync::Arc;
 
     let (device, _) =
         crate::api::tests::mock::shaders_for_test(device(), &[AcceptedCodeForm::Wgsl]);
@@ -133,5 +132,5 @@ fn a_cloned_module_shares_one_backend_object() {
 
     let clone = module.clone();
     assert_eq!(clone.id(), module.id());
-    assert!(Arc::ptr_eq(module.native(), clone.native()));
+    assert!(std::ptr::eq(module.native(), clone.native()));
 }

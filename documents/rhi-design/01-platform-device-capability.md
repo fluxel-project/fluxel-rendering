@@ -1022,12 +1022,15 @@ impl Device {
     ///
     /// Returns a stable loss summary after Lost.
     pub fn loss_info(&self) -> Option<DeviceLossInfo>;
-
-    /// Waits for the Device to enter its terminal lost state.
-    /// This Future may remain pending when the Device is never lost.
-    pub async fn lost(&self) -> DeviceLossInfo;
 }
 ```
+
+v13 deliberately has **no** `Device::lost()` future, no `wait_lost()`, and no
+separate public device-loss event. Loss is an execution-domain terminal state,
+not a second event stream a caller must subscribe to or drain. `status()` and
+`loss_info()` are synchronous, stable observations: once a Device reports
+`Lost`, later calls on that same identity report the same terminal state and
+loss summary.
 
 After Device loss:
 
@@ -1045,7 +1048,29 @@ Loss does not perform transparent recovery. A later Device request obtains a
 new DeviceIdentity; old handles return `WrongDevice` when passed to it, and
 `DeviceLost` when used through their lost original Device.
 
-Pending work cannot be pending permanently.
+Loss must wake and terminate every operation that is already waiting on that
+domain:
+
+```text
+pending CompletionPoint / wait_completion()  -> CompletionState::DeviceLost
+pending ReadbackTicket::read()                -> DeviceLost error/state
+pending surface.acquire()                     -> AcquireErrorKind::DeviceLost
+pending PresentReceipt / wait_present()       -> PresentState::DeviceLost
+wait_idle()                                   -> DeviceLost error
+```
+
+No such operation may remain pending forever after loss is observed. Subsequent
+operations on the lost original Device return structured `DeviceLost` after the
+normal ownership/identity checks; they do not reach a native backend merely to
+rediscover loss.
+
+An implementation is not required to poll solely to discover a loss when it has
+no pending RHI operation. In that idle case it may first observe and publish the
+loss on the next RHI call. This does not weaken the wakeup rule above: once loss
+is observed, all registered pending operations must be released promptly. If a
+real future use case needs proactive notification while completely idle, it may
+add a separately designed `wait_lost` API then; v13 does not reserve or imply
+one.
 
 ---
 

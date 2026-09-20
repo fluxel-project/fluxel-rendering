@@ -33,11 +33,14 @@
 //!   [`crate::api::resource::subresource`].
 
 use core::fmt;
+use std::any::Any;
+use std::sync::Arc;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, format_aspects};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
+use crate::api::resource::backend::TextureViewBackend;
 use crate::api::resource::subresource::TextureAspects;
 use crate::api::resource::texture::{
     Extent3d, Texture, TextureDescriptor, TextureDimension, TextureViewCompatibility, mip_extent,
@@ -172,59 +175,84 @@ impl TextureViewDescriptor {
 /// that a logical-ownership rule rather than a convention.
 #[derive(Clone)]
 pub struct TextureView {
+    inner: Arc<TextureViewInner>,
+}
+
+/// The one shared ownership domain of a logical texture view.
+struct TextureViewInner {
     id: ObjectId,
     device: DeviceIdentity,
     texture: Texture,
     descriptor: TextureViewDescriptor,
+    native: Box<dyn TextureViewBackend>,
+}
+
+/// Concrete seam token for crate-local descriptor-validation fixtures.
+struct ValidationTextureViewBackend;
+
+impl TextureViewBackend for ValidationTextureViewBackend {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl TextureView {
-    /// Assembles a created texture view.
-    ///
-    /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only [`crate::api::platform::Device::create_texture_view`] may produce one.
-    /// That verb exists and is the only caller this is written for, but it stops
-    /// before a native view is bound — nothing can mint the identity below until a
-    /// backend view path does — so nothing calls this yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_texture_view calls this once the backend view path lands and can mint the view's identity"
-        )
-    )]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,
         texture: Texture,
         descriptor: TextureViewDescriptor,
     ) -> Self {
-        Self {
+        Self::new_backed(
             id,
             device,
             texture,
             descriptor,
+            Box::new(ValidationTextureViewBackend),
+        )
+    }
+
+    /// Assembles a view with its backend descriptor retained for its lifetime.
+    pub(crate) fn new_backed(
+        id: ObjectId,
+        device: DeviceIdentity,
+        texture: Texture,
+        descriptor: TextureViewDescriptor,
+        native: Box<dyn TextureViewBackend>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(TextureViewInner {
+                id,
+                device,
+                texture,
+                descriptor,
+                native,
+            }),
         }
+    }
+
+    pub(crate) fn native(&self) -> &dyn TextureViewBackend {
+        self.inner.native.as_ref()
     }
 
     /// This view's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this view.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The texture this view was created from.
     pub fn texture(&self) -> &Texture {
-        &self.texture
+        &self.inner.texture
     }
 
     /// The descriptor this view was created from.
     pub fn descriptor(&self) -> &TextureViewDescriptor {
-        &self.descriptor
+        &self.inner.descriptor
     }
 
     /// Actual view format.
@@ -233,9 +261,10 @@ impl TextureView {
     /// [`TextureViewDescriptor::format`] as `None` means "the base format", and
     /// this is the accessor that answers what that came to.
     pub fn format(&self) -> TextureFormat {
-        self.descriptor
+        self.inner
+            .descriptor
             .format
-            .unwrap_or_else(|| self.texture.descriptor().format)
+            .unwrap_or_else(|| self.inner.texture.descriptor().format)
     }
 
     /// The aspects this view covers.
@@ -245,7 +274,7 @@ impl TextureView {
     /// resolution: the descriptor carries a set rather than an option, and the
     /// view's effective aspect is exactly the one it selected.
     pub fn aspects(&self) -> TextureAspects {
-        self.descriptor.aspects
+        self.inner.descriptor.aspects
     }
 
     /// Logical texel extent of base_mip; array layers do not contribute to depth.
@@ -258,8 +287,8 @@ impl TextureView {
     /// reports `depth = 1`, which is what "array layers do not contribute to
     /// depth" means — a 6-layer cube view is `depth = 1`, not `depth = 6`.
     pub fn extent(&self) -> Extent3d {
-        let base = self.texture.descriptor();
-        mip_extent(base.extent, base.dimension, self.descriptor.base_mip)
+        let base = self.inner.texture.descriptor();
+        mip_extent(base.extent, base.dimension, self.inner.descriptor.base_mip)
     }
 
     /// The sample count of the base texture.
@@ -268,12 +297,12 @@ impl TextureView {
     /// among the things creation validation checks, and in P0 the only such
     /// restriction is that cube views require a single-sampled texture.
     pub fn sample_count(&self) -> u32 {
-        self.texture.descriptor().sample_count
+        self.inner.texture.descriptor().sample_count
     }
 
     /// The number of array layers this view covers.
     pub fn layer_count(&self) -> u32 {
-        self.descriptor.layer_count
+        self.inner.descriptor.layer_count
     }
 }
 
@@ -290,8 +319,8 @@ impl fmt::Debug for TextureView {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("TextureView")
-            .field("id", &self.id)
-            .field("device", &self.device)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
             .finish_non_exhaustive()
     }
 }
@@ -350,15 +379,27 @@ impl Device {
         // descriptor's own portable checks. A texture belonging to another
         // device is `WrongDevice` even when this device is also lost.
         self.require_active()?;
-        unimplemented!(
-            "Device::create_texture_view needs a backend to bind a native view over a \
-             texture on device {:?}; the portable contract is fixed and both checks \
-             listed above are built, but no backend port is built, and section 8.5's \
-             device half — whether this driver permits the base format to be \
-             reinterpreted as the view format — needs the enabled-capability snapshot, \
-             which is a backend-port deliverable",
-            self.identity()
-        )
+        let base_format = texture.descriptor().format;
+        let view_format = desc.format.unwrap_or(base_format);
+        if view_format != base_format
+            && !self
+                .capabilities()
+                .texture_view_format_compatible(base_format, view_format)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "the device does not support this texture view format reinterpretation",
+            )
+            .at("Device::create_texture_view"));
+        }
+        let native = self.native().create_texture_view(texture, desc)?;
+        Ok(TextureView::new_backed(
+            ObjectId::next(),
+            self.identity(),
+            texture.clone(),
+            desc.clone(),
+            native,
+        ))
     }
 }
 

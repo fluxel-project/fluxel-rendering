@@ -13,7 +13,7 @@
 //! several devices and get different answers; presentation is never a
 //! device-global boolean.
 
-use crate::api::error::RhiResult;
+use crate::api::error::{RhiError, RhiResult};
 use crate::api::format::TextureFormat;
 use crate::api::platform::Device;
 
@@ -126,13 +126,6 @@ impl PresentationTargetCapabilities {
     /// surface may state them. A caller that could build this snapshot could claim
     /// a format the target cannot present, and the refusal would then land on the
     /// first frame instead of at configuration time.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "filled by the presentation backend when the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         formats: Vec<TextureFormat>,
         present_modes: Vec<PresentMode>,
@@ -184,10 +177,15 @@ impl Device {
         &self,
         target: &crate::api::presentation::PresentationTarget,
     ) -> RhiResult<PresentationTargetCapabilities> {
-        let _ = target;
-        unimplemented!(
-            "surface facts come from the presentation backend; the contract is \
-             fixed, the query is not built"
-        )
+        self.native()
+            .presentation()
+            .ok_or_else(|| {
+                RhiError::new(
+                    crate::api::error::RhiErrorKind::Unsupported,
+                    "this backend does not implement presentation",
+                )
+                .at("Device::presentation_capabilities")
+            })?
+            .capabilities(target.id())
     }
 }

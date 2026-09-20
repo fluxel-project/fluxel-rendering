@@ -48,7 +48,7 @@ use crate::api::presentation::{
 use crate::api::resource::buffer::{Buffer, BufferDescriptor, BufferRange, BufferUsage};
 use crate::api::resource::subresource::{TextureAspects, TextureSubresourceRange};
 use crate::api::resource::texture::{Extent3d, Texture, TextureDescriptor, TextureUsage};
-use crate::api::resource::transient::TransientLifetime;
+use crate::api::resource::transient::{TransientLifetime, is_deferred_buffer};
 use crate::api::submission::builder::validate_plan_graph;
 use crate::api::submission::plan::{PlanBatch, PlanPresent};
 use crate::api::submission::{
@@ -58,7 +58,7 @@ use crate::api::submission::{
     SubmissionReceipt,
 };
 use crate::api::tests::fixture;
-use crate::api::tests::mock::paired_device_for_test;
+use crate::api::tests::mock::{buffers_for_test, paired_device_for_test};
 // The only import here that exists for the backend's own answer rather than the
 // portable layer's: section 41.8's per-point obligation is owed by whoever owns
 // the completion bookkeeping, and on this device that is the mock.
@@ -1295,6 +1295,94 @@ fn a_transient_lifetime_uses_submission_ordering() {
     builder.build().unwrap();
 }
 
+/// Dedicated is the baseline transient implementation: a builder opened from a
+/// real device allocates backing immediately, and the resulting resource enters
+/// the ordinary submission path rather than relying on a later placeholder swap.
+#[test]
+fn a_device_backed_transient_is_materialized_before_submission() {
+    let identity = device_identity(1);
+    let (device, native) = buffers_for_test(identity, 64);
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let acquire = builder.reserve_batch(lane_id(0)).unwrap();
+    let release = builder.reserve_batch(lane_id(0)).unwrap();
+    let allocator = builder.transient_allocator();
+    let buffer = allocator
+        .create_buffer(
+            &BufferDescriptor::new(64, BufferUsage::COPY_DST),
+            TransientLifetime::new(acquire).release_at(release),
+        )
+        .unwrap();
+
+    assert_eq!(native.allocations(), 1);
+    assert!(!is_deferred_buffer(&buffer));
+
+    builder
+        .set_batch(
+            acquire,
+            vec![raster_work(
+                identity,
+                vec![ResourceUse::Buffer(BufferUse {
+                    buffer,
+                    range: BufferRange::new(0, 64),
+                    stages: PipelineScope::COPY,
+                    access: AccessMask::COPY_WRITE,
+                })],
+            )],
+        )
+        .unwrap();
+    builder
+        .set_batch(release, vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    block_on(device.submit(builder.build().unwrap())).unwrap();
+}
+
+/// A fact-only builder deliberately has no native allocation factory. Its
+/// deferred fixture must be refused during submit Phase A rather than passed to
+/// any backend lowering.
+#[test]
+fn submit_refuses_a_deferred_transient_fixture_before_backend_lowering() {
+    let identity = device_identity(1);
+    let (device, _native) = paired_device_for_test(identity);
+    let mut builder = SubmissionPlanBuilder::with_facts(
+        SubmissionPlanId::new(identity, 77),
+        identity,
+        device.capabilities().submission().clone(),
+    );
+    let acquire = builder.reserve_batch(lane_id(0)).unwrap();
+    let release = builder.reserve_batch(lane_id(0)).unwrap();
+    let allocator = builder.transient_allocator();
+    let buffer = allocator
+        .create_buffer(
+            &BufferDescriptor::new(64, BufferUsage::COPY_DST),
+            TransientLifetime::new(acquire).release_at(release),
+        )
+        .unwrap();
+    builder
+        .set_batch(
+            acquire,
+            vec![raster_work(
+                identity,
+                vec![ResourceUse::Buffer(BufferUse {
+                    buffer,
+                    range: BufferRange::new(0, 64),
+                    stages: PipelineScope::COPY,
+                    access: AccessMask::COPY_WRITE,
+                })],
+            )],
+        )
+        .unwrap();
+    builder
+        .set_batch(release, vec![raster_work(identity, Vec::new())])
+        .unwrap();
+
+    assert_eq!(
+        block_on(device.submit(builder.build().unwrap()))
+            .unwrap_err()
+            .kind(),
+        RhiErrorKind::InvalidUsage
+    );
+}
+
 /// A lifetime must be complete and entirely owned by the allocator's plan.
 #[test]
 fn a_transient_allocator_refuses_empty_and_foreign_lifetimes() {
@@ -1369,11 +1457,21 @@ fn completion_state_refuses_a_foreign_point_and_reports_a_lost_device() {
         .unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::WrongDevice);
 
+    native.hold_completion();
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let batch = builder
+        .add_batch(
+            lane_id(0),
+            vec![raster_work(device_identity_value, Vec::new())],
+        )
+        .unwrap();
+    let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
+    let point = receipt.completion_for(batch).unwrap();
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
-    let error = device
-        .completion_state(CompletionPoint::new(device_identity_value, 1))
-        .unwrap_err();
-    assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
+    assert!(matches!(
+        device.completion_state(point).unwrap(),
+        CompletionState::DeviceLost(_)
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1560,14 +1658,29 @@ fn completion_is_pending_until_the_device_reports_it() {
 
 /// A lost device reaches every serial it reported, and never leaves one `Pending`.
 ///
-/// Section 41.8's liveness rule, in the direction the mock can decide: work that
-/// was in flight when the device ended becomes terminal through the *same* query a
-/// caller was already polling, so a frame loop that never changes shape still
-/// escapes. The portable layer is excused here rather than exercised — it answers
-/// `DeviceLost` for the whole identity before it asks about the point, which is
-/// why the per-point half is asserted against the backend directly.
+/// Section 41.8's liveness rule: work that was in flight when the device ended
+/// becomes terminal through the same query a caller was already polling, so a
+/// frame loop that never changes shape still escapes.
 #[test]
 fn device_loss_reaches_every_reported_serial() {
+    use core::future::Future;
+    use core::task::{Context, Poll, Waker};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Wake;
+
+    struct WakeCounter(AtomicUsize);
+
+    impl Wake for WakeCounter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     let identity = device_identity(1);
     let (device, native) = paired_device_for_test(identity);
 
@@ -1585,7 +1698,22 @@ fn device_loss_reaches_every_reported_serial() {
         CompletionState::Pending
     ));
 
+    let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    let mut wait = core::pin::pin!(device.wait_completion(token));
+    assert!(matches!(wait.as_mut().poll(&mut context), Poll::Pending));
+
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+    assert_eq!(
+        wakes.0.load(Ordering::SeqCst),
+        1,
+        "device loss must wake a registered completion future"
+    );
+    assert!(matches!(
+        wait.as_mut().poll(&mut context),
+        Poll::Ready(Ok(CompletionState::DeviceLost(_)))
+    ));
 
     // The per-point answer a backend owes: `Pending` is gone, and it did not take
     // a `wait_idle` to get there.
@@ -1593,12 +1721,63 @@ fn device_loss_reaches_every_reported_serial() {
         native.completion(token.serial()),
         CompletionState::DeviceLost(_)
     ));
-    // And the portable layer's own answer, which is the loss itself. Terminal on
-    // both paths, which is the property section 41.8 exists to guarantee.
-    assert_eq!(
-        device.completion_state(token).unwrap_err().kind(),
-        RhiErrorKind::DeviceLost
-    );
+    // The portable answer delegates the per-serial distinction rather than
+    // erasing it with a device-wide error.
+    assert!(matches!(
+        device.completion_state(token).unwrap(),
+        CompletionState::DeviceLost(_)
+    ));
+}
+
+/// A completion already observed by the backend remains true after loss.
+#[test]
+fn device_loss_preserves_an_already_complete_point() {
+    let identity = device_identity(1);
+    let (device, native) = paired_device_for_test(identity);
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let point = builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
+    let token = receipt.completion_for(point).unwrap();
+
+    assert!(matches!(
+        device.completion_state(token).unwrap(),
+        CompletionState::Complete
+    ));
+    native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
+    assert!(matches!(
+        device.completion_state(token).unwrap(),
+        CompletionState::Complete
+    ));
+}
+
+/// The async completion path registers a waker while pending rather than
+/// panicking or performing a synchronous wait.
+#[test]
+fn wait_completion_resolves_after_a_pending_mock_is_released() {
+    use core::task::{Context, Poll, Waker};
+
+    let identity = device_identity(1);
+    let (device, native) = paired_device_for_test(identity);
+    native.hold_completion();
+    let mut builder = SubmissionPlanBuilder::new(&device);
+    let point = builder
+        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .unwrap();
+    let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
+    let token = receipt.completion_for(point).unwrap();
+
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut wait = core::pin::pin!(device.wait_completion(token));
+    assert!(matches!(wait.as_mut().poll(&mut context), Poll::Pending));
+
+    native.release_completion();
+    assert!(matches!(
+        wait.as_mut().poll(&mut context),
+        Poll::Ready(Ok(CompletionState::Complete))
+    ));
 }
 
 /// A serial the device never reported is terminal, not `Pending`.

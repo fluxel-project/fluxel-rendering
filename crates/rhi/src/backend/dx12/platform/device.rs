@@ -51,12 +51,47 @@ use crate::api::submission::{CompletionState, SubmissionCapabilities};
 
 use crate::backend::dx12::binding::DescriptorHeap;
 use crate::backend::dx12::command::Dx12CommandSpine;
+use crate::backend::dx12::presentation::Dx12Presentation;
 use crate::backend::dx12::{binding, pipeline, resource, shader};
 
 /// A device's liveness, as this backend observes it.
 struct Liveness {
     status: DeviceStatus,
     loss: Option<DeviceLossInfo>,
+}
+
+/// The sole loss authority shared by a DX12 device and presentation leases.
+pub(crate) struct Dx12LossState(Mutex<Liveness>);
+
+impl Dx12LossState {
+    pub(crate) fn new() -> Self {
+        Self(Mutex::new(Liveness {
+            status: DeviceStatus::Active,
+            loss: None,
+        }))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Liveness> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn status(&self) -> DeviceStatus {
+        self.lock().status
+    }
+
+    pub(crate) fn loss_info(&self) -> Option<DeviceLossInfo> {
+        self.lock().loss.clone()
+    }
+
+    pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
+        let mut liveness = self.lock();
+        if matches!(liveness.status, DeviceStatus::Active) {
+            liveness.status = DeviceStatus::Lost;
+            liveness.loss = Some(info);
+        }
+    }
 }
 
 /// The native device behind a portable [`crate::api::platform::Device`].
@@ -81,13 +116,16 @@ pub(crate) struct Dx12Device {
     device: ID3D12Device,
     /// The single shader-visible CBV/SRV/UAV heap shared by all bind groups.
     descriptor_heap: Arc<DescriptorHeap>,
+    /// The single shader-visible sampler heap shared by all bind groups.
+    sampler_heap: Arc<DescriptorHeap>,
     /// The queue, fence and command-list ring every submission goes through.
     ///
     /// Held by value and never cloned: it owns the one queue this device has, and
     /// a second handle to the same queue would be a second path to `Signal` on
     /// the same fence, which is the only place a serial is minted.
     spine: Dx12CommandSpine,
-    liveness: Mutex<Liveness>,
+    presentation: Dx12Presentation,
+    loss: Arc<Dx12LossState>,
     /// The contract this device reports.
     ///
     /// Filled by [`super::facts::probe`] from the live `ID3D12Device` beside it,
@@ -115,6 +153,13 @@ pub(crate) struct Dx12Device {
 }
 
 impl Dx12Device {
+    #[cfg(test)]
+    pub(crate) fn register_test_presentation_target(
+        &self,
+        hwnd: windows::Win32::Foundation::HWND,
+    ) -> crate::api::presentation::PresentationTarget {
+        self.presentation.register_test_hwnd(hwnd)
+    }
     /// Assembles the device [`super::provider`] has just created natively.
     ///
     /// Every part is made by the caller, because every part is made *there*: the
@@ -132,7 +177,10 @@ impl Dx12Device {
         adapter: AdapterInfo,
         device: ID3D12Device,
         descriptor_heap: Arc<DescriptorHeap>,
+        sampler_heap: Arc<DescriptorHeap>,
         spine: Dx12CommandSpine,
+        presentation: Dx12Presentation,
+        loss: Arc<Dx12LossState>,
         facts: CapabilityFacts,
         submission: SubmissionCapabilities,
     ) -> Self {
@@ -141,26 +189,13 @@ impl Dx12Device {
             object: ObjectId::next(),
             device,
             descriptor_heap,
+            sampler_heap,
             spine,
+            presentation,
+            loss,
             facts,
             submission,
-            liveness: Mutex::new(Liveness {
-                status: DeviceStatus::Active,
-                loss: None,
-            }),
         }
-    }
-
-    /// Borrows the liveness cell, surviving a poisoned lock.
-    ///
-    /// Recovering rather than propagating is correct here and only here: the
-    /// guarded value is two plain fields with no invariant a panicking holder
-    /// could have left half-written, so letting one panic hide the first is
-    /// strictly worse than reading the fields.
-    fn liveness(&self) -> std::sync::MutexGuard<'_, Liveness> {
-        self.liveness
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Records that this device is gone, with the reason.
@@ -174,13 +209,17 @@ impl Dx12Device {
     /// caller; until it lands, allocation failures are the only ones that can
     /// end a device's identity here.
     pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
-        let mut liveness = self.liveness();
-        liveness.status = DeviceStatus::Lost;
-        liveness.loss = Some(info);
+        self.loss.mark_lost(info);
+        // A native fence may never signal after removal. Wake every async waiter
+        // now so it re-polls and observes the terminal per-serial loss state.
+        self.spine.terminate_pending_for_device_loss();
     }
 }
 
 impl DeviceBackend for Dx12Device {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     fn backend_kind(&self) -> BackendKind {
         BackendKind::Dx12
     }
@@ -202,11 +241,11 @@ impl DeviceBackend for Dx12Device {
     }
 
     fn status(&self) -> DeviceStatus {
-        self.liveness().status
+        self.loss.status()
     }
 
     fn loss_info(&self) -> Option<DeviceLossInfo> {
-        self.liveness().loss.clone()
+        self.loss.loss_info()
     }
 
     fn poll(&self) -> RhiResult<()> {
@@ -269,6 +308,51 @@ impl DeviceBackend for Dx12Device {
         }
     }
 
+    fn create_texture(
+        &self,
+        descriptor: &crate::api::resource::texture::TextureDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureBackend>> {
+        resource::create_texture(&self.device, descriptor)
+            .map(|texture| {
+                Box::new(texture) as Box<dyn crate::api::resource::backend::TextureBackend>
+            })
+            .map_err(|failure| failure.into_rhi())
+    }
+
+    fn create_texture_view(
+        &self,
+        texture: &crate::api::resource::Texture,
+        descriptor: &crate::api::resource::view::TextureViewDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureViewBackend>> {
+        let native = texture
+            .native()
+            .as_any()
+            .downcast_ref::<resource::Dx12Texture>()
+            .ok_or_else(|| {
+                crate::api::RhiError::new(
+                    crate::api::RhiErrorKind::BackendFailure,
+                    "DX12 received a texture without a DX12 native allocation",
+                )
+                .at("Dx12Device::create_texture_view")
+            })?;
+        resource::create_texture_view(&self.device, native, texture.descriptor(), descriptor)
+            .map(|view| {
+                Box::new(view) as Box<dyn crate::api::resource::backend::TextureViewBackend>
+            })
+            .map_err(|failure| failure.into_rhi())
+    }
+
+    fn create_sampler(
+        &self,
+        descriptor: &crate::api::resource::sampler::SamplerDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::SamplerBackend>> {
+        resource::create_sampler(&self.device, descriptor)
+            .map(|sampler| {
+                Box::new(sampler) as Box<dyn crate::api::resource::backend::SamplerBackend>
+            })
+            .map_err(|failure| failure.into_rhi())
+    }
+
     /// Prepares one shader entry point, and cannot fail.
     ///
     /// The least eventful method on this trait, and the one most worth a note,
@@ -291,16 +375,19 @@ impl DeviceBackend for Dx12Device {
         Ok(Box::new(shader::create_shader(artifact)))
     }
 
-    /// Writes a validated buffer-backed group into the shared descriptor heap.
-    /// Texture and sampler entries are refused by the binding chapter until
-    /// their native resource/view lowering exists.
+    /// Writes a validated group into the shared view and sampler descriptor heaps.
     fn create_bind_group(
         &self,
         descriptor: &crate::api::binding::BindGroupDescriptor,
     ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>> {
-        binding::create_bind_group(&self.device, &self.descriptor_heap, descriptor)
-            .map(|group| Box::new(group) as Box<dyn crate::api::binding::backend::BindGroupBackend>)
-            .map_err(|failure| failure.into_rhi("Dx12Device::create_bind_group"))
+        binding::create_bind_group(
+            &self.device,
+            &self.descriptor_heap,
+            &self.sampler_heap,
+            descriptor,
+        )
+        .map(|group| Box::new(group) as Box<dyn crate::api::binding::backend::BindGroupBackend>)
+        .map_err(|failure| failure.into_rhi("Dx12Device::create_bind_group"))
     }
 
     /// Refuses, because this backend's root-signature and pipeline-state lowering
@@ -335,6 +422,21 @@ impl DeviceBackend for Dx12Device {
                 Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>
             })
             .map_err(|failure| failure.into_rhi("Dx12Device::create_compute_pipeline"))
+    }
+
+    fn create_raster_pipeline(
+        &self,
+        descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
+        pipeline::create_raster_pipeline(&self.device, descriptor)
+            .map(|pipeline| {
+                Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
+            })
+            .map_err(|failure| failure.into_rhi("Dx12Device::create_raster_pipeline"))
+    }
+
+    fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
+        Some(&self.presentation)
     }
 
     /// Lowers a plan onto the spine's queue, and is the second place in this
@@ -393,6 +495,21 @@ impl DeviceBackend for Dx12Device {
     /// a caller branches on to recover.
     fn completion(&self, serial: u64) -> CompletionState {
         let spine = self.spine.completion(serial);
+        if matches!(spine, CompletionState::Complete) {
+            return spine;
+        }
+        match self.loss_info() {
+            Some(info) => CompletionState::DeviceLost(info),
+            None => spine,
+        }
+    }
+
+    fn completion_or_register_waker(
+        &self,
+        serial: u64,
+        waker: &std::task::Waker,
+    ) -> CompletionState {
+        let spine = self.spine.completion_or_register_waker(serial, waker);
         if matches!(spine, CompletionState::Complete) {
             return spine;
         }

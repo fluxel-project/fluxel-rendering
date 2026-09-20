@@ -379,12 +379,8 @@ impl ToolingAccess {
     /// capture and debug CPU overhead; it may not change GPU results.
     pub fn subscribe(&self, observer: Arc<dyn SemanticObserver>) -> RhiResult<ToolingSubscription> {
         self.refuse_if_lost()?;
-        let _ = observer;
-        unimplemented!(
-            "ToolingAccess::subscribe needs the device's observer registry and the semantic event \
-             dispatcher, which the backend port supplies; until then only the device-lost refusal \
-             above is real"
-        )
+        let registration = self.device.insert_observer(observer);
+        Ok(ToolingSubscription::new(self.device.clone(), registration))
     }
 
     /// Asks what an object that is still live actually is.
@@ -407,12 +403,11 @@ impl ToolingAccess {
     /// not decided here.
     pub fn describe_object(&self, id: ObjectId) -> RhiResult<CapturedObjectDefinition> {
         self.refuse_if_lost()?;
-        let _ = id;
-        unimplemented!(
-            "ToolingAccess::describe_object needs the device's object inventory and the per-type \
-             definition lowering, which the backend port supplies; until then only the device-lost \
-             refusal above is real"
+        Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "runtime object descriptions are not retained by this RHI build",
         )
+        .with_object(id))
     }
 
     /// Asks for the complete portable semantics of a live `RecordedWork`.
@@ -429,12 +424,11 @@ impl ToolingAccess {
     /// [`Self::describe_object`] gives.
     pub fn describe_work(&self, work: ObjectId) -> RhiResult<CapturedRecordedWork> {
         self.refuse_if_lost()?;
-        let _ = work;
-        unimplemented!(
-            "ToolingAccess::describe_work needs the recorded-work inventory and the PortableCommand \
-             lowering, which the backend port supplies; until then only the device-lost refusal \
-             above is real"
+        Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "recorded-work descriptions are not retained by this RHI build",
         )
+        .with_object(work))
     }
 
     /// Refuses when the device is gone.
@@ -502,7 +496,8 @@ pub struct ToolingSubscription {
     ///
     /// Also the key the unregistration path needs, which is the observer
     /// registry the backend port adds alongside it.
-    device: DeviceIdentity,
+    device: Device,
+    registration: u64,
 }
 
 impl ToolingSubscription {
@@ -513,15 +508,11 @@ impl ToolingSubscription {
     /// caller. Not yet called by `subscribe`, because that verb's insertion step
     /// is the backend port's; the contract tests reach it so that the type's
     /// identity half is exercised rather than asserted.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "ToolingAccess::subscribe calls this once the observer registry exists"
-        )
-    )]
-    pub(crate) fn new(device: DeviceIdentity) -> Self {
-        Self { device }
+    pub(crate) fn new(device: Device, registration: u64) -> Self {
+        Self {
+            device,
+            registration,
+        }
     }
 
     /// The device this subscription observes.
@@ -532,21 +523,15 @@ impl ToolingSubscription {
     /// holding the `Device` alongside every subscription — is a second field
     /// whose pairing with this one has nothing checking it.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.device.identity()
     }
 }
 
 impl Drop for ToolingSubscription {
     /// Performs the unregistration described on the type.
-    ///
-    /// The body is empty because there is nothing yet to unregister *from*: the
-    /// observer set belongs to the device's private domain, which the backend
-    /// port supplies. The contract above is the type's; this is where its
-    /// implementation goes. It is written as a real `Drop` rather than a panic
-    /// because drop is not a fallible verb — a `Drop` that panicked during
-    /// unwinding would abort the process, and no `ToolingSubscription` can be
-    /// constructed to reach it anyway.
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        self.device.remove_observer(self.registration);
+    }
 }
 
 /// Receives semantic events from one device.

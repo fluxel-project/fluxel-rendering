@@ -256,15 +256,14 @@ fn tooling_access_is_device_scoped_and_cloneable() {
 
 #[test]
 fn a_subscription_reports_the_device_it_registered_with() {
-    // The half of `ToolingSubscription` that can be exercised without an observer
-    // registry is its identity and its Drop. Drop does nothing today — the
-    // unregistration it owes is the port's — and the value of this test is that
-    // the type is constructible at all, so that the Drop contract has somewhere to
-    // be implemented rather than being a contract on a type that cannot exist.
-    let device = identity(7);
-    let subscription = ToolingSubscription::new(device);
+    let device = active_device();
+    let identity = device.identity();
+    let subscription = device
+        .tooling()
+        .subscribe(silent_observer())
+        .expect("an active device accepts an observer");
 
-    assert_eq!(subscription.device_identity(), device);
+    assert_eq!(subscription.device_identity(), identity);
     drop(subscription);
 }
 
@@ -332,32 +331,33 @@ fn the_refusal_carries_the_loss_summary_section_6_5_makes_stable() {
 }
 
 // ---------------------------------------------------------------------------
-// Tier tests: the unbuilt half panics, and the portable half fires first
+// Runtime service behaviour on an active device.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "ToolingAccess::subscribe needs the device's observer registry")]
-fn subscribe_panics_on_a_live_device_because_the_dispatcher_is_not_built() {
-    // The half that must reach a dispatcher. It panics naming what is missing
-    // rather than handing back an empty subscription, which would be a
-    // subscription that silently never delivers anything — the failure mode
-    // section 52.8 exists to forbid.
+fn subscribe_registers_on_a_live_device() {
     let access = active_device().tooling();
-    let _ = access.subscribe(silent_observer());
+    let subscription = access
+        .subscribe(silent_observer())
+        .expect("active device accepts observer");
+    assert_eq!(subscription.device_identity(), access.device_identity());
 }
 
 #[test]
-#[should_panic(expected = "ToolingAccess::describe_object needs the device's object inventory")]
-fn describe_object_panics_on_a_live_device_because_the_inventory_is_not_built() {
+fn describe_object_reports_unsupported_when_the_runtime_does_not_retain_definitions() {
     let access = active_device().tooling();
-    let _ = access.describe_object(object(11));
+    let error = access
+        .describe_object(object(11))
+        .err()
+        .expect("unsupported");
+    assert_eq!(error.kind(), RhiErrorKind::Unsupported);
 }
 
 #[test]
-#[should_panic(expected = "ToolingAccess::describe_work needs the recorded-work inventory")]
-fn describe_work_panics_on_a_live_device_because_the_inventory_is_not_built() {
+fn describe_work_reports_unsupported_when_the_runtime_does_not_retain_work() {
     let access = active_device().tooling();
-    let _ = access.describe_work(object(12));
+    let error = access.describe_work(object(12)).err().expect("unsupported");
+    assert_eq!(error.kind(), RhiErrorKind::Unsupported);
 }
 
 // ---------------------------------------------------------------------------

@@ -38,8 +38,9 @@
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::TextureFormat;
 use crate::api::identity::DeviceIdentity;
+use crate::api::presentation::backend::FrameAttachmentBackend;
 use crate::api::presentation::configure::{
-    ConfiguredPresentation, FrameEnding, OutstandingFrame, validate_acquire_allowed,
+    ConfiguredPresentation, ConfiguredPresentationInner, FrameEnding, validate_acquire_allowed,
 };
 use crate::api::resource::texture::Extent3d;
 use std::sync::Arc;
@@ -169,13 +170,6 @@ impl AcquiredFrameId {
     /// Mints the identity of the frame a backend just acquired.
     ///
     /// Crate-private: a frame identity is evidence that an acquire happened.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "minted by the acquire path when the backend port lands"
-        )
-    )]
     pub(crate) fn new(device: DeviceIdentity, serial: u64) -> Self {
         Self { device, serial }
     }
@@ -240,10 +234,22 @@ pub enum AcquiredFrameState {
 /// cloning still confers no ownership — see `validate_frame_attachment_use`.
 #[derive(Clone)]
 pub struct FrameAttachment {
+    inner: Arc<FrameAttachmentInner>,
+}
+
+struct FrameAttachmentInner {
     frame_id: AcquiredFrameId,
     device: DeviceIdentity,
     format: TextureFormat,
     extent: Extent3d,
+    native: Box<dyn FrameAttachmentBackend>,
+}
+
+struct ValidationFrameAttachmentBackend;
+impl FrameAttachmentBackend for ValidationFrameAttachmentBackend {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl FrameAttachment {
@@ -258,11 +264,40 @@ impl FrameAttachment {
         extent: Extent3d,
     ) -> Self {
         Self {
-            frame_id,
-            device,
-            format,
-            extent,
+            inner: Arc::new(FrameAttachmentInner {
+                frame_id,
+                device,
+                format,
+                extent,
+                native: Box::new(ValidationFrameAttachmentBackend),
+            }),
         }
+    }
+
+    pub(crate) fn new_backed(
+        frame_id: AcquiredFrameId,
+        device: DeviceIdentity,
+        format: TextureFormat,
+        extent: Extent3d,
+        native: Box<dyn FrameAttachmentBackend>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(FrameAttachmentInner {
+                frame_id,
+                device,
+                format,
+                extent,
+                native,
+            }),
+        }
+    }
+
+    pub(crate) fn native(&self) -> &dyn FrameAttachmentBackend {
+        self.inner.native.as_ref()
+    }
+
+    pub(crate) fn present(&self, receipt: crate::api::presentation::PresentReceiptId) {
+        self.native().present(receipt);
     }
 
     /// The frame this attachment describes.
@@ -270,7 +305,7 @@ impl FrameAttachment {
     /// What a validation looks the frame's state up by, and what a diagnostic
     /// reports when it says which drawable a raster scope drew into.
     pub fn frame_id(&self) -> AcquiredFrameId {
-        self.frame_id
+        self.inner.frame_id
     }
 
     /// The device the frame was acquired on.
@@ -279,7 +314,7 @@ impl FrameAttachment {
     /// [`RhiErrorKind::WrongDevice`] rather than being translated: section 3.3
     /// gives P0 no implicit peer copy or staging bridge to fall back on.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The format the frame is in.
@@ -287,7 +322,7 @@ impl FrameAttachment {
     /// The format the configuration was validated against, so a raster pipeline
     /// built for it is legal without a further query.
     pub fn format(&self) -> TextureFormat {
-        self.format
+        self.inner.format
     }
 
     /// The drawable's current texel extent.
@@ -297,7 +332,7 @@ impl FrameAttachment {
     /// of the configuration, and a pipeline that depends on a size must be
     /// re-checked when it changes.
     pub fn extent(&self) -> Extent3d {
-        self.extent
+        self.inner.extent
     }
 
     /// The sample count of the drawable, which P0 fixes at 1.
@@ -323,10 +358,10 @@ impl core::fmt::Debug for FrameAttachment {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("FrameAttachment")
-            .field("frame_id", &self.frame_id)
-            .field("device", &self.device)
-            .field("format", &self.format)
-            .field("extent", &self.extent)
+            .field("frame_id", &self.frame_id())
+            .field("device", &self.device_identity())
+            .field("format", &self.format())
+            .field("extent", &self.extent())
             .finish_non_exhaustive()
     }
 }
@@ -350,14 +385,10 @@ pub struct AcquiredFrame {
     device: DeviceIdentity,
     state: AcquiredFrameState,
     attachment: FrameAttachment,
-    /// The lease's record of this frame, when a lease is waiting on it.
-    ///
-    /// `None` for a frame no lease recorded — the shape the contract tests build — and
-    /// `Some` for every frame [`ConfiguredPresentation::acquire`] produces. Section
-    /// 44.5's drop path writes the ending here, and the lease reads it for section
-    /// 43.4's refusal, which is what keeps the two drop paths of this chapter from
-    /// disagreeing about whether a frame is still out.
-    lease_record: Option<Arc<OutstandingFrame>>,
+    /// The same domain as the lease that acquired this frame. It keeps the native
+    /// configured surface and its sole outstanding-frame record together until this
+    /// token ends; there is no optional or independently shared backing.
+    presentation: Arc<ConfiguredPresentationInner>,
 }
 
 impl AcquiredFrame {
@@ -375,13 +406,7 @@ impl AcquiredFrame {
     /// [`ConfiguredPresentation::acquire_from_surface`], which has no backend to call
     /// yet — so today the only callers this constructor has are the contract tests,
     /// exactly like [`AcquiredFrameId::new`] above.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "minted by the acquire path's surface port when it lands"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn new(
         id: AcquiredFrameId,
         device: DeviceIdentity,
@@ -393,7 +418,7 @@ impl AcquiredFrame {
             device,
             state: AcquiredFrameState::Acquired,
             attachment: FrameAttachment::new(id, device, format, extent),
-            lease_record: None,
+            presentation: ConfiguredPresentationInner::test_backed(),
         }
     }
 
@@ -407,13 +432,21 @@ impl AcquiredFrame {
     /// forget: a frame exists only because that path built it, and this is the same
     /// expression.
     ///
-    /// Consuming and returning `self` keeps the construction and the link one
-    /// expression. The parameter is an `Option` because that is what the lease's
-    /// recorder returns rather than because a frame without a record is expected: it is
-    /// `None` only where no lease recorded the frame at all.
-    pub(crate) fn reporting_to(mut self, record: Option<Arc<OutstandingFrame>>) -> Self {
-        self.lease_record = record;
-        self
+    pub(crate) fn from_configured(
+        id: AcquiredFrameId,
+        device: DeviceIdentity,
+        format: TextureFormat,
+        extent: Extent3d,
+        presentation: Arc<ConfiguredPresentationInner>,
+        native: Box<dyn FrameAttachmentBackend>,
+    ) -> Self {
+        Self {
+            id,
+            device,
+            state: AcquiredFrameState::Acquired,
+            attachment: FrameAttachment::new_backed(id, device, format, extent, native),
+            presentation,
+        }
     }
 
     /// Reports this frame's ending to its lease, when it has one.
@@ -423,9 +456,7 @@ impl AcquiredFrame {
     /// whether the frame is still outstanding. Nothing else may report to the record —
     /// the ending is observed in exactly one place, this token's `Drop`.
     fn report(&self, ending: FrameEnding) {
-        if let Some(record) = &self.lease_record {
-            record.report(ending);
-        }
+        self.presentation.report(self.id, ending);
     }
 
     /// This frame's identity.
@@ -521,6 +552,14 @@ impl AcquiredFrame {
         }
     }
 
+    /// Phase-B acknowledgement: the backend has accepted this frame's present
+    /// operation (its eventual state may still be Failed/Outdated).
+    pub(crate) fn mark_present_accepted(&mut self) {
+        if matches!(self.state, AcquiredFrameState::PlannedForPresent) {
+            self.state = AcquiredFrameState::PresentAccepted;
+        }
+    }
+
     /// Explicitly declines to present this frame.
     ///
     /// The portable promise is only *"do not present; this RHI is responsible for
@@ -583,10 +622,8 @@ impl AcquiredFrame {
                 .at("AcquiredFrame::abandon"));
             }
         }
-        unimplemented!(
-            "releasing the acquired drawable needs the presentation backend; the \
-             contract is fixed, the release is not built"
-        )
+        self.presentation.native().abandon(self.id)?;
+        Ok(())
     }
 }
 
@@ -645,6 +682,7 @@ impl Drop for AcquiredFrame {
     fn drop(&mut self) {
         match self.state {
             AcquiredFrameState::Acquired | AcquiredFrameState::PlannedForPresent => {
+                self.presentation.native().abandon_no_throw(self.id);
                 self.state = AcquiredFrameState::Abandoned;
                 self.report(FrameEnding::Abandoned);
             }
@@ -704,21 +742,35 @@ impl ConfiguredPresentation {
     /// Attempts a non-blocking acquisition.
     pub fn try_acquire(&mut self) -> Result<Option<AcquiredFrame>, AcquireError> {
         validate_acquire_allowed(self.outstanding_frame())?;
-        let frame = self.acquire_from_surface()?;
+        let Some(frame) = self.try_acquire_from_surface()? else {
+            return Ok(None);
+        };
         // Recording and linking are one step, and the record is what section 44.5's
         // drop path writes: a frame handed to a caller without it would be a frame
         // whose abandonment the lease could not see, and the lease would refuse the
         // next acquire forever — the state section 46.3 forbids.
-        let record = self.set_outstanding_frame(Some(frame.id()));
-        Ok(Some(frame.reporting_to(record)))
+        self.set_outstanding_frame(Some(frame.id()));
+        Ok(Some(frame))
     }
 
     /// Waits until the next drawable/frame can be acquired.
     pub async fn acquire(&mut self) -> Result<AcquiredFrame, AcquireError> {
         validate_acquire_allowed(self.outstanding_frame())?;
-        let frame = self.acquire_from_surface()?;
-        let record = self.set_outstanding_frame(Some(frame.id()));
-        Ok(frame.reporting_to(record))
+        let frame = std::future::poll_fn(|context| {
+            match self
+                .inner
+                .native()
+                .acquire_or_register_waker(self.device, context.waker())
+            {
+                std::task::Poll::Ready(result) => {
+                    std::task::Poll::Ready(result.map(|acquired| self.frame_from_surface(acquired)))
+                }
+                std::task::Poll::Pending => std::task::Poll::Pending,
+            }
+        })
+        .await?;
+        self.set_outstanding_frame(Some(frame.id()));
+        Ok(frame)
     }
 
     /// The native half of an acquire: the drawable the surface hands over, as a frame.
@@ -736,10 +788,28 @@ impl ConfiguredPresentation {
     /// that produced it, and a verb that panicked before installing it would leave
     /// section 44.5's report with nothing to write to for as long as the port takes to
     /// arrive.
-    fn acquire_from_surface(&self) -> Result<AcquiredFrame, AcquireError> {
-        unimplemented!(
-            "the acquired drawable comes from the presentation backend; the contract \
-             is fixed, the acquire is not built"
+    fn try_acquire_from_surface(&self) -> Result<Option<AcquiredFrame>, AcquireError> {
+        self.inner
+            .native()
+            .try_acquire(self.device)
+            .map(|acquired| acquired.map(|acquired| self.frame_from_surface(acquired)))
+    }
+
+    fn frame_from_surface(
+        &self,
+        acquired: crate::api::presentation::backend::AcquiredSurfaceFrame,
+    ) -> AcquiredFrame {
+        AcquiredFrame::from_configured(
+            AcquiredFrameId::new(self.device, acquired.serial),
+            self.device,
+            self.configuration.format(),
+            Extent3d {
+                width: acquired.extent.width,
+                height: acquired.extent.height,
+                depth: 1,
+            },
+            Arc::clone(&self.inner),
+            acquired.attachment,
         )
     }
 }

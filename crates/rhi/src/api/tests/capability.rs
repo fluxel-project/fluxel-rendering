@@ -103,6 +103,10 @@ fn a_format_available_on_the_adapter_can_be_unavailable_on_the_device() {
         FormatFacts::new(
             TextureFormat::R8Unorm,
             StorageAccessSupport::new(true, true, true),
+            true,
+            false,
+            false,
+            true,
         ),
     );
     let available = AvailableCapabilities::from_facts(facts);
@@ -511,7 +515,11 @@ fn a_difference_anywhere_in_the_facts_yields_a_different_id() {
             TextureFormat::R8Unorm,
             FormatFacts::new(
                 TextureFormat::R8Unorm,
-                StorageAccessSupport::new(true, false, false)
+                StorageAccessSupport::new(true, false, false),
+                true,
+                false,
+                false,
+                true,
             )
         )),
         "a format fact"

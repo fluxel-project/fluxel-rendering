@@ -54,7 +54,14 @@
 //! [`crate::api::platform::backend::DeviceBackend::completion`] and should say so where it
 //! constructs its device rather than spin inside the query.
 
+use crate::api::presentation::{FrameAttachment, PresentReceiptId};
 use crate::api::submission::plan::{CompletionPoint, PlanBatch, PlanPoint, SubmissionPlanId};
+
+pub(crate) struct BackendPresent {
+    pub(crate) after: PlanPoint,
+    pub(crate) receipt: PresentReceiptId,
+    pub(crate) attachment: FrameAttachment,
+}
 
 /// One validated plan, as the backend receives it.
 ///
@@ -135,6 +142,7 @@ pub(crate) struct SubmissionRequest<'a> {
                   orders a submission after everything before it on that queue"
     )]
     pub(crate) external_dependencies: &'a [(CompletionPoint, PlanPoint)],
+    pub(crate) presents: &'a [BackendPresent],
 }
 
 /// What a backend reports once it has accepted a plan.

@@ -121,5 +121,7 @@ fn a_sampler_reports_its_own_id_device_and_descriptor() {
     assert_eq!(sampler.device_identity(), identity(5));
     assert_eq!(sampler.descriptor().label.as_deref(), Some("linear"));
     assert_eq!(sampler.descriptor().max_anisotropy, 1);
-    assert_eq!(sampler.clone().id(), sampler.id());
+    let clone = sampler.clone();
+    assert_eq!(clone.id(), sampler.id());
+    assert!(std::ptr::eq(clone.native(), sampler.native()));
 }

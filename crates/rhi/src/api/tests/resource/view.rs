@@ -360,7 +360,9 @@ fn a_view_reports_its_resolved_format_and_its_own_range() {
     assert_eq!(alternate_view.format(), TextureFormat::Bgra8Unorm);
 
     // Cloning a view is the same view.
-    assert_eq!(alternate_view.clone().id(), alternate_view.id());
+    let clone = alternate_view.clone();
+    assert_eq!(clone.id(), alternate_view.id());
+    assert!(std::ptr::eq(clone.native(), alternate_view.native()));
 }
 
 #[test]

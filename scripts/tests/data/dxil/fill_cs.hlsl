@@ -5,10 +5,10 @@
 // Command line (see scripts/tests/data/dxil/README.md for the full note):
 //   dxc -T cs_6_0 -E main -Fo fill_cs.dxil fill_cs.hlsl
 
-RWStructuredBuffer<uint> output : register(u0);
+RWByteAddressBuffer output : register(u0);
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
-    output[id.x] = id.x;
+    output.Store(id.x * 4, id.x);
 }

@@ -37,5 +37,7 @@
 
 mod compute;
 mod interface;
+mod raster;
 
-pub(crate) use compute::create_compute_pipeline;
+pub(crate) use compute::{Dx12ComputePipeline, create_compute_pipeline};
+pub(crate) use raster::{Dx12RasterPipeline, create_raster_pipeline};

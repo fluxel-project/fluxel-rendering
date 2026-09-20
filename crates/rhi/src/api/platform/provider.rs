@@ -263,12 +263,12 @@ pub enum AdapterSelection {
 /// behind [`ProviderBackend`]. Nothing on this side
 /// names a `IDXGIFactory`, a `VkInstance`, a `MTLDevice`, a GPU object, or a
 /// rendering context.
-struct ProviderState {
+struct ProviderInner {
     backend: BackendKind,
     /// This provider's process-local identity, used to scope adapter tokens.
     provider_id: DeviceInstanceId,
     /// The native instance this provider wraps.
-    native: Arc<dyn ProviderBackend>,
+    native: Box<dyn ProviderBackend>,
 }
 
 /// One backend family's entry point for adapter discovery and device creation.
@@ -289,7 +289,7 @@ struct ProviderState {
 pub struct PlatformProvider {
     /// Shared rather than cloned into each handle, so each clone refers to the
     /// same provider identity and native provider state.
-    state: Arc<ProviderState>,
+    inner: Arc<ProviderInner>,
 }
 
 impl PlatformProvider {
@@ -307,10 +307,10 @@ impl PlatformProvider {
     pub(crate) fn new(
         backend: BackendKind,
         instance: DeviceInstanceId,
-        native: Arc<dyn ProviderBackend>,
+        native: Box<dyn ProviderBackend>,
     ) -> Self {
         Self {
-            state: Arc::new(ProviderState {
+            inner: Arc::new(ProviderInner {
                 backend,
                 provider_id: instance,
                 native,
@@ -330,7 +330,7 @@ impl PlatformProvider {
 
     /// The backend family this provider speaks.
     pub fn backend(&self) -> BackendKind {
-        self.state.backend
+        self.inner.backend
     }
 
     /// Attempts to enumerate the adapters this provider can expose explicitly.
@@ -352,7 +352,7 @@ impl PlatformProvider {
     /// only wants a device — the common case — never calls it, which is what
     /// lets a provider that cannot enumerate stay fully usable.
     pub async fn enumerate_adapters(&self) -> RhiResult<Option<Vec<AdapterInfo>>> {
-        self.state.native.enumerate_adapters()
+        self.inner.native.enumerate_adapters()
     }
 
     /// Performs presentation preflight for one of this provider's adapters.
@@ -371,14 +371,14 @@ impl PlatformProvider {
         // the provider that produced it, and section 3.1 requires the portable
         // checks to run in O(1) before any backend call. This one is portable,
         // so it is decided here rather than left for a driver to notice.
-        if adapter.provider != self.state.provider_id.as_u64() {
+        if adapter.provider != self.inner.provider_id.as_u64() {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 "adapter belongs to a different provider",
             )
             .at("PlatformProvider::supports_presentation"));
         }
-        self.state.native.supports_presentation(adapter, target)
+        self.inner.native.supports_presentation(adapter, target)
     }
 
     /// The canonical path to a device.
@@ -398,7 +398,7 @@ impl PlatformProvider {
     /// the caller meant.
     pub async fn request_device(&self, desc: DeviceRequestDescriptor) -> RhiResult<Device> {
         if let AdapterSelection::Explicit(adapter) = desc.selection() {
-            if adapter.provider != self.state.provider_id.as_u64() {
+            if adapter.provider != self.inner.provider_id.as_u64() {
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
                     "adapter belongs to a different provider",
@@ -406,7 +406,7 @@ impl PlatformProvider {
                 .at("PlatformProvider::request_device"));
             }
         }
-        let mut request = self.state.native.request_device(&desc)?;
+        let mut request = self.inner.native.request_device(&desc)?;
 
         // The current crate-private backend seam still represents an in-flight
         // request with `RequestProgress`. Keep that compatibility detail wholly
@@ -419,7 +419,7 @@ impl PlatformProvider {
                 Poll::Pending
             }
             RequestProgress::Ready(native) => {
-                Poll::Ready(Device::new(self.mint_identity(), Arc::from(native)))
+                Poll::Ready(Device::new(self.mint_identity(), native))
             }
         })
         .await

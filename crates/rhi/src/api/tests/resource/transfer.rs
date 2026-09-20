@@ -634,6 +634,52 @@ fn every_terminal_state_is_an_error_and_not_an_endless_none() {
 }
 
 #[test]
+fn device_loss_wakes_a_pending_readback_future() {
+    use core::future::Future;
+    use core::task::{Context, Poll, Waker};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Wake;
+
+    struct WakeCounter(AtomicUsize);
+
+    impl Wake for WakeCounter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let ticket = ReadbackTicket::new(
+        object(76),
+        device(),
+        ReadbackRequest::Buffer {
+            label: Label::default(),
+            src: buffer_with(BufferUsage::COPY_SRC, 64),
+            range: BufferRange::new(0, 4),
+        },
+    );
+    ticket.set_status(ReadbackStatus::Pending);
+
+    let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    let mut read = core::pin::pin!(ticket.read());
+    assert!(matches!(read.as_mut().poll(&mut context), Poll::Pending));
+
+    ticket.set_status(ReadbackStatus::DeviceLost);
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    match read.as_mut().poll(&mut context) {
+        Poll::Ready(Err(error)) => assert_eq!(error.kind(), RhiErrorKind::DeviceLost),
+        Poll::Ready(Ok(_)) => panic!("device loss cannot produce readback bytes"),
+        Poll::Pending => panic!("device loss must terminally resolve readback"),
+    }
+}
+
+#[test]
 fn a_ready_ticket_without_bytes_is_reported_as_a_backend_fault() {
     // `publish` is the only correct way to reach Ready, so this state is
     // unreachable through the crate's own writers — but the reader must not

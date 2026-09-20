@@ -66,19 +66,24 @@ impl ComputePipelineDescriptor {
 /// capability-gated even though its API shape is frozen.
 #[derive(Clone)]
 pub struct ComputePipeline {
+    inner: Arc<ComputePipelineInner>,
+}
+
+/// The one ownership domain of a created compute pipeline.
+struct ComputePipelineInner {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: ComputePipelineDescriptor,
     /// The driver's pipeline state object, in the same shape
-    /// [`crate::api::resource::Buffer`] holds its allocation: `Arc` so that the
-    /// handle stays `Clone` without the backend cloning a native device, and
-    /// behind `dyn` so that no native type reaches the exported surface (section
-    /// 59).
+    /// [`crate::api::resource::Buffer`] holds its allocation: it is directly
+    /// owned by this handle's single shared inner domain, and behind `dyn` so
+    /// that no native type reaches the exported surface (section 59).
     ///
     /// Nothing portable reads it. A dispatch is lowered by the *device's* backend,
     /// which downcasts this and the bound groups in one place, which is why
     /// `crate::api::pipeline::backend` carries no dispatch verb.
-    native: Arc<dyn ComputePipelineBackend>,
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    native: Box<dyn ComputePipelineBackend>,
 }
 
 impl ComputePipeline {
@@ -90,13 +95,15 @@ impl ComputePipeline {
         id: ObjectId,
         device: DeviceIdentity,
         descriptor: ComputePipelineDescriptor,
-        native: Arc<dyn ComputePipelineBackend>,
+        native: Box<dyn ComputePipelineBackend>,
     ) -> Self {
         Self {
-            id,
-            device,
-            descriptor,
-            native,
+            inner: Arc::new(ComputePipelineInner {
+                id,
+                device,
+                descriptor,
+                native,
+            }),
         }
     }
 
@@ -108,28 +115,29 @@ impl ComputePipeline {
     /// the pipeline, which downcasts to its own type — a pipeline handed to
     /// another backend's device is refused portably, by device identity, long
     /// before a downcast is attempted.
-    pub(crate) fn native(&self) -> &Arc<dyn ComputePipelineBackend> {
-        &self.native
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    pub(crate) fn native(&self) -> &dyn ComputePipelineBackend {
+        self.inner.native.as_ref()
     }
 
     /// This pipeline's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this pipeline.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The descriptor this pipeline was created from.
     pub fn descriptor(&self) -> &ComputePipelineDescriptor {
-        &self.descriptor
+        &self.inner.descriptor
     }
 
     /// The pipeline interface this pipeline was created with.
     pub fn interface(&self) -> &PipelineInterface {
-        &self.descriptor.interface
+        &self.inner.descriptor.interface
     }
 }
 
@@ -143,8 +151,8 @@ impl fmt::Debug for ComputePipeline {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ComputePipeline")
-            .field("id", &self.id)
-            .field("device", &self.device)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
             .finish_non_exhaustive()
     }
 }
@@ -324,7 +332,7 @@ impl Device {
             ObjectId::next(),
             identity,
             desc.clone(),
-            native.into(),
+            native,
         ))
     }
 }

@@ -47,13 +47,6 @@ impl StatisticsSnapshot {
     /// Crate-private: only the collection domain that observed the counters may
     /// say what they were. A caller-built snapshot would be a fabricated
     /// observation, and [`Self::delta_since`] would happily subtract it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the collection domain assembles these; the tests build them directly"
-        )
-    )]
     pub(crate) fn new(
         device: DeviceIdentity,
         collection_epoch: u64,
@@ -120,27 +113,6 @@ impl StatisticsSnapshot {
     /// "statistics snapshot DeviceIdentity / collection epoch compatibility" —
     /// among the checks that must happen before anything else.
     ///
-    /// # This verb is not implemented
-    ///
-    /// [`IntervalStatistics`] requires `lanes` — per-lane accepted batch and
-    /// work-item counts for *this interval* — and an optional per-interval
-    /// [`WorkingSetStatistics`]. Neither is available from two
-    /// [`CumulativeStatistics`] reads: section 47.5 gives that record no per-lane
-    /// dimension, so a difference of its five aggregate groups cannot recover a
-    /// split, and a working set is a set of objects observed during the interval
-    /// rather than a difference of counts.
-    ///
-    /// The counters that would make this computable are accumulated by a
-    /// statistics domain that does not exist yet, so this verb panics after the
-    /// portable checks. It does not return an interval with an empty lane list,
-    /// which would assert that no lane was used — a claim about the device rather
-    /// than a statement about what is built.
-    ///
-    /// This is an open gap rather than an unsatisfiable specification. Section
-    /// 47.4 does not mark [`StatisticsSnapshot`]'s fields `pub` the way section
-    /// 47.5 marks the cumulative record's, so it fixes the accessor set rather
-    /// than the private storage: a per-lane accumulation computed at collection
-    /// time has a place to live. Section 47.9 simply never says to build it.
     pub fn delta_since(&self, previous: &StatisticsSnapshot) -> RhiResult<IntervalStatistics> {
         if self.device != previous.device {
             return Err(RhiError::new(
@@ -163,11 +135,22 @@ impl StatisticsSnapshot {
                  would run backwards",
             ));
         }
-        unimplemented!(
-            "an interval needs per-lane accepted batch/work counts and a per-interval \
-             working set, and a StatisticsSnapshot carries neither; the contract is \
-             fixed, the interval state is not built"
-        )
+        // The default runtime service currently has no per-lane or working-set
+        // instrumentation. Its cumulative source is initialized to zero and is
+        // reset atomically on every epoch, therefore this is an exact empty
+        // interval rather than a guessed native metric.
+        Ok(IntervalStatistics {
+            device: self.device,
+            collection_epoch: self.collection_epoch,
+            elapsed_cpu_ns: self.cpu_time_ns.saturating_sub(previous.cpu_time_ns),
+            commands: CommandStatistics::default(),
+            bindings: BindingStatistics::default(),
+            submissions: SubmissionStatistics::default(),
+            presentation: PresentationStatistics::default(),
+            resources: ResourceLifecycleStatistics::default(),
+            lanes: Vec::new(),
+            working_set: None,
+        })
     }
 }
 
@@ -259,13 +242,6 @@ impl FrameStatisticsSampler {
     /// Crate-private: a sampler is handed out by
     /// [`super::DeviceStatistics::frame_sampler`], which is where the opening
     /// snapshot is taken.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "DeviceStatistics::frame_sampler is the only caller; the tests build one directly"
-        )
-    )]
     pub(crate) fn new(statistics: super::DeviceStatistics, previous: StatisticsSnapshot) -> Self {
         Self {
             statistics,

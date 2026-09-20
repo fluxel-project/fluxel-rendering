@@ -50,13 +50,8 @@ pub(crate) trait ShaderModuleBackend: Send + Sync + 'static {
     /// sibling has, and rule 4.6's "the matrix gets the row" is applied to the
     /// attribute itself.
     #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by a backend's own lowering, which is the only code that may \
-                      cross the seam; that lowering is not written, so only the contract \
-                      tests reach it"
-        )
+        all(not(test), not(feature = "dx12")),
+        expect(dead_code, reason = "read by backend pipeline lowering")
     )]
     fn as_any(&self) -> &dyn Any;
 }

@@ -39,11 +39,14 @@
 //! limitation.
 
 use core::fmt;
+use std::any::Any;
+use std::sync::Arc;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupport, TextureSupportQuery};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
+use crate::api::resource::backend::TextureBackend;
 use crate::api::resource::buffer::ResourceMemoryPreference;
 use crate::api::resource::transient::TransientResourceMetadata;
 
@@ -419,35 +422,60 @@ impl TextureDescriptor {
 /// *and* all accepted work referencing it is terminal.
 #[derive(Clone)]
 pub struct Texture {
+    inner: Arc<TextureInner>,
+}
+
+/// The single shared ownership domain of one logical texture.
+struct TextureInner {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: TextureDescriptor,
+    native: Box<dyn TextureBackend>,
     /// Plan-scoped transient execution metadata, when this is not persistent.
     transient: Option<TransientResourceMetadata>,
 }
 
+/// Native-seam token used solely by crate-local validation fixtures.
+///
+/// It is still a concrete backend object, rather than an `Option`, so every
+/// `Texture` has the same ownership invariant. Real device creation uses
+/// `new_backed` and never constructs this token.
+struct ValidationTextureBackend;
+
+impl TextureBackend for ValidationTextureBackend {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 impl Texture {
-    /// Assembles a created texture.
-    ///
-    /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only [`crate::api::platform::Device::create_texture`] may produce one. That
-    /// verb exists and is the only caller this is written for, but it stops before
-    /// the driver image is created — nothing can mint the identity below until a
-    /// backend image allocator does — so nothing calls this yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_texture calls this once the backend image allocator lands and can mint the texture's identity"
-        )
-    )]
+    /// Assembles a crate-local validation fixture. Production creation must use
+    /// [`Self::new_backed`], which requires the backend allocation to succeed.
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: TextureDescriptor) -> Self {
+        Self::new_backed(id, device, descriptor, Box::new(ValidationTextureBackend))
+    }
+
+    /// Assembles a texture whose backend allocation has already succeeded.
+    pub(crate) fn new_backed(
+        id: ObjectId,
+        device: DeviceIdentity,
+        descriptor: TextureDescriptor,
+        native: Box<dyn TextureBackend>,
+    ) -> Self {
         Self {
-            id,
-            device,
-            descriptor,
-            transient: None,
+            inner: Arc::new(TextureInner {
+                id,
+                device,
+                descriptor,
+                native,
+                transient: None,
+            }),
         }
+    }
+
+    /// Backend allocation, available on objects created through a real device.
+    pub(crate) fn native(&self) -> &dyn TextureBackend {
+        self.inner.native.as_ref()
     }
 
     /// Assembles a logical texture owned by one transient submission plan.
@@ -455,33 +483,37 @@ impl Texture {
         id: ObjectId,
         device: DeviceIdentity,
         descriptor: TextureDescriptor,
+        native: Box<dyn TextureBackend>,
         transient: TransientResourceMetadata,
     ) -> Self {
-        Self {
-            id,
-            device,
-            descriptor,
-            transient: Some(transient),
-        }
+        Self::new_backed(id, device, descriptor, native).with_transient(transient)
+    }
+
+    fn with_transient(mut self, transient: TransientResourceMetadata) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("newly-created texture must have one owner")
+            .transient = Some(transient);
+        self
     }
 
     /// Internal transient lifetime for submission-plan validation.
     pub(crate) fn transient_lifetime(
         &self,
     ) -> Option<&crate::api::resource::transient::TransientLifetime> {
-        self.transient
+        self.inner
+            .transient
             .as_ref()
             .map(TransientResourceMetadata::lifetime)
     }
 
     /// This texture's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this texture.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The descriptor this texture was created from.
@@ -489,7 +521,7 @@ impl Texture {
     /// Section 18.8 requires a descriptor to be recoverable for capture, and
     /// §15.2's `whole` constructor reads it to build a view covering everything.
     pub fn descriptor(&self) -> &TextureDescriptor {
-        &self.descriptor
+        &self.inner.descriptor
     }
 }
 
@@ -506,8 +538,8 @@ impl fmt::Debug for Texture {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Texture")
-            .field("id", &self.id)
-            .field("device", &self.device)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
             .finish_non_exhaustive()
     }
 }
@@ -565,18 +597,13 @@ impl Device {
         }
         let support = self.capabilities().texture_support(&query);
         validate_texture_descriptor(&mut accepted, &support)?;
-        unimplemented!(
-            "Device::create_texture needs a backend image allocator to create a {:?} \
-             texture of {}x{}x{} texels; the portable contract is fixed and its refusal \
-             paths above are built, but no backend port is built. The capability \
-             snapshot this verb reads its texture-support answer from is a backend-port \
-             deliverable as well, so on today's tree the call stops inside \
-             Device::capabilities before reaching this point",
-            accepted.dimension,
-            accepted.extent.width,
-            accepted.extent.height,
-            accepted.extent.depth
-        )
+        let native = self.native().create_texture(&accepted)?;
+        Ok(Texture::new_backed(
+            ObjectId::next(),
+            self.identity(),
+            accepted,
+            native,
+        ))
     }
 }
 

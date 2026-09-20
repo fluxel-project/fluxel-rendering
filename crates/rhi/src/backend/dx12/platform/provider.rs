@@ -12,32 +12,14 @@
 //! a device carries one native object, and a request is the single-shot
 //! handover between them.
 //!
-//! # Why adapter enumeration refuses instead of answering
+//! # Adapter capability snapshots
 //!
-//! `enumerate_adapters` returns a structured `Unsupported` rather than a list,
-//! and that is not a gap left for later. [`AdapterInfo`] carries an
-//! [`AvailableCapabilities`] snapshot, and [`crate::api::capability`] states the
-//! completeness rule in the strongest terms it has: "an absent entry is not a
-//! fact at all: it means enumeration never asked. ... A backend that leaves a hole
-//! in its snapshot has produced a bug". Every accessor on that snapshot panics on
-//! a hole rather than guessing, because both `Supported` and `Unsupported` would
-//! be lies.
-//!
-//! DX12 answers capability questions through a *device* — `CheckFeatureSupport`,
-//! format support, resource-binding tiers — so a provider that enumerated before
-//! it could populate a table would have to publish a snapshot full of holes, and
-//! the first caller to ask one of those questions would panic in release code.
-//! Refusing says the true thing: this provider cannot yet answer what an adapter
-//! list promises. `Ok(None)` would say something false instead — that DX12 has no
-//! portable enumeration at all, which is exactly what section 5's `Ok(None)` case
-//! is reserved for.
-//!
-//! The ordering this implies is the ordering in `super::super`: device creation,
-//! then capability enumeration, then adapter enumeration. It is also why
-//! [`ProviderBackend::request_device`] can be complete while enumeration is not —
-//! selecting an adapter needs DXGI only, and the `AdapterInfo` a *device* reports
-//! is the snapshot of the adapter it actually got, which is a different and
-//! narrower promise than listing candidates.
+//! DXGI provides identity and memory facts, while Direct3D 12 exposes the
+//! capability contract through an `ID3D12Device`. Enumeration therefore creates a
+//! short-lived device for every offered DXGI candidate and probes it before
+//! publishing [`AdapterInfo`]. A candidate that cannot create a D3D12 device is
+//! not an adapter this provider can offer; it is omitted rather than published
+//! with a hollow snapshot.
 //!
 //! # Reachability, and the shape the expectation takes
 //!
@@ -56,8 +38,6 @@
     )
 )]
 
-use std::sync::Arc;
-
 use windows::Win32::Foundation::LUID;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{D3D12CreateDevice, ID3D12Device};
@@ -72,6 +52,7 @@ use crate::api::identity::DeviceInstanceId;
 use crate::api::platform::backend::ProviderBackend;
 use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
+use crate::api::platform::requirements::{DeviceRequirements, LimitRequirement};
 use crate::api::platform::{AdapterId, AdapterInfo, BackendKind};
 use crate::api::presentation::PresentationTarget;
 use crate::api::submission::{
@@ -288,33 +269,34 @@ impl Dx12Provider {
     /// device they then need to observe losing its liveness — which is exactly the
     /// situation that invites a test-only downcast escape hatch on the seam trait.
     /// Reaching the device directly is the smaller design.
-    pub(super) fn create_native(&self, selection: AdapterSelection) -> RhiResult<Arc<Dx12Device>> {
+    pub(super) fn create_native(&self, selection: AdapterSelection) -> RhiResult<Dx12Device> {
+        self.create_native_with_requirements(selection, &DeviceRequirements::new())
+    }
+
+    fn create_native_with_requirements(
+        &self,
+        selection: AdapterSelection,
+        requirements: &DeviceRequirements,
+    ) -> RhiResult<Dx12Device> {
         let candidate = self.select(selection)?;
+
+        let device = self.create_d3d_device(&candidate)?;
 
         // `D3D_FEATURE_LEVEL_11_0` is the floor Direct3D 12 itself requires, so
         // asking for less is not possible and asking for more would refuse
         // adapters that can run the contract. What was actually achieved is a
         // capability fact, and capability enumeration is where it is reported.
-        let mut device: Option<ID3D12Device> = None;
+        let facts = facts::probe(&device)?;
+        validate_requirements(
+            requirements,
+            &AvailableCapabilities::from_facts(facts.clone()),
+        )?;
+
+        // One lane. Direct3D 12 does expose more than one queue type — a compute
         // SAFETY: `D3D12CreateDevice` writes one interface pointer into
         // `device` and returns an error otherwise; the binding converts only on
         // success. `candidate.adapter` outlives the call and is the adapter the
         // created device is bound to.
-        unsafe {
-            D3D12CreateDevice(&candidate.adapter, D3D_FEATURE_LEVEL_11_0, &mut device)
-                .map_err(|error| ffi::to_rhi(&error, "Dx12Provider::request_device"))?;
-        }
-        let device = device.ok_or_else(|| {
-            // `S_OK` with a null out-parameter is a contract violation by the
-            // driver. Reported as a backend failure rather than unwrapped, so a
-            // diagnosis says what actually happened.
-            RhiError::new(
-                RhiErrorKind::BackendFailure,
-                "D3D12CreateDevice reported success without producing a device",
-            )
-            .at("Dx12Provider::request_device")
-        })?;
-
         // One lane. Direct3D 12 does expose more than one queue type — a compute
         // queue and up to three copy queues exist beside the direct queue — but
         // several *logical* lanes do not promise hardware overlap (section 10.3),
@@ -331,8 +313,6 @@ impl Dx12Provider {
         // structural property of Direct3D 12, so the under-report is no longer the
         // only consistent answer and keeping it would refuse dispatches the device
         // can run.
-        let facts = facts::probe(&device)?;
-
         // The spine is created beside the facts rather than lazily on the first
         // submission, because both are native objects a device either has or does
         // not: `CreateCommandQueue` and `CreateFence` are two calls that can fail,
@@ -343,8 +323,19 @@ impl Dx12Provider {
         // *not* created here: those are the ring `command` grows on demand, so a
         // device that never submits never pays for one.
         let spine = Dx12CommandSpine::new(&device).map_err(|native| native.into_rhi())?;
+        let loss =
+            std::sync::Arc::new(crate::backend::dx12::platform::device::Dx12LossState::new());
+        let presentation = crate::backend::dx12::presentation::Dx12Presentation::new(
+            device.clone(),
+            spine.queue(),
+            std::sync::Arc::clone(&loss),
+        )?;
         let descriptor_heap = std::sync::Arc::new(
             crate::backend::dx12::binding::DescriptorHeap::new(&device)
+                .map_err(|native| native.into_rhi())?,
+        );
+        let sampler_heap = std::sync::Arc::new(
+            crate::backend::dx12::binding::DescriptorHeap::new_sampler(&device)
                 .map_err(|native| native.into_rhi())?,
         );
 
@@ -356,45 +347,144 @@ impl Dx12Provider {
                 .union(LaneWorkDomains::COPY),
         )]);
 
-        Ok(std::sync::Arc::new(Dx12Device::new(
-            deferred_adapter_info(&candidate, self.instance),
+        Ok(Dx12Device::new(
+            adapter_info(&candidate, self.instance, facts.clone()),
             device,
             descriptor_heap,
+            sampler_heap,
             spine,
+            presentation,
+            loss,
             facts,
             submission,
-        )))
+        ))
+    }
+
+    /// Creates the D3D12 object needed to query an adapter's complete capability
+    /// contract. DXGI alone cannot answer that contract.
+    fn create_d3d_device(&self, candidate: &Candidate) -> RhiResult<ID3D12Device> {
+        let mut device: Option<ID3D12Device> = None;
+        // SAFETY: the binding owns the output slot and `candidate.adapter`
+        // remains alive for the call.
+        unsafe {
+            D3D12CreateDevice(&candidate.adapter, D3D_FEATURE_LEVEL_11_0, &mut device)
+                .map_err(|error| ffi::to_rhi(&error, "Dx12Provider::create_d3d_device"))?;
+        }
+        device.ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::BackendFailure,
+                "D3D12CreateDevice reported success without producing a device",
+            )
+            .at("Dx12Provider::create_d3d_device")
+        })
     }
 }
 
-/// The adapter snapshot DXGI can answer before any capability question.
-///
-/// The capability half is deliberately not filled: see the module note. Nothing
-/// hands this out today — it is what the capability-enumeration work will need to
-/// complete before `enumerate_adapters` can return — so it exists to record what
-/// is already known and what is still missing, not to be published.
-fn deferred_adapter_info(candidate: &Candidate, instance: DeviceInstanceId) -> AdapterInfo {
+/// Builds the published adapter snapshot from DXGI identity and the fully probed
+/// D3D12 capability contract.
+fn adapter_info(
+    candidate: &Candidate,
+    instance: DeviceInstanceId,
+    facts: CapabilityFacts,
+) -> AdapterInfo {
     AdapterInfo::new(
         AdapterId::new(instance.as_u64(), candidate.serial),
         candidate.name.clone(),
         BackendKind::Dx12,
         Some(candidate.vendor),
         Some(candidate.device),
-        AvailableCapabilities::from_facts(CapabilityFacts::empty()),
+        AvailableCapabilities::from_facts(facts),
     )
+}
+
+/// Checks every requested capability against the exact facts read from the
+/// selected native device. Preferred features deliberately do not participate:
+/// requesting one may influence a backend that has feature enablement, but D3D12
+/// exposes these facts unconditionally and the resulting device reports all of
+/// them through its immutable capability snapshot.
+fn validate_requirements(
+    requirements: &DeviceRequirements,
+    facts: &AvailableCapabilities,
+) -> RhiResult<()> {
+    for feature in requirements.required_features() {
+        if !facts.supports_feature(*feature) {
+            return Err(RhiError::new(RhiErrorKind::Unsupported, format!("requested feature {feature:?} is not supported by the selected Direct3D 12 adapter"))
+                .at("Dx12Provider::request_device"));
+        }
+    }
+    for requirement in requirements.limit_requirements() {
+        let Some(actual) = facts.limit(requirement.key()) else {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                format!(
+                    "requested limit {:?} is not defined by the selected Direct3D 12 adapter",
+                    requirement.key()
+                ),
+            )
+            .at("Dx12Provider::request_device"));
+        };
+        let satisfied = match requirement {
+            LimitRequirement::AtLeast { value, .. } => actual >= *value,
+            LimitRequirement::AtMost { value, .. } => actual <= *value,
+        };
+        if !satisfied {
+            return Err(RhiError::new(RhiErrorKind::Unsupported, format!("requested limit {:?} = {} is not satisfied by selected Direct3D 12 adapter value {actual}", requirement.key(), requirement.value()))
+                .at("Dx12Provider::request_device"));
+        }
+    }
+    for query in requirements.required_buffer_support() {
+        if !facts.buffer_support(query).is_supported() {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "selected Direct3D 12 adapter does not support a required buffer capability",
+            )
+            .at("Dx12Provider::request_device"));
+        }
+    }
+    for query in requirements.required_texture_support() {
+        if !facts.texture_support(query).is_supported() {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "selected Direct3D 12 adapter does not support a required texture capability",
+            )
+            .at("Dx12Provider::request_device"));
+        }
+    }
+    for query in requirements.required_binding_support() {
+        if !facts.binding_support(query).is_supported() {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "selected Direct3D 12 adapter does not support a required binding capability",
+            )
+            .at("Dx12Provider::request_device"));
+        }
+    }
+    for query in requirements.required_route_support() {
+        if !facts.route(query).is_supported() {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "selected Direct3D 12 adapter does not support a required transfer route",
+            )
+            .at("Dx12Provider::request_device"));
+        }
+    }
+    Ok(())
 }
 
 impl ProviderBackend for Dx12Provider {
     fn enumerate_adapters(&self) -> RhiResult<Option<Vec<AdapterInfo>>> {
-        Err(RhiError::new(
-            RhiErrorKind::Unsupported,
-            "this provider cannot enumerate adapters yet: an AdapterInfo carries a capability \
-             snapshot, DX12 answers capability questions through a device, and the capability \
-             enumeration that would fill that snapshot is not built. Returning a list with an \
-             empty snapshot would panic the first time a caller asked it anything, and \
-             returning Ok(None) would instead claim DX12 has no portable enumeration at all",
-        )
-        .at("Dx12Provider::enumerate_adapters"))
+        let mut adapters = Vec::new();
+        for candidate in self.candidates()? {
+            // A DXGI adapter that cannot make a D3D12 device is not an adapter
+            // this provider can offer. Do not publish a hollow snapshot for it.
+            let device = match self.create_d3d_device(&candidate) {
+                Ok(device) => device,
+                Err(_) => continue,
+            };
+            let facts = facts::probe(&device)?;
+            adapters.push(adapter_info(&candidate, self.instance, facts));
+        }
+        Ok(Some(adapters))
     }
 
     fn supports_presentation(
@@ -438,27 +528,15 @@ impl ProviderBackend for Dx12Provider {
             .at("Dx12Provider::request_device"));
         }
 
-        // Requirements are refused rather than dropped, and the distinction is the
-        // whole of this check: an *empty* requirement set asks for nothing and can
-        // be satisfied honestly, while a non-empty one asks for facts this
-        // provider cannot compare yet — exactly the capability enumeration the
-        // module note describes. Creating a device and ignoring a
-        // `require_feature(Compute)` would hand back a device whose documented
-        // contract the caller believes was checked. Section 9.4 forbids that
-        // substitution in the shader case and the reasoning does not depend on
-        // which requirement was dropped.
-        if !descriptor.requirements().is_empty() {
-            return Err(RhiError::new(
-                RhiErrorKind::Unsupported,
-                "this provider cannot yet honour device requirements: checking them needs the \
-                 capability enumeration that reads facts off a live device, and it is not built. \
-                 A device requested with no requirements is created without consulting it",
-            )
-            .at("Dx12Provider::request_device"));
-        }
-
         Ok(Box::new(Dx12Request::new(
-            self.create_native(descriptor.selection())?,
+            self.create_native_with_requirements(
+                descriptor.selection(),
+                descriptor.requirements(),
+            )?,
         )))
     }
 }
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod provider_tests;

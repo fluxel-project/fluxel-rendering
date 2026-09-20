@@ -237,13 +237,6 @@ pub struct InventoryStatistics {
 /// resource validators give: a rule that takes the capability answer it must
 /// respect stays portable and testable, and the device is left responsible only
 /// for producing the facts.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "driven directly by the contract tests, as the module note states; nothing else reads it yet"
-    )
-)]
 pub(crate) fn estimate_texture_bytes(
     desc: &TextureDescriptor,
     facts: &FormatFacts,

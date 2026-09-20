@@ -35,6 +35,20 @@
 
 use std::any::Any;
 
+/// The native graphics pipeline state object behind one
+/// [`RasterPipeline`](crate::api::pipeline::RasterPipeline).
+///
+/// This is deliberately a second, descriptor-specific seam.  Compute and
+/// graphics state objects have different native ABI requirements (input layout,
+/// fixed function state and render-target formats exist only for graphics), so
+/// merging them would either leak graphics vocabulary into compute or leave a
+/// deliberately underspecified backend contract.
+pub(crate) trait RasterPipelineBackend: Send + Sync + 'static {
+    /// This pipeline as an opaque native object for command lowering.
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    fn as_any(&self) -> &dyn Any;
+}
+
 /// The native pipeline state object behind one
 /// [`ComputePipeline`](crate::api::pipeline::ComputePipeline).
 ///
@@ -49,5 +63,6 @@ pub(crate) trait ComputePipelineBackend: Send + Sync + 'static {
     /// The downcast's callers are the backend's own command lowering, which reaches
     /// the native pipeline state from the bound pipeline to hand it to the native
     /// bind verb, and the backend's own test set.
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
     fn as_any(&self) -> &dyn Any;
 }

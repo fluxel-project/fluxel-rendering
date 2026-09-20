@@ -60,14 +60,13 @@ use crate::api::platform::Device;
 use crate::api::presentation::{AcquiredFrame, AcquiredFrameId, PresentPlanId};
 use crate::api::resource::buffer::BufferRange;
 use crate::api::resource::subresource::{TextureAspects, TextureSubresourceRange};
-use crate::api::resource::transient::{
-    TransientAllocator, TransientLifetime, TransientLifetimeRegistry,
-};
+use crate::api::resource::transient::{TransientAllocator, TransientLifetime};
 use crate::api::submission::plan::{
     CompletionPoint, PlanBatch, PlanBody, PlanPoint, PlanPresent, SubmissionPlan, SubmissionPlanId,
 };
 use crate::api::submission::{
     LaneDependencyRoute, SubmissionBatchId, SubmissionCapabilities, SubmissionLaneId,
+    TransientLifetimeRegistry,
 };
 
 /// Builds one submission plan.
@@ -93,6 +92,10 @@ pub struct SubmissionPlanBuilder {
     plan: SubmissionPlanId,
     /// The device this plan will be submitted to.
     device: DeviceIdentity,
+    /// The live device used solely to realize Dedicated transient resources.
+    /// Keeping this one handle also keeps its native allocation factory alive
+    /// while a caller is assembling the plan.
+    device_handle: Option<Device>,
     /// The device's lanes and their cross-lane routes, which section 40.1 and
     /// section 40.2 are both decided against.
     ///
@@ -131,11 +134,26 @@ impl SubmissionPlanBuilder {
     /// two builders collide, and the private field would then be protecting
     /// nothing.
     pub fn new(device: &Device) -> Self {
-        Self::with_facts(
+        Self::with_device(
             SubmissionPlanId::new(device.identity(), device.serials().next_plan()),
-            device.identity(),
+            device,
             device.capabilities().submission().clone(),
         )
+    }
+
+    fn with_device(plan: SubmissionPlanId, device: &Device, lanes: SubmissionCapabilities) -> Self {
+        Self {
+            plan,
+            device: device.identity(),
+            device_handle: Some(device.clone()),
+            lanes,
+            batches: Vec::new(),
+            dependencies: Vec::new(),
+            external_dependencies: Vec::new(),
+            presents: Vec::new(),
+            frames: Vec::new(),
+            transient_lifetimes: TransientLifetimeRegistry::default(),
+        }
     }
 
     /// Opens a builder over facts the caller supplies.
@@ -154,6 +172,7 @@ impl SubmissionPlanBuilder {
         Self {
             plan,
             device,
+            device_handle: None,
             lanes,
             batches: Vec::new(),
             dependencies: Vec::new(),
@@ -255,11 +274,12 @@ impl SubmissionPlanBuilder {
     }
 
     /// Returns an allocator scoped to this builder's Device and plan identity.
-    pub fn transient_allocator(&self) -> TransientAllocator {
+    pub fn transient_allocator(&self) -> TransientAllocator<'_> {
         TransientAllocator::new_with_registry(
             self.device,
             self.plan,
-            self.transient_lifetimes.clone(),
+            &self.transient_lifetimes,
+            self.device_handle.as_ref(),
         )
     }
 
@@ -504,11 +524,7 @@ impl SubmissionPlanBuilder {
             .at("SubmissionPlanBuilder::build"));
         }
         validate_plan_graph(&self.batches, &self.dependencies, &self.presents)?;
-        let transient_lifetimes = self
-            .transient_lifetimes
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone();
+        let transient_lifetimes = self.transient_lifetimes.snapshot();
         validate_transient_lifetimes(
             &self.batches,
             &self.dependencies,

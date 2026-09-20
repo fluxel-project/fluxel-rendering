@@ -258,6 +258,10 @@ impl StorageAccessSupport {
 pub struct FormatFacts {
     format: TextureFormat,
     storage_access: StorageAccessSupport,
+    color_attachment: bool,
+    depth_attachment: bool,
+    stencil_attachment: bool,
+    blendable: bool,
 }
 
 impl FormatFacts {
@@ -273,10 +277,21 @@ impl FormatFacts {
             reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
         )
     )]
-    pub(crate) fn new(format: TextureFormat, storage_access: StorageAccessSupport) -> Self {
+    pub(crate) fn new(
+        format: TextureFormat,
+        storage_access: StorageAccessSupport,
+        color_attachment: bool,
+        depth_attachment: bool,
+        stencil_attachment: bool,
+        blendable: bool,
+    ) -> Self {
         Self {
             format,
             storage_access,
+            color_attachment,
+            depth_attachment,
+            stencil_attachment,
+            blendable,
         }
     }
 
@@ -327,30 +342,21 @@ impl FormatFacts {
     /// statement. Deriving it from [`Self::aspects`] would report a permission
     /// the device never granted.
     pub fn color_attachment(&self) -> bool {
-        unimplemented!(
-            "per-format attachment support arrives with the backend port; the \
-             contract is fixed, the probe is not built"
-        )
+        self.color_attachment
     }
 
     /// Whether the format may be used as a depth attachment.
     ///
     /// Probed for the same reason as [`Self::color_attachment`].
     pub fn depth_attachment(&self) -> bool {
-        unimplemented!(
-            "per-format attachment support arrives with the backend port; the \
-             contract is fixed, the probe is not built"
-        )
+        self.depth_attachment
     }
 
     /// Whether the format may be used as a stencil attachment.
     ///
     /// Probed for the same reason as [`Self::color_attachment`].
     pub fn stencil_attachment(&self) -> bool {
-        unimplemented!(
-            "per-format attachment support arrives with the backend port; the \
-             contract is fixed, the probe is not built"
-        )
+        self.stencil_attachment
     }
 
     /// Can be true only for color-attachment formats.
@@ -360,10 +366,7 @@ impl FormatFacts {
     /// is not a claim that the format is a color attachment, only that it is not
     /// disqualified as one.
     pub fn blendable(&self) -> bool {
-        unimplemented!(
-            "per-format blend support arrives with the backend port; the \
-             contract is fixed, the probe is not built"
-        )
+        self.blendable
     }
 
     /// Whether the color format has an alpha component.
@@ -938,6 +941,11 @@ impl FormatFacts {
             | u8::from(self.storage_access.write_only) << 1
             | u8::from(self.storage_access.read_write) << 2;
         out.push(access);
+        let attachments = u8::from(self.color_attachment)
+            | u8::from(self.depth_attachment) << 1
+            | u8::from(self.stencil_attachment) << 2
+            | u8::from(self.blendable) << 3;
+        out.push(attachments);
     }
 }
 

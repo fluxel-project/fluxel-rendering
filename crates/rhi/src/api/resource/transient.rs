@@ -8,14 +8,13 @@ use crate::api::error::RhiResult;
 use crate::api::format::TextureSupportQuery;
 use crate::api::identity::DeviceIdentity;
 use crate::api::platform::Device;
-use crate::api::resource::backend::BufferBackend;
+use crate::api::resource::backend::{BufferBackend, TextureBackend};
 use crate::api::resource::buffer::{
     Buffer, BufferDescriptor, BufferSupportQuery, validate_buffer_descriptor,
 };
 use crate::api::resource::texture::{Texture, TextureDescriptor, validate_texture_descriptor};
-use crate::api::submission::{PlanPoint, SubmissionPlanId};
+use crate::api::submission::{PlanPoint, SubmissionPlanId, TransientLifetimeRegistry};
 use std::any::Any;
-use std::sync::{Arc, Mutex};
 
 /// How a resource kind is physically allocated by this device.
 #[non_exhaustive]
@@ -96,12 +95,6 @@ pub(crate) struct TransientResourceMetadata {
     lifetime: TransientLifetime,
 }
 
-/// Shared builder/allocator registry of all transient lifetimes in one plan.
-///
-/// Submission owns validation of this registry because only it owns the plan
-/// DAG; resource allocation merely makes every allocated lifetime visible.
-pub(crate) type TransientLifetimeRegistry = Arc<Mutex<Vec<TransientLifetime>>>;
-
 impl TransientResourceMetadata {
     fn new(lifetime: TransientLifetime) -> Self {
         Self { lifetime }
@@ -114,12 +107,39 @@ impl TransientResourceMetadata {
 }
 
 /// Placeholder backing for a logical resource awaiting submission realization.
-struct DeferredTransientBuffer;
+pub(crate) struct DeferredTransientBuffer;
 
 impl BufferBackend for DeferredTransientBuffer {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// Placeholder backend object for a texture whose dedicated backing will be
+/// materialized by submission lowering. It keeps the public handle's ownership
+/// invariant intact; unlike the removed `Option`, it is always a concrete seam
+/// object.
+pub(crate) struct DeferredTransientTexture;
+
+impl TextureBackend for DeferredTransientTexture {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Whether a buffer still carries the crate-local deferred fixture backing.
+///
+/// A public plan builder always creates transient resources through a live
+/// [`Device`], so a submitted plan must never contain this marker.  It remains
+/// useful for the fact-only builder used by DAG tests: those tests deliberately
+/// have no native device from which an allocation could be requested.
+pub(crate) fn is_deferred_buffer(buffer: &Buffer) -> bool {
+    buffer.native().as_any().is::<DeferredTransientBuffer>()
+}
+
+/// Whether a texture still carries the crate-local deferred fixture backing.
+pub(crate) fn is_deferred_texture(texture: &Texture) -> bool {
+    texture.native().as_any().is::<DeferredTransientTexture>()
 }
 
 impl TransientLifetime {
@@ -149,24 +169,27 @@ impl TransientLifetime {
 }
 
 /// A handle which creates transient resources for one submission plan.
-#[derive(Clone)]
-pub struct TransientAllocator {
+pub struct TransientAllocator<'plan> {
     device: DeviceIdentity,
     plan: SubmissionPlanId,
-    registry: TransientLifetimeRegistry,
+    registry: &'plan TransientLifetimeRegistry,
+    /// Present for builders opened from a real device.  The fact-only builder
+    /// used by contract tests intentionally has no backend to allocate from.
+    device_handle: Option<&'plan Device>,
 }
 
-impl TransientAllocator {
+impl<'plan> TransientAllocator<'plan> {
     /// Assembles the plan-scoped allocator returned by the submission builder.
     pub(crate) fn new(
         device: DeviceIdentity,
         plan: SubmissionPlanId,
-        registry: TransientLifetimeRegistry,
+        registry: &'plan TransientLifetimeRegistry,
     ) -> Self {
         Self {
             device,
             plan,
             registry,
+            device_handle: None,
         }
     }
 
@@ -174,9 +197,15 @@ impl TransientAllocator {
     pub(crate) fn new_with_registry(
         device: DeviceIdentity,
         plan: SubmissionPlanId,
-        registry: TransientLifetimeRegistry,
+        registry: &'plan TransientLifetimeRegistry,
+        device_handle: Option<&'plan Device>,
     ) -> Self {
-        Self::new(device, plan, registry)
+        Self {
+            device,
+            plan,
+            registry,
+            device_handle,
+        }
     }
 
     /// The device that owns resources created by this allocator.
@@ -189,8 +218,12 @@ impl TransientAllocator {
         self.plan
     }
 
-    /// Creates a logical transient buffer. Physical realization may be deferred
-    /// until submission lowering.
+    /// Creates a transient buffer with dedicated native backing.
+    ///
+    /// Dedicated is the frozen baseline: its allocation happens here so the
+    /// returned handle is immediately a normal native-backed `Buffer`.  A future
+    /// aliasing implementation may defer *placement* until submit, but may not
+    /// expose a public handle without a valid backend object.
     pub fn create_buffer(
         &self,
         desc: &BufferDescriptor,
@@ -198,22 +231,34 @@ impl TransientAllocator {
     ) -> RhiResult<Buffer> {
         self.validate_lifetime(&lifetime)?;
         validate_transient_buffer_descriptor(desc)?;
+        let native = if let Some(device) = self.device_handle {
+            device
+                .require_active()
+                .map_err(|error| error.at("TransientAllocator::create_buffer"))?;
+            let support = device
+                .capabilities()
+                .buffer_support(&BufferSupportQuery::new(desc.usage));
+            validate_buffer_descriptor(desc, &support)
+                .map_err(|error| error.at("TransientAllocator::create_buffer"))?;
+            device.native().create_buffer(desc)?
+        } else {
+            // `SubmissionPlanBuilder::with_facts` has no native device.  This
+            // path is solely a crate-local plan-validation fixture; submit
+            // rejects it before reaching a backend.
+            Box::new(DeferredTransientBuffer)
+        };
         let buffer = Buffer::new_transient(
             crate::api::identity::ObjectId::next(),
             self.device,
             desc.clone(),
-            Arc::new(DeferredTransientBuffer),
+            native,
             TransientResourceMetadata::new(lifetime.clone()),
         );
-        self.registry
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(lifetime);
+        self.registry.record(lifetime);
         Ok(buffer)
     }
 
-    /// Creates a logical transient texture. Physical realization may be deferred
-    /// until submission lowering.
+    /// Creates a transient texture with dedicated native backing.
     pub fn create_texture(
         &self,
         desc: &TextureDescriptor,
@@ -221,16 +266,40 @@ impl TransientAllocator {
     ) -> RhiResult<Texture> {
         self.validate_lifetime(&lifetime)?;
         validate_transient_texture_descriptor(desc)?;
+        let (descriptor, native) = if let Some(device) = self.device_handle {
+            device
+                .require_active()
+                .map_err(|error| error.at("TransientAllocator::create_texture"))?;
+            let mut accepted = desc.clone();
+            let mut query = TextureSupportQuery::new(
+                accepted.dimension,
+                accepted.format,
+                accepted.usage,
+                accepted.sample_count,
+            )
+            .with_view_compatibility(accepted.view_compatibility);
+            for format in &accepted.view_formats {
+                query = query.with_view_format(*format);
+            }
+            let support = device.capabilities().texture_support(&query);
+            validate_texture_descriptor(&mut accepted, &support)
+                .map_err(|error| error.at("TransientAllocator::create_texture"))?;
+            let native = device.native().create_texture(&accepted)?;
+            (accepted, native)
+        } else {
+            (
+                desc.clone(),
+                Box::new(DeferredTransientTexture) as Box<dyn TextureBackend>,
+            )
+        };
         let texture = Texture::new_transient(
             crate::api::identity::ObjectId::next(),
             self.device,
-            desc.clone(),
+            descriptor,
+            native,
             TransientResourceMetadata::new(lifetime.clone()),
         );
-        self.registry
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(lifetime);
+        self.registry.record(lifetime);
         Ok(texture)
     }
 

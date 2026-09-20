@@ -248,16 +248,8 @@ pub(crate) struct PlanBatch {
 pub(crate) struct PlanPresent {
     /// The plan-local present identity returned to the caller.
     ///
-    /// Written when the present is planned and read when the receipt is assembled, so
-    /// the backend port is what reads it; the test suite reads it to check that the
-    /// identity a caller was handed is the identity the plan carries.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the receipt path when the backend port lands"
-        )
-    )]
+    /// Written when the present is planned and read when the submission receipt is
+    /// assembled.
     pub(crate) id: PresentPlanId,
     /// The frame being presented, which the plan owns.
     pub(crate) frame: AcquiredFrameId,
@@ -359,15 +351,12 @@ impl SubmissionPlan {
     }
 
     /// The frames this plan owns, which are presented by it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the backend lowering and the present path when the port lands"
-        )
-    )]
     pub(crate) fn frames(&self) -> &[AcquiredFrame] {
         &self.body.frames
+    }
+
+    pub(crate) fn frames_mut(&mut self) -> &mut [AcquiredFrame] {
+        &mut self.body.frames
     }
 }
 

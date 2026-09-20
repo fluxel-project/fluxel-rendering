@@ -147,25 +147,15 @@ fn a_snapshot_failing_two_preconditions_reports_the_devices_first() {
     );
 }
 
-/// The interval itself, once the preconditions hold, is reached only after the
-/// portable half has run — and it panics, because the state it needs does not
-/// exist.
-///
-/// [`IntervalStatistics`] requires `lanes` and an optional per-interval working
-/// set, and the statistics domain that would accumulate them does not exist yet:
-/// the cumulative record has no per-lane dimension, and a working set is a set of
-/// objects observed during the interval rather than a difference of counts.
-/// Returning an interval with an empty lane list would state that no lane was
-/// used, which is a claim about the device and not about what is built, so the
-/// verb panics instead. This is an open gap and not worked around; the reason
-/// lives on `delta_since`.
 #[test]
-#[should_panic(expected = "the interval state is not built")]
-fn a_comparable_pair_of_snapshots_reaches_the_unbuilt_interval() {
+fn a_comparable_pair_of_snapshots_produces_an_empty_default_interval() {
     let earlier = snapshot_on(device(), 1, 4, 1_000);
     let later = snapshot_on(device(), 1, 9, 2_000);
 
-    let _ = later.delta_since(&earlier);
+    let interval = later.delta_since(&earlier).expect("comparable snapshots");
+    assert_eq!(interval.elapsed_cpu_ns, 1_000);
+    assert!(interval.lanes.is_empty());
+    assert!(interval.working_set.is_none());
 }
 
 // ---------------------------------------------------------------------------

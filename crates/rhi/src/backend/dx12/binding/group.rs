@@ -43,16 +43,20 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_CONSTANT_BUFFER_VIEW_DESC, D3D12_CPU_DESCRIPTOR_HANDLE,
     D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, D3D12_GPU_DESCRIPTOR_HANDLE,
     D3D12_SHADER_RESOURCE_VIEW_DESC, D3D12_SHADER_RESOURCE_VIEW_DESC_0, D3D12_SRV_DIMENSION_BUFFER,
-    D3D12_UAV_DIMENSION_BUFFER, D3D12_UNORDERED_ACCESS_VIEW_DESC,
-    D3D12_UNORDERED_ACCESS_VIEW_DESC_0, ID3D12Device, ID3D12Resource,
+    D3D12_TEX1D_UAV, D3D12_TEX2D_ARRAY_UAV, D3D12_TEX2D_UAV, D3D12_TEX3D_UAV,
+    D3D12_UAV_DIMENSION_BUFFER, D3D12_UAV_DIMENSION_TEXTURE1D, D3D12_UAV_DIMENSION_TEXTURE2D,
+    D3D12_UAV_DIMENSION_TEXTURE2DARRAY, D3D12_UAV_DIMENSION_TEXTURE3D,
+    D3D12_UNORDERED_ACCESS_VIEW_DESC, D3D12_UNORDERED_ACCESS_VIEW_DESC_0, ID3D12DescriptorHeap,
+    ID3D12Device, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_TYPELESS;
 
 use crate::api::binding::backend::BindGroupBackend;
 use crate::api::binding::{BindGroupDescriptor, BindingKind, BindingResource};
 use crate::api::resource::buffer::{Buffer, BufferBinding};
+use crate::api::resource::{Sampler, TextureView};
 use crate::backend::dx12::failure::Dx12Failure;
-use crate::backend::dx12::resource::Dx12Buffer;
+use crate::backend::dx12::resource::{Dx12Buffer, Dx12Sampler, Dx12Texture, Dx12TextureView};
 
 use super::heap::DescriptorHeap;
 use super::layout::{RangePlan, TablePlan};
@@ -81,6 +85,9 @@ pub(crate) struct Dx12BindGroup {
     /// An `Arc` rather than a borrow, because the group outlives the call that
     /// made it and must be able to give its slots back on its own.
     heap: Arc<DescriptorHeap>,
+    sampler_start: u32,
+    sampler_count: u32,
+    sampler_heap: Arc<DescriptorHeap>,
     /// Every buffer an address in the run points at.
     ///
     /// Textures and samplers will join this list when they are lowered; today a
@@ -88,7 +95,9 @@ pub(crate) struct Dx12BindGroup {
     /// with one inhabitant would be an abstraction with no second case to justify
     /// it. Held for the reason the module doc gives, and never read — which is
     /// what an ownership field is.
-    buffers: Vec<Buffer>,
+    _buffers: Vec<Buffer>,
+    _textures: Vec<TextureView>,
+    _samplers: Vec<Sampler>,
 }
 
 impl Dx12BindGroup {
@@ -99,6 +108,19 @@ impl Dx12BindGroup {
     /// *within* the table, so the table is named from its start.
     pub(crate) fn view_table(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
         self.heap.gpu(self.start)
+    }
+
+    /// The shader-visible heap containing this group's view table.
+    pub(crate) fn view_heap(&self) -> &ID3D12DescriptorHeap {
+        self.heap.handle()
+    }
+
+    pub(crate) fn sampler_table(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        self.sampler_heap.gpu(self.sampler_start)
+    }
+
+    pub(crate) fn sampler_heap(&self) -> &ID3D12DescriptorHeap {
+        self.sampler_heap.handle()
     }
 }
 
@@ -111,6 +133,8 @@ impl BindGroupBackend for Dx12BindGroup {
 impl Drop for Dx12BindGroup {
     fn drop(&mut self) {
         self.heap.release(self.start, self.count);
+        self.sampler_heap
+            .release(self.sampler_start, self.sampler_count);
     }
 }
 
@@ -128,10 +152,12 @@ impl Drop for Dx12BindGroup {
 pub(crate) fn create_bind_group(
     device: &ID3D12Device,
     heap: &Arc<DescriptorHeap>,
+    sampler_heap: &Arc<DescriptorHeap>,
     descriptor: &BindGroupDescriptor,
 ) -> Result<Dx12BindGroup, Dx12Failure> {
     let plan = TablePlan::of(descriptor.layout.descriptor())?;
     let count = plan.view_descriptors();
+    let sampler_count = plan.sampler_descriptors();
     let start = if count == 0 {
         // Empty layouts are meaningful placeholders in a PipelineInterface and
         // an empty group for one owns no native descriptor range.
@@ -143,13 +169,35 @@ pub(crate) fn create_bind_group(
                   live bind group holds its range until the last handle to it is dropped",
         })?
     };
+    let sampler_start = if sampler_count == 0 {
+        0
+    } else {
+        sampler_heap.allocate(sampler_count).ok_or(Dx12Failure::Unsupported {
+            what: "a bind group's samplers larger than this device's free descriptor slots",
+            why: "the DX12 sampler heap is fixed-size and every live bind group retains its range",
+        })?
+    };
 
     let mut buffers = Vec::with_capacity(descriptor.entries.len());
+    let mut textures = Vec::with_capacity(descriptor.entries.len());
+    let mut samplers = Vec::with_capacity(descriptor.entries.len());
     // The run is released on a failure below rather than leaked: the
     // `Dx12BindGroup` that would have owned it is never built, so nothing else
     // can give it back.
-    if let Err(failure) = write_entries(device, heap, start, &plan, descriptor, &mut buffers) {
+    if let Err(failure) = write_entries(
+        device,
+        heap,
+        start,
+        sampler_heap,
+        sampler_start,
+        &plan,
+        descriptor,
+        &mut buffers,
+        &mut textures,
+        &mut samplers,
+    ) {
         heap.release(start, count);
+        sampler_heap.release(sampler_start, sampler_count);
         return Err(failure);
     }
 
@@ -157,7 +205,12 @@ pub(crate) fn create_bind_group(
         start,
         count,
         heap: Arc::clone(heap),
-        buffers,
+        sampler_start,
+        sampler_count,
+        sampler_heap: Arc::clone(sampler_heap),
+        _buffers: buffers,
+        _textures: textures,
+        _samplers: samplers,
     })
 }
 
@@ -166,9 +219,13 @@ fn write_entries(
     device: &ID3D12Device,
     heap: &DescriptorHeap,
     start: u32,
+    sampler_heap: &DescriptorHeap,
+    sampler_start: u32,
     plan: &TablePlan,
     descriptor: &BindGroupDescriptor,
     buffers: &mut Vec<Buffer>,
+    textures: &mut Vec<TextureView>,
+    samplers: &mut Vec<Sampler>,
 ) -> Result<(), Dx12Failure> {
     for entry in &descriptor.entries {
         // A lookup rather than an index by position: the plan's order is the
@@ -211,28 +268,38 @@ fn write_entries(
                     buffers.push(binding.buffer.clone());
                 }
             }
-            // The view types below have no lowering in this backend at all, and
-            // the refusal names which one arrived rather than reporting them as
-            // one gap. A texture reaching here is a *portable* gap as well —
-            // `Device::create_texture` stops with `unimplemented!()` — while a
-            // sampler reaching here is only this backend's, which is why the two
-            // messages differ.
-            BindingResource::Texture(_) | BindingResource::TextureArray(_) => {
-                return Err(Dx12Failure::Unsupported {
-                    what: "a texture bound to a group",
-                    why: "this backend has no texture resource, no texture view and no \
-                          format mapping, and no caller can reach them anyway: \
-                          Device::create_texture stops with unimplemented!()",
-                });
+            BindingResource::Texture(view) => {
+                write_texture(device, heap.cpu(start + range.first), range, view)?;
+                textures.push(view.clone());
             }
-            BindingResource::Sampler(_) | BindingResource::SamplerArray(_) => {
-                return Err(Dx12Failure::Unsupported {
-                    what: "a sampler bound to a group",
-                    why: "the sampler heap and the per-entry sampler write are not \
-                          written, and no caller can reach them anyway: \
-                          Device::create_sampler stops with unimplemented!(), so no \
-                          portable Sampler value exists to bind",
-                });
+            BindingResource::TextureArray(views) => {
+                for (element, view) in views.iter().enumerate() {
+                    write_texture(
+                        device,
+                        heap.cpu(start + range.first + element as u32),
+                        range,
+                        view,
+                    )?;
+                    textures.push(view.clone());
+                }
+            }
+            BindingResource::Sampler(sampler) => {
+                write_sampler(
+                    device,
+                    sampler_heap.cpu(sampler_start + range.first),
+                    sampler,
+                )?;
+                samplers.push(sampler.clone());
+            }
+            BindingResource::SamplerArray(values) => {
+                for (element, sampler) in values.iter().enumerate() {
+                    write_sampler(
+                        device,
+                        sampler_heap.cpu(sampler_start + range.first + element as u32),
+                        sampler,
+                    )?;
+                    samplers.push(sampler.clone());
+                }
             }
         }
     }
@@ -309,6 +376,154 @@ fn write_element(
                       reached, so this is a total function over an empty case",
         }),
     }
+}
+
+/// Copies a texture SRV into the group's shader-visible view heap.
+///
+/// The view owns its CPU-only descriptor, while the group owns the portable
+/// view. Copying keeps descriptor storage separate from resource lifetime and
+/// is the D3D12-prescribed way to populate a shader-visible heap.
+fn write_texture(
+    device: &ID3D12Device,
+    destination: D3D12_CPU_DESCRIPTOR_HANDLE,
+    range: &RangePlan,
+    view: &TextureView,
+) -> Result<(), Dx12Failure> {
+    let native = view
+        .native()
+        .as_any()
+        .downcast_ref::<Dx12TextureView>()
+        .ok_or(Dx12Failure::Unsupported {
+            what: "a texture view this device did not create",
+            why: "its native descriptor belongs to another backend",
+        })?;
+    match &range.kind {
+        BindingKind::SampledTexture { .. }
+        | BindingKind::StorageTexture {
+            access: crate::api::binding::StorageAccess::ReadOnly,
+            ..
+        } => unsafe {
+            device.CopyDescriptorsSimple(
+                1,
+                destination,
+                native.cpu(),
+                windows::Win32::Graphics::Direct3D12::D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+            );
+            Ok(())
+        },
+        BindingKind::StorageTexture { .. } => write_texture_uav(device, destination, view),
+        _ => Err(Dx12Failure::Unsupported {
+            what: "a texture bound to a non-texture slot",
+            why: "portable validation normally rejects this shape before backend lowering",
+        }),
+    }
+}
+
+fn write_texture_uav(
+    device: &ID3D12Device,
+    destination: D3D12_CPU_DESCRIPTOR_HANDLE,
+    view: &TextureView,
+) -> Result<(), Dx12Failure> {
+    let texture = view.texture();
+    let native = texture
+        .native()
+        .as_any()
+        .downcast_ref::<Dx12Texture>()
+        .ok_or(Dx12Failure::Unsupported {
+            what: "a texture this device did not create",
+            why: "its native allocation belongs to another backend",
+        })?;
+    let format = crate::backend::dx12::platform::facts::dxgi_format(view.format()).ok_or(
+        Dx12Failure::Unsupported {
+            what: "a storage texture format with no DXGI UAV representation",
+            why: "the public format is accepted only where the device capability table says it is usable",
+        },
+    )?;
+    use crate::api::resource::view::TextureViewDimension;
+    let descriptor = match view.descriptor().dimension {
+        TextureViewDimension::D1 => D3D12_UNORDERED_ACCESS_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D12_UAV_DIMENSION_TEXTURE1D,
+            Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+                Texture1D: D3D12_TEX1D_UAV {
+                    MipSlice: view.descriptor().base_mip,
+                },
+            },
+        },
+        TextureViewDimension::D2 => D3D12_UNORDERED_ACCESS_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_UAV {
+                    MipSlice: view.descriptor().base_mip,
+                    PlaneSlice: 0,
+                },
+            },
+        },
+        TextureViewDimension::D2Array => D3D12_UNORDERED_ACCESS_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
+            Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+                Texture2DArray: D3D12_TEX2D_ARRAY_UAV {
+                    MipSlice: view.descriptor().base_mip,
+                    FirstArraySlice: view.descriptor().base_layer,
+                    ArraySize: view.descriptor().layer_count,
+                    PlaneSlice: 0,
+                },
+            },
+        },
+        TextureViewDimension::D3 => D3D12_UNORDERED_ACCESS_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D12_UAV_DIMENSION_TEXTURE3D,
+            Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+                Texture3D: D3D12_TEX3D_UAV {
+                    MipSlice: view.descriptor().base_mip,
+                    FirstWSlice: 0,
+                    WSize: u32::MAX,
+                },
+            },
+        },
+        TextureViewDimension::Cube | TextureViewDimension::CubeArray => {
+            return Err(Dx12Failure::Unsupported {
+                what: "a cube storage texture binding",
+                why: "D3D12 has no cube UAV descriptor dimension",
+            });
+        }
+    };
+    unsafe {
+        device.CreateUnorderedAccessView(
+            native.resource(),
+            None::<&ID3D12Resource>,
+            Some(&descriptor),
+            destination,
+        );
+    }
+    Ok(())
+}
+
+/// Copies a sampler descriptor into the group's shader-visible sampler heap.
+fn write_sampler(
+    device: &ID3D12Device,
+    destination: D3D12_CPU_DESCRIPTOR_HANDLE,
+    sampler: &Sampler,
+) -> Result<(), Dx12Failure> {
+    let native = sampler
+        .native()
+        .as_any()
+        .downcast_ref::<Dx12Sampler>()
+        .ok_or(Dx12Failure::Unsupported {
+            what: "a sampler this device did not create",
+            why: "its native descriptor belongs to another backend",
+        })?;
+    unsafe {
+        device.CopyDescriptorsSimple(
+            1,
+            destination,
+            native.cpu(),
+            windows::Win32::Graphics::Direct3D12::D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
+        );
+    }
+    Ok(())
 }
 
 /// Writes a constant-buffer view, widening the range to the view's granularity.

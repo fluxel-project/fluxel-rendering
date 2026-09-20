@@ -56,8 +56,8 @@
 //! expectation is on an item with no caller in any configuration, which is a
 //! different case and is fulfilled everywhere.
 
-mod device;
-mod facts;
+pub(crate) mod device;
+pub(crate) mod facts;
 mod provider;
 mod request;
 

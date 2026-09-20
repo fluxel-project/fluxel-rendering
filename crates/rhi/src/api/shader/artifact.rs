@@ -145,6 +145,15 @@ impl ShaderArtifact {
 /// the artifacts and interfaces it was built from.
 #[derive(Clone)]
 pub struct ShaderModule {
+    inner: Arc<ShaderModuleInner>,
+}
+
+/// The one ownership domain of a created shader module.
+///
+/// A module is a single logical handle.  Keeping its portable description and
+/// native backing together means cloning the public handle performs one shared
+/// ownership operation rather than independently sharing only the native half.
+struct ShaderModuleInner {
     id: ObjectId,
     device: DeviceIdentity,
     artifact: ShaderArtifact,
@@ -154,7 +163,7 @@ pub struct ShaderModule {
     /// behind `dyn` so that no native type reaches the exported surface (section
     /// 59). Section 19.10 declares no accessor for it, and it is reached only by a
     /// later chapter's device verb, which downcasts inside its own backend.
-    native: Arc<dyn ShaderModuleBackend>,
+    native: Box<dyn ShaderModuleBackend>,
 }
 
 impl ShaderModule {
@@ -168,13 +177,15 @@ impl ShaderModule {
         id: ObjectId,
         device: DeviceIdentity,
         artifact: ShaderArtifact,
-        native: Arc<dyn ShaderModuleBackend>,
+        native: Box<dyn ShaderModuleBackend>,
     ) -> Self {
         Self {
-            id,
-            device,
-            artifact,
-            native,
+            inner: Arc::new(ShaderModuleInner {
+                id,
+                device,
+                artifact,
+                native,
+            }),
         }
     }
 
@@ -201,20 +212,16 @@ impl ShaderModule {
     /// rather than an accident: the attribute's reason has stopped being true, and
     /// `expect` is what makes that a compile error instead of a stale comment.
     #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the pipeline chapter's device verb, which is not written; the \
-                      contract tests are what exercise it until then"
-        )
+        all(not(test), not(feature = "dx12")),
+        expect(dead_code, reason = "read by backend pipeline lowering")
     )]
-    pub(crate) fn native(&self) -> &Arc<dyn ShaderModuleBackend> {
-        &self.native
+    pub(crate) fn native(&self) -> &dyn ShaderModuleBackend {
+        self.inner.native.as_ref()
     }
 
     /// This module's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this module.
@@ -223,7 +230,7 @@ impl ShaderModule {
     /// implicit recompile or module transfer, so a module from another device is a
     /// refusal.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The artifact this module was created from.
@@ -231,7 +238,7 @@ impl ShaderModule {
     /// Still needed after creation: a pipeline re-describes its stages from their
     /// artifacts (section 28.1).
     pub fn artifact(&self) -> &ShaderArtifact {
-        &self.artifact
+        &self.inner.artifact
     }
 
     /// The stage of this module's entry point.
@@ -240,7 +247,7 @@ impl ShaderModule {
     /// is decided: a module is exactly one artifact entry point (section 19.10),
     /// so there is no second stage to disagree with.
     pub fn stage(&self) -> ShaderStage {
-        self.artifact.stage
+        self.inner.artifact.stage
     }
 }
 
@@ -261,8 +268,8 @@ impl fmt::Debug for ShaderModule {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ShaderModule")
-            .field("id", &self.id)
-            .field("device", &self.device)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
             .finish_non_exhaustive()
     }
 }
@@ -350,7 +357,7 @@ impl Device {
             ObjectId::next(),
             self.identity(),
             artifact.clone(),
-            native.into(),
+            native,
         ))
     }
 }

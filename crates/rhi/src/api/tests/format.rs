@@ -73,7 +73,43 @@ const ALL_FORMATS: [TextureFormat; 38] = [
 /// pins is that the facts object can be built and that every *other* accessor
 /// answers from the format alone.
 fn facts(format: TextureFormat) -> FormatFacts {
-    FormatFacts::new(format, StorageAccessSupport::new(true, true, true))
+    FormatFacts::new(
+        format,
+        StorageAccessSupport::new(true, true, true),
+        true,
+        true,
+        true,
+        true,
+    )
+}
+
+#[test]
+fn attachment_and_blend_accessors_read_the_probed_record() {
+    let color = FormatFacts::new(
+        TextureFormat::Rgba8Unorm,
+        StorageAccessSupport::new(false, false, false),
+        true,
+        false,
+        false,
+        true,
+    );
+    assert!(color.color_attachment());
+    assert!(!color.depth_attachment());
+    assert!(!color.stencil_attachment());
+    assert!(color.blendable());
+
+    let depth_stencil = FormatFacts::new(
+        TextureFormat::Depth24PlusStencil8,
+        StorageAccessSupport::new(false, false, false),
+        false,
+        true,
+        true,
+        false,
+    );
+    assert!(!depth_stencil.color_attachment());
+    assert!(depth_stencil.depth_attachment());
+    assert!(depth_stencil.stencil_attachment());
+    assert!(!depth_stencil.blendable());
 }
 
 #[test]

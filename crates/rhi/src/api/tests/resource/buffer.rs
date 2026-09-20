@@ -540,7 +540,7 @@ fn a_clone_is_the_same_allocation_and_not_a_second_one() {
     // buffer, so the two handles must reach one allocation. Sharing one `Arc` is
     // that statement in the only form observable without a GPU.
     assert!(
-        std::sync::Arc::ptr_eq(clone.native(), buffer.native()),
+        std::ptr::eq(clone.native(), buffer.native()),
         "cloning a buffer must share the allocation, not copy it"
     );
     assert_eq!(mock_native(&clone).size(), 256);

@@ -27,12 +27,10 @@
 //! an `unimplemented!()` behind an `Arc`: a fixture that panics when read would
 //! turn "these tests do not look at allocations" from a fact into a trap.
 
-use std::any::Any;
-use std::sync::Arc;
-
 use crate::api::identity::{DeviceIdentity, ObjectId};
 use crate::api::resource::backend::BufferBackend;
 use crate::api::resource::buffer::{Buffer, BufferDescriptor};
+use std::any::Any;
 
 /// The native side of a fixture buffer: a token that is never read.
 pub(crate) struct FixtureBuffer;
@@ -49,5 +47,5 @@ impl BufferBackend for FixtureBuffer {
 /// are the three facts each test is actually about; only the allocation is
 /// supplied by this function.
 pub(crate) fn buffer(id: ObjectId, device: DeviceIdentity, descriptor: BufferDescriptor) -> Buffer {
-    Buffer::new(id, device, descriptor, Arc::new(FixtureBuffer))
+    Buffer::new(id, device, descriptor, Box::new(FixtureBuffer))
 }

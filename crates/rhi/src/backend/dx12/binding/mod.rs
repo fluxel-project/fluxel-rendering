@@ -34,14 +34,15 @@
 //! wrote an address for, and returns its heap slots only when the last handle to
 //! it is gone.
 //!
-//! Buffer-backed descriptor groups are implemented. Texture and sampler
-//! descriptors remain explicit unsupported paths until their resource lowering
-//! exists; no v12 compatibility layer is kept for them.
+//! Buffer, sampled-texture, read-only storage-texture, and sampler descriptors
+//! are copied into the device-wide shader-visible heaps. Read-write texture UAV
+//! lowering remains deliberately refused until its per-view descriptor rules are
+//! implemented.
 
 mod group;
 mod heap;
 pub(crate) mod layout;
 pub(crate) mod vocabulary;
 
-pub(crate) use group::create_bind_group;
+pub(crate) use group::{Dx12BindGroup, create_bind_group};
 pub(crate) use heap::DescriptorHeap;

@@ -53,13 +53,10 @@
 //! texture_support     EnabledCapabilities::texture_support(query)
 //! ```
 //!
-//! Two of those deserve their reason stated. `color_target_facts` is a closure
-//! rather than a `FormatFacts` read because the four facts it answers are
-//! *probed* facts of section 27.3's "Target facts" block: three of them are still
-//! `unimplemented!()` in [`crate::api::format`] and the fourth is not written, so
-//! a validator that called them would panic before it could refuse anything.
-//! Passing them keeps this module's rules decidable and testable now, and leaves
-//! one seam for the façade to close when the probe lands.
+//! `color_target_facts` is a small carrier rather than a direct `FormatFacts`
+//! reference so validation fixtures can state the exact target facts they need
+//! without constructing an entire capability snapshot. Production construction
+//! maps it directly from the probed `FormatFacts` record.
 //!
 //! # The rules this module decides
 //!
@@ -167,11 +164,9 @@ pub(crate) struct PipelineDeviceFacts<'a> {
 
 /// The four format facts section 27.3's "Target facts" block names.
 ///
-/// A carrier rather than a `FormatFacts` read: three of the four are still
-/// `unimplemented!()` in [`crate::api::format`] and the fourth — the shader
-/// numeric type the format outputs — is not written, so a validator that read
-/// them directly would panic instead of refusing. The façade fills this from the
-/// probed facts once they exist.
+/// A compact validation carrier. The façade fills it from the probed
+/// [`crate::api::format::FormatFacts`], while fixtures can state only the four
+/// facts a target-validation case varies.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ColorTargetFacts {
     /// `FormatFacts::color_attachment`.

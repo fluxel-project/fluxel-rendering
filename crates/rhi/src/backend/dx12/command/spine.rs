@@ -64,15 +64,16 @@
 //!
 //! # Why a payload with no lowering is refused rather than skipped
 //!
-//! The recorder can hold raster scopes, dispatches, texture copies, and debug
-//! markup, and this spine lowers none of them yet. Skipping one would leave the
-//! caller holding a receipt for a plan whose draw never happened — the silent
-//! substitution discipline 3 and section 9.4 forbid in the route case, and which
-//! does not become acceptable because the missing lowering is this backend's
-//! rather than the platform's.
+//! The recorder can also hold texture copies, resolves, presentation images, and
+//! debug markup which this spine does not lower yet. Skipping one would leave the
+//! caller holding a receipt for work that never happened — the silent substitution
+//! discipline 3 and section 9.4 forbid in the route case, and which does not
+//! become acceptable because the missing lowering is this backend's rather than
+//! the platform's.
 
-use std::collections::VecDeque;
-use std::sync::{Mutex, MutexGuard};
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::Waker;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::{
@@ -91,8 +92,13 @@ use crate::api::submission::plan::PlanBatch;
 use crate::api::submission::{CompletionFailure, CompletionState};
 use crate::backend::dx12::ffi;
 
+use super::compute::lower_compute_dispatch;
 use super::copy::lower_buffer_copy;
-use super::transfer::{CommittedBatch, lower_readback, lower_upload, publish_readback};
+use super::raster::{RasterScopeState, lower_raster_begin, lower_raster_draw, lower_raster_end};
+use super::transfer::{
+    CommittedBatch, lower_buffer_texture_copy, lower_readback, lower_texture_copy, lower_upload,
+    publish_readback,
+};
 use crate::backend::dx12::failure::{Dx12Failure, ref_native};
 
 /// How long `wait_idle` will block before it reports that the GPU never got
@@ -144,6 +150,9 @@ pub(crate) struct Dx12CommandSpine {
     /// reader observe a slot reserved under one fence value and released under
     /// another.
     state: Mutex<SpineState>,
+    /// Futures waiting for a fence transition. Kept separate from command state
+    /// so a native event thread only needs a small portable waker registry.
+    completion_waiters: Arc<Mutex<BTreeMap<u64, Vec<Waker>>>>,
 }
 
 /// The mutable half of a spine.
@@ -274,6 +283,10 @@ impl Drop for OwnedEvent {
 }
 
 impl Dx12CommandSpine {
+    pub(crate) fn queue(&self) -> ID3D12CommandQueue {
+        self.queue.clone()
+    }
+
     /// Creates the queue and fence behind one device.
     ///
     /// The ring starts empty: slots are made on demand, so a device that never
@@ -314,6 +327,7 @@ impl Dx12CommandSpine {
                     unobservable: None,
                     pending: VecDeque::new(),
                 }),
+                completion_waiters: Arc::new(Mutex::new(BTreeMap::new())),
             })
         }
     }
@@ -386,6 +400,14 @@ impl Dx12CommandSpine {
                 serial,
                 staging: Vec::new(),
                 readbacks: Vec::new(),
+                compute_pipelines: Vec::new(),
+                raster_pipelines: Vec::new(),
+                raster_buffers: Vec::new(),
+                raster_views: Vec::new(),
+                raster_frames: Vec::new(),
+                raster_textures: Vec::new(),
+                raster_descriptor_heaps: Vec::new(),
+                bind_groups: Vec::new(),
             };
             self.record_batch(&slot.list, batch, &mut committed)?;
 
@@ -408,6 +430,18 @@ impl Dx12CommandSpine {
             // the duration of the call, and the queue holds its own reference to
             // every list it is given.
             unsafe { self.queue.ExecuteCommandLists(&[Some(list)]) };
+
+            // DXGI Present transfers ownership after the batch its plan point
+            // names has entered the queue.  It cannot turn Phase B back into an
+            // error: the frame backend records its terminal present state.
+            let point = request.batches[offset].point;
+            for present in request
+                .presents
+                .iter()
+                .filter(|present| present.after == point)
+            {
+                present.attachment.present(present.receipt);
+            }
 
             // Signalling after each execute is what makes per-batch completion
             // real: the signal is queued behind *this* list, so the fence
@@ -475,17 +509,58 @@ impl Dx12CommandSpine {
         batch: &PlanBatch,
         committed: &mut CommittedBatch,
     ) -> Result<(), Dx12Failure> {
+        let mut raster = None::<RasterScopeState>;
         for work in &batch.work {
             for command in work.commands() {
                 match &command.payload {
+                    RecordedPayload::RasterBegin(begin) => {
+                        if raster.is_some() {
+                            return Err(Dx12Failure::Unsupported {
+                                what: "nested raster scopes",
+                                why: "the portable recorder never emits them",
+                            });
+                        }
+                        raster = Some(lower_raster_begin(&self.device, list, begin, committed)?);
+                    }
+                    RecordedPayload::RasterDraw(draw) => {
+                        let Some(scope) = raster.as_ref() else {
+                            return Err(Dx12Failure::Unsupported {
+                                what: "a raster draw outside a raster scope",
+                                why: "the portable recorder never emits it",
+                            });
+                        };
+                        lower_raster_draw(list, draw, &command.uses, scope, committed)?;
+                    }
+                    RecordedPayload::RasterEnd => {
+                        let Some(scope) = raster.take() else {
+                            return Err(Dx12Failure::Unsupported {
+                                what: "a raster-scope end without a scope",
+                                why: "the portable recorder never emits it",
+                            });
+                        };
+                        lower_raster_end(list, scope, committed);
+                    }
                     RecordedPayload::Copy(CopyRecord::Buffer(copy)) => {
                         lower_buffer_copy(list, copy)?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::Texture(copy)) => {
+                        lower_texture_copy(list, copy)?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::BufferToTexture(copy)) => {
+                        lower_buffer_texture_copy(&self.device, list, copy, true)?;
+                    }
+                    RecordedPayload::Copy(CopyRecord::TextureToBuffer(copy)) => {
+                        lower_buffer_texture_copy(&self.device, list, copy, false)?;
                     }
                     RecordedPayload::Upload(job) => {
                         lower_upload(&self.device, list, job, committed)?;
                     }
                     RecordedPayload::Readback(ticket) => {
                         lower_readback(&self.device, list, ticket, committed)?;
+                    }
+                    RecordedPayload::ComputeBegin(_) | RecordedPayload::ComputeEnd => {}
+                    RecordedPayload::ComputeDispatch(dispatch) => {
+                        lower_compute_dispatch(list, dispatch, &command.uses, committed)?;
                     }
                     other => {
                         return Err(Dx12Failure::Unsupported {
@@ -495,6 +570,12 @@ impl Dx12CommandSpine {
                     }
                 }
             }
+        }
+        if raster.is_some() {
+            return Err(Dx12Failure::Unsupported {
+                what: "an unterminated raster scope",
+                why: "the portable recorder never emits it",
+            });
         }
         Ok(())
     }
@@ -557,6 +638,84 @@ impl Dx12CommandSpine {
         }
     }
 
+    /// Samples one serial and subscribes a runtime waker if it remains pending.
+    ///
+    /// Direct3D 12 supplies completion as a fence event, whereas Rust futures
+    /// supply a `Waker`. A tiny OS thread bridges exactly those two mechanisms:
+    /// it sleeps in `WaitForSingleObject`, then wakes the executor; it never
+    /// polls the fence and never assumes a particular async runtime.
+    pub(crate) fn completion_or_register_waker(
+        &self,
+        serial: u64,
+        waker: &Waker,
+    ) -> CompletionState {
+        let state = self.completion(serial);
+        if !matches!(state, CompletionState::Pending) {
+            return state;
+        }
+
+        let spawn_waiter = {
+            let mut waiters = self
+                .completion_waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let entry = waiters.entry(serial).or_default();
+            let first = entry.is_empty();
+            entry.push(waker.clone());
+            first
+        };
+
+        if spawn_waiter {
+            let fence = self.fence.clone();
+            let waiters = Arc::clone(&self.completion_waiters);
+            std::thread::spawn(move || {
+                // A fence event is one-shot. The bounded wait also guarantees a
+                // device removal cannot strand an OS thread forever; the wake at
+                // the bound causes a fresh state sample and, if still live,
+                // registration for a new native event.
+                let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) };
+                if let Ok(event) = event {
+                    let event = OwnedEvent(event);
+                    if unsafe { fence.SetEventOnCompletion(serial, event.0) }.is_ok() {
+                        let _ = unsafe { WaitForSingleObject(event.0, WAIT_BOUND_MS) };
+                    }
+                }
+                wake_serial(&waiters, serial);
+            });
+        }
+        CompletionState::Pending
+    }
+
+    /// Wakes all registered futures after device loss. Their next poll is what
+    /// observes `DeviceLost` (or preserves an already-complete serial).
+    pub(crate) fn wake_completion_waiters(&self) {
+        let mut waiters = self
+            .completion_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pending = core::mem::take(&mut *waiters);
+        drop(waiters);
+        for (_, wakers) in pending {
+            for waker in wakers {
+                waker.wake();
+            }
+        }
+    }
+
+    /// Terminates every readback retained by work whose fence can no longer
+    /// advance, then wakes completion futures. Retained staging stays alive until
+    /// device teardown: loss gives no proof that native DMA has stopped.
+    pub(crate) fn terminate_pending_for_device_loss(&self) {
+        let state = self.lock();
+        for batch in &state.pending {
+            for retention in &batch.readbacks {
+                retention.ticket.set_status(ReadbackStatus::DeviceLost);
+            }
+        }
+        drop(state);
+        self.wake_completion_waiters();
+    }
+
     /// Publishes whatever the fence has reported finished.
     ///
     /// Called from the device's `poll`, which is the portable layer's only
@@ -616,6 +775,18 @@ impl Dx12CommandSpine {
         // The wait proves the fence moved, so the drain has something to publish.
         self.advance();
         Ok(())
+    }
+}
+
+/// Removes and wakes the futures waiting for one fence value.
+fn wake_serial(waiters: &Mutex<BTreeMap<u64, Vec<Waker>>>, serial: u64) {
+    let registered = waiters
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&serial)
+        .unwrap_or_default();
+    for waker in registered {
+        waker.wake();
     }
 }
 

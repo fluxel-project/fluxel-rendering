@@ -11,11 +11,13 @@
 //! and the merged shader requirements (section 23.3).
 
 use core::fmt;
+use std::sync::Arc;
 
 use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupportQuery, logical_bytes_per_block};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
+use crate::api::pipeline::backend::RasterPipelineBackend;
 use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::texture::{TextureDimension, TextureUsage};
@@ -230,10 +232,19 @@ impl RasterPipelineDescriptor {
 /// that must not re-derive the signature each time.
 #[derive(Clone)]
 pub struct RasterPipeline {
+    inner: Arc<RasterPipelineInner>,
+}
+
+/// The one ownership domain of a created raster pipeline.
+struct RasterPipelineInner {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: RasterPipelineDescriptor,
     target_signature: RenderTargetSignature,
+    /// Native graphics state retained by the portable handle.  It is only
+    /// reachable by crate-private command lowering.
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    native: Box<dyn RasterPipelineBackend>,
 }
 
 impl RasterPipeline {
@@ -242,45 +253,42 @@ impl RasterPipeline {
     /// Crate-private: section 3 gives identity to the object that created it, so
     /// only `Device::create_raster_pipeline` may produce one. The signature is the
     /// canonical one, computed from the descriptor it is given.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_raster_pipeline calls this once the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,
         descriptor: RasterPipelineDescriptor,
+        native: Box<dyn RasterPipelineBackend>,
     ) -> Self {
         let target_signature = descriptor.target_signature();
         Self {
-            id,
-            device,
-            descriptor,
-            target_signature,
+            inner: Arc::new(RasterPipelineInner {
+                id,
+                device,
+                descriptor,
+                target_signature,
+                native,
+            }),
         }
     }
 
     /// This pipeline's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this pipeline.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The descriptor this pipeline was created from.
     pub fn descriptor(&self) -> &RasterPipelineDescriptor {
-        &self.descriptor
+        &self.inner.descriptor
     }
 
     /// The pipeline interface this pipeline was created with.
     pub fn interface(&self) -> &PipelineInterface {
-        &self.descriptor.interface
+        &self.inner.descriptor.interface
     }
 
     /// The canonical target signature.
@@ -289,7 +297,13 @@ impl RasterPipeline {
     /// section 26 makes one canonical representation of each signature the whole
     /// point.
     pub fn target_signature(&self) -> &RenderTargetSignature {
-        &self.target_signature
+        &self.inner.target_signature
+    }
+
+    /// The backend graphics state used by native command lowering.
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    pub(crate) fn native(&self) -> &dyn RasterPipelineBackend {
+        self.inner.native.as_ref()
     }
 }
 
@@ -303,8 +317,8 @@ impl fmt::Debug for RasterPipeline {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RasterPipeline")
-            .field("id", &self.id)
-            .field("device", &self.device)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
             .finish_non_exhaustive()
     }
 }
@@ -880,12 +894,12 @@ impl Device {
             },
         )?;
 
-        unimplemented!(
-            "Device::create_raster_pipeline needs a backend graphics pipeline builder to lower \
-             the vertex input state, the fixed state, and {} color target(s) on device {:?}; the \
-             portable contract is fixed, but no backend port is built",
-            desc.color_targets.len(),
-            self.identity()
-        )
+        let native = self.native().create_raster_pipeline(desc)?;
+        Ok(RasterPipeline::new(
+            ObjectId::next(),
+            identity,
+            desc.clone(),
+            native,
+        ))
     }
 }

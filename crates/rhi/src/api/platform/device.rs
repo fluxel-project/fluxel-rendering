@@ -40,11 +40,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::api::capability::EnabledCapabilities;
+use crate::api::diagnostics::DiagnosticEvent;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, ObjectId};
 use crate::api::platform::backend::DeviceBackend;
 use crate::api::platform::provider::{AdapterInfo, BackendKind};
 use crate::api::platform::requirements::OptionalFeature;
+use crate::api::statistics::{CumulativeStatistics, StatisticsConfig};
+use crate::api::tooling::{SemanticEvent, SemanticEventId, SemanticObserver};
 
 /// Whether a device is still usable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,13 +117,16 @@ impl DeviceLossInfo {
 /// `PlatformProvider::request_device()` and therefore a new identity.
 #[derive(Clone)]
 pub struct Device {
+    inner: Arc<DeviceInner>,
+}
+
+struct DeviceInner {
     identity: DeviceIdentity,
     /// The native execution domain this handle lowers through.
     ///
-    /// Shared rather than owned, and that is what makes `Clone` mean what
-    /// section 6.1 says it means: a clone is the same domain under the same
-    /// identity, so it must reach the same native device rather than open a
-    /// second one. It is never replaced after construction — loss does not
+    /// Directly owned by this inner execution domain. `Device` clones share this
+    /// one `DeviceInner`, so they reach the same native device without separately
+    /// reference-counting its backend. It is never replaced after construction — loss does not
     /// re-point it, because section 6.5 makes loss terminal and recovery a new
     /// request with a new identity.
     ///
@@ -128,7 +134,7 @@ pub struct Device {
     /// backend is what observes a native loss. Keeping one copy is section 65.3's
     /// rule; keeping it on the side that can see the event is what makes the copy
     /// authoritative.
-    native: Arc<dyn DeviceBackend>,
+    native: Box<dyn DeviceBackend>,
     /// What this device can actually do, built once from the backend's
     /// enumeration and never rebuilt.
     ///
@@ -148,7 +154,7 @@ pub struct Device {
     /// 7.2), the backend owns no copy of it, and it is never replaced — loss does
     /// not re-point it, because section 6.5 makes recovery a new request with a new
     /// identity.
-    capabilities: Arc<EnabledCapabilities>,
+    capabilities: EnabledCapabilities,
     /// The serials this domain hands out.
     ///
     /// Shared rather than owned, and for the same reason `native` is: a clone is
@@ -156,7 +162,7 @@ pub struct Device {
     /// each kept their own counter would mint the same plan serial twice. Section
     /// 39.1 makes a plan serial unique *within the device*, and this is what makes
     /// "the device" mean the identity rather than the handle.
-    serials: Arc<DomainSerials>,
+    serials: DomainSerials,
     /// The exact compatibility tokens this domain has minted.
     ///
     /// Shared rather than owned, for the reason `serials` is: a clone is the same
@@ -165,7 +171,50 @@ pub struct Device {
     /// [`BindGroupLayoutCompatibilityId`](crate::api::binding::BindGroupLayoutCompatibilityId)s
     /// for one canonical layout. Section 21.1's rule is about the *device*, so the
     /// table has to hang off the identity rather than off the handle.
-    interning: Arc<DomainInterning>,
+    interning: DomainInterning,
+    /// Small portable runtime services belong to the device execution domain;
+    /// they are not a second resource manager.
+    runtime: RuntimeServices,
+}
+
+pub(crate) struct RuntimeServices {
+    diagnostics: Mutex<Vec<DiagnosticEvent>>,
+    statistics: Mutex<StatisticsState>,
+    observers: Mutex<ObserverState>,
+}
+
+struct ObserverState {
+    next: u64,
+    next_event: u64,
+    entries: Vec<(u64, Arc<dyn SemanticObserver>)>,
+}
+
+pub(crate) struct StatisticsState {
+    pub(crate) config: StatisticsConfig,
+    pub(crate) epoch: u64,
+    pub(crate) sequence: u64,
+    pub(crate) started: std::time::Instant,
+    pub(crate) cumulative: CumulativeStatistics,
+}
+
+impl RuntimeServices {
+    fn new() -> Self {
+        Self {
+            diagnostics: Mutex::new(Vec::new()),
+            statistics: Mutex::new(StatisticsState {
+                config: StatisticsConfig::default(),
+                epoch: 1,
+                sequence: 1,
+                started: std::time::Instant::now(),
+                cumulative: CumulativeStatistics::default(),
+            }),
+            observers: Mutex::new(ObserverState {
+                next: 1,
+                next_event: 1,
+                entries: Vec::new(),
+            }),
+        }
+    }
 }
 
 /// The per-domain serial sources.
@@ -185,6 +234,7 @@ pub struct Device {
 pub(crate) struct DomainSerials {
     plans: AtomicU64,
     submissions: AtomicU64,
+    presents: AtomicU64,
 }
 
 impl DomainSerials {
@@ -195,6 +245,7 @@ impl DomainSerials {
             // minted one, and neither type has a "never minted" spelling.
             plans: AtomicU64::new(1),
             submissions: AtomicU64::new(1),
+            presents: AtomicU64::new(1),
         }
     }
 
@@ -206,6 +257,10 @@ impl DomainSerials {
     /// The next acceptance serial of this domain.
     pub(crate) fn next_submission(&self) -> u64 {
         self.submissions.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(crate) fn next_present(&self) -> u64 {
+        self.presents.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -339,7 +394,7 @@ impl Device {
     ///
     /// [`RhiErrorKind::BackendFailure`] when the enumeration violates the base
     /// guarantee, naming which half of it was violated.
-    pub(crate) fn new(identity: DeviceIdentity, native: Arc<dyn DeviceBackend>) -> RhiResult<Self> {
+    pub(crate) fn new(identity: DeviceIdentity, native: Box<dyn DeviceBackend>) -> RhiResult<Self> {
         let capabilities = EnabledCapabilities::from_facts(
             native.capability_facts(),
             native.submission_capabilities(),
@@ -353,11 +408,14 @@ impl Device {
             .submission()
             .validate_base_guarantee(capabilities.supports_feature(OptionalFeature::Compute))?;
         Ok(Self {
-            identity,
-            native,
-            capabilities: Arc::new(capabilities),
-            serials: Arc::new(DomainSerials::new()),
-            interning: Arc::new(DomainInterning::new()),
+            inner: Arc::new(DeviceInner {
+                identity,
+                native,
+                capabilities,
+                serials: DomainSerials::new(),
+                interning: DomainInterning::new(),
+                runtime: RuntimeServices::new(),
+            }),
         })
     }
 
@@ -369,7 +427,7 @@ impl Device {
     /// backend has accepted. Nothing else may mint one, which is what section
     /// 39.1's "a plan identity is minted by the builder that owns it" requires.
     pub(crate) fn serials(&self) -> &DomainSerials {
-        &self.serials
+        &self.inner.serials
     }
 
     /// The exact compatibility tokens this domain has minted.
@@ -380,7 +438,62 @@ impl Device {
     /// (section 21.2). Nothing else may mint one, which is what section 21.1's "a
     /// caller cannot construct it" requires.
     pub(crate) fn interning(&self) -> &DomainInterning {
-        &self.interning
+        &self.inner.interning
+    }
+
+    /// Runtime service state is owned by the one device inner, so every public
+    /// device clone observes exactly the same queues and collection epoch.
+    pub(crate) fn diagnostics_queue(&self) -> &Mutex<Vec<DiagnosticEvent>> {
+        &self.inner.runtime.diagnostics
+    }
+
+    pub(crate) fn statistics_state(&self) -> &Mutex<StatisticsState> {
+        &self.inner.runtime.statistics
+    }
+
+    pub(crate) fn insert_observer(&self, observer: Arc<dyn SemanticObserver>) -> u64 {
+        let mut state = self
+            .inner
+            .runtime
+            .observers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let id = state.next;
+        state.next = state.next.saturating_add(1);
+        state.entries.push((id, observer));
+        id
+    }
+
+    pub(crate) fn remove_observer(&self, id: u64) {
+        let mut state = self
+            .inner
+            .runtime
+            .observers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.entries.retain(|(entry, _)| *entry != id);
+    }
+
+    pub(crate) fn dispatch_diagnostic(&self, diagnostic: &DiagnosticEvent) {
+        let (event, observers) = {
+            let mut state = self
+                .inner
+                .runtime
+                .observers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let event = SemanticEventId::new(state.next_event);
+            state.next_event = state.next_event.saturating_add(1);
+            let observers = state
+                .entries
+                .iter()
+                .map(|(_, observer)| Arc::clone(observer))
+                .collect::<Vec<_>>();
+            (event, observers)
+        };
+        for observer in observers {
+            observer.on_event(SemanticEvent::Diagnostic { event, diagnostic });
+        }
     }
 
     /// A shared handle to this device's capability snapshot.
@@ -391,17 +504,13 @@ impl Device {
     /// immutable. The one caller is `Device::create_recorder`, whose recorder holds
     /// the snapshot rather than the device — see that type's documentation for why
     /// the narrow shape is the one that keeps a recorder unable to lower.
-    pub(crate) fn capabilities_arc(&self) -> Arc<EnabledCapabilities> {
-        Arc::clone(&self.capabilities)
-    }
-
     /// This device's identity.
     ///
     /// Every object the device owns carries the same identity, and section 3.1
     /// makes the comparison against it the first thing any public operation does
     /// — in O(1), before a backend is touched.
     pub fn identity(&self) -> DeviceIdentity {
-        self.identity
+        self.inner.identity
     }
 
     /// The native domain this handle lowers through.
@@ -416,8 +525,8 @@ impl Device {
     /// therefore need to reach the backend through the handle they were given.
     /// Reaching it *through* the handle rather than storing a copy is what keeps
     /// one device from having two authoritative backends.
-    pub(crate) fn native(&self) -> &Arc<dyn DeviceBackend> {
-        &self.native
+    pub(crate) fn native(&self) -> &dyn DeviceBackend {
+        &*self.inner.native
     }
 
     /// The backend family this device came from.
@@ -428,7 +537,7 @@ impl Device {
     /// instead of asking the device what it can do is the mistake section 6.3
     /// names.
     pub fn backend(&self) -> BackendKind {
-        self.native.backend_kind()
+        self.inner.native.backend_kind()
     }
 
     /// A snapshot of the adapter that was actually selected.
@@ -437,7 +546,7 @@ impl Device {
     /// section 6.3 asks a device to report what it actually got, which is a
     /// weaker and always-answerable question than listing the candidates.
     pub fn adapter_info(&self) -> &AdapterInfo {
-        self.native.adapter_info()
+        self.inner.native.adapter_info()
     }
 
     /// What this device can actually do.
@@ -458,7 +567,7 @@ impl Device {
     /// [`crate::api::capability::CapabilityCompatibilityId`] — which is what
     /// section 7.1's `CompiledGraph` reuse rule reads.
     pub fn capabilities(&self) -> &EnabledCapabilities {
-        &self.capabilities
+        &self.inner.capabilities
     }
 
     /// Whether the device is still usable.
@@ -468,32 +577,12 @@ impl Device {
     /// crate two places that know whether this device is alive, and section 65.3
     /// allows exactly one authority per concern.
     pub fn status(&self) -> DeviceStatus {
-        self.native.status()
+        self.inner.native.status()
     }
 
     /// Why the device was lost, or `None` while it is active.
     pub fn loss_info(&self) -> Option<DeviceLossInfo> {
-        self.native.loss_info()
-    }
-
-    /// Waits for this device to enter its terminal lost state.
-    ///
-    /// The future remains pending while the device stays active. Once loss is
-    /// observed, all clones return the same stable summary.
-    pub async fn lost(&self) -> DeviceLossInfo {
-        std::future::poll_fn(|context| {
-            if let Some(info) = self.loss_info() {
-                return std::task::Poll::Ready(info);
-            }
-
-            // `poll` is only an opportunistic progress hook. The self-wake is a
-            // compatibility bridge for the current private backend seam; native
-            // event/fence based backends can wake this future directly.
-            let _ = self.poll();
-            context.waker().wake_by_ref();
-            std::task::Poll::Pending
-        })
-        .await
+        self.inner.native.loss_info()
     }
 
     /// Non-blockingly advances completion, loss, and callback bookkeeping.
@@ -506,7 +595,9 @@ impl Device {
     /// makes polling the device a way to make progress rather than only to
     /// observe it.
     pub fn poll(&self) -> RhiResult<()> {
-        self.native.poll()
+        self.require_active()
+            .map_err(|error| error.at("Device::poll"))?;
+        self.inner.native.poll()
     }
 
     /// Waits until the device is idle.
@@ -519,7 +610,9 @@ impl Device {
     /// [`crate::api::error::RhiErrorKind::Unsupported`] rather than pretending to
     /// have waited.
     pub async fn wait_idle(&self) -> RhiResult<()> {
-        self.native.wait_idle()
+        self.require_active()
+            .map_err(|error| error.at("Device::wait_idle"))?;
+        self.inner.native.wait_idle()
     }
 
     /// This device's process-local object ID.
@@ -534,7 +627,7 @@ impl Device {
     /// section 7.1 requires tooling to describe objects by one, which is
     /// unreachable if no object can name its own ID.
     pub fn object_id(&self) -> ObjectId {
-        self.native.object_id()
+        self.inner.native.object_id()
     }
 
     /// Refuses an operation that would use this device while it is lost.
@@ -576,10 +669,10 @@ impl Device {
     /// that says only "lost" would send every caller back to ask the device a
     /// question this call site already had the answer to.
     pub(crate) fn require_active(&self) -> RhiResult<()> {
-        match self.native.status() {
+        match self.inner.native.status() {
             DeviceStatus::Active => Ok(()),
             DeviceStatus::Lost => {
-                let message = match &self.native.loss_info() {
+                let message = match &self.inner.native.loss_info() {
                     Some(loss) => format!(
                         "this device is lost and section 6.5 makes loss terminal, so this \
                          operation cannot be performed through it: {}",
@@ -607,9 +700,9 @@ impl core::fmt::Debug for Device {
     /// describe.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Device")
-            .field("identity", &self.identity)
-            .field("status", &self.native.status())
-            .field("loss", &self.native.loss_info())
+            .field("identity", &self.inner.identity)
+            .field("status", &self.inner.native.status())
+            .field("loss", &self.inner.native.loss_info())
             .finish_non_exhaustive()
     }
 }

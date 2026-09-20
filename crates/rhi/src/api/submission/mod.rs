@@ -59,6 +59,8 @@
 
 use crate::api::capability::{encode_entry, write_section};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::resource::transient::TransientLifetime;
+use std::sync::Mutex;
 
 pub(crate) mod backend;
 pub mod builder;
@@ -71,6 +73,28 @@ pub use plan::{
     CompletionPoint, PlanPoint, SubmissionBatchId, SubmissionPlan, SubmissionPlanId,
     SubmissionPoint,
 };
+
+/// Submission-owned registry shared with the plan-scoped transient allocator.
+/// It is synchronization state for one builder, not an independent lifetime
+/// authority: the builder snapshots and validates it against its DAG at build.
+#[derive(Default)]
+pub(crate) struct TransientLifetimeRegistry(Mutex<Vec<TransientLifetime>>);
+
+impl TransientLifetimeRegistry {
+    pub(crate) fn record(&self, lifetime: TransientLifetime) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(lifetime);
+    }
+
+    pub(crate) fn snapshot(&self) -> Vec<TransientLifetime> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+}
 
 /// Opaque identity of one logical submission lane on one device.
 ///

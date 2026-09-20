@@ -29,6 +29,7 @@ fn pipeline_reading_a_vertex_buffer(
                     VertexAttribute::new(ShaderLocation::new(0), VertexFormat::Float32x2, 0),
                 ),
             )),
+        crate::api::tests::mock::raster_pipeline_backend_for_test(),
     )
 }
 
@@ -50,6 +51,7 @@ fn strip_pipeline(id: u64, module: u64, format: Option<IndexFormat>) -> RasterPi
                 ColorTargetState::new(TextureFormat::Rgba8Unorm),
             )
             .with_primitive(primitive),
+        crate::api::tests::mock::raster_pipeline_backend_for_test(),
     )
 }
 
@@ -79,6 +81,7 @@ fn a_pipeline_from_another_device_is_wrong_device() {
                 ShaderLocation::new(0),
                 ColorTargetState::new(TextureFormat::Rgba8Unorm),
             ),
+        crate::api::tests::mock::raster_pipeline_backend_for_test(),
     );
     assert_kind(scope.set_pipeline(&foreign), RhiErrorKind::WrongDevice);
 }

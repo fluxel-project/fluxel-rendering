@@ -26,15 +26,20 @@
 //! device loss reaches every pending point, and never stays Pending   (41.8)
 //! ```
 
+use crate::api::command::ResourceUse;
 use crate::api::command::record::RecordedPayload;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::DeviceIdentity;
 use crate::api::platform::{Device, DeviceLossInfo, DeviceStatus};
 use crate::api::presentation::present::PresentReceipt;
 use crate::api::resource::transfer::ReadbackStatus;
+use crate::api::resource::transient::{is_deferred_buffer, is_deferred_texture};
 use crate::api::submission::plan::{
     CompletionPoint, PlanPoint, SubmissionPlan, SubmissionPlanId, SubmissionPoint,
 };
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// Why GPU work terminated without completing.
 ///
@@ -314,7 +319,7 @@ impl Device {
     /// terminal path — the frame's own `Drop` performs the no-throw abandonment
     /// bookkeeping, so a caller that ignores the error still does not leak a
     /// drawable. No submission happens on that path, by construction.
-    pub async fn submit(&self, plan: SubmissionPlan) -> RhiResult<SubmissionReceipt> {
+    pub async fn submit(&self, mut plan: SubmissionPlan) -> RhiResult<SubmissionReceipt> {
         if let DeviceStatus::Lost = self.status() {
             return Err(RhiError::new(
                 RhiErrorKind::DeviceLost,
@@ -330,6 +335,12 @@ impl Device {
             .at("Device::submit"));
         }
 
+        // Dedicated transient resources are materially allocated by the
+        // plan-scoped allocator, before their first possible use.  The only
+        // deferred markers are fact-only test fixtures; refusing one here keeps
+        // Phase A's promise that no backend ever sees a non-native resource.
+        validate_transient_backing(plan.batches())?;
+
         // The rest of Phase A. Everything below is decided *before* the backend is
         // asked to commit, because section 41.3's invariant is that an `Err` from
         // this function proves no native work was accepted — and a check that ran
@@ -344,7 +355,7 @@ impl Device {
         // What is left is the part `build` could not decide because it is about
         // *this* moment rather than about the plan: the present relation, and the
         // external dependencies that point at work already in flight.
-        if !plan.presents().is_empty() {
+        if !plan.presents().is_empty() && self.native().presentation().is_none() {
             // Refused rather than dropped, and before the backend is reached.
             // Section 45.5 makes a presentation the independent other half of a
             // plan's fate, so a plan carrying one but lowered without it would
@@ -381,12 +392,31 @@ impl Device {
         // The borrow of `plan` ends with this call, which is what lets the plan be
         // dropped on the way out — section 41.9's release path, and the reason
         // nothing below reads it again.
+        let identity = self.identity();
+        let present_requests: Vec<crate::api::submission::backend::BackendPresent> = plan
+            .presents()
+            .iter()
+            .filter_map(|present| {
+                plan.frames()
+                    .iter()
+                    .find(|frame| frame.id() == present.frame)
+                    .map(|frame| crate::api::submission::backend::BackendPresent {
+                        after: present.after,
+                        receipt: crate::api::presentation::PresentReceiptId::new(
+                            identity,
+                            self.serials().next_present(),
+                        ),
+                        attachment: frame.attachment(),
+                    })
+            })
+            .collect();
         let outcome = {
             let request = crate::api::submission::backend::SubmissionRequest {
                 plan: plan.id(),
                 batches: plan.batches(),
                 dependencies: plan.dependencies(),
                 external_dependencies: plan.external_dependencies(),
+                presents: &present_requests,
             };
             self.native().submit(&request)?
         };
@@ -394,7 +424,6 @@ impl Device {
         // Infallible from here. The tokens are wrapped, not derived: the serials
         // are the backend's numbers and the device half is this layer's, which is
         // what keeps section 3.1's identity rule on this side of the seam.
-        let identity = self.identity();
         let overall = CompletionPoint::new(identity, outcome.completion);
         // Annotated rather than inferred: the walk below reads this before the
         // receipt takes it, so there is no longer a single consumer for the
@@ -405,6 +434,11 @@ impl Device {
             .map(|(point, serial)| (point, CompletionPoint::new(identity, serial)))
             .collect();
         let submitted = SubmissionPoint::new(identity, self.serials().next_submission());
+        if !present_requests.is_empty() {
+            for frame in plan.frames_mut() {
+                frame.mark_present_accepted();
+            }
+        }
 
         // Section 41.5, and the second half of section 41.3's Phase B. Every
         // readback ticket this plan carried is now bound to the point of *this*
@@ -451,9 +485,13 @@ impl Device {
             submitted,
             overall,
             points,
-            // Empty by construction: a plan carrying a presentation was refused
-            // above, so there is no receipt to build for one here.
-            Vec::new(),
+            plan.presents()
+                .iter()
+                .zip(&present_requests)
+                .map(|(present, request)| {
+                    crate::api::presentation::PresentReceipt::new(request.receipt, present.id)
+                })
+                .collect(),
         ))
     }
 
@@ -468,31 +506,12 @@ impl Device {
     /// (section 3.1) and a foreign token on a lost device would otherwise send a
     /// caller looking for the wrong problem.
     ///
-    /// On a lost device this returns [`RhiErrorKind::DeviceLost`] rather than
-    /// `Ok(CompletionState::DeviceLost(..))`. Section 41.8 defines the per-point
-    /// outcome — pending points reach `DeviceLost`, already-complete points stay
-    /// `Complete` — and *that* answer needs to know which point it is about. The
-    /// portable layer holds no per-point state, so it declines to guess one: it
-    /// reports the loss, and the point's own state is what the backend's
-    /// bookkeeping answers with once the port lands.
-    ///
-    /// The port landed with the Direct3D 12 command spine, which answers per
-    /// serial out of its fence. The lost-device answer above is therefore still
-    /// the portable layer's — a *status* check ahead of the port — and that
-    /// ordering is a known gap rather than a settled rule: section 41.8 splits the
-    /// two cases (pending points reach `DeviceLost`, already-complete points stay
-    /// `Complete`), and telling them apart needs the per-serial bookkeeping a
-    /// loss-and-recovery unit will own. Until it exists, a device whose status is
-    /// still `Active` but whose fence has stopped advancing answers from the
-    /// backend only.
+    /// A lost device still answers this per point. Section 41.8 distinguishes a
+    /// point that had already completed (which remains `Complete`) from work that
+    /// was in flight (which becomes `DeviceLost`); only backend fence bookkeeping
+    /// can make that distinction, so the portable layer must not preempt it with
+    /// a device-wide error.
     pub fn completion_state(&self, point: CompletionPoint) -> RhiResult<CompletionState> {
-        if let DeviceStatus::Lost = self.status() {
-            return Err(RhiError::new(
-                RhiErrorKind::DeviceLost,
-                "this device was lost; its completion points cannot be queried",
-            )
-            .at("Device::completion_state"));
-        }
         if point.device_identity() != self.identity() {
             return Err(RhiError::new(
                 RhiErrorKind::WrongDevice,
@@ -513,15 +532,69 @@ impl Device {
     /// is the synchronous, non-blocking observation; this verb owns the potentially
     /// suspending completion wait.
     pub async fn wait_completion(&self, point: CompletionPoint) -> RhiResult<CompletionState> {
-        // The portable identity and loss checks are shared with the non-blocking
-        // query. A backend-specific waiter will replace this single observation;
-        // keeping the public boundary async now prevents a later API split.
-        let state = self.completion_state(point)?;
-        match state {
-            CompletionState::Pending => unimplemented!(
-                "waiting for GPU completion requires backend async completion plumbing"
-            ),
-            terminal => Ok(terminal),
+        CompletionWait {
+            device: self,
+            point,
+        }
+        .await
+    }
+}
+
+/// Ensures submit only receives transient handles with actual backend backing.
+///
+/// This is intentionally Phase A validation: a failure means no native work was
+/// accepted, and a backend never has to guess whether a placeholder can be
+/// lowered.  Aliasing backends can replace this with their own concrete backing
+/// while preserving the same public handle invariant.
+fn validate_transient_backing(
+    batches: &[crate::api::submission::plan::PlanBatch],
+) -> RhiResult<()> {
+    for use_record in batches
+        .iter()
+        .flat_map(|batch| batch.work.iter().flat_map(|work| work.resource_uses()))
+    {
+        let deferred = match use_record {
+            ResourceUse::Buffer(use_record) => is_deferred_buffer(&use_record.buffer),
+            ResourceUse::Texture(use_record) => is_deferred_texture(&use_record.texture),
+            ResourceUse::Frame(_) => false,
+        };
+        if deferred {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a transient resource without native backing cannot be submitted",
+            )
+            .at("Device::submit"));
+        }
+    }
+    Ok(())
+}
+
+/// The runtime-neutral public future over a backend's native completion event.
+struct CompletionWait<'a> {
+    device: &'a Device,
+    point: CompletionPoint,
+}
+
+impl Future for CompletionWait<'_> {
+    type Output = RhiResult<CompletionState>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if this.point.device_identity() != this.device.identity() {
+            return Poll::Ready(Err(RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "this completion point belongs to another device",
+            )
+            .at("Device::wait_completion")));
+        }
+
+        match this
+            .device
+            .native()
+            .completion_or_register_waker(this.point.serial(), context.waker())
+        {
+            CompletionState::Pending => Poll::Pending,
+            terminal => Poll::Ready(Ok(terminal)),
         }
     }
 }

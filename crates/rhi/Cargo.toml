@@ -43,6 +43,7 @@ windows = { version = "=0.62.2", optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
     # `D3D_FEATURE_LEVEL`, which `D3D12CreateDevice` takes. It lives in the
     # Direct3D module even though the call is a Direct3D 12 one.
     "Win32_Graphics_Direct3D",
@@ -54,6 +55,8 @@ windows = { version = "=0.62.2", optional = true, features = [
     # a loop instead would burn a core for the whole wait, which is a cost
     # `wait_idle` should not impose on a shutdown path.
     "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
     # `CreateEventW` itself is gated on this rather than on `System_Threading`,
     # because its first parameter is a `*const SECURITY_ATTRIBUTES`. The
     # declaration is in `System::Threading` and the type is in `Security`, and

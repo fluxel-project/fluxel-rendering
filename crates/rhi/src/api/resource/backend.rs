@@ -81,3 +81,22 @@ pub(crate) trait BufferBackend: Send + Sync + 'static {
     )]
     fn as_any(&self) -> &dyn Any;
 }
+
+/// The native allocation behind one portable texture.
+///
+/// This mirrors [`BufferBackend`]: texture state transitions and copies belong to
+/// the device lowering, while the object merely carries the backend allocation
+/// that those operations downcast to.
+pub(crate) trait TextureBackend: Send + Sync + 'static {
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// The native descriptor or view object behind a texture view.
+pub(crate) trait TextureViewBackend: Send + Sync + 'static {
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// The native descriptor or object behind a sampler.
+pub(crate) trait SamplerBackend: Send + Sync + 'static {
+    fn as_any(&self) -> &dyn Any;
+}

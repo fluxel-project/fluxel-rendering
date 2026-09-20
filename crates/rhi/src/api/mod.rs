@@ -47,26 +47,11 @@
 //!
 //! # Status
 //!
-//! The behavioural verbs are being written ahead of their backends: the
-//! signatures and the refusal paths land first, so that the call sites in
-//! `tests` can be used to review whether the interface is usable before any
-//! lowering exists.
-//!
-//! Two tiers, and the difference is deliberate:
-//!
-//! - A verb that must reach a backend panics with `unimplemented!()` and a
-//!   message naming what is missing. Its contract is fixed; its lowering is not
-//!   built.
-//! - Plain data — snapshots, descriptors, builders, opaque tokens — is
-//!   implemented, because its accessors are forced by its own field list and
-//!   writing `unimplemented!()` over `&self.name` would hide the shape the tests
-//!   exist to check.
-//!
-//! The portable *rules* are implemented wherever they are decidable without a
-//! backend, even inside an otherwise unbuilt verb. Section 3.1 requires identity
-//! validation before any backend call; a verb that panics has nothing to
-//! validate, but one that can refuse a wrong-device argument does so before it
-//! panics.
+//! Public verbs are executable implementations rather than interface-only
+//! placeholders. Portable validation runs before a backend call, and a backend
+//! that cannot lower an otherwise legal request returns a structured error.
+//! Plain data — snapshots, descriptors, builders, and opaque tokens — likewise
+//! exposes total accessors over its retained state.
 
 #![deny(missing_docs)]
 

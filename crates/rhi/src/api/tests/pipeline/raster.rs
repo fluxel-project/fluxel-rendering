@@ -342,6 +342,7 @@ fn a_raster_pipeline_debug_prints_portable_identity_only() {
         object(51),
         device(),
         raster_with(vertex_module(1, Vec::new())),
+        crate::api::tests::mock::raster_pipeline_backend_for_test(),
     );
     let text = format!("{pipeline:?}");
     assert!(text.contains("RasterPipeline"), "{text}");

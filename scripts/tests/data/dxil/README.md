@@ -17,9 +17,9 @@ than with an absence of errors.
 | Profile | `cs_6_0` |
 | Entry point | `main` |
 | Thread group | `(8, 8, 1)`, declared by `[numthreads(8, 8, 1)]` |
-| Result | `output[id.x] = id.x` over `RWStructuredBuffer<uint>` at `u0` |
-| Size | 2876 bytes |
-| SHA-256 | `291f5b8a77d86610a0f12da31617f53eb2fdeeed9b5f379283095c85514ad0e9` |
+| Result | `output.Store(id.x * 4, id.x)` over `RWByteAddressBuffer` at `u0` |
+| Size | 2752 bytes |
+| SHA-256 | `0c569075a49592f8fa162c49420b674eca5eee89a61aceb38210c08502ff32a4` |
 | `dxc` | `dxcompiler.dll 1.9(5399-a107ba61)` / `1.9.0.5399`, from Vulkan SDK `1.4.357.0` |
 
 Regenerate:

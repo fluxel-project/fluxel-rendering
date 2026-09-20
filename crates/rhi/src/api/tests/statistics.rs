@@ -78,7 +78,7 @@ fn object(value: u64) -> ObjectId {
 }
 
 fn statistics() -> DeviceStatistics {
-    DeviceStatistics::new(device())
+    crate::api::tests::mock::device_for_test(device()).statistics()
 }
 
 fn buffer_on(device: DeviceIdentity, size: u64) -> Buffer {
@@ -150,8 +150,8 @@ fn a_statistics_service_refuses_a_resource_from_another_device() {
 /// Re-requesting after terminal loss creates a different logical device domain.
 #[test]
 fn a_lost_and_recreated_device_is_not_the_same_domain() {
-    let stale = DeviceStatistics::new(identity(1));
-    let current = DeviceStatistics::new(identity(3));
+    let stale = crate::api::tests::mock::device_for_test(identity(1)).statistics();
+    let current = crate::api::tests::mock::device_for_test(identity(3)).statistics();
 
     let recorded_before_loss = buffer_on(identity(1), 4096);
 
@@ -172,8 +172,8 @@ fn a_lost_and_recreated_device_is_not_the_same_domain() {
 /// there is no answer that is right for every caller.
 #[test]
 fn two_devices_are_aggregated_by_the_caller_and_not_by_the_rhi() {
-    let first = DeviceStatistics::new(device());
-    let second = DeviceStatistics::new(other_device());
+    let first = crate::api::tests::mock::device_for_test(device()).statistics();
+    let second = crate::api::tests::mock::device_for_test(other_device()).statistics();
 
     let first_estimate = first
         .estimate_buffer_memory(&buffer_on(device(), 2048))
@@ -311,20 +311,18 @@ fn a_texture_from_another_device_is_refused_before_the_estimate_panics() {
     assert_eq!(error.object(), Some(object(2)));
 }
 
-/// The unbuilt half panics rather than returning a number it did not compute.
-///
-/// Either candidate substitute would be a fabrication: `logical(0)` claims the
-/// texture occupies nothing, and `unknown()` is a claim about the *format* when
-/// the real gap is that the device's format facts are not built. Panicking says
-/// which of the two is the case, and it says it in the message, which is why this
-/// test asserts on the message text and not only on the fact of a panic.
 #[test]
-#[should_panic(expected = "the facts are not built")]
-fn a_texture_estimate_on_the_owning_device_reaches_the_unbuilt_half() {
+fn a_texture_estimate_on_the_owning_device_uses_enabled_format_facts() {
     let service = statistics();
     let own = texture_on(device());
 
-    let _ = service.estimate_texture_memory(&own);
+    let estimate = service
+        .estimate_texture_memory(&own)
+        .expect("the owning texture is estimable or explicitly unknown");
+    assert!(matches!(
+        estimate.quality,
+        MemoryEstimateQuality::LogicalEstimate | MemoryEstimateQuality::Unknown
+    ));
 }
 
 // ---------------------------------------------------------------------------

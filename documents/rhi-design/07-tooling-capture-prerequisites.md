@@ -233,6 +233,12 @@ Terminal observation must be obtained.
 
 Capture does not allow waiting forever for an event that the RHI already knows will not complete.
 
+This does not create a separate public device-loss subscription API. v13 uses
+the synchronous `Device::status()` / `loss_info()` observation and the terminal
+outcomes of the operations already being awaited. A tooling `DeviceLost` semantic
+event, where tooling is enabled, records that observation; it is not a required
+replacement for completion/readback/acquire/present wakeups.
+
 ---
 
 # 53. Tooling SPI — engine/tooling surface

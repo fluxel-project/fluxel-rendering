@@ -378,16 +378,14 @@ impl Device {
                  upload into this texture cannot be prepared",
             ));
         }
-        // As above: the route question is answered from this device's own
-        // snapshot and the refusal above is live. Only the staging path is absent.
-        unimplemented!(
-            "Device::create_texture_upload needs a backend staging path to write the {} \
-             retained bytes into a texture region on device {:?}; the portable contract \
-             is fixed and every refusal path above is built, but the backend that would \
-             retain and stage the bytes is not",
-            desc.bytes.len(),
-            self.identity()
-        )
+        // Like buffer uploads, preparing the portable job does not allocate
+        // staging memory. Encoding supplies the batch lifetime in which the
+        // backend may repack the host layout into its native copy layout.
+        Ok(UploadJob::new(
+            ObjectId::next(),
+            self.identity(),
+            UploadDescriptor::Texture(desc),
+        ))
     }
 }
 

@@ -24,7 +24,7 @@
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::DeviceIdentity;
-use crate::api::platform::{Device, DeviceLossInfo, DeviceStatus};
+use crate::api::platform::{Device, DeviceLossInfo};
 use crate::api::submission::SubmissionPlanId;
 
 /// Identity of one frame's presentation inside one plan.
@@ -108,13 +108,6 @@ impl PresentReceiptId {
     /// Mints the identity of an accepted presentation.
     ///
     /// Crate-private: acceptance is observed by `Device::submit`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "minted by Device::submit when the backend port lands"
-        )
-    )]
     pub(crate) fn new(device: DeviceIdentity, serial: u64) -> Self {
         Self { device, serial }
     }
@@ -146,13 +139,6 @@ impl PresentFailure {
     /// Describes a failure.
     ///
     /// Crate-private: only the code that observed the failure may describe it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "raised by the present path when the backend port lands"
-        )
-    )]
     pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -224,13 +210,6 @@ impl PresentReceipt {
     /// Assembles the receipt for an accepted presentation.
     ///
     /// Crate-private: a receipt exists because a plan was accepted.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "created by Device::submit when the backend port lands"
-        )
-    )]
     pub(crate) fn new(id: PresentReceiptId, plan_id: PresentPlanId) -> Self {
         Self { id, plan_id }
     }
@@ -274,23 +253,11 @@ impl Device {
     /// host/runtime progress, `Device::poll`, and backend callbacks rather than
     /// from waiting here.
     ///
-    /// The device is checked before the receipt is: a lost device is terminal
-    /// (section 3.1), so [`RhiErrorKind::DeviceLost`] is the honest answer for any
-    /// receipt, and reporting [`RhiErrorKind::WrongDevice`] for a foreign receipt on
-    /// a lost device would send a caller looking for the wrong problem.
-    ///
     /// Cross-device receipts are refused rather than answered: a receipt names work
     /// accepted on one device, and another device has no such presentation.
     ///
     /// Panics until the presentation backend exists; both checks above are real.
     pub fn present_state(&self, receipt: PresentReceiptId) -> RhiResult<PresentState> {
-        if let DeviceStatus::Lost = self.status() {
-            return Err(RhiError::new(
-                RhiErrorKind::DeviceLost,
-                "this device was lost; its presentations cannot be queried",
-            )
-            .at("Device::present_state"));
-        }
         if receipt.device_identity() != self.identity() {
             return Err(RhiError::new(
                 RhiErrorKind::WrongDevice,
@@ -298,20 +265,41 @@ impl Device {
             )
             .at("Device::present_state"));
         }
-        unimplemented!(
-            "present outcomes are tracked by the presentation backend; the contract is \
-             fixed, the bookkeeping is not built"
-        )
+        self.native()
+            .presentation()
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    "this backend does not implement presentation",
+                )
+                .at("Device::present_state")
+            })?
+            .present_state(receipt)
     }
 
     /// Waits for presentation ownership to reach a terminal outcome.
     pub async fn wait_present(&self, receipt: PresentReceiptId) -> RhiResult<PresentState> {
-        let state = self.present_state(receipt)?;
-        match state {
-            PresentState::Pending => unimplemented!(
-                "waiting for presentation outcome requires backend async presentation plumbing"
-            ),
-            terminal => Ok(terminal),
-        }
+        std::future::poll_fn(|context| {
+            if receipt.device_identity() != self.identity() {
+                return std::task::Poll::Ready(Err(RhiError::new(
+                    RhiErrorKind::WrongDevice,
+                    "this present receipt belongs to another device",
+                )
+                .at("Device::wait_present")));
+            }
+            let Some(backend) = self.native().presentation() else {
+                return std::task::Poll::Ready(Err(RhiError::new(
+                    RhiErrorKind::Unsupported,
+                    "this backend does not implement presentation",
+                )
+                .at("Device::wait_present")));
+            };
+            match backend.present_state_or_register_waker(receipt, context.waker()) {
+                Ok(PresentState::Pending) => std::task::Poll::Pending,
+                Ok(terminal) => std::task::Poll::Ready(Ok(terminal)),
+                Err(error) => std::task::Poll::Ready(Err(error)),
+            }
+        })
+        .await
     }
 }

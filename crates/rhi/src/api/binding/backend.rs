@@ -54,5 +54,6 @@ pub(crate) trait BindGroupBackend: Send + Sync + 'static {
     /// The downcast's callers are the backend's own command lowering, which reaches
     /// a native descriptor from each bound group to hand it to the native bind
     /// verb, and the backend's own test set.
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
     fn as_any(&self) -> &dyn Any;
 }

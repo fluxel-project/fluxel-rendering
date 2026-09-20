@@ -84,14 +84,6 @@ impl Dx12ShaderModule {
     /// readable from the portable handle. A second reader would be a second answer
     /// to the same question, which is the duplication this crate deletes rather than
     /// tolerates.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the DX12 pipeline lowering, which is not written; the \
-                      provider's test set is what exercises it until then"
-        )
-    )]
     pub(crate) fn dxil(&self) -> Option<&[u8]> {
         match &self.artifact.code {
             crate::api::shader::ShaderCode::Dxil(bytes) => Some(bytes),

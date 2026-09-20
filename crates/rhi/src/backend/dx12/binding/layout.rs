@@ -14,14 +14,9 @@
 //! both [`super::group`] and [`crate::backend::dx12::pipeline`] call, is what
 //! makes "the two agree" a property of the code rather than of a review.
 //!
-//! # The two tables
-//!
-//! Direct3D 12 keeps sampler descriptors in a heap type that no CBV/SRV/UAV copy
-//! can mix with, so a layout's slots are split into two tables — the view table
-//! and the sampler table — and each group therefore has **two** root parameters,
-//! at indices `2 * group` and `2 * group + 1`. The scheme is stated here because
-//! it is a contract between the root signature and the dispatch lowering, and
-//! neither of them owns it.
+//! Sampler descriptors use their own table and heap. Root parameters for
+//! CBV/SRV/UAV and sampler tables are compacted by the pipeline
+//! lowering, which retains the logical-group to native-parameter mapping.
 //!
 //! # What this module does not own
 //!
@@ -34,20 +29,7 @@ use crate::backend::dx12::failure::Dx12Failure;
 
 use super::vocabulary::{RegisterClass, class_of};
 
-/// The root-parameter index a group's view table is set at.
-///
-/// Half of the two-table scheme the module doc describes. Both callers use this
-/// function rather than the arithmetic, so the scheme has one spelling.
-pub(crate) fn view_parameter(group: u32) -> u32 {
-    group * 2
-}
-
-/// The root-parameter index a group's sampler table is set at.
-pub(crate) fn sampler_parameter(group: u32) -> u32 {
-    group * 2 + 1
-}
-
-/// How one layout's slots map onto the two descriptor tables.
+/// How one layout's implemented slots map onto its view descriptor table.
 ///
 /// Held by [`super::group`] for the length of its writes and rebuilt by
 /// [`crate::backend::dx12::pipeline::interface`] for the root signature. It is
@@ -57,11 +39,9 @@ pub(crate) fn sampler_parameter(group: u32) -> u32 {
 pub(crate) struct TablePlan {
     /// The CBV/SRV/UAV ranges, in table order.
     views: Vec<RangePlan>,
-    /// The sampler ranges, in table order.
-    samplers: Vec<RangePlan>,
     /// How many descriptors the view table needs.
     view_descriptors: u32,
-    /// How many descriptors the sampler table needs.
+    samplers: Vec<RangePlan>,
     sampler_descriptors: u32,
 }
 
@@ -83,7 +63,7 @@ pub(crate) struct RangePlan {
 }
 
 impl TablePlan {
-    /// Reads a layout into the two tables it becomes.
+    /// Reads a layout into the view table it becomes.
     ///
     /// The entries arrive canonicalized — ascending by slot id, which section
     /// 22.1 requires and `BindGroupLayoutDescriptor::canonicalized` has already
@@ -102,8 +82,8 @@ impl TablePlan {
     pub(crate) fn of(layout: &BindGroupLayoutDescriptor) -> Result<Self, Dx12Failure> {
         let mut plan = Self {
             views: Vec::with_capacity(layout.entries.len()),
-            samplers: Vec::new(),
             view_descriptors: 0,
+            samplers: Vec::with_capacity(layout.entries.len()),
             sampler_descriptors: 0,
         };
         for entry in &layout.entries {
@@ -112,7 +92,7 @@ impl TablePlan {
         Ok(plan)
     }
 
-    /// Places one slot in whichever table its register class belongs to.
+    /// Places one supported slot in the view table.
     fn push(&mut self, entry: &BindingSlot) -> Result<(), Dx12Failure> {
         // Checked before the class, because a dynamic offset is a property of the
         // *slot* and would have to change the root parameter's type rather than
@@ -131,20 +111,7 @@ impl TablePlan {
         let class = class_of(&entry.kind);
         let count = entry.count.elements();
         let (ranges, descriptors) = match class {
-            // The sampler heap and its per-entry write are the lowering this
-            // backend has not built. The refusal names both halves, because a
-            // reader who reaches it needs to know that no caller can reach it
-            // either: `Device::create_sampler` stops with `unimplemented!()`, so
-            // no portable `Sampler` value exists to put in such a slot.
-            RegisterClass::Sampler => {
-                return Err(Dx12Failure::Unsupported {
-                    what: "a sampler binding slot",
-                    why: "the sampler heap and the per-entry sampler write are not \
-                          written, and no caller can reach them anyway: \
-                          Device::create_sampler stops with unimplemented!(), so no \
-                          portable Sampler value exists to bind",
-                });
-            }
+            RegisterClass::Sampler => (&mut self.samplers, &mut self.sampler_descriptors),
             RegisterClass::ConstantBuffer
             | RegisterClass::ShaderResource
             | RegisterClass::UnorderedAccess => (&mut self.views, &mut self.view_descriptors),
@@ -166,17 +133,15 @@ impl TablePlan {
         &self.views
     }
 
-    /// The sampler ranges, in table order.
-    pub(crate) fn samplers(&self) -> &[RangePlan] {
-        &self.samplers
-    }
-
     /// How many descriptors the view table needs.
     pub(crate) fn view_descriptors(&self) -> u32 {
         self.view_descriptors
     }
 
-    /// How many descriptors the sampler table needs.
+    pub(crate) fn samplers(&self) -> &[RangePlan] {
+        &self.samplers
+    }
+
     pub(crate) fn sampler_descriptors(&self) -> u32 {
         self.sampler_descriptors
     }
@@ -185,7 +150,7 @@ impl TablePlan {
     pub(crate) fn range_for(&self, slot: BindingSlotId) -> Option<&RangePlan> {
         self.views
             .iter()
-            .chain(self.samplers.iter())
+            .chain(&self.samplers)
             .find(|range| range.slot == slot)
     }
 }

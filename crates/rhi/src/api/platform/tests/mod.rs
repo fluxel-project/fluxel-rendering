@@ -63,7 +63,7 @@ fn provider() -> PlatformProvider {
     PlatformProvider::new(
         BackendKind::Dx12,
         instance,
-        MockProvider::new(BackendKind::Dx12, instance).shared(),
+        MockProvider::new(BackendKind::Dx12, instance).boxed(),
     )
 }
 
@@ -75,8 +75,11 @@ fn provider() -> PlatformProvider {
 fn live_device() -> (Device, Arc<MockDevice>) {
     let native = MockDevice::new(BackendKind::Dx12, mock_provider().adapter());
     (
-        Device::new(identity(1), native.clone())
-            .expect("the mock backend offers a lane accepting raster and copy work"),
+        Device::new(
+            identity(1),
+            crate::api::tests::mock::observed_backend(native.clone()),
+        )
+        .expect("the mock backend offers a lane accepting raster and copy work"),
         native,
     )
 }
@@ -118,13 +121,13 @@ fn enumeration_distinguishes_unsupported_from_empty() {
 
     let not_exposed = MockProvider::new(BackendKind::Dx12, instance)
         .enumerating(MockEnumeration::NotExposed)
-        .shared();
+        .boxed();
     let empty = MockProvider::new(BackendKind::Dx12, instance)
         .enumerating(MockEnumeration::NoCandidate)
-        .shared();
-    let listed = MockProvider::new(BackendKind::Dx12, instance).shared();
+        .boxed();
+    let listed = MockProvider::new(BackendKind::Dx12, instance).boxed();
 
-    let provider = |native: Arc<dyn crate::api::platform::backend::ProviderBackend>| {
+    let provider = |native: Box<dyn crate::api::platform::backend::ProviderBackend>| {
         PlatformProvider::new(BackendKind::Dx12, instance, native)
     };
 
@@ -171,7 +174,7 @@ fn a_provider_reports_an_adapter_that_cannot_present() {
     let presenting = PlatformProvider::new(
         BackendKind::Dx12,
         instance,
-        MockProvider::new(BackendKind::Dx12, instance).shared(),
+        MockProvider::new(BackendKind::Dx12, instance).boxed(),
     );
     assert!(
         presenting
@@ -184,7 +187,7 @@ fn a_provider_reports_an_adapter_that_cannot_present() {
         instance,
         MockProvider::new(BackendKind::Dx12, instance)
             .presenting(false)
-            .shared(),
+            .boxed(),
     );
     assert!(
         !headless_only
@@ -224,7 +227,7 @@ fn a_pending_request_resolves_through_the_async_boundary() {
     let instance = DeviceInstanceId::new(1);
     let native = MockProvider::new(BackendKind::Dx12, instance)
         .pending_steps(2)
-        .shared();
+        .boxed();
     let provider = PlatformProvider::new(BackendKind::Dx12, instance, native);
     assert!(block_on(provider.request_device(headless_request())).is_ok());
 }
@@ -239,7 +242,7 @@ fn a_failed_request_carries_its_error() {
     let instance = DeviceInstanceId::new(1);
     let native = MockProvider::new(BackendKind::Dx12, instance)
         .failing("the adapter was removed while the request was in flight")
-        .shared();
+        .boxed();
     let provider = PlatformProvider::new(BackendKind::Dx12, instance, native);
     let error = block_on(provider.request_device(headless_request()))
         .expect_err("the request was configured to fail");
@@ -286,10 +289,8 @@ fn a_device_reports_backend_facts() {
 /// portable device reports.
 ///
 /// This is the test that section 7.1's interning rule is *reachable* through, and
-/// reachability is the part worth asserting: before this block, every path from a
-/// caller to [`Device::capabilities`] ended at a documented `unimplemented!()`, so
-/// the id, the fingerprint, and the fact table were all unreachable from outside
-/// the crate no matter how well tested they were in isolation.
+/// reachability is the part worth asserting: the id, fingerprint, and fact table
+/// must be available through the same device a caller actually receives.
 ///
 /// The id is checked against an independently interned contract rather than
 /// against a number. Section 7.1 makes the id the interning of the canonical
@@ -358,7 +359,7 @@ async fn request_over(
         mock_provider()
             .with_capability_facts(facts)
             .with_submission_capabilities(lanes)
-            .shared(),
+            .boxed(),
     );
     provider.request_device(headless_request()).await
 }
@@ -396,13 +397,13 @@ fn declared_submission() -> SubmissionCapabilities {
 /// each other's objects.
 #[test]
 fn a_clone_is_the_same_domain_and_a_new_request_is_not() {
-    let (device, _native) = live_device();
+    let provider = provider();
+    let device = block_on(provider.request_device(headless_request())).unwrap();
     let clone = device.clone();
 
     assert_eq!(clone.identity(), device.identity());
     assert_eq!(clone.object_id(), device.object_id());
 
-    let provider = provider();
     let fresh = block_on(provider.request_device(headless_request())).unwrap();
     assert_ne!(fresh.identity(), device.identity());
 }
@@ -481,9 +482,14 @@ fn a_lost_device_refuses_creation_and_says_why() {
         "section 6.5 makes the summary stable, so a later ask must match an earlier one"
     );
     assert_eq!(
-        block_on(device.lost()).message(),
-        "the driver reset the adapter",
-        "the async loss wait returns the same stable terminal summary"
+        device.loss_info().map(|loss| loss.message().to_string()),
+        Some("the driver reset the adapter".to_string()),
+        "repeated synchronous queries return the same stable terminal summary"
+    );
+    assert_eq!(device.poll().unwrap_err().kind(), RhiErrorKind::DeviceLost);
+    assert_eq!(
+        block_on(device.wait_idle()).unwrap_err().kind(),
+        RhiErrorKind::DeviceLost
     );
 
     let error = device

@@ -110,7 +110,11 @@ ledger, not an alternate API definition.
 
 - Device loss is terminal. Re-requesting creates a fresh `DeviceIdentity`;
   public APIs expose no mutable generation counter and never revive old
-  resources.
+  resources. v13 exposes stable synchronous `status()` / `loss_info()`, not a
+  `Device::lost()` future or separate loss event: once loss is observed, pending
+  completion/readback/acquire/present/wait-idle operations are woken into their
+  terminal DeviceLost outcomes, while an idle backend may defer discovery until
+  the next RHI call.
 
 No implementation may silently revert one of these corrections to match an old
 prototype.

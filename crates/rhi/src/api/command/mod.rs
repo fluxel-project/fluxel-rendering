@@ -86,8 +86,6 @@ pub use uses::{
     TextureUseIntent,
 };
 
-use std::sync::Arc;
-
 use crate::api::capability::EnabledCapabilities;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
@@ -194,27 +192,19 @@ pub(crate) enum RecorderPhase {
 /// there is nothing to finalize, so a dropped scope can only mark the recording
 /// unusable, never leave a half-written native command list behind.
 ///
-/// What it does hold is the device's capability snapshot, and the choice of *that*
-/// rather than a [`Device`] is the same rule read a second time. Four verbs here
-/// need a device answer — whether compute is enabled, the workgroup ceiling, and
-/// the route plus copy-layout alignment of each copy family — and every one of
-/// those answers is already in the snapshot the device interned at construction.
-/// Holding a whole `Device` would be more than those verbs need, and the excess is
-/// exactly the handle that would let a recorder reach a backend and lower, which
-/// the rule above forbids. So the type makes the rule unfollowable rather than
-/// merely documented.
+/// It retains its creating [`Device`] as one ownership-domain handle. This is not
+/// a native encoder and does not authorize lowering: the recorder only queries
+/// the immutable capability contract through its narrow [`Self::capabilities`]
+/// helper. Keeping the device handle avoids a second `Arc` solely for its
+/// capability snapshot and keeps the recorder alive in the same execution domain
+/// as the resources it records.
 pub struct CommandRecorder {
     /// Process-local identity.
     id: ObjectId,
     /// The device every recorded object must belong to.
     device: DeviceIdentity,
-    /// The capability snapshot of that device.
-    ///
-    /// Shared, not copied: `Device` builds it once (section 7.2 makes an enabled
-    /// contract immutable) and this is a second handle on the same value, so a
-    /// recorder can never answer a capability question differently from the device
-    /// that produced it.
-    capabilities: Arc<EnabledCapabilities>,
+    /// One clone of the creating device's ownership domain.
+    owner: Device,
     /// The descriptor's label, kept for diagnostics and capture.
     label: Label,
     /// Which part of the state machine this recorder is in.
@@ -242,19 +232,12 @@ impl CommandRecorder {
     /// only [`Device::create_recorder`] may produce one, and a caller-built
     /// recorder would describe a device that never agreed to record.
     ///
-    /// `capabilities` is the device's own snapshot, passed rather than derived so
-    /// that a recorder cannot be built against a different device's facts than the
-    /// identity it carries.
-    pub(crate) fn new(
-        id: ObjectId,
-        device: DeviceIdentity,
-        capabilities: Arc<EnabledCapabilities>,
-        label: Label,
-    ) -> Self {
+    pub(crate) fn new(id: ObjectId, owner: Device, label: Label) -> Self {
+        let device = owner.identity();
         Self {
             id,
             device,
-            capabilities,
+            owner,
             label,
             phase: RecorderPhase::Open,
             poison_reason: None,
@@ -275,7 +258,7 @@ impl CommandRecorder {
     /// verbs that need a device answer ask *this*, so a verb added later that wants
     /// a backend handle cannot get one from here. See the type's documentation.
     pub(crate) fn capabilities(&self) -> &EnabledCapabilities {
-        &self.capabilities
+        self.owner.capabilities()
     }
 
     /// Finishes the recording and produces the work it describes.
@@ -847,8 +830,7 @@ impl Device {
 
         Ok(CommandRecorder::new(
             ObjectId::next(),
-            self.identity(),
-            self.capabilities_arc(),
+            self.clone(),
             desc.label.clone(),
         ))
     }

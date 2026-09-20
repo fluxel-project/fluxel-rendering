@@ -36,10 +36,14 @@
 //! it: the descriptor half of section 16.1 is decidable now, this half is not.
 
 use core::fmt;
+use std::any::Any;
+use std::sync::Arc;
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::platform::Device;
+use crate::api::platform::{LimitKey, OptionalFeature};
+use crate::api::resource::backend::SamplerBackend;
 
 /// How texture coordinates outside the `[0, 1]` range are resolved.
 #[non_exhaustive]
@@ -224,47 +228,65 @@ impl SamplerDescriptor {
 /// of completion-safe retirement like every other resource.
 #[derive(Clone)]
 pub struct Sampler {
+    inner: Arc<SamplerInner>,
+}
+
+/// The one shared ownership domain of a logical sampler.
+struct SamplerInner {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: SamplerDescriptor,
+    native: Box<dyn SamplerBackend>,
+}
+
+/// Concrete seam token for crate-local descriptor-validation fixtures.
+struct ValidationSamplerBackend;
+
+impl SamplerBackend for ValidationSamplerBackend {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl Sampler {
-    /// Assembles a created sampler.
-    ///
-    /// Crate-private: section 3 gives identity to the object that created it, so
-    /// only [`crate::api::platform::Device::create_sampler`] may produce one. That
-    /// verb exists and is the only caller this is written for, but it stops before
-    /// a native sampler object is built — nothing can mint the identity below until
-    /// a backend sampler path does — so nothing calls this yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Device::create_sampler calls this once the backend sampler path lands and can mint the sampler's identity"
-        )
-    )]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: SamplerDescriptor) -> Self {
+        Self::new_backed(id, device, descriptor, Box::new(ValidationSamplerBackend))
+    }
+
+    /// Assembles a sampler backed by one native immutable descriptor.
+    pub(crate) fn new_backed(
+        id: ObjectId,
+        device: DeviceIdentity,
+        descriptor: SamplerDescriptor,
+        native: Box<dyn SamplerBackend>,
+    ) -> Self {
         Self {
-            id,
-            device,
-            descriptor,
+            inner: Arc::new(SamplerInner {
+                id,
+                device,
+                descriptor,
+                native,
+            }),
         }
+    }
+
+    pub(crate) fn native(&self) -> &dyn SamplerBackend {
+        self.inner.native.as_ref()
     }
 
     /// This sampler's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this sampler.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The descriptor this sampler was created from.
     pub fn descriptor(&self) -> &SamplerDescriptor {
-        &self.descriptor
+        &self.inner.descriptor
     }
 }
 
@@ -281,8 +303,8 @@ impl fmt::Debug for Sampler {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Sampler")
-            .field("id", &self.id)
-            .field("device", &self.device)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
             .finish_non_exhaustive()
     }
 }
@@ -324,15 +346,23 @@ impl Device {
         // descriptor and stay ahead of any question about the device — the same
         // order every creation verb in this crate uses.
         self.require_active()?;
-        unimplemented!(
-            "Device::create_sampler needs a backend to build a native sampler object on \
-             device {:?}; the descriptor's portable contract is fixed and validated \
-             above, but no backend port is built, and the remaining section 16.1 rule — \
-             that a max_anisotropy above 1 needs the SamplerAnisotropy optional feature \
-             within the MaxSamplerAnisotropy ceiling — is a probed device fact only the \
-             enabled-capability snapshot can answer",
-            self.identity()
-        )
+        let anisotropy = self
+            .capabilities()
+            .supports_feature(OptionalFeature::SamplerAnisotropy)
+            .then(|| {
+                self.capabilities()
+                    .limit(LimitKey::MaxSamplerAnisotropy)
+                    .unwrap_or(1)
+                    .min(u16::MAX as u64) as u16
+            });
+        validate_sampler_anisotropy(desc, anisotropy)?;
+        let native = self.native().create_sampler(desc)?;
+        Ok(Sampler::new_backed(
+            ObjectId::next(),
+            self.identity(),
+            desc.clone(),
+            native,
+        ))
     }
 }
 
@@ -401,13 +431,6 @@ pub(crate) fn validate_sampler_descriptor(desc: &SamplerDescriptor) -> RhiResult
 /// [`RhiErrorKind::InvalidUsage`], because the device can honour anisotropy and
 /// the number is out of range. The split matters to a caller deciding whether to
 /// retry with a smaller value or to stop asking.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Device::create_sampler calls this once the enabled-capability snapshot can answer the SamplerAnisotropy feature and its MaxSamplerAnisotropy ceiling"
-    )
-)]
 pub(crate) fn validate_sampler_anisotropy(
     desc: &SamplerDescriptor,
     anisotropy: Option<u16>,

@@ -73,7 +73,7 @@
 //! allocation ([`resource`]), the command spine ([`command`]), shader entry
 //! points ([`shader`]), and buffer-backed descriptor groups ([`binding`]) are
 //! written. Compute pipeline ownership is wired through [`pipeline`], while its
-//! native PSO/root-signature creation remains an explicit `unimplemented!()`.
+//! native compute PSO/root-signature creation and dispatch are implemented.
 //! There is no texture or presentation lowering yet, and no claim of complete
 //! DX12 support exists until the shared contract suite and a real Windows run
 //! close on one revision.
@@ -117,5 +117,6 @@ mod failure;
 mod ffi;
 mod pipeline;
 mod platform;
+mod presentation;
 mod resource;
 mod shader;

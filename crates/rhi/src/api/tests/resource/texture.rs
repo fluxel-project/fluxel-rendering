@@ -343,7 +343,9 @@ fn a_texture_reports_its_own_id_device_and_descriptor() {
     assert_eq!(texture.device_identity(), identity(2));
     assert_eq!(texture.descriptor().label.as_deref(), Some("albedo"));
     assert_eq!(texture.descriptor().extent, Extent3d::d2(4, 4));
-    assert_eq!(texture.clone().id(), texture.id());
+    let clone = texture.clone();
+    assert_eq!(clone.id(), texture.id());
+    assert!(std::ptr::eq(clone.native(), texture.native()));
 }
 
 #[test]

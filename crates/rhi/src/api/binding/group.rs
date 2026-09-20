@@ -148,14 +148,18 @@ impl BindGroupDescriptor {
 /// update verb here and no interior mutability: a change is a new group.
 #[derive(Clone)]
 pub struct BindGroup {
+    inner: Arc<BindGroupInner>,
+}
+
+/// The one ownership domain of an immutable bind-group packet.
+struct BindGroupInner {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: BindGroupDescriptor,
     /// The backend's own descriptor packet, in the same shape
-    /// [`crate::api::resource::Buffer`] holds its allocation: `Arc` so that the
-    /// handle stays `Clone` without the backend cloning a native device, and
-    /// behind `dyn` so that no native type reaches the exported surface (section
-    /// 59).
+    /// [`crate::api::resource::Buffer`] holds its allocation: it is directly
+    /// owned by this handle's single shared inner domain, and behind `dyn` so
+    /// that no native type reaches the exported surface (section 59).
     ///
     /// Section 22.2 makes a bind group a logical owner of everything it binds. The
     /// *logical* half of that is the descriptor above, which holds the resource
@@ -166,7 +170,8 @@ pub struct BindGroup {
     ///
     /// Section 22.2 declares no accessor for it, and it is reached only by a
     /// command lowering, which downcasts inside its own backend.
-    native: Arc<dyn BindGroupBackend>,
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    native: Box<dyn BindGroupBackend>,
 }
 
 impl BindGroup {
@@ -178,13 +183,15 @@ impl BindGroup {
         id: ObjectId,
         device: DeviceIdentity,
         canonical: BindGroupDescriptor,
-        native: Arc<dyn BindGroupBackend>,
+        native: Box<dyn BindGroupBackend>,
     ) -> Self {
         Self {
-            id,
-            device,
-            descriptor: canonical,
-            native,
+            inner: Arc::new(BindGroupInner {
+                id,
+                device,
+                descriptor: canonical,
+                native,
+            }),
         }
     }
 
@@ -196,28 +203,29 @@ impl BindGroup {
     /// command lowering of the backend that created it, which downcasts to its own
     /// type — a group handed to another backend's device is refused portably, by
     /// device identity, long before a downcast is attempted.
-    pub(crate) fn native(&self) -> &Arc<dyn BindGroupBackend> {
-        &self.native
+    #[cfg_attr(not(feature = "dx12"), allow(dead_code))]
+    pub(crate) fn native(&self) -> &dyn BindGroupBackend {
+        self.inner.native.as_ref()
     }
 
     /// This group's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this group.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The layout this packet was validated against.
     pub fn layout(&self) -> &BindGroupLayout {
-        &self.descriptor.layout
+        &self.inner.descriptor.layout
     }
 
     /// The canonicalized descriptor.
     pub fn descriptor(&self) -> &BindGroupDescriptor {
-        &self.descriptor
+        &self.inner.descriptor
     }
 }
 
@@ -232,9 +240,9 @@ impl fmt::Debug for BindGroup {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("BindGroup")
-            .field("id", &self.id)
-            .field("device", &self.device)
-            .field("layout", &self.descriptor.layout)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
+            .field("layout", &self.inner.descriptor.layout)
             .finish_non_exhaustive()
     }
 }
@@ -946,7 +954,7 @@ impl Device {
             ObjectId::next(),
             self.identity(),
             canonical,
-            native.into(),
+            native,
         ))
     }
 }

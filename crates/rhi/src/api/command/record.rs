@@ -48,22 +48,11 @@ use crate::api::submission::LaneWorkDomains;
 /// "this draw consumed that binding" answerable, and a flat use list cannot say
 /// which command produced a use or in what order.
 ///
-/// This carried an `expect(dead_code)` until the DX12 command spine began
-/// matching on [`Self::payload`] and merging [`Self::uses`]. Its stated reason
-/// named two readers, and the first of them arriving is what expired it — which
-/// is the difference between an expectation that came true and one that was
-/// wrong. There is no feature gate here for the same reason there is none on
-/// `RecordedWork`: the recorder itself reads both fields in every build.
 pub(crate) struct RecordedCommand {
     /// What the command was.
     ///
-    /// This field carried a feature-gated `expect(dead_code)` for one round, on
-    /// the reasoning that only a backend reads it. That was true of the *lowering*
-    /// and false of the submit path: `Device::submit` walks the recorded commands
-    /// to bind each readback ticket to its completion point (section 41.5), and
-    /// that walk is portable code compiled in every configuration. The gate is
-    /// therefore gone rather than widened — the reader that arrived is not a
-    /// backend at all.
+    /// `Device::submit` walks this sequence to bind readback tickets to their
+    /// completion points, and backends replay it in command order.
     pub(crate) payload: RecordedPayload,
     /// The actual uses this command produced.
     ///
@@ -76,9 +65,14 @@ pub(crate) struct RecordedCommand {
 /// What a recorded command was.
 ///
 /// Every variant exists so that a recording can be replayed in command order by a
-/// lowering backend, which is the only reader; until that backend exists, the
-/// payloads are written and never read.
-#[expect(dead_code, reason = "lowered by a backend port that is not built")]
+/// lowering backend.
+#[cfg_attr(
+    all(not(test), not(feature = "dx12")),
+    allow(
+        dead_code,
+        reason = "a build without a lowering backend retains command data for a backend selected by an embedding"
+    )
+)]
 pub(crate) enum RecordedPayload {
     /// A raster scope began, with its attachment set.
     RasterBegin(RasterBegin),
@@ -87,6 +81,10 @@ pub(crate) enum RecordedPayload {
     /// The raster scope ended.
     RasterEnd,
     /// A compute scope began.
+    #[allow(
+        dead_code,
+        reason = "compute scope labels are retained for backend debug-marker lowering"
+    )]
     ComputeBegin(ComputeBegin),
     /// A dispatch inside the open compute scope.
     ComputeDispatch(Box<ComputeDispatch>),
@@ -103,15 +101,26 @@ pub(crate) enum RecordedPayload {
     /// Recorded rather than kept only in the scope's own stack, because a backend
     /// lowers a debug group as native debug-utils markup and needs to see where it
     /// began relative to the commands inside it.
+    #[allow(
+        dead_code,
+        reason = "debug-group lowering is backend-specific and not implemented by every backend"
+    )]
     DebugPush(Label),
     /// A debug group was closed.
     DebugPop,
     /// A debug marker was inserted.
+    #[allow(
+        dead_code,
+        reason = "debug-marker lowering is backend-specific and not implemented by every backend"
+    )]
     DebugMarker(Label),
 }
 
 /// A raster scope's beginning, as recorded.
-#[expect(dead_code, reason = "lowered by a backend port that is not built")]
+#[expect(
+    dead_code,
+    reason = "scope labels are retained for backend debug-marker lowering"
+)]
 pub(crate) struct RasterBegin {
     /// The scope's diagnostic label.
     pub(crate) label: Label,
@@ -127,7 +136,13 @@ pub(crate) struct RasterBegin {
 /// end-of-scope time, because a draw is lowered with the state that was bound
 /// when it was recorded; a later `set_pipeline` must not retroactively change an
 /// earlier draw.
-#[expect(dead_code, reason = "lowered by a backend port that is not built")]
+#[cfg_attr(
+    all(not(test), not(feature = "dx12")),
+    allow(
+        dead_code,
+        reason = "a build without a lowering backend retains draw state for a backend selected by an embedding"
+    )
+)]
 pub(crate) struct RasterDraw {
     /// The pipeline that was bound. Section 32.3 requires one.
     pub(crate) pipeline: RasterPipeline,
@@ -154,14 +169,20 @@ pub(crate) struct RasterDraw {
 }
 
 /// A compute scope's beginning, as recorded.
-#[expect(dead_code, reason = "lowered by a backend port that is not built")]
+#[expect(
+    dead_code,
+    reason = "scope labels are retained for backend debug-marker lowering"
+)]
 pub(crate) struct ComputeBegin {
     /// The scope's diagnostic label.
     pub(crate) label: Label,
 }
 
 /// One dispatch, with the state that was current when it was issued.
-#[expect(dead_code, reason = "lowered by a backend port that is not built")]
+#[cfg_attr(
+    all(not(test), not(feature = "dx12")),
+    expect(dead_code, reason = "read by backend compute command lowering")
+)]
 pub(crate) struct ComputeDispatch {
     /// The pipeline that was bound. Section 33 requires one.
     pub(crate) pipeline: ComputePipeline,

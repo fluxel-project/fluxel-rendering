@@ -119,6 +119,7 @@ pub(crate) enum RequestProgress {
 /// `DeviceLost` only after ownership has been decided — and reads the fact from
 /// here.
 pub(crate) trait DeviceBackend: Send + Sync + 'static {
+    fn as_any(&self) -> &dyn std::any::Any;
     /// The backend family this device came from.
     ///
     /// Diagnostics, selection provenance, and tooling UI only. Section 6.3 is
@@ -239,6 +240,22 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
         descriptor: &crate::api::resource::buffer::BufferDescriptor,
     ) -> RhiResult<Box<dyn crate::api::resource::backend::BufferBackend>>;
 
+    fn create_texture(
+        &self,
+        descriptor: &crate::api::resource::texture::TextureDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureBackend>>;
+
+    fn create_texture_view(
+        &self,
+        texture: &crate::api::resource::Texture,
+        descriptor: &crate::api::resource::view::TextureViewDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureViewBackend>>;
+
+    fn create_sampler(
+        &self,
+        descriptor: &crate::api::resource::sampler::SamplerDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::SamplerBackend>>;
+
     /// Prepares the native entry point behind one shader module.
     ///
     /// The same division of labour as [`Self::create_buffer`], with one difference
@@ -312,6 +329,15 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
     ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>>;
 
+    fn create_raster_pipeline(
+        &self,
+        descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>>;
+
+    fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
+        None
+    }
+
     /// Lowers and submits one plan that has passed the portable preflight.
     ///
     /// This is Phase B of section 41.3 and the two phases are not symmetric. By
@@ -353,4 +379,24 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// and not forever. A backend that answered `Pending` for work whose device
     /// has ended would hang the caller's loop on work that can never finish.
     fn completion(&self, serial: u64) -> crate::api::submission::CompletionState;
+
+    /// Observes a completion serial and, when it is still pending, arranges for
+    /// `waker` to be called when the backend has new information about it.
+    ///
+    /// This is deliberately a waker registration rather than an async trait
+    /// method: the public API owns the `Future`, while a backend only owns the
+    /// native event/callback that can make its next poll useful.  That keeps the
+    /// seam runtime-neutral (no Tokio, browser executor, or thread-pool contract
+    /// leaks into RHI) and makes command recording remain synchronous.
+    ///
+    /// The returned state is sampled in the same operation as registration. A
+    /// backend must not retain the waker when it returns a terminal state.
+    fn completion_or_register_waker(
+        &self,
+        serial: u64,
+        waker: &std::task::Waker,
+    ) -> crate::api::submission::CompletionState {
+        let _ = waker;
+        self.completion(serial)
+    }
 }

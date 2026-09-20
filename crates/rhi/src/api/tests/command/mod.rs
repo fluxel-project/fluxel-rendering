@@ -75,7 +75,8 @@ use crate::api::shader::{
 };
 use crate::api::tests::fixture;
 use crate::api::tests::mock::{
-    bind_group_backend_for_test, recorder_for_test, recorder_without_facts_for_test,
+    bind_group_backend_for_test, raster_pipeline_backend_for_test, recorder_for_test,
+    recorder_without_facts_for_test,
 };
 
 fn identity(instance: u64) -> DeviceIdentity {
@@ -408,6 +409,7 @@ fn raster_pipeline(layout: BindGroupLayout) -> RasterPipeline {
             ShaderLocation::new(0),
             ColorTargetState::new(TextureFormat::Rgba8Unorm),
         ),
+        raster_pipeline_backend_for_test(),
     )
 }
 
@@ -420,6 +422,7 @@ fn mismatched_pipeline(layout: BindGroupLayout) -> RasterPipeline {
             ShaderLocation::new(0),
             ColorTargetState::new(TextureFormat::Bgra8Unorm),
         ),
+        raster_pipeline_backend_for_test(),
     )
 }
 

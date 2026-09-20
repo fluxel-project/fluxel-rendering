@@ -221,7 +221,10 @@ struct ReadbackPayload {
 /// one ticket: a cloned ticket that snapshotted its status would disagree with
 /// the original the moment the device advanced, which is precisely the bug
 /// section 18.4's "shared device-scoped state" note exists to prevent.
-struct TicketState {
+struct ReadbackTicketInner {
+    id: ObjectId,
+    device: DeviceIdentity,
+    request: ReadbackRequest,
     /// The current [`ReadbackStatus`], as its wire value.
     ///
     /// Atomic because the device advances it from wherever completion is
@@ -260,10 +263,7 @@ struct TicketState {
 /// again to ask about it.
 #[derive(Clone)]
 pub struct ReadbackTicket {
-    id: ObjectId,
-    device: DeviceIdentity,
-    request: Arc<ReadbackRequest>,
-    state: Arc<TicketState>,
+    inner: Arc<ReadbackTicketInner>,
 }
 impl ReadbackTicket {
     /// Assembles a ticket for a freshly encoded request.
@@ -273,10 +273,10 @@ impl ReadbackTicket {
     /// of identity and shared state.
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, request: ReadbackRequest) -> Self {
         Self {
-            id,
-            device,
-            request: Arc::new(request),
-            state: Arc::new(TicketState {
+            inner: Arc::new(ReadbackTicketInner {
+                id,
+                device,
+                request,
                 status: AtomicU8::new(ReadbackStatus::NotSubmitted.to_raw()),
                 data: std::sync::OnceLock::new(),
                 completion: std::sync::OnceLock::new(),
@@ -287,17 +287,17 @@ impl ReadbackTicket {
 
     /// This ticket's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that owns this ticket's state.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// Original portable request.
     pub fn request(&self) -> &ReadbackRequest {
-        &self.request
+        &self.inner.request
     }
 
     /// The ticket's current state.
@@ -305,7 +305,7 @@ impl ReadbackTicket {
     /// Device need not be passed again;
     /// ticket already binds its own DeviceIdentity / internal state.
     pub fn status(&self) -> ReadbackStatus {
-        ReadbackStatus::from_raw(self.state.status.load(Ordering::Acquire))
+        ReadbackStatus::from_raw(self.inner.status.load(Ordering::Acquire))
     }
 
     /// The completion point the ticket's work was accepted under.
@@ -322,7 +322,7 @@ impl ReadbackTicket {
     /// native fence value (section 41.1); it is named to
     /// [`DeviceIdentity`] so a foreign device's token is refusable.
     pub fn completion(&self) -> Option<CompletionPoint> {
-        self.state.completion.get().copied()
+        self.inner.completion.get().copied()
     }
 
     /// The bytes, once the request is `Ready`.
@@ -348,13 +348,13 @@ impl ReadbackTicket {
     pub fn try_read<'a>(&'a self) -> RhiResult<Option<ReadbackView<'a>>> {
         match self.status() {
             ReadbackStatus::Ready => {
-                let payload = self.state.data.get().ok_or_else(|| {
+                let payload = self.inner.data.get().ok_or_else(|| {
                     RhiError::new(
                         RhiErrorKind::BackendFailure,
                         "readback is Ready but no bytes were published; the device must \
                          publish data before it reports Ready",
                     )
-                    .with_object(self.id)
+                    .with_object(self.inner.id)
                 })?;
                 Ok(Some(ReadbackView::new(payload)))
             }
@@ -364,17 +364,17 @@ impl ReadbackTicket {
                 "the recorded work carrying this readback was discarded before it was \
                  submitted, so it will never produce data",
             )
-            .with_object(self.id)),
+            .with_object(self.inner.id)),
             ReadbackStatus::DeviceLost => Err(RhiError::new(
                 RhiErrorKind::DeviceLost,
                 "the device was lost before this readback completed",
             )
-            .with_object(self.id)),
+            .with_object(self.inner.id)),
             ReadbackStatus::Failed => Err(RhiError::new(
                 RhiErrorKind::BackendFailure,
                 "the readback's GPU work failed",
             )
-            .with_object(self.id)),
+            .with_object(self.inner.id)),
         }
     }
 
@@ -395,7 +395,7 @@ impl ReadbackTicket {
         }
 
         let mut waiters = self
-            .state
+            .inner
             .waiters
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -421,7 +421,7 @@ impl ReadbackTicket {
     /// reach [`ReadbackStatus::Ready`]: a state without bytes is not readable,
     /// and `try_read` reports it as a backend fault.
     pub(crate) fn set_status(&self, status: ReadbackStatus) {
-        self.state.status.store(status.to_raw(), Ordering::Release);
+        self.inner.status.store(status.to_raw(), Ordering::Release);
         if matches!(
             status,
             ReadbackStatus::Abandoned | ReadbackStatus::DeviceLost | ReadbackStatus::Failed
@@ -450,7 +450,7 @@ impl ReadbackTicket {
     pub(crate) fn set_completion(&self, point: CompletionPoint) {
         // The only failure is a second call, which is ignored rather than
         // overwritten: the point a caller already observed stays true.
-        let _ = self.state.completion.set(point);
+        let _ = self.inner.completion.set(point);
     }
 
     /// Publishes the bytes and marks the ticket `Ready`.
@@ -486,7 +486,7 @@ impl ReadbackTicket {
         // The only failure is a second publish, which would silently discard the
         // first one's bytes; keeping the first is the conservative choice,
         // because the status a caller already acted on stays true.
-        let _ = self.state.data.set(ReadbackPayload { bytes, layout });
+        let _ = self.inner.data.set(ReadbackPayload { bytes, layout });
         self.set_status(ReadbackStatus::Ready);
         self.wake_waiters();
     }
@@ -494,7 +494,7 @@ impl ReadbackTicket {
     fn wake_waiters(&self) {
         let waiters = {
             let mut waiters = self
-                .state
+                .inner
                 .waiters
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());

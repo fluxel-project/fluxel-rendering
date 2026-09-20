@@ -40,14 +40,13 @@
 //! acquire refusal, GPU completion, and present outcome are three outcomes (45.5)
 //! ```
 //!
-//! # How the unbuilt verbs are written
+//! # Validation and lowering
 //!
-//! Every verb here that must reach a presentation backend panics with
-//! `unimplemented!()` naming the missing fact. The *portable* rules are
-//! implemented regardless, in two forms:
+//! Every verb runs its portable rules before reaching a presentation backend,
+//! in two forms:
 //!
 //! - the checks decidable from the arguments alone run first, inside the verb,
-//!   before it panics — a wrong-device receipt or a second outstanding acquire is
+//!   before lowering — a wrong-device receipt or a second outstanding acquire is
 //!   refused with its own kind instead of reaching a driver as an impossible
 //!   request (root section 4);
 //! - the checks that need a fact the caller holds run in a `pub(crate)`
@@ -56,6 +55,7 @@
 //!   `crate::api::resource::buffer::validate_buffer_descriptor` does with a
 //!   capability answer, and it is what makes those rules testable without a GPU.
 
+pub(crate) mod backend;
 pub mod configure;
 pub mod frame;
 pub mod present;

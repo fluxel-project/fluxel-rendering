@@ -7,23 +7,23 @@
 //! makes an enabled contract immutable, so the table built here is the table the
 //! device reports for its whole life.
 //!
-//! # Why this runs at device creation and not before
+//! # Why this runs against a device
 //!
 //! Direct3D 12 answers every capability question through a device. `DXGI` can
 //! hand out an adapter name and a vendor id without one, but format support,
 //! resource-binding tiers and multisample quality levels all come from
 //! `ID3D12Device::CheckFeatureSupport`, and there is no adapter-level spelling of
-//! them. That dependency — not a preference — is why
-//! [`crate::api::platform::backend::ProviderBackend::enumerate_adapters`] refuses while
-//! `request_device` works, and why an [`crate::api::platform::AdapterInfo`] built
-//! from `DXGI` alone carries no capability snapshot yet.
+//! them. The provider creates a temporary D3D12 device during adapter enumeration
+//! and uses this probe to publish a complete `AdapterInfo` snapshot; device
+//! creation runs the same probe for the final native device before validating its
+//! requirements.
 //!
 //! # What is probed, what is structural, and what is still absent
 //!
 //! Being explicit about which is which, because "the table is full" and "the table
 //! is complete" are different claims and only one of them is true here.
 //!
-//! - **Probed.** Per-format storage access comes from
+//! - **Probed.** Per-format storage access and attachment support come from
 //!   `D3D12_FEATURE_FORMAT_SUPPORT`. A refusal from `CheckFeatureSupport` on it
 //!   is reported as a backend failure rather than swallowed: it is a mandatory
 //!   question, so a device that cannot answer it is not a device this backend can
@@ -138,19 +138,20 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_FEATURE_DATA_D3D12_OPTIONS, D3D12_FEATURE_DATA_FORMAT_SUPPORT,
     D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS, D3D12_FEATURE_FORMAT_SUPPORT,
     D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, D3D12_FORMAT_SUPPORT1,
-    D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL, D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE,
-    D3D12_FORMAT_SUPPORT1_RENDER_TARGET, D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE,
-    D3D12_FORMAT_SUPPORT1_TEXTURE1D, D3D12_FORMAT_SUPPORT1_TEXTURE2D,
-    D3D12_FORMAT_SUPPORT1_TEXTURE3D, D3D12_FORMAT_SUPPORT1_TEXTURECUBE,
-    D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW, D3D12_FORMAT_SUPPORT2,
-    D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE,
-    D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT,
-    D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS, D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT,
-    D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT, D3D12_REQ_MIP_LEVELS,
-    D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES, D3D12_REQ_TEXTURE1D_U_DIMENSION,
-    D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION, D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION,
-    D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT,
-    D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, ID3D12Device,
+    D3D12_FORMAT_SUPPORT1_BLENDABLE, D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL,
+    D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE, D3D12_FORMAT_SUPPORT1_RENDER_TARGET,
+    D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE, D3D12_FORMAT_SUPPORT1_TEXTURE1D,
+    D3D12_FORMAT_SUPPORT1_TEXTURE2D, D3D12_FORMAT_SUPPORT1_TEXTURE3D,
+    D3D12_FORMAT_SUPPORT1_TEXTURECUBE, D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW,
+    D3D12_FORMAT_SUPPORT2, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD,
+    D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE, D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
+    D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT, D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS,
+    D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT, D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT,
+    D3D12_REQ_MIP_LEVELS, D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES,
+    D3D12_REQ_TEXTURE1D_U_DIMENSION, D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION,
+    D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION, D3D12_REQ_TEXTURE3D_U_V_OR_W_DIMENSION,
+    D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT,
+    D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, ID3D12Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
@@ -182,7 +183,7 @@ use crate::api::resource::buffer::{BufferSupport, BufferSupportLimits, BufferUsa
 use crate::api::resource::route::{
     BufferCopyLayoutLimits, RouteCapabilities, RouteQuery, RouteSupport, TexelCopyLayoutLimits,
 };
-use crate::api::resource::subresource::{TextureAspect, aspect_bits};
+use crate::api::resource::subresource::{TextureAspect, TextureAspects, aspect_bits};
 use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
@@ -408,16 +409,11 @@ fn record_buffer_support(facts: &mut CapabilityFacts) {
 
 /// Fills the binding-support table for the families no format decides.
 ///
-/// Three of section 20.4's five kinds answer the same way for every device this
-/// backend can describe, and the reason is the same one `record_buffer_support`
-/// gives about usage flags: Direct3D 12 states a binding's role in the root
-/// signature and the resource's state, not in the resource. A constant buffer is a
-/// `D3D12_ROOT_PARAMETER_TYPE_CBV` or a range in a descriptor table, a storage
-/// buffer is the same with UAV visibility, and either is visible to every stage
-/// because every stage of a root signature has the same register spaces. So
-/// "storage buffer in the vertex stage" — section 20.4's own example of a
-/// limitation a device may have — is not one *this* API has, and the walk below
-/// records the positive rather than a plausible-looking negative.
+/// Capability records what this backend can lower end to end, rather than every
+/// shape the native API could theoretically express. Static buffer descriptor
+/// tables are implemented. Dynamic offsets need root descriptors, while texture
+/// and sampler bindings need native resource/view creation; those rows remain
+/// unsupported until those paths exist.
 ///
 /// Two limitations this API does have are recorded as the negatives they are, and
 /// both come from the header rather than from a driver reading:
@@ -438,12 +434,12 @@ fn record_buffer_support(facts: &mut CapabilityFacts) {
 /// silent refusal of a legal binding.
 fn record_binding_support(facts: &mut CapabilityFacts) {
     for dynamic_offset in [false, true] {
-        record_bindable(
-            facts,
-            BindableKind::UniformBuffer,
-            dynamic_offset,
-            BindingSupport::Supported,
-        );
+        let answer = if dynamic_offset {
+            BindingSupport::Unsupported
+        } else {
+            BindingSupport::Supported
+        };
+        record_bindable(facts, BindableKind::UniformBuffer, dynamic_offset, answer);
         for access in [
             BufferBindingAccess::ReadOnly,
             BufferBindingAccess::ReadWrite,
@@ -452,7 +448,7 @@ fn record_binding_support(facts: &mut CapabilityFacts) {
                 facts,
                 BindableKind::StorageBuffer { access },
                 dynamic_offset,
-                BindingSupport::Supported,
+                answer,
             );
         }
     }
@@ -476,7 +472,16 @@ fn record_binding_support(facts: &mut CapabilityFacts) {
                         multisampled,
                     },
                     false,
-                    sampled_binding_answer(dimension, multisampled),
+                    if multisampled
+                        && !matches!(
+                            dimension,
+                            TextureViewDimension::D2 | TextureViewDimension::D2Array
+                        )
+                    {
+                        BindingSupport::Unsupported
+                    } else {
+                        BindingSupport::Supported
+                    },
                 );
             }
         }
@@ -529,39 +534,15 @@ fn record_bindable(
     }
 }
 
-/// Whether a sampled texture can be bound with this view dimension and sample
-/// count.
-///
-/// The sample count is the whole question: `D3D12_SRV_DIMENSION` spells a
-/// multisampled texture in two dimensions and no others, which is section 13.4's
-/// two-dimensional rule stated by the API instead of derived from it. Everything
-/// else about a sampled binding is a pairing the portable layer checks elsewhere,
-/// so there is no second condition to add here.
-fn sampled_binding_answer(dimension: TextureViewDimension, multisampled: bool) -> BindingSupport {
-    if multisampled
-        && !matches!(
-            dimension,
-            TextureViewDimension::D2 | TextureViewDimension::D2Array
-        )
-    {
-        return BindingSupport::Unsupported;
-    }
-    BindingSupport::Supported
-}
-
 /// Records the storage-texture rows for one format.
 ///
 /// Per format because the portable key names one: a storage texture binding
 /// declares the format the shader reads and writes, unlike a sampled one, where
 /// the format belongs to the view.
 ///
-/// Three questions, in the order that keeps each refusal about the right thing.
-/// Cube first, because it has no answer at any format — `D3D12_UAV_DIMENSION` has
-/// no cube member, so a cube storage texture is not a binding this API can express
-/// whatever the texels are. Then the typed-UAV bit, which says a typed UAV exists
-/// for the format at all. Then the two access bits, which are the same two
-/// `record_format_facts` reads for the texture side of the same fact: one probe,
-/// two consumers, so the two tables cannot disagree about a format.
+/// The access answer is the conjunction of the real format probe and the
+/// descriptor shape the lowering can emit. Read-only bindings copy an SRV;
+/// write-only/read-write bindings build a typed UAV. D3D12 has no cube UAV.
 fn record_storage_texture_bindings(
     format: TextureFormat,
     support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
@@ -573,7 +554,27 @@ fn record_storage_texture_bindings(
             StorageAccess::WriteOnly,
             StorageAccess::ReadWrite,
         ] {
-            let answer = storage_binding_answer(dimension, support, access);
+            let access_supported = match access {
+                StorageAccess::ReadOnly => {
+                    has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD)
+                }
+                StorageAccess::WriteOnly => {
+                    has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE)
+                }
+                StorageAccess::ReadWrite => {
+                    has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD)
+                        && has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE)
+                }
+            };
+            let answer = if access_supported
+                && !matches!(
+                    dimension,
+                    TextureViewDimension::Cube | TextureViewDimension::CubeArray
+                ) {
+                BindingSupport::Supported
+            } else {
+                BindingSupport::Unsupported
+            };
             record_bindable(
                 facts,
                 BindableKind::StorageTexture {
@@ -586,45 +587,6 @@ fn record_storage_texture_bindings(
             );
         }
     }
-}
-
-/// Whether a storage texture can be bound with this view dimension and access.
-///
-/// The access bits are read separately rather than as a three-valued answer,
-/// because Direct3D 12 states two independent facts — a format can be loadable
-/// without being storable — and `ReadWrite` is their conjunction rather than a
-/// third probe.
-fn storage_binding_answer(
-    dimension: TextureViewDimension,
-    support: &D3D12_FEATURE_DATA_FORMAT_SUPPORT,
-    access: StorageAccess,
-) -> BindingSupport {
-    // `D3D12_UAV_DIMENSION` has TEXTURE1D, TEXTURE1DARRAY, TEXTURE2D,
-    // TEXTURE2DARRAY and TEXTURE3D, and no cube member. Section 20.4 names
-    // `StorageTexture + Cube` as its first example of an independently limited
-    // combination; this is the limitation it is talking about.
-    if matches!(
-        dimension,
-        TextureViewDimension::Cube | TextureViewDimension::CubeArray
-    ) {
-        return BindingSupport::Unsupported;
-    }
-
-    if !has_support1(support, D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) {
-        return BindingSupport::Unsupported;
-    }
-
-    let needs_load = matches!(access, StorageAccess::ReadOnly | StorageAccess::ReadWrite);
-    let needs_store = matches!(access, StorageAccess::WriteOnly | StorageAccess::ReadWrite);
-
-    if needs_load && !has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) {
-        return BindingSupport::Unsupported;
-    }
-    if needs_store && !has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE) {
-        return BindingSupport::Unsupported;
-    }
-
-    BindingSupport::Supported
 }
 
 /// Records one portable format's storage access from its probed support words.
@@ -643,12 +605,18 @@ fn record_format_facts(
 ) {
     let read_only = has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD);
     let write_only = has_support2(support, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE);
+    let aspects = format_aspects(format);
+    let depth_stencil = has_support1(support, D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL);
 
     facts.record_format(
         format,
         FormatFacts::new(
             format,
             StorageAccessSupport::new(read_only, write_only, read_only && write_only),
+            has_support1(support, D3D12_FORMAT_SUPPORT1_RENDER_TARGET),
+            depth_stencil && aspects.contains(TextureAspects::DEPTH),
+            depth_stencil && aspects.contains(TextureAspects::STENCIL),
+            has_support1(support, D3D12_FORMAT_SUPPORT1_BLENDABLE),
         ),
     );
 }
@@ -728,7 +696,7 @@ fn format_support(
 /// The exact match rather than a nearest-fit: a portable format is a contract
 /// about bit layout, so answering a `Depth24Plus` question with `D32_FLOAT`'s
 /// facts would describe a resource the caller did not ask for.
-fn dxgi_format(format: TextureFormat) -> Option<DXGI_FORMAT> {
+pub(crate) fn dxgi_format(format: TextureFormat) -> Option<DXGI_FORMAT> {
     let mapped = match format {
         TextureFormat::R8Unorm => DXGI_FORMAT_R8_UNORM,
         TextureFormat::R8Snorm => DXGI_FORMAT_R8_SNORM,

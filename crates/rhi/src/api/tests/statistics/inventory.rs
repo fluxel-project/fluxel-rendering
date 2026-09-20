@@ -34,7 +34,14 @@ use super::{device, other_device};
 /// `FormatFacts` cannot be assembled without it, because it is a probed device
 /// fact and the type has no partial constructor.
 fn facts(format: TextureFormat) -> FormatFacts {
-    FormatFacts::new(format, StorageAccessSupport::new(true, true, true))
+    FormatFacts::new(
+        format,
+        StorageAccessSupport::new(true, true, true),
+        true,
+        true,
+        true,
+        true,
+    )
 }
 
 /// A descriptor with every dimension given explicitly.
@@ -441,7 +448,7 @@ fn shape_an_inventory_report_names_its_device(service: &DeviceStatistics) -> Inv
 /// while `estimate_buffer_memory` refuses before it does anything else.
 #[test]
 fn the_device_free_estimate_is_the_half_that_can_be_driven_today() {
-    let service = DeviceStatistics::new(device());
+    let service = crate::api::tests::mock::device_for_test(device()).statistics();
 
     let buffer = crate::api::tests::fixture::buffer(
         crate::api::identity::ObjectId::new(9),

@@ -259,7 +259,9 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
 - [x] `AdapterId` is a Provider-scoped opaque token, not an index/native handle.
 - [x] The presentation requirement enters the request at Device creation.
 - [x] Device-request futures are not bound to a specific async runtime.
-- [x] Device loss moves pending completion/readback/present into a terminal state.
+- [x] Device loss wakes pending completion/readback/acquire/present/wait-idle
+  into terminal states; v13 has no `Device::lost()` future or separate public
+  loss-event API, and idle loss may first be observed by the next RHI call.
 - [x] `wait_idle().await` is only for shutdown/diagnostics.
 
 ## Capability / Format / Route / Surface

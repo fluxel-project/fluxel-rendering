@@ -35,7 +35,8 @@ use std::sync::Mutex;
 
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_DESC,
-    D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+    D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE,
+    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
     D3D12_GPU_DESCRIPTOR_HANDLE, ID3D12DescriptorHeap, ID3D12Device,
 };
 
@@ -54,6 +55,8 @@ use crate::backend::dx12::ffi;
 /// handed more live descriptors than this says so, rather than silently binding
 /// a group whose range it never got.
 const CAPACITY: u32 = 65_536;
+/// D3D12 limits a shader-visible sampler heap to 2,048 descriptors.
+const SAMPLER_CAPACITY: u32 = 2_048;
 
 /// A shader-visible CBV/SRV/UAV descriptor heap and its free runs.
 pub(crate) struct DescriptorHeap {
@@ -81,9 +84,26 @@ pub(crate) struct DescriptorHeap {
 impl DescriptorHeap {
     /// Creates the heap and its starting free run.
     pub(crate) fn new(device: &ID3D12Device) -> Result<Self, ffi::NativeError> {
+        Self::with_type(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, CAPACITY)
+    }
+
+    /// Creates the device-wide shader-visible sampler heap.
+    ///
+    /// D3D12 permits one sampler heap beside one CBV/SRV/UAV heap on a command
+    /// list.  It must therefore be device-wide just like the view heap: a
+    /// per-group heap would make two independently live groups unbindable.
+    pub(crate) fn new_sampler(device: &ID3D12Device) -> Result<Self, ffi::NativeError> {
+        Self::with_type(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, SAMPLER_CAPACITY)
+    }
+
+    fn with_type(
+        device: &ID3D12Device,
+        heap_type: D3D12_DESCRIPTOR_HEAP_TYPE,
+        capacity: u32,
+    ) -> Result<Self, ffi::NativeError> {
         let description = D3D12_DESCRIPTOR_HEAP_DESC {
-            Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-            NumDescriptors: CAPACITY,
+            Type: heap_type,
+            NumDescriptors: capacity,
             // Shader-visible, for the reason the module doc gives: a table is
             // named by GPU address and only this heap type has one.
             Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
@@ -99,15 +119,14 @@ impl DescriptorHeap {
             let heap = device
                 .CreateDescriptorHeap::<ID3D12DescriptorHeap>(&description)
                 .map_err(|error| ffi::NativeError::new(&error, "Dx12Device::create_bind_group"))?;
-            let increment =
-                device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            let increment = device.GetDescriptorHandleIncrementSize(heap_type);
             Ok(Self {
                 base_cpu: heap.GetCPUDescriptorHandleForHeapStart(),
                 base_gpu: heap.GetGPUDescriptorHandleForHeapStart(),
                 heap,
                 increment,
-                capacity: CAPACITY,
-                free: Mutex::new(vec![0..CAPACITY]),
+                capacity,
+                free: Mutex::new(vec![0..capacity]),
             })
         }
     }

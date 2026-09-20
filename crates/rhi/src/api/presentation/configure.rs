@@ -28,8 +28,8 @@ use crate::api::presentation::frame::{AcquireError, AcquireErrorKind, AcquiredFr
 use crate::api::presentation::target::{
     Extent2d, PresentMode, PresentationExtentControl, PresentationTargetCapabilities,
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// The drawable extent a configuration asks for.
 ///
@@ -201,6 +201,73 @@ pub(crate) struct OutstandingFrame {
     ending: AtomicU8,
 }
 
+/// The one shared ownership domain of a configured native lease and any frame
+/// it has handed out.  A frame has to keep the configured native object alive
+/// after its `ConfiguredPresentation` wrapper was moved or dropped; keeping
+/// that relationship in one inner avoids independently reference-counting the
+/// native lease and its outstanding-frame bookkeeping.
+pub(crate) struct ConfiguredPresentationInner {
+    native: Box<dyn crate::api::presentation::backend::ConfiguredPresentationBackend>,
+    outstanding: Mutex<Option<OutstandingFrame>>,
+}
+
+impl ConfiguredPresentationInner {
+    pub(crate) fn new(
+        native: Box<dyn crate::api::presentation::backend::ConfiguredPresentationBackend>,
+    ) -> Self {
+        Self {
+            native,
+            outstanding: Mutex::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_backed() -> Arc<Self> {
+        Arc::new(Self::new(Box::new(TestConfiguredPresentationBackend)))
+    }
+
+    pub(crate) fn native(
+        &self,
+    ) -> &dyn crate::api::presentation::backend::ConfiguredPresentationBackend {
+        self.native.as_ref()
+    }
+
+    fn outstanding_frame(&self) -> Option<AcquiredFrameId> {
+        let outstanding = self
+            .outstanding
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match outstanding.as_ref() {
+            Some(frame) if frame.ending() == FrameEnding::Outstanding => Some(frame.id()),
+            _ => None,
+        }
+    }
+
+    fn set_outstanding_frame(&self, frame: Option<AcquiredFrameId>) {
+        let mut outstanding = self
+            .outstanding
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *outstanding = frame.map(OutstandingFrame::new);
+    }
+
+    pub(crate) fn report(&self, id: AcquiredFrameId, ending: FrameEnding) {
+        let outstanding = self
+            .outstanding
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(record) = outstanding.as_ref().filter(|record| record.id() == id) {
+            record.report(ending);
+        }
+    }
+}
+
+impl Drop for ConfiguredPresentationInner {
+    fn drop(&mut self) {
+        self.native.release();
+    }
+}
+
 impl OutstandingFrame {
     /// Opens a record for a frame a lease is about to hand out.
     fn new(id: AcquiredFrameId) -> Self {
@@ -265,28 +332,16 @@ impl core::fmt::Debug for OutstandingFrame {
 /// and the reason section 43.4 can state the one-outstanding-frame rule at all: a
 /// lease knows whether it has a frame out.
 ///
-/// Releasing a lease with a frame still out is section 46.3's case, and its order is
-/// fixed there: the frame's abandonment or recovery first, the release second. It is
-/// implemented in the `Drop` below together with the record it is read from.
+/// Releasing a lease with a frame still out is section 46.3's case. The shared
+/// inner remains alive until that frame ends, then releases the native lease exactly
+/// once from its own `Drop`.
 pub struct ConfiguredPresentation {
     id: ObjectId,
-    device: DeviceIdentity,
+    pub(crate) device: DeviceIdentity,
     target_id: ObjectId,
-    configuration: PresentationConfiguration,
-    /// The frame this lease has outstanding, if any.
-    ///
-    /// Section 43.4 permits at most one, and the next acquire is allowed only
-    /// after that frame enters an accepted present plan, is explicitly abandoned,
-    /// or is terminated by target/device loss. Storing the frame's identity
-    /// rather than a flag is what lets the refusal name the frame and lets a
-    /// release be matched to the frame it releases.
-    ///
-    /// It is an [`OutstandingFrame`] rather than a bare [`AcquiredFrameId`] because
-    /// "the next acquire is allowed only after" is a claim that expires with the
-    /// frame: this lease answers section 43.4's refusal from the ending the frame's
-    /// token reports, so a frame the caller dropped unpresented does not leave its
-    /// lease permanently refusing (section 46.3).
-    outstanding: Option<Arc<OutstandingFrame>>,
+    pub(crate) configuration: PresentationConfiguration,
+    /// The exact shared domain held by this lease and every frame it acquires.
+    pub(crate) inner: Arc<ConfiguredPresentationInner>,
 }
 
 impl ConfiguredPresentation {
@@ -298,26 +353,36 @@ impl ConfiguredPresentation {
     /// [`validate_presentation_configuration`] against facts queried at
     /// configuration time — section 42.5 makes that a fresh check rather than a
     /// reuse of whatever the caller queried earlier.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "created by Device::configure_presentation when the backend port lands"
-        )
-    )]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,
         target_id: ObjectId,
         configuration: PresentationConfiguration,
+        native: Box<dyn crate::api::presentation::backend::ConfiguredPresentationBackend>,
     ) -> Self {
         Self {
             id,
             device,
             target_id,
             configuration,
-            outstanding: None,
+            inner: Arc::new(ConfiguredPresentationInner::new(native)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        id: ObjectId,
+        device: DeviceIdentity,
+        target_id: ObjectId,
+        configuration: PresentationConfiguration,
+    ) -> Self {
+        Self::new(
+            id,
+            device,
+            target_id,
+            configuration,
+            Box::new(TestConfiguredPresentationBackend),
+        )
     }
 
     /// This lease's process-local identity.
@@ -368,12 +433,12 @@ impl ConfiguredPresentation {
     /// with the same [`Self::id`], which is what distinguishes it from dropping
     /// the lease and configuring again.
     pub async fn reconfigure(&mut self, config: &PresentationConfiguration) -> RhiResult<()> {
-        let _ = config;
         validate_reconfigure_allowed(self.outstanding_frame())?;
-        unimplemented!(
-            "revalidation against re-queried surface facts needs the presentation \
-             backend; the contract is fixed, the lease is not built"
-        )
+        let capabilities = self.inner.native().capabilities()?;
+        validate_presentation_configuration(config, &capabilities)?;
+        self.inner.native().reconfigure(config)?;
+        self.configuration = config.clone();
+        Ok(())
     }
 
     /// The frame this lease has outstanding, if any.
@@ -393,14 +458,7 @@ impl ConfiguredPresentation {
     /// No dead-code annotation: this crate's own `acquire` and `reconfigure` read
     /// it already, so the item is live in every build rather than pending a port.
     pub(crate) fn outstanding_frame(&self) -> Option<AcquiredFrameId> {
-        match &self.outstanding {
-            Some(frame) if frame.ending() == FrameEnding::Outstanding => Some(frame.id()),
-            // An ended frame — or no frame at all — is not an outstanding one. The
-            // record is kept until the next acquire rather than cleared here, because
-            // `outstanding_frame` answers a question and must not be a writer: the
-            // ending it reads is what a release and a diagnostic report.
-            _ => None,
-        }
+        self.inner.outstanding_frame()
     }
 
     /// Records which frame this lease has outstanding, and opens the record its
@@ -420,70 +478,60 @@ impl ConfiguredPresentation {
     ///
     /// No dead-code annotation: `ConfiguredPresentation::acquire` drives it in every
     /// build, which is also why this returns the record rather than only installing it.
-    pub(crate) fn set_outstanding_frame(
-        &mut self,
-        frame: Option<AcquiredFrameId>,
-    ) -> Option<Arc<OutstandingFrame>> {
-        let record = frame.map(|id| Arc::new(OutstandingFrame::new(id)));
-        self.outstanding = record.clone();
-        record
+    pub(crate) fn set_outstanding_frame(&self, frame: Option<AcquiredFrameId>) {
+        self.inner.set_outstanding_frame(frame);
     }
 }
 
-impl Drop for ConfiguredPresentation {
-    /// Releases the lease in section 46.3's order: the frame's record first, the lease
-    /// second.
-    ///
-    /// Section 46.3 requires two things of a dropped lease — "if an outstanding frame
-    /// remains: first enter the no-throw abandonment/recovery path, then release the
-    /// lease", and "the target must not be left permanently in an 'acquired frame
-    /// already exists' state" — and this performs the part of them that the portable
-    /// layer can, which is the part section 43.4 rests on. The claim on the frame ends
-    /// with the lease that made it, so the refusal a released lease answered cannot
-    /// outlive it, and that is the second of the two requirements stated as portable
-    /// state.
-    ///
-    /// The first requirement is the pair, in this order: the record is left carrying the
-    /// ending of the frame it named — `Outstanding` when the token is still alive to
-    /// report a later ending to it, and the token's ending when the token went first —
-    /// and the native release, once the port performs it, reads that ending from the
-    /// record rather than reconstructing it. An abandonment is the ending that owes the
-    /// surface a recovery, and a present acceptance or a loss owes none, which is why the
-    /// record keeps the distinction the release would otherwise have to guess at. Nothing
-    /// here invents an ending: a lease that wrote one into the record would be answering
-    /// the one question only the frame token observes (section 44.5).
-    ///
-    /// What is *not* performed here is native, and a `Drop` that cannot fail must not
-    /// reach for it — a panic in a drop that runs during unwinding aborts the process,
-    /// which is the same reason `ToolingSubscription`'s `Drop` is empty rather than
-    /// `unimplemented!()`:
-    ///
-    /// ```text
-    /// releasing the acquired drawable       the recovery §44.5's abandonment marks as
-    ///                                       owed; the backend port owns the drawable
-    /// unregistering the target-side lease   the registry §42.1's "one active
-    ///                                       ConfiguredPresentation per target" is
-    ///                                       enforced from; Device::configure_presentation
-    ///                                       is unimplemented, so the registration this
-    ///                                       release would undo does not exist yet
-    /// ```
-    ///
-    /// A frame that ended by present acceptance or by loss owes neither: the
-    /// presentation system owns it in the first case, and section 45.5 keeps a lost
-    /// target lost in the second. That distinction is why the record keeps the ending
-    /// rather than a flag, and it is what the release reads when the port performs it.
-    fn drop(&mut self) {
-        // The second of §46.3's two requirements, and deliberately the assignment
-        // rather than a read: the lease's claim on the frame ends here, and the record
-        // — which the frame token may still hold, and which keeps the ending the
-        // native release will act on — is what the first requirement is carried in.
-        // Holding on to the record would leave this lease answering §43.4's refusal
-        // after it has been released, which is the "acquired frame already exists"
-        // state §46.3 forbids the target to be left in.
-        self.outstanding = None;
-    }
-}
+#[cfg(test)]
+struct TestConfiguredPresentationBackend;
 
+#[cfg(test)]
+impl crate::api::presentation::backend::ConfiguredPresentationBackend
+    for TestConfiguredPresentationBackend
+{
+    fn capabilities(&self) -> RhiResult<PresentationTargetCapabilities> {
+        Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "test presentation backing has no surface capabilities",
+        ))
+    }
+
+    fn reconfigure(&self, _: &PresentationConfiguration) -> RhiResult<()> {
+        Ok(())
+    }
+
+    fn try_acquire(
+        &self,
+        _: DeviceIdentity,
+    ) -> Result<Option<crate::api::presentation::backend::AcquiredSurfaceFrame>, AcquireError> {
+        Err(AcquireError::new(
+            AcquireErrorKind::TargetLost,
+            "test presentation backing cannot acquire a host drawable",
+        ))
+    }
+
+    fn acquire_or_register_waker(
+        &self,
+        _: DeviceIdentity,
+        _: &std::task::Waker,
+    ) -> std::task::Poll<
+        Result<crate::api::presentation::backend::AcquiredSurfaceFrame, AcquireError>,
+    > {
+        std::task::Poll::Ready(Err(AcquireError::new(
+            AcquireErrorKind::TargetLost,
+            "test presentation backing cannot acquire a host drawable",
+        )))
+    }
+
+    fn abandon(&self, _: AcquiredFrameId) -> RhiResult<()> {
+        Ok(())
+    }
+
+    fn abandon_no_throw(&self, _: AcquiredFrameId) {}
+
+    fn release(&self) {}
+}
 impl core::fmt::Debug for ConfiguredPresentation {
     /// Prints portable identity, not the platform lease.
     ///
@@ -498,7 +546,7 @@ impl core::fmt::Debug for ConfiguredPresentation {
             .field("device", &self.device)
             .field("target_id", &self.target_id)
             .field("configuration", &self.configuration)
-            .field("outstanding", &self.outstanding)
+            .field("outstanding", &self.outstanding_frame())
             .finish_non_exhaustive()
     }
 }
@@ -521,7 +569,6 @@ impl Device {
         target: &PresentationTarget,
         config: &PresentationConfiguration,
     ) -> RhiResult<ConfiguredPresentation> {
-        let _ = (target, config);
         if let DeviceStatus::Lost = self.status() {
             return Err(RhiError::new(
                 RhiErrorKind::DeviceLost,
@@ -529,11 +576,23 @@ impl Device {
             )
             .at("Device::configure_presentation"));
         }
-        unimplemented!(
-            "surface facts, the target lease registry, and the native configuration \
-             all come from the presentation backend; the contract is fixed, none of \
-             them is built"
-        )
+        let backend = self.native().presentation().ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this backend does not implement presentation",
+            )
+            .at("Device::configure_presentation")
+        })?;
+        let capabilities = backend.capabilities(target.id())?;
+        validate_presentation_configuration(config, &capabilities)?;
+        let native = backend.configure(self.identity(), target.id(), config)?;
+        Ok(ConfiguredPresentation::new(
+            ObjectId::next(),
+            self.identity(),
+            target.id(),
+            config.clone(),
+            native,
+        ))
     }
 }
 
@@ -563,13 +622,6 @@ impl Device {
 ///
 /// Crate-private but not hidden: it takes the facts as a parameter rather than
 /// reading a device, which is what makes it exercisable without a GPU.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by configure and reconfigure when the backend port lands"
-    )
-)]
 pub(crate) fn validate_presentation_configuration(
     config: &PresentationConfiguration,
     capabilities: &PresentationTargetCapabilities,

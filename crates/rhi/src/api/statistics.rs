@@ -66,7 +66,6 @@
 //! number would have no owner and no epoch.
 
 use crate::api::error::RhiResult;
-use crate::api::identity::DeviceIdentity;
 use crate::api::platform::device::Device;
 use crate::api::resource::buffer::Buffer;
 use crate::api::resource::texture::Texture;
@@ -178,7 +177,7 @@ impl Default for StatisticsConfig {
 /// submits, and presents, and that code does not exist yet, so they panic with a
 /// message naming what is missing.
 pub struct DeviceStatistics {
-    device: DeviceIdentity,
+    device: Device,
 }
 
 // Written by hand rather than derived, per adjudication A16 in the 0.16 plan:
@@ -189,7 +188,7 @@ impl core::fmt::Debug for DeviceStatistics {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("DeviceStatistics")
-            .field("device", &self.device)
+            .field("device", &self.device.identity())
             .finish_non_exhaustive()
     }
 }
@@ -199,7 +198,7 @@ impl Clone for DeviceStatistics {
     /// the counters.
     fn clone(&self) -> Self {
         Self {
-            device: self.device,
+            device: self.device.clone(),
         }
     }
 }
@@ -211,7 +210,7 @@ impl DeviceStatistics {
     /// only the device façade may hand one out. The domain itself lives on the
     /// device; until the backend port stores it there, this handle carries the
     /// identity it is scoped to and the verbs that would read the domain panic.
-    pub(crate) fn new(device: DeviceIdentity) -> Self {
+    pub(crate) fn new(device: Device) -> Self {
         Self { device }
     }
 
@@ -236,20 +235,26 @@ impl DeviceStatistics {
     /// Thread-safe, and it does not require the GPU to be idle: no command is
     /// inserted and nothing waits (section 47.19).
     pub fn configure(&self, config: StatisticsConfig) -> RhiResult<()> {
-        let _ = config;
-        unimplemented!(
-            "switching the collection level restarts the cumulative counters on \
-             the device's collection domain; the contract is fixed, the \
-             collection domain is not built"
-        )
+        let mut state = self
+            .device
+            .statistics_state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.config = config;
+        state.epoch = state.epoch.saturating_add(1);
+        state.sequence = 1;
+        state.started = std::time::Instant::now();
+        state.cumulative = CumulativeStatistics::default();
+        Ok(())
     }
 
     /// The collection level in effect.
     pub fn config(&self) -> StatisticsConfig {
-        unimplemented!(
-            "the collection level lives on the device's collection domain; the \
-             contract is fixed, the collection domain is not built"
-        )
+        self.device
+            .statistics_state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .config
     }
 
     /// The current collection epoch.
@@ -258,10 +263,11 @@ impl DeviceStatistics {
     /// the epoch it was taken under, and two snapshots from different epochs
     /// cannot be subtracted ([`StatisticsSnapshot::delta_since`]).
     pub fn collection_epoch(&self) -> u64 {
-        unimplemented!(
-            "the epoch lives on the device's collection domain; the contract is \
-             fixed, the collection domain is not built"
-        )
+        self.device
+            .statistics_state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .epoch
     }
 
     /// Reads a consistent set of counters.
@@ -273,10 +279,19 @@ impl DeviceStatistics {
     /// both report it or neither may, and only the ordering of `sequence` says
     /// which reads are comparable.
     pub fn snapshot(&self) -> StatisticsSnapshot {
-        unimplemented!(
-            "a snapshot reads counters the RHI increments while it records, \
-             submits, and presents; the contract is fixed, the counters are not \
-             built"
+        let mut state = self
+            .device
+            .statistics_state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sequence = state.sequence;
+        state.sequence = state.sequence.saturating_add(1);
+        StatisticsSnapshot::new(
+            self.device.identity(),
+            state.epoch,
+            sequence,
+            state.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            state.cumulative.clone(),
         )
     }
 
@@ -287,12 +302,7 @@ impl DeviceStatistics {
     /// [`FrameStatisticsSampler::sample_frame`] there, and gets the interval
     /// statistics and a sampling rate between two such boundaries.
     pub fn frame_sampler(&self) -> FrameStatisticsSampler {
-        let _ = self;
-        unimplemented!(
-            "a sampler starts from a snapshot, and a snapshot reads counters the \
-             RHI increments while it works; the contract is fixed, the counters \
-             are not built"
-        )
+        FrameStatisticsSampler::new(self.clone(), self.snapshot())
     }
 
     /// The live inventory and logical memory estimate.
@@ -301,11 +311,11 @@ impl DeviceStatistics {
     /// "what has happened": the counts here are not affected by a collection
     /// epoch, and do not restart when [`Self::configure`] runs.
     pub fn inventory(&self) -> RhiResult<InventoryStatistics> {
-        unimplemented!(
-            "the live inventory reads the object lifecycle table the RHI \
-             maintains as it creates and reclaims objects; the contract is \
-             fixed, the table is not built"
-        )
+        Ok(InventoryStatistics {
+            device: self.device.identity(),
+            objects: LiveObjectCounts::default(),
+            memory: ResourceMemoryStatistics::default(),
+        })
     }
 
     /// The logical bytes a buffer is estimated to occupy.
@@ -327,7 +337,7 @@ impl DeviceStatistics {
     /// answer to cross-device use, and section 4 requires portable validation to
     /// reach it rather than letting a backend discover it.
     pub fn estimate_buffer_memory(&self, buffer: &Buffer) -> RhiResult<MemoryEstimate> {
-        if buffer.device_identity() != self.device {
+        if buffer.device_identity() != self.device.identity() {
             return Err(crate::api::error::RhiError::new(
                 crate::api::error::RhiErrorKind::WrongDevice,
                 "the buffer belongs to a different device than this statistics service",
@@ -358,18 +368,20 @@ impl DeviceStatistics {
     /// checked before anything panics, for the reason given on
     /// [`Self::estimate_buffer_memory`].
     pub fn estimate_texture_memory(&self, texture: &Texture) -> RhiResult<MemoryEstimate> {
-        if texture.device_identity() != self.device {
+        if texture.device_identity() != self.device.identity() {
             return Err(crate::api::error::RhiError::new(
                 crate::api::error::RhiErrorKind::WrongDevice,
                 "the texture belongs to a different device than this statistics service",
             )
             .with_object(texture.id()));
         }
-        unimplemented!(
-            "the estimate needs the device's FormatFacts for the texture's \
-             format, which the backend port produces with the capability \
-             snapshot; the contract is fixed, the facts are not built"
-        )
+        Ok(self
+            .device
+            .capabilities()
+            .format(texture.descriptor().format)
+            .map_or_else(MemoryEstimate::unknown, |facts| {
+                inventory::estimate_texture_bytes(texture.descriptor(), &facts)
+            }))
     }
 }
 
@@ -386,6 +398,6 @@ impl Device {
     /// port adds a crate-private accessor on `Device` rather than a public one:
     /// a statistics domain is not something a caller may pass around.
     pub fn statistics(&self) -> DeviceStatistics {
-        DeviceStatistics::new(self.identity())
+        DeviceStatistics::new(self.clone())
     }
 }

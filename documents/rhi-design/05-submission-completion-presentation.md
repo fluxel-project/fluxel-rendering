@@ -715,7 +715,8 @@ SubmissionPoint serial
 
 ## 41.9 Device loss
 
-After Device loss, every pending CompletionPoint for that DeviceIdentity must, through bounded host/device polling progress, enter:
+After Device loss is observed, every pending CompletionPoint for that
+DeviceIdentity must be woken and enter:
 
 ~~~text
 CompletionState::DeviceLost(...)
@@ -724,6 +725,12 @@ CompletionState::DeviceLost(...)
 It may not remain Pending forever.
 
 Already Complete tokens remain Complete.
+
+This is one part of the device-loss rule in section 6.5. The same observation
+terminates pending readback, surface acquire, present/wait_present, and
+wait_idle; there is no independent `Device::lost()` future or public loss-event
+stream. A backend with no pending RHI operation need not poll just to discover
+loss, but once it observes loss it must release every registered waiter.
 
 ---
 

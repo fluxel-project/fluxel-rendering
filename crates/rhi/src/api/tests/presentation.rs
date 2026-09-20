@@ -290,8 +290,8 @@ fn a_lease_keeps_the_frame_it_has_outstanding_and_its_own_identity() {
     let device = device_identity(1);
     let target_id = ObjectId::new(4);
     let config = PresentationConfiguration::new(TextureFormat::Bgra8Unorm);
-    let mut lease =
-        ConfiguredPresentation::new(ObjectId::new(7), device, target_id, config.clone());
+    let lease =
+        ConfiguredPresentation::new_for_test(ObjectId::new(7), device, target_id, config.clone());
 
     // A reconfiguration is the same lease rather than a second one, so the identity
     // distinguishes this from dropping the lease and configuring again.
@@ -341,6 +341,75 @@ fn configure_presentation_on_a_lost_device_is_device_lost() {
         device.loss_info().map(|loss| loss.message().to_owned()),
         Some("simulated loss".to_owned()),
         "the loss summary is stable, so a refusal can say why"
+    );
+}
+
+/// An acquire that suspended waiting for the host must not strand its future
+/// when the device goes away.  This deliberately drives the public lease
+/// future through the backend waker seam rather than relying on a scheduler
+/// yield: loss is an event, so it must wake the task that is waiting for one.
+#[test]
+fn pending_acquire_is_woken_and_terminates_as_device_lost() {
+    use core::future::Future;
+    use core::task::{Context, Poll, Waker};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Wake;
+
+    struct WakeCounter(AtomicUsize);
+
+    impl Wake for WakeCounter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let backend = MockPendingAcquireBackend::new();
+    let mut lease = ConfiguredPresentation::new(
+        ObjectId::new(7),
+        device_identity(1),
+        ObjectId::new(8),
+        PresentationConfiguration::new(TextureFormat::Bgra8Unorm),
+        Box::new(backend.clone()),
+    );
+    let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    let mut acquire = Box::pin(lease.acquire());
+
+    assert!(matches!(acquire.as_mut().poll(&mut context), Poll::Pending));
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+
+    backend.mark_device_lost();
+    assert_eq!(
+        wakes.0.load(Ordering::SeqCst),
+        1,
+        "device loss must wake the acquire future that registered for host progress"
+    );
+
+    let refusal = match acquire.as_mut().poll(&mut context) {
+        Poll::Ready(Err(refusal)) => refusal,
+        Poll::Ready(Ok(_)) => panic!("a lost device must not hand out a drawable"),
+        Poll::Pending => panic!("a loss must terminally resolve a pending acquire"),
+    };
+    assert_eq!(refusal.kind(), AcquireErrorKind::DeviceLost);
+    drop(acquire);
+
+    assert_eq!(
+        lease.try_acquire().unwrap_err().kind(),
+        AcquireErrorKind::DeviceLost,
+        "later acquire attempts remain terminal after loss"
+    );
+    assert_eq!(
+        block_on(lease.reconfigure(&PresentationConfiguration::new(TextureFormat::Bgra8Unorm)))
+            .unwrap_err()
+            .kind(),
+        RhiErrorKind::DeviceLost,
+        "the same configured lease cannot be revived after loss"
     );
 }
 
@@ -663,10 +732,9 @@ fn a_failed_presentation_carries_its_reason() {
     }
 }
 
-/// Asking about a presentation a device never accepted is `WrongDevice`, and a
-/// lost device is terminal for every receipt.
+/// Asking about another device's presentation is always `WrongDevice`.
 #[test]
-fn present_state_refuses_a_foreign_receipt_and_reports_a_lost_device() {
+fn present_state_refuses_a_foreign_receipt_before_backend_state() {
     let identity = device_identity(1);
     let other = device_identity(2);
     let (device, native) = paired_device_for_test(identity);
@@ -682,15 +750,14 @@ fn present_state_refuses_a_foreign_receipt_and_reports_a_lost_device() {
 
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
 
-    let error = device
-        .present_state(PresentReceiptId::new(identity, 1))
-        .unwrap_err();
     assert_eq!(
-        error.kind(),
-        RhiErrorKind::DeviceLost,
-        "loss is terminal, so it is reported ahead of the receipt's own state"
+        device
+            .present_state(PresentReceiptId::new(other, 1))
+            .unwrap_err()
+            .kind(),
+        RhiErrorKind::WrongDevice,
+        "identity is validated before receipt-specific terminal state"
     );
-    assert_eq!(error.operation(), Some("Device::present_state"));
 }
 
 // ---------------------------------------------------------------------------
@@ -793,8 +860,132 @@ fn shape_three_independent_outcomes(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers.
+// Test backends and helpers.
 // ---------------------------------------------------------------------------
+
+/// In-memory host acquire used to verify the configured-presentation waker
+/// contract. It intentionally never produces a drawable: the test is about the
+/// pending-to-loss transition before a drawable can be owned.
+#[derive(Clone)]
+struct MockPendingAcquireBackend {
+    state: std::sync::Arc<std::sync::Mutex<MockPendingAcquireState>>,
+}
+
+struct MockPendingAcquireState {
+    device_lost: bool,
+    waiters: Vec<std::task::Waker>,
+}
+
+impl MockPendingAcquireBackend {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(MockPendingAcquireState {
+                device_lost: false,
+                waiters: Vec::new(),
+            })),
+        }
+    }
+
+    fn mark_device_lost(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.device_lost = true;
+        let waiters = core::mem::take(&mut state.waiters);
+        drop(state);
+        for waker in waiters {
+            waker.wake();
+        }
+    }
+
+    fn device_lost(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .device_lost
+    }
+
+    fn device_lost_refusal() -> frame::AcquireError {
+        frame::AcquireError::new(
+            AcquireErrorKind::DeviceLost,
+            "the mock device was lost while waiting for a drawable",
+        )
+    }
+}
+
+impl crate::api::presentation::backend::ConfiguredPresentationBackend
+    for MockPendingAcquireBackend
+{
+    fn capabilities(&self) -> crate::api::error::RhiResult<PresentationTargetCapabilities> {
+        if self.device_lost() {
+            return Err(crate::api::error::RhiError::new(
+                RhiErrorKind::DeviceLost,
+                "the mock device was lost",
+            ));
+        }
+        Ok(target_caps(
+            vec![TextureFormat::Bgra8Unorm],
+            vec![PresentMode::Fifo],
+            host_managed(Some((64, 64))),
+        ))
+    }
+
+    fn reconfigure(&self, _: &PresentationConfiguration) -> crate::api::error::RhiResult<()> {
+        if self.device_lost() {
+            Err(crate::api::error::RhiError::new(
+                RhiErrorKind::DeviceLost,
+                "the mock device was lost",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn try_acquire(
+        &self,
+        _: DeviceIdentity,
+    ) -> Result<Option<crate::api::presentation::backend::AcquiredSurfaceFrame>, frame::AcquireError>
+    {
+        if self.device_lost() {
+            Err(Self::device_lost_refusal())
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn acquire_or_register_waker(
+        &self,
+        _: DeviceIdentity,
+        waker: &std::task::Waker,
+    ) -> std::task::Poll<
+        Result<crate::api::presentation::backend::AcquiredSurfaceFrame, frame::AcquireError>,
+    > {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.device_lost {
+            return std::task::Poll::Ready(Err(Self::device_lost_refusal()));
+        }
+        state.waiters.push(waker.clone());
+        // The registration and this recheck share the same lock, so loss cannot
+        // occur in between and leave the future asleep.
+        if state.device_lost {
+            std::task::Poll::Ready(Err(Self::device_lost_refusal()))
+        } else {
+            std::task::Poll::Pending
+        }
+    }
+
+    fn abandon(&self, _: AcquiredFrameId) -> crate::api::error::RhiResult<()> {
+        Ok(())
+    }
+
+    fn abandon_no_throw(&self, _: AcquiredFrameId) {}
+
+    fn release(&self) {}
+}
 
 fn block_on<T>(future: impl core::future::Future<Output = T>) -> T {
     use core::task::{Context, Poll, Waker};

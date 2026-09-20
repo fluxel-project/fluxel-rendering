@@ -123,16 +123,23 @@ impl Device {
     /// its own diagnostics would double-report once a host installed its own
     /// sink, and would write to a stream the host may own.
     ///
-    /// Panics until the backend port lands: the queue is filled by the code that
-    /// detects the problem, and that code does not exist yet. There is nothing to
-    /// validate first — a drain names no object, so it has no portable refusal
-    /// path, and section 4's rule about not deferring a *legal* decision to a
-    /// driver does not apply to a verb that decides nothing.
     pub fn drain_diagnostics(&self, out: &mut Vec<DiagnosticEvent>) {
-        let _ = out;
-        unimplemented!(
-            "the diagnostic queue is filled by the backend port as it detects \
-             problems; the contract is fixed, the queue is not built"
-        )
+        let mut queued = self
+            .diagnostics_queue()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        out.append(&mut queued);
+    }
+
+    /// Records one portable diagnostic on this device.
+    ///
+    /// Kept crate-private so backend and validation paths can report a fact
+    /// without making diagnostics a caller-controlled logging channel.
+    pub(crate) fn report_diagnostic(&self, event: DiagnosticEvent) {
+        self.diagnostics_queue()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(event.clone());
+        self.dispatch_diagnostic(&event);
     }
 }

@@ -325,6 +325,15 @@ impl BufferDescriptor {
 /// work item referencing it is terminal.
 #[derive(Clone)]
 pub struct Buffer {
+    inner: Arc<BufferInner>,
+}
+
+/// The one shared ownership domain of a logical buffer.
+///
+/// Keeping identity, immutable descriptor, transient metadata, and the native
+/// allocation together is deliberate: a cloned `Buffer` is one logical
+/// resource, not several independently reference-counted pieces of one.
+struct BufferInner {
     id: ObjectId,
     device: DeviceIdentity,
     descriptor: BufferDescriptor,
@@ -345,7 +354,7 @@ pub struct Buffer {
     /// accessor reads it, and an `expect` on the field therefore sits
     /// unfulfilled; what is genuinely unreached is the accessor, which is where
     /// the reason is written.
-    native: Arc<dyn BufferBackend>,
+    native: Box<dyn BufferBackend>,
     /// Plan-scoped transient execution metadata, when this is not persistent.
     transient: Option<TransientResourceMetadata>,
 }
@@ -362,14 +371,16 @@ impl Buffer {
         id: ObjectId,
         device: DeviceIdentity,
         descriptor: BufferDescriptor,
-        native: Arc<dyn BufferBackend>,
+        native: Box<dyn BufferBackend>,
     ) -> Self {
         Self {
-            id,
-            device,
-            descriptor,
-            native,
-            transient: None,
+            inner: Arc::new(BufferInner {
+                id,
+                device,
+                descriptor,
+                native,
+                transient: None,
+            }),
         }
     }
 
@@ -378,15 +389,17 @@ impl Buffer {
         id: ObjectId,
         device: DeviceIdentity,
         descriptor: BufferDescriptor,
-        native: Arc<dyn BufferBackend>,
+        native: Box<dyn BufferBackend>,
         transient: TransientResourceMetadata,
     ) -> Self {
         Self {
-            id,
-            device,
-            descriptor,
-            native,
-            transient: Some(transient),
+            inner: Arc::new(BufferInner {
+                id,
+                device,
+                descriptor,
+                native,
+                transient: Some(transient),
+            }),
         }
     }
 
@@ -394,7 +407,8 @@ impl Buffer {
     pub(crate) fn transient_lifetime(
         &self,
     ) -> Option<&crate::api::resource::transient::TransientLifetime> {
-        self.transient
+        self.inner
+            .transient
             .as_ref()
             .map(TransientResourceMetadata::lifetime)
     }
@@ -428,13 +442,13 @@ impl Buffer {
                       cross the seam; a build with no backend compiled has none"
         )
     )]
-    pub(crate) fn native(&self) -> &Arc<dyn BufferBackend> {
-        &self.native
+    pub(crate) fn native(&self) -> &dyn BufferBackend {
+        self.inner.native.as_ref()
     }
 
     /// This buffer's process-local object ID.
     pub fn id(&self) -> ObjectId {
-        self.id
+        self.inner.id
     }
 
     /// The device that created this buffer.
@@ -444,7 +458,7 @@ impl Buffer {
     /// so the comparison in `validate_buffer_ownership` is a refusal rather
     /// than a migration.
     pub fn device_identity(&self) -> DeviceIdentity {
-        self.device
+        self.inner.device
     }
 
     /// The descriptor this buffer was created from.
@@ -452,7 +466,7 @@ impl Buffer {
     /// Section 18.8 requires a descriptor to be recoverable for capture, which is
     /// why the buffer retains it rather than only its effects.
     pub fn descriptor(&self) -> &BufferDescriptor {
-        &self.descriptor
+        &self.inner.descriptor
     }
 }
 
@@ -470,8 +484,8 @@ impl fmt::Debug for Buffer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Buffer")
-            .field("id", &self.id)
-            .field("device", &self.device)
+            .field("id", &self.inner.id)
+            .field("device", &self.inner.device)
             .finish_non_exhaustive()
     }
 }

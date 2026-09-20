@@ -59,6 +59,7 @@
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::Waker;
 
 use crate::api::capability::{AvailableCapabilities, CapabilityFacts};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -205,8 +206,8 @@ impl MockProvider {
     }
 
     /// Wraps this provider for a [`crate::api::platform::PlatformProvider`].
-    pub(crate) fn shared(self) -> Arc<dyn ProviderBackend> {
-        Arc::new(self)
+    pub(crate) fn boxed(self) -> Box<dyn ProviderBackend> {
+        Box::new(self)
     }
 }
 
@@ -283,6 +284,8 @@ impl DeviceRequestBackend for MockRequest {
                 submissions: AtomicUsize::new(0),
                 next_completion: AtomicU64::new(1),
                 holding: AtomicBool::new(false),
+                completed_at_loss: AtomicBool::new(false),
+                completion_waiters: Mutex::new(Vec::new()),
             }))),
             MockOutcome::Fails(message) => {
                 Err(RhiError::new(RhiErrorKind::Unsupported, message.clone()))
@@ -448,6 +451,47 @@ impl crate::api::pipeline::backend::ComputePipelineBackend for MockComputePipeli
     }
 }
 
+/// A deliberately inert graphics pipeline for portable tests that only need a
+/// valid created-handle backing. Native command lowering is tested by backend
+/// suites with that backend's concrete state instead.
+pub(crate) struct MockRasterPipeline;
+
+impl crate::api::pipeline::backend::RasterPipelineBackend for MockRasterPipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub(crate) struct MockTexture;
+
+impl crate::api::resource::backend::TextureBackend for MockTexture {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub(crate) struct MockTextureView;
+
+impl crate::api::resource::backend::TextureViewBackend for MockTextureView {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub(crate) struct MockSampler;
+
+impl crate::api::resource::backend::SamplerBackend for MockSampler {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Native graphics state for a portable test that is not about lowering.
+pub(crate) fn raster_pipeline_backend_for_test()
+-> Box<dyn crate::api::pipeline::backend::RasterPipelineBackend> {
+    Box::new(MockRasterPipeline)
+}
+
 /// A bind group backend holding the canonical packet it was handed.
 ///
 /// The same shape as [`module_backend_for_test`], one chapter later: a test that
@@ -459,8 +503,8 @@ impl crate::api::pipeline::backend::ComputePipelineBackend for MockComputePipeli
 /// will be seen.
 pub(crate) fn bind_group_backend_for_test(
     descriptor: crate::api::binding::BindGroupDescriptor,
-) -> Arc<dyn crate::api::binding::backend::BindGroupBackend> {
-    Arc::new(MockBindGroup::new(descriptor))
+) -> Box<dyn crate::api::binding::backend::BindGroupBackend> {
+    Box::new(MockBindGroup::new(descriptor))
 }
 
 /// A compute pipeline backend holding the descriptor it was handed.
@@ -473,8 +517,8 @@ pub(crate) fn bind_group_backend_for_test(
 /// caller named.
 pub(crate) fn compute_pipeline_backend_for_test(
     descriptor: crate::api::pipeline::ComputePipelineDescriptor,
-) -> Arc<dyn crate::api::pipeline::backend::ComputePipelineBackend> {
-    Arc::new(MockComputePipeline::new(descriptor))
+) -> Box<dyn crate::api::pipeline::backend::ComputePipelineBackend> {
+    Box::new(MockComputePipeline::new(descriptor))
 }
 
 /// A device that answers from memory.
@@ -552,6 +596,10 @@ pub(crate) struct MockDevice {
     /// Defaults to false so that a test which does not care about the distinction
     /// sees the old immediate answer.
     holding: AtomicBool,
+    /// Whether the mock's already-issued work had completed at loss time.
+    completed_at_loss: AtomicBool,
+    /// Async waiters registered while `holding` made completion pending.
+    completion_waiters: Mutex<Vec<Waker>>,
 }
 
 impl MockDevice {
@@ -605,6 +653,8 @@ impl MockDevice {
             // the first real value is not a sentinel.
             next_completion: AtomicU64::new(1),
             holding: AtomicBool::new(false),
+            completed_at_loss: AtomicBool::new(false),
+            completion_waiters: Mutex::new(Vec::new()),
         })
     }
 
@@ -673,6 +723,7 @@ impl MockDevice {
     /// because this device has no work to actually run and no driver to run it.
     pub(crate) fn release_completion(&self) {
         self.holding.store(false, Ordering::Relaxed);
+        self.wake_completion_waiters();
     }
 
     /// Records that this device is gone, with the reason.
@@ -680,9 +731,13 @@ impl MockDevice {
     /// One-way, like the loss it records: section 6.5 makes device loss terminal
     /// for the whole identity, so there is no matching `mark_active`.
     pub(crate) fn mark_lost(&self, info: DeviceLossInfo) {
+        self.completed_at_loss
+            .store(!self.holding.load(Ordering::Relaxed), Ordering::Relaxed);
         let mut liveness = self.liveness();
         liveness.status = DeviceStatus::Lost;
         liveness.loss = Some(info);
+        drop(liveness);
+        self.wake_completion_waiters();
     }
 
     /// Borrows the liveness cell, surviving a poisoned lock.
@@ -696,9 +751,24 @@ impl MockDevice {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    fn wake_completion_waiters(&self) {
+        let mut waiters = self
+            .completion_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let registered = core::mem::take(&mut *waiters);
+        drop(waiters);
+        for waker in registered {
+            waker.wake();
+        }
+    }
 }
 
 impl DeviceBackend for MockDevice {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     fn backend_kind(&self) -> BackendKind {
         self.backend
     }
@@ -747,6 +817,29 @@ impl DeviceBackend for MockDevice {
             size: descriptor.size,
             usage: descriptor.usage,
         }))
+    }
+
+    fn create_texture(
+        &self,
+        _descriptor: &crate::api::resource::texture::TextureDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureBackend>> {
+        self.allocations.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(MockTexture))
+    }
+
+    fn create_texture_view(
+        &self,
+        _texture: &crate::api::resource::Texture,
+        _descriptor: &crate::api::resource::view::TextureViewDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureViewBackend>> {
+        Ok(Box::new(MockTextureView))
+    }
+
+    fn create_sampler(
+        &self,
+        _descriptor: &crate::api::resource::sampler::SamplerDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::SamplerBackend>> {
+        Ok(Box::new(MockSampler))
     }
 
     fn create_shader(
@@ -803,6 +896,13 @@ impl DeviceBackend for MockDevice {
         // is the shape of the question.
         self.compute_pipelines.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(MockComputePipeline::new(descriptor.clone())))
+    }
+
+    fn create_raster_pipeline(
+        &self,
+        _descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
+        Ok(Box::new(MockRasterPipeline))
     }
 
     /// Accepts the plan, and executes none of it.
@@ -863,10 +963,9 @@ impl DeviceBackend for MockDevice {
 
     /// Answers a serial this backend reported.
     ///
-    /// Loss first, because section 41.8 makes it override everything: after the
-    /// device ends, a serial that was `Complete` stays `Complete` and one that was
-    /// not becomes `DeviceLost` — and the mock has no "not yet" to preserve, so
-    /// every serial moves to `DeviceLost` together.
+    /// A loss preserves work that was already complete and changes only work the
+    /// mock was holding into `DeviceLost`, matching section 41.8's per-point
+    /// distinction.
     ///
     /// A serial this backend never reported is a portable-layer bug rather than a
     /// caller error. It answers `Failed` naming the serial instead of panicking,
@@ -876,14 +975,18 @@ impl DeviceBackend for MockDevice {
     fn completion(&self, serial: u64) -> crate::api::submission::CompletionState {
         use crate::api::submission::{CompletionFailure, CompletionState};
 
-        if let Some(info) = self.loss_info() {
-            return CompletionState::DeviceLost(info);
-        }
-
         if serial >= self.next_completion.load(Ordering::Relaxed) {
             return CompletionState::Failed(CompletionFailure::new(format!(
                 "completion serial {serial} was never reported by this device"
             )));
+        }
+
+        if let Some(info) = self.loss_info() {
+            return if self.completed_at_loss.load(Ordering::Relaxed) {
+                CompletionState::Complete
+            } else {
+                CompletionState::DeviceLost(info)
+            };
         }
 
         // Held work, after the two terminal answers above and never before them.
@@ -897,6 +1000,136 @@ impl DeviceBackend for MockDevice {
 
         CompletionState::Complete
     }
+
+    fn completion_or_register_waker(
+        &self,
+        serial: u64,
+        waker: &Waker,
+    ) -> crate::api::submission::CompletionState {
+        let state = self.completion(serial);
+        if matches!(state, crate::api::submission::CompletionState::Pending) {
+            self.completion_waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(waker.clone());
+            // `release_completion` can race the sample above. Re-sampling after
+            // publication closes the otherwise lost-wake window without making
+            // the portable future depend on an executor-specific primitive.
+            let after_registration = self.completion(serial);
+            if !matches!(
+                after_registration,
+                crate::api::submission::CompletionState::Pending
+            ) {
+                self.wake_completion_waiters();
+            }
+            return after_registration;
+        }
+        state
+    }
+}
+
+/// Test-only adapter which lets assertions retain a view of a mock backend while
+/// the portable `Device` still directly owns one boxed backend. Production
+/// backends never take this extra reference-counted path.
+struct ObservedMockDevice(Arc<MockDevice>);
+
+pub(crate) fn observed_backend(device: Arc<MockDevice>) -> Box<dyn DeviceBackend> {
+    Box::new(ObservedMockDevice(device))
+}
+
+impl DeviceBackend for ObservedMockDevice {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn backend_kind(&self) -> BackendKind {
+        self.0.backend_kind()
+    }
+    fn adapter_info(&self) -> &AdapterInfo {
+        self.0.adapter_info()
+    }
+    fn capability_facts(&self) -> CapabilityFacts {
+        self.0.capability_facts()
+    }
+    fn submission_capabilities(&self) -> SubmissionCapabilities {
+        self.0.submission_capabilities()
+    }
+    fn object_id(&self) -> ObjectId {
+        self.0.object_id()
+    }
+    fn status(&self) -> DeviceStatus {
+        self.0.status()
+    }
+    fn loss_info(&self) -> Option<DeviceLossInfo> {
+        self.0.loss_info()
+    }
+    fn poll(&self) -> RhiResult<()> {
+        self.0.poll()
+    }
+    fn wait_idle(&self) -> RhiResult<()> {
+        self.0.wait_idle()
+    }
+    fn create_buffer(&self, descriptor: &BufferDescriptor) -> RhiResult<Box<dyn BufferBackend>> {
+        self.0.create_buffer(descriptor)
+    }
+    fn create_texture(
+        &self,
+        descriptor: &crate::api::resource::texture::TextureDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureBackend>> {
+        self.0.create_texture(descriptor)
+    }
+    fn create_texture_view(
+        &self,
+        texture: &crate::api::resource::Texture,
+        descriptor: &crate::api::resource::view::TextureViewDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::TextureViewBackend>> {
+        self.0.create_texture_view(texture, descriptor)
+    }
+    fn create_sampler(
+        &self,
+        descriptor: &crate::api::resource::sampler::SamplerDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::resource::backend::SamplerBackend>> {
+        self.0.create_sampler(descriptor)
+    }
+    fn create_shader(
+        &self,
+        artifact: &crate::api::shader::ShaderArtifact,
+    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
+        self.0.create_shader(artifact)
+    }
+    fn create_bind_group(
+        &self,
+        descriptor: &crate::api::binding::BindGroupDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>> {
+        self.0.create_bind_group(descriptor)
+    }
+    fn create_compute_pipeline(
+        &self,
+        descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
+        self.0.create_compute_pipeline(descriptor)
+    }
+    fn create_raster_pipeline(
+        &self,
+        descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
+    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
+        self.0.create_raster_pipeline(descriptor)
+    }
+    fn submit(
+        &self,
+        request: &crate::api::submission::backend::SubmissionRequest<'_>,
+    ) -> RhiResult<crate::api::submission::backend::SubmissionOutcome> {
+        self.0.submit(request)
+    }
+    fn completion(&self, serial: u64) -> crate::api::submission::CompletionState {
+        self.0.completion(serial)
+    }
+    fn completion_or_register_waker(
+        &self,
+        serial: u64,
+        waker: &Waker,
+    ) -> crate::api::submission::CompletionState {
+        self.0.completion_or_register_waker(serial, waker)
+    }
 }
 
 /// A portable device handle over a fresh mock backend.
@@ -905,7 +1138,7 @@ impl DeviceBackend for MockDevice {
 /// test that needs to observe a loss wants [`paired_device_for_test`] instead,
 /// because the handle owns the backend and cannot hand it back.
 pub(crate) fn device_for_test(identity: DeviceIdentity) -> Device {
-    Device::new(identity, mock_native(BackendKind::Dx12))
+    Device::new(identity, observed_backend(mock_native(BackendKind::Dx12)))
         .expect("the mock backend offers a lane accepting raster and copy work")
 }
 
@@ -913,7 +1146,7 @@ pub(crate) fn device_for_test(identity: DeviceIdentity) -> Device {
 pub(crate) fn paired_device_for_test(identity: DeviceIdentity) -> (Device, Arc<MockDevice>) {
     let native = mock_native(BackendKind::Dx12);
     (
-        Device::new(identity, native.clone())
+        Device::new(identity, observed_backend(native.clone()))
             .expect("the mock backend offers a lane accepting raster and copy work"),
         native,
     )
@@ -933,8 +1166,8 @@ pub(crate) fn paired_device_for_test(identity: DeviceIdentity) -> (Device, Arc<M
 /// and nothing else: no compilation is modelled, and none is claimed.
 pub(crate) fn module_backend_for_test(
     artifact: &crate::api::shader::ShaderArtifact,
-) -> Arc<dyn crate::api::shader::backend::ShaderModuleBackend> {
-    Arc::new(MockShaderModule::new(artifact.clone()))
+) -> Box<dyn crate::api::shader::backend::ShaderModuleBackend> {
+    Box::new(MockShaderModule::new(artifact.clone()))
 }
 
 /// A portable device that consumes exactly the code forms a test names.
@@ -970,7 +1203,7 @@ pub(crate) fn shaders_for_test(
         default_lanes(),
     );
     (
-        Device::new(identity, native.clone())
+        Device::new(identity, observed_backend(native.clone()))
             .expect("the mock backend offers a lane accepting raster and copy work"),
         native,
     )
@@ -1015,7 +1248,7 @@ pub(crate) fn buffers_for_test(
         default_lanes(),
     );
     (
-        Device::new(identity, native.clone())
+        Device::new(identity, observed_backend(native.clone()))
             .expect("the mock backend offers a lane accepting raster and copy work"),
         native,
     )
@@ -1052,7 +1285,7 @@ pub(crate) fn recorder_for_test(
         facts,
         lanes,
     );
-    let device = Device::new(identity, native)
+    let device = Device::new(identity, observed_backend(native))
         .expect("the caller states a lane set that satisfies section 10's base guarantee");
     device
         .create_recorder(&crate::api::command::RecorderDescriptor::new())
