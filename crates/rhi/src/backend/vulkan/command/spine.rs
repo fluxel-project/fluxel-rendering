@@ -19,6 +19,7 @@ use std::task::Waker;
 use ash::vk;
 
 use crate::api::command::record::{CopyRecord, RecordedPayload};
+use crate::api::command::{ResourceUse, TextureUse, TextureUseIntent};
 use crate::api::platform::DeviceLossInfo;
 use crate::api::resource::transfer::ReadbackStatus;
 use crate::api::submission::backend::{SubmissionOutcome, SubmissionRequest};
@@ -427,8 +428,8 @@ impl VulkanCommandSpine {
         retention: &mut TransferRetention,
     ) -> Result<(), VulkanFailure> {
         let mut raster_scope = None;
-        for work in &batch.work {
-            for command in work.commands() {
+        for (work_index, work) in batch.work.iter().enumerate() {
+            for (command_index, command) in work.commands().iter().enumerate() {
                 match &command.payload {
                     RecordedPayload::RasterBegin(begin) => {
                         if raster_scope.is_some() {
@@ -437,10 +438,13 @@ impl VulkanCommandSpine {
                                 why: "portable recording should keep raster scopes linear",
                             });
                         }
+                        let shader_texture_uses =
+                            collect_raster_shader_texture_uses(batch, work_index, command_index)?;
                         raster_scope = Some(raster::lower_raster_begin(
                             Arc::clone(&self.inner.shared),
                             command_buffer,
                             begin,
+                            &shader_texture_uses,
                             retention,
                         )?);
                     }
@@ -480,6 +484,7 @@ impl VulkanCommandSpine {
                             command_buffer,
                             dispatch,
                             &command.uses,
+                            retention,
                         )?;
                         retention.retain_compute(compute);
                     }
@@ -553,6 +558,21 @@ impl VulkanCommandSpine {
                             )?
                         }
                     },
+                    // Debug markup has no execution semantics and no portable
+                    // capability gate. Refusing it would make an otherwise
+                    // supported workload fail merely because diagnostics were
+                    // added. The Vulkan 1.0 baseline therefore accepts it as a
+                    // no-op when VK_EXT_debug_utils is not enabled.
+                    //
+                    // TODO(tooling): enable VK_EXT_debug_utils when the instance
+                    // advertises it and lower these three payloads (plus scope
+                    // labels) to vkCmdBegin/End/InsertDebugUtilsLabelEXT. Keep
+                    // this correct no-op fallback for loaders without the
+                    // extension; debug labels must never become a required
+                    // execution capability.
+                    RecordedPayload::DebugPush(_)
+                    | RecordedPayload::DebugPop
+                    | RecordedPayload::DebugMarker(_) => {}
                     other => {
                         return Err(VulkanFailure::Unsupported {
                             what: payload_name(other),
@@ -842,6 +862,103 @@ fn completion_from_state(state: &SpineState, serial: u64) -> CompletionState {
             "Vulkan completion was queried for a serial this device never issued",
         ))
     }
+}
+
+/// Collects exactly the shader image uses in one linear raster scope before it
+/// is begun natively. Vulkan synchronization commands are invalid inside a
+/// render pass, so raster lowering establishes descriptor layouts at the scope
+/// boundary rather than when each draw is replayed.
+fn collect_raster_shader_texture_uses(
+    batch: &PlanBatch,
+    begin_work: usize,
+    begin_command: usize,
+) -> Result<Vec<TextureUse>, VulkanFailure> {
+    let mut result = Vec::new();
+    // A Vulkan 1.0 render pass cannot insert a pipeline barrier between two
+    // draws. Sample-only reuse is safe, but any storage-image use shared with
+    // another draw would need an in-pass visibility dependency this baseline
+    // does not create. Keep that shape out of the advertised/lowered subset.
+    let mut prior_draw_images = Vec::new();
+    let mut prior_draw_storage_images = Vec::new();
+    for (work_index, work) in batch.work.iter().enumerate().skip(begin_work) {
+        let first_command = if work_index == begin_work {
+            begin_command + 1
+        } else {
+            0
+        };
+        for command in work.commands().iter().skip(first_command) {
+            match &command.payload {
+                RecordedPayload::RasterEnd => return Ok(result),
+                RecordedPayload::RasterBegin(_) => {
+                    return Err(VulkanFailure::Unsupported {
+                        what: "nested Vulkan raster scopes",
+                        why: "portable recording should keep raster scopes linear",
+                    });
+                }
+                RecordedPayload::RasterDraw(_) => {
+                    let shader_uses: Vec<_> = command
+                        .uses
+                        .iter()
+                        .filter_map(|use_| match use_ {
+                            ResourceUse::Texture(texture)
+                                if matches!(
+                                    texture.intent,
+                                    TextureUseIntent::ShaderRead
+                                        | TextureUseIntent::ShaderReadWrite
+                                ) =>
+                            {
+                                Some(texture.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let current_images: Vec<_> = shader_uses
+                        .iter()
+                        .map(|texture| texture.texture.id())
+                        .collect();
+                    let current_storage_images: Vec<_> = shader_uses
+                        .iter()
+                        .filter(|texture| texture.intent == TextureUseIntent::ShaderReadWrite)
+                        .map(|texture| texture.texture.id())
+                        .collect();
+                    let current_sampled_images: Vec<_> = shader_uses
+                        .iter()
+                        .filter(|texture| texture.intent == TextureUseIntent::ShaderRead)
+                        .map(|texture| texture.texture.id())
+                        .collect();
+                    if current_storage_images
+                        .iter()
+                        .any(|id| current_sampled_images.contains(id))
+                    {
+                        return Err(VulkanFailure::Unsupported {
+                            what: "one Vulkan raster draw binding the same texture as sampled and storage",
+                            why: "one image cannot satisfy SHADER_READ_ONLY_OPTIMAL and GENERAL descriptors simultaneously",
+                        });
+                    }
+                    if current_storage_images
+                        .iter()
+                        .any(|id| prior_draw_images.contains(id))
+                        || prior_draw_storage_images
+                            .iter()
+                            .any(|id| current_images.contains(id))
+                    {
+                        return Err(VulkanFailure::Unsupported {
+                            what: "a Vulkan raster storage image shared across draws in one render pass",
+                            why: "this baseline has no in-render-pass shader memory barrier lowering",
+                        });
+                    }
+                    prior_draw_images.extend(current_images);
+                    prior_draw_storage_images.extend(current_storage_images);
+                    result.extend(shader_uses);
+                }
+                _ => {}
+            }
+        }
+    }
+    Err(VulkanFailure::Unsupported {
+        what: "an unterminated Vulkan raster scope",
+        why: "portable recording should emit RasterEnd before finish",
+    })
 }
 
 fn payload_name(payload: &RecordedPayload) -> &'static str {

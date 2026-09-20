@@ -145,19 +145,39 @@ impl VulkanProvider {
                 storage_buffer_ceiling: u64::from(properties.limits.max_storage_buffer_range),
                 non_coherent_atom_size: properties.limits.non_coherent_atom_size,
                 capability_limits: facts::VulkanCapabilityLimits {
-                    max_bindings_per_group: properties.limits.max_per_stage_resources.min(
-                        properties
-                            .limits
-                            .max_descriptor_set_uniform_buffers
-                            .saturating_add(properties.limits.max_descriptor_set_storage_buffers),
-                    ),
+                    max_bindings_per_group: properties.limits.max_per_stage_resources,
                     max_bound_descriptor_sets: properties.limits.max_bound_descriptor_sets,
+                    // The portable interface validates each of its five
+                    // descriptor classes independently, while Vulkan also has
+                    // one aggregate maxPerStageResources ceiling. Giving each
+                    // class at most one fifth of that aggregate proves that any
+                    // combination accepted by the portable validators still
+                    // fits, without inventing a sixth cross-class API limit.
                     max_per_stage_uniform_buffers: properties
                         .limits
-                        .max_per_stage_descriptor_uniform_buffers,
+                        .max_per_stage_descriptor_uniform_buffers
+                        .min(properties.limits.max_descriptor_set_uniform_buffers)
+                        .min(properties.limits.max_per_stage_resources / 5),
                     max_per_stage_storage_buffers: properties
                         .limits
-                        .max_per_stage_descriptor_storage_buffers,
+                        .max_per_stage_descriptor_storage_buffers
+                        .min(properties.limits.max_descriptor_set_storage_buffers)
+                        .min(properties.limits.max_per_stage_resources / 5),
+                    max_per_stage_sampled_images: properties
+                        .limits
+                        .max_per_stage_descriptor_sampled_images
+                        .min(properties.limits.max_descriptor_set_sampled_images)
+                        .min(properties.limits.max_per_stage_resources / 5),
+                    max_per_stage_storage_images: properties
+                        .limits
+                        .max_per_stage_descriptor_storage_images
+                        .min(properties.limits.max_descriptor_set_storage_images)
+                        .min(properties.limits.max_per_stage_resources / 5),
+                    max_per_stage_samplers: properties
+                        .limits
+                        .max_per_stage_descriptor_samplers
+                        .min(properties.limits.max_descriptor_set_samplers)
+                        .min(properties.limits.max_per_stage_resources / 5),
                     min_uniform_buffer_offset_alignment: properties
                         .limits
                         .min_uniform_buffer_offset_alignment,

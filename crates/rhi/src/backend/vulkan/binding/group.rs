@@ -8,6 +8,7 @@ use ash::vk;
 use crate::api::binding::backend::BindGroupBackend;
 use crate::api::binding::{BindGroupDescriptor, BindingKind, BindingResource};
 use crate::api::resource::buffer::BufferBinding;
+use crate::api::resource::subresource::TextureAspects;
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::ffi;
 use crate::backend::vulkan::platform::device::VulkanShared;
@@ -262,11 +263,6 @@ fn write_images(
         BindingResource::TextureArray(values) => values,
         _ => return packet_mismatch("texture", "a non-texture resource"),
     };
-    let layout = match descriptor_type {
-        vk::DescriptorType::SAMPLED_IMAGE => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        vk::DescriptorType::STORAGE_IMAGE => vk::ImageLayout::GENERAL,
-        _ => unreachable!("image writer only receives portable texture descriptor types"),
-    };
     let mut infos = Vec::with_capacity(views.len());
     for value in views {
         let Some(view) = value.native().as_any().downcast_ref::<VulkanTextureView>() else {
@@ -275,7 +271,10 @@ fn write_images(
         infos.push(
             vk::DescriptorImageInfo::default()
                 .image_view(view.view())
-                .image_layout(layout),
+                .image_layout(descriptor_image_layout(
+                    descriptor_type,
+                    value.descriptor().aspects,
+                )),
         );
     }
     let write = vk::WriteDescriptorSet::default()
@@ -285,6 +284,31 @@ fn write_images(
         .image_info(&infos);
     unsafe { shared.device.update_descriptor_sets(&[write], &[]) };
     Ok(())
+}
+
+/// The layout recorded in an immutable image descriptor.
+///
+/// Command lowering must use this exact rule before binding the descriptor.
+/// In particular, depth/stencil sampled views need Vulkan's depth/stencil
+/// read-only layout rather than the color-image shader-read layout.  Keeping
+/// the mapping here prevents descriptor metadata and image barriers from
+/// quietly drifting apart as more command paths are added.
+pub(crate) fn descriptor_image_layout(
+    descriptor_type: vk::DescriptorType,
+    aspects: TextureAspects,
+) -> vk::ImageLayout {
+    match descriptor_type {
+        vk::DescriptorType::SAMPLED_IMAGE => {
+            if aspects.contains(TextureAspects::DEPTH) || aspects.contains(TextureAspects::STENCIL)
+            {
+                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
+            } else {
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+            }
+        }
+        vk::DescriptorType::STORAGE_IMAGE => vk::ImageLayout::GENERAL,
+        _ => unreachable!("image-layout mapping only receives portable image descriptor types"),
+    }
 }
 
 fn write_samplers(

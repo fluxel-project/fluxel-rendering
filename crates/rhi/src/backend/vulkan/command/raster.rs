@@ -22,7 +22,7 @@ use crate::api::command::attachment::{
 };
 use crate::api::command::geometry::{ColorClearValue, LoadOp, StoreOp};
 use crate::api::command::record::{RasterBegin, RasterDraw};
-use crate::api::command::{IndexFormat, ResourceUse, TextureUseIntent};
+use crate::api::command::{IndexFormat, ResourceUse, TextureUse, TextureUseIntent};
 use crate::api::pipeline::RasterPipeline;
 use crate::api::resource::buffer::Buffer;
 use crate::api::resource::view::TextureView;
@@ -91,8 +91,23 @@ pub(super) fn lower_raster_begin(
     shared: Arc<VulkanShared>,
     command_buffer: vk::CommandBuffer,
     begin: &RasterBegin,
+    shader_texture_uses: &[TextureUse],
     transfer_retention: &mut transfer::TransferRetention,
 ) -> Result<RasterScopeState, VulkanFailure> {
+    reject_raster_feedback(begin, shader_texture_uses)?;
+    // Vulkan forbids vkCmdPipelineBarrier inside a render pass. The spine
+    // therefore gathers this scope's draw uses before calling us, allowing the
+    // shared image-state authority to establish every descriptor layout before
+    // vkCmdBeginRenderPass. Do not move this into `lower_raster_draw`.
+    for use_ in shader_texture_uses {
+        transfer::transition_shader_texture(
+            &shared,
+            command_buffer,
+            use_,
+            vk::PipelineStageFlags::ALL_GRAPHICS,
+            transfer_retention,
+        )?;
+    }
     let mut attachments = Vec::new();
     let mut attachment_views = Vec::new();
     let mut color_refs = Vec::with_capacity(begin.colors.len());
@@ -332,12 +347,10 @@ pub(super) fn lower_raster_draw(
                 TextureUseIntent::ColorAttachment
                 | TextureUseIntent::DepthStencilRead
                 | TextureUseIntent::DepthStencilWrite => {}
-                TextureUseIntent::ShaderRead | TextureUseIntent::ShaderReadWrite => {
-                    return Err(VulkanFailure::Unsupported {
-                        what: "a raster draw using a texture binding",
-                        why: "Vulkan raster image descriptor layout tracking is not implemented yet",
-                    });
-                }
+                // Shader image layouts were transitioned before render-pass
+                // begin after the spine pre-scanned this complete scope. A
+                // barrier here would be invalid Vulkan.
+                TextureUseIntent::ShaderRead | TextureUseIntent::ShaderReadWrite => {}
                 _ => {
                     return Err(VulkanFailure::Unsupported {
                         what: "a raster draw texture use outside an attachment or shader binding",
@@ -490,6 +503,38 @@ pub(super) fn lower_raster_draw(
         }
     }
     Ok(retention)
+}
+
+/// Rejects the unsupported feedback-loop shape before any native command is
+/// recorded. This baseline has no `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT` path,
+/// and its render pass describes attachments independently from shader image
+/// descriptors. Conservatively rejecting the whole texture (rather than trying
+/// to prove disjoint mip/layer ranges) keeps the descriptor and attachment
+/// layouts unambiguous.
+fn reject_raster_feedback(
+    begin: &RasterBegin,
+    shader_texture_uses: &[TextureUse],
+) -> Result<(), VulkanFailure> {
+    let mut attachments =
+        Vec::with_capacity(begin.colors.len() + usize::from(begin.depth_stencil.is_some()));
+    for (_, color) in &begin.colors {
+        if let ColorAttachmentView::Texture(view) = &color.view {
+            attachments.push(view.texture().id());
+        }
+    }
+    if let Some(depth_stencil) = &begin.depth_stencil {
+        attachments.push(depth_stencil.view.texture().id());
+    }
+    if shader_texture_uses
+        .iter()
+        .any(|use_| attachments.contains(&use_.texture.id()))
+    {
+        return Err(VulkanFailure::Unsupported {
+            what: "a Vulkan raster attachment also used as a shader image",
+            why: "this baseline does not implement Vulkan attachment feedback-loop layouts",
+        });
+    }
+    Ok(())
 }
 
 /// Ends the native pass, returns its retained native objects, and transitions

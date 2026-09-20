@@ -11,8 +11,8 @@ use std::sync::Arc;
 use ash::vk;
 
 use crate::api::binding::BindGroup;
-use crate::api::command::AccessMask;
 use crate::api::command::copy::{BufferCopy, BufferTextureCopy, TextureCopy};
+use crate::api::command::{AccessMask, TextureUse, TextureUseIntent};
 use crate::api::format::logical_bytes_per_block;
 use crate::api::identity::ObjectId;
 use crate::api::pipeline::ComputePipeline;
@@ -24,6 +24,7 @@ use crate::api::resource::transfer::{
     UploadJob,
 };
 use crate::api::resource::view::TextureView;
+use crate::backend::vulkan::binding::descriptor_image_layout;
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::platform::device::VulkanShared;
 use crate::backend::vulkan::resource::{
@@ -674,6 +675,90 @@ pub(super) fn transition_image(
             });
         }
     }
+}
+
+/// Transitions shader-visible image subresources to the exact layout written
+/// into their immutable Vulkan descriptors.
+///
+/// This is deliberately owned by the queue-domain image-state authority rather
+/// than by compute or raster lowering.  A copy in one submission followed by a
+/// sampled image use in another must observe the same `ObjectId`/aspect/mip/
+/// layer state. `stage` lets a caller select compute or graphics without
+/// introducing a second tracker for either execution domain.
+pub(super) fn transition_shader_texture(
+    shared: &VulkanShared,
+    command_buffer: vk::CommandBuffer,
+    use_: &TextureUse,
+    stage: vk::PipelineStageFlags,
+    retention: &mut TransferRetention,
+) -> Result<(), VulkanFailure> {
+    let (layout, access) = match use_.intent {
+        TextureUseIntent::ShaderRead => (
+            descriptor_image_layout(vk::DescriptorType::SAMPLED_IMAGE, use_.subresources.aspects),
+            vk::AccessFlags::SHADER_READ,
+        ),
+        TextureUseIntent::ShaderReadWrite => {
+            let mut access = vk::AccessFlags::empty();
+            if use_.access.contains(AccessMask::SHADER_READ) {
+                access |= vk::AccessFlags::SHADER_READ;
+            }
+            if use_.access.contains(AccessMask::SHADER_WRITE) {
+                access |= vk::AccessFlags::SHADER_WRITE;
+            }
+            if access.is_empty() {
+                return Err(VulkanFailure::Unsupported {
+                    what: "a Vulkan storage-image shader use without shader access",
+                    why: "the portable ResourceUse must declare the storage image read and/or write",
+                });
+            }
+            (vk::ImageLayout::GENERAL, access)
+        }
+        _ => {
+            return Err(VulkanFailure::Unsupported {
+                what: "a Vulkan texture use outside a shader binding",
+                why: "copy, resolve, and attachment intents have separate lowering paths",
+            });
+        }
+    };
+    let native = native_texture(&use_.texture)?;
+    let range = use_.subresources;
+    for aspect in shader_texture_aspects(range.aspects) {
+        for mip_level in range.base_mip..range.base_mip + range.mip_count {
+            transition_image(
+                shared,
+                command_buffer,
+                native.image(),
+                &use_.texture,
+                TextureSubresourceLayers {
+                    aspect,
+                    mip_level,
+                    base_layer: range.base_layer,
+                    layer_count: range.layer_count,
+                },
+                layout,
+                stage,
+                access,
+                retention,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn shader_texture_aspects(
+    aspects: crate::api::resource::subresource::TextureAspects,
+) -> Vec<TextureAspect> {
+    let mut result = Vec::with_capacity(3);
+    if aspects.contains(crate::api::resource::subresource::TextureAspects::COLOR) {
+        result.push(TextureAspect::Color);
+    }
+    if aspects.contains(crate::api::resource::subresource::TextureAspects::DEPTH) {
+        result.push(TextureAspect::Depth);
+    }
+    if aspects.contains(crate::api::resource::subresource::TextureAspects::STENCIL) {
+        result.push(TextureAspect::Stencil);
+    }
+    result
 }
 
 /// Routes a raster attachment transition through the queue-domain image-state

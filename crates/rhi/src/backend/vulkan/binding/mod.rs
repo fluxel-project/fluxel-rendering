@@ -9,5 +9,7 @@
 mod group;
 mod layout;
 
-pub(in crate::backend::vulkan) use group::{VulkanBindGroup, create_bind_group};
+pub(in crate::backend::vulkan) use group::{
+    VulkanBindGroup, create_bind_group, descriptor_image_layout,
+};
 pub(in crate::backend::vulkan) use layout::layout_bindings;

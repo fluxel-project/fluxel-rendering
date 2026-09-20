@@ -15,13 +15,15 @@
 
 use ash::vk;
 
-use crate::api::binding::vocabulary::BindableKind;
-use crate::api::binding::{BindingLimitClass, BindingSupport, BufferBindingAccess};
+use crate::api::binding::vocabulary::{BindableKind, TextureSampleType};
+use crate::api::binding::{
+    BindingLimitClass, BindingSupport, BufferBindingAccess, SamplerKind, StorageAccess,
+};
 use crate::api::capability::{BindingSupportKey, CapabilityFacts};
 use crate::api::error::RhiResult;
 use crate::api::format::{
     FormatFacts, StorageAccessSupport, TextureSupport, TextureSupportLimits, TextureSupportQuery,
-    format_aspects,
+    format_aspects, sample_type,
 };
 use crate::api::platform::{LimitKey, OptionalFeature};
 use crate::api::resource::TextureAspects;
@@ -32,6 +34,7 @@ use crate::api::resource::route::{
 use crate::api::resource::texture::{
     Extent3d, TextureDimension, TextureUsage, TextureViewCompatibility,
 };
+use crate::api::resource::view::TextureViewDimension;
 use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::shader::{ShaderStage, ShaderStages};
 use crate::backend::vulkan::ffi;
@@ -44,6 +47,9 @@ pub(super) struct VulkanCapabilityLimits {
     pub(super) max_bound_descriptor_sets: u32,
     pub(super) max_per_stage_uniform_buffers: u32,
     pub(super) max_per_stage_storage_buffers: u32,
+    pub(super) max_per_stage_sampled_images: u32,
+    pub(super) max_per_stage_storage_images: u32,
+    pub(super) max_per_stage_samplers: u32,
     pub(super) min_uniform_buffer_offset_alignment: u64,
     pub(super) min_storage_buffer_offset_alignment: u64,
     pub(super) max_compute_work_group_invocations: u32,
@@ -105,6 +111,34 @@ pub(super) fn probe(
                 features.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND),
             ),
         );
+        if storage {
+            for dimension in [
+                TextureViewDimension::D1,
+                TextureViewDimension::D2,
+                TextureViewDimension::D2Array,
+                TextureViewDimension::D3,
+            ] {
+                for access in [
+                    StorageAccess::ReadOnly,
+                    StorageAccess::WriteOnly,
+                    StorageAccess::ReadWrite,
+                ] {
+                    facts.record_binding_support(
+                        BindingSupportKey {
+                            visibility: ShaderStages::COMPUTE,
+                            kind: BindableKind::StorageTexture {
+                                dimension,
+                                format,
+                                access,
+                            },
+                            array: false,
+                            dynamic_offset: false,
+                        },
+                        BindingSupport::Supported,
+                    );
+                }
+            }
+        }
         // These routes are only published after the exact native format has
         // reported the matching optimal-tiling transfer feature.  The command
         // spine has real `vkCmdCopy*` lowering for this subset; resolve and
@@ -162,6 +196,17 @@ pub(super) fn probe(
             TextureDimension::D3,
         ] {
             for usage in TextureUsage::all().filter(|usage| !usage.is_empty()) {
+                // Vulkan 1.0 framebuffer attachments are 1D/2D image views;
+                // the current raster lowering deliberately has no 3D-slice
+                // attachment route. Do not let a successful generic image
+                // format query advertise a D3 texture that later fails at
+                // `vkCreateFramebuffer`.
+                if dimension == TextureDimension::D3
+                    && (usage.contains(TextureUsage::COLOR_ATTACHMENT)
+                        || usage.contains(TextureUsage::DEPTH_STENCIL_ATTACHMENT))
+                {
+                    continue;
+                }
                 for view_compatibility in [
                     TextureViewCompatibility::NONE,
                     TextureViewCompatibility::CUBE,
@@ -170,6 +215,7 @@ pub(super) fn probe(
                         instance,
                         physical,
                         properties.optimal_tiling_features,
+                        format,
                         native,
                         dimension,
                         usage,
@@ -182,10 +228,12 @@ pub(super) fn probe(
                     // native image tuple once and returns its whole sample-mask.
                     // The RHI key then selects a member from that mask; querying
                     // the driver again for each member would be identical work.
-                    // v13's portable sample mask is one u32, so sample counts
-                    // above 32 are outside the frozen portable contract even if
-                    // a Vulkan implementation exposes a wider native mask.
-                    for sample_count in [1, 2, 4, 8, 16, 32] {
+                    // Keep the published raster slice at 1x until its Vulkan
+                    // render-pass lowering includes resolve attachments. The
+                    // portable scope can request resolve whenever an MSAA color
+                    // attachment exists, so advertising native MSAA creation
+                    // ahead of that lowering would leave a capability hole.
+                    for sample_count in [1] {
                         // Keep requirements queries inside the public P0
                         // descriptor domain too: only 2D images may be
                         // multisampled, and cube-compatible images must be 1x.
@@ -309,6 +357,21 @@ fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabi
         BindingLimitClass::StorageBuffers,
         limits.max_per_stage_storage_buffers,
     );
+    facts.record_binding_limit(
+        ShaderStage::Compute,
+        BindingLimitClass::SampledTextures,
+        limits.max_per_stage_sampled_images,
+    );
+    facts.record_binding_limit(
+        ShaderStage::Compute,
+        BindingLimitClass::StorageTextures,
+        limits.max_per_stage_storage_images,
+    );
+    facts.record_binding_limit(
+        ShaderStage::Compute,
+        BindingLimitClass::Samplers,
+        limits.max_per_stage_samplers,
+    );
     // Fixed descriptor arrays are implemented by the descriptor writer, but
     // remain unadvertised until a native conformance case closes that route.
     // Capability publication follows proven lowering, not Vulkan's theoretical
@@ -331,6 +394,53 @@ fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabi
                 BindingSupportKey {
                     visibility: ShaderStages::COMPUTE,
                     kind: BindableKind::StorageBuffer { access },
+                    array,
+                    dynamic_offset: false,
+                },
+                BindingSupport::Supported,
+            );
+        }
+
+        for dimension in [
+            TextureViewDimension::D1,
+            TextureViewDimension::D2,
+            TextureViewDimension::D2Array,
+            TextureViewDimension::Cube,
+            TextureViewDimension::CubeArray,
+            TextureViewDimension::D3,
+        ] {
+            for sample_type in [
+                TextureSampleType::Float,
+                TextureSampleType::UnfilterableFloat,
+                TextureSampleType::Sint,
+                TextureSampleType::Uint,
+                TextureSampleType::Depth,
+            ] {
+                facts.record_binding_support(
+                    BindingSupportKey {
+                        visibility: ShaderStages::COMPUTE,
+                        kind: BindableKind::SampledTexture {
+                            dimension,
+                            sample_type,
+                            multisampled: false,
+                        },
+                        array,
+                        dynamic_offset: false,
+                    },
+                    BindingSupport::Supported,
+                );
+            }
+        }
+
+        for kind in [
+            SamplerKind::Filtering,
+            SamplerKind::NonFiltering,
+            SamplerKind::Comparison,
+        ] {
+            facts.record_binding_support(
+                BindingSupportKey {
+                    visibility: ShaderStages::COMPUTE,
+                    kind: BindableKind::Sampler { kind },
                     array,
                     dynamic_offset: false,
                 },
@@ -367,12 +477,13 @@ fn texture_properties(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
     features: vk::FormatFeatureFlags,
+    portable_format: crate::api::format::TextureFormat,
     format: vk::Format,
     dimension: TextureDimension,
     usage: TextureUsage,
     view_compatibility: TextureViewCompatibility,
 ) -> RhiResult<Option<vk::ImageFormatProperties>> {
-    if usage.is_empty() || !format_features_cover(features, usage) {
+    if usage.is_empty() || !format_features_cover(portable_format, features, usage) {
         return Ok(None);
     }
     if view_compatibility == TextureViewCompatibility::CUBE && dimension != TextureDimension::D2 {
@@ -412,9 +523,20 @@ fn texture_properties(
     Ok(Some(properties))
 }
 
-fn format_features_cover(features: vk::FormatFeatureFlags, usage: TextureUsage) -> bool {
+fn format_features_cover(
+    format: crate::api::format::TextureFormat,
+    features: vk::FormatFeatureFlags,
+    usage: TextureUsage,
+) -> bool {
     (!usage.contains(TextureUsage::SAMPLED)
         || features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE))
+        // `TextureSampleType::Float` permits filtering in the frozen public
+        // vocabulary. Vulkan exposes linear filtering per format, so publishing
+        // this tuple without the native bit would make a Filtering sampler
+        // pairing pass validation and fail only later at execution.
+        && (!usage.contains(TextureUsage::SAMPLED)
+            || sample_type(format) != Some(TextureSampleType::Float)
+            || features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR))
         && (!usage.contains(TextureUsage::STORAGE)
             || features.contains(vk::FormatFeatureFlags::STORAGE_IMAGE))
         && (!usage.contains(TextureUsage::COLOR_ATTACHMENT)

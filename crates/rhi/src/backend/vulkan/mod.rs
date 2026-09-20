@@ -7,10 +7,10 @@
 //!
 //! The implementation grows by end-to-end vertical slices. Dedicated buffer,
 //! texture, view and sampler ownership exists; the published slice covers
-//! buffer/texture transfer, SPIR-V shaders, immutable descriptor sets, and
-//! buffer-backed compute dispatch. Raster command/pipeline lowering and
-//! presentation remain closed until their vertical slices are complete. An
-//! available Vulkan feature is not yet a Fluxel capability by itself.
+//! buffer/texture transfer, SPIR-V shaders, immutable descriptor sets, compute
+//! buffer/image dispatch, and offscreen raster lowering. Presentation remains
+//! closed until its complete WSI ownership and synchronization slice is wired.
+//! An available Vulkan feature is not yet a Fluxel capability by itself.
 
 pub(crate) mod binding;
 pub(crate) mod command;
@@ -24,5 +24,7 @@ pub(crate) mod shader;
 
 #[cfg(test)]
 mod compute_tests;
+#[cfg(test)]
+mod image_binding_tests;
 #[cfg(test)]
 mod raster_tests;

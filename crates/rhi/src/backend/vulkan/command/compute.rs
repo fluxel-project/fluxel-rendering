@@ -1,11 +1,11 @@
 //! Vulkan compute-dispatch lowering.
 //!
-//! This deliberately accepts buffer-only dispatches.  Binding an image without
-//! transitioning it to the layout advertised in its descriptor is incorrect,
-//! and the transfer-only tracker is not a substitute for a general Vulkan
-//! access/stage/layout tracker.  Texture uses therefore remain a Phase-A
-//! refusal until that tracker exists; capability facts must not promise this
-//! path ahead of its lowering.
+//! Image descriptors name a layout, so accepting an image binding without a
+//! matching transition would be invalid Vulkan.  Dispatch lowering therefore
+//! routes every actual shader image use through the same queue-domain,
+//! per-subresource tracker used by transfers.  That tracker is intentionally
+//! shared rather than duplicated here: a texture copied in one submission and
+//! consumed by compute in the next must retain its real prior layout.
 
 use ash::vk;
 
@@ -17,6 +17,8 @@ use crate::backend::vulkan::binding::VulkanBindGroup;
 use crate::backend::vulkan::failure::VulkanFailure;
 use crate::backend::vulkan::pipeline::VulkanComputePipeline;
 use crate::backend::vulkan::platform::device::VulkanShared;
+
+use super::transfer::{self, TransferRetention};
 
 /// Portable handles retained by an accepted dispatch until its batch fence is
 /// terminal.  Vulkan command buffers only retain native handles; without these
@@ -38,6 +40,7 @@ pub(super) fn lower_compute_dispatch(
     command_buffer: vk::CommandBuffer,
     dispatch: &ComputeDispatch,
     uses: &[ResourceUse],
+    transfer_retention: &mut TransferRetention,
 ) -> Result<ComputeRetention, VulkanFailure> {
     let pipeline = dispatch
         .pipeline
@@ -71,39 +74,50 @@ pub(super) fn lower_compute_dispatch(
         sets.push(native.set());
     }
 
-    // A buffer barrier is intentionally conservative.  It gives a preceding
-    // transfer or shader write visibility to this dispatch without claiming to
-    // be the persistent resource-state system needed by textures/raster.
+    // Buffer barriers remain conservative until buffer-range state tracking is
+    // added.  Images are more constrained: descriptor layouts are part of the
+    // native command contract, and so use the persistent image tracker below.
     for use_ in uses {
-        let ResourceUse::Buffer(buffer) = use_ else {
-            return Err(VulkanFailure::Unsupported {
-                what: "a Vulkan compute dispatch that touches a texture or presentation frame",
-                why: "image layout/access tracking is not implemented for compute dispatch",
-            });
-        };
-        let destination_access = if buffer.access.contains(AccessMask::SHADER_WRITE) {
-            vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE
-        } else {
-            vk::AccessFlags::UNIFORM_READ | vk::AccessFlags::SHADER_READ
-        };
-        let barrier = vk::BufferMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
-            .dst_access_mask(destination_access)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .buffer(native_buffer(buffer.buffer.native())?)
-            .offset(0)
-            .size(vk::WHOLE_SIZE);
-        unsafe {
-            shared.device.cmd_pipeline_barrier(
+        match use_ {
+            ResourceUse::Buffer(buffer) => {
+                let destination_access = if buffer.access.contains(AccessMask::SHADER_WRITE) {
+                    vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE
+                } else {
+                    vk::AccessFlags::UNIFORM_READ | vk::AccessFlags::SHADER_READ
+                };
+                let barrier = vk::BufferMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
+                    .dst_access_mask(destination_access)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .buffer(native_buffer(buffer.buffer.native())?)
+                    .offset(0)
+                    .size(vk::WHOLE_SIZE);
+                unsafe {
+                    shared.device.cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[barrier],
+                        &[],
+                    );
+                }
+            }
+            ResourceUse::Texture(texture) => transfer::transition_shader_texture(
+                shared,
                 command_buffer,
-                vk::PipelineStageFlags::ALL_COMMANDS,
+                texture,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[barrier],
-                &[],
-            );
+                transfer_retention,
+            )?,
+            ResourceUse::Frame(_) => {
+                return Err(VulkanFailure::Unsupported {
+                    what: "a presentation frame used by a Vulkan compute dispatch",
+                    why: "presentation images are not compute-bindable in this Vulkan slice",
+                });
+            }
         }
     }
 
