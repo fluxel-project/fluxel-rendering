@@ -33,6 +33,12 @@ impl WebGpuDevice {
         provider: DeviceInstanceId,
         metadata: WebGpuAdapterMetadata,
     ) -> RhiResult<Self> {
+        // Own the registration before capability discovery.  Discovery reads
+        // browser values and can fail if `device.lost` races the initial
+        // request; in that path `WebGpuDriverInner::drop` must still remove
+        // the TLS entry and its retained JS closures.  Constructing it after
+        // the fallible probe would strand that just-registered generation.
+        let driver = WebGpuDriver::new(registration);
         let input = probe_capabilities(registration)?;
         let (facts, submission) = input.into_capabilities();
         let adapter = AdapterInfo::new(
@@ -43,7 +49,6 @@ impl WebGpuDevice {
             None,
             AvailableCapabilities::from_facts(facts.clone()),
         );
-        let driver = WebGpuDriver::new(registration);
         Ok(Self {
             command: WebGpuCommandSpine::new(driver.clone()),
             presentation: WebGpuPresentation::new(driver.clone()),
