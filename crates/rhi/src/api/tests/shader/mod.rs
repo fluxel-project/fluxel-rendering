@@ -47,9 +47,9 @@ use crate::api::platform::requirements::{LimitKey, LimitRequirement, OptionalFea
 use crate::api::shader::validation::validate_shader_artifact;
 use crate::api::shader::vocabulary::stage_mask;
 use crate::api::shader::{
-    ArtifactHash, ArtifactProducerVersion, InterpolationMode, InterpolationSampling,
-    ShaderAbiVersion, ShaderArtifact, ShaderCode, ShaderInterface, ShaderInterpolation,
-    ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
+    ArtifactHash, ArtifactProducerVersion, ComputeWorkgroupSize, InterpolationMode,
+    InterpolationSampling, ShaderAbiVersion, ShaderArtifact, ShaderCode, ShaderInterface,
+    ShaderInterpolation, ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
     ShaderResourceRequirement, ShaderStage, ShaderStages,
 };
 
@@ -136,6 +136,13 @@ fn resource(group: u32, slot: u32) -> ShaderResourceRequirement {
 /// else.
 fn vertex_interface() -> ShaderInterface {
     ShaderInterface::new().with_writes_position(true)
+}
+
+/// A minimal, valid compute entry-point interface. Keep this fixture central so
+/// compute tests exercise the actual local-size contract rather than relying on
+/// an accidental empty interface.
+fn compute_interface() -> ShaderInterface {
+    ShaderInterface::new().with_compute_workgroup_size(ComputeWorkgroupSize::new(1, 1, 1))
 }
 
 fn artifact(stage: ShaderStage, interface: ShaderInterface) -> ShaderArtifact {

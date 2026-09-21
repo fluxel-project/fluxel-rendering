@@ -35,7 +35,7 @@
 //! [`BackendKind`]: crate::api::platform::provider::BackendKind
 
 use crate::api::capability::CapabilityFacts;
-use crate::api::platform::requirements::{LimitRequirement, OptionalFeature};
+use crate::api::platform::requirements::{LimitKey, LimitRequirement, OptionalFeature};
 use crate::api::shader::artifact::ShaderArtifact;
 use crate::api::shader::requirements::ShaderRequirements;
 use crate::api::shader::vocabulary::{
@@ -117,6 +117,31 @@ pub(crate) fn decide(facts: &CapabilityFacts, artifact: &ShaderArtifact) -> Arti
         .any(|requirement| !limit_satisfied(facts, *requirement))
     {
         return ArtifactAcceptance::LimitExceeded;
+    }
+
+    // The local workgroup is part of the compute shader's executable contract,
+    // not an advisory requirement a producer may omit.  Unlike a generic stated
+    // limit, each of these four facts is mandatory once Compute is enabled: an
+    // absent fact cannot prove that native lowering accepts this local shape.
+    if artifact.stage == ShaderStage::Compute {
+        let Some(shape) = artifact.interface.compute_workgroup_size() else {
+            return ArtifactAcceptance::LimitExceeded;
+        };
+        let limits = [
+            (LimitKey::MaxComputeWorkgroupSizeX, u64::from(shape.x)),
+            (LimitKey::MaxComputeWorkgroupSizeY, u64::from(shape.y)),
+            (LimitKey::MaxComputeWorkgroupSizeZ, u64::from(shape.z)),
+            (
+                LimitKey::MaxComputeInvocationsPerWorkgroup,
+                shape.invocation_count(),
+            ),
+        ];
+        if limits
+            .into_iter()
+            .any(|(key, required)| facts.limit(key).is_none_or(|actual| actual < required))
+        {
+            return ArtifactAcceptance::LimitExceeded;
+        }
     }
 
     for resource in artifact.interface.resources() {

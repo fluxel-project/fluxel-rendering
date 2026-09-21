@@ -74,6 +74,10 @@ fn shader_requirements() -> crate::api::shader::ShaderRequirements {
 fn permissive_device() -> CapabilityFacts {
     let mut facts = device_consuming(AcceptedCodeForm::Wgsl);
     facts.record_feature(OptionalFeature::Compute);
+    facts.record_limit(LimitKey::MaxComputeWorkgroupSizeX, 1);
+    facts.record_limit(LimitKey::MaxComputeWorkgroupSizeY, 1);
+    facts.record_limit(LimitKey::MaxComputeWorkgroupSizeZ, 1);
+    facts.record_limit(LimitKey::MaxComputeInvocationsPerWorkgroup, 1);
     facts
 }
 
@@ -284,7 +288,7 @@ fn the_abi_accepts_older_minors_and_refuses_other_majors() {
 fn a_compute_entry_point_needs_the_compute_feature_even_when_it_asks_for_nothing() {
     let artifact = artifact_with(
         ShaderStage::Compute,
-        ShaderInterface::new(),
+        compute_interface(),
         shader_requirements(),
     );
     assert!(artifact.requirements.required_features().is_empty());
@@ -321,7 +325,7 @@ fn a_required_feature_that_is_not_enabled_refuses_the_artifact() {
 fn ray_hit_vertex_return_builtin_requires_its_specific_feature() {
     let requirements = shader_requirements()
         .require_builtin(crate::api::shader::ShaderBuiltin::RayHitVertexPosition);
-    let artifact = artifact_with(ShaderStage::Compute, ShaderInterface::new(), requirements);
+    let artifact = artifact_with(ShaderStage::Compute, compute_interface(), requirements);
 
     assert_eq!(
         verdict(permissive_device(), &artifact),
@@ -360,6 +364,53 @@ fn a_stated_limit_below_the_requirement_refuses_the_artifact() {
     let mut large = permissive_device();
     large.record_limit(LimitKey::MaxBufferSize, 1 << 20);
     assert_eq!(verdict(large, &artifact), ArtifactAcceptance::Accepted);
+}
+
+#[test]
+fn compute_local_size_is_checked_against_each_axis_and_total_invocation_limit() {
+    let artifact = artifact_with(
+        ShaderStage::Compute,
+        ShaderInterface::new()
+            .with_compute_workgroup_size(crate::api::shader::ComputeWorkgroupSize::new(8, 4, 2)),
+        shader_requirements(),
+    );
+
+    let mut supported = device_consuming(AcceptedCodeForm::Wgsl);
+    supported.record_feature(OptionalFeature::Compute);
+    supported.record_limit(LimitKey::MaxComputeWorkgroupSizeX, 8);
+    supported.record_limit(LimitKey::MaxComputeWorkgroupSizeY, 4);
+    supported.record_limit(LimitKey::MaxComputeWorkgroupSizeZ, 2);
+    supported.record_limit(LimitKey::MaxComputeInvocationsPerWorkgroup, 64);
+    assert_eq!(
+        verdict(supported.clone(), &artifact),
+        ArtifactAcceptance::Accepted
+    );
+
+    for (key, value) in [
+        (LimitKey::MaxComputeWorkgroupSizeX, 7),
+        (LimitKey::MaxComputeWorkgroupSizeY, 3),
+        (LimitKey::MaxComputeWorkgroupSizeZ, 1),
+        (LimitKey::MaxComputeInvocationsPerWorkgroup, 63),
+    ] {
+        let mut too_small = supported.clone();
+        too_small.record_limit(key, value);
+        assert_eq!(
+            verdict(too_small, &artifact),
+            ArtifactAcceptance::LimitExceeded,
+            "{key:?} below the declared local shape must refuse",
+        );
+    }
+
+    let mut incomplete = device_consuming(AcceptedCodeForm::Wgsl);
+    incomplete.record_feature(OptionalFeature::Compute);
+    incomplete.record_limit(LimitKey::MaxComputeWorkgroupSizeX, 8);
+    incomplete.record_limit(LimitKey::MaxComputeWorkgroupSizeY, 4);
+    incomplete.record_limit(LimitKey::MaxComputeWorkgroupSizeZ, 2);
+    assert_eq!(
+        verdict(incomplete, &artifact),
+        ArtifactAcceptance::LimitExceeded,
+        "a missing required compute limit cannot prove the local shape executable",
+    );
 }
 
 /// The direction the variant carries is the direction the comparison uses, so an

@@ -55,7 +55,8 @@ fn a_compute_pipeline_shares_the_interface_rules_with_raster() {
             0,
             BufferBindingAccess::ReadWrite,
             64,
-        )]),
+        )])
+        .with_compute_workgroup_size(crate::api::shader::ComputeWorkgroupSize::new(1, 1, 1)),
         ShaderRequirements::new(),
     );
     let desc = ComputePipelineDescriptor::new(module, no_bindings());
@@ -74,7 +75,8 @@ fn a_compute_pipeline_shares_the_interface_rules_with_raster() {
                 0,
                 BufferBindingAccess::ReadWrite,
                 64,
-            )]),
+            )])
+            .with_compute_workgroup_size(crate::api::shader::ComputeWorkgroupSize::new(1, 1, 1)),
             ShaderRequirements::new(),
         ),
         interface_of(vec![layout(vec![layout_slot(

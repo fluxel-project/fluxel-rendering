@@ -394,10 +394,77 @@ is the normative scope boundary for Mesh/Task, the ray system, cooperative
 matrix, transient physical aliasing, external interop, NV12/P010 multiplanar
 handling, native debugger capture, advanced allocator diagnostics, HDR/timing,
 and advanced descriptor indexing. Their public vocabulary and portable tests are
-complete v13 requirements. Only their native DX12/Vulkan lowering may remain a
+complete v13 requirements. Only their native DX12/Vulkan/Metal lowering may remain a
 documented TODO, with its capability absent and a pre-native `Unsupported`
 result. These rows must not be confused with the private performance
 enhancements in section 67.9.1.
+
+### 67.9.3 Metal lowering admission and wgpu-hal comparison
+
+The Metal backend follows the same closure rule as DX12 and Vulkan. The mere
+existence of an Objective-C selector, a pixel-format enum, or an Apple GPU-family
+bit is not sufficient evidence. A capability is published only after the
+selected device was probed and every portable path from validation through
+command-buffer completion or device loss has a native lowering.
+
+The `wgpu-hal 30.0.1` Metal implementation is a reference for native API usage,
+not a second public contract. Fluxel deliberately keeps raw-device/resource
+constructors, raw shared-event export, queue adoption and Naga-to-MSL translation
+outside the RHI: they would either expose native ownership or duplicate the
+shader-toolchain boundary. Conversely, the following are required whenever the
+corresponding capability is published:
+
+- direct buffer, texture and sampler binding uses Metal's three independent
+  index namespaces and honours stage visibility and dynamic offsets;
+- array-layer buffer/texture copies and uploads advance the buffer image stride
+  for every layer, including compressed block geometry;
+- readback staging remains retained until completion and publishes bytes only
+  after successful command-buffer completion; loss terminates every ticket;
+- a `FrameAttachment` is normalized to a Metal render attachment during
+  lowering, and its drawable is scheduled for presentation before commit;
+- debug groups and markers that were validly recorded are consumed by the
+  encoder or are a documented safe no-op; they cannot become a submit-time
+  `Unsupported` failure;
+- comparison samplers, clamp-to-border, coherent/primary mapping, compressed
+  format families, multisampling, resolve and indirect commands have their
+  exact device/OS probes and complete lowerers.
+
+Metal shared events, heaps and aliasable resources, argument buffers, hazard
+tracking modes, retention pools, state-difference caches, binary archives and
+autorelease-pool placement are backend-private implementation choices. The
+correct baseline is respectively single-queue ordered submission, dedicated
+resources, direct bindings, tracked hazards, ownership retention and uncached
+pipeline creation. They require no new v13 API and may be introduced after
+profiling without changing portable semantics.
+
+Timestamp counters and pipeline statistics remain fail-closed until the full
+query-set creation, recording, resolve, result conversion and loss path is
+implemented for the selected Metal counter-set profile. ASTC HDR, MSAA/resolve,
+multiview and pipeline archive serialization likewise remain absent when the
+device/OS cannot provide an exact guarantee or the backend has no end-to-end
+lowering. This is a capability answer, not a reachable `todo!()` path.
+
+The v13 Metal audit against `wgpu-hal 30.0.1` records every remaining
+non-advanced difference explicitly:
+
+| Native family present in Metal/wgpu-hal | v13 Metal answer | Why it is not currently published |
+| --- | --- | --- |
+| Occlusion and counter-sample timestamps | `QuerySet` capability absent; creation and recording return `Unsupported` before native work | Metal uses visibility-result buffers for occlusion and device/OS-specific `MTLCounterSampleBuffer` sets for timestamps. Fluxel has not yet closed allocation, encoder placement, resolve, nanosecond conversion, readback and loss as one path. |
+| Direct and indexed indirect draw; indirect compute dispatch | `IndirectDraw` / `IndirectDispatch` absent | The direct commands are complete; the indirect argument ABI, offset/stride bounds, first-instance behavior and completion-retention cases are not. Counted/multi-draw additionally lacks one portable native Metal route. |
+| Multisampling and resolve | Only sample count one is published | Per-format sample-count probe, multisample texture restrictions, attachment resolve (including drawable targets), standalone resolve and copy restrictions do not yet have one conformance matrix. |
+| Multiview / vertex amplification | `Multiview` absent | Support is GPU-family and OS dependent, and render-pass amplification plus shader-view indexing are not lowered. |
+| Depth clipping control | Optional depth-clip facts absent | The backend has not yet connected the device availability probe and the encoder's depth-clip mode to the portable pipeline state. |
+| Storage textures in raster stages and read/write storage textures | Only the probed write-only compute subset is published | Metal read/write texture support is tier- and format-dependent. A selector existing in the SDK is not a substitute for the required per-device/per-format matrix. |
+| General texture clear | `ClearTexture` absent | Metal has no general blit clear matching all portable formats/subresources; a render/compute fallback would need its own format, usage, hazard and loss closure. |
+| Argument buffers | Direct three-namespace ABI with conservative limits | This changes capacity and binding cost, not semantics. Tier 1/2 probing, residency and retirement are backend-private performance work. |
+| Binary archives / pipeline serialization | Uncached pipeline creation remains valid | `MTLBinaryArchive` identity, invalid-data policy and serialization are not closed; wgpu-hal's Metal `PipelineCache` is itself not evidence of a portable serialized cache. |
+
+External textures/memory, Mesh/Task, ray tracing, physical transient aliasing,
+advanced native capture and multiplanar video formats are not repeated in this
+table because section 67.9.2 already classifies them as advanced native TODO
+families. Raw Metal device/resource constructors, adopted queues and raw shared
+events are intentionally absent because they contradict Fluxel's ownership
+boundary rather than fill a portable feature gap.
 
 ## 67.10 Definition of done
 

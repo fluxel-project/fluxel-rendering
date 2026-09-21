@@ -29,6 +29,34 @@ pub struct SubgroupSizeRange {
     pub max: u32,
 }
 
+/// The fixed three-dimensional local size of a compute entry point.
+///
+/// This is entry-point metadata, rather than a dispatch parameter: a dispatch
+/// selects how many workgroups run, while shader code fixes how many invocations
+/// each workgroup contains.  It deliberately remains representable even when an
+/// axis is zero so [`ShaderArtifact`](super::ShaderArtifact) validation can report
+/// the producer error instead of a builder silently repairing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ComputeWorkgroupSize {
+    /// Local invocations on the X axis.
+    pub x: u32,
+    /// Local invocations on the Y axis.
+    pub y: u32,
+    /// Local invocations on the Z axis.
+    pub z: u32,
+}
+
+impl ComputeWorkgroupSize {
+    /// Describes the local size declared by the compute entry point.
+    pub const fn new(x: u32, y: u32, z: u32) -> Self {
+        Self { x, y, z }
+    }
+
+    pub(crate) fn invocation_count(self) -> u64 {
+        u64::from(self.x) * u64::from(self.y) * u64::from(self.z)
+    }
+}
+
 impl SubgroupSizeRange {
     /// Creates a non-empty inclusive range.
     pub fn new(min: u32, max: u32) -> Option<Self> {
@@ -231,13 +259,15 @@ pub struct ShaderInterface {
     writes_position: bool,
     writes_frag_depth: bool,
     writes_sample_mask: bool,
+    compute_workgroup_size: Option<ComputeWorkgroupSize>,
 }
 
 impl ShaderInterface {
     /// An empty interface.
     ///
-    /// Legal as a starting point and legal as the whole thing for a compute entry
-    /// point, which may declare no locations at all.
+    /// Legal as a starting point. A complete compute entry point must additionally
+    /// declare its local size with [`Self::with_compute_workgroup_size`], although
+    /// it may declare no locations at all.
     pub fn new() -> Self {
         Self::default()
     }
@@ -284,6 +314,17 @@ impl ShaderInterface {
         self
     }
 
+    /// Declares the fixed local invocation shape of a compute entry point.
+    ///
+    /// Exactly one shape is required for [`ShaderStage::Compute`]; it is forbidden
+    /// on every other stage.  The artifact validator checks that every axis is
+    /// non-zero, and device acceptance compares all three axes and their product
+    /// against the enabled compute limits.
+    pub fn with_compute_workgroup_size(mut self, size: ComputeWorkgroupSize) -> Self {
+        self.compute_workgroup_size = Some(size);
+        self
+    }
+
     /// The resource requirements, in the order they were added.
     ///
     /// A valid artifact has them already canonical; this accessor does not sort.
@@ -314,6 +355,11 @@ impl ShaderInterface {
     /// Whether this entry point writes the sample-mask built-in.
     pub fn writes_sample_mask(&self) -> bool {
         self.writes_sample_mask
+    }
+
+    /// The declared compute local size, if this is a compute entry point.
+    pub fn compute_workgroup_size(&self) -> Option<ComputeWorkgroupSize> {
+        self.compute_workgroup_size
     }
 }
 

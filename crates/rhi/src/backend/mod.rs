@@ -46,6 +46,9 @@ pub(crate) mod dx12;
 #[cfg(all(feature = "vulkan", not(target_arch = "wasm32")))]
 pub(crate) mod vulkan;
 
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
+pub(crate) mod metal;
+
 // GL-family lowering is split by profile below one backend-private state
 // machine.  `gl-family` contains only portable state/probe logic; WGL, EGL and
 // browser context ownership are enabled by their narrower provider features.

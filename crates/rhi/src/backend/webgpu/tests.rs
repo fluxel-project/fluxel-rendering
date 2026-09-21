@@ -26,8 +26,8 @@ use crate::api::resource::{
     TextureAspects, TextureDescriptor, TextureUsage, TextureViewDescriptor, TextureViewDimension,
 };
 use crate::api::shader::{
-    ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderCode,
-    ShaderInterface, ShaderRequirements, ShaderStage,
+    ArtifactHash, ArtifactProducerVersion, ComputeWorkgroupSize, ShaderAbiVersion, ShaderArtifact,
+    ShaderCode, ShaderInterface, ShaderRequirements, ShaderStage,
 };
 
 use super::{WebGpuProvider, js, registry};
@@ -40,7 +40,7 @@ fn compute_artifact(source: &'static str, hash_byte: u8) -> ShaderArtifact {
         "main",
         ShaderCode::Wgsl(Arc::from(source)),
         ShaderAbiVersion { major: 1, minor: 0 },
-        ShaderInterface::new(),
+        ShaderInterface::new().with_compute_workgroup_size(ComputeWorkgroupSize::new(1, 1, 1)),
         ShaderRequirements::new(),
         ArtifactHash([hash_byte; 32]),
         ArtifactProducerVersion {

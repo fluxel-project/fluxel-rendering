@@ -356,7 +356,8 @@ fn compute_module(id: u64) -> ShaderModule {
         device(),
         id,
         ShaderStage::Compute,
-        ShaderInterface::new(),
+        ShaderInterface::new()
+            .with_compute_workgroup_size(crate::api::shader::ComputeWorkgroupSize::new(1, 1, 1)),
         ShaderRequirements::new(),
     )
 }

@@ -28,8 +28,9 @@ use crate::api::platform::{BackendKind, Device, PlatformProvider};
 use crate::api::resource::buffer::{BufferDescriptor, BufferRange, BufferUsage};
 use crate::api::resource::transfer::{ReadbackRequest, ReadbackViewData};
 use crate::api::shader::{
-    ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderCode,
-    ShaderInterface, ShaderRequirements, ShaderResourceRequirement, ShaderStage, ShaderStages,
+    ArtifactHash, ArtifactProducerVersion, ComputeWorkgroupSize, ShaderAbiVersion, ShaderArtifact,
+    ShaderCode, ShaderInterface, ShaderRequirements, ShaderResourceRequirement, ShaderStage,
+    ShaderStages,
 };
 use crate::api::submission::{
     CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
@@ -293,15 +294,17 @@ fn compute_artifact() -> ShaderArtifact {
         "main",
         ShaderCode::SpirV(words),
         ShaderAbiVersion { major: 1, minor: 0 },
-        ShaderInterface::new().with_resource(ShaderResourceRequirement {
-            group: BindGroupIndex::new(0),
-            slot: BindingSlotId::new(0),
-            kind: BindingKind::StorageBuffer {
-                access: BufferBindingAccess::ReadWrite,
-                min_size: SIZE,
-            },
-            count: BindingCount::One,
-        }),
+        ShaderInterface::new()
+            .with_compute_workgroup_size(ComputeWorkgroupSize::new(8, 1, 1))
+            .with_resource(ShaderResourceRequirement {
+                group: BindGroupIndex::new(0),
+                slot: BindingSlotId::new(0),
+                kind: BindingKind::StorageBuffer {
+                    access: BufferBindingAccess::ReadWrite,
+                    min_size: SIZE,
+                },
+                count: BindingCount::One,
+            }),
         ShaderRequirements::new(),
         ArtifactHash([0xC0; 32]),
         ArtifactProducerVersion {

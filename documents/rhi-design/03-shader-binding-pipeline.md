@@ -341,6 +341,20 @@ pub struct ShaderInterface {
     /// Optional for a Fragment entry point.
     writes_frag_depth: bool,
     writes_sample_mask: bool,
+
+    /// Required exactly for a Compute entry point.
+    compute_workgroup_size: Option<ComputeWorkgroupSize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ComputeWorkgroupSize {
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
+
+impl ComputeWorkgroupSize {
+    pub const fn new(x: u32, y: u32, z: u32) -> Self;
 }
 
 impl ShaderInterface {
@@ -376,6 +390,11 @@ impl ShaderInterface {
         value: bool,
     ) -> Self;
 
+    pub fn with_compute_workgroup_size(
+        mut self,
+        size: ComputeWorkgroupSize,
+    ) -> Self;
+
     pub fn resources(&self) -> &[ShaderResourceRequirement];
     pub fn inputs(&self) -> &[ShaderLocationInterface];
     pub fn outputs(&self) -> &[ShaderLocationInterface];
@@ -383,6 +402,7 @@ impl ShaderInterface {
     pub fn writes_position(&self) -> bool;
     pub fn writes_frag_depth(&self) -> bool;
     pub fn writes_sample_mask(&self) -> bool;
+    pub fn compute_workgroup_size(&self) -> Option<ComputeWorkgroupSize>;
 }
 ```
 
@@ -427,7 +447,19 @@ Fragment:
 Compute:
     inputs / outputs must be empty
     writes_* must be false
+    compute_workgroup_size must be Some(x, y, z), with x/y/z != 0
+
+all non-Compute stages:
+    compute_workgroup_size must be None
 ```
+
+The local workgroup size belongs to the entry point, not `dispatch(x, y, z)`:
+the former fixes invocations per workgroup in shader code, while the latter fixes
+the number of workgroups launched. On shader acceptance a compute shape is
+checked against `MaxComputeWorkgroupSizeX`, `Y`, `Z`, and the product against
+`MaxComputeInvocationsPerWorkgroup`. Those four facts must be present whenever
+Compute is enabled; an absent fact cannot prove a shape is executable and is
+therefore `LimitExceeded` rather than an optimistic acceptance.
 
 Built-ins:
 
@@ -2349,6 +2381,7 @@ shader.stage == Compute
 
 ShaderInterface:
     location inputs/outputs are empty
+    compute_workgroup_size is present and accepted against all four local-size limits
     resource requirements are compatible with PipelineInterface
 
 ShaderRequirements:

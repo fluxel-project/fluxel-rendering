@@ -230,12 +230,12 @@ The following ten families are **not deferred public API design**: their public
 types, capability/limit vocabulary, portable validation, positive/negative/
 boundary contract tests, resource-use representation, and tooling schema are
 part of v13. What may remain for a backend is only the advanced native lowering.
-Until every admission condition in a row is met, DX12/Vulkan must keep the
+Until every admission condition in a row is met, DX12/Vulkan/Metal must keep the
 corresponding fact disabled and return structured `Unsupported` before the first
 native operation. A comment may say `TODO(native-lowering)`; a reachable
 `todo!()`, `unimplemented!()`, panic, dummy success, or silent no-op is forbidden.
 
-| Advanced family | Frozen public carrier | Current correct DX12/Vulkan behavior | Required evidence before enabling |
+| Advanced family | Frozen public carrier | Current correct DX12/Vulkan/Metal behavior | Required evidence before enabling |
 | --- | --- | --- | --- |
 | Mesh / task shaders | mesh/task stages, `MeshPipeline`, direct/indirect/count mesh commands and mesh limits | Capability false and pre-native `Unsupported` unless a backend has the complete path | Native tier/extension probe and device enablement; shader acceptance; pipeline creation; dispatch lowering; argument/resource retention; loss and conformance tests. |
 | Ray system | BLAS/TLAS descriptors and sizing, build/update/copy/compaction, ray-query requirements, ray pipeline/groups, SBT and `trace_rays` | Keep each independently incomplete fact false; no AS/pipeline/dispatch placeholder may succeed | Exact size/alignment query; native allocation/build barriers; update/compaction; descriptor binding; pipeline/SBT construction; trace dispatch; lifetime/loss and positive/negative/boundary tests. |

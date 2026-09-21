@@ -32,8 +32,9 @@ use crate::api::resource::texture::{Extent3d, TextureDescriptor, TextureUsage};
 use crate::api::resource::transfer::{ReadbackRequest, ReadbackViewData, TextureUploadDescriptor};
 use crate::api::resource::view::{TextureViewDescriptor, TextureViewDimension};
 use crate::api::shader::{
-    ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderCode,
-    ShaderInterface, ShaderRequirements, ShaderResourceRequirement, ShaderStage, ShaderStages,
+    ArtifactHash, ArtifactProducerVersion, ComputeWorkgroupSize, ShaderAbiVersion, ShaderArtifact,
+    ShaderCode, ShaderInterface, ShaderRequirements, ShaderResourceRequirement, ShaderStage,
+    ShaderStages,
 };
 use crate::api::submission::{
     CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
@@ -347,6 +348,7 @@ fn image_artifact() -> ShaderArtifact {
         ShaderCode::SpirV(Arc::from(IMAGE_BINDING_SPIRV)),
         ShaderAbiVersion { major: 1, minor: 0 },
         ShaderInterface::new()
+            .with_compute_workgroup_size(ComputeWorkgroupSize::new(1, 1, 1))
             .with_resource(resource(
                 0,
                 BindingKind::SampledTexture {

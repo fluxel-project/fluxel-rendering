@@ -96,9 +96,9 @@ pub use artifact::{
     ShaderModule,
 };
 pub use requirements::{
-    CooperativeMatrixComponentType, CooperativeMatrixProperties, CooperativeMatrixRequirement,
-    CooperativeMatrixScope, ShaderBuiltin, ShaderInterface, ShaderRequirements,
-    ShaderResourceRequirement, SubgroupSizeRange,
+    ComputeWorkgroupSize, CooperativeMatrixComponentType, CooperativeMatrixProperties,
+    CooperativeMatrixRequirement, CooperativeMatrixScope, ShaderBuiltin, ShaderInterface,
+    ShaderRequirements, ShaderResourceRequirement, SubgroupSizeRange,
 };
 pub use vocabulary::{
     ArtifactAcceptance, GlslProfile, InterpolationMode, InterpolationSampling, ShaderAbiVersion,

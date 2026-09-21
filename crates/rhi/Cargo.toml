@@ -25,6 +25,15 @@ native-gl-wgl = ["gl-family", "dep:glow", "dep:glutin_wgl_sys", "dep:raw-window-
 native-gles-egl = ["gl-family", "dep:glow", "dep:khronos-egl", "dep:raw-window-handle"]
 webgl2 = ["gl-family", "dep:glow", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 webgpu = ["dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
+metal = [
+    "dep:block2",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-metal",
+    "dep:objc2-quartz-core",
+    "dep:raw-window-handle",
+    "dep:raw-window-metal",
+]
 test-support = []
 
 [dependencies]
@@ -37,6 +46,54 @@ raw-window-handle = { version = "=0.6.2", optional = true }
 # `src/backend/vulkan`.
 ash = { version = "=0.38.0", optional = true, default-features = false, features = ["loaded", "std"] }
 khronos-egl = { version = "=6.0.0", features = ["dynamic"], optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# Keep the Objective-C/Metal stack aligned with the vendored wgpu-hal 30.0.1
+# reference.  Mixing objc2 framework-crate generations is not supported: their
+# Retained/ProtocolObject types form one ABI-level ownership vocabulary.
+block2 = { version = "=0.6.2", optional = true }
+objc2 = { version = "=0.6.3", optional = true }
+objc2-foundation = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "NSError",
+    "NSRange",
+    "NSString",
+] }
+objc2-metal = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "block2",
+    "MTLBlitCommandEncoder",
+    "MTLAllocation",
+    "MTLArgument",
+    "MTLBuffer",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLComputeCommandEncoder",
+    "MTLComputePipeline",
+    "MTLDepthStencil",
+    "MTLDevice",
+    "MTLDrawable",
+    "MTLEvent",
+    "MTLLibrary",
+    "MTLPipeline",
+    "MTLPixelFormat",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLResource",
+    "MTLSampler",
+    "MTLTexture",
+    "MTLTypes",
+    "MTLVertexDescriptor",
+] }
+objc2-quartz-core = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-metal",
+] }
+raw-window-metal = { version = "=1.0.0", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # The owned Direct3D 12 backend's binding, and nothing else uses it: no module

@@ -472,15 +472,17 @@ fn fill_cs_artifact(code: crate::api::shader::ShaderCode) -> ShaderArtifact {
         // `fill_cs.hlsl` declares `RWByteAddressBuffer output : register(u0)`.
         // ABI 1.0 maps that to group 0 / slot 0, so the PSO test
         // below exercises the same TablePlan/register mapping the fixture needs.
-        ShaderInterface::new().with_resource(ShaderResourceRequirement {
-            group: crate::api::binding::BindGroupIndex::new(0),
-            slot: BindingSlotId::new(0),
-            kind: BindingKind::StorageBuffer {
-                access: BufferBindingAccess::ReadWrite,
-                min_size: 4,
-            },
-            count: BindingCount::One,
-        }),
+        ShaderInterface::new()
+            .with_compute_workgroup_size(crate::api::shader::ComputeWorkgroupSize::new(8, 8, 1))
+            .with_resource(ShaderResourceRequirement {
+                group: crate::api::binding::BindGroupIndex::new(0),
+                slot: BindingSlotId::new(0),
+                kind: BindingKind::StorageBuffer {
+                    access: BufferBindingAccess::ReadWrite,
+                    min_size: 4,
+                },
+                count: BindingCount::One,
+            }),
         ShaderRequirements::new(),
         ArtifactHash([0x51; 32]),
         ArtifactProducerVersion {

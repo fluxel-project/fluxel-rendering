@@ -150,6 +150,12 @@ fn validate_interface(interface: &ShaderInterface, stage: ShaderStage) -> RhiRes
     // is not refused by the text, and refusing it here would be inventing a rule.
     match stage {
         ShaderStage::Vertex | ShaderStage::Mesh => {
+            if interface.compute_workgroup_size().is_some() {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "only a compute entry point may declare a compute workgroup size",
+                ));
+            }
             if !interface.writes_position() {
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
@@ -157,14 +163,15 @@ fn validate_interface(interface: &ShaderInterface, stage: ShaderStage) -> RhiRes
                 ));
             }
         }
-        ShaderStage::Fragment => {}
-        ShaderStage::Compute
-        | ShaderStage::Task
-        | ShaderStage::RayGeneration
-        | ShaderStage::Miss
-        | ShaderStage::ClosestHit
-        | ShaderStage::AnyHit
-        | ShaderStage::Intersection => {
+        ShaderStage::Fragment => {
+            if interface.compute_workgroup_size().is_some() {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "only a compute entry point may declare a compute workgroup size",
+                ));
+            }
+        }
+        ShaderStage::Compute => {
             if !interface.inputs().is_empty() || !interface.outputs().is_empty() {
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
@@ -178,6 +185,46 @@ fn validate_interface(interface: &ShaderInterface, stage: ShaderStage) -> RhiRes
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
                     "a compute entry point writes no raster built-in",
+                ));
+            }
+            let Some(shape) = interface.compute_workgroup_size() else {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a compute entry point must declare its compute workgroup size",
+                ));
+            };
+            if shape.x == 0 || shape.y == 0 || shape.z == 0 {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "each compute workgroup-size axis must be non-zero",
+                ));
+            }
+        }
+        ShaderStage::Task
+        | ShaderStage::RayGeneration
+        | ShaderStage::Miss
+        | ShaderStage::ClosestHit
+        | ShaderStage::AnyHit
+        | ShaderStage::Intersection => {
+            if interface.compute_workgroup_size().is_some() {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "only a compute entry point may declare a compute workgroup size",
+                ));
+            }
+            if !interface.inputs().is_empty() || !interface.outputs().is_empty() {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "this entry point has no stage inputs or outputs",
+                ));
+            }
+            if interface.writes_position()
+                || interface.writes_frag_depth()
+                || interface.writes_sample_mask()
+            {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "this entry point writes no raster built-in",
                 ));
             }
         }

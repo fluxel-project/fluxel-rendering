@@ -67,9 +67,49 @@ fn a_vertex_entry_point_must_write_the_position_built_in() {
 }
 
 #[test]
-fn a_compute_entry_point_may_declare_no_locations() {
-    let artifact = artifact(ShaderStage::Compute, ShaderInterface::new());
+fn a_compute_entry_point_with_a_non_zero_local_shape_may_declare_no_locations() {
+    let artifact = artifact(ShaderStage::Compute, compute_interface());
     assert!(validate_shader_artifact(&artifact, permissive).is_ok());
+}
+
+#[test]
+fn a_compute_entry_point_must_declare_its_local_shape() {
+    let artifact = artifact(ShaderStage::Compute, ShaderInterface::new());
+    assert_kind(
+        validate_shader_artifact(&artifact, permissive),
+        RhiErrorKind::InvalidUsage,
+    );
+}
+
+#[test]
+fn a_compute_local_shape_requires_three_non_zero_axes() {
+    for shape in [
+        crate::api::shader::ComputeWorkgroupSize::new(0, 1, 1),
+        crate::api::shader::ComputeWorkgroupSize::new(1, 0, 1),
+        crate::api::shader::ComputeWorkgroupSize::new(1, 1, 0),
+    ] {
+        let artifact = artifact(
+            ShaderStage::Compute,
+            ShaderInterface::new().with_compute_workgroup_size(shape),
+        );
+        assert_kind(
+            validate_shader_artifact(&artifact, permissive),
+            RhiErrorKind::InvalidUsage,
+        );
+    }
+}
+
+#[test]
+fn a_non_compute_entry_point_may_not_declare_a_compute_local_shape() {
+    let artifact = artifact(
+        ShaderStage::Vertex,
+        vertex_interface()
+            .with_compute_workgroup_size(crate::api::shader::ComputeWorkgroupSize::new(1, 1, 1)),
+    );
+    assert_kind(
+        validate_shader_artifact(&artifact, permissive),
+        RhiErrorKind::InvalidUsage,
+    );
 }
 
 #[test]
