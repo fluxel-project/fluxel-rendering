@@ -35,6 +35,10 @@ metal = [
     "dep:raw-window-metal",
 ]
 test-support = []
+# Source-only, host-injected usage templates under `examples/`.  These targets
+# deliberately do not construct a native provider: applications obtain that
+# provider from their platform integration and pass it into the workload.
+examples = []
 
 [dependencies]
 glow = { version = "=0.18.0", optional = true }
@@ -163,3 +167,18 @@ web-sys = { version = "=0.3.105", optional = true, features = [
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"
 wasm-bindgen-futures = "0.4.55"
+
+[[example]]
+name = "headless_compute"
+path = "examples/headless_compute.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "offscreen_triangle"
+path = "examples/offscreen_triangle.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "clear_present"
+path = "examples/clear_present.rs"
+required-features = ["examples"]
