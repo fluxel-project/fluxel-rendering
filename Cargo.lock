@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "fluxel-renderer"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "fluxel-assets",
  "fluxel-rendergraph",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "fluxel-rendergraph"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "clap",
  "criterion",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "fluxel-rendering-wasm"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "fluxel-assets",
  "fluxel-renderer",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "fluxel-rhi"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "ash",
  "block2 0.6.2",
