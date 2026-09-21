@@ -1,7 +1,10 @@
 //! Mesh/task pipeline descriptors and fail-closed creation façade.
 
 use super::interface::validate_pipeline_interface_descriptor;
-use super::resources::{merge_shader_resources, validate_shader_resource_requirements};
+use super::resources::{
+    merge_shader_resources, validate_shader_immediate_requirements,
+    validate_shader_resource_requirements,
+};
 use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupportQuery, logical_bytes_per_block};
@@ -332,6 +335,14 @@ pub(crate) fn validate_mesh_pipeline_descriptor(
     }
     let merged = merge_shader_resources(stages)?;
     validate_shader_resource_requirements(&merged, &desc.interface, facts.binding_support)?;
+    let mut immediate_stages = vec![(ShaderStage::Mesh, mesh_interface)];
+    if let Some(task) = &desc.task {
+        immediate_stages.push((ShaderStage::Task, &task.artifact().interface));
+    }
+    if let Some(fragment) = &desc.fragment {
+        immediate_stages.push((ShaderStage::Fragment, &fragment.artifact().interface));
+    }
+    validate_shader_immediate_requirements(immediate_stages, &desc.interface)?;
     for module in [Some(&desc.mesh), desc.task.as_ref(), desc.fragment.as_ref()]
         .into_iter()
         .flatten()

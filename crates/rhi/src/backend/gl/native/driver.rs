@@ -2854,7 +2854,9 @@ fn native_gl_unlowered_shader_write(use_: &crate::api::command::ResourceUse) -> 
     match use_ {
         ResourceUse::Buffer(value) => value.access.contains(AccessMask::SHADER_WRITE),
         ResourceUse::Texture(value) => value.access.contains(AccessMask::SHADER_WRITE),
-        ResourceUse::Frame(_) | ResourceUse::AccelerationStructure(_) => false,
+        ResourceUse::Frame(_) | ResourceUse::AccelerationStructure(_) | ResourceUse::Query(_) => {
+            false
+        }
     }
 }
 

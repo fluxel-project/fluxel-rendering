@@ -101,6 +101,40 @@ fn compute_query_bracket_refuses_end_before_begin_nesting_and_mismatched_end() {
     scope.end().unwrap();
 }
 
+/// A query result slot is produced once per `RecordedWork`, even if a caller
+/// closes the first bracket before attempting a second one.  This is distinct
+/// from the active-bracket nesting rule above and prevents backend-dependent
+/// last-write-wins behaviour.
+#[test]
+fn closed_query_slot_cannot_be_written_again_in_one_recording() {
+    let device = query_device();
+    let raster_set = occlusion_set(&device, 1);
+    let mut raster = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+    let mut raster_scope = raster
+        .begin_raster(&color_scope("single query writer"))
+        .unwrap();
+    raster_scope.begin_query(&raster_set, 0).unwrap();
+    raster_scope.end_query(&raster_set, 0).unwrap();
+    assert_kind(
+        raster_scope.begin_query(&raster_set, 0),
+        RhiErrorKind::InvalidUsage,
+    );
+    raster_scope.end().unwrap();
+    assert!(raster.finish().is_ok());
+
+    let compute_set = statistics_set(&device, 1);
+    let mut compute = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+    let mut compute_scope = compute.begin_compute(&Default::default()).unwrap();
+    compute_scope.begin_query(&compute_set, 0).unwrap();
+    compute_scope.end_query(&compute_set, 0).unwrap();
+    assert_kind(
+        compute_scope.begin_query(&compute_set, 0),
+        RhiErrorKind::InvalidUsage,
+    );
+    compute_scope.end().unwrap();
+    assert!(compute.finish().is_ok());
+}
+
 #[test]
 fn active_query_refuses_scope_end_and_drop_poison_prevents_recording_reuse() {
     let device = query_device();

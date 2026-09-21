@@ -352,7 +352,7 @@ impl MetalCommandSpine {
                     })?,
             )
         };
-        let mut next_visibility_slot = 0usize;
+        let mut visibility_sequence = OcclusionQuerySequence::default();
         let mut active_visibility = None;
         let mut pending_visibility = Vec::new();
         for work in &batch.work {
@@ -507,6 +507,12 @@ impl MetalCommandSpine {
                                         "Metal raster vertex range underflows",
                                     )
                                 })?;
+                        validate_base_vertex_instance_selector(
+                            self.shared.base_vertex_instance,
+                            draw.index.is_some(),
+                            draw.base_vertex,
+                            draw.instances.start,
+                        )?;
                         if let Some(index) = &draw.index {
                             let buffer = metal_buffer(&index.binding.buffer)?;
                             let index_offset = index
@@ -537,12 +543,6 @@ impl MetalCommandSpine {
                                     );
                                 }
                             } else {
-                                if draw.base_vertex != 0 || draw.instances.start != 0 {
-                                    return Err(RhiError::new(
-                                        RhiErrorKind::Unsupported,
-                                        "Metal base-vertex/base-instance draw selector is unavailable on this device",
-                                    ));
-                                }
                                 unsafe {
                                     encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
                                         topology, count as usize, metal_index_type(index.format), &buffer.raw,
@@ -558,12 +558,6 @@ impl MetalCommandSpine {
                                     );
                                 }
                             } else {
-                                if draw.instances.start != 0 {
-                                    return Err(RhiError::new(
-                                        RhiErrorKind::Unsupported,
-                                        "Metal base-instance draw selector is unavailable on this device",
-                                    ));
-                                }
                                 unsafe {
                                     encoder.drawPrimitives_vertexStart_vertexCount_instanceCount(
                                         topology,
@@ -583,7 +577,7 @@ impl MetalCommandSpine {
                             )
                             .at("MetalCommandSpine::encode_batch")
                         })?;
-                        if active_visibility.is_some() {
+                        if visibility_sequence.is_active() {
                             return Err(RhiError::new(
                                 RhiErrorKind::InvalidUsage,
                                 "Metal raster scope ended with an active occlusion query",
@@ -627,7 +621,7 @@ impl MetalCommandSpine {
                                 "Metal occlusion query began outside a raster scope",
                             )
                         })?;
-                        if active_visibility.is_some() {
+                        if visibility_sequence.is_active() {
                             return Err(RhiError::new(
                                 RhiErrorKind::InvalidUsage,
                                 "Metal received nested occlusion queries",
@@ -640,24 +634,12 @@ impl MetalCommandSpine {
                                 "Metal occlusion query index exceeds its native query set",
                             ));
                         }
-                        let offset = next_visibility_slot.checked_mul(8).ok_or_else(|| {
-                            RhiError::new(
-                                RhiErrorKind::InvalidUsage,
-                                "Metal visibility query offset overflows",
-                            )
-                        })?;
-                        next_visibility_slot =
-                            next_visibility_slot.checked_add(1).ok_or_else(|| {
-                                RhiError::new(
-                                    RhiErrorKind::InvalidUsage,
-                                    "Metal visibility query count overflows",
-                                )
-                            })?;
+                        let offset = visibility_sequence.begin(set.id(), *index)?;
                         encoder.setVisibilityResultMode_offset(
                             MTLVisibilityResultMode::Counting,
                             offset,
                         );
-                        active_visibility = Some((set.clone(), *index, offset));
+                        active_visibility = Some(set.clone());
                     }
                     RecordedPayload::QueryEnd { set, index } => {
                         let encoder = render.as_deref().ok_or_else(|| {
@@ -666,22 +648,16 @@ impl MetalCommandSpine {
                                 "Metal occlusion query ended outside a raster scope",
                             )
                         })?;
-                        let Some((active_set, active_index, offset)) = active_visibility.take()
-                        else {
-                            return Err(RhiError::new(
+                        let offset = visibility_sequence.end(set.id(), *index)?;
+                        let active_set = active_visibility.take().ok_or_else(|| {
+                            RhiError::new(
                                 RhiErrorKind::InvalidUsage,
                                 "Metal received an occlusion-query end without a begin",
-                            ));
-                        };
-                        if active_set.id() != set.id() || active_index != *index {
-                            return Err(RhiError::new(
-                                RhiErrorKind::InvalidUsage,
-                                "Metal occlusion-query end does not match its begin",
-                            ));
-                        }
+                            )
+                        })?;
                         encoder
                             .setVisibilityResultMode_offset(MTLVisibilityResultMode::Disabled, 0);
-                        pending_visibility.push((active_set, active_index, offset));
+                        pending_visibility.push((active_set, *index, offset));
                     }
                     RecordedPayload::QueryResolve(resolve) => {
                         if compute.is_some() || render.is_some() {
@@ -1251,6 +1227,68 @@ struct RepackedTextureUpload {
     bytes_per_image: u64,
 }
 
+/// The native visibility-result buffer is addressed by a dense byte offset,
+/// while the portable query set is addressed by an object identity and slot.
+/// This small state machine keeps the two mappings ordered and makes the
+/// begin/end pairing independently testable without an Objective-C encoder.
+#[derive(Default)]
+struct OcclusionQuerySequence {
+    next_slot: usize,
+    active: Option<ActiveOcclusionQuery>,
+}
+
+#[derive(Clone, Copy)]
+struct ActiveOcclusionQuery {
+    set: crate::api::identity::ObjectId,
+    index: u32,
+    offset: usize,
+}
+
+impl OcclusionQuerySequence {
+    fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    fn begin(&mut self, set: crate::api::identity::ObjectId, index: u32) -> RhiResult<usize> {
+        if self.active.is_some() {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "Metal received nested occlusion queries",
+            ));
+        }
+        let offset = self.next_slot.checked_mul(8).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "Metal visibility query offset overflows",
+            )
+        })?;
+        self.next_slot = self.next_slot.checked_add(1).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "Metal visibility query count overflows",
+            )
+        })?;
+        self.active = Some(ActiveOcclusionQuery { set, index, offset });
+        Ok(offset)
+    }
+
+    fn end(&mut self, set: crate::api::identity::ObjectId, index: u32) -> RhiResult<usize> {
+        let active = self.active.take().ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "Metal received an occlusion-query end without a begin",
+            )
+        })?;
+        if active.set != set || active.index != index {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "Metal occlusion-query end does not match its begin",
+            ));
+        }
+        Ok(active.offset)
+    }
+}
+
 /// Converts the caller-owned host layout into Metal's buffer-copy layout.
 /// Host rows are deliberately allowed to be tightly packed; imposing Metal's
 /// four-byte row requirement on asset bytes would violate the upload contract.
@@ -1259,7 +1297,29 @@ struct RepackedTextureUpload {
 fn repack_texture_upload(
     upload: &crate::api::resource::transfer::TextureUploadDescriptor,
 ) -> RhiResult<RepackedTextureUpload> {
-    let format = upload.dst.descriptor().format;
+    let descriptor = upload.dst.descriptor();
+    repack_texture_upload_parts(
+        descriptor.format,
+        upload.extent,
+        descriptor.dimension,
+        upload.subresource.layer_count,
+        upload.source_layout,
+        &upload.bytes,
+    )
+}
+
+/// The byte-only half of [`repack_texture_upload`].  It intentionally has no
+/// Metal or logical-resource dependency, so compressed block geometry and
+/// row-padding behaviour remain executable on hosts that cannot create a
+/// Metal device.
+fn repack_texture_upload_parts(
+    format: crate::api::format::TextureFormat,
+    extent: crate::api::resource::Extent3d,
+    dimension: TextureDimension,
+    layer_count: u32,
+    source_layout: crate::api::resource::HostTexelLayout,
+    source_bytes: &[u8],
+) -> RhiResult<RepackedTextureUpload> {
     let block_bytes = u64::from(logical_bytes_per_block(format).ok_or_else(|| {
         RhiError::new(
             RhiErrorKind::Unsupported,
@@ -1267,7 +1327,7 @@ fn repack_texture_upload(
         )
     })?);
     let (block_width, block_height) = block_extent(format);
-    let logical_row = u64::from(upload.extent.width.div_ceil(block_width))
+    let logical_row = u64::from(extent.width.div_ceil(block_width))
         .checked_mul(block_bytes)
         .ok_or_else(|| {
             RhiError::new(RhiErrorKind::InvalidUsage, "Metal upload row size overflow")
@@ -1281,16 +1341,16 @@ fn repack_texture_upload(
                 "Metal upload row alignment overflow",
             )
         })?;
-    let block_rows = u64::from(upload.extent.height.div_ceil(block_height));
+    let block_rows = u64::from(extent.height.div_ceil(block_height));
     let bytes_per_image = bytes_per_row.checked_mul(block_rows).ok_or_else(|| {
         RhiError::new(
             RhiErrorKind::InvalidUsage,
             "Metal texture-upload image stride overflow",
         )
     })?;
-    let image_count = match upload.dst.descriptor().dimension {
-        TextureDimension::D3 => u64::from(upload.extent.depth),
-        TextureDimension::D1 | TextureDimension::D2 => u64::from(upload.subresource.layer_count),
+    let image_count = match dimension {
+        TextureDimension::D3 => u64::from(extent.depth),
+        TextureDimension::D1 | TextureDimension::D2 => u64::from(layer_count),
     };
     let total = bytes_per_image.checked_mul(image_count).ok_or_else(|| {
         RhiError::new(
@@ -1305,9 +1365,9 @@ fn repack_texture_upload(
         )
     })?;
     let mut bytes = vec![0_u8; total];
-    let source_row = u64::from(upload.source_layout.bytes_per_row);
+    let source_row = u64::from(source_layout.bytes_per_row);
     let source_image = source_row
-        .checked_mul(u64::from(upload.source_layout.rows_per_image))
+        .checked_mul(u64::from(source_layout.rows_per_image))
         .ok_or_else(|| {
             RhiError::new(
                 RhiErrorKind::InvalidUsage,
@@ -1349,7 +1409,7 @@ fn repack_texture_upload(
             let count = usize::try_from(logical_row).map_err(|_| {
                 RhiError::new(RhiErrorKind::InvalidUsage, "Metal upload row is too large")
             })?;
-            let source = upload.bytes.get(src..src + count).ok_or_else(|| {
+            let source = source_bytes.get(src..src + count).ok_or_else(|| {
                 RhiError::new(
                     RhiErrorKind::InvalidUsage,
                     "Metal texture-upload source bytes do not cover the copied row",
@@ -1976,13 +2036,23 @@ fn immediate_bytes(
                     "Metal immediate write overflows",
                 )
             })?;
-        if end > immediate.size {
-            return Err(RhiError::new(
-                RhiErrorKind::InvalidUsage,
-                "Metal immediate write exceeds pipeline ABI size",
-            ));
+        for required in &immediate.requirements {
+            let required_end = required.offset.checked_add(required.size).ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "Metal immediate requirement overflows",
+                )
+            })?;
+            let copy_start = write.offset.max(required.offset);
+            let copy_end = end.min(required_end);
+            if copy_start >= copy_end {
+                continue;
+            }
+            let source_start = (copy_start - write.offset) as usize;
+            let source_end = (copy_end - write.offset) as usize;
+            bytes[copy_start as usize..copy_end as usize]
+                .copy_from_slice(&write.bytes[source_start..source_end]);
         }
-        bytes[write.offset as usize..end as usize].copy_from_slice(&write.bytes);
     }
     Ok(bytes)
 }
@@ -2038,6 +2108,31 @@ fn index_element_size(value: crate::api::command::IndexFormat) -> u64 {
         crate::api::command::IndexFormat::Uint16 => 2,
         crate::api::command::IndexFormat::Uint32 => 4,
     }
+}
+
+/// Checks whether the encoder can select the public base-vertex/base-instance
+/// overload.  Older Metal profiles have only the zero-base overload; that is a
+/// correct fallback for a zero base, not permission to silently drop a caller's
+/// non-zero first instance or base vertex.
+fn validate_base_vertex_instance_selector(
+    selector_available: bool,
+    indexed: bool,
+    base_vertex: i32,
+    first_instance: u32,
+) -> RhiResult<()> {
+    if selector_available || (base_vertex == 0 && first_instance == 0) {
+        return Ok(());
+    }
+    let operation = if indexed && base_vertex != 0 {
+        "base-vertex/base-instance"
+    } else {
+        "base-instance"
+    };
+    Err(RhiError::new(
+        RhiErrorKind::Unsupported,
+        format!("Metal {operation} draw selector is unavailable on this device"),
+    )
+    .at("MetalCommandSpine::encode_batch"))
 }
 
 fn dynamic_offset(
@@ -2717,5 +2812,115 @@ fn payload_name(payload: &RecordedPayload) -> &'static str {
         RecordedPayload::DebugPush(_) => "debug push",
         RecordedPayload::DebugPop => "debug pop",
         RecordedPayload::DebugMarker(_) => "debug marker",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::format::TextureFormat;
+    use crate::api::identity::ObjectId;
+    use crate::api::resource::{Extent3d, HostTexelLayout};
+
+    #[test]
+    fn repack_r8_three_texel_rows_adds_only_native_padding() {
+        let upload = repack_texture_upload_parts(
+            TextureFormat::R8Unorm,
+            Extent3d::d2(3, 2),
+            TextureDimension::D2,
+            1,
+            HostTexelLayout {
+                bytes_per_row: 3,
+                rows_per_image: 2,
+            },
+            &[1, 2, 3, 4, 5, 6],
+        )
+        .unwrap();
+        assert_eq!(upload.bytes_per_row, 4);
+        assert_eq!(upload.bytes_per_image, 8);
+        assert_eq!(upload.bytes, vec![1, 2, 3, 0, 4, 5, 6, 0]);
+    }
+
+    #[test]
+    fn repack_bc_rows_copy_blocks_not_caller_padding() {
+        let upload = repack_texture_upload_parts(
+            TextureFormat::Bc1RgbaUnorm,
+            Extent3d::d2(4, 8),
+            TextureDimension::D2,
+            1,
+            HostTexelLayout {
+                bytes_per_row: 16,
+                rows_per_image: 2,
+            },
+            &[
+                1, 2, 3, 4, 5, 6, 7, 8, 99, 99, 99, 99, 99, 99, 99, 99, 9, 10, 11, 12, 13, 14, 15,
+                16, 88, 88, 88, 88, 88, 88, 88, 88,
+            ],
+        )
+        .unwrap();
+        assert_eq!(upload.bytes_per_row, 8);
+        assert_eq!(upload.bytes_per_image, 16);
+        assert_eq!(
+            upload.bytes,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
+    }
+
+    #[test]
+    fn repack_astc_uses_block_rows_and_3d_image_stride() {
+        let source = (0_u8..128).collect::<Vec<_>>();
+        let upload = repack_texture_upload_parts(
+            TextureFormat::Astc4x4Unorm,
+            Extent3d::d3(5, 5, 2),
+            TextureDimension::D3,
+            1,
+            HostTexelLayout {
+                bytes_per_row: 32,
+                rows_per_image: 2,
+            },
+            &source,
+        )
+        .unwrap();
+        assert_eq!(upload.bytes_per_row, 32);
+        assert_eq!(upload.bytes_per_image, 64);
+        assert_eq!(upload.bytes, source);
+    }
+
+    #[test]
+    fn absent_base_instance_selector_allows_only_zero_base_fallback() {
+        validate_base_vertex_instance_selector(false, false, 0, 0).unwrap();
+        validate_base_vertex_instance_selector(false, true, 0, 0).unwrap();
+        assert_eq!(
+            validate_base_vertex_instance_selector(false, false, 0, 1)
+                .unwrap_err()
+                .kind(),
+            RhiErrorKind::Unsupported
+        );
+        assert_eq!(
+            validate_base_vertex_instance_selector(false, true, -1, 0)
+                .unwrap_err()
+                .kind(),
+            RhiErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn visibility_query_sequence_preserves_begin_end_order_and_offsets() {
+        let first = ObjectId::new(1);
+        let second = ObjectId::new(2);
+        let mut sequence = OcclusionQuerySequence::default();
+        assert_eq!(sequence.begin(first, 3).unwrap(), 0);
+        assert!(sequence.is_active());
+        assert!(sequence.begin(second, 0).is_err(), "nested query must fail");
+        assert!(sequence.end(first, 4).is_err(), "end must match its begin");
+
+        // A rejected command buffer will be discarded after a mismatched end.
+        // Start a fresh sequence to pin the accepted ordering and dense offsets.
+        let mut sequence = OcclusionQuerySequence::default();
+        assert_eq!(sequence.begin(first, 3).unwrap(), 0);
+        assert_eq!(sequence.end(first, 3).unwrap(), 0);
+        assert_eq!(sequence.begin(second, 0).unwrap(), 8);
+        assert_eq!(sequence.end(second, 0).unwrap(), 8);
+        assert!(!sequence.is_active());
     }
 }

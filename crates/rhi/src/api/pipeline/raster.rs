@@ -32,7 +32,10 @@ use super::raster_state::{
     ColorTargetState, ColorWriteMask, DepthStencilState, MultisampleState, PrimitiveState,
     PrimitiveTopology,
 };
-use super::resources::{merge_shader_resources, validate_shader_resource_requirements};
+use super::resources::{
+    merge_shader_resources, validate_shader_immediate_requirements,
+    validate_shader_resource_requirements,
+};
 use super::vertex_input::{
     VertexInputState, validate_vertex_input_against_interface, validate_vertex_input_state,
 };
@@ -564,6 +567,14 @@ pub(crate) fn validate_raster_pipeline_descriptor(
         None => merge_shader_resources([(ShaderStage::Vertex, vertex_interface)])?,
     };
     validate_shader_resource_requirements(&merged, &desc.interface, facts.binding_support)?;
+    let immediate_stages = match desc.fragment.as_ref() {
+        Some(fragment) => vec![
+            (ShaderStage::Vertex, vertex_interface),
+            (ShaderStage::Fragment, &fragment.artifact().interface),
+        ],
+        None => vec![(ShaderStage::Vertex, vertex_interface)],
+    };
+    validate_shader_immediate_requirements(immediate_stages, &desc.interface)?;
 
     // Section 23.1's raster addendum, which section 27.3's "Limits" block repeats.
     if let Some(max) = limit(LimitKey::MaxBindGroupsPlusVertexBuffers) {

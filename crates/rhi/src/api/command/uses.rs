@@ -27,9 +27,9 @@
 //!   these actual uses together with `SubmissionPlan` ordering; exposing a state
 //!   transition here would make callers duplicate backend synchronization policy.
 //! - Sampler participation. Section 37.2 says a sampler generates no memory
-//!   hazard but still enters command semantics; the only `ResourceUse` variants
-//!   are buffer, texture, and frame, so a sampler produces no record here. It is
-//!   not lost: the [`crate::api::binding::BindGroup`] that holds it is cloned
+//!   hazard but still enters command semantics; it has no memory or query-slot
+//!   `ResourceUse`, so it produces no record here. It is not lost: the
+//!   [`crate::api::binding::BindGroup`] that holds it is cloned
 //!   into the recorded command, so the sampler is still part of what the command
 //!   says.
 //!
@@ -50,6 +50,7 @@ use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{block_extent, logical_bytes_per_block};
 use crate::api::pipeline::PipelineInterface;
 use crate::api::presentation::FrameAttachment;
+use crate::api::query::QuerySet;
 use crate::api::resource::AccelerationStructure;
 use crate::api::resource::buffer::{Buffer, BufferRange};
 use crate::api::resource::subresource::{
@@ -272,6 +273,37 @@ pub struct AccelerationStructureUse {
     pub access: AccessMask,
 }
 
+/// How a command accesses query-result slots.
+///
+/// Query slots are not buffer memory: a backend may keep them in a query pool,
+/// counter sample buffer, or a driver-private object.  They nevertheless carry
+/// execution dependencies.  In particular, a resolve must observe the write
+/// that produced the selected slots, even when the two commands land in
+/// different plan batches or native queues.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum QueryAccess {
+    /// Produces one query result slot.
+    Write,
+    /// Reads produced slots while resolving them into a buffer.
+    ResolveRead,
+}
+
+/// A contiguous query-slot range actually touched by recorded work.
+#[derive(Clone)]
+pub struct QueryUse {
+    /// Query set containing the slots.
+    pub set: QuerySet,
+    /// First touched slot.
+    pub first_query: u32,
+    /// Number of contiguous touched slots. Always non-zero for recorded uses.
+    pub query_count: u32,
+    /// Pipeline domains issuing the access.
+    pub stages: PipelineScope,
+    /// Query-result access performed by the command.
+    pub access: QueryAccess,
+}
+
 /// One resource actually touched by recorded work.
 ///
 /// This is the complete portable synchronization input for an individual
@@ -290,6 +322,9 @@ pub enum ResourceUse {
     Frame(FrameAttachmentUse),
     /// Acceleration-structure access.
     AccelerationStructure(AccelerationStructureUse),
+    /// Query-set slot access. This is scheduling-only metadata; it never
+    /// implies a buffer/image transition by itself.
+    Query(QueryUse),
 }
 
 fn write_bit_names(
@@ -382,6 +417,27 @@ pub(crate) fn frame_use(
 ) -> ResourceUse {
     ResourceUse::Frame(FrameAttachmentUse {
         frame: frame.frame_id(),
+        stages,
+        access,
+    })
+}
+
+/// A query-set use with a validated, non-empty slot span.
+///
+/// Query commands use this constructor rather than spelling the scheduling
+/// metadata locally, keeping timestamp, bracket, and resolve access classes in
+/// the same vocabulary as the plan hazard checker.
+pub(crate) fn query_use(
+    set: &QuerySet,
+    first_query: u32,
+    query_count: u32,
+    stages: PipelineScope,
+    access: QueryAccess,
+) -> ResourceUse {
+    ResourceUse::Query(QueryUse {
+        set: set.clone(),
+        first_query,
+        query_count,
         stages,
         access,
     })

@@ -434,6 +434,7 @@ pub(super) fn lower_raster_draw(
                     why: "the Vulkan ray-query descriptor and synchronization extension path is not enabled",
                 });
             }
+            ResourceUse::Query(_) => {}
         }
     }
     let mut sets = Vec::with_capacity(draw.groups.len());
@@ -674,6 +675,7 @@ pub(super) fn lower_raster_indirect(
                     why: "the Vulkan ray-query descriptor and synchronization extension path is not enabled",
                 });
             }
+            ResourceUse::Query(_) => {}
         }
     }
     let mut sets = Vec::with_capacity(draw.groups.len());

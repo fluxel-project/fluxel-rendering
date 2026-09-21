@@ -641,6 +641,8 @@ fn validate_transient_uses(
                 ResourceUse::Texture(use_record) => use_record.texture.transient_lifetime(),
                 ResourceUse::Frame(_) => None,
                 ResourceUse::AccelerationStructure(_) => None,
+                // Query sets are synchronization objects, not transient memory.
+                ResourceUse::Query(_) => None,
             };
             let Some(lifetime) = lifetime else {
                 continue;
@@ -1019,18 +1021,28 @@ fn shared_resource(one: &ResourceUse, other: &ResourceUse) -> Option<String> {
             (one.structure.id() == other.structure.id())
                 .then(|| format!("acceleration structure {}", one.structure.id().as_u64()))
         }
-        (ResourceUse::Buffer(_), ResourceUse::Texture(_))
-        | (ResourceUse::Texture(_), ResourceUse::Buffer(_))
-        | (ResourceUse::Buffer(_), ResourceUse::Frame(_))
-        | (ResourceUse::Frame(_), ResourceUse::Buffer(_))
-        | (ResourceUse::Texture(_), ResourceUse::Frame(_))
-        | (ResourceUse::Frame(_), ResourceUse::Texture(_))
-        | (ResourceUse::AccelerationStructure(_), ResourceUse::Buffer(_))
-        | (ResourceUse::Buffer(_), ResourceUse::AccelerationStructure(_))
-        | (ResourceUse::AccelerationStructure(_), ResourceUse::Texture(_))
-        | (ResourceUse::Texture(_), ResourceUse::AccelerationStructure(_))
-        | (ResourceUse::AccelerationStructure(_), ResourceUse::Frame(_))
-        | (ResourceUse::Frame(_), ResourceUse::AccelerationStructure(_)) => None,
+        (ResourceUse::Query(one), ResourceUse::Query(other)) => {
+            if one.set.id() == other.set.id()
+                && query_ranges_overlap(
+                    one.first_query,
+                    one.query_count,
+                    other.first_query,
+                    other.query_count,
+                )
+            {
+                Some(format!(
+                    "query set {} over slots {}..{} and {}..{}",
+                    one.set.id().as_u64(),
+                    one.first_query,
+                    one.first_query.saturating_add(one.query_count),
+                    other.first_query,
+                    other.first_query.saturating_add(other.query_count),
+                ))
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1047,6 +1059,9 @@ fn writes(use_record: &ResourceUse) -> bool {
         ResourceUse::Texture(use_record) => use_record.access,
         ResourceUse::Frame(use_record) => use_record.access,
         ResourceUse::AccelerationStructure(use_record) => use_record.access,
+        ResourceUse::Query(use_record) => {
+            return matches!(use_record.access, crate::api::command::QueryAccess::Write);
+        }
     };
     [
         AccessMask::SHADER_WRITE,
@@ -1058,6 +1073,20 @@ fn writes(use_record: &ResourceUse) -> bool {
     ]
     .into_iter()
     .any(|bit| access.contains(bit))
+}
+
+/// Whether two valid, non-empty query-slot spans overlap.  Recording validates
+/// each endpoint before producing a `QueryUse`; the saturating arithmetic here
+/// remains conservative if a future private producer violates that invariant.
+fn query_ranges_overlap(
+    one_first: u32,
+    one_count: u32,
+    other_first: u32,
+    other_count: u32,
+) -> bool {
+    let one_end = one_first.saturating_add(one_count);
+    let other_end = other_first.saturating_add(other_count);
+    one_first < other_end && other_first < one_end
 }
 
 /// Whether two byte ranges of one buffer share a byte.

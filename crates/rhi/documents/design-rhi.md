@@ -34,8 +34,10 @@ The public modules are `platform`, `capability`, `format`, `resource`,
   identity and a replacement device receives a new one.
 - Capability facts are the authority. A supported fact requires validation,
   native lowering, lifetime/loss handling, and conformance evidence.
-- `command::ResourceUse` is derived from recorded commands. RenderGraph
-  declarations and scheduler contracts are intentionally outside RHI.
+- `command::ResourceUse` is derived from recorded commands. It includes
+  scheduling-only query-slot writes and resolve reads without pretending a
+  `QuerySet` is a buffer. RenderGraph declarations and scheduler contracts are
+  intentionally outside RHI.
 - Only operations which may wait for a future event are async. Logical object
   creation, validation, capability queries, and recording are synchronous.
 - `submit(Err)` accepts no native work. `submit(Ok)` transfers plan ownership;
@@ -58,6 +60,7 @@ The public modules are `platform`, `capability`, `format`, `resource`,
 | [0018](../../../documents/adr/0018-capture-observability-without-capture-ownership.md) | Preserve observability without owning capture/replay. |
 | [0019](../../../documents/adr/0019-portable-logical-statistics.md) | Keep statistics logical rather than native profiling. |
 | [0020](../../../documents/adr/0020-optional-feature-family-admission.md) | Admit optional feature families as complete portable contracts. |
+| [0021](../../../documents/adr/0021-shader-owned-immediate-abi.md) | Derive executable immediate-data ABI from shader artifacts, not interface supersets. |
 
 Existing ADRs cover unsafe/native containment, serial lowering policy,
 conformance evidence, platform test gates, and the GL-family private boundary.

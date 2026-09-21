@@ -41,7 +41,7 @@ use crate::api::pipeline::vertex_input::{
 use crate::api::pipeline::{
     BlendComponent, BlendFactor, BlendOperation, BlendState, ColorTargetFacts, ColorTargetState,
     ColorWriteMask, ComputePipeline, ComputePipelineDescriptor, DepthBiasState, DepthState,
-    DepthStencilState, MultisampleState, PipelineDeviceFacts, PipelineInterface,
+    DepthStencilState, ImmediateRange, MultisampleState, PipelineDeviceFacts, PipelineInterface,
     PipelineInterfaceCompatibilityId, PipelineInterfaceDescriptor, PrimitiveState,
     PrimitiveTopology, RasterPipeline, RasterPipelineDescriptor, StencilFaceState,
     StencilOperation, StencilState, VertexAttribute, VertexBufferLayout, VertexFormat,
@@ -53,9 +53,10 @@ use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
 use crate::api::resource::view::TextureViewDimension;
 use crate::api::shader::{
     ArtifactAcceptance, ArtifactHash, ArtifactProducerVersion, InterpolationMode,
-    InterpolationSampling, ShaderAbiVersion, ShaderArtifact, ShaderCode, ShaderInterface,
-    ShaderInterpolation, ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
-    ShaderRequirements, ShaderResourceRequirement, ShaderStage, ShaderStages,
+    InterpolationSampling, ShaderAbiVersion, ShaderArtifact, ShaderCode,
+    ShaderImmediateRequirement, ShaderInterface, ShaderInterpolation, ShaderLocation,
+    ShaderLocationInterface, ShaderModule, ShaderNumericType, ShaderRequirements,
+    ShaderResourceRequirement, ShaderStage, ShaderStages,
 };
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 //! the fixtures; the banners below are the original section banners.
 
 use super::*;
-use crate::api::shader::PassthroughShaderProvenance;
+use crate::api::shader::{PassthroughShaderProvenance, ShaderImmediateRequirement};
 
 /// Trusted passthrough carries capture provenance, not an opaque escape hatch.
 /// The unsafe marker is only meaningful when both fields identify who established
@@ -161,6 +161,29 @@ fn a_resource_list_must_be_in_canonical_order() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn immediate_requirements_are_non_empty_ordered_and_non_overlapping() {
+    let valid = vertex_interface()
+        .with_immediate_requirement(ShaderImmediateRequirement::new(0, 4))
+        .with_immediate_requirement(ShaderImmediateRequirement::new(4, 4));
+    assert!(validate_shader_artifact(&artifact(ShaderStage::Vertex, valid), permissive).is_ok());
+
+    for interface in [
+        vertex_interface().with_immediate_requirement(ShaderImmediateRequirement::new(0, 0)),
+        vertex_interface()
+            .with_immediate_requirement(ShaderImmediateRequirement::new(4, 4))
+            .with_immediate_requirement(ShaderImmediateRequirement::new(0, 4)),
+        vertex_interface()
+            .with_immediate_requirement(ShaderImmediateRequirement::new(0, 8))
+            .with_immediate_requirement(ShaderImmediateRequirement::new(4, 4)),
+    ] {
+        assert_kind(
+            validate_shader_artifact(&artifact(ShaderStage::Vertex, interface), permissive),
+            RhiErrorKind::InvalidUsage,
+        );
+    }
 }
 
 #[test]

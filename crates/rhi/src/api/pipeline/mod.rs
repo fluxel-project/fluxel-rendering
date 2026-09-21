@@ -26,9 +26,11 @@
 //!   constructor parameters here, exactly as in [`crate::api::binding`].
 //! - [`crate::api::command::IndexFormat`]. Section 25.1 back-references it for
 //!   `strip_index_format`, and section 04 owns it.
-//! - Inline parameters. Section 23.4 freezes *nothing* in `PipelineInterface` for
-//!   push constants, root constants, or immediate bytes, and forbids pre-adding a
-//!   reserved range, so there is no field for them and no placeholder verb.
+//! - Native inline-parameter encodings. `PipelineInterface` declares portable
+//!   immediate byte ranges, while [`crate::api::shader::ShaderInterface`] names
+//!   the intervals an executable artifact actually reads. Push constants, root
+//!   constants, native buffer indices, and their allocation strategy remain
+//!   backend-private (ADR-0021).
 //! - The persistent pipeline cache format. Section 28.1 requires every descriptor
 //!   to be re-described by artifact, interface, fixed state, and target signature,
 //!   which the types below satisfy by construction; the file format itself is not

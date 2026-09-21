@@ -72,6 +72,16 @@ pub(crate) fn decide(facts: &CapabilityFacts, artifact: &ShaderArtifact) -> Arti
         return ArtifactAcceptance::MissingFeature;
     }
 
+    // Immediate byte intervals are executable shader ABI.  Unlike a layout
+    // superset, their presence is not optional once reflection reports one, so
+    // artifact admission itself must reject a device that did not enable the
+    // family.  Pipeline creation repeats the logical-layout check later.
+    if !artifact.interface.immediate_requirements().is_empty()
+        && !facts.has_feature(OptionalFeature::Immediates)
+    {
+        return ArtifactAcceptance::MissingFeature;
+    }
+
     // Native code form and trusted passthrough are intentionally separate: a
     // backend may consume SPIR-V/DXIL/etc. through its normal validated compiler
     // path without accepting caller-asserted reflection.  Only the explicit unsafe

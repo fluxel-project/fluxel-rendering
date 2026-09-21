@@ -17,7 +17,7 @@ use crate::api::binding::{
 };
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::pipeline::PipelineInterface;
-use crate::api::shader::{ShaderInterface, ShaderStages};
+use crate::api::shader::{ShaderImmediateRequirement, ShaderInterface, ShaderStages};
 
 /// Vertex fetch is part of the MSL vertex-stage buffer namespace.  This is a
 /// fixed reservation, not the number of streams in a particular pipeline:
@@ -141,10 +141,16 @@ pub(super) struct MetalBindingAbi {
     immediates: MetalImmediateAbi,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct MetalImmediateAbi {
     pub(super) indices: MetalStageBindingIndices,
+    /// The largest byte the executable shader interfaces can read.  This is
+    /// intentionally not the size of the pipeline interface's superset.
     pub(super) size: u32,
+    /// Artifact-declared intervals which must survive command lowering. Writes
+    /// to a legal-but-unused interface range have no executable observer and
+    /// are deliberately omitted from the native byte packet.
+    pub(super) requirements: Vec<ShaderImmediateRequirement>,
 }
 
 impl MetalBindingAbi {
@@ -237,16 +243,26 @@ impl MetalBindingAbi {
         }
         let mut visibility = None;
         let mut size = 0u32;
-        for range in &interface.descriptor().immediate_ranges {
-            visibility = Some(visibility.map_or(range.visibility, |known: ShaderStages| {
-                known.union(range.visibility)
-            }));
-            size = size.max(range.offset.checked_add(range.size).ok_or_else(|| {
-                RhiError::new(
-                    RhiErrorKind::InvalidUsage,
-                    "Metal immediate range overflows",
-                )
-            })?);
+        let mut requirements = Vec::new();
+        for (stage, shader) in stages {
+            if shader.immediate_requirements().is_empty() {
+                continue;
+            }
+            visibility = Some(visibility.map_or(*stage, |known: ShaderStages| known.union(*stage)));
+            for requirement in shader.immediate_requirements() {
+                size = size.max(
+                    requirement
+                        .offset
+                        .checked_add(requirement.size)
+                        .ok_or_else(|| {
+                            RhiError::new(
+                                RhiErrorKind::InvalidUsage,
+                                "Metal immediate range overflows",
+                            )
+                        })?,
+                );
+                requirements.push(*requirement);
+            }
         }
         let indices = if size == 0 {
             MetalStageBindingIndices::default()
@@ -278,15 +294,19 @@ impl MetalBindingAbi {
         }
         Ok(Self {
             groups,
-            immediates: MetalImmediateAbi { indices, size },
+            immediates: MetalImmediateAbi {
+                indices,
+                size,
+                requirements,
+            },
         })
     }
 
     pub(super) fn group(&self, index: BindGroupIndex) -> Option<&MetalGroupBindingAbi> {
         self.groups.get(index.get() as usize)
     }
-    pub(super) const fn immediates(&self) -> MetalImmediateAbi {
-        self.immediates
+    pub(super) const fn immediates(&self) -> &MetalImmediateAbi {
+        &self.immediates
     }
 
     /// Reifies the portable dynamic-offset sequence into named ABI elements.
@@ -517,5 +537,52 @@ fn buffer_elements(
                 slot.get()
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::binding::LayoutFingerprint;
+    use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
+    use crate::api::pipeline::{
+        ImmediateRange, PipelineInterfaceCompatibilityId, PipelineInterfaceDescriptor,
+    };
+
+    fn interface(ranges: Vec<ImmediateRange>) -> PipelineInterface {
+        let mut descriptor = PipelineInterfaceDescriptor::new(Vec::new());
+        for range in ranges {
+            descriptor = descriptor.with_immediate_range(range);
+        }
+        PipelineInterface::new(
+            ObjectId::new(1),
+            DeviceIdentity::new(DeviceInstanceId::new(1)),
+            descriptor,
+            PipelineInterfaceCompatibilityId::new(1),
+            LayoutFingerprint([1; 32]),
+        )
+    }
+
+    #[test]
+    fn unused_immediate_interface_ranges_do_not_change_the_metal_shader_abi() {
+        let shader = ShaderInterface::new()
+            .with_immediate_requirement(ShaderImmediateRequirement::new(0, 4));
+        let narrow = MetalBindingAbi::from_compute_interface(
+            &interface(vec![ImmediateRange::new(0, 4, ShaderStages::COMPUTE)]),
+            &shader,
+        )
+        .unwrap();
+        let superset = MetalBindingAbi::from_compute_interface(
+            &interface(vec![
+                ImmediateRange::new(0, 4, ShaderStages::COMPUTE),
+                ImmediateRange::new(4, 4, ShaderStages::COMPUTE),
+            ]),
+            &shader,
+        )
+        .unwrap();
+
+        assert_eq!(narrow.immediates().indices, superset.immediates().indices);
+        assert_eq!(narrow.immediates().size, 4);
+        assert_eq!(superset.immediates().size, 4);
     }
 }

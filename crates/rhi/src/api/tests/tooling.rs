@@ -1088,6 +1088,7 @@ fn objects_named_by(work: &CapturedRecordedWork) -> Vec<ObjectId> {
                         CapturedResourceUse::AccelerationStructure { structure, .. } => {
                             touched.push(*structure)
                         }
+                        CapturedResourceUse::Query { .. } => {}
                     }
                 }
             }

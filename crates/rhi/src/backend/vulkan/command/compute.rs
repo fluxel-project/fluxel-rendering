@@ -188,6 +188,9 @@ where
                     why: "the Vulkan ray-query descriptor and synchronization extension path is not enabled",
                 });
             }
+            // Query hazards are represented to submission planning; query
+            // commands themselves supply Vulkan's query-pool synchronization.
+            ResourceUse::Query(_) => {}
         }
     }
 

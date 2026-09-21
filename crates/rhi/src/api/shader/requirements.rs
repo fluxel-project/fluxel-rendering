@@ -46,6 +46,33 @@ pub struct ComputeWorkgroupSize {
     pub z: u32,
 }
 
+/// One byte interval of pipeline-owned immediate data an entry point reads.
+///
+/// Immediate data has one portable byte address space per pipeline, but a
+/// compiled entry point uses only part of it.  This declaration is therefore
+/// part of the shader artifact interface, not merely a pipeline-layout hint:
+/// native lowering must be able to assign its argument ABI from the executable
+/// artifact even when a [`PipelineInterface`](crate::api::pipeline::PipelineInterface)
+/// deliberately declares an otherwise-compatible superset.
+///
+/// The range is half-open: `offset..offset + size`.  Construction permits an
+/// invalid value so [`ShaderArtifact`](super::ShaderArtifact) validation can
+/// diagnose the producing tool instead of silently changing its ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ShaderImmediateRequirement {
+    /// First byte read by the entry point.
+    pub offset: u32,
+    /// Number of bytes read by the entry point.
+    pub size: u32,
+}
+
+impl ShaderImmediateRequirement {
+    /// Describes one immediate-data interval used by an entry point.
+    pub const fn new(offset: u32, size: u32) -> Self {
+        Self { offset, size }
+    }
+}
+
 impl ComputeWorkgroupSize {
     /// Describes the local size declared by the compute entry point.
     pub const fn new(x: u32, y: u32, z: u32) -> Self {
@@ -240,9 +267,10 @@ impl ShaderResourceRequirement {
 /// may silently repair:
 ///
 /// ```text
-/// resources  (group, slot) unique, ordered lexicographically by (group, slot)
-/// inputs     location unique, ascending
-/// outputs    location unique, ascending
+/// resources   (group, slot) unique, ordered lexicographically by (group, slot)
+/// immediates  non-overlapping, ascending byte intervals
+/// inputs      location unique, ascending
+/// outputs     location unique, ascending
 /// ```
 ///
 /// Input and output locations are separate namespaces: a vertex input at location
@@ -254,6 +282,7 @@ impl ShaderResourceRequirement {
 #[derive(Clone, Debug, Default)]
 pub struct ShaderInterface {
     resources: Vec<ShaderResourceRequirement>,
+    immediate_requirements: Vec<ShaderImmediateRequirement>,
     inputs: Vec<ShaderLocationInterface>,
     outputs: Vec<ShaderLocationInterface>,
     writes_position: bool,
@@ -275,6 +304,16 @@ impl ShaderInterface {
     /// Adds one resource requirement.
     pub fn with_resource(mut self, requirement: ShaderResourceRequirement) -> Self {
         self.resources.push(requirement);
+        self
+    }
+
+    /// Adds one immediate-data interval read by this entry point.
+    ///
+    /// Valid artifacts keep intervals non-overlapping and in ascending offset
+    /// order. The pipeline interface later proves that each interval is within
+    /// a declared range visible to this entry point's stage.
+    pub fn with_immediate_requirement(mut self, requirement: ShaderImmediateRequirement) -> Self {
+        self.immediate_requirements.push(requirement);
         self
     }
 
@@ -330,6 +369,11 @@ impl ShaderInterface {
     /// A valid artifact has them already canonical; this accessor does not sort.
     pub fn resources(&self) -> &[ShaderResourceRequirement] {
         &self.resources
+    }
+
+    /// Immediate-data intervals read by this entry point.
+    pub fn immediate_requirements(&self) -> &[ShaderImmediateRequirement] {
+        &self.immediate_requirements
     }
 
     /// The input locations, in the order they were added.

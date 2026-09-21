@@ -23,7 +23,10 @@ use crate::api::shader::{ArtifactAcceptance, ShaderArtifact, ShaderModule, Shade
 use crate::api::pipeline::backend::ComputePipelineBackend;
 
 use super::interface::{PipelineInterface, validate_pipeline_interface_descriptor};
-use super::resources::{merge_shader_resources, validate_shader_resource_requirements};
+use super::resources::{
+    merge_shader_resources, validate_shader_immediate_requirements,
+    validate_shader_resource_requirements,
+};
 use super::{ColorTargetFacts, PipelineDeviceFacts};
 
 // ---------------------------------------------------------------------------
@@ -225,6 +228,7 @@ pub(crate) fn validate_compute_pipeline_descriptor(
     )?;
     let merged = merge_shader_resources([(ShaderStage::Compute, interface)])?;
     validate_shader_resource_requirements(&merged, &desc.interface, facts.binding_support)?;
+    validate_shader_immediate_requirements([(ShaderStage::Compute, interface)], &desc.interface)?;
 
     // Section 28's "ShaderRequirements: features / limits satisfied". The rule
     // itself belongs to section 19.7, so it is asked of its owner rather than

@@ -586,6 +586,7 @@ fn validate_transient_backing(
             ResourceUse::Texture(use_record) => is_deferred_texture(&use_record.texture),
             ResourceUse::Frame(_) => false,
             ResourceUse::AccelerationStructure(_) => false,
+            ResourceUse::Query(_) => false,
         };
         if deferred {
             return Err(RhiError::new(

@@ -40,8 +40,8 @@ use crate::api::command::record::{
     RasterDraw, RasterIndirect, RecordedPayload,
 };
 use crate::api::command::uses::{
-    bound_group_uses, buffer_use, frame_use, require_valid_dynamic_offsets, texture_use_of_view,
-    validate_bound_groups,
+    bound_group_uses, buffer_use, frame_use, query_use, require_valid_dynamic_offsets,
+    texture_use_of_view, validate_bound_groups,
 };
 use crate::api::command::{
     AccessMask, CommandRecorder, IndexFormat, PipelineScope, RecorderPhase, ResourceUse,
@@ -841,12 +841,20 @@ impl RasterScope<'_> {
             )
             .at("RasterScope::begin_query"));
         }
+        self.recorder
+            .mark_query_written(set, index, "RasterScope::begin_query")?;
         self.recorder.record_command(
             RecordedPayload::QueryBegin {
                 set: set.clone(),
                 index,
             },
-            Vec::new(),
+            vec![query_use(
+                set,
+                index,
+                1,
+                PipelineScope::VERTEX.union(PipelineScope::FRAGMENT),
+                crate::api::command::QueryAccess::Write,
+            )],
             RASTER_DOMAIN,
         );
         self.active_query = Some(ActiveQuery {
@@ -928,13 +936,19 @@ impl RasterScope<'_> {
             "RasterScope::write_timestamp",
         )?;
         self.recorder
-            .mark_query_written(set, index, "RasterScope::begin_query")?;
+            .mark_query_written(set, index, "RasterScope::write_timestamp")?;
         self.recorder.record_command(
             RecordedPayload::TimestampWrite {
                 set: set.clone(),
                 index,
             },
-            Vec::new(),
+            vec![query_use(
+                set,
+                index,
+                1,
+                PipelineScope::VERTEX.union(PipelineScope::FRAGMENT),
+                crate::api::command::QueryAccess::Write,
+            )],
             RASTER_DOMAIN,
         );
         Ok(())

@@ -87,7 +87,7 @@ pub use raster::RasterScope;
 pub use record::RecordedWork;
 pub use uses::{
     AccelerationStructureUse, AccessMask, BufferUse, FrameAttachmentUse, PipelineScope,
-    ResourceUse, TextureUse, TextureUseIntent,
+    QueryAccess, QueryUse, ResourceUse, TextureUse, TextureUseIntent,
 };
 
 use crate::api::capability::EnabledCapabilities;
@@ -524,7 +524,13 @@ impl CommandRecorder {
                 set: set.clone(),
                 index,
             },
-            Vec::new(),
+            vec![uses::query_use(
+                set,
+                index,
+                1,
+                PipelineScope::COPY,
+                QueryAccess::Write,
+            )],
             crate::api::submission::LaneWorkDomains::COPY,
         );
         Ok(())
@@ -616,12 +622,21 @@ impl CommandRecorder {
             BufferRange::new(destination_offset, bytes),
             destination.descriptor().size,
         )?;
-        let uses = vec![ResourceUse::Buffer(BufferUse {
-            buffer: destination.clone(),
-            range: BufferRange::new(destination_offset, bytes),
-            stages: PipelineScope::COPY,
-            access: AccessMask::QUERY_RESOLVE_WRITE,
-        })];
+        let uses = vec![
+            uses::query_use(
+                set,
+                first_query,
+                query_count,
+                PipelineScope::COPY,
+                QueryAccess::ResolveRead,
+            ),
+            ResourceUse::Buffer(BufferUse {
+                buffer: destination.clone(),
+                range: BufferRange::new(destination_offset, bytes),
+                stages: PipelineScope::COPY,
+                access: AccessMask::QUERY_RESOLVE_WRITE,
+            }),
+        ];
         self.record_command(
             RecordedPayload::QueryResolve(QueryResolve {
                 set: set.clone(),

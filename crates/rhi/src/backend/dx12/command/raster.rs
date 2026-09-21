@@ -366,6 +366,7 @@ pub(super) fn lower_raster_draw(
                     "DX12 acceleration-structure binding lowering is not enabled",
                 ));
             }
+            ResourceUse::Query(_) => {}
         }
     }
     for (buffer, state) in buffers.values() {

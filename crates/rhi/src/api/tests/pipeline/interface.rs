@@ -127,7 +127,6 @@ fn an_interface_reports_its_groups_by_index() {
 
 #[test]
 fn immediate_ranges_require_order_alignment_and_the_declared_maximum() {
-    use crate::api::pipeline::ImmediateRange;
     let base = interface_of(vec![layout(vec![])]);
     let facts = permissive()
         .limit(LimitKey::MaxImmediateSize, 16)
@@ -167,6 +166,58 @@ fn immediate_ranges_require_order_alignment_and_the_declared_maximum() {
         ),
         RhiErrorKind::InvalidUsage,
     );
+}
+
+#[test]
+fn shader_immediate_requirements_need_a_stage_visible_interface_superset() {
+    let shader = ShaderInterface::new()
+        .with_compute_workgroup_size(crate::api::shader::ComputeWorkgroupSize::new(1, 1, 1))
+        .with_immediate_requirement(ShaderImmediateRequirement::new(4, 8));
+    let shader = module_on(
+        device(),
+        42,
+        ShaderStage::Compute,
+        shader,
+        ShaderRequirements::new(),
+    );
+    let facts = permissive()
+        .limit(LimitKey::MaxImmediateSize, 16)
+        .limit(LimitKey::ImmediateDataAlignment, 4);
+    let interface = |range: Option<ImmediateRange>| {
+        let mut descriptor = PipelineInterfaceDescriptor::new(Vec::new());
+        if let Some(range) = range {
+            descriptor = descriptor.with_immediate_range(range);
+        }
+        PipelineInterface::new(
+            object(41),
+            device(),
+            descriptor,
+            PipelineInterfaceCompatibilityId::new(41),
+            LayoutFingerprint([41; 32]),
+        )
+    };
+
+    assert!(
+        check_compute(
+            &ComputePipelineDescriptor::new(
+                shader.clone(),
+                interface(Some(ImmediateRange::new(0, 12, ShaderStages::COMPUTE))),
+            ),
+            &facts,
+        )
+        .is_ok()
+    );
+
+    for bad in [
+        interface(None),
+        interface(Some(ImmediateRange::new(0, 4, ShaderStages::COMPUTE))),
+        interface(Some(ImmediateRange::new(0, 12, ShaderStages::VERTEX))),
+    ] {
+        assert_kind(
+            check_compute(&ComputePipelineDescriptor::new(shader.clone(), bad), &facts),
+            RhiErrorKind::IncompatibleInterface,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

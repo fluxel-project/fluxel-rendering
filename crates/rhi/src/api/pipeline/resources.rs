@@ -409,6 +409,49 @@ pub(crate) fn validate_shader_resource_requirements(
     Ok(())
 }
 
+/// Checks the participating artifacts' immediate-data ABI against a pipeline
+/// interface. Unlike a layout's unused resource slots, an unused immediate
+/// range must never acquire a native argument index: the artifact, rather than
+/// the interface superset, owns that executable ABI.
+pub(crate) fn validate_shader_immediate_requirements<'a>(
+    stages: impl IntoIterator<Item = (ShaderStage, &'a ShaderInterface)>,
+    interface: &PipelineInterface,
+) -> RhiResult<()> {
+    for (stage, shader) in stages {
+        let stage_visibility = stage_mask(stage);
+        for required in shader.immediate_requirements() {
+            let required_end = u64::from(required.offset)
+                .checked_add(u64::from(required.size))
+                .ok_or_else(|| {
+                    RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "shader immediate-data requirement overflows",
+                    )
+                })?;
+            let covered = interface
+                .descriptor()
+                .immediate_ranges
+                .iter()
+                .any(|declared| {
+                    let declared_end = u64::from(declared.offset) + u64::from(declared.size);
+                    declared.visibility.contains(stage_visibility)
+                        && u64::from(declared.offset) <= u64::from(required.offset)
+                        && required_end <= declared_end
+                });
+            if !covered {
+                return Err(RhiError::new(
+                    RhiErrorKind::IncompatibleInterface,
+                    format!(
+                        "the {stage:?} shader requires immediate bytes {}..{}, which the pipeline interface does not declare for that stage",
+                        required.offset, required_end
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One merged requirement's kind against the layout slot that must satisfy it.
 fn validate_kind_against_layout(
     layout_kind: &BindingKind,

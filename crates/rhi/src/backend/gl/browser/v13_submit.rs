@@ -304,7 +304,9 @@ fn requires_unavailable_barrier(use_: &crate::api::command::ResourceUse) -> bool
     match use_ {
         ResourceUse::Buffer(value) => value.access.contains(AccessMask::SHADER_WRITE),
         ResourceUse::Texture(value) => value.access.contains(AccessMask::SHADER_WRITE),
-        ResourceUse::Frame(_) | ResourceUse::AccelerationStructure(_) => false,
+        ResourceUse::Frame(_) | ResourceUse::AccelerationStructure(_) | ResourceUse::Query(_) => {
+            false
+        }
     }
 }
 

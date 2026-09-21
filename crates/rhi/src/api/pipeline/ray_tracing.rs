@@ -5,7 +5,10 @@
 //! data with the device's published alignment limits.
 
 use super::interface::validate_pipeline_interface_descriptor;
-use super::resources::{merge_shader_resources, validate_shader_resource_requirements};
+use super::resources::{
+    merge_shader_resources, validate_shader_immediate_requirements,
+    validate_shader_resource_requirements,
+};
 use crate::api::binding::{BindingLimitClass, BindingSupportQuery};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::format::{TextureFormat, TextureSupportQuery};
@@ -292,7 +295,13 @@ pub(crate) fn validate_ray_tracing_pipeline_descriptor(
             .iter()
             .map(|(stage, module)| (*stage, &module.artifact().interface)),
     )?;
-    validate_shader_resource_requirements(&merged, &desc.interface, facts.binding_support)
+    validate_shader_resource_requirements(&merged, &desc.interface, facts.binding_support)?;
+    validate_shader_immediate_requirements(
+        modules
+            .iter()
+            .map(|(stage, module)| (*stage, &module.artifact().interface)),
+        &desc.interface,
+    )
 }
 fn validate_module(
     module: &ShaderModule,

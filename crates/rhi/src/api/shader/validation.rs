@@ -142,6 +142,35 @@ fn validate_interface(interface: &ShaderInterface, stage: ShaderStage) -> RhiRes
         previous = Some(key);
     }
 
+    // Immediate intervals are artifact ABI, just like resource coordinates:
+    // they must already be canonical, rather than being sorted or merged by a
+    // backend that cannot know what native index the producer compiled into the
+    // program.
+    let mut previous_immediate_end = 0u64;
+    for requirement in interface.immediate_requirements() {
+        let end = u64::from(requirement.offset)
+            .checked_add(u64::from(requirement.size))
+            .ok_or_else(|| {
+                RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "shader immediate-data requirement overflows",
+                )
+            })?;
+        if requirement.size == 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "shader immediate-data requirement has zero size",
+            ));
+        }
+        if u64::from(requirement.offset) < previous_immediate_end {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "shader immediate-data requirements overlap or are not in ascending offset order",
+            ));
+        }
+        previous_immediate_end = end;
+    }
+
     validate_locations(interface.inputs(), "input")?;
     validate_locations(interface.outputs(), "output")?;
 

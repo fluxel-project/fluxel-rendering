@@ -173,9 +173,10 @@ fn a_draw_records_its_attachment_and_binding_uses() {
         ResourceUse::Buffer(buffer) => {
             (buffer.access == AccessMask::UNIFORM_READ).then_some(buffer.clone())
         }
-        ResourceUse::Texture(_) | ResourceUse::Frame(_) | ResourceUse::AccelerationStructure(_) => {
-            None
-        }
+        ResourceUse::Texture(_)
+        | ResourceUse::Frame(_)
+        | ResourceUse::AccelerationStructure(_)
+        | ResourceUse::Query(_) => None,
     });
     let uniform = uniform.expect("a bound uniform produces a use");
     assert_eq!(uniform.stages, PipelineScope::VERTEX);

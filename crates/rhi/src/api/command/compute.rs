@@ -30,7 +30,7 @@ use crate::api::command::record::{
     BoundGroup, ComputeBegin, ComputeDispatch, ComputeIndirect, ImmediateWrite, RecordedPayload,
 };
 use crate::api::command::uses::{
-    bound_group_uses, require_valid_dynamic_offsets, validate_bound_groups,
+    bound_group_uses, query_use, require_valid_dynamic_offsets, validate_bound_groups,
 };
 use crate::api::command::{CommandRecorder, RecorderPhase, ResourceUse, require_device};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -282,12 +282,20 @@ impl ComputeScope<'_> {
             )
             .at("ComputeScope::begin_query"));
         }
+        self.recorder
+            .mark_query_written(set, index, "ComputeScope::begin_query")?;
         self.recorder.record_command(
             RecordedPayload::QueryBegin {
                 set: set.clone(),
                 index,
             },
-            Vec::new(),
+            vec![query_use(
+                set,
+                index,
+                1,
+                crate::api::command::PipelineScope::COMPUTE,
+                crate::api::command::QueryAccess::Write,
+            )],
             COMPUTE_DOMAIN,
         );
         self.active_query = Some(ActiveQuery {
@@ -364,13 +372,19 @@ impl ComputeScope<'_> {
             "ComputeScope::write_timestamp",
         )?;
         self.recorder
-            .mark_query_written(set, index, "ComputeScope::begin_query")?;
+            .mark_query_written(set, index, "ComputeScope::write_timestamp")?;
         self.recorder.record_command(
             RecordedPayload::TimestampWrite {
                 set: set.clone(),
                 index,
             },
-            Vec::new(),
+            vec![query_use(
+                set,
+                index,
+                1,
+                crate::api::command::PipelineScope::COMPUTE,
+                crate::api::command::QueryAccess::Write,
+            )],
             COMPUTE_DOMAIN,
         );
         Ok(())

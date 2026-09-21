@@ -1,6 +1,6 @@
 //! Query API positive, refusal, and boundary conformance cases.
 
-use crate::api::command::RecorderDescriptor;
+use crate::api::command::{QueryAccess, RecorderDescriptor, ResourceUse};
 use crate::api::error::RhiErrorKind;
 use crate::api::format::TextureFormat;
 use crate::api::identity::ObjectId;
@@ -11,6 +11,10 @@ use crate::api::query::{
 };
 use crate::api::resource::{BufferDescriptor, BufferUsage};
 use crate::api::resource::{TextureAspects, TextureSubresourceRange, TextureUsage};
+use crate::api::submission::{
+    LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
+    SubmissionLaneInfo, SubmissionPlanBuilder, SubmissionPlanId,
+};
 use crate::api::tests::fixture;
 use crate::api::tests::mock::query_device_for_test;
 
@@ -201,6 +205,132 @@ fn one_recorded_work_cannot_write_the_same_timestamp_slot_twice() {
         recorder.write_timestamp(&set, 0).unwrap_err().kind(),
         RhiErrorKind::InvalidUsage
     );
+}
+
+/// Query operations carry their own actual uses: a query result is not portable
+/// buffer memory, but scheduling still must see the producer and the resolve
+/// consumer. This pins both forms so a future queue backend cannot silently
+/// rely on its single-queue ordering.
+#[test]
+fn query_commands_record_slot_write_and_resolve_read_uses() {
+    let device = query_device_for_test(device(8));
+    let set = device
+        .create_query_set(&QuerySetDescriptor::new(QueryType::Timestamp, 3))
+        .unwrap();
+    let destination = device
+        .create_buffer(&BufferDescriptor::new(64, BufferUsage::QUERY_RESOLVE))
+        .unwrap();
+
+    let mut writer = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+    writer.write_timestamp(&set, 1).unwrap();
+    let writer = writer.finish().unwrap();
+    assert!(matches!(
+        writer.resource_uses(),
+        [ResourceUse::Query(use_)]
+            if use_.set.id() == set.id()
+                && use_.first_query == 1
+                && use_.query_count == 1
+                && use_.access == QueryAccess::Write
+    ));
+
+    let mut resolver = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+    resolver
+        .resolve_query_set(&set, 1, 2, &destination, 0)
+        .unwrap();
+    let resolver = resolver.finish().unwrap();
+    assert!(matches!(
+        resolver.resource_uses().first(),
+        Some(ResourceUse::Query(use_))
+            if use_.set.id() == set.id()
+                && use_.first_query == 1
+                && use_.query_count == 2
+                && use_.access == QueryAccess::ResolveRead
+    ));
+    assert!(matches!(
+        resolver.resource_uses().get(1),
+        Some(ResourceUse::Buffer(use_)) if use_.buffer.id() == destination.id()
+    ));
+}
+
+#[test]
+fn query_slot_hazards_require_a_plan_dependency_only_when_ranges_overlap() {
+    let identity = device(9);
+    let device = query_device_for_test(identity);
+    let set = device
+        .create_query_set(&QuerySetDescriptor::new(QueryType::Timestamp, 2))
+        .unwrap();
+    let destination = device
+        .create_buffer(&BufferDescriptor::new(32, BufferUsage::QUERY_RESOLVE))
+        .unwrap();
+
+    let writer = |index| {
+        let mut recorder = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+        recorder.write_timestamp(&set, index).unwrap();
+        recorder.finish().unwrap()
+    };
+    let resolver = || {
+        let mut recorder = device.create_recorder(&RecorderDescriptor::new()).unwrap();
+        recorder
+            .resolve_query_set(&set, 0, 1, &destination, 0)
+            .unwrap();
+        recorder.finish().unwrap()
+    };
+
+    let lanes = || {
+        let mut capabilities = SubmissionCapabilities::new(vec![
+            SubmissionLaneInfo::new(
+                SubmissionLaneId::new(0),
+                SubmissionLaneClass::General,
+                LaneWorkDomains::COPY,
+            ),
+            SubmissionLaneInfo::new(
+                SubmissionLaneId::new(1),
+                SubmissionLaneClass::General,
+                LaneWorkDomains::COPY,
+            ),
+        ]);
+        capabilities.record_dependency_route(
+            SubmissionLaneId::new(0),
+            SubmissionLaneId::new(1),
+            crate::api::submission::LaneDependencyRoute::Gpu,
+        );
+        capabilities
+    };
+    let mut unordered =
+        SubmissionPlanBuilder::with_facts(SubmissionPlanId::new(identity, 90), identity, lanes());
+    unordered
+        .add_batch(SubmissionLaneId::new(0), vec![writer(0)])
+        .unwrap();
+    unordered
+        .add_batch(SubmissionLaneId::new(1), vec![resolver()])
+        .unwrap();
+    assert_eq!(
+        unordered.build().unwrap_err().kind(),
+        RhiErrorKind::MissingDependency
+    );
+
+    let mut ordered =
+        SubmissionPlanBuilder::with_facts(SubmissionPlanId::new(identity, 91), identity, lanes());
+    let producer = ordered
+        .add_batch(SubmissionLaneId::new(0), vec![writer(0)])
+        .unwrap();
+    let consumer = ordered
+        .add_batch(SubmissionLaneId::new(1), vec![resolver()])
+        .unwrap();
+    ordered.add_dependency(producer, consumer).unwrap();
+    assert!(ordered.build().is_ok());
+
+    // Slot identity is range-sensitive: a producer for slot 1 and a resolve of
+    // slot 0 do not share a query result and remain safely unordered.
+    let mut disjoint =
+        SubmissionPlanBuilder::with_facts(SubmissionPlanId::new(identity, 92), identity, lanes());
+    disjoint
+        .add_batch(SubmissionLaneId::new(0), vec![writer(1)])
+        .unwrap();
+    disjoint
+        .add_batch(SubmissionLaneId::new(1), vec![resolver()])
+        .unwrap();
+    assert!(disjoint.build().is_ok());
 }
 
 #[test]

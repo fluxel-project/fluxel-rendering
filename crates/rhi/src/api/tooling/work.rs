@@ -55,7 +55,7 @@
 use core::ops::Range;
 
 use crate::api::binding::BindGroupIndex;
-use crate::api::command::{AccessMask, PipelineScope, TextureUseIntent};
+use crate::api::command::{AccessMask, PipelineScope, QueryAccess, TextureUseIntent};
 use crate::api::command::{Color, IndexFormat, Rect, Viewport};
 use crate::api::identity::{DeviceIdentity, Label, ObjectId};
 use crate::api::presentation::AcquiredFrameId;
@@ -566,6 +566,13 @@ fn capture_use(use_: &crate::api::command::ResourceUse) -> CapturedResourceUse {
                 access: use_.access,
             }
         }
+        crate::api::command::ResourceUse::Query(use_) => CapturedResourceUse::Query {
+            set: use_.set.id(),
+            first_query: use_.first_query,
+            query_count: use_.query_count,
+            stages: use_.stages,
+            access: use_.access,
+        },
     }
 }
 
@@ -993,5 +1000,15 @@ pub enum CapturedResourceUse {
         structure: ObjectId,
         stages: PipelineScope,
         access: AccessMask,
+    },
+
+    /// Query-set slots. Query sets have no buffer/image backing in the portable
+    /// model, but this use preserves their scheduling dependency in a capture.
+    Query {
+        set: ObjectId,
+        first_query: u32,
+        query_count: u32,
+        stages: PipelineScope,
+        access: QueryAccess,
     },
 }
