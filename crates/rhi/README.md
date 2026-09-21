@@ -32,8 +32,13 @@ immediate `WrongDevice` error rather than a driver call.
 
 ## Typical frame workflow
 
-The provider is supplied by Fluxel's platform/host integration; applications do
-not construct one from raw native objects through this crate's public API.
+The provider is supplied by Fluxel's platform/host integration. Applications
+never construct one from raw native objects: on backends with process-owned
+discovery they call the matching public composition function (for example
+`create_dx12_provider` or `create_vulkan_provider`); adopted-context backends
+need a platform bridge that creates the same portable provider without exposing
+a native context. That GL/browser bridge is a tracked composition TODO, not a
+reason to pass a native context through the RHI API.
 
 ```rust,no_run
 use fluxel_rhi::api::{

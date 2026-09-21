@@ -16,14 +16,14 @@
 //! picks a trait to bound on, and never learns the platform in order to write
 //! correct code.
 //!
-//! Section 5.1 says a provider "is created by Fluxel host/platform
-//! integration", so a host crate does need *some* way in. That entry point is
-//! not written yet, and deliberately so: this repository has no consumer that
-//! could call it — the harness under `examples/windows-dx12` is written against
-//! the pre-rewrite API and does not compile against API v1 — and a public
-//! constructor designed with no caller is a guess about its shape. Until a real
-//! consumer exists, the way in is `pub(crate)`, and the real-GPU evidence runs
-//! as in-crate tests that reach it from inside.
+//! Section 5.1 says a provider is created by Fluxel host/platform integration.
+//! Native APIs with process-owned discovery have narrow crate-root composition
+//! functions such as [`crate::create_dx12_provider`] and
+//! [`crate::create_vulkan_provider`]. They return only the portable
+//! [`crate::api::platform::PlatformProvider`]. Context-adopting APIs (GL and
+//! browser canvas/context integration) remain behind their host bridge until a
+//! portable host-composition boundary can be stated without exporting a native
+//! context, session, or token.
 //!
 //! # Dependency direction
 //!

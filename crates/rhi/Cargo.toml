@@ -189,3 +189,8 @@ required-features = ["examples"]
 name = "clear_present"
 path = "examples/clear_present.rs"
 required-features = ["examples"]
+
+[[example]]
+name = "provider_probe"
+path = "examples/provider_probe.rs"
+required-features = ["examples"]

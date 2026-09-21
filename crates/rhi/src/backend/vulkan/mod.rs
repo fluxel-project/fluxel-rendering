@@ -31,7 +31,9 @@ mod compute_tests;
 mod depth_stencil_tests;
 #[cfg(test)]
 mod image_binding_tests;
-#[cfg(all(test, windows, feature = "dx12"))]
+// WSI evidence is Vulkan-only.  It uses the host crate's standard raw-window
+// handle rather than borrowing DX12's old private Win32 test fixture.
+#[cfg(all(test, windows, feature = "vulkan"))]
 mod presentation_tests;
 #[cfg(test)]
 #[path = "../../../tests/vulkan/query.rs"]

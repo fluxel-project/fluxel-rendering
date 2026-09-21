@@ -87,6 +87,13 @@ Metal timestamp/statistics, WebGPU timestamp placement/conversion, and
 WebGPU host-image interop. See ADR-0020 and the capability facts for the exact
 per-backend answer.
 
+Native discovery backends expose public provider composition functions. GL and
+WebGL are context-adopting backends, so their remaining integration work is a
+small host-composition crate or bridge which returns `PlatformProvider` without
+putting an HGLRC/EGLContext/WebGL context, browser session, or token in the
+RHI API. This is an ecosystem integration TODO, not an excuse to weaken the
+portable boundary.
+
 ## Change rule
 
 For a new stable boundary: write or update one focused ADR, update public API

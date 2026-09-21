@@ -15,7 +15,14 @@ use std::time::Duration;
 use fluxel_rhi::api::platform::PlatformProvider;
 #[cfg(all(windows, feature = "dx12"))]
 use fluxel_rhi::create_dx12_provider;
-#[cfg(all(not(windows), feature = "vulkan", not(target_arch = "wasm32")))]
+// Windows can intentionally build Vulkan without DX12.  Prefer DX12 only when
+// both are available; do not accidentally turn that legitimate feature set
+// into the "no provider" branch.
+#[cfg(all(
+    feature = "vulkan",
+    not(target_arch = "wasm32"),
+    not(all(windows, feature = "dx12"))
+))]
 use fluxel_rhi::create_vulkan_provider;
 
 fn block_on<F: Future>(future: F) -> F::Output {
@@ -70,7 +77,11 @@ fn main() {
     #[cfg(all(windows, feature = "dx12"))]
     probe(provider);
     return;
-    #[cfg(all(not(windows), feature = "vulkan", not(target_arch = "wasm32")))]
+    #[cfg(all(
+        feature = "vulkan",
+        not(target_arch = "wasm32"),
+        not(all(windows, feature = "dx12"))
+    ))]
     let provider = match create_vulkan_provider() {
         Ok(provider) => provider,
         Err(error) => {
@@ -78,12 +89,20 @@ fn main() {
             return;
         }
     };
-    #[cfg(all(not(windows), feature = "vulkan", not(target_arch = "wasm32")))]
+    #[cfg(all(
+        feature = "vulkan",
+        not(target_arch = "wasm32"),
+        not(all(windows, feature = "dx12"))
+    ))]
     probe(provider);
     return;
     #[cfg(not(any(
         all(windows, feature = "dx12"),
-        all(not(windows), feature = "vulkan", not(target_arch = "wasm32"))
+        all(
+            feature = "vulkan",
+            not(target_arch = "wasm32"),
+            not(all(windows, feature = "dx12"))
+        )
     )))]
     {
         eprintln!("no native provider feature is enabled for this target");

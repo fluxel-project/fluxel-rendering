@@ -702,6 +702,7 @@ impl Dx12CommandSpine {
                     query_sets: Vec::new(),
                     indirect_buffers: Vec::new(),
                     command_signatures: Vec::new(),
+                    resource_uses: Vec::new(),
                 };
                 self.record_batch(&slot.list, batch, &mut committed)?;
 
@@ -735,7 +736,7 @@ impl Dx12CommandSpine {
         }
         let mut signals_intact = true;
         let mut terminal_signal_loss = None;
-        for (offset, (list, committed)) in recorded.into_iter().enumerate() {
+        for (offset, (list, mut committed)) in recorded.into_iter().enumerate() {
             let serial = first_serial + offset as u64;
             // SAFETY: the list was closed above and is executed exactly once. The
             // binding copies the slice's pointers into the queue's own array for
@@ -752,6 +753,12 @@ impl Dx12CommandSpine {
                 .iter()
                 .flat_map(|work| work.resource_uses())
             {
+                // The plan is consumed as soon as `submit` returns, whereas
+                // D3D12 may still execute this list. Keep every portable
+                // resource named by its actual work alive until `serial`
+                // completes; transfer-only textures otherwise have no bind
+                // group or raster scope that happens to retain them.
+                committed.resource_uses.push(resource_use.clone());
                 if let ResourceUse::Buffer(buffer_use) = resource_use {
                     if let Ok(native) = dx12_buffer(&buffer_use.buffer) {
                         native.mark_accepted(serial);

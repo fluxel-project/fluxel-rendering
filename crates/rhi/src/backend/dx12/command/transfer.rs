@@ -29,6 +29,7 @@ use windows::Win32::Graphics::Direct3D12::{
 };
 
 use crate::api::binding::BindGroup;
+use crate::api::command::ResourceUse;
 use crate::api::command::copy::{BufferTextureCopy, TextureCopy};
 use crate::api::format::{block_extent, logical_bytes_per_block};
 use crate::api::pipeline::{ComputePipeline, RasterPipeline};
@@ -99,6 +100,21 @@ pub(super) struct CommittedBatch {
     /// `ExecuteIndirect` only borrows its command signature. Retain the COM
     /// object until the submission fence reports completion.
     pub(super) command_signatures: Vec<ID3D12CommandSignature>,
+    /// Every portable resource use named by the accepted work.
+    ///
+    /// D3D12 command lists do not make the application's portable resource
+    /// ownership live until execution completes.  In particular, a transfer
+    /// recording can be the last owner of an otherwise unbound texture or
+    /// buffer; `SubmissionPlan` is consumed immediately after Phase B, while
+    /// the queue is still reading that native object.  Retaining the recorded
+    /// uses here makes the fence the single retirement boundary for *all*
+    /// command paths, instead of relying on individual lowerings to remember
+    /// an ad-hoc keep-alive vector.
+    ///
+    /// This intentionally retains the portable `ResourceUse`, not raw COM
+    /// pointers: it covers buffers, textures, query sets and future resource
+    /// categories with their normal Device identity/lifetime semantics.
+    pub(super) resource_uses: Vec<ResourceUse>,
 }
 
 /// A readback's staging buffer and the ticket waiting on it.

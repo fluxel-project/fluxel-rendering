@@ -80,6 +80,15 @@ pub mod test_support;
 // contribute no code at all.
 pub(crate) mod backend;
 
+// This sequence exists only on targets on which a public provider composition
+// entry point is available.  Keeping it under the same gate prevents a
+// no-backend build from acquiring a misleading, unused process-global state.
+#[cfg(any(
+    all(feature = "dx12", windows),
+    all(feature = "vulkan", not(target_arch = "wasm32")),
+    all(feature = "metal", target_vendor = "apple"),
+    all(feature = "webgpu", target_arch = "wasm32")
+))]
 static NEXT_PUBLIC_PROVIDER: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0xF1_0000_0000_0000);
 
@@ -147,11 +156,12 @@ pub fn create_metal_provider() -> api::error::RhiResult<api::platform::PlatformP
     ))
 }
 
-/// Opens the browser WebGPU provider after the browser host has installed its
-/// canvas/device bridge.
+/// Opens the browser WebGPU provider from the browser's `navigator.gpu` entry
+/// point.
 ///
 /// Adapter selection and device creation remain asynchronous browser futures;
-/// this function only creates the portable provider handle and does not expose
+/// a browser host supplies a canvas only later when it configures presentation.
+/// This function creates only the portable provider handle and does not expose
 /// a `GPU`/`GPUDevice` value.
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 pub fn create_webgpu_provider() -> api::error::RhiResult<api::platform::PlatformProvider> {

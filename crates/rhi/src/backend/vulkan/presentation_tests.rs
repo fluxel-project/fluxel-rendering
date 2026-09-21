@@ -1,27 +1,22 @@
 //! Native Vulkan Win32 presentation conformance evidence.
 //!
-//! This is deliberately a real hidden `HWND`, WSI surface, swapchain, raster
+//! This is deliberately a real host-owned `HWND`, WSI surface, swapchain, raster
 //! clear and present path.  It does not substitute an off-screen image or a
 //! mock presentation backend: those paths cannot prove the ownership and
 //! semaphore hand-off that `VK_KHR_swapchain` requires.
 //!
-//! The module is compiled only when the DX12 feature supplies the repository's
-//! existing Win32 test binding.  The Vulkan implementation itself has no DX12
-//! dependency; this is solely test-host window creation plumbing.
+//! The host window is the same public raw-window-handle boundary applications
+//! use.  The Vulkan implementation itself has no host dependency; this is
+//! solely test-host window creation plumbing.
 
-#![cfg(all(windows, feature = "dx12"))]
+#![cfg(all(windows, feature = "vulkan"))]
 
 use core::future::Future;
 use core::task::{Context, Poll, Waker};
 use std::pin::pin;
 
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, UnregisterClassW,
-    WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
-};
-use windows::core::w;
+use fluxel_host::{Window as HostWindow, WindowConfig};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::api::command::{
     ColorAttachment, ColorAttachmentView, ColorClearValue, LoadOp, RasterScopeDescriptor,
@@ -42,66 +37,6 @@ use crate::api::submission::{
 };
 
 use super::platform::VulkanProvider;
-
-unsafe extern "system" fn hidden_window_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-}
-
-struct HiddenWindow {
-    hwnd: HWND,
-    instance: HINSTANCE,
-}
-
-impl HiddenWindow {
-    fn create() -> Self {
-        let instance = unsafe { GetModuleHandleW(None) }.expect("test module handle");
-        let class = WNDCLASSW {
-            hInstance: instance.into(),
-            lpszClassName: w!("FluxelVulkanPresentationTest"),
-            lpfnWndProc: Some(hidden_window_proc),
-            ..Default::default()
-        };
-        // A previous aborted test can leave the class registered.  The class is
-        // process-local and compatible with this exact definition, so creation
-        // below is the meaningful success check.
-        unsafe { RegisterClassW(&class) };
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                w!("FluxelVulkanPresentationTest"),
-                w!("fluxel-vulkan-hidden"),
-                WS_OVERLAPPED,
-                0,
-                0,
-                64,
-                64,
-                None,
-                None,
-                Some(instance.into()),
-                None,
-            )
-        }
-        .expect("hidden Win32 presentation window");
-        Self {
-            hwnd,
-            instance: instance.into(),
-        }
-    }
-}
-
-impl Drop for HiddenWindow {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = DestroyWindow(self.hwnd);
-            let _ = UnregisterClassW(w!("FluxelVulkanPresentationTest"), Some(self.instance));
-        }
-    }
-}
 
 fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::noop();
@@ -173,12 +108,29 @@ fn clear_frame_work(
 }
 
 #[test]
-fn hidden_win32_surface_acquires_clears_presents_reconfigures_and_abandons() {
-    let window = HiddenWindow::create();
+fn host_win32_surface_acquires_clears_presents_reconfigures_and_abandons() {
+    // Some ICDs defer their desktop-presentable surface allocation until the
+    // HWND has a mapped client area.  A hand-rolled hidden `WS_OVERLAPPED`
+    // window can therefore make `vkCreateSwapchainKHR` fail with the opaque
+    // `VK_ERROR_UNKNOWN`, despite a successful surface/support preflight.  Use
+    // Fluxel's real host primitive: it creates a shown `WS_OVERLAPPEDWINDOW`
+    // with an explicitly non-zero *client* extent and is the boundary clients
+    // actually use for a Win32 presentation target.
+    let window = HostWindow::new(
+        WindowConfig::new("Fluxel Vulkan presentation", 64, 64).expect("valid host config"),
+    )
+    .expect("host presentation window");
+    let raw = window.window_handle().expect("live host HWND").as_raw();
+    let RawWindowHandle::Win32(raw) = raw else {
+        panic!("Windows host must expose a Win32 raw handle");
+    };
+    let hinstance = raw
+        .hinstance
+        .expect("the Win32 host handle retains its module instance");
     let identity = DeviceInstanceId::new(0xA571_0001);
     let native = VulkanProvider::new(identity).expect("Vulkan loader available");
     let target = native
-        .register_win32_presentation_target(window.hwnd.0 as usize, window.instance.0 as usize);
+        .register_win32_presentation_target(raw.hwnd.get() as usize, hinstance.get() as usize);
     let provider = PlatformProvider::new(BackendKind::Vulkan, identity, Box::new(native));
     let adapters = block_on(provider.enumerate_adapters())
         .expect("Vulkan adapter enumeration")
