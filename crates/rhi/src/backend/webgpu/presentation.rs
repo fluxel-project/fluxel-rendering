@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
 use js_sys::{Array, Function, Object, Reflect};
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::HtmlCanvasElement;
 
@@ -147,6 +148,12 @@ fn canvas_context(registration: WebGpuRegistration, target: ObjectId) -> RhiResu
 struct PresentationState {
     leased: HashSet<ObjectId>,
     acquired: HashMap<ObjectId, u64>,
+    /// After abandon, WebGPU may keep returning the same current texture until
+    /// the browser expires it at the next task boundary. Keep the portable
+    /// lease unavailable until that boundary rather than minting a second frame
+    /// identity for the same native texture.
+    awaiting_browser_expiry: HashSet<ObjectId>,
+    expiry_waiters: HashMap<ObjectId, Vec<Waker>>,
     receipts: HashMap<PresentReceiptId, PresentState>,
 }
 
@@ -155,6 +162,8 @@ impl PresentationState {
         Self {
             leased: HashSet::new(),
             acquired: HashMap::new(),
+            awaiting_browser_expiry: HashSet::new(),
+            expiry_waiters: HashMap::new(),
             receipts: HashMap::new(),
         }
     }
@@ -317,6 +326,15 @@ impl WebGpuConfiguredPresentation {
                 "the WebGPU canvas target is no longer registered",
             ));
         }
+        if lock(&self.state)
+            .awaiting_browser_expiry
+            .contains(&self.target)
+        {
+            return Err(AcquireError::new(
+                AcquireErrorKind::NotReady,
+                "the abandoned WebGPU canvas texture is awaiting browser expiry",
+            ));
+        }
         if let Some(serial) = lock(&self.state).acquired.get(&self.target).copied() {
             return Err(AcquireError::new(
                 AcquireErrorKind::FrameOutstanding,
@@ -378,6 +396,59 @@ impl WebGpuConfiguredPresentation {
             }),
         })
     }
+
+    fn begin_browser_expiry(&self, frame: AcquiredFrameId) -> RhiResult<()> {
+        {
+            let mut state = lock(&self.state);
+            if state.acquired.get(&self.target).copied() != Some(frame.serial()) {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "the WebGPU frame being abandoned is not the outstanding canvas frame",
+                ));
+            }
+            state.acquired.remove(&self.target);
+            state.awaiting_browser_expiry.insert(self.target);
+        }
+
+        let state = Arc::clone(&self.state);
+        let target = self.target;
+        let callback = Closure::once_into_js(move || {
+            let waiters = {
+                let mut state = lock(&state);
+                state.awaiting_browser_expiry.remove(&target);
+                state.expiry_waiters.remove(&target).unwrap_or_default()
+            };
+            for waiter in waiters {
+                waiter.wake();
+            }
+        });
+        let global = js_sys::global();
+        let set_timeout = Reflect::get(&global, &JsValue::from_str("setTimeout"))
+            .ok()
+            .and_then(|value| value.dyn_into::<Function>().ok());
+        let Some(set_timeout) = set_timeout else {
+            let mut state = lock(&self.state);
+            state.awaiting_browser_expiry.remove(&self.target);
+            state.acquired.insert(self.target, frame.serial());
+            return Err(RhiError::new(
+                RhiErrorKind::BackendFailure,
+                "the browser host has no setTimeout task-boundary primitive",
+            ));
+        };
+        if let Err(error) = set_timeout
+            .call2(&global, &callback, &JsValue::from_f64(0.0))
+            .map_err(|error| {
+                RhiError::new(RhiErrorKind::BackendFailure, js::message(&error))
+                    .at("WebGpuConfiguredPresentation::abandon")
+            })
+        {
+            let mut state = lock(&self.state);
+            state.awaiting_browser_expiry.remove(&self.target);
+            state.acquired.insert(self.target, frame.serial());
+            return Err(error);
+        }
+        Ok(())
+    }
 }
 
 impl ConfiguredPresentationBackend for WebGpuConfiguredPresentation {
@@ -420,32 +491,59 @@ impl ConfiguredPresentationBackend for WebGpuConfiguredPresentation {
         &self,
         device: DeviceIdentity,
     ) -> Result<Option<AcquiredSurfaceFrame>, AcquireError> {
-        self.acquire_now(device).map(Some)
+        match self.acquire_now(device) {
+            Err(error) if error.kind() == AcquireErrorKind::NotReady => Ok(None),
+            Ok(frame) => Ok(Some(frame)),
+            Err(error) => Err(error),
+        }
     }
 
     fn acquire_or_register_waker(
         &self,
         device: DeviceIdentity,
-        _: &Waker,
+        waker: &Waker,
     ) -> Poll<Result<AcquiredSurfaceFrame, AcquireError>> {
-        // `getCurrentTexture` is the WebGPU acquire operation and is synchronous.
-        // Browser scheduling does not expose a drawable-ready event, so returning
-        // Pending here would violate the seam's retained-waker requirement.
+        if device != self.device
+            || registry::device_status(self.registration()) != Some(DeviceStatus::Active)
+        {
+            return Poll::Ready(self.acquire_now(device));
+        }
+        {
+            let mut state = lock(&self.state);
+            if state.awaiting_browser_expiry.contains(&self.target) {
+                let waiters = state.expiry_waiters.entry(self.target).or_default();
+                if !waiters.iter().any(|known| known.will_wake(waker)) {
+                    waiters.push(waker.clone());
+                }
+                return Poll::Pending;
+            }
+        }
+        // Outside the explicit abandon-expiry barrier, getCurrentTexture is
+        // synchronous and has no drawable-ready callback.
         Poll::Ready(self.acquire_now(device))
     }
 
-    fn abandon(&self, _: AcquiredFrameId) -> RhiResult<()> {
+    fn abandon(&self, frame: AcquiredFrameId) -> RhiResult<()> {
         self.require_active("WebGpuConfiguredPresentation::abandon")?;
-        lock(&self.state).acquired.remove(&self.target);
-        Ok(())
+        self.begin_browser_expiry(frame)
     }
 
-    fn abandon_no_throw(&self, _: AcquiredFrameId) {
-        lock(&self.state).acquired.remove(&self.target);
+    fn abandon_no_throw(&self, frame: AcquiredFrameId) {
+        let _ = self.begin_browser_expiry(frame);
     }
 
     fn release(&self) {
         lock(&self.state).acquired.remove(&self.target);
+        lock(&self.state)
+            .awaiting_browser_expiry
+            .remove(&self.target);
+        let waiters = lock(&self.state)
+            .expiry_waiters
+            .remove(&self.target)
+            .unwrap_or_default();
+        for waiter in waiters {
+            waiter.wake();
+        }
         lock(&self.state).leased.remove(&self.target);
         // `unconfigure` drops the canvas-context's reference to this device.
         // It is intentionally best-effort: Drop cannot report an already-lost

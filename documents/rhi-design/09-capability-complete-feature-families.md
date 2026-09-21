@@ -83,7 +83,8 @@ claim that every native counter exists. Raster/compute scopes can begin/end a
 query and write timestamps; the recorder can write timestamps and resolve a
 query range into a `QUERY_RESOLVE` buffer.
 
-Capabilities are separate for occlusion, timestamp, timestamp inside encoder,
+Capabilities are separate for occlusion, its native set-binding profile,
+timestamp, timestamp inside encoder,
 timestamp inside raster scope, timestamp inside compute scope, pipeline
 statistics, resolve mode, nonblocking resolve, timestamp period/conversion,
 and valid bits where meaningful. `MaxQueriesPerQuerySet` and
@@ -106,21 +107,23 @@ WebGPU has a direct `resolveQuerySet()` command, with a 256-byte aligned
 destination offset. That alone cannot enable the Fluxel query family: a useful
 resolve first requires a query set that can be legally recorded. A WebGPU
 render-pass descriptor chooses exactly one `occlusionQuerySet` when the pass
-begins, whereas one portable `RasterScope` may legally begin/end slots from
-different sets in sequence. Rejecting the second set only during submission
-would make a public capability promise a program that fails after recording.
+begins. `OcclusionQueryBinding` therefore distinguishes backends that select
+sets dynamically from `FixedAtRasterScope`. In the fixed profile the caller
+supplies the set through `RasterScopeDescriptor`; every `begin_query` inside
+that scope must name the same set. Ownership, query type, missing-set and
+wrong-set cases are rejected while recording, before native work.
 
 Timestamp writes have the same semantic impedance: current WebGPU pass
 `timestampWrites` represent beginning/end descriptor boundaries, while the RHI
 records an exact arbitrary command-stream position. Rewriting the latter into a
-boundary changes the measured interval. Consequently WebGPU deliberately
-publishes none of `OcclusionQuery`, `TimestampQuery`,
-`TimestampInsideEncoder`, `TimestampInsideRasterScope`,
-`TimestampInsideComputeScope`, or `QueryResolve`, even when the browser offers
-`timestamp-query`; it publishes neither query limits nor a fictitious 8-byte
-alignment. A future WebGPU query profile must first express one fixed pass set
-and explicit pass-boundary timestamps in public recording vocabulary, then
-enable creation, validation, lowering, and resolve together.
+boundary changes the measured interval. Consequently WebGPU may publish
+occlusion plus resolve only when its complete fixed-scope-set lowering is
+present. It deliberately publishes none of `TimestampQuery`,
+`TimestampInsideEncoder`, `TimestampInsideRasterScope`, or
+`TimestampInsideComputeScope`, even when the browser offers `timestamp-query`;
+it publishes no fictitious timestamp period. A future WebGPU timestamp profile
+must first express explicit pass-boundary writes in public recording vocabulary,
+then enable creation, validation, lowering, conversion and resolve together.
 
 ## 67.4 Resources, mapping, formats, and samplers
 
@@ -187,6 +190,14 @@ source descriptors: origin, extent, flip-Y, premultiplied-alpha and color-space
 intent. Browser/native object types never enter public API. Capabilities state
 the exact external-copy and unrestricted-copy restrictions.
 
+The WebGPU backend does not publish either external family until its platform
+bridge can attach a backend-private `ImageBitmap`/`VideoFrame`-class object to
+that opaque source. `copyExternalImageToTexture()` and
+`importExternalTexture()` existing in the browser is not by itself a complete
+RHI route: without that ownership bridge the backend has no native source to
+pass them. This is an explicit fail-closed host-integration boundary, not a
+reason to expose browser source types or a session/token object publicly.
+
 A GL-family backend without an independently allocated native texture-view
 object admits only the exact whole, same-format, same-dimension, all-aspect
 view of the base texture. Partial mip/layer ranges and reinterpretation fail
@@ -225,15 +236,19 @@ Raster supports direct/indirect indexed and non-indexed draw, multi-draw,
 count-buffer multi-draw, and the corresponding indexed forms. Compute supports
 indirect dispatch. Required distinctions are `IndirectDraw`,
 `IndirectDispatch`, `MultiDrawIndirect`, `MultiDrawIndirectCount`,
-`IndirectFirstInstance`, and `BaseVertex`. Alignment, stride, count-buffer
+`IndirectFirstInstance`, `BaseVertex`, and `BaseInstance`. Alignment, stride, count-buffer
 range, `INDIRECT` usage and bounds are validated. Nonzero `base_vertex` is
-rejected unless `BaseVertex` is enabled.
+rejected unless `BaseVertex` is enabled; a direct draw whose instance range
+starts above zero is rejected unless `BaseInstance` is enabled.
 
 `IndirectFirstInstance` is distinct because argument bytes are GPU-owned and
 cannot be inspected by portable recording. A backend must not publish executable
 `IndirectDraw` unless its native route guarantees the non-zero first-instance
 semantic (for example Vulkan's drawIndirectFirstInstance feature); it cannot let
 the driver discover an unsupported argument value after work is accepted.
+`BaseInstance` answers the direct-command form separately, allowing older Metal
+and GL profiles to fail closed while modern DX12/Vulkan/WebGPU paths retain the
+native semantic.
 
 Pipeline interfaces declare `ImmediateData` ranges and stage visibility;
 raster, compute, and ray scopes set bytes by offset. `Immediates`,
@@ -275,10 +290,12 @@ native bytecode is not implicitly trusted.
 
 ## 67.7 Multiview, mesh, acceleration structures, ray tracing, matrices
 
-Raster/pipeline descriptors carry a validated multiview mask. Facts distinguish
-multiview, selective multiview, multisample arrays, and mesh multiview; limits
-state maximum view counts. Color attachments can select a validated 3D depth
-slice, which is reflected in subresource uses.
+Raster/pipeline descriptors carry a validated multiview mask. `Multiview`
+admits only contiguous low-bit masks; a mask with holes is an explicit
+`SelectiveMultiview` request. Facts distinguish multiview, selective multiview,
+multisample arrays, and mesh multiview; limits state maximum view counts. Color
+attachments can select a validated 3D depth slice, which is reflected in
+subresource uses.
 
 Task and mesh shader stages, mesh pipeline path, direct/indirect/count mesh
 draws, and mesh points are public semantics. Facts and limits cover task/mesh
@@ -439,23 +456,24 @@ profiling without changing portable semantics.
 
 Timestamp counters and pipeline statistics remain fail-closed until the full
 query-set creation, recording, resolve, result conversion and loss path is
-implemented for the selected Metal counter-set profile. ASTC HDR, MSAA/resolve,
-multiview and pipeline archive serialization likewise remain absent when the
-device/OS cannot provide an exact guarantee or the backend has no end-to-end
-lowering. This is a capability answer, not a reachable `todo!()` path.
+implemented for the selected Metal counter-set profile. ASTC HDR, individual
+MSAA/resolve rows, multiview and every other optional row remain absent on a
+device/OS that cannot provide their exact guarantee. Pipeline archive
+serialization remains uncached backend-private work. These are capability
+answers, not reachable `todo!()` paths.
 
 The v13 Metal audit against `wgpu-hal 30.0.1` records every remaining
 non-advanced difference explicitly:
 
-| Native family present in Metal/wgpu-hal | v13 Metal answer | Why it is not currently published |
+| Native family present in Metal/wgpu-hal | v13 Metal answer | Exact boundary |
 | --- | --- | --- |
-| Occlusion and counter-sample timestamps | `QuerySet` capability absent; creation and recording return `Unsupported` before native work | Metal uses visibility-result buffers for occlusion and device/OS-specific `MTLCounterSampleBuffer` sets for timestamps. Fluxel has not yet closed allocation, encoder placement, resolve, nanosecond conversion, readback and loss as one path. |
-| Direct and indexed indirect draw; indirect compute dispatch | `IndirectDraw` / `IndirectDispatch` absent | The direct commands are complete; the indirect argument ABI, offset/stride bounds, first-instance behavior and completion-retention cases are not. Counted/multi-draw additionally lacks one portable native Metal route. |
-| Multisampling and resolve | Only sample count one is published | Per-format sample-count probe, multisample texture restrictions, attachment resolve (including drawable targets), standalone resolve and copy restrictions do not yet have one conformance matrix. |
-| Multiview / vertex amplification | `Multiview` absent | Support is GPU-family and OS dependent, and render-pass amplification plus shader-view indexing are not lowered. |
-| Depth clipping control | Optional depth-clip facts absent | The backend has not yet connected the device availability probe and the encoder's depth-clip mode to the portable pipeline state. |
-| Storage textures in raster stages and read/write storage textures | Only the probed write-only compute subset is published | Metal read/write texture support is tier- and format-dependent. A selector existing in the SDK is not a substitute for the required per-device/per-format matrix. |
-| General texture clear | `ClearTexture` absent | Metal has no general blit clear matching all portable formats/subresources; a render/compute fallback would need its own format, usage, hazard and loss closure. |
+| Occlusion and counter-sample timestamps | Occlusion allocation, raster visibility recording and resolve are implemented; timestamps and pipeline statistics remain absent | Metal visibility buffers satisfy the occlusion contract. No stable device fact proves the exact nanosecond period required by Fluxel timestamps; driver-name guesses are not a capability. Pipeline-statistics lowering is likewise incomplete. |
+| Direct and indexed indirect draw; indirect compute dispatch | Ordinary indirect paths are published after their family probe; count-buffer indirect remains absent | Metal has direct argument-buffer selectors but no portable counted multi-draw route matching Fluxel's count-buffer contract. |
+| Multisampling and resolve | Exact device-reported sample counts are intersected with per-format usage rows; attachment resolve is native and standalone resolve is limited to formats with the private compute path | Integer/depth and non-storage-writable colour formats do not acquire a fabricated compute resolve. Current standalone resolve is limited to `Rgba8Unorm` and `Rgba16Float`. |
+| Multiview / vertex amplification | Published only when the selected device accepts amplification count greater than one; sparse masks preserve their layer indices | Device probe, pipeline maximum, render-encoder mappings and attachment array length must agree. |
+| Depth clipping control | Published only on the probed Metal family/OS path | Pipeline state retains Clamp or an explicit Clip reset so encoder state cannot leak across pipeline switches. |
+| Storage textures in raster stages and read/write storage textures | Published per stage, dimension, access and format after intersecting direct binding with `MTLReadWriteTextureTier` | Unsupported read/write combinations remain absent even if the pixel-format enum exists. |
+| General texture clear | Published where the complete fallback exists | Colour/compressed textures use block-aware zero staging; depth/stencil textures use render-pass clear while preserving an unselected aspect. |
 | Argument buffers | Direct three-namespace ABI with conservative limits | This changes capacity and binding cost, not semantics. Tier 1/2 probing, residency and retirement are backend-private performance work. |
 | Binary archives / pipeline serialization | Uncached pipeline creation remains valid | `MTLBinaryArchive` identity, invalid-data policy and serialization are not closed; wgpu-hal's Metal `PipelineCache` is itself not evidence of a portable serialized cache. |
 

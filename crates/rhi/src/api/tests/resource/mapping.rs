@@ -10,7 +10,10 @@ use crate::api::error::RhiErrorKind;
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId};
 use crate::api::platform::{DeviceLossInfo, OptionalFeature};
 use crate::api::resource::{BufferDescriptor, BufferRange, BufferUsage, MapMode};
-use crate::api::tests::mock::{mapped_buffers_for_test, staging_mapped_buffers_for_test};
+use crate::api::tests::mock::{
+    mapped_buffers_for_test, mapped_buffers_with_alignment_for_test,
+    staging_mapped_buffers_for_test,
+};
 
 fn identity(value: u64) -> DeviceIdentity {
     DeviceIdentity::new(DeviceInstanceId::new(value))
@@ -189,6 +192,45 @@ fn mapping_rejects_usage_empty_overflow_misalignment_and_accepts_exact_end() {
     )
     .expect("exact end mapping");
     drop(mapping);
+}
+
+/// A map range is two independently constrained quantities.  In particular,
+/// this is the WebGPU shape (8-byte offset, 4-byte size), which one
+/// `MapAlignment` value cannot represent without rejecting a legal range.
+#[test]
+fn mapping_validates_offset_and_size_against_distinct_reported_limits() {
+    let (legacy_device, legacy_buffer) = mapped(BufferUsage::MAP_READ);
+    // Old facts retain their one-alignment behavior during the migration.
+    let legacy = ready(
+        legacy_device
+            .map_buffer(&legacy_buffer, MapMode::Read, BufferRange::new(4, 4))
+            .expect("legacy common alignment accepts matching range"),
+    );
+    drop(legacy);
+
+    let (device, _) = mapped_buffers_with_alignment_for_test(identity(92), 8, 4);
+    let buffer = device
+        .create_buffer(&crate::api::resource::BufferDescriptor::new(
+            32,
+            BufferUsage::MAP_READ,
+        ))
+        .expect("mapping buffer");
+
+    let legal = ready(
+        device
+            .map_buffer(&buffer, MapMode::Read, BufferRange::new(8, 4))
+            .expect("8-byte offset and 4-byte size are legal"),
+    );
+    drop(legal);
+    for range in [BufferRange::new(4, 4), BufferRange::new(8, 2)] {
+        assert_eq!(
+            device
+                .map_buffer(&buffer, MapMode::Read, range)
+                .unwrap_err()
+                .kind(),
+            RhiErrorKind::InvalidUsage
+        );
+    }
 }
 
 #[test]

@@ -41,6 +41,7 @@ use crate::api::format::{TextureFormat, color_output_type};
 use crate::api::identity::{DeviceIdentity, Label};
 use crate::api::pipeline::RenderTargetSignature;
 use crate::api::presentation::FrameAttachment;
+use crate::api::query::QuerySet;
 use crate::api::resource::texture::{Extent3d, TextureUsage};
 use crate::api::resource::view::TextureView;
 use crate::api::shader::{ShaderLocation, ShaderNumericType};
@@ -287,6 +288,14 @@ pub struct RasterScopeDescriptor {
 
     /// The depth and/or stencil attachment, if any.
     pub depth_stencil: Option<DepthStencilAttachment>,
+
+    /// An occlusion query set fixed for this raster scope.
+    ///
+    /// Required when the device reports
+    /// [`OcclusionQueryBinding::FixedAtRasterScope`](crate::api::query::OcclusionQueryBinding::FixedAtRasterScope)
+    /// and the scope records occlusion. It is optional for dynamic devices, so
+    /// a portable caller can use the same descriptor on both profiles.
+    pub occlusion_query_set: Option<QuerySet>,
 }
 
 impl RasterScopeDescriptor {
@@ -302,6 +311,7 @@ impl RasterScopeDescriptor {
             label: Label::default(),
             colors: Vec::new(),
             depth_stencil: None,
+            occlusion_query_set: None,
         }
     }
 
@@ -329,6 +339,12 @@ impl RasterScopeDescriptor {
     /// Attaches the depth and/or stencil attachment.
     pub fn with_depth_stencil(mut self, attachment: DepthStencilAttachment) -> Self {
         self.depth_stencil = Some(attachment);
+        self
+    }
+
+    /// Fixes the one occlusion set this raster scope may use.
+    pub fn with_occlusion_query_set(mut self, set: QuerySet) -> Self {
+        self.occlusion_query_set = Some(set);
         self
     }
 

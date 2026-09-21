@@ -272,15 +272,40 @@ impl Device {
             )
             .with_object(buffer.id()));
         }
-        if let Some(alignment) = self.capabilities().limit(LimitKey::MapAlignment) {
-            if alignment != 0 && (range.offset % alignment != 0 || range.size % alignment != 0) {
-                return Err(RhiError::new(
-                    RhiErrorKind::InvalidUsage,
-                    format!(
-                        "mapped range offset and size must be multiples of map alignment {alignment}"
-                    ),
-                ));
-            }
+        // Offset and size are independent native facts.  Do not collapse them
+        // to their maximum: that would reject valid WebGPU ranges (offset: 8,
+        // size: 4), while collapsing to their minimum would defer a predictable
+        // validation failure to the backend.  `MapAlignment` is only the
+        // compatibility fallback for facts emitted before this distinction was
+        // added.
+        let legacy_alignment = self.capabilities().limit(LimitKey::MapAlignment);
+        let offset_alignment = self
+            .capabilities()
+            .limit(LimitKey::MapOffsetAlignment)
+            .or(legacy_alignment);
+        let size_alignment = self
+            .capabilities()
+            .limit(LimitKey::MapSizeAlignment)
+            .or(legacy_alignment);
+        if let Some(alignment) = offset_alignment
+            && alignment != 0
+            && !range.offset.is_multiple_of(alignment)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                format!(
+                    "mapped range offset must be a multiple of map offset alignment {alignment}"
+                ),
+            ));
+        }
+        if let Some(alignment) = size_alignment
+            && alignment != 0
+            && !range.size.is_multiple_of(alignment)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                format!("mapped range size must be a multiple of map size alignment {alignment}"),
+            ));
         }
         buffer.begin_map()?;
         match self.native().map_buffer(buffer, mode, range) {

@@ -17,6 +17,7 @@ use objc2_metal::{
 };
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::format::TextureFormat;
 use crate::api::resource::backend::{
     BufferBackend, MappedBufferBackend, MappingRequestBackend, SamplerBackend, TextureBackend,
     TextureViewBackend,
@@ -72,6 +73,7 @@ pub(super) struct MetalTexture {
     pub(super) ty: MTLTextureType,
     pub(super) mip_levels: u32,
     pub(super) array_layers: u32,
+    pub(super) sample_count: u32,
 }
 
 unsafe impl Send for MetalTexture {}
@@ -285,6 +287,23 @@ pub(super) fn create_texture(
         .at("MetalDevice::create_texture")
     })?;
     let native = MTLTextureDescriptor::new();
+    let native_samples = usize::try_from(descriptor.sample_count).map_err(|_| {
+        RhiError::new(
+            RhiErrorKind::Unsupported,
+            "Metal texture sample count exceeds native range",
+        )
+        .at("MetalDevice::create_texture")
+    })?;
+    if !device.supportsTextureSampleCount(native_samples) {
+        return Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            format!(
+                "Metal device does not support {} texture samples",
+                descriptor.sample_count
+            ),
+        )
+        .at("MetalDevice::create_texture"));
+    }
     let ty = match descriptor.dimension {
         TextureDimension::D1 => MTLTextureType::Type1D,
         TextureDimension::D2 if descriptor.sample_count > 1 && descriptor.array_layers > 1 => {
@@ -307,12 +326,13 @@ pub(super) fn create_texture(
         native.setWidth(descriptor.extent.width as usize);
         native.setHeight(descriptor.extent.height as usize);
         native.setMipmapLevelCount(descriptor.mip_levels as usize);
-        native.setSampleCount(descriptor.sample_count as usize);
+        native.setSampleCount(native_samples);
     }
     native.setPixelFormat(format);
     native.setStorageMode(MTLStorageMode::Private);
     native.setUsage(texture_usage(
         descriptor.usage,
+        descriptor.format,
         !descriptor.view_formats.is_empty(),
     ));
     let raw = device.newTextureWithDescriptor(&native).ok_or_else(|| {
@@ -328,6 +348,7 @@ pub(super) fn create_texture(
         ty,
         mip_levels: descriptor.mip_levels,
         array_layers: descriptor.array_layers,
+        sample_count: descriptor.sample_count,
     })
 }
 
@@ -336,7 +357,7 @@ pub(super) fn create_texture_view(
     descriptor: &TextureViewDescriptor,
     format: MTLPixelFormat,
 ) -> RhiResult<MetalTextureView> {
-    let ty = view_type(descriptor.dimension);
+    let ty = view_type(descriptor.dimension, texture.sample_count)?;
     let full = format == texture.format
         && ty == texture.ty
         && descriptor.base_mip == 0
@@ -415,10 +436,28 @@ pub(super) fn create_sampler(
     Ok(MetalSampler { raw })
 }
 
-fn texture_usage(usage: TextureUsage, pixel_format_view: bool) -> MTLTextureUsage {
+fn texture_usage(
+    usage: TextureUsage,
+    format: TextureFormat,
+    pixel_format_view: bool,
+) -> MTLTextureUsage {
     let mut result = MTLTextureUsage::Unknown;
     if usage.contains(TextureUsage::SAMPLED) {
         result |= MTLTextureUsage::ShaderRead;
+    }
+    // A standalone resolve is a public copy operation but its Metal lowering
+    // needs private shader access and a one-level/one-layer native view.  The
+    // extra usage bits do not alter portable texture semantics; they merely
+    // reserve the native capabilities required by any COPY_SRC/COPY_DST image.
+    let compute_resolve_format = matches!(
+        format,
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float
+    );
+    if compute_resolve_format && usage.contains(TextureUsage::COPY_SRC) {
+        result |= MTLTextureUsage::ShaderRead | MTLTextureUsage::PixelFormatView;
+    }
+    if compute_resolve_format && usage.contains(TextureUsage::COPY_DST) {
+        result |= MTLTextureUsage::ShaderWrite | MTLTextureUsage::PixelFormatView;
     }
     if usage.contains(TextureUsage::STORAGE) {
         result |= MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite;
@@ -434,14 +473,29 @@ fn texture_usage(usage: TextureUsage, pixel_format_view: bool) -> MTLTextureUsag
     result
 }
 
-fn view_type(value: TextureViewDimension) -> MTLTextureType {
-    match value {
+fn view_type(value: TextureViewDimension, sample_count: u32) -> RhiResult<MTLTextureType> {
+    let ty = match value {
         TextureViewDimension::D1 => MTLTextureType::Type1D,
         TextureViewDimension::D2 => MTLTextureType::Type2D,
         TextureViewDimension::D2Array => MTLTextureType::Type2DArray,
         TextureViewDimension::Cube => MTLTextureType::TypeCube,
         TextureViewDimension::CubeArray => MTLTextureType::TypeCubeArray,
         TextureViewDimension::D3 => MTLTextureType::Type3D,
+    };
+    if sample_count == 1 {
+        return Ok(ty);
+    }
+    match value {
+        // A multisample allocation has a distinct native view type. Reusing
+        // Type2D here made a whole MSAA D2 view fall through to the native view
+        // constructor, which rightly rejects the type mismatch.
+        TextureViewDimension::D2 => Ok(MTLTextureType::Type2DMultisample),
+        TextureViewDimension::D2Array => Ok(MTLTextureType::Type2DMultisampleArray),
+        _ => Err(RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "Metal multisample textures permit only D2 or D2Array views",
+        )
+        .at("MetalDevice::create_texture_view")),
     }
 }
 

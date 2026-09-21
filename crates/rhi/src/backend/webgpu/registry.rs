@@ -225,6 +225,31 @@ pub(super) fn poll_promise(id: WebGpuRequestId, waker: &Waker) -> PromisePoll {
     })
 }
 
+/// Registers interest without consuming a settled result.
+///
+/// Composite operations such as queue completion plus readback publication
+/// have one public future but several browser promises. Their progress driver
+/// owns result consumption; the public future only needs each constituent
+/// promise to schedule another poll. If settlement raced this call, wake the
+/// supplied task immediately after releasing the registry borrow.
+pub(super) fn register_promise_waker(id: WebGpuRequestId, waker: &Waker) {
+    let settled = OWNER.with(|owner| {
+        let mut owner = owner.borrow_mut();
+        let Some(request) = owner.requests.get_mut(&id.0) else {
+            return true;
+        };
+        if request.settled.is_some() {
+            true
+        } else {
+            register_waker(&mut request.wakers, waker);
+            false
+        }
+    });
+    if settled {
+        waker.wake_by_ref();
+    }
+}
+
 /// Detaches an abandoned Rust waiter from a browser Promise.
 ///
 /// JavaScript promises are not cancellable, but retaining their closure pair,

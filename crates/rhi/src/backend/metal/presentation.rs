@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::sel;
 use objc2_metal::{MTLCommandBuffer, MTLDevice, MTLDrawable, MTLTexture};
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
@@ -206,8 +207,8 @@ impl MetalPresentation {
         // value.  The authoritative extent is the acquired drawable texture;
         // therefore a pre-acquire snapshot correctly reports host-managed size
         // as unavailable.
-        self.layer(target)?;
-        Ok(metal_capabilities(None))
+        let layer = self.layer(target)?;
+        Ok(metal_capabilities(None, supports_display_sync(&layer)))
     }
 }
 
@@ -228,8 +229,8 @@ impl PresentationBackend for MetalPresentation {
         if let Some(info) = self.loss.loss_info() {
             return Err(lost_error(&info, "MetalPresentation::configure"));
         }
-        validate_metal_configuration(config)?;
         let layer = self.layer(target)?;
+        validate_metal_configuration(config, supports_display_sync(&layer))?;
         {
             let mut state = lock(&self.state);
             if !state.leased.insert(target) {
@@ -466,7 +467,7 @@ impl ConfiguredPresentationBackend for MetalConfiguredPresentation {
                 "MetalConfiguredPresentation::capabilities",
             ));
         }
-        Ok(metal_capabilities(None))
+        Ok(metal_capabilities(None, supports_display_sync(&self.layer)))
     }
 
     fn reconfigure_or_register_waker(
@@ -495,7 +496,7 @@ impl ConfiguredPresentationBackend for MetalConfiguredPresentation {
         // The layer retains its configured device.  The device is set by the
         // first configuration and does not change during a portable lease.
         Poll::Ready(
-            validate_metal_configuration(config)
+            validate_metal_configuration(config, supports_display_sync(&self.layer))
                 .and_then(|_| configure_existing_layer(&self.layer, config)),
         )
     }
@@ -683,14 +684,17 @@ fn receipt_state(state: &PresentationState, receipt: PresentReceiptId) -> RhiRes
         .ok_or_else(|| RhiError::new(RhiErrorKind::InvalidUsage, "unknown Metal present receipt"))
 }
 
-fn metal_capabilities(current: Option<Extent2d>) -> PresentationTargetCapabilities {
+fn metal_capabilities(
+    current: Option<Extent2d>,
+    display_sync_control: bool,
+) -> PresentationTargetCapabilities {
+    let mut present_modes = vec![PresentMode::Automatic, PresentMode::Fifo];
+    if display_sync_control {
+        present_modes.push(PresentMode::Immediate);
+    }
     PresentationTargetCapabilities::new(
         vec![TextureFormat::Bgra8Unorm, TextureFormat::Bgra8UnormSrgb],
-        vec![
-            PresentMode::Automatic,
-            PresentMode::Fifo,
-            PresentMode::Immediate,
-        ],
+        present_modes,
         PresentationExtentControl::HostManaged { current },
     )
     .with_format_color_spaces(vec![
@@ -714,7 +718,10 @@ fn metal_capabilities(current: Option<Extent2d>) -> PresentationTargetCapabiliti
     .with_timing_and_hdr(PresentationTimingCapabilities { timestamps: false }, None)
 }
 
-fn validate_metal_configuration(config: &PresentationConfiguration) -> RhiResult<()> {
+fn validate_metal_configuration(
+    config: &PresentationConfiguration,
+    display_sync_control: bool,
+) -> RhiResult<()> {
     if !matches!(config.extent(), PresentationExtent::HostManaged) {
         return Err(RhiError::new(
             RhiErrorKind::Unsupported,
@@ -738,6 +745,12 @@ fn validate_metal_configuration(config: &PresentationConfiguration) -> RhiResult
         return Err(RhiError::new(
             RhiErrorKind::Unsupported,
             "this Metal present mode has no CAMetalLayer lowering",
+        ));
+    }
+    if config.present_mode() == PresentMode::Immediate && !display_sync_control {
+        return Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "this CAMetalLayer cannot disable display synchronization",
         ));
     }
     if config.usage() != TextureUsage::COLOR_ATTACHMENT || !config.view_formats().is_empty() {
@@ -794,8 +807,17 @@ fn configure_existing_layer(
     // immediate versus paced presentation. `Automatic` deliberately retains the
     // host/layer default rather than fabricating a pacing promise.
     match config.present_mode() {
-        PresentMode::Fifo => layer.setDisplaySyncEnabled(true),
-        PresentMode::Immediate => layer.setDisplaySyncEnabled(false),
+        PresentMode::Fifo if supports_display_sync(layer) => layer.setDisplaySyncEnabled(true),
+        PresentMode::Immediate if supports_display_sync(layer) => {
+            layer.setDisplaySyncEnabled(false)
+        }
+        PresentMode::Immediate => {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this CAMetalLayer cannot disable display synchronization",
+            ));
+        }
+        PresentMode::Fifo => {}
         PresentMode::Automatic => {}
         PresentMode::Mailbox => {
             return Err(RhiError::new(
@@ -805,6 +827,13 @@ fn configure_existing_layer(
         }
     }
     Ok(())
+}
+
+fn supports_display_sync(layer: &CAMetalLayer) -> bool {
+    // Recent SDKs expose this selector for every Apple target, but older and
+    // mobile Core Animation profiles need not implement it. Probe the concrete
+    // layer before advertising Immediate or sending the optional setter.
+    AnyObject::class(layer).responds_to(sel!(setDisplaySyncEnabled:))
 }
 
 fn acquire(kind: AcquireErrorKind, message: &'static str) -> AcquireError {

@@ -9,6 +9,32 @@ use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::backend::QuerySetBackend;
 
+/// How an enabled device binds an occlusion query set to a raster pass.
+///
+/// The distinction is observable at recording time.  D3D12/Vulkan-style
+/// devices can select a set while a pass is open; WebGPU binds one set in the
+/// render-pass descriptor and can only begin/end indices from that set.  This
+/// profile lets a backend expose the latter honestly instead of either
+/// pretending it supports dynamic selection or disabling occlusion entirely.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OcclusionQueryBinding {
+    /// An occlusion query set may be selected by `RasterScope::begin_query`.
+    #[default]
+    Dynamic,
+    /// The one usable set is fixed when the raster scope begins.
+    FixedAtRasterScope,
+}
+
+impl OcclusionQueryBinding {
+    pub(crate) fn encode_into(self, out: &mut Vec<u8>) {
+        out.push(match self {
+            Self::Dynamic => 0,
+            Self::FixedAtRasterScope => 1,
+        });
+    }
+}
+
 /// Timestamp conversion and resolve facts for one enabled device.
 ///
 /// `period_nanos` converts a resolved native tick to nanoseconds. `valid_bits`

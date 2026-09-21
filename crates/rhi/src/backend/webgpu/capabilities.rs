@@ -10,13 +10,16 @@
 use std::collections::BTreeSet;
 
 use crate::api::binding::vocabulary::{BindableKind, StorageAccess};
-use crate::api::binding::{BindingSupport, BufferBindingAccess, SamplerKind, TextureSampleType};
+use crate::api::binding::{
+    BindingLimitClass, BindingSupport, BufferBindingAccess, SamplerKind, TextureSampleType,
+};
 use crate::api::capability::{BindingSupportKey, CapabilityFacts, visibilities};
 use crate::api::format::{
     FormatFacts, StorageAccessSupport, TextureFormat, TextureSupport, TextureSupportLimits,
     TextureSupportQuery,
 };
 use crate::api::platform::{LimitKey, OptionalFeature};
+use crate::api::query::OcclusionQueryBinding;
 use crate::api::resource::buffer::{BufferSupport, BufferSupportLimits, BufferUsage};
 use crate::api::resource::route::{
     BufferCopyLayoutLimits, RouteCapabilities, RouteQuery, RouteSupport, TexelCopyLayoutLimits,
@@ -24,6 +27,7 @@ use crate::api::resource::route::{
 use crate::api::resource::subresource::TextureAspect;
 use crate::api::resource::texture::{Extent3d, TextureDimension, TextureUsage};
 use crate::api::resource::view::TextureViewDimension;
+use crate::api::shader::ShaderStage;
 use crate::api::shader::vocabulary::AcceptedCodeForm;
 use crate::api::submission::{
     LaneWorkDomains, SubmissionCapabilities, SubmissionLaneClass, SubmissionLaneId,
@@ -42,6 +46,16 @@ pub(crate) struct WebGpuLimits {
     pub(crate) max_texture_array_layers: u32,
     pub(crate) max_bind_groups: u32,
     pub(crate) max_bindings_per_bind_group: u32,
+    // The WebGPU limits below are deliberately separate from
+    // `max_bindings_per_bind_group`: the latter is a layout-wide count and is
+    // not a valid substitute for any per-shader-stage class limit.
+    pub(crate) max_uniform_buffers_per_shader_stage: u32,
+    pub(crate) max_storage_buffers_per_shader_stage: u32,
+    pub(crate) max_sampled_textures_per_shader_stage: u32,
+    pub(crate) max_storage_textures_per_shader_stage: u32,
+    pub(crate) max_samplers_per_shader_stage: u32,
+    pub(crate) max_dynamic_uniform_buffers_per_pipeline_layout: u32,
+    pub(crate) max_dynamic_storage_buffers_per_pipeline_layout: u32,
     pub(crate) max_uniform_buffer_binding_size: u64,
     pub(crate) max_storage_buffer_binding_size: u64,
     pub(crate) min_uniform_buffer_offset_alignment: u64,
@@ -94,12 +108,11 @@ impl WebGpuCapabilityInput {
         // WebGPU lowering path. Compression is represented per exact texture
         // format below rather than as a coarse public boolean. Deliberately
         // absent: the complete query family, external texture, mesh and ray
-        // features. This is stricter than merely checking `timestamp-query`:
-        // WebGPU fixes an occlusion query set in the render-pass descriptor,
-        // while a portable RasterScope can legally use more than one QuerySet
-        // sequentially. WebGPU pass timestamps describe boundaries rather than
-        // the portable API's exact arbitrary command positions. Publishing
-        // either fact would turn valid recorded work into a submit-time refusal.
+        // features. Occlusion is published through the explicit fixed-at-scope
+        // profile below. Timestamp remains stricter than merely checking
+        // `timestamp-query`: WebGPU pass timestamps describe boundaries rather
+        // than the portable API's exact arbitrary command positions, and there
+        // is no reliable public tick period to fabricate.
         // SamplerAnisotropy is also deliberately absent:
         // WebGPU accepts maxAnisotropy but does not expose a GPUSupportedLimits
         // ceiling that is equivalent to RHI MaxSamplerAnisotropy. A browser's
@@ -111,9 +124,21 @@ impl WebGpuCapabilityInput {
         // MappablePrimaryBuffers correctly remains absent.
         facts.record_feature(OptionalFeature::ComparisonSamplers);
         facts.record_feature(OptionalFeature::BaseVertex);
+        facts.record_feature(OptionalFeature::BaseInstance);
         facts.record_feature(OptionalFeature::ClearBuffer);
         facts.record_feature(OptionalFeature::IndirectDispatch);
         facts.record_feature(OptionalFeature::IndependentBlend);
+        // GPUMultisampleState lowers both fields directly. WGSL sample
+        // interpolation is a core shader semantic rather than a WebGPU
+        // optional device feature.
+        facts.record_feature(OptionalFeature::MultisampleMask);
+        facts.record_feature(OptionalFeature::MultisampledShading);
+        // Occlusion query sets and resolveQuerySet are WebGPU core. The fixed
+        // 8192-entry ceiling is a specification validation constant rather than
+        // a GPUSupportedLimits property; do not probe a non-existent JS field.
+        facts.record_feature(OptionalFeature::OcclusionQuery);
+        facts.record_feature(OptionalFeature::QueryResolve);
+        facts.record_occlusion_query_binding(OcclusionQueryBinding::FixedAtRasterScope);
         // WebGPU's indirect draw commands exist in core, but their portable
         // `first_instance` semantics are gated by this exact optional feature.
         // Fluxel's IndirectDraw contract includes that semantic, so do not
@@ -157,6 +182,22 @@ impl WebGpuCapabilityInput {
             (
                 LimitKey::MaxBindingsPerGroup,
                 u64::from(l.max_bindings_per_bind_group),
+            ),
+            (LimitKey::MaxQueriesPerQuerySet, 8_192),
+            // WebGPU resolveQuerySet requires the destination offset to be
+            // 256-byte aligned. This is a fixed WebGPU validation rule, not a
+            // guessed hardware limit.
+            (LimitKey::QueryResolveBufferAlignment, 256),
+            // GPUBuffer.mapAsync has distinct WebGPU alignment requirements.
+            (LimitKey::MapOffsetAlignment, 8),
+            (LimitKey::MapSizeAlignment, 4),
+            (
+                LimitKey::MaxDynamicUniformBuffersPerPipelineLayout,
+                u64::from(l.max_dynamic_uniform_buffers_per_pipeline_layout),
+            ),
+            (
+                LimitKey::MaxDynamicStorageBuffersPerPipelineLayout,
+                u64::from(l.max_dynamic_storage_buffers_per_pipeline_layout),
             ),
             (
                 LimitKey::MaxUniformBufferBindingSize,
@@ -220,6 +261,43 @@ impl WebGpuCapabilityInput {
                 facts.record_limit(key, value);
             }
         }
+
+        // Unlike the layout-wide binding count, WebGPU exposes exact limits
+        // for every shader stage and resource class.  The native values apply
+        // identically to vertex, fragment, and compute; record each portable
+        // stage rather than widening a layout limit into a made-up answer.
+        for stage in [
+            ShaderStage::Vertex,
+            ShaderStage::Fragment,
+            ShaderStage::Compute,
+        ] {
+            for (class, limit) in [
+                (
+                    BindingLimitClass::UniformBuffers,
+                    l.max_uniform_buffers_per_shader_stage,
+                ),
+                (
+                    BindingLimitClass::StorageBuffers,
+                    l.max_storage_buffers_per_shader_stage,
+                ),
+                (
+                    BindingLimitClass::SampledTextures,
+                    l.max_sampled_textures_per_shader_stage,
+                ),
+                (
+                    BindingLimitClass::StorageTextures,
+                    l.max_storage_textures_per_shader_stage,
+                ),
+                (BindingLimitClass::Samplers, l.max_samplers_per_shader_stage),
+            ] {
+                // Zero means discovery did not obtain a usable native answer,
+                // never an invented WebGPU minimum.  Omitting the fact keeps
+                // pipeline validation fail-closed.
+                if limit != 0 {
+                    facts.record_binding_limit(stage, class, limit);
+                }
+            }
+        }
     }
 
     fn record_buffers(&self, facts: &mut CapabilityFacts) {
@@ -265,9 +343,8 @@ impl WebGpuCapabilityInput {
     }
 
     fn record_bindings(&self, facts: &mut CapabilityFacts) {
-        // WebGPU's limits are layout-wide; it has no native per-stage-class
-        // counters.  Do not manufacture per-stage limits from unrelated
-        // `maxBindingsPerBindGroup` data.
+        let dynamic_uniforms = self.limits.max_dynamic_uniform_buffers_per_pipeline_layout != 0;
+        let dynamic_storages = self.limits.max_dynamic_storage_buffers_per_pipeline_layout != 0;
         for visibility in visibilities() {
             for kind in [
                 BindableKind::UniformBuffer,
@@ -288,7 +365,37 @@ impl WebGpuCapabilityInput {
                     },
                     BindingSupport::Supported,
                 );
+                let dynamic_offset = match kind {
+                    BindableKind::UniformBuffer => dynamic_uniforms,
+                    BindableKind::StorageBuffer { .. } => dynamic_storages,
+                    _ => unreachable!("buffer binding loop only"),
+                };
+                if dynamic_offset {
+                    facts.record_binding_support(
+                        BindingSupportKey {
+                            visibility,
+                            kind,
+                            array: false,
+                            runtime_sized: false,
+                            dynamic_offset: true,
+                        },
+                        BindingSupport::Supported,
+                    );
+                }
             }
+            // WebGPU's view-dimension vocabulary matches the portable P0
+            // vocabulary exactly.  It is tempting to advertise only D2 because
+            // most render targets are D2, but bind-group lowering supports all
+            // six dimensions and a D1/D3/cube view must not be rejected before
+            // it reaches that valid native route.
+            let sampled_dimensions = [
+                TextureViewDimension::D1,
+                TextureViewDimension::D2,
+                TextureViewDimension::D2Array,
+                TextureViewDimension::Cube,
+                TextureViewDimension::CubeArray,
+                TextureViewDimension::D3,
+            ];
             for sample_type in [
                 TextureSampleType::Float,
                 TextureSampleType::UnfilterableFloat,
@@ -296,13 +403,32 @@ impl WebGpuCapabilityInput {
                 TextureSampleType::Uint,
                 TextureSampleType::Depth,
             ] {
+                for dimension in sampled_dimensions {
+                    facts.record_binding_support(
+                        BindingSupportKey {
+                            visibility,
+                            kind: BindableKind::SampledTexture {
+                                dimension,
+                                sample_type,
+                                multisampled: false,
+                            },
+                            array: false,
+                            runtime_sized: false,
+                            dynamic_offset: false,
+                        },
+                        BindingSupport::Supported,
+                    );
+                }
+                // WebGPU validates a multisampled sampled binding only for a
+                // 2D view.  Do not extrapolate it to 2D-array/cube views even
+                // when the physical texture has array layers.
                 facts.record_binding_support(
                     BindingSupportKey {
                         visibility,
                         kind: BindableKind::SampledTexture {
                             dimension: TextureViewDimension::D2,
                             sample_type,
-                            multisampled: false,
+                            multisampled: true,
                         },
                         array: false,
                         runtime_sized: false,
@@ -342,23 +468,32 @@ impl WebGpuCapabilityInput {
                     &[StorageAccess::WriteOnly]
                 };
             // Storage textures are deliberately only emitted for the formats
-            // below that have a closed core WebGPU storage route.
+            // below that have a closed core WebGPU storage route.  Cube and
+            // cube-array are intentionally absent: WebGPU does not admit them
+            // as storage texture view dimensions.
             for format in storage_formats() {
                 for &access in storage_accesses {
-                    facts.record_binding_support(
-                        BindingSupportKey {
-                            visibility,
-                            kind: BindableKind::StorageTexture {
-                                dimension: TextureViewDimension::D2,
-                                format,
-                                access,
+                    for dimension in [
+                        TextureViewDimension::D1,
+                        TextureViewDimension::D2,
+                        TextureViewDimension::D2Array,
+                        TextureViewDimension::D3,
+                    ] {
+                        facts.record_binding_support(
+                            BindingSupportKey {
+                                visibility,
+                                kind: BindableKind::StorageTexture {
+                                    dimension,
+                                    format,
+                                    access,
+                                },
+                                array: false,
+                                runtime_sized: false,
+                                dynamic_offset: false,
                             },
-                            array: false,
-                            runtime_sized: false,
-                            dynamic_offset: false,
-                        },
-                        BindingSupport::Supported,
-                    );
+                            BindingSupport::Supported,
+                        );
+                    }
                 }
             }
         }
@@ -440,6 +575,37 @@ impl WebGpuCapabilityInput {
                             support,
                         );
                     }
+                }
+            }
+            // Core WebGPU's portable multisample count is 4.  It has a real
+            // render-pass lowering (including `resolveTarget`) but no direct
+            // `copyTextureToTexture`/buffer-copy route for multisampled
+            // textures.  Only attachment and sampled usages are recorded, and
+            // no standalone `RouteQuery::Resolve` fact is published: that key
+            // describes Fluxel's explicit copy resolve, which command lowering
+            // currently and intentionally refuses.  Raster-pass resolves do
+            // not ask that route (section 31.1).
+            if info.color_attachment || info.depth || info.stencil {
+                let multisample_allowed = TextureUsage::SAMPLED
+                    .union(TextureUsage::COLOR_ATTACHMENT)
+                    .union(TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+                for usage in TextureUsage::all() {
+                    let query = TextureSupportQuery::new(TextureDimension::D2, format, usage, 4);
+                    let supported = !usage.is_empty()
+                        && multisample_allowed.contains(usage)
+                        && ((info.color_attachment
+                            && usage.contains(TextureUsage::COLOR_ATTACHMENT))
+                            || ((info.depth || info.stencil)
+                                && usage.contains(TextureUsage::DEPTH_STENCIL_ATTACHMENT)))
+                        && l.max_texture_dimension_2d != 0;
+                    facts.record_texture_support(
+                        &query,
+                        if supported {
+                            TextureSupport::Supported(texture_limits)
+                        } else {
+                            TextureSupport::Unsupported
+                        },
+                    );
                 }
             }
             if info.color {
@@ -904,6 +1070,13 @@ mod tests {
                 max_texture_array_layers: 8,
                 max_bind_groups: 4,
                 max_bindings_per_bind_group: 16,
+                max_uniform_buffers_per_shader_stage: 12,
+                max_storage_buffers_per_shader_stage: 8,
+                max_sampled_textures_per_shader_stage: 16,
+                max_storage_textures_per_shader_stage: 4,
+                max_samplers_per_shader_stage: 16,
+                max_dynamic_uniform_buffers_per_pipeline_layout: 8,
+                max_dynamic_storage_buffers_per_pipeline_layout: 4,
                 max_uniform_buffer_binding_size: 256,
                 max_storage_buffer_binding_size: 256,
                 min_uniform_buffer_offset_alignment: 256,
@@ -981,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn query_feature_strings_remain_fail_closed_until_recording_contract_matches() {
+    fn fixed_occlusion_is_core_but_timestamp_feature_strings_remain_fail_closed() {
         let mut input = input();
         for name in ["timestamp-query", "timestamp-query-inside-passes"] {
             input.adapter_features.insert(name.to_owned());
@@ -991,20 +1164,31 @@ mod tests {
         let available = AvailableCapabilities::from_facts(facts.clone());
         let enabled = crate::api::capability::EnabledCapabilities::from_facts(facts, submission);
 
-        // The native feature names are not enough: see the WebGPU
-        // query-profile boundary in the design document.
+        assert!(available.supports_feature(OptionalFeature::OcclusionQuery));
+        assert!(available.supports_feature(OptionalFeature::QueryResolve));
+        assert_eq!(
+            available.limit(LimitKey::MaxQueriesPerQuerySet),
+            Some(8_192)
+        );
+        assert_eq!(
+            available.limit(LimitKey::QueryResolveBufferAlignment),
+            Some(256)
+        );
+        assert_eq!(
+            enabled.occlusion_query_binding(),
+            crate::api::query::OcclusionQueryBinding::FixedAtRasterScope
+        );
+
+        // Native timestamp feature names are not enough: see the WebGPU
+        // pass-boundary/timestamp-period contract in the design document.
         for feature in [
-            OptionalFeature::OcclusionQuery,
             OptionalFeature::TimestampQuery,
             OptionalFeature::TimestampInsideEncoder,
             OptionalFeature::TimestampInsideRasterScope,
             OptionalFeature::TimestampInsideComputeScope,
-            OptionalFeature::QueryResolve,
         ] {
             assert!(!available.supports_feature(feature));
         }
-        assert_eq!(available.limit(LimitKey::MaxQueriesPerQuerySet), None);
-        assert_eq!(available.limit(LimitKey::QueryResolveBufferAlignment), None);
         assert_eq!(enabled.timestamp_queries().period_nanos, None);
     }
 
@@ -1046,6 +1230,131 @@ mod tests {
         assert!(storage.supports(StorageAccess::WriteOnly));
         assert!(storage.supports(StorageAccess::ReadWrite));
         assert!(extended.binding_support(&read_only).is_supported());
+    }
+
+    #[test]
+    fn native_per_stage_and_dynamic_limits_are_not_widened_from_layout_limits() {
+        let available = AvailableCapabilities::from_facts(input().into_capabilities().0);
+        for stage in [
+            ShaderStage::Vertex,
+            ShaderStage::Fragment,
+            ShaderStage::Compute,
+        ] {
+            assert_eq!(
+                available.binding_limit(stage, BindingLimitClass::UniformBuffers),
+                Some(12)
+            );
+            assert_eq!(
+                available.binding_limit(stage, BindingLimitClass::StorageBuffers),
+                Some(8)
+            );
+            assert_eq!(
+                available.binding_limit(stage, BindingLimitClass::SampledTextures),
+                Some(16)
+            );
+            assert_eq!(
+                available.binding_limit(stage, BindingLimitClass::StorageTextures),
+                Some(4)
+            );
+            assert_eq!(
+                available.binding_limit(stage, BindingLimitClass::Samplers),
+                Some(16)
+            );
+        }
+        assert_eq!(
+            available.limit(LimitKey::MaxDynamicUniformBuffersPerPipelineLayout),
+            Some(8)
+        );
+        assert_eq!(
+            available.limit(LimitKey::MaxDynamicStorageBuffersPerPipelineLayout),
+            Some(4)
+        );
+
+        let dynamic_uniform = BindingSupportQuery {
+            visibility: ShaderStages::VERTEX,
+            kind: BindingKind::UniformBuffer { min_size: 0 },
+            count: BindingCount::One,
+            dynamic_offset: true,
+        };
+        assert!(available.binding_support(&dynamic_uniform).is_supported());
+
+        let mut missing_dynamic_limit = input();
+        missing_dynamic_limit
+            .limits
+            .max_dynamic_uniform_buffers_per_pipeline_layout = 0;
+        let unavailable =
+            AvailableCapabilities::from_facts(missing_dynamic_limit.into_capabilities().0);
+        assert_eq!(
+            unavailable.limit(LimitKey::MaxDynamicUniformBuffersPerPipelineLayout),
+            None
+        );
+        assert!(!unavailable.binding_support(&dynamic_uniform).is_supported());
+    }
+
+    #[test]
+    fn supported_binding_dimensions_and_msaa_are_exactly_webgpu_core() {
+        let available = AvailableCapabilities::from_facts(input().into_capabilities().0);
+        for dimension in [
+            TextureViewDimension::D1,
+            TextureViewDimension::D2,
+            TextureViewDimension::D2Array,
+            TextureViewDimension::Cube,
+            TextureViewDimension::CubeArray,
+            TextureViewDimension::D3,
+        ] {
+            let sampled = BindingSupportQuery {
+                visibility: ShaderStages::FRAGMENT,
+                kind: BindingKind::SampledTexture {
+                    dimension,
+                    sample_type: TextureSampleType::Float,
+                    multisampled: false,
+                },
+                count: BindingCount::One,
+                dynamic_offset: false,
+            };
+            assert!(available.binding_support(&sampled).is_supported());
+        }
+        let multisampled = BindingSupportQuery {
+            visibility: ShaderStages::FRAGMENT,
+            kind: BindingKind::SampledTexture {
+                dimension: TextureViewDimension::D2,
+                sample_type: TextureSampleType::Float,
+                multisampled: true,
+            },
+            count: BindingCount::One,
+            dynamic_offset: false,
+        };
+        assert!(available.binding_support(&multisampled).is_supported());
+        let invalid_multisample_dimension = BindingSupportQuery {
+            visibility: ShaderStages::FRAGMENT,
+            kind: BindingKind::SampledTexture {
+                dimension: TextureViewDimension::D2Array,
+                sample_type: TextureSampleType::Float,
+                multisampled: true,
+            },
+            count: BindingCount::One,
+            dynamic_offset: false,
+        };
+        assert!(
+            !available
+                .binding_support(&invalid_multisample_dimension)
+                .is_supported()
+        );
+
+        let msaa_color = TextureSupportQuery::new(
+            TextureDimension::D2,
+            TextureFormat::Rgba8Unorm,
+            TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::SAMPLED),
+            4,
+        );
+        assert!(available.texture_support(&msaa_color).is_supported());
+        let illegal_msaa_copy = TextureSupportQuery::new(
+            TextureDimension::D2,
+            TextureFormat::Rgba8Unorm,
+            TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::COPY_SRC),
+            4,
+        );
+        assert!(!available.texture_support(&illegal_msaa_copy).is_supported());
     }
 
     #[test]

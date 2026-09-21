@@ -14,6 +14,8 @@ mod logic;
 mod pipeline;
 mod presentation;
 mod provider;
+mod query;
+mod resolve;
 mod resource;
 mod shader;
 

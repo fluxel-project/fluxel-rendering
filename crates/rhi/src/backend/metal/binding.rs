@@ -17,7 +17,13 @@ use crate::api::binding::{
 };
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::pipeline::PipelineInterface;
-use crate::api::shader::ShaderStages;
+use crate::api::shader::{ShaderInterface, ShaderStages};
+
+/// Vertex fetch is part of the MSL vertex-stage buffer namespace.  This is a
+/// fixed reservation, not the number of streams in a particular pipeline:
+/// compiled MSL argument indices must not move when an otherwise compatible
+/// vertex-input declaration gains or loses an unused stream.
+const VERTEX_STREAM_RESERVED_BUFFERS: u32 = 15;
 
 /// Metal has independent buffer, texture and sampler index spaces.  The packet
 /// retains the portable resources (which in turn retain their native objects)
@@ -148,8 +154,11 @@ impl MetalBindingAbi {
     /// their active length belongs to a packet, while MSL direct argument
     /// indices are baked into a function.  They therefore remain fail-closed
     /// until this backend gains an argument-buffer ABI.
-    pub(super) fn from_interface(interface: &PipelineInterface) -> RhiResult<Self> {
-        Self::from_interface_with_vertex_buffers(interface, 0)
+    pub(super) fn from_compute_interface(
+        interface: &PipelineInterface,
+        shader: &ShaderInterface,
+    ) -> RhiResult<Self> {
+        Self::from_stage_interfaces(interface, &[(ShaderStages::COMPUTE, shader)], 0)
     }
 
     /// Raster pipelines reserve the vertex-stage buffer indices occupied by the
@@ -157,43 +166,70 @@ impl MetalBindingAbi {
     /// the same `[[buffer(n)]]` namespace for vertex fetch buffers and ordinary
     /// vertex-stage arguments, so starting bind groups at zero would make a
     /// perfectly valid layout overwrite vertex data at draw time.
-    pub(super) fn from_raster_interface(
+    pub(super) fn from_raster_interfaces(
         interface: &PipelineInterface,
-        vertex_buffer_count: usize,
+        vertex: &ShaderInterface,
+        fragment: Option<&ShaderInterface>,
     ) -> RhiResult<Self> {
-        let vertex_buffer_count = u32::try_from(vertex_buffer_count).map_err(|_| {
-            RhiError::new(
-                RhiErrorKind::Unsupported,
-                "Metal vertex-buffer count does not fit its argument-index space",
-            )
-        })?;
-        Self::from_interface_with_vertex_buffers(interface, vertex_buffer_count)
+        let mut stages = vec![(ShaderStages::VERTEX, vertex)];
+        if let Some(fragment) = fragment {
+            stages.push((ShaderStages::FRAGMENT, fragment));
+        }
+        Self::from_stage_interfaces(interface, &stages, VERTEX_STREAM_RESERVED_BUFFERS)
     }
 
-    fn from_interface_with_vertex_buffers(
+    fn from_stage_interfaces(
         interface: &PipelineInterface,
-        vertex_buffer_count: u32,
+        stages: &[(ShaderStages, &ShaderInterface)],
+        vertex_buffer_reserve: u32,
     ) -> RhiResult<Self> {
         let mut next = NativeArgumentCursors {
             vertex: ClassCursors {
-                buffers: vertex_buffer_count,
+                buffers: vertex_buffer_reserve,
                 ..ClassCursors::default()
             },
             ..NativeArgumentCursors::default()
         };
         let mut groups = Vec::with_capacity(interface.descriptor().groups.len());
-        for layout in &interface.descriptor().groups {
+        for (group_index, layout) in interface.descriptor().groups.iter().enumerate() {
             let mut group = MetalGroupBindingAbi::default();
             for entry in &layout.descriptor().entries {
-                let class = class_of(&entry.kind)?;
-                let count = fixed_count(entry.count, entry.slot)?;
-                let first = next.allocate(class, entry.visibility, count)?;
+                // A layout may intentionally be a superset of an entry point.
+                // Only resources the compiled artifacts actually declare own an
+                // MSL argument index.  Allocating the superset here would make
+                // artifact ABI depend on unrelated layout declarations.
+                let mut active_visibility = None;
+                let mut active_kind = None;
+                let mut active_count = None;
+                for (stage, shader) in stages {
+                    if let Some(requirement) = shader.resources().iter().find(|requirement| {
+                        requirement.group == BindGroupIndex::new(group_index as u32)
+                            && requirement.slot == entry.slot
+                    }) {
+                        active_visibility = Some(
+                            active_visibility
+                                .map_or(*stage, |known: ShaderStages| known.union(*stage)),
+                        );
+                        active_kind = Some(&requirement.kind);
+                        active_count = Some(requirement.count);
+                    }
+                }
+                let Some(visibility) = active_visibility else {
+                    continue;
+                };
+                let kind = active_kind.expect("active Metal resource has a kind");
+                let count = fixed_count(
+                    active_count.expect("active Metal resource has a count"),
+                    entry.slot,
+                )?;
+                let class = class_of(kind)?;
+                let first = next.allocate(class, visibility, count)?;
                 group.slots.push(MetalSlotBindingAbi {
                     slot: entry.slot,
                     class,
                     first,
                     count,
-                    visibility: entry.visibility,
+                    visibility,
                     dynamic_offset: entry.dynamic_offset,
                 });
             }
@@ -288,21 +324,6 @@ impl MetalBindingAbi {
             if !layout_slot.dynamic_offset {
                 continue;
             }
-            let abi_slot = abi_group.slot(layout_slot.slot).ok_or_else(|| {
-                RhiError::new(
-                    RhiErrorKind::InvalidUsage,
-                    format!(
-                        "Metal ABI has no entry for dynamic bind-group slot {}",
-                        layout_slot.slot.get()
-                    ),
-                )
-            })?;
-            if abi_slot.class != MetalBindingClass::Buffer || !abi_slot.dynamic_offset {
-                return Err(RhiError::new(
-                    RhiErrorKind::InvalidUsage,
-                    "Metal dynamic offset targets a non-buffer ABI slot",
-                ));
-            }
             let entry = group
                 .descriptor()
                 .entries
@@ -318,14 +339,23 @@ impl MetalBindingAbi {
                     )
                 })?;
             let bindings = buffer_elements(&entry.resource, layout_slot.slot)?;
-            if bindings.len() != abi_slot.count as usize {
+            let abi_slot = abi_group.slot(layout_slot.slot);
+            if let Some(abi_slot) = abi_slot {
+                if abi_slot.class != MetalBindingClass::Buffer || !abi_slot.dynamic_offset {
+                    return Err(RhiError::new(
+                        RhiErrorKind::InvalidUsage,
+                        "Metal dynamic offset targets a non-buffer ABI slot",
+                    ));
+                }
+            }
+            if abi_slot.is_some_and(|slot| bindings.len() != slot.count as usize) {
                 return Err(RhiError::new(
                     RhiErrorKind::InvalidUsage,
                     format!(
                         "Metal bind-group slot {} has {} buffer elements, ABI requires {}",
                         layout_slot.slot.get(),
                         bindings.len(),
-                        abi_slot.count
+                        abi_slot.map_or(0, |slot| slot.count)
                     ),
                 ));
             }
@@ -351,11 +381,16 @@ impl MetalBindingAbi {
                         ),
                     ));
                 }
-                resolved.push(MetalDynamicOffset {
-                    slot: layout_slot.slot,
-                    element: element as u32,
-                    offset: u64::from(offset),
-                });
+                // Dynamic offsets remain a complete public packet sequence even
+                // when this artifact does not use the layout slot. Consume and
+                // validate it, but do not create a native binding for it.
+                if abi_slot.is_some() {
+                    resolved.push(MetalDynamicOffset {
+                        slot: layout_slot.slot,
+                        element: element as u32,
+                        offset: u64::from(offset),
+                    });
+                }
             }
         }
         debug_assert_eq!(cursor, offsets.len());

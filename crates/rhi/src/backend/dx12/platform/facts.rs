@@ -355,6 +355,10 @@ fn record_features(device: &ID3D12Device, facts: &mut CapabilityFacts) {
     facts.record_feature(OptionalFeature::DepthBiasClamp);
     facts.record_feature(OptionalFeature::DualSourceBlending);
     facts.record_feature(OptionalFeature::IndependentBlend);
+    // The raster PSO carries SampleMask verbatim, and D3D12 pixel-shader
+    // sample interpolation has no separate device-enable bit.
+    facts.record_feature(OptionalFeature::MultisampleMask);
+    facts.record_feature(OptionalFeature::MultisampledShading);
     // Every D3D12 direct command list exposes occlusion query begin/end and a
     // query heap is an ordinary device allocation. Timestamp/statistics are
     // intentionally separate: their portable result conversion is not implied
@@ -369,6 +373,7 @@ fn record_features(device: &ID3D12Device, facts: &mut CapabilityFacts) {
     // DrawIndexedInstanced carries BaseVertexLocation directly; the raster
     // lowerer forwards the recorded i32 without emulation.
     facts.record_feature(OptionalFeature::BaseVertex);
+    facts.record_feature(OptionalFeature::BaseInstance);
     facts.record_feature(OptionalFeature::ClearBuffer);
     // Color clear lowers through zeroed upload footprints; depth/stencil clear
     // uses a temporary DSV after recording-time validation requires both COPY_DST
@@ -409,7 +414,8 @@ fn record_limits(options: &D3D12_FEATURE_DATA_D3D12_OPTIONS, facts: &mut Capabil
     facts.record_limit(LimitKey::QueryResolveBufferAlignment, 8);
     facts.record_limit(LimitKey::ImmediateDataAlignment, 4);
     // D3D12 Map itself permits byte-granular ranges on buffer resources.
-    facts.record_limit(LimitKey::MapAlignment, 1);
+    facts.record_limit(LimitKey::MapOffsetAlignment, 1);
+    facts.record_limit(LimitKey::MapSizeAlignment, 1);
     // 32 DWORDs are reserved for the one contiguous DX12 root-constant ABI.
     // The remaining 32 DWORDs leave room for descriptor-table parameters in
     // the native 64-DWORD root-signature budget.

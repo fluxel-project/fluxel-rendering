@@ -177,6 +177,17 @@ pub(crate) struct PipelineDeviceFacts<'a> {
     pub(crate) texture_support: &'a dyn Fn(&TextureSupportQuery) -> TextureSupport,
 }
 
+/// Returns whether a non-zero multiview mask selects every view from zero up
+/// through its highest selected view.
+///
+/// Ordinary [`OptionalFeature::Multiview`] promises this compact native shape;
+/// a mask with a hole is the separately negotiated selective-multiview path.
+/// `wrapping_add` deliberately makes `u32::MAX` (all 32 views) a contiguous
+/// mask too.
+pub(crate) const fn is_contiguous_low_multiview_mask(mask: u32) -> bool {
+    mask != 0 && (mask & mask.wrapping_add(1)) == 0
+}
+
 /// The four format facts section 27.3's "Target facts" block names.
 ///
 /// A compact validation carrier. The façade fills it from the probed

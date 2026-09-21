@@ -19,6 +19,9 @@ use crate::api::command::record::{
     RecordedPayload,
 };
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::format::{block_extent, logical_bytes_per_block};
+use crate::api::query::{QuerySet, QueryType};
+use crate::api::resource::{ReadbackRequest, ReadbackTexelLayout};
 use crate::api::submission::backend::{SubmissionOutcome, SubmissionRequest};
 use crate::api::submission::{CompletionFailure, CompletionState};
 
@@ -29,11 +32,14 @@ use super::registry::{
     self, PromisePoll, WebGpuDriver, WebGpuObjectId, WebGpuRegistration, WebGpuRequestId,
 };
 use super::resource::WebGpuTextureView;
-use super::resource::{WebGpuBuffer, WebGpuTexture};
+use super::resource::{WebGpuBuffer, WebGpuQuerySet, WebGpuTexture};
 
 #[derive(Clone, Debug)]
 enum SerialState {
     Pending(WebGpuRequestId),
+    /// GPU queue work ended but an attached readback mapping lease has not
+    /// published CPU bytes yet.
+    AwaitReadbacks(WebGpuRequestId),
     Complete,
     Failed(String),
 }
@@ -52,7 +58,12 @@ struct PendingReadback {
     ticket: crate::api::resource::ReadbackTicket,
     staging: WebGpuObjectId,
     bytes: u64,
+    layout: Option<ReadbackTexelLayout>,
     map: Option<WebGpuRequestId>,
+    /// The submitted-work promise for this plan. A plan completion cannot be
+    /// published Complete until every ticket attached to it has been copied
+    /// into CPU-owned bytes and published.
+    completion: Option<WebGpuRequestId>,
 }
 
 /// The browser-side execution timeline for one WebGPU device registration.
@@ -144,6 +155,24 @@ impl WebGpuCommandSpine {
                         RecordedPayload::RasterBegin(begin) => {
                             preflight_raster_begin(begin, self.registration())?
                         }
+                        RecordedPayload::QueryBegin { set, .. }
+                        | RecordedPayload::QueryEnd { set, .. } => {
+                            query_set(set, self.registration(), "occlusion query")?;
+                            if set.descriptor().ty != QueryType::Occlusion {
+                                return Err(unsupported("non-occlusion query"));
+                            }
+                        }
+                        RecordedPayload::QueryResolve(resolve) => {
+                            query_set(&resolve.set, self.registration(), "query resolve")?;
+                            buffer(
+                                resolve.destination.native(),
+                                self.registration(),
+                                "query resolve destination",
+                            )?;
+                            if resolve.set.descriptor().ty != QueryType::Occlusion {
+                                return Err(unsupported("non-occlusion query resolve"));
+                            }
+                        }
                         RecordedPayload::RasterDraw(draw) => {
                             preflight_raster_draw(draw, self.registration())?
                         }
@@ -167,10 +196,7 @@ impl WebGpuCommandSpine {
                         | RecordedPayload::Copy(CopyRecord::Resolve(_))
                         | RecordedPayload::Copy(CopyRecord::Blit(_))
                         | RecordedPayload::Copy(CopyRecord::ExternalImage(_))
-                        | RecordedPayload::QueryBegin { .. }
-                        | RecordedPayload::QueryEnd { .. }
                         | RecordedPayload::TimestampWrite { .. }
-                        | RecordedPayload::QueryResolve(_)
                         | RecordedPayload::MeshDispatch(_)
                         | RecordedPayload::MeshIndirect(_)
                         | RecordedPayload::RayTracingBegin(_)
@@ -206,12 +232,15 @@ impl WebGpuCommandSpine {
         let last = first + request.batches.len() as u64 - 1;
         state.issued = last;
         match phase_b {
-            Ok((promise, readbacks)) => {
+            Ok((promise, mut readbacks)) => {
                 let request_id = registry::start_device_promise(self.registration(), promise);
                 for serial in first..=last {
                     state
                         .serials
                         .insert(serial, SerialState::Pending(request_id));
+                }
+                for readback in &mut readbacks {
+                    readback.completion = Some(request_id);
                 }
                 state.readbacks.extend(readbacks);
             }
@@ -270,6 +299,43 @@ impl WebGpuCommandSpine {
                             }
                             raster_pass = Some(begin_raster(&encoder, begin, self.registration())?);
                         }
+                        RecordedPayload::QueryBegin { index, .. } => {
+                            let pass = raster_pass.as_ref().ok_or_else(|| {
+                                "occlusion query begin outside render pass".to_owned()
+                            })?;
+                            call1(pass, "beginOcclusionQuery", &num(*index as u64))?;
+                        }
+                        RecordedPayload::QueryEnd { .. } => {
+                            let pass = raster_pass.as_ref().ok_or_else(|| {
+                                "occlusion query end outside render pass".to_owned()
+                            })?;
+                            call0(pass, "endOcclusionQuery")?;
+                        }
+                        RecordedPayload::QueryResolve(resolve) => {
+                            let set = object(
+                                query_set(&resolve.set, self.registration(), "query resolve")
+                                    .map_err(|error| error.to_string())?,
+                            )
+                            .ok_or_else(|| "query set was retired".to_owned())?;
+                            let destination = object(
+                                buffer(
+                                    resolve.destination.native(),
+                                    self.registration(),
+                                    "query resolve destination",
+                                )
+                                .map_err(|error| error.to_string())?,
+                            )
+                            .ok_or_else(|| "query resolve destination was retired".to_owned())?;
+                            call5(
+                                &encoder,
+                                "resolveQuerySet",
+                                &set,
+                                &num(resolve.first_query as u64),
+                                &num(resolve.query_count as u64),
+                                &destination,
+                                &num(resolve.destination_offset),
+                            )?;
+                        }
                         RecordedPayload::RasterDraw(draw) => {
                             let pass = raster_pass
                                 .as_ref()
@@ -318,12 +384,9 @@ impl WebGpuCommandSpine {
                         RecordedPayload::Upload(job) => {
                             lower_upload(&queue, job, self.registration())?
                         }
-                        RecordedPayload::Readback(ticket) => lower_buffer_readback(
-                            &encoder,
-                            ticket,
-                            self.registration(),
-                            &mut readbacks,
-                        )?,
+                        RecordedPayload::Readback(ticket) => {
+                            lower_readback(&encoder, ticket, self.registration(), &mut readbacks)?
+                        }
                         RecordedPayload::Copy(CopyRecord::Buffer(copy)) => {
                             lower_buffer_copy(&encoder, copy)?
                         }
@@ -428,36 +491,11 @@ impl WebGpuCommandSpine {
 
     fn advance(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        // Each plan shares one promise. Poll it only once, then fan the result
-        // out to each point carrying that serial; `poll_promise` consumes a
-        // settled request, so collecting IDs first is essential.
-        let ids: Vec<_> = state
-            .serials
-            .values()
-            .filter_map(|entry| match entry {
-                SerialState::Pending(id) => Some(*id),
-                _ => None,
-            })
-            .collect();
-        for id in ids {
-            match registry::try_take_settled_promise(id) {
-                PromisePoll::Pending => {}
-                PromisePoll::Ready(_) => {
-                    for entry in state.serials.values_mut() {
-                        if matches!(entry, SerialState::Pending(current) if *current == id) {
-                            *entry = SerialState::Complete;
-                        }
-                    }
-                }
-                PromisePoll::Failed(message) => {
-                    for entry in state.serials.values_mut() {
-                        if matches!(entry, SerialState::Pending(current) if *current == id) {
-                            *entry = SerialState::Failed(message.clone());
-                        }
-                    }
-                }
-            }
-        }
+        // Publish readback bytes before completion. `mapAsync` resolves only
+        // after the copy that precedes it, so this may finish before the queue
+        // promise. If it does not, the completion below remains Pending until
+        // the ticket reaches its terminal state.
+        let mut failed_readbacks = Vec::new();
         let mut still_pending = Vec::with_capacity(state.readbacks.len());
         for pending in state.readbacks.drain(..) {
             let map = pending
@@ -474,6 +512,9 @@ impl WebGpuCommandSpine {
                         pending
                             .ticket
                             .set_status(crate::api::resource::ReadbackStatus::Failed);
+                        if let Some(completion) = pending.completion {
+                            failed_readbacks.push(completion);
+                        }
                     }
                     let _ = registry::remove_object(self.registration(), pending.staging);
                 }
@@ -484,10 +525,15 @@ impl WebGpuCommandSpine {
                         })
                         .flatten();
                     match bytes {
-                        Some(bytes) => pending.ticket.publish(bytes, None),
-                        None => pending
-                            .ticket
-                            .set_status(crate::api::resource::ReadbackStatus::Failed),
+                        Some(bytes) => pending.ticket.publish(bytes, pending.layout),
+                        None => {
+                            pending
+                                .ticket
+                                .set_status(crate::api::resource::ReadbackStatus::Failed);
+                            if let Some(completion) = pending.completion {
+                                failed_readbacks.push(completion);
+                            }
+                        }
                     }
                     let _ =
                         registry::with_object(self.registration(), pending.staging, unmap_buffer);
@@ -496,6 +542,78 @@ impl WebGpuCommandSpine {
             }
         }
         state.readbacks = still_pending;
+        // Each plan shares one promise. Poll it only once, then fan the result
+        // out to each point carrying that serial; `poll_promise` consumes a
+        // settled request, so collecting IDs first is essential.
+        let mut ids = Vec::new();
+        for id in state.serials.values().filter_map(|entry| match entry {
+            SerialState::Pending(id) => Some(*id),
+            _ => None,
+        }) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        for id in ids {
+            match registry::try_take_settled_promise(id) {
+                PromisePoll::Pending => {}
+                PromisePoll::Ready(_) => {
+                    if !state
+                        .readbacks
+                        .iter()
+                        .any(|readback| readback.completion == Some(id))
+                    {
+                        for entry in state.serials.values_mut() {
+                            if matches!(entry, SerialState::Pending(current) if *current == id) {
+                                *entry = SerialState::Complete;
+                            }
+                        }
+                    } else {
+                        for entry in state.serials.values_mut() {
+                            if matches!(entry, SerialState::Pending(current) if *current == id) {
+                                *entry = SerialState::AwaitReadbacks(id);
+                            }
+                        }
+                    }
+                }
+                PromisePoll::Failed(message) => {
+                    for entry in state.serials.values_mut() {
+                        if matches!(entry, SerialState::Pending(current) if *current == id) {
+                            *entry = SerialState::Failed(message.clone());
+                        }
+                    }
+                }
+            }
+        }
+        for id in failed_readbacks {
+            for entry in state.serials.values_mut() {
+                if matches!(entry, SerialState::Pending(current) | SerialState::AwaitReadbacks(current) if *current == id)
+                {
+                    *entry = SerialState::Failed("WebGPU readback mapping failed".into());
+                }
+            }
+        }
+        let published_readback_completions: Vec<_> = state
+            .serials
+            .values()
+            .filter_map(|entry| match entry {
+                SerialState::AwaitReadbacks(id)
+                    if !state
+                        .readbacks
+                        .iter()
+                        .any(|readback| readback.completion == Some(*id)) =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect();
+        for entry in state.serials.values_mut() {
+            if matches!(entry, SerialState::AwaitReadbacks(id) if published_readback_completions.contains(id))
+            {
+                *entry = SerialState::Complete;
+            }
+        }
     }
 
     fn state(&self, serial: u64, waker: Option<&Waker>) -> CompletionState {
@@ -503,6 +621,23 @@ impl WebGpuCommandSpine {
             return CompletionState::DeviceLost(info);
         }
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(SerialState::AwaitReadbacks(id)) = state.serials.get(&serial) {
+            let maps = state
+                .readbacks
+                .iter()
+                .filter(|readback| readback.completion == Some(*id))
+                .filter_map(|readback| readback.map)
+                .collect::<Vec<_>>();
+            // A browser promise callback may wake an executor synchronously.
+            // Never retain the spine mutex across that foreign wake boundary.
+            drop(state);
+            if let Some(waker) = waker {
+                for map in maps {
+                    registry::register_promise_waker(map, waker);
+                }
+            }
+            return CompletionState::Pending;
+        }
         match state.serials.get(&serial) {
             Some(SerialState::Complete) => CompletionState::Complete,
             Some(SerialState::Failed(message)) => {
@@ -514,6 +649,7 @@ impl WebGpuCommandSpine {
                 }
                 CompletionState::Pending
             }
+            Some(SerialState::AwaitReadbacks(_)) => unreachable!("handled above"),
             None if serial <= state.issued => CompletionState::Complete,
             None => {
                 CompletionState::Failed(CompletionFailure::new("unknown WebGPU completion serial"))
@@ -566,6 +702,25 @@ fn texture_view<'a>(
     let value = value
         .as_any()
         .downcast_ref::<WebGpuTextureView>()
+        .ok_or_else(|| unsupported(what))?;
+    (value.registration() == registration)
+        .then_some(value)
+        .ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::WrongDevice,
+                format!("{what} belongs to another WebGPU device"),
+            )
+        })
+}
+fn query_set<'a>(
+    value: &'a QuerySet,
+    registration: WebGpuRegistration,
+    what: &'static str,
+) -> RhiResult<&'a WebGpuQuerySet> {
+    let value = value
+        .native()
+        .as_any()
+        .downcast_ref::<WebGpuQuerySet>()
         .ok_or_else(|| unsupported(what))?;
     (value.registration() == registration)
         .then_some(value)
@@ -654,6 +809,14 @@ impl Registered for WebGpuTexture {
     }
 }
 impl Registered for WebGpuTextureView {
+    fn registration(&self) -> WebGpuRegistration {
+        self.registration()
+    }
+    fn object(&self) -> super::registry::WebGpuObjectId {
+        self.object()
+    }
+}
+impl Registered for WebGpuQuerySet {
     fn registration(&self) -> WebGpuRegistration {
         self.registration()
     }
@@ -816,6 +979,12 @@ fn lower_texture_copy(encoder: &JsValue, copy: &TextureCopy) -> Result<(), Strin
 }
 
 fn preflight_raster_begin(begin: &RasterBegin, registration: WebGpuRegistration) -> RhiResult<()> {
+    if let Some(set) = &begin.occlusion_query_set {
+        query_set(set, registration, "raster occlusion query set")?;
+        if set.descriptor().ty != QueryType::Occlusion {
+            return Err(unsupported("non-occlusion raster query set"));
+        }
+    }
     for (_, attachment) in &begin.colors {
         match &attachment.view {
             crate::api::command::attachment::ColorAttachmentView::Texture(view) => {
@@ -929,19 +1098,26 @@ fn preflight_readback(
             Ok(())
         }
         crate::api::resource::ReadbackRequest::Texture { .. } => {
-            Err(unsupported("texture readback staging"))
+            let ReadbackRequest::Texture { src, .. } = ticket.request() else {
+                unreachable!();
+            };
+            texture(src.native(), registration, "readback texture source")?;
+            texture_readback_layout(ticket).map(|_| ())
         }
     }
 }
 
-fn lower_buffer_readback(
+fn lower_readback(
     encoder: &JsValue,
     ticket: &crate::api::resource::ReadbackTicket,
     registration: WebGpuRegistration,
     out: &mut Vec<PendingReadback>,
 ) -> Result<(), String> {
-    let crate::api::resource::ReadbackRequest::Buffer { src, range, .. } = ticket.request() else {
-        return Err("Phase-A admitted a texture readback".into());
+    if let ReadbackRequest::Texture { .. } = ticket.request() {
+        return lower_texture_readback(encoder, ticket, registration, out);
+    }
+    let ReadbackRequest::Buffer { src, range, .. } = ticket.request() else {
+        unreachable!()
     };
     let source =
         object(buffer(src.native(), registration, "readback source").map_err(|e| e.to_string())?)
@@ -967,7 +1143,175 @@ fn lower_buffer_readback(
         ticket: ticket.clone(),
         staging: staging_id,
         bytes: range.size,
+        layout: None,
         map: None,
+        completion: None,
+    });
+    Ok(())
+}
+
+fn texture_readback_layout(
+    ticket: &crate::api::resource::ReadbackTicket,
+) -> RhiResult<ReadbackTexelLayout> {
+    let ReadbackRequest::Texture {
+        src,
+        subresource,
+        extent,
+        ..
+    } = ticket.request()
+    else {
+        unreachable!();
+    };
+    let bytes = logical_bytes_per_block(src.descriptor().format).ok_or_else(|| {
+        RhiError::new(
+            RhiErrorKind::Unsupported,
+            "texture format has no WebGPU copy footprint",
+        )
+    })?;
+    let (block_width, block_height) = block_extent(src.descriptor().format);
+    let columns = extent.width.div_ceil(block_width);
+    let rows = extent.height.div_ceil(block_height);
+    let unaligned = columns.checked_mul(bytes).ok_or_else(|| {
+        RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "texture readback row size overflow",
+        )
+    })?;
+    // A private staging buffer is a GPU copy buffer, so its rows obey WebGPU's
+    // 256-byte footprint alignment; the public ticket reports that padding.
+    let bytes_per_row = unaligned.checked_add(255).ok_or_else(|| {
+        RhiError::new(
+            RhiErrorKind::InvalidUsage,
+            "texture readback row alignment overflow",
+        )
+    })? / 256
+        * 256;
+    let images = if matches!(
+        src.descriptor().dimension,
+        crate::api::resource::TextureDimension::D3
+    ) {
+        extent.depth
+    } else {
+        subresource.layer_count
+    };
+    let total_size = u64::from(bytes_per_row)
+        .checked_mul(u64::from(rows))
+        .and_then(|value| value.checked_mul(u64::from(images)))
+        .ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "texture readback staging size overflow",
+            )
+        })?;
+    Ok(ReadbackTexelLayout {
+        bytes_per_row,
+        rows_per_image: rows,
+        total_size,
+    })
+}
+
+fn lower_texture_readback(
+    encoder: &JsValue,
+    ticket: &crate::api::resource::ReadbackTicket,
+    registration: WebGpuRegistration,
+    out: &mut Vec<PendingReadback>,
+) -> Result<(), String> {
+    let ReadbackRequest::Texture {
+        src,
+        subresource,
+        origin,
+        extent,
+        ..
+    } = ticket.request()
+    else {
+        unreachable!()
+    };
+    let layout = texture_readback_layout(ticket).map_err(|error| error.to_string())?;
+    let source = object(
+        texture(src.native(), registration, "readback texture source")
+            .map_err(|error| error.to_string())?,
+    )
+    .ok_or_else(|| "readback texture source retired".to_owned())?;
+    let device = registry::with_device_handles(registration, |h| h.device.clone())
+        .ok_or_else(|| "WebGPU device retired".to_owned())?;
+    let descriptor = Object::new();
+    set(&descriptor, "size", &num(layout.total_size))?;
+    set(&descriptor, "usage", &num(1 | 8))?;
+    let staging = call1(&device, "createBuffer", &descriptor.into())?;
+    let staging_id = registry::insert_object(registration, staging.clone()).ok_or_else(|| {
+        "WebGPU device retired while retaining texture readback staging".to_owned()
+    })?;
+    let source_desc = Object::new();
+    set(&source_desc, "texture", &source)?;
+    set(&source_desc, "mipLevel", &num(subresource.mip_level as u64))?;
+    let aspect = match subresource.aspect {
+        crate::api::resource::TextureAspect::Color => "all",
+        crate::api::resource::TextureAspect::Depth => "depth-only",
+        crate::api::resource::TextureAspect::Stencil => "stencil-only",
+        crate::api::resource::TextureAspect::Plane0
+        | crate::api::resource::TextureAspect::Plane1
+        | crate::api::resource::TextureAspect::Plane2 => {
+            return Err("WebGPU has no portable multi-planar texture readback lowering".into());
+        }
+    };
+    set(&source_desc, "aspect", &JsValue::from_str(aspect))?;
+    let source_origin = Object::new();
+    set(&source_origin, "x", &num(origin.x as u64))?;
+    set(&source_origin, "y", &num(origin.y as u64))?;
+    let source_z = if matches!(
+        src.descriptor().dimension,
+        crate::api::resource::TextureDimension::D3
+    ) {
+        origin.z
+    } else {
+        subresource.base_layer
+    };
+    set(&source_origin, "z", &num(source_z as u64))?;
+    set(&source_desc, "origin", &source_origin.into())?;
+    let destination = Object::new();
+    set(&destination, "buffer", &staging)?;
+    set(&destination, "offset", &num(0))?;
+    set(
+        &destination,
+        "bytesPerRow",
+        &num(layout.bytes_per_row as u64),
+    )?;
+    set(
+        &destination,
+        "rowsPerImage",
+        &num(layout.rows_per_image as u64),
+    )?;
+    let copy_extent = Object::new();
+    set(&copy_extent, "width", &num(extent.width as u64))?;
+    set(&copy_extent, "height", &num(extent.height as u64))?;
+    set(
+        &copy_extent,
+        "depthOrArrayLayers",
+        &num(
+            if matches!(
+                src.descriptor().dimension,
+                crate::api::resource::TextureDimension::D3
+            ) {
+                extent.depth as u64
+            } else {
+                subresource.layer_count as u64
+            },
+        ),
+    )?;
+    call3(
+        encoder,
+        "copyTextureToBuffer",
+        &source_desc.into(),
+        &destination.into(),
+        &copy_extent.into(),
+    )?;
+    out.push(PendingReadback {
+        ticket: ticket.clone(),
+        staging: staging_id,
+        bytes: layout.total_size,
+        layout: Some(layout),
+        map: None,
+        completion: None,
     });
     Ok(())
 }
@@ -1037,6 +1381,14 @@ fn begin_raster(
                 .map_err(|e| e.to_string())?
                 .into(),
         )?;
+    }
+    if let Some(query) = &begin.occlusion_query_set {
+        let native_set = object(
+            query_set(query, registration, "raster occlusion query set")
+                .map_err(|error| error.to_string())?,
+        )
+        .ok_or_else(|| "raster occlusion query set was retired".to_owned())?;
+        set(&descriptor, "occlusionQuerySet", &native_set)?;
     }
     call1(encoder, "beginRenderPass", &descriptor.into())
 }

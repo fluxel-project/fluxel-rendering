@@ -62,6 +62,8 @@ pub enum OptionalFeature {
     IndependentBlend,
     /// Per-sample fragment shading.
     MultisampledShading,
+    /// A raster pipeline can narrow the default all-samples-enabled mask.
+    MultisampleMask,
     /// 64-bit vertex attributes.
     VertexAttribute64Bit,
     /// Occlusion queries can be recorded and resolved.
@@ -95,6 +97,12 @@ pub enum OptionalFeature {
     MultiDrawIndirectCount,
     /// Indexed draws accept a non-zero base vertex.
     BaseVertex,
+    /// Direct draws accept a non-zero first instance.
+    ///
+    /// This is separate from [`Self::IndirectFirstInstance`]: direct command
+    /// arguments are visible to the recorder and can fail closed before native
+    /// work, while indirect argument bytes are GPU-owned.
+    BaseInstance,
     /// Native clear-buffer lowering.
     ClearBuffer,
     /// Native clear-texture lowering.
@@ -226,8 +234,22 @@ pub enum OptionalFeature {
 pub enum LimitKey {
     /// Largest single buffer, in bytes.
     MaxBufferSize,
-    /// Required alignment for mapped buffer ranges.
+    /// Legacy required alignment for both the offset and size of mapped buffer
+    /// ranges.
+    ///
+    /// New backends must report [`Self::MapOffsetAlignment`] and
+    /// [`Self::MapSizeAlignment`] instead. This key remains as a compatibility
+    /// fallback for already-established backends whose native contract uses one
+    /// common alignment; it must never be used to approximate two different
+    /// constraints.
     MapAlignment,
+    /// Required alignment of a mapped buffer range's starting offset.
+    ///
+    /// This is deliberately distinct from [`Self::MapSizeAlignment`]. For
+    /// example, WebGPU requires an 8-byte offset but only a 4-byte size.
+    MapOffsetAlignment,
+    /// Required alignment of a mapped buffer range's size.
+    MapSizeAlignment,
     /// Largest 1D texture dimension.
     MaxTexture1dDimension,
     /// Largest 2D texture dimension.
@@ -461,6 +483,8 @@ impl LimitKey {
             LimitKey::MinUniformBufferOffsetAlignment
             | LimitKey::MinStorageBufferOffsetAlignment
             | LimitKey::MapAlignment
+            | LimitKey::MapOffsetAlignment
+            | LimitKey::MapSizeAlignment
             | LimitKey::QueryResolveBufferAlignment
             | LimitKey::ImmediateDataAlignment
             | LimitKey::UniformBoundsCheckAlignment

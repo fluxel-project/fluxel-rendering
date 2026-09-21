@@ -228,6 +228,15 @@ argument-buffer/root-signature strategy
 
 remain backend/toolchain-private and do not enter the portable API.
 
+Backend-private does not mean pipeline-dependent. For a fixed
+`ShaderAbiVersion`, an executable artifact's native resource indices must be
+derivable from that artifact's declared `ShaderInterface` and the frozen ABI
+rule alone. A legal pipeline-interface superset, an unused binding, or a change
+in vertex-buffer count must not renumber an already compiled shader's Metal
+`[[buffer(n)]]`, `[[texture(n)]]`, or `[[sampler(n)]]` arguments. Backends whose
+vertex streams share a native namespace with resources reserve a fixed ABI
+region for those streams rather than shifting resource arguments per pipeline.
+
 ---
 
 ## 19.4 Shader IO types
@@ -1999,6 +2008,7 @@ pub struct MultisampleState {
     pub count: u32,
 
     /// The portable sample mask aligns with the core mask width of Vulkan/WebGPU/D3D12.
+    /// u32::MAX is baseline; any narrower mask requires MultisampleMask.
     pub mask: u32,
 
     pub alpha_to_coverage_enabled: bool,
@@ -2021,6 +2031,14 @@ impl MultisampleState {
 }
 ```
 
+`InterpolationSampling::Sample` requests sample-frequency fragment
+interpolation and therefore requires `MultisampledShading` during raster or
+mesh-pipeline validation. A fragment output that writes the sample-mask built-in
+does not by itself request sample-frequency shading; it controls coverage for
+the invocation being executed. `MultisampleState.mask != u32::MAX` is a
+separate fixed-function request and requires `MultisampleMask`. Both gates are
+checked before native pipeline creation.
+
 `count` must be consistent with all active render target attachment sample counts.
 
 `alpha_to_coverage_enabled` is only valid when `count > 1`.
@@ -2030,6 +2048,20 @@ impl MultisampleState {
 # 26. Pipeline target signature
 
 Multiview is no longer half-frozen.
+
+A descriptor's non-zero `multiview_mask` has two precise capability shapes:
+
+```text
+0b0000_0111 = views 0, 1, 2  -> Multiview
+0b0000_0101 = views 0, 2     -> Multiview + SelectiveMultiview
+```
+
+Baseline `Multiview` accepts only a contiguous low-bit mask, mathematically
+`(1 << view_count) - 1`; `u32::MAX` is the 32-view boundary case. Any hole in
+the selected range is a selective-multiview request and is rejected unless
+`SelectiveMultiview` is enabled. Zero is never a multiview selection. This
+keeps a backend which only exposes native all-view amplification from claiming
+the stronger sparse-selection contract.
 
 Color locations allow holes, so:
 
@@ -2082,6 +2114,10 @@ pub struct RasterPipelineDescriptor {
 
     pub depth_stencil: Option<DepthStencilState>,
     pub multisample: MultisampleState,
+
+    /// A non-zero contiguous low mask requires Multiview. A sparse mask also
+    /// requires SelectiveMultiview.
+    pub multiview_mask: Option<u32>,
 
     /// Vector index = color output location.
     pub color_targets: Vec<Option<ColorTargetState>>,

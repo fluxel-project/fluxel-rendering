@@ -23,8 +23,8 @@ use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::texture::{TextureDimension, TextureUsage};
 use crate::api::shader::{
-    ShaderArtifact, ShaderLocation, ShaderLocationInterface, ShaderModule, ShaderNumericType,
-    ShaderStage,
+    InterpolationSampling, ShaderArtifact, ShaderLocation, ShaderLocationInterface, ShaderModule,
+    ShaderNumericType, ShaderStage,
 };
 
 use super::interface::{PipelineInterface, validate_pipeline_interface_descriptor};
@@ -126,7 +126,9 @@ pub struct RasterPipelineDescriptor {
     pub multisample: MultisampleState,
 
     /// Bit `n` selects view `n` for multiview rasterization. `None` is the
-    /// ordinary single-view path; `Some` must be non-zero.
+    /// ordinary single-view path; `Some` must be non-zero. A contiguous low
+    /// mask (`(1 << n) - 1`) needs `Multiview`; a mask with holes additionally
+    /// needs `SelectiveMultiview`.
     pub multiview_mask: Option<u32>,
 
     /// Vector index = color output location.
@@ -202,6 +204,10 @@ impl RasterPipelineDescriptor {
     }
 
     /// Enables the selected multiview layers for this pipeline.
+    ///
+    /// A contiguous low mask is the baseline multiview contract. Sparse masks
+    /// are valid portable descriptors, but creation requires the separately
+    /// advertised `SelectiveMultiview` capability.
     pub fn with_multiview_mask(mut self, mask: u32) -> Self {
         self.multiview_mask = Some(mask);
         self
@@ -398,6 +404,13 @@ pub(crate) fn validate_raster_pipeline_descriptor(
         ));
     }
     if let Some(mask) = desc.multiview_mask {
+        if !super::is_contiguous_low_multiview_mask(mask) {
+            require_feature(
+                true,
+                OptionalFeature::SelectiveMultiview,
+                "selective multiview rasterization",
+            )?;
+        }
         if let Some(max) = limit(LimitKey::MaxMultiviewViewCount) {
             if u64::from(32 - mask.leading_zeros()) > max {
                 return Err(RhiError::new(
@@ -427,6 +440,11 @@ pub(crate) fn validate_raster_pipeline_descriptor(
         desc.primitive.unclipped_depth,
         OptionalFeature::DepthClipControl,
         "unclipped depth",
+    )?;
+    require_feature(
+        desc.multisample.mask != u32::MAX,
+        OptionalFeature::MultisampleMask,
+        "a non-default multisample mask",
     )?;
     require_feature(
         desc.primitive.conservative,
@@ -571,6 +589,15 @@ pub(crate) fn validate_raster_pipeline_descriptor(
         .as_ref()
         .map(|fragment| &fragment.artifact().interface);
     if let Some(fragment_interface) = fragment_interface {
+        require_feature(
+            fragment_interface.inputs().iter().any(|input| {
+                input.interpolation.is_some_and(|interpolation| {
+                    interpolation.sampling == InterpolationSampling::Sample
+                })
+            }),
+            OptionalFeature::MultisampledShading,
+            "sample-frequency fragment interpolation",
+        )?;
         for input in fragment_interface.inputs() {
             let Some(output) = find_location(vertex_interface.outputs(), input.location) else {
                 return Err(RhiError::new(

@@ -1768,6 +1768,17 @@ pub(crate) fn buffers_for_test(
 
 /// A mock device that advertises the complete portable query vocabulary.
 pub(crate) fn query_device_for_test(identity: DeviceIdentity) -> Device {
+    query_device_with_occlusion_binding_for_test(
+        identity,
+        crate::api::query::OcclusionQueryBinding::Dynamic,
+    )
+}
+
+/// Query fixture with an explicit pass-level occlusion binding profile.
+pub(crate) fn query_device_with_occlusion_binding_for_test(
+    identity: DeviceIdentity,
+    binding: crate::api::query::OcclusionQueryBinding,
+) -> Device {
     let mut facts = CapabilityFacts::empty();
     let limits = BufferSupportLimits::new(1 << 20);
     for usage in BufferUsage::all() {
@@ -1805,6 +1816,7 @@ pub(crate) fn query_device_for_test(identity: DeviceIdentity) -> Device {
         crate::api::query::TimestampQueryCapabilities::new(1.0, None, true)
             .expect("mock timestamp facts are valid"),
     );
+    facts.record_occlusion_query_binding(binding);
     let native = MockDevice::with_capabilities(
         BackendKind::Dx12,
         MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
@@ -1884,6 +1896,47 @@ pub(crate) fn mapped_buffers_for_test(
     coherent: bool,
 ) -> (Device, Arc<MockDevice>) {
     mapped_buffers_with_options_for_test(identity, coherent, false)
+}
+
+/// Mapping fixture whose range offset and range size have distinct facts.
+/// This models WebGPU's 8-byte offset / 4-byte size contract without teaching
+/// unrelated mapping tests about a particular backend.
+pub(crate) fn mapped_buffers_with_alignment_for_test(
+    identity: DeviceIdentity,
+    offset_alignment: u64,
+    size_alignment: u64,
+) -> (Device, Arc<MockDevice>) {
+    let mut facts = CapabilityFacts::empty();
+    let limits = BufferSupportLimits::new(1 << 20);
+    for usage in BufferUsage::all() {
+        facts.record_buffer_support(
+            usage,
+            if usage.is_empty() {
+                BufferSupport::Unsupported
+            } else {
+                BufferSupport::Supported(limits)
+            },
+        );
+    }
+    facts.record_limit(
+        crate::api::platform::LimitKey::MapOffsetAlignment,
+        offset_alignment,
+    );
+    facts.record_limit(
+        crate::api::platform::LimitKey::MapSizeAlignment,
+        size_alignment,
+    );
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
+    (
+        Device::new(identity, observed_backend(native.clone()))
+            .expect("the mapping mock exposes base submission lanes"),
+        native,
+    )
 }
 
 /// A mapping fixture with only ordinary upload/readback-style map masks.

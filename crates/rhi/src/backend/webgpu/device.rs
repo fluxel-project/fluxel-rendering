@@ -308,6 +308,17 @@ fn limits(device: &JsValue) -> WebGpuLimits {
         max_texture_array_layers: u32_value("maxTextureArrayLayers"),
         max_bind_groups: u32_value("maxBindGroups"),
         max_bindings_per_bind_group: u32_value("maxBindingsPerBindGroup"),
+        max_uniform_buffers_per_shader_stage: u32_value("maxUniformBuffersPerShaderStage"),
+        max_storage_buffers_per_shader_stage: u32_value("maxStorageBuffersPerShaderStage"),
+        max_sampled_textures_per_shader_stage: u32_value("maxSampledTexturesPerShaderStage"),
+        max_storage_textures_per_shader_stage: u32_value("maxStorageTexturesPerShaderStage"),
+        max_samplers_per_shader_stage: u32_value("maxSamplersPerShaderStage"),
+        max_dynamic_uniform_buffers_per_pipeline_layout: u32_value(
+            "maxDynamicUniformBuffersPerPipelineLayout",
+        ),
+        max_dynamic_storage_buffers_per_pipeline_layout: u32_value(
+            "maxDynamicStorageBuffersPerPipelineLayout",
+        ),
         max_uniform_buffer_binding_size: u64_value("maxUniformBufferBindingSize"),
         max_storage_buffer_binding_size: u64_value("maxStorageBufferBindingSize"),
         min_uniform_buffer_offset_alignment: u64_value("minUniformBufferOffsetAlignment"),

@@ -602,7 +602,13 @@ impl crate::api::resource::backend::MappingRequestBackend for WebGpuMapRequest {
                     driver: self.driver.clone(),
                     buffer: self.buffer.clone(),
                     mode: self.mode,
-                    offset: self.range.offset,
+                    // Keep the browser's mapped lease alive through the public
+                    // `MappedRange`.  A Rust shadow is still useful because
+                    // the public trait exposes a slice, but `flush` must copy
+                    // that shadow *into this mapped range*, not unmap and
+                    // issue queue.writeBuffer.  The latter prematurely ended
+                    // the lease while callers could still mutate `bytes_mut`.
+                    mapped: Uint8Array::new(&mapped),
                     bytes,
                     unmapped: false,
                 })))
@@ -614,7 +620,7 @@ struct WebGpuMappedBuffer {
     driver: WebGpuDriver,
     buffer: JsValue,
     mode: crate::api::resource::MapMode,
-    offset: u64,
+    mapped: Uint8Array,
     bytes: Vec<u8>,
     unmapped: bool,
 }
@@ -645,47 +651,17 @@ impl crate::api::resource::backend::MappedBufferBackend for WebGpuMappedBuffer {
     }
     fn flush(&mut self) -> RhiResult<()> {
         if matches!(self.mode, crate::api::resource::MapMode::Write) {
-            let queue =
-                registry::with_device_handles(self.driver.registration(), |h| h.queue.clone())
-                    .ok_or_else(|| {
-                        error(
-                            RhiErrorKind::DeviceLost,
-                            "WebGPU mapped buffer",
-                            "device registration was retired",
-                        )
-                    })?;
-            let write = js::property(&queue, "writeBuffer")
-                .map_err(|e| {
-                    error(
-                        RhiErrorKind::BackendFailure,
-                        "GPUQueue.writeBuffer",
-                        js::message(&e),
-                    )
-                })?
-                .dyn_into::<Function>()
-                .map_err(|e| {
-                    error(
-                        RhiErrorKind::BackendFailure,
-                        "GPUQueue.writeBuffer",
-                        js::message(&e),
-                    )
-                })?;
-            let view = Uint8Array::from(self.bytes.as_slice());
-            self.unmap();
-            write
-                .call3(
-                    &queue,
-                    &self.buffer,
-                    &JsValue::from_f64(self.offset as f64),
-                    &view,
-                )
-                .map_err(|e| {
-                    error(
-                        RhiErrorKind::BackendFailure,
-                        "GPUQueue.writeBuffer",
-                        js::message(&e),
-                    )
-                })?;
+            if self.unmapped {
+                return Err(error(
+                    RhiErrorKind::InvalidUsage,
+                    "WebGPU mapped buffer",
+                    "the mapping lease has already ended",
+                ));
+            }
+            // `copy_from` writes directly into getMappedRange's ArrayBuffer.
+            // WebGPU commits those writes at unmap, which remains exclusively
+            // owned by the range's Drop implementation.
+            self.mapped.copy_from(self.bytes.as_slice());
         }
         Ok(())
     }

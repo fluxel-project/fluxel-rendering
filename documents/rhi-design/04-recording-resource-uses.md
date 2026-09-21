@@ -289,6 +289,10 @@ pub struct RasterScopeDescriptor {
     pub colors: Vec<Option<ColorAttachment>>,
 
     pub depth_stencil: Option<DepthStencilAttachment>,
+
+    /// Required by devices whose occlusion set is fixed in the native pass
+    /// descriptor; omitted for dynamic-set profiles or scopes without queries.
+    pub occlusion_query_set: Option<QuerySet>,
 }
 
 impl RasterScopeDescriptor {
@@ -305,6 +309,8 @@ impl RasterScopeDescriptor {
         mut self,
         attachment: DepthStencilAttachment,
     ) -> Self;
+
+    pub fn with_occlusion_query_set(mut self, set: QuerySet) -> Self;
 }
 ```
 
@@ -320,8 +326,15 @@ same width/height
 same sample_count (except resolve targets)
 ```
 
+If `CapabilityFacts::occlusion_query_binding()` is
+`FixedAtRasterScope`, every occlusion `begin_query()` additionally requires the
+scope descriptor to carry that same `QuerySet`. Wrong-device, non-occlusion,
+missing and mismatched sets are rejected during recording.
+
 Single-view pipelines require `layer_count == 1`. A multiview pipeline's
-non-zero mask selects attachment layers: its highest selected bit must be less
+non-zero mask selects attachment layers: baseline `Multiview` has already
+admitted only a contiguous low-bit mask, while a sparse mask has additionally
+been admitted by `SelectiveMultiview`. Its highest selected bit must be less
 than every main attachment's common `layer_count`; all color and depth/stencil
 main attachments must have identical layer counts. `begin_raster()` validates
 the common geometry, while `set_pipeline()` validates the pipeline mask after

@@ -851,8 +851,15 @@ ordinary staging buffers. The remaining mapping facts are:
 ```text
 PersistentMapping
 CoherentMapping or explicit flush/invalidate
-MapAlignment
+MapOffsetAlignment
+MapSizeAlignment
 ```
+
+Offset and size are separate facts because native APIs need not impose the
+same divisor on both. WebGPU, for example, requires an eight-byte map offset
+but only a four-byte map size. `MapAlignment` remains a compatibility fallback
+for older backend fact producers; new backends publish both precise keys and
+validation never invents a stronger common alignment.
 
 `Device::map_buffer` returns `RhiResult<MapBufferFuture<'_>>`. The future may
 remain pending until conflicting GPU use retires, registers its executor waker,

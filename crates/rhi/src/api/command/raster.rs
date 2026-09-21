@@ -50,6 +50,7 @@ use crate::api::command::{
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::identity::{Label, ObjectId};
 use crate::api::pipeline::{MeshPipeline, RasterPipeline, RenderTargetSignature, VertexStepMode};
+use crate::api::query::OcclusionQueryBinding;
 use crate::api::query::{QuerySet, QueryType, validate_query};
 use crate::api::resource::buffer::{BufferBinding, BufferUsage, validate_buffer_range};
 use crate::api::resource::texture::Extent3d;
@@ -80,6 +81,21 @@ impl CommandRecorder {
 
         let desc = desc.clone().canonicalized();
         crate::api::command::attachment::validate_raster_scope(&desc)?;
+        if let Some(set) = desc.occlusion_query_set.as_ref() {
+            if set.descriptor().ty != QueryType::Occlusion {
+                return Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "a raster scope's fixed query set must be an Occlusion query set",
+                )
+                .at("CommandRecorder::begin_raster"));
+            }
+            validate_query(
+                set,
+                0,
+                self.device_identity(),
+                "CommandRecorder::begin_raster",
+            )?;
+        }
 
         let colors: Vec<(u32, ColorAttachment)> = desc
             .attached_colors()
@@ -94,6 +110,7 @@ impl CommandRecorder {
             label: desc.label.clone(),
             colors: colors.clone(),
             depth_stencil: desc.depth_stencil.clone(),
+            occlusion_query_set: desc.occlusion_query_set.clone(),
         };
         self.record_command(RecordedPayload::RasterBegin(begin), uses, RASTER_DOMAIN);
         self.set_phase(RecorderPhase::RasterScopeOpen);
@@ -105,6 +122,7 @@ impl CommandRecorder {
             layer_count,
             colors,
             depth_stencil: desc.depth_stencil,
+            fixed_occlusion_query_set: desc.occlusion_query_set,
             pipeline: None,
             mesh_pipeline: None,
             groups: Vec::new(),
@@ -146,6 +164,8 @@ pub struct RasterScope<'a> {
     colors: Vec<(u32, ColorAttachment)>,
     /// The depth/stencil attachment, fixed at `begin_raster`.
     depth_stencil: Option<DepthStencilAttachment>,
+    /// Set selected at pass creation on fixed-set profiles.
+    fixed_occlusion_query_set: Option<QuerySet>,
 
     /// The bound pipeline, if any.
     pipeline: Option<RasterPipeline>,
@@ -783,6 +803,37 @@ impl RasterScope<'_> {
             self.recorder.device_identity(),
             "RasterScope::begin_query",
         )?;
+        if set.descriptor().ty == QueryType::Occlusion {
+            match self.recorder.capabilities().occlusion_query_binding() {
+                OcclusionQueryBinding::Dynamic => {
+                    if let Some(fixed) = self.fixed_occlusion_query_set.as_ref()
+                        && fixed.id() != set.id()
+                    {
+                        return Err(RhiError::new(
+                            RhiErrorKind::InvalidUsage,
+                            "this raster scope fixed a different occlusion query set",
+                        )
+                        .at("RasterScope::begin_query"));
+                    }
+                }
+                OcclusionQueryBinding::FixedAtRasterScope => {
+                    let Some(fixed) = self.fixed_occlusion_query_set.as_ref() else {
+                        return Err(RhiError::new(
+                            RhiErrorKind::Unsupported,
+                            "this device requires its occlusion query set at raster-scope creation",
+                        )
+                        .at("RasterScope::begin_query"));
+                    };
+                    if fixed.id() != set.id() {
+                        return Err(RhiError::new(
+                            RhiErrorKind::InvalidUsage,
+                            "this raster scope fixed a different occlusion query set",
+                        )
+                        .at("RasterScope::begin_query"));
+                    }
+                }
+            }
+        }
         if self.active_query.is_some() {
             return Err(RhiError::new(
                 RhiErrorKind::InvalidUsage,
@@ -1070,6 +1121,7 @@ impl RasterScope<'_> {
         vertices: core::ops::Range<u32>,
         instances: core::ops::Range<u32>,
     ) -> RhiResult<()> {
+        self.validate_first_instance(&instances, "RasterScope::draw")?;
         let pipeline = self.bound_pipeline()?;
         self.validate_groups(&pipeline)?;
         self.validate_vertex_buffers(&pipeline, &vertices, &instances)?;
@@ -1109,6 +1161,7 @@ impl RasterScope<'_> {
         base_vertex: i32,
         instances: core::ops::Range<u32>,
     ) -> RhiResult<()> {
+        self.validate_first_instance(&instances, "RasterScope::draw_indexed")?;
         if base_vertex != 0
             && !self
                 .recorder
@@ -1193,6 +1246,26 @@ impl RasterScope<'_> {
             uses,
             RASTER_DOMAIN,
         );
+        Ok(())
+    }
+
+    fn validate_first_instance(
+        &self,
+        instances: &core::ops::Range<u32>,
+        operation: &'static str,
+    ) -> RhiResult<()> {
+        if instances.start != 0
+            && !self
+                .recorder
+                .capabilities()
+                .supports_feature(crate::api::platform::requirements::OptionalFeature::BaseInstance)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device did not enable BaseInstance, so direct draws require first_instance == 0",
+            )
+            .at(operation));
+        }
         Ok(())
     }
 

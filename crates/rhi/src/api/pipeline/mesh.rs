@@ -16,7 +16,8 @@ use crate::api::platform::Device;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
 use crate::api::resource::texture::{TextureDimension, TextureUsage};
 use crate::api::shader::{
-    ArtifactAcceptance, ShaderArtifact, ShaderLocation, ShaderModule, ShaderStage,
+    ArtifactAcceptance, InterpolationSampling, ShaderArtifact, ShaderLocation, ShaderModule,
+    ShaderStage,
 };
 use core::fmt;
 use std::sync::Arc;
@@ -43,7 +44,9 @@ pub struct MeshPipelineDescriptor {
     pub depth_stencil: Option<DepthStencilState>,
     /// Multisample state shared by every active attachment.
     pub multisample: MultisampleState,
-    /// Optional non-zero multiview mask.
+    /// Optional non-zero multiview mask. A contiguous low mask only requires
+    /// `Multiview`; a mask with holes additionally requires
+    /// `SelectiveMultiview`.
     pub multiview_mask: Option<u32>,
     /// Vector index = fragment output location; holes are preserved.
     pub color_targets: Vec<Option<ColorTargetState>>,
@@ -110,7 +113,8 @@ impl MeshPipelineDescriptor {
         self.multisample = state;
         self
     }
-    /// Enables selected multiview layers. Zero is rejected at creation.
+    /// Enables selected multiview layers. Zero is rejected at creation; a
+    /// sparse selection additionally requires `SelectiveMultiview`.
     pub fn with_multiview_mask(mut self, mask: u32) -> Self {
         self.multiview_mask = Some(mask);
         self
@@ -224,34 +228,48 @@ pub(crate) fn validate_mesh_fixed_state(
             "depth-bias clamp is not enabled on this device",
         ));
     }
-    let Some(mask) = desc.multiview_mask else {
-        return Ok(());
-    };
-    if mask == 0 {
-        return Err(RhiError::new(
-            RhiErrorKind::InvalidUsage,
-            "a mesh-pipeline multiview mask must select at least one view",
-        ));
-    }
-    if !feature_supported(OptionalFeature::Multiview) {
+    if desc.multisample.mask != u32::MAX && !feature_supported(OptionalFeature::MultisampleMask) {
         return Err(RhiError::new(
             RhiErrorKind::Unsupported,
-            "this device does not enable multiview rasterization",
+            "a non-default multisample mask is not enabled on this device",
         ));
     }
-    if !feature_supported(OptionalFeature::MeshShaderMultiview) {
-        return Err(RhiError::new(
-            RhiErrorKind::Unsupported,
-            "this device does not enable mesh-shader multiview",
-        ));
-    }
-    if let Some(max) = limit(crate::api::platform::requirements::LimitKey::MaxMultiviewViewCount)
-        && u64::from(32 - mask.leading_zeros()) > max
-    {
-        return Err(RhiError::new(
-            RhiErrorKind::InvalidUsage,
-            "the mesh-pipeline multiview mask exceeds MaxMultiviewViewCount",
-        ));
+    if let Some(mask) = desc.multiview_mask {
+        if mask == 0 {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "a mesh-pipeline multiview mask must select at least one view",
+            ));
+        }
+        if !feature_supported(OptionalFeature::Multiview) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not enable multiview rasterization",
+            ));
+        }
+        if !super::is_contiguous_low_multiview_mask(mask)
+            && !feature_supported(OptionalFeature::SelectiveMultiview)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "selective multiview rasterization is not enabled on this device",
+            ));
+        }
+        if !feature_supported(OptionalFeature::MeshShaderMultiview) {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "this device does not enable mesh-shader multiview",
+            ));
+        }
+        if let Some(max) =
+            limit(crate::api::platform::requirements::LimitKey::MaxMultiviewViewCount)
+            && u64::from(32 - mask.leading_zeros()) > max
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::InvalidUsage,
+                "the mesh-pipeline multiview mask exceeds MaxMultiviewViewCount",
+            ));
+        }
     }
     Ok(())
 }
@@ -337,6 +355,17 @@ pub(crate) fn validate_mesh_pipeline_descriptor(
         .as_ref()
         .map(|module| &module.artifact().interface);
     if let Some(fragment) = fragment_interface {
+        if fragment.inputs().iter().any(|input| {
+            input.interpolation.is_some_and(|interpolation| {
+                interpolation.sampling == InterpolationSampling::Sample
+            })
+        }) && !(facts.feature_supported)(OptionalFeature::MultisampledShading)
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "sample-frequency fragment interpolation is not enabled on this device",
+            ));
+        }
         validate_stage_linkage(mesh_interface, fragment, "mesh", "fragment")?;
     } else if let Some(index) = desc.color_targets.iter().position(Option::is_some) {
         return Err(RhiError::new(

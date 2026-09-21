@@ -311,6 +311,12 @@ pub(super) fn probe(
 
 fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabilityLimits) {
     facts.record_feature(OptionalFeature::Compute);
+    facts.record_feature(OptionalFeature::BaseVertex);
+    facts.record_feature(OptionalFeature::BaseInstance);
+    // VkPipelineMultisampleStateCreateInfo always carries pSampleMask. Sample
+    // shading remains separate because it needs the sampleRateShading device
+    // feature and this backend currently keeps sampleShadingEnable false.
+    facts.record_feature(OptionalFeature::MultisampleMask);
     // `firstInstance` is GPU-provided indirect data, so it cannot be checked
     // by portable recording. Do not publish even one raster indirect draw
     // unless the native feature guarantees that field is honored.
@@ -355,7 +361,8 @@ fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabi
     // allocation offset zero then slices the portable range, making
     // byte-granular map ranges safe.
     facts.record_feature(OptionalFeature::MappablePrimaryBuffers);
-    facts.record_limit(LimitKey::MapAlignment, 1);
+    facts.record_limit(LimitKey::MapOffsetAlignment, 1);
+    facts.record_limit(LimitKey::MapSizeAlignment, 1);
     // Query pools and result copies are Vulkan core. Query-pool creation can
     // still report OOM, but has no device feature bit beyond the exact
     // pipeline-statistics feature handled below.

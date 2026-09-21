@@ -232,6 +232,8 @@ pub(crate) struct RasterBegin {
     pub(crate) colors: Vec<(u32, ColorAttachment)>,
     /// The depth/stencil attachment, if any.
     pub(crate) depth_stencil: Option<DepthStencilAttachment>,
+    /// Set bound at pass creation for fixed-set occlusion profiles.
+    pub(crate) occlusion_query_set: Option<QuerySet>,
 }
 
 /// One raster draw, with the state that was current when it was issued.

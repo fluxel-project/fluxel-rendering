@@ -1345,6 +1345,14 @@ Therefore, the portable semantic promises only:
 
 It does not promise backend cost.
 
+WebGPU is a concrete example of that cost boundary. After an acquired canvas
+texture is abandoned, `getCurrentTexture()` may keep returning that same native
+texture until the user agent expires it. The backend must therefore keep the
+portable presentation lease unavailable across at least one browser task
+boundary and wake pending acquisition afterwards. It must not mint a second
+`AcquiredFrameId` for the still-current native texture merely because the first
+portable frame was abandoned.
+
 ---
 
 ## 44.5 Drop safety

@@ -1,6 +1,6 @@
 //! Metal execution-domain ownership and the portable backend seam.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -24,6 +24,14 @@ use super::command::MetalCommandSpine;
 pub(super) struct MetalShared {
     pub(super) device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub(super) queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    /// Whether this execution domain may invoke the extended direct-draw
+    /// selectors carrying base vertex/base instance.  It mirrors the fact gate;
+    /// command lowering still checks it because replayed packets are a native
+    /// trust boundary.
+    pub(super) base_vertex_instance: bool,
+    /// Lazy because many devices never record a standalone resolve. Pipeline
+    /// creation is backend-private and is serialized with this one tiny cache.
+    pub(super) resolve_pipeline: Mutex<Option<super::resolve::MetalResolvePipeline>>,
 }
 
 unsafe impl Send for MetalShared {}
@@ -54,8 +62,10 @@ impl MetalDevice {
         })?;
         let facts = super::facts::baseline(&native);
         let shared = Arc::new(MetalShared {
+            base_vertex_instance: super::facts::supports_base_vertex_instance(&native),
             device: native,
             queue,
+            resolve_pipeline: Mutex::new(None),
         });
         let presentation_loss = Arc::new(super::presentation::MetalPresentationLoss::default());
         let command = MetalCommandSpine::new(Arc::clone(&shared), Arc::clone(&presentation_loss))?;
@@ -153,9 +163,10 @@ impl DeviceBackend for MetalDevice {
 
     fn create_query_set(
         &self,
-        _descriptor: &crate::api::query::QuerySetDescriptor,
+        descriptor: &crate::api::query::QuerySetDescriptor,
     ) -> RhiResult<Box<dyn crate::api::resource::backend::QuerySetBackend>> {
-        self.unsupported("query sets")
+        super::query::create_query_set(&self.shared.device, descriptor)
+            .map(|value| Box::new(value) as Box<dyn crate::api::resource::backend::QuerySetBackend>)
     }
 
     fn create_texture(

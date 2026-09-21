@@ -291,28 +291,33 @@ fn prefer_optional_feature(
 /// requires that precise browser feature string; `None` has no reviewed route.
 fn webgpu_optional_feature(feature: OptionalFeature) -> Option<Option<&'static str>> {
     Some(match feature {
+        // WebGPU's MAP_READ/MAP_WRITE usages are mutually exclusive with the
+        // ordinary GPU usages required by the portable primary-buffer family.
+        // Reject it during request planning, rather than after creating a
+        // device only to withdraw the claimed requirement.
+        OptionalFeature::MappablePrimaryBuffers => return None,
         OptionalFeature::Compute
         | OptionalFeature::ComparisonSamplers
         | OptionalFeature::BaseVertex
+        | OptionalFeature::BaseInstance
+        | OptionalFeature::MultisampleMask
+        | OptionalFeature::MultisampledShading
         | OptionalFeature::ClearBuffer
         | OptionalFeature::IndirectDispatch
         | OptionalFeature::IndependentBlend
-        | OptionalFeature::MappablePrimaryBuffers => None,
+        | OptionalFeature::OcclusionQuery
+        | OptionalFeature::QueryResolve => None,
         OptionalFeature::IndirectDraw | OptionalFeature::IndirectFirstInstance => {
             Some("indirect-first-instance")
         }
-        // Do not map `timestamp-query`: resolveQuerySet has a direct WebGPU
-        // lowering (and a 256-byte destination-offset alignment), but the
-        // whole public family is not representable. WebGPU fixes one occlusion
-        // set at render-pass creation and exposes pass timestamp boundaries,
-        // while the RHI records sequential sets and exact command positions.
-        // Returning None preserves fail-closed request and fact semantics.
-        OptionalFeature::OcclusionQuery
-        | OptionalFeature::TimestampQuery
+        // Do not map `timestamp-query`: WebGPU exposes pass timestamp
+        // boundaries, while the RHI records exact command positions and
+        // requires a trustworthy tick-to-nanosecond conversion. Occlusion is
+        // independently core and uses the fixed-at-raster-scope profile above.
+        OptionalFeature::TimestampQuery
         | OptionalFeature::TimestampInsideEncoder
         | OptionalFeature::TimestampInsideRasterScope
-        | OptionalFeature::TimestampInsideComputeScope
-        | OptionalFeature::QueryResolve => return None,
+        | OptionalFeature::TimestampInsideComputeScope => return None,
         _ => return None,
     })
 }

@@ -386,6 +386,51 @@ fn color_scope(label: &str) -> RasterScopeDescriptor {
     )
 }
 
+/// Fixed-set query APIs (notably WebGPU) select their occlusion set with the
+/// render-pass descriptor. The portable descriptor carries that binding, and a
+/// later begin must not silently select another set.
+#[test]
+fn fixed_occlusion_profile_requires_and_honors_the_scope_query_set() {
+    use crate::api::query::{OcclusionQueryBinding, QuerySetDescriptor, QueryType};
+    use crate::api::tests::mock::query_device_with_occlusion_binding_for_test;
+
+    let device = query_device_with_occlusion_binding_for_test(
+        device(),
+        OcclusionQueryBinding::FixedAtRasterScope,
+    );
+    assert_eq!(
+        device.capabilities().occlusion_query_binding(),
+        OcclusionQueryBinding::FixedAtRasterScope
+    );
+    let first = device
+        .create_query_set(&QuerySetDescriptor::new(QueryType::Occlusion, 2))
+        .expect("first occlusion set");
+    let second = device
+        .create_query_set(&QuerySetDescriptor::new(QueryType::Occlusion, 2))
+        .expect("second occlusion set");
+
+    let mut recorder = device
+        .create_recorder(&crate::api::command::RecorderDescriptor::new())
+        .unwrap();
+    let mut scope = recorder.begin_raster(&color_scope("fixed none")).unwrap();
+    assert_eq!(
+        scope.begin_query(&first, 0).unwrap_err().kind(),
+        crate::api::error::RhiErrorKind::Unsupported
+    );
+    scope.end().unwrap();
+
+    let mut scope = recorder
+        .begin_raster(&color_scope("fixed first").with_occlusion_query_set(first.clone()))
+        .unwrap();
+    assert_eq!(
+        scope.begin_query(&second, 0).unwrap_err().kind(),
+        crate::api::error::RhiErrorKind::InvalidUsage
+    );
+    scope.begin_query(&first, 1).unwrap();
+    scope.end_query(&first, 1).unwrap();
+    scope.end().unwrap();
+}
+
 fn vertex_module(_id: u64) -> ShaderModule {
     let artifact = ShaderArtifact::new(
         ShaderStage::Vertex,

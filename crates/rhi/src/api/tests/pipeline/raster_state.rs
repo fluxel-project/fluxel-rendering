@@ -107,3 +107,85 @@ fn a_created_pipeline_stores_the_canonical_signature() {
     assert_eq!(pipeline.interface().id(), object(40));
     assert_eq!(pipeline.device_identity(), device());
 }
+
+#[test]
+fn multiview_masks_distinguish_baseline_selective_and_the_32_view_boundary() {
+    // Positive: baseline multiview is a compact prefix of views and does not
+    // need the stronger selective capability.
+    let baseline = raster_with(vertex_module(51, Vec::new())).with_multiview_mask(0b111);
+    assert!(
+        check_raster(
+            &baseline,
+            &Facts::new().without_feature(OptionalFeature::SelectiveMultiview),
+        )
+        .is_ok()
+    );
+
+    // Negative: a hole is observable semantics, not merely an alternate bit
+    // spelling for baseline multiview.
+    let sparse = raster_with(vertex_module(52, Vec::new())).with_multiview_mask(0b101);
+    assert_kind(
+        check_raster(
+            &sparse,
+            &Facts::new().without_feature(OptionalFeature::SelectiveMultiview),
+        ),
+        RhiErrorKind::Unsupported,
+    );
+    assert!(check_raster(&sparse, &Facts::new()).is_ok());
+
+    // Boundary: all 32 view bits are still a contiguous low mask. `u32::MAX`
+    // must not overflow into a false sparse-mask rejection.
+    let all_views = raster_with(vertex_module(53, Vec::new())).with_multiview_mask(u32::MAX);
+    assert!(
+        check_raster(
+            &all_views,
+            &Facts::new()
+                .without_feature(OptionalFeature::SelectiveMultiview)
+                .limit(LimitKey::MaxMultiviewViewCount, 32),
+        )
+        .is_ok()
+    );
+    assert_kind(
+        check_raster(
+            &all_views,
+            &Facts::new().limit(LimitKey::MaxMultiviewViewCount, 31),
+        ),
+        RhiErrorKind::InvalidUsage,
+    );
+
+    // Zero is neither baseline nor selective multiview.
+    let zero = raster_with(vertex_module(54, Vec::new())).with_multiview_mask(0);
+    assert_kind(
+        check_raster(&zero, &Facts::new()),
+        RhiErrorKind::InvalidUsage,
+    );
+}
+
+#[test]
+fn non_default_multisample_masks_are_an_explicit_capability_request() {
+    // The all-open mask is baseline and must not make an otherwise ordinary
+    // pipeline depend on the optional native fixed-function state.
+    let baseline = raster_with(vertex_module(55, Vec::new()));
+    assert!(
+        check_raster(
+            &baseline,
+            &Facts::new().without_feature(OptionalFeature::MultisampleMask),
+        )
+        .is_ok()
+    );
+
+    // A partially enabled mask and the all-disabled boundary are both real
+    // state requests, so neither may silently lower as the baseline mask.
+    for mask in [0x0000_00ff, 0] {
+        let narrowed = raster_with(vertex_module(56, Vec::new()))
+            .with_multisample(MultisampleState::new(4).with_mask(mask));
+        assert_kind(
+            check_raster(
+                &narrowed,
+                &Facts::new().without_feature(OptionalFeature::MultisampleMask),
+            ),
+            RhiErrorKind::Unsupported,
+        );
+        assert!(check_raster(&narrowed, &Facts::new()).is_ok());
+    }
+}

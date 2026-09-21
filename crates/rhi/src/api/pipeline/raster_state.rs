@@ -568,6 +568,10 @@ pub struct MultisampleState {
     pub count: u32,
 
     /// The portable sample mask aligns with the core mask width of Vulkan/WebGPU/D3D12.
+    ///
+    /// `u32::MAX` is baseline. Any narrower value requires
+    /// [`OptionalFeature::MultisampleMask`](crate::api::platform::OptionalFeature::MultisampleMask)
+    /// when the enclosing raster or mesh pipeline is created.
     pub mask: u32,
 
     /// Whether alpha-to-coverage is enabled.

@@ -13,9 +13,10 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSError, NSString};
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCompareFunction,
-    MTLComputePipelineState, MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStencilDescriptor, MTLStencilOperation,
-    MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+    MTLComputePipelineState, MTLDepthClipMode, MTLDepthStencilDescriptor, MTLDepthStencilState,
+    MTLDevice, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStencilDescriptor,
+    MTLStencilOperation, MTLVertexAmplificationViewMapping, MTLVertexDescriptor, MTLVertexFormat,
+    MTLVertexStepFunction,
 };
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
@@ -70,6 +71,13 @@ pub(super) struct MetalRasterPipeline {
     _shared: Arc<MetalShared>,
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     depth_stencil: Option<Retained<ProtocolObject<dyn MTLDepthStencilState>>>,
+    /// Metal depth clipping is render-encoder state, not part of the PSO. Keep
+    /// the pipeline-selected value here so command lowering can apply it whenever
+    /// this pipeline becomes current without rereading a portable descriptor.
+    depth_clip_mode: Option<MTLDepthClipMode>,
+    /// One mapping per selected portable multiview bit. Sparse masks preserve
+    /// their original layer index instead of compacting selected layers.
+    vertex_amplification_mappings: Option<Vec<MTLVertexAmplificationViewMapping>>,
     /// Stable native direct-argument mapping derived from the pipeline interface.
     abi: MetalBindingAbi,
 }
@@ -86,6 +94,16 @@ impl MetalRasterPipeline {
     }
     pub(super) fn depth_stencil(&self) -> Option<&ProtocolObject<dyn MTLDepthStencilState>> {
         self.depth_stencil.as_deref()
+    }
+    /// The render-encoder depth clip mode selected from `PrimitiveState`.
+    pub(super) const fn depth_clip_mode(&self) -> Option<MTLDepthClipMode> {
+        self.depth_clip_mode
+    }
+    /// The view mappings command lowering installs for a multiview draw.
+    pub(super) fn vertex_amplification_mappings(
+        &self,
+    ) -> Option<&[MTLVertexAmplificationViewMapping]> {
+        self.vertex_amplification_mappings.as_deref()
     }
 }
 
@@ -115,7 +133,10 @@ pub(super) fn create_compute_pipeline(
                 "Metal compute pipeline shader has no validated workgroup size",
             )
         })?;
-    let abi = MetalBindingAbi::from_interface(&descriptor.interface)?;
+    let abi = MetalBindingAbi::from_compute_interface(
+        &descriptor.interface,
+        &descriptor.shader.artifact().interface,
+    )?;
     Ok(MetalComputePipeline {
         _shared: shared,
         state,
@@ -139,6 +160,25 @@ pub(super) fn create_raster_pipeline(
     native.setFragmentFunction(fragment.map(|shader| shader.function()));
     native.setRasterSampleCount(descriptor.multisample.count as usize);
     native.setAlphaToCoverageEnabled(descriptor.multisample.alpha_to_coverage_enabled);
+    let vertex_amplification_mappings = multiview_mappings(descriptor.multiview_mask);
+    if let Some(mappings) = &vertex_amplification_mappings {
+        // Metal does not bounds-check the unsafe PSO setter. Public validation
+        // has already refused a zero mask; keep an exact native count check here
+        // as a defence against stale capability facts.
+        if !shared
+            .device
+            .supportsVertexAmplificationCount(mappings.len())
+        {
+            return Err(RhiError::new(
+                RhiErrorKind::Unsupported,
+                "Metal does not support this multiview amplification count",
+            )
+            .at("MetalDevice::create_raster_pipeline"));
+        }
+        unsafe {
+            native.setMaxVertexAmplificationCount(mappings.len());
+        }
+    }
     if let Some(label) = descriptor.label.as_deref() {
         native.setLabel(Some(&NSString::from_str(label)));
     }
@@ -149,9 +189,33 @@ pub(super) fn create_raster_pipeline(
         .as_ref()
         .map(|state| create_depth_stencil_state(&shared.device, state))
         .transpose()?;
-    let abi = MetalBindingAbi::from_raster_interface(
+    // `unclipped_depth` is validated against DepthClipControl before this
+    // backend is reached. Metal exposes the corresponding setting on the render
+    // encoder (rather than on MTLRenderPipelineDescriptor), so retain the exact
+    // native choice with the immutable pipeline for command lowering.
+    // On supporting devices retain both Clamp and the explicit Clip reset: the
+    // mode is encoder state and would otherwise leak across pipeline switches.
+    // Older families retain `None` and never receive the optional selector.
+    let depth_clip_supported = super::facts::supports_depth_clip_control(&shared.device);
+    if descriptor.primitive.unclipped_depth && !depth_clip_supported {
+        return Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "Metal depth-clip clamp is unavailable on this device",
+        )
+        .at("MetalDevice::create_raster_pipeline"));
+    }
+    let depth_clip_mode = depth_clip_supported.then_some(if descriptor.primitive.unclipped_depth {
+        MTLDepthClipMode::Clamp
+    } else {
+        MTLDepthClipMode::Clip
+    });
+    let abi = MetalBindingAbi::from_raster_interfaces(
         &descriptor.interface,
-        descriptor.vertex_input.buffers.len(),
+        &descriptor.vertex.artifact().interface,
+        descriptor
+            .fragment
+            .as_ref()
+            .map(|shader| &shader.artifact().interface),
     )?;
     let state = shared
         .device
@@ -161,8 +225,45 @@ pub(super) fn create_raster_pipeline(
         _shared: shared,
         state,
         depth_stencil,
+        depth_clip_mode,
+        vertex_amplification_mappings,
         abi,
     })
+}
+
+/// Preserves each selected logical view's index as both native offsets. Thus a
+/// SelectiveMultiview mask such as `0b101` renders into layers zero and two,
+/// rather than incorrectly compacting its second view into layer one.
+fn multiview_mappings(mask: Option<u32>) -> Option<Vec<MTLVertexAmplificationViewMapping>> {
+    mask.map(|mask| {
+        (0..u32::BITS)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| MTLVertexAmplificationViewMapping {
+                viewportArrayIndexOffset: bit,
+                renderTargetArrayIndexOffset: bit,
+            })
+            .collect()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selective_multiview_keeps_sparse_layer_indices() {
+        let mappings = multiview_mappings(Some(0b101)).expect("a mask has mappings");
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0].viewportArrayIndexOffset, 0);
+        assert_eq!(mappings[0].renderTargetArrayIndexOffset, 0);
+        assert_eq!(mappings[1].viewportArrayIndexOffset, 2);
+        assert_eq!(mappings[1].renderTargetArrayIndexOffset, 2);
+    }
+
+    #[test]
+    fn ordinary_raster_has_no_amplification_mapping() {
+        assert!(multiview_mappings(None).is_none());
+    }
 }
 
 fn create_depth_stencil_state(

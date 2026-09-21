@@ -120,7 +120,7 @@ use crate::api::binding::{BindingCount, BindingLimitClass, BindingSupport, Bindi
 use crate::api::format::{FormatFacts, TextureFormat, TextureSupport, TextureSupportQuery};
 use crate::api::internal::digest::sha256;
 use crate::api::platform::requirements::{LimitKey, OptionalFeature};
-use crate::api::query::{PipelineStatistics, TimestampQueryCapabilities};
+use crate::api::query::{OcclusionQueryBinding, PipelineStatistics, TimestampQueryCapabilities};
 use crate::api::resource::buffer::{BufferSupport, BufferSupportQuery, BufferUsage};
 use crate::api::resource::route::{RouteQuery, RouteSupport};
 use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
@@ -431,6 +431,7 @@ pub(crate) struct CapabilityFacts {
     transient: TransientCapabilities,
     pipeline_statistics: PipelineStatistics,
     timestamp_queries: TimestampQueryCapabilities,
+    occlusion_query_binding: OcclusionQueryBinding,
     subgroup_size: Option<SubgroupSizeRange>,
     cooperative_matrices: Vec<CooperativeMatrixProperties>,
 }
@@ -478,6 +479,7 @@ impl CapabilityFacts {
             },
             pipeline_statistics: PipelineStatistics::NONE,
             timestamp_queries: TimestampQueryCapabilities::NONE,
+            occlusion_query_binding: OcclusionQueryBinding::Dynamic,
             subgroup_size: None,
             cooperative_matrices: Vec::new(),
         }
@@ -682,6 +684,13 @@ impl CapabilityFacts {
         );
         write_section(
             &mut out,
+            vec![encode_entry(
+                |out| out.push(0),
+                |out| self.occlusion_query_binding.encode_into(out),
+            )],
+        );
+        write_section(
+            &mut out,
             self.subgroup_size
                 .into_iter()
                 .map(|range| encode_entry(|out| out.push(0), |out| range.encode_into(out)))
@@ -830,6 +839,13 @@ impl CapabilityFacts {
     /// Records timestamp conversion and resolve facts probed for this device.
     pub(crate) fn record_timestamp_queries(&mut self, facts: TimestampQueryCapabilities) {
         self.timestamp_queries = facts;
+    }
+
+    /// Records whether an occlusion query set is selected dynamically or at
+    /// raster-pass creation.  This is independent from the query feature bit:
+    /// it answers *how* a supported family is recorded.
+    pub(crate) fn record_occlusion_query_binding(&mut self, binding: OcclusionQueryBinding) {
+        self.occlusion_query_binding = binding;
     }
 
     /// Records the valid subgroup-size interval after native feature probing.
@@ -1360,6 +1376,10 @@ impl EnabledCapabilities {
     /// Timestamp conversion and non-blocking-resolve facts for this device.
     pub fn timestamp_queries(&self) -> TimestampQueryCapabilities {
         self.facts.timestamp_queries
+    }
+    /// The enabled device's occlusion query-set binding profile.
+    pub fn occlusion_query_binding(&self) -> OcclusionQueryBinding {
+        self.facts.occlusion_query_binding
     }
     /// Valid subgroup sizes, or `None` when subgroup operations are unavailable.
     pub fn subgroup_size_range(&self) -> Option<SubgroupSizeRange> {

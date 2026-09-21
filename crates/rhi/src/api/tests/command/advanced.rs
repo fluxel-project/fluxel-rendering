@@ -167,7 +167,7 @@ fn mesh_fixed_state_refuses_zero_and_unavailable_or_out_of_range_multiview() {
         crate::api::pipeline::mesh::validate_mesh_fixed_state(&zero_mask, |_| true, |_| None),
         RhiErrorKind::InvalidUsage,
     );
-    let selected = base.with_multiview_mask(0b100);
+    let selected = base.clone().with_multiview_mask(0b100);
     assert_kind(
         crate::api::pipeline::mesh::validate_mesh_fixed_state(&selected, |_| false, |_| None),
         RhiErrorKind::Unsupported,
@@ -185,6 +185,26 @@ fn mesh_fixed_state_refuses_zero_and_unavailable_or_out_of_range_multiview() {
             &selected,
             |_| true,
             |key| (key == LimitKey::MaxMultiviewViewCount).then_some(3),
+        )
+        .is_ok()
+    );
+
+    // Mesh pipelines carry the same mask contract as ordinary raster
+    // pipelines: a hole is an opt-in selective-multiview request.
+    assert_kind(
+        crate::api::pipeline::mesh::validate_mesh_fixed_state(
+            &selected,
+            |feature| feature != OptionalFeature::SelectiveMultiview,
+            |_| None,
+        ),
+        RhiErrorKind::Unsupported,
+    );
+    let contiguous = base.with_multiview_mask(0b111);
+    assert!(
+        crate::api::pipeline::mesh::validate_mesh_fixed_state(
+            &contiguous,
+            |feature| feature != OptionalFeature::SelectiveMultiview,
+            |_| None,
         )
         .is_ok()
     );

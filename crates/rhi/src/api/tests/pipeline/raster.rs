@@ -338,6 +338,32 @@ fn alpha_to_coverage_requires_multisampling_a_float4_output_and_a_written_mask()
 }
 
 #[test]
+fn sample_frequency_interpolation_requires_multisampled_shading() {
+    let sample = Some(ShaderInterpolation {
+        mode: InterpolationMode::Perspective,
+        sampling: InterpolationSampling::Sample,
+    });
+    let mut producer = float32(0, 4);
+    producer.interpolation = sample;
+    let mut consumer = float32(0, 4);
+    consumer.interpolation = sample;
+    let pipeline = raster_with(vertex_module(57, vec![producer])).with_fragment(fragment_module(
+        58,
+        vec![consumer],
+        Vec::new(),
+    ));
+
+    assert!(check_raster(&pipeline, &permissive()).is_ok());
+    assert_kind(
+        check_raster(
+            &pipeline,
+            &permissive().without_feature(OptionalFeature::MultisampledShading),
+        ),
+        RhiErrorKind::Unsupported,
+    );
+}
+
+#[test]
 fn a_raster_pipeline_debug_prints_portable_identity_only() {
     let pipeline = RasterPipeline::new(
         object(51),

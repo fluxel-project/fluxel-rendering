@@ -492,6 +492,33 @@ fn base_vertex_is_capability_gated_but_zero_remains_portable() {
 }
 
 #[test]
+fn first_instance_is_capability_gated_but_zero_remains_portable() {
+    let layout = uniform_layout(1);
+    let mut absent = recorder();
+    let mut absent_scope = absent
+        .begin_raster(&color_scope("base instance absent"))
+        .unwrap();
+    absent_scope
+        .set_pipeline(&raster_pipeline(layout.clone()))
+        .unwrap();
+    bind_the_uniform(&mut absent_scope, layout.clone());
+    absent_scope.draw(0..1, 0..1).unwrap();
+    assert_kind(absent_scope.draw(0..1, 1..2), RhiErrorKind::Unsupported);
+
+    let mut facts = crate::api::capability::CapabilityFacts::empty();
+    facts.record_feature(crate::api::platform::OptionalFeature::BaseInstance);
+    let mut present = recorder_reporting(facts);
+    let mut present_scope = present
+        .begin_raster(&color_scope("base instance present"))
+        .unwrap();
+    present_scope
+        .set_pipeline(&raster_pipeline(layout.clone()))
+        .unwrap();
+    bind_the_uniform(&mut present_scope, layout);
+    present_scope.draw(0..1, 1..2).unwrap();
+}
+
+#[test]
 fn an_open_debug_group_refuses_end_and_poisons_the_recording() {
     let mut recorder = recorder();
     {
