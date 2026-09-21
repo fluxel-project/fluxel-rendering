@@ -26,8 +26,8 @@ pub(crate) use cache::{
 )]
 pub(crate) use context::{
     BindingFlush, BoundGroupPacket, CanonicalBlockId, ContextState, ContextStateError,
-    DerivedCacheKey, DerivedCacheKind, PassPacket, PixelTransferPacket, RasterPipelineBlocks,
-    RasterPipelineDiff, RasterPipelinePacket,
+    DerivedCacheKey, DerivedCacheKind, PassPacket, PixelTransferPacket,
+    RasterPipelineBlockInterner, RasterPipelineBlocks, RasterPipelineDiff, RasterPipelinePacket,
 };
 #[allow(
     unused_imports,

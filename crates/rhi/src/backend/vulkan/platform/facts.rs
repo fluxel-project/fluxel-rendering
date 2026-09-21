@@ -345,11 +345,15 @@ fn record_pipeline_and_binding(facts: &mut CapabilityFacts, limits: VulkanCapabi
     // and passes it to both compute and graphics creation paths.
     facts.record_feature(OptionalFeature::PipelineCache);
     facts.record_feature(OptionalFeature::PipelineCacheSerialization);
-    // MAP_* primary buffers are allocated from a compatible HOST_VISIBLE
-    // memory type by resource::buffer. Non-coherent allocations use explicit
-    // whole-allocation flush/invalidate, so coherence is intentionally not a
-    // blanket fact. Mapping maps from allocation offset zero then slices the
-    // portable range, making byte-granular map ranges safe.
+    // MAP_* buffers, including combinations with broader primary GPU usages,
+    // are allocated from a compatible HOST_VISIBLE memory type by
+    // resource::buffer. This is precisely the additional contract named by
+    // MappablePrimaryBuffers; ordinary staging maps are decided by their exact
+    // buffer-support rows even on backends that do not publish this feature.
+    // Non-coherent allocations use explicit whole-allocation flush/invalidate,
+    // so coherence is intentionally not a blanket fact. Mapping maps from
+    // allocation offset zero then slices the portable range, making
+    // byte-granular map ranges safe.
     facts.record_feature(OptionalFeature::MappablePrimaryBuffers);
     facts.record_limit(LimitKey::MapAlignment, 1);
     // Query pools and result copies are Vulkan core. Query-pool creation can

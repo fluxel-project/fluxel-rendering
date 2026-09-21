@@ -15,6 +15,7 @@ use super::super::api::{
 };
 use super::discovery::WebGl2BrowserDiscovery;
 use super::exec_vertex::{indexed_draw_offset, indexed_draw_span, indexed_draw_type};
+use crate::backend::gl::state::RasterPipelineDiff;
 
 pub(super) const fn topology_mode(topology: GlPrimitiveTopology) -> u32 {
     match topology {
@@ -106,29 +107,17 @@ pub(super) enum PreparedDraw {
 impl GlRasterCommandApi for WebGl2BrowserDiscovery {
     fn set_raster_pipeline(&mut self, pipeline: &GlRasterPipeline) -> Result<(), GlError> {
         const OP: &str = "set-raster-pipeline";
-        self.assert_provider_ready(OP)?;
-        let pass = self
-            .pass
-            .as_ref()
-            .ok_or_else(|| Self::validation(OP, "no active render pass"))?;
-        let program_raw = self.program(OP, pipeline.program)?.raw.clone();
+        self.apply_raster_pipeline_diff(
+            pipeline,
+            RasterPipelineDiff {
+                program: true,
+                raster: true,
+                depth_stencil: true,
+                blend: true,
+                multisample: true,
+            },
+        )?;
         let vertex_array_raw = self.vertex_array(OP, pipeline.vertex_array)?.raw.clone();
-        pipeline
-            .state
-            .validate(GlRasterValidationInfo {
-                width: pass.width,
-                height: pass.height,
-                max_samples: self.discovery().limits().max_samples,
-                max_color_targets: self.discovery().limits().max_color_attachments,
-            })
-            .map_err(|_| Self::validation(OP, "invalid raster state"))?;
-        if pipeline.state.multisample.sample_count != pass.samples {
-            return Err(Self::validation(
-                OP,
-                "pipeline sample count does not match the active framebuffer",
-            ));
-        }
-        self.raw.use_program(Some(&program_raw));
         self.raw.bind_vertex_array(Some(&vertex_array_raw));
         // What the driver now holds, recorded where the binding happens, for the
         // same reason the input domain records it there: the draws read this slot
@@ -136,15 +125,6 @@ impl GlRasterCommandApi for WebGl2BrowserDiscovery {
         // replaces the installed array on every request under the uncached
         // execution mode.
         self.bound_vertex_array = Some(pipeline.vertex_array);
-        self.apply_raster_state(OP, &pipeline.state)?;
-        if let Err(error) = self.driver_error(OP) {
-            self.raster = None;
-            return Err(error);
-        }
-        self.raster = Some(super::objects::ActiveRaster {
-            program: pipeline.program,
-            topology: pipeline.state.topology,
-        });
         Ok(())
     }
 
@@ -193,6 +173,62 @@ impl GlRasterCommandApi for WebGl2BrowserDiscovery {
 }
 
 impl WebGl2BrowserDiscovery {
+    /// Applies exactly the canonical leaves selected by `RasterPipelineDiff`.
+    /// The browser driver calls this after the state authority has proved that
+    /// the pipeline identity is not already installed.
+    pub(super) fn apply_raster_pipeline_diff(
+        &mut self,
+        pipeline: &GlRasterPipeline,
+        diff: RasterPipelineDiff,
+    ) -> Result<(), GlError> {
+        const OP: &str = "apply-raster-pipeline-diff";
+        self.assert_provider_ready(OP)?;
+        let pass = self
+            .pass
+            .as_ref()
+            .ok_or_else(|| Self::validation(OP, "no active render pass"))?;
+        let program_raw = self.program(OP, pipeline.program)?.raw.clone();
+        pipeline
+            .state
+            .validate(GlRasterValidationInfo {
+                width: pass.width,
+                height: pass.height,
+                max_samples: self.discovery().limits().max_samples,
+                max_color_targets: self.discovery().limits().max_color_attachments,
+            })
+            .map_err(|_| Self::validation(OP, "invalid raster state"))?;
+        if pipeline.state.multisample.sample_count != pass.samples {
+            return Err(Self::validation(
+                OP,
+                "pipeline sample count does not match the active framebuffer",
+            ));
+        }
+        if diff.program {
+            self.raw.use_program(Some(&program_raw));
+        }
+        if diff.raster {
+            self.apply_raster_block(&pipeline.state);
+        }
+        if diff.depth_stencil {
+            self.apply_depth_stencil_block(OP, &pipeline.state)?;
+        }
+        if diff.blend {
+            self.apply_blend_block(OP, &pipeline.state)?;
+        }
+        if diff.multisample {
+            self.apply_multisample_block(OP, &pipeline.state)?;
+        }
+        if let Err(error) = self.driver_error(OP) {
+            self.raster = None;
+            return Err(error);
+        }
+        self.raster = Some(super::objects::ActiveRaster {
+            program: pipeline.program,
+            topology: pipeline.state.topology,
+        });
+        Ok(())
+    }
+
     /// Validates one draw against the active pass, the installed pipeline, and
     /// the index allocation it reads, returning the values the browser call
     /// needs.
@@ -281,12 +317,7 @@ impl WebGl2BrowserDiscovery {
 }
 
 impl WebGl2BrowserDiscovery {
-    /// Applies one complete validated raster state in a fixed order.
-    fn apply_raster_state(
-        &mut self,
-        op: &'static str,
-        state: &GlRasterState,
-    ) -> Result<(), GlError> {
+    fn apply_raster_block(&mut self, state: &GlRasterState) {
         let viewport = &state.viewport;
         self.raw.viewport(
             viewport.x as i32,
@@ -325,16 +356,22 @@ impl WebGl2BrowserDiscovery {
             GlFrontFace::Clockwise => Gl::CW,
             GlFrontFace::CounterClockwise => Gl::CCW,
         });
+    }
+
+    fn apply_depth_stencil_block(
+        &mut self,
+        op: &'static str,
+        state: &GlRasterState,
+    ) -> Result<(), GlError> {
         match &state.depth_stencil {
-            Some(depth_stencil) => self.apply_depth_stencil(op, depth_stencil)?,
+            Some(depth_stencil) => self.apply_depth_stencil(op, depth_stencil),
             None => {
                 self.raw.disable(Gl::DEPTH_TEST);
                 self.raw.disable(Gl::STENCIL_TEST);
                 self.raw.disable(Gl::POLYGON_OFFSET_FILL);
+                Ok(())
             }
         }
-        self.apply_color_state(op, state)?;
-        Ok(())
     }
 
     fn apply_depth_stencil(
@@ -386,7 +423,7 @@ impl WebGl2BrowserDiscovery {
         );
     }
 
-    fn apply_color_state(
+    fn apply_blend_block(
         &mut self,
         op: &'static str,
         state: &GlRasterState,
@@ -437,9 +474,16 @@ impl WebGl2BrowserDiscovery {
             }
             None => self.raw.disable(Gl::BLEND),
         }
-        // WebGL2 multisampling is framebuffer state; only the coverage knobs
-        // are pipeline state. A sample mask other than "all" has no typed
-        // WebGL2 command, so it rejects instead of being ignored.
+        Ok(())
+    }
+
+    fn apply_multisample_block(
+        &mut self,
+        op: &'static str,
+        state: &GlRasterState,
+    ) -> Result<(), GlError> {
+        // WebGL2 multisampling is framebuffer state; only coverage knobs are
+        // pipeline state. A partial mask has no typed WebGL2 command.
         if state.multisample.sample_mask != u32::MAX {
             return Err(Self::validation(
                 op,

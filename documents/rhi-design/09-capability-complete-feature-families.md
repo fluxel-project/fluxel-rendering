@@ -131,9 +131,13 @@ portable map, indirect, query, acceleration-build, and ray-data semantics.
 flush, and invalidate define range/alignment, exclusivity, coherent versus
 explicit-cache memory, persistent mappings, GPU-use legality, completion, and
 loss. Dropping a pending mapping cancels it and releases its reservation; loss
-wakes every pending mapping to `DeviceLost`. `MappablePrimaryBuffers`,
-`PersistentMapping`, and coherent/explicit
-flush-invalidate facts are distinct capabilities. Persistent mapping keeps the
+wakes every pending mapping to `DeviceLost`. Ordinary mapping is authorized by
+the buffer's matching `MAP_READ`/`MAP_WRITE` usage and its exact supported
+`BufferSupportQuery`; it is not gated by `MappablePrimaryBuffers`.
+`MappablePrimaryBuffers` instead distinguishes support for map usage combined
+with broader primary GPU usages from the universally useful staging shapes
+(`MAP_READ | COPY_DST` and `MAP_WRITE | COPY_SRC`). `PersistentMapping` and
+coherent/explicit flush-invalidate facts are distinct capabilities. Persistent mapping keeps the
 native mapping lease alive across submission; it does not grant coherent
 simultaneous ownership of overlapping bytes. The caller must flush CPU writes
 before an overlapping GPU read, wait for GPU writes before reading and then
@@ -170,7 +174,11 @@ Sampler facts independently cover anisotropy plus `MaxSamplerAnisotropy`,
 comparison samplers, clamp-to-zero, clamp-to-border, custom border color, and
 border-color restrictions. A descriptor requesting one validates the relevant
 feature and limit before backend lowering; it is never silently changed to a
-different addressing/filtering mode.
+different addressing/filtering mode. A comparison sampler has one capability
+authority: the optional feature that permits its descriptor and the
+`SamplerKind::Comparison` binding-support row are emitted from the same closed
+native-state plus binding-packet lowering route. A backend must publish neither
+half alone.
 
 `TextureViewDescriptor::usage` is a subset of its texture's usage. View
 format/aspect/plane/usage compatibility is a descriptor-dependent query, not a
@@ -178,6 +186,24 @@ backend-name rule. `ExternalTexture` and external-image copy use opaque public
 source descriptors: origin, extent, flip-Y, premultiplied-alpha and color-space
 intent. Browser/native object types never enter public API. Capabilities state
 the exact external-copy and unrestricted-copy restrictions.
+
+A GL-family backend without an independently allocated native texture-view
+object admits only the exact whole, same-format, same-dimension, all-aspect
+view of the base texture. Partial mip/layer ranges and reinterpretation fail
+with `Unsupported` during view creation. In particular, changing
+`TEXTURE_BASE_LEVEL`/`TEXTURE_MAX_LEVEL` is not a valid substitute: those are
+base-object state and would make sibling portable views alias each other.
+Native GL may widen this row only after its `glTextureView` core/extension
+entry point, allocation, binding, and retirement routes are all closed.
+
+GL driver-state cache keys for object-backed state contain context identity,
+slot, and generation, plus every setter-specific scalar (for example UBO
+offset and size). Geometry keys additionally contain the complete typed
+vertex/index binding structure. Resource retirement invalidates all dependent
+slots, bind-group packets, VAO/FBO-derived entries, and current program or
+pipeline state before a native name can be reused. Structural pipeline leaves
+are interned by value and a cache miss lowers only the changed leaves; neither
+creation serials nor allocation slots are semantic equality keys.
 
 ## 67.5 Commands: clear, indirect, and immediates
 

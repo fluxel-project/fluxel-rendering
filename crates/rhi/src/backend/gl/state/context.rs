@@ -8,6 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::api::identity::ObjectId;
+use crate::backend::gl::api::{ContextStamp, GlObjectKind, ObjectIdentity};
+use crate::backend::gl::api::{
+    GlColorTargetState, GlCullMode, GlDepthStencilState, GlFrontFace, GlMultisampleState,
+    GlPrimitiveTopology, GlRasterPipeline, GlScissorRect, GlViewport, ProgramId,
+};
 use crate::backend::gl::platform::GlObjectName;
 
 use super::{DriverKnowledge, ExecutionMode, ResourceRef, StateDomain, StateEvent};
@@ -15,10 +20,52 @@ use super::{DriverKnowledge, ExecutionMode, ResourceRef, StateDomain, StateEvent
 /// A canonical immutable block prepared during phase A.  It is assigned by
 /// the private pipeline/binding table, never synthesized from a lossy hash.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct CanonicalBlockId(u64);
+pub(crate) enum CanonicalBlockId {
+    /// Private monotonically allocated immutable-state block.  Such blocks are
+    /// owned by this one `ContextState`, which is discarded on context loss.
+    Allocated(u64),
+    /// A real GL object identity.  Do not reduce this to a native name or an
+    /// allocation slot: browser registries deliberately reuse slots and a
+    /// restored context may reuse the same native names.
+    Object {
+        context: ContextStamp,
+        slot: u32,
+        generation: u32,
+    },
+    /// `glBindBufferRange` state includes the selected range, not merely the
+    /// buffer.  Keeping all fields here prevents an equal-buffer fast path
+    /// from skipping a legitimate offset/size update.
+    UniformRange {
+        context: ContextStamp,
+        slot: u32,
+        generation: u32,
+        offset: u32,
+        size: u32,
+    },
+}
 impl CanonicalBlockId {
     pub(crate) const fn new(value: u64) -> Self {
-        Self(value)
+        Self::Allocated(value)
+    }
+    pub(crate) const fn object<K: GlObjectKind>(identity: ObjectIdentity<K>) -> Self {
+        Self::Object {
+            context: identity.context,
+            slot: identity.slot,
+            generation: identity.generation,
+        }
+    }
+    pub(crate) const fn uniform_range<K: GlObjectKind>(
+        buffer: ObjectIdentity<K>,
+        offset: u32,
+        size: u32,
+    ) -> Self {
+        Self::UniformRange {
+            context: buffer.context,
+            slot: buffer.slot,
+            generation: buffer.generation,
+            offset,
+            size,
+        }
     }
 }
 
@@ -30,6 +77,128 @@ pub(crate) struct RasterPipelineBlocks {
     pub(crate) depth_stencil: CanonicalBlockId,
     pub(crate) blend: CanonicalBlockId,
     pub(crate) multisample: CanonicalBlockId,
+}
+
+/// Per-context structural canonicalization for immutable raster pipeline
+/// leaves.  These IDs are deliberately *not* creation serials: a pipeline
+/// switch can only skip an unchanged GL leaf when equal descriptors intern to
+/// the same value.  `HashMap` equality resolves collisions, so no lossy hash
+/// ever becomes a state-cache identity.
+#[derive(Default)]
+pub(crate) struct RasterPipelineBlockInterner {
+    next: u64,
+    programs: HashMap<ProgramId, CanonicalBlockId>,
+    rasters: HashMap<RasterBlock, CanonicalBlockId>,
+    depth_stencils: HashMap<Option<GlDepthStencilState>, CanonicalBlockId>,
+    blends: HashMap<BlendBlock, CanonicalBlockId>,
+    multisamples: HashMap<GlMultisampleState, CanonicalBlockId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct RasterBlock {
+    topology: GlPrimitiveTopology,
+    cull_mode: GlCullMode,
+    front_face: GlFrontFace,
+    viewport: GlViewport,
+    scissor: Option<GlScissorRect>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct BlendBlock {
+    color_targets: Vec<GlColorTargetState>,
+    blend_constant: [u32; 4],
+}
+
+impl RasterPipelineBlockInterner {
+    pub(crate) fn new() -> Self {
+        Self {
+            // Zero stays invalid so a malformed transport/default value cannot
+            // accidentally compare equal to a real canonical block.
+            next: 1,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn intern(
+        &mut self,
+        pipeline: &GlRasterPipeline,
+        operation: &'static str,
+    ) -> Result<RasterPipelineBlocks, &'static str> {
+        let state = &pipeline.state;
+        Ok(RasterPipelineBlocks {
+            program: self.intern_program(pipeline.program, operation)?,
+            raster: self.intern_raster(
+                RasterBlock {
+                    topology: state.topology,
+                    cull_mode: state.cull_mode,
+                    front_face: state.front_face,
+                    viewport: state.viewport,
+                    scissor: state.scissor,
+                },
+                operation,
+            )?,
+            depth_stencil: self.intern_depth_stencil(state.depth_stencil, operation)?,
+            blend: self.intern_blend(
+                BlendBlock {
+                    color_targets: state.color_targets.clone(),
+                    blend_constant: state.blend_constant,
+                },
+                operation,
+            )?,
+            multisample: self.intern_multisample(state.multisample, operation)?,
+        })
+    }
+
+    fn intern_program(
+        &mut self,
+        value: ProgramId,
+        operation: &'static str,
+    ) -> Result<CanonicalBlockId, &'static str> {
+        intern(&mut self.next, &mut self.programs, value, operation)
+    }
+    fn intern_raster(
+        &mut self,
+        value: RasterBlock,
+        operation: &'static str,
+    ) -> Result<CanonicalBlockId, &'static str> {
+        intern(&mut self.next, &mut self.rasters, value, operation)
+    }
+    fn intern_depth_stencil(
+        &mut self,
+        value: Option<GlDepthStencilState>,
+        operation: &'static str,
+    ) -> Result<CanonicalBlockId, &'static str> {
+        intern(&mut self.next, &mut self.depth_stencils, value, operation)
+    }
+    fn intern_blend(
+        &mut self,
+        value: BlendBlock,
+        operation: &'static str,
+    ) -> Result<CanonicalBlockId, &'static str> {
+        intern(&mut self.next, &mut self.blends, value, operation)
+    }
+    fn intern_multisample(
+        &mut self,
+        value: GlMultisampleState,
+        operation: &'static str,
+    ) -> Result<CanonicalBlockId, &'static str> {
+        intern(&mut self.next, &mut self.multisamples, value, operation)
+    }
+}
+
+fn intern<T: Eq + std::hash::Hash>(
+    next: &mut u64,
+    table: &mut HashMap<T, CanonicalBlockId>,
+    value: T,
+    operation: &'static str,
+) -> Result<CanonicalBlockId, &'static str> {
+    if let Some(id) = table.get(&value) {
+        return Ok(*id);
+    }
+    let id = CanonicalBlockId::new(*next);
+    *next = next.checked_add(1).ok_or(operation)?;
+    table.insert(value, id);
+    Ok(id)
 }
 
 /// Phase-A's immutable pipeline packet. `identity` is the actual v13 pipeline
@@ -98,7 +267,10 @@ pub(crate) struct BoundGroupPacket {
     pub(crate) name: GlObjectName,
     pub(crate) index: u32,
     pub(crate) dynamic_offsets: Vec<u32>,
-    pub(crate) program_link_epoch: u64,
+    /// Full program provenance, not a lossy `(slot, generation)` packing.
+    /// Bind-group application must be revisited after a context replacement
+    /// even where a provider happens to reuse both native name and slot.
+    pub(crate) program_identity: CanonicalBlockId,
     pub(crate) dependencies: BTreeSet<ResourceRef>,
 }
 
@@ -144,6 +316,10 @@ pub(crate) struct ContextState {
     dirty_bindings: BTreeSet<u32>,
     active_texture: DriverKnowledge<u32>,
     texture_slots: BTreeMap<u32, CanonicalBlockId>,
+    // Samplers are independent texture-unit state in both desktop GL and
+    // WebGL2.  They must not piggy-back on `texture_slots`: changing only a
+    // compare/filter object is still a real `bind_sampler` mutation.
+    sampler_slots: BTreeMap<u32, CanonicalBlockId>,
     uniform_slots: BTreeMap<u32, CanonicalBlockId>,
     storage_slots: BTreeMap<u32, CanonicalBlockId>,
     image_slots: BTreeMap<u32, CanonicalBlockId>,
@@ -166,6 +342,7 @@ impl ContextState {
             dirty_bindings: BTreeSet::new(),
             active_texture: DriverKnowledge::Unknown,
             texture_slots: BTreeMap::new(),
+            sampler_slots: BTreeMap::new(),
             uniform_slots: BTreeMap::new(),
             storage_slots: BTreeMap::new(),
             image_slots: BTreeMap::new(),
@@ -340,6 +517,19 @@ impl ContextState {
         self.active_texture.set(unit);
         self.texture_slots.insert(unit, binding);
     }
+    /// `glBindSampler` has no active-texture prerequisite, but is otherwise
+    /// exactly the same kind of generation-safe unit cache as a texture bind.
+    /// The caller commits only after the native/browser operation succeeds.
+    pub(crate) fn prepare_sampler_slot(&self, unit: u32, binding: CanonicalBlockId) -> bool {
+        !(self.mode.may_skip()
+            && self
+                .sampler_slots
+                .get(&unit)
+                .is_some_and(|known| *known == binding))
+    }
+    pub(crate) fn commit_sampler_slot(&mut self, unit: u32, binding: CanonicalBlockId) {
+        self.sampler_slots.insert(unit, binding);
+    }
     pub(crate) fn prepare_uniform_slot(&self, index: u32, binding: CanonicalBlockId) -> bool {
         !(self.mode.may_skip()
             && self
@@ -384,6 +574,14 @@ impl ContextState {
             self.dirty_bindings.remove(&packet.index);
         }
     }
+    /// Removes a logical bind-group from the applied-state mirror before its
+    /// private packet is retired.  Keeping it would let a later draw treat a
+    /// destroyed packet as already flushed.
+    pub(crate) fn retire_bind_group(&mut self, name: GlObjectName) {
+        self.bindings.retain(|_, packet| packet.name != name);
+        self.dirty_bindings
+            .retain(|index| self.bindings.contains_key(index));
+    }
     pub(crate) fn register_derived(
         &mut self,
         key: DerivedCacheKey,
@@ -420,6 +618,20 @@ impl ContextState {
             .retain(|_, packet| !packet.dependencies.contains(&resource));
         self.dirty_bindings
             .retain(|index| self.bindings.contains_key(index));
+        // Binding slots are state caches too.  Erase a matching object now;
+        // although a complete identity would prevent a false hit after slot
+        // reuse, eagerly forgetting it also prevents stale bookkeeping from
+        // hiding a retirement while an application owns no replacement yet.
+        self.texture_slots
+            .retain(|_, value| !value.references(resource));
+        self.sampler_slots
+            .retain(|_, value| !value.references(resource));
+        self.uniform_slots
+            .retain(|_, value| !value.references(resource));
+        self.storage_slots
+            .retain(|_, value| !value.references(resource));
+        self.image_slots
+            .retain(|_, value| !value.references(resource));
         match resource {
             ResourceRef::Program(_) => {
                 self.pipeline.invalidate();
@@ -450,6 +662,7 @@ impl ContextState {
                 self.dirty_bindings.extend(self.bindings.keys().copied());
                 self.active_texture.invalidate();
                 self.texture_slots.clear();
+                self.sampler_slots.clear();
                 self.uniform_slots.clear();
                 self.storage_slots.clear();
                 self.image_slots.clear();
@@ -476,15 +689,59 @@ impl ContextState {
         self.pipeline_packets.clear();
         self.active_texture.invalidate();
         self.texture_slots.clear();
+        self.sampler_slots.clear();
         self.uniform_slots.clear();
         self.storage_slots.clear();
         self.image_slots.clear();
     }
 }
 
+impl CanonicalBlockId {
+    fn references(self, resource: ResourceRef) -> bool {
+        let (context, slot, generation) = match self {
+            Self::Object {
+                context,
+                slot,
+                generation,
+            }
+            | Self::UniformRange {
+                context,
+                slot,
+                generation,
+                ..
+            } => (context, slot, generation),
+            Self::Allocated(_) => return false,
+        };
+        // The cache is intentionally type-erased.  A same-number identity of
+        // another GL object kind may cause an extra bind, never an unsafe skip.
+        // Context/slot/generation equality is nevertheless mandatory.
+        (match resource {
+            ResourceRef::Buffer(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Texture(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Renderbuffer(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Sampler(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Shader(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Program(id) => (id.context, id.slot, id.generation),
+            ResourceRef::VertexArray(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Framebuffer(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Query(id) => (id.context, id.slot, id.generation),
+            ResourceRef::Sync(id) => (id.context, id.slot, id.generation),
+        }) == (context, slot, generation)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::gl::api::{
+        BufferId, ContextEpoch, ContextStamp, DeviceIdentity, GlCullMode, GlFrontFace,
+        GlMultisampleState, GlPrimitiveTopology, GlRasterPipeline, GlRasterState, GlViewport,
+        ProgramId, SamplerId, VertexArrayId,
+    };
+
+    fn stamp(epoch: ContextEpoch) -> ContextStamp {
+        ContextStamp::new(DeviceIdentity::new(7).unwrap(), epoch)
+    }
     fn name(value: u32) -> GlObjectName {
         GlObjectName::new(value, "state test").unwrap()
     }
@@ -497,6 +754,35 @@ mod tests {
                 depth_stencil: CanonicalBlockId::new(base + 2),
                 blend: CanonicalBlockId::new(base + 3),
                 multisample: CanonicalBlockId::new(base + 4),
+            },
+        }
+    }
+    fn pipeline(program_slot: u32, blend_constant: [u32; 4]) -> GlRasterPipeline {
+        let context = stamp(ContextEpoch::INITIAL);
+        GlRasterPipeline {
+            program: ProgramId::new(context, program_slot, 1),
+            vertex_array: VertexArrayId::new(context, program_slot, 1),
+            state: GlRasterState {
+                topology: GlPrimitiveTopology::Triangles,
+                cull_mode: GlCullMode::None,
+                front_face: GlFrontFace::CounterClockwise,
+                depth_stencil: None,
+                color_targets: vec![],
+                multisample: GlMultisampleState {
+                    sample_count: 1,
+                    alpha_to_coverage_enabled: false,
+                    sample_mask: u32::MAX,
+                },
+                viewport: GlViewport {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                    min_depth: 0.0f32.to_bits(),
+                    max_depth: 1.0f32.to_bits(),
+                },
+                scissor: None,
+                blend_constant,
             },
         }
     }
@@ -534,6 +820,66 @@ mod tests {
         );
     }
     #[test]
+    fn structurally_equal_pipeline_leaves_share_canonical_ids() {
+        let mut interner = RasterPipelineBlockInterner::new();
+        let first = pipeline(1, [0; 4]);
+        // Distinct pipeline object/VAO carriers must not prevent sharing the
+        // immutable program and fixed-function leaves.
+        let mut second = pipeline(1, [0; 4]);
+        second.vertex_array = VertexArrayId::new(stamp(ContextEpoch::INITIAL), 99, 1);
+        let a = interner.intern(&first, "test exhausted").unwrap();
+        let b = interner.intern(&second, "test exhausted").unwrap();
+        assert_eq!(a, b);
+    }
+    #[test]
+    fn one_changed_leaf_produces_one_lowering_call_and_identity_hit_none() {
+        let mut interner = RasterPipelineBlockInterner::new();
+        let first = pipeline(1, [0; 4]);
+        let changed_blend = pipeline(1, [1, 0, 0, 0]);
+        let first_packet = RasterPipelinePacket {
+            identity: name(41),
+            blocks: interner.intern(&first, "test exhausted").unwrap(),
+        };
+        let changed_packet = RasterPipelinePacket {
+            identity: name(42),
+            blocks: interner.intern(&changed_blend, "test exhausted").unwrap(),
+        };
+        let mut state = ContextState::new(ExecutionMode::Optimized);
+        state.register_pipeline(first_packet).unwrap();
+        state.register_pipeline(changed_packet).unwrap();
+        state.commit_pipeline(first_packet);
+        let diff = state.prepare_pipeline(changed_packet).unwrap();
+        assert_eq!(
+            diff,
+            RasterPipelineDiff {
+                blend: true,
+                ..RasterPipelineDiff::default()
+            }
+        );
+        state.commit_pipeline(changed_packet);
+        assert_eq!(
+            state.prepare_pipeline(changed_packet).unwrap(),
+            RasterPipelineDiff::default(),
+            "exact pipeline identity fast path must issue no leaf install"
+        );
+    }
+    #[test]
+    fn dynamic_draw_invalidation_cannot_take_a_stale_pipeline_identity_hit() {
+        let mut state = ContextState::new(ExecutionMode::Optimized);
+        let raster = packet(1, 10);
+        state.register_pipeline(raster).unwrap();
+        state.commit_pipeline(raster);
+        assert!(state.prepare_pipeline(raster).unwrap().is_empty());
+        // A viewport/scissor/blend/stencil value belongs to a draw, not the
+        // immutable public pipeline packet. The native lowering invalidates
+        // this domain before installing the dynamically modified state.
+        state.event(StateEvent::DomainFailed(StateDomain::RasterPipeline));
+        let diff = state.prepare_pipeline(raster).unwrap();
+        assert!(
+            diff.program && diff.raster && diff.depth_stencil && diff.blend && diff.multisample
+        );
+    }
+    #[test]
     fn compute_program_change_forces_raster_program_restore() {
         let mut state = ContextState::new(ExecutionMode::Optimized);
         let raster = packet(1, 10);
@@ -559,7 +905,7 @@ mod tests {
             name: name(3),
             index: 0,
             dynamic_offsets: vec![4],
-            program_link_epoch: 1,
+            program_identity: CanonicalBlockId::new(1),
             dependencies: BTreeSet::new(),
         });
         let flush = state.binding_flush();
@@ -580,5 +926,66 @@ mod tests {
         state.commit_pass(pass);
         assert!(state.prepare_pass(pass));
         assert!(state.pass.is_known());
+    }
+    #[test]
+    fn uniform_cache_key_includes_buffer_generation_and_range() {
+        let mut state = ContextState::new(ExecutionMode::Optimized);
+        let first = BufferId::new(stamp(ContextEpoch::INITIAL), 4, 1);
+        let same_slot_new_generation = BufferId::new(stamp(ContextEpoch::INITIAL), 4, 2);
+        let first_range = CanonicalBlockId::uniform_range(first, 256, 64);
+        state.commit_uniform_slot(0, first_range);
+        assert!(!state.prepare_uniform_slot(0, first_range));
+        assert!(state.prepare_uniform_slot(0, CanonicalBlockId::uniform_range(first, 320, 64)));
+        assert!(state.prepare_uniform_slot(0, CanonicalBlockId::uniform_range(first, 256, 128)));
+        assert!(state.prepare_uniform_slot(
+            0,
+            CanonicalBlockId::uniform_range(same_slot_new_generation, 256, 64)
+        ));
+    }
+    #[test]
+    fn sampler_cache_is_unit_scoped_and_generation_safe() {
+        let mut state = ContextState::new(ExecutionMode::Optimized);
+        let first = SamplerId::new(stamp(ContextEpoch::INITIAL), 5, 1);
+        let recycled = SamplerId::new(stamp(ContextEpoch::INITIAL), 5, 2);
+        let first_key = CanonicalBlockId::object(first);
+        state.commit_sampler_slot(3, first_key);
+        assert!(
+            !state.prepare_sampler_slot(3, first_key),
+            "identical sampler/unit is the only bind elision"
+        );
+        assert!(state.prepare_sampler_slot(4, first_key));
+        assert!(state.prepare_sampler_slot(3, CanonicalBlockId::object(recycled)));
+        state.event(StateEvent::SamplerRetired(first));
+        assert!(state.prepare_sampler_slot(3, first_key));
+    }
+    #[test]
+    fn raw_binding_access_forces_sampler_rebind() {
+        let mut state = ContextState::new(ExecutionMode::Optimized);
+        let sampler = SamplerId::new(stamp(ContextEpoch::INITIAL), 5, 1);
+        let key = CanonicalBlockId::object(sampler);
+        state.commit_sampler_slot(3, key);
+        state.event(StateEvent::DomainFailed(StateDomain::Bindings));
+        assert!(state.prepare_sampler_slot(3, key));
+    }
+    #[test]
+    fn retirement_erases_cached_object_binding_and_dependent_group() {
+        let mut state = ContextState::new(ExecutionMode::Optimized);
+        let buffer = BufferId::new(stamp(ContextEpoch::INITIAL), 8, 3);
+        let key = CanonicalBlockId::uniform_range(buffer, 0, 64);
+        state.commit_uniform_slot(2, key);
+        let mut dependencies = BTreeSet::new();
+        dependencies.insert(ResourceRef::Buffer(buffer));
+        state.stage_bind_group(BoundGroupPacket {
+            group: ObjectId::new(11),
+            name: name(11),
+            index: 0,
+            dynamic_offsets: vec![],
+            program_identity: CanonicalBlockId::new(1),
+            dependencies,
+        });
+        state.acknowledge_bindings(&state.binding_flush());
+        state.event(StateEvent::BufferRetired(buffer));
+        assert!(state.prepare_uniform_slot(2, key));
+        assert!(state.binding_flush().is_empty());
     }
 }

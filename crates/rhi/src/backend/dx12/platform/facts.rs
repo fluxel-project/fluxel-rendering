@@ -374,10 +374,9 @@ fn record_features(device: &ID3D12Device, facts: &mut CapabilityFacts) {
     // uses a temporary DSV after recording-time validation requires both COPY_DST
     // and DEPTH_STENCIL_ATTACHMENT. Planar formats are not creatable here.
     facts.record_feature(OptionalFeature::ClearTexture);
-    // General mapping is real only for the explicit UPLOAD/READBACK usage
-    // combinations recorded in `record_buffer_support`; those host heaps have
-    // synchronous Map/RAII Unmap lowerings in `resource::buffer`.
-    facts.record_feature(OptionalFeature::MappablePrimaryBuffers);
+    // UPLOAD/READBACK staging maps are real through the exact MAP_* support
+    // rows below. They do not imply MappablePrimaryBuffers: D3D12's upload and
+    // readback heaps cannot also express broader primary GPU usages.
     facts.record_feature(OptionalFeature::Immediates);
     // PipelineLibrary is an ID3D12Device1 extension. Its cast is the native
     // capability query; the cache lowering owns real Create/Load/Store/Serialize

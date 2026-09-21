@@ -835,11 +835,20 @@ pub enum ResourceMemoryPreference {
 }
 ```
 
-`ResourceMemoryPreference` does not imply host visibility. Host access requires
-`MAP_READ` or `MAP_WRITE` at creation and the enabled mapping facts:
+`ResourceMemoryPreference` does not imply host visibility. An ordinary host
+map lease requires the matching `MAP_READ` or `MAP_WRITE` bit at creation, a
+supported exact `BufferSupportQuery`, and an available mapping lease. It does
+**not** require `MappablePrimaryBuffers`: `MAP_READ | COPY_DST` readback and
+`MAP_WRITE | COPY_SRC` upload are ordinary staging-buffer contracts.
+
+`MappablePrimaryBuffers` answers the narrower, additional question of whether
+a map usage may coexist with broader primary GPU usages such as `VERTEX`,
+`UNIFORM`, or `STORAGE`. That question is still represented by the exact
+`BufferSupportQuery`; the optional feature lets requirements distinguish a
+backend that supports those primary combinations from one that supports only
+ordinary staging buffers. The remaining mapping facts are:
 
 ```text
-MappablePrimaryBuffers
 PersistentMapping
 CoherentMapping or explicit flush/invalidate
 MapAlignment

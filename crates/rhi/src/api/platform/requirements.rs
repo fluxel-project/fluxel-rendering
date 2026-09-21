@@ -99,8 +99,13 @@ pub enum OptionalFeature {
     ClearBuffer,
     /// Native clear-texture lowering.
     ClearTexture,
-    /// Buffers declared with map usage may be mapped without first copying them
-    /// through the upload/readback API.
+    /// A map usage may coexist with broader primary GPU usages on one buffer.
+    ///
+    /// This does not gate ordinary staging maps: `MAP_READ | COPY_DST` and
+    /// `MAP_WRITE | COPY_SRC` are decided by the exact buffer-support answer
+    /// and the mapping lease. This feature lets a requirement distinguish a
+    /// backend that additionally admits combinations such as map-plus-vertex,
+    /// uniform, or storage usage.
     MappablePrimaryBuffers,
     /// A mapped lease may remain open across submissions when the backend's
     /// memory model permits it.  Absence does not remove ordinary map/unmap.

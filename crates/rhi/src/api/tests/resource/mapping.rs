@@ -8,9 +8,9 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use crate::api::error::RhiErrorKind;
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId};
-use crate::api::platform::DeviceLossInfo;
+use crate::api::platform::{DeviceLossInfo, OptionalFeature};
 use crate::api::resource::{BufferDescriptor, BufferRange, BufferUsage, MapMode};
-use crate::api::tests::mock::mapped_buffers_for_test;
+use crate::api::tests::mock::{mapped_buffers_for_test, staging_mapped_buffers_for_test};
 
 fn identity(value: u64) -> DeviceIdentity {
     DeviceIdentity::new(DeviceInstanceId::new(value))
@@ -232,16 +232,60 @@ fn read_write_flush_invalidate_wrong_device_and_loss_are_structured() {
 }
 
 #[test]
-fn a_device_without_mapping_capability_refuses_before_native_mapping() {
-    let (device, _) = crate::api::tests::mock::buffers_for_test(identity(97), 64);
+fn ordinary_staging_mapping_does_not_require_mappable_primary_buffers() {
+    let (device, _) = staging_mapped_buffers_for_test(identity(97));
+    assert!(
+        !device
+            .capabilities()
+            .supports_feature(OptionalFeature::MappablePrimaryBuffers),
+        "the fixture models a staging-only mapping backend"
+    );
     let buffer = device
-        .create_buffer(&BufferDescriptor::new(8, BufferUsage::MAP_READ))
-        .expect("buffer creation is distinct from map capability");
-    assert_eq!(
+        .create_buffer(&BufferDescriptor::new(
+            8,
+            BufferUsage::MAP_READ.union(BufferUsage::COPY_DST),
+        ))
+        .expect("ordinary staging buffer is creatable without the broader feature");
+    let mapping = ready(
         device
             .map_buffer(&buffer, MapMode::Read, BufferRange::new(0, 4))
+            .expect("ordinary staging map does not require MappablePrimaryBuffers"),
+    )
+    .expect("ordinary staging mapping succeeds");
+    drop(mapping);
+
+    assert_eq!(
+        device
+            .create_buffer(&BufferDescriptor::new(
+                8,
+                BufferUsage::MAP_READ.union(BufferUsage::VERTEX),
+            ))
             .unwrap_err()
             .kind(),
-        RhiErrorKind::Unsupported
+        RhiErrorKind::Unsupported,
+        "the absent feature is represented by the unsupported broader usage combination"
     );
+}
+
+#[test]
+fn mappable_primary_buffers_authorizes_the_broader_usage_rows_not_map_itself() {
+    let (device, _) = mapped_buffers_for_test(identity(98), true);
+    assert!(
+        device
+            .capabilities()
+            .supports_feature(OptionalFeature::MappablePrimaryBuffers)
+    );
+    let buffer = device
+        .create_buffer(&BufferDescriptor::new(
+            8,
+            BufferUsage::MAP_WRITE.union(BufferUsage::VERTEX),
+        ))
+        .expect("primary map usage is admitted when its exact row and feature are present");
+    let mapping = ready(
+        device
+            .map_buffer(&buffer, MapMode::Write, BufferRange::new(0, 4))
+            .expect("map operation still relies on map usage, support, and lease state"),
+    )
+    .expect("primary mapping resolves");
+    drop(mapping);
 }

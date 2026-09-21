@@ -14,7 +14,7 @@ use std::task::{Context, Poll};
 
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::platform::Device;
-use crate::api::platform::requirements::{LimitKey, OptionalFeature};
+use crate::api::platform::requirements::LimitKey;
 use crate::api::resource::backend::{MappedBufferBackend, MappingRequestBackend};
 use crate::api::resource::buffer::{
     Buffer, BufferRange, BufferUsage, validate_buffer_ownership, validate_buffer_range,
@@ -254,14 +254,23 @@ impl Device {
             )
             .with_object(buffer.id()));
         }
+        // Mapping a staging buffer is not an optional feature. The descriptor's
+        // exact buffer-support answer already says whether this map usage can
+        // exist on this backend. `MappablePrimaryBuffers` only describes the
+        // *additional* ability to combine MAP_* with broader primary GPU uses;
+        // it must not reject MAP_READ|COPY_DST or MAP_WRITE|COPY_SRC here.
         if !self
             .capabilities()
-            .supports_feature(OptionalFeature::MappablePrimaryBuffers)
+            .buffer_support(&crate::api::resource::BufferSupportQuery::new(
+                buffer.descriptor().usage,
+            ))
+            .is_supported()
         {
             return Err(RhiError::new(
                 RhiErrorKind::Unsupported,
-                "this device does not support mapping primary buffers",
-            ));
+                "this buffer's declared usage is no longer mappable on this device",
+            )
+            .with_object(buffer.id()));
         }
         if let Some(alignment) = self.capabilities().limit(LimitKey::MapAlignment) {
             if alignment != 0 && (range.offset % alignment != 0 || range.size % alignment != 0) {

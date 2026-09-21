@@ -48,8 +48,8 @@ use crate::backend::gl::platform::{
 };
 use crate::backend::gl::state::{
     BoundGroupPacket, CanonicalBlockId, ContextState, ExecutionMode, PassPacket,
-    RasterPipelineBlocks, RasterPipelinePacket as StateRasterPipelinePacket, ResourceRef,
-    StateDomain, StateEvent,
+    RasterPipelineBlockInterner, RasterPipelinePacket as StateRasterPipelinePacket, StateDomain,
+    StateEvent,
 };
 
 use super::{NativeGlProvider, NativeOwnerWorker, WorkerStartupError};
@@ -278,6 +278,8 @@ pub(crate) struct NativeOwnedProvider<C: NativePlatformContext> {
     compute_pipelines: BTreeMap<u32, ProgramId>,
     next_virtual: u32,
     next_canonical: u64,
+    pipeline_blocks: RasterPipelineBlockInterner,
+    geometry_blocks: HashMap<NativeGeometryKey, CanonicalBlockId>,
     context_state: ContextState,
     active_raster_framebuffer: Option<crate::backend::gl::api::FramebufferId>,
     next_completion: u64,
@@ -328,6 +330,7 @@ enum NativeCompletion {
 #[derive(Clone, Copy)]
 struct NativeTextureView {
     texture: TextureId,
+    target: crate::backend::gl::api::GlTextureTarget,
     format: crate::backend::gl::api::GlFormat,
     mip_level: u32,
     base_layer: u32,
@@ -343,6 +346,17 @@ struct PendingReadback {
 struct NativeRasterPipeline {
     pipeline: crate::backend::gl::api::GlRasterPipeline,
     packet: StateRasterPipelinePacket,
+}
+
+/// Effective GL vertex-input state.  `vertex_array` owns the immutable
+/// attribute layout; the generation-safe buffer identities, offsets and index
+/// format own the per-draw VAO bindings.  Do not replace this with a draw
+/// serial: equal geometry must be eligible for the ContextState fast path.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct NativeGeometryKey {
+    vertex_array: VertexArrayId,
+    vertices: Vec<crate::backend::gl::api::GlVertexBufferBinding>,
+    index: Option<crate::backend::gl::api::GlIndexBinding>,
 }
 
 #[derive(Clone)]
@@ -368,6 +382,12 @@ struct NativeRasterBeginAction {
 struct NativeRasterDrawAction {
     pipeline: crate::backend::gl::api::GlRasterPipeline,
     packet: StateRasterPipelinePacket,
+    /// Dynamic draw values mutate GL leaves without creating another public
+    /// pipeline object.  The stored packet describes creation-time state, so
+    /// it cannot be used for an exact identity hit after one of these values
+    /// differs.  We currently invalidate the raster domain conservatively;
+    /// later dynamic-leaf packets may narrow this to individual leaves.
+    has_dynamic_state: bool,
     draw: crate::backend::gl::api::GlDrawCommand,
     geometry: Vec<crate::backend::gl::api::GlVertexBufferBinding>,
     index: Option<crate::backend::gl::api::GlIndexBinding>,
@@ -449,6 +469,8 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
             compute_pipelines: BTreeMap::new(),
             next_virtual: 1,
             next_canonical: 1,
+            pipeline_blocks: RasterPipelineBlockInterner::new(),
+            geometry_blocks: HashMap::new(),
             context_state: ContextState::new(ExecutionMode::Optimized),
             active_raster_framebuffer: None,
             next_completion: 1,
@@ -469,14 +491,17 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
         Ok(CanonicalBlockId::new(value))
     }
 
-    fn pipeline_blocks(&mut self, operation: &'static str) -> RhiResult<RasterPipelineBlocks> {
-        Ok(RasterPipelineBlocks {
-            program: self.canonical(operation)?,
-            raster: self.canonical(operation)?,
-            depth_stencil: self.canonical(operation)?,
-            blend: self.canonical(operation)?,
-            multisample: self.canonical(operation)?,
-        })
+    fn geometry_canonical(
+        &mut self,
+        key: NativeGeometryKey,
+        operation: &'static str,
+    ) -> RhiResult<CanonicalBlockId> {
+        if let Some(canonical) = self.geometry_blocks.get(&key) {
+            return Ok(*canonical);
+        }
+        let canonical = self.canonical(operation)?;
+        self.geometry_blocks.insert(key, canonical);
+        Ok(canonical)
     }
 
     fn ready(&mut self, operation: &'static str) -> RhiResult<()> {
@@ -826,8 +851,12 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
     /// raster draws.  Keeping this common path is important: an indirect draw
     /// must not bypass the state-machine's program/binding/VAO comparisons.
     fn prepare_raster_draw(&mut self, action: &NativeRasterDrawAction) -> RhiResult<()> {
-        use crate::backend::gl::api::{GlRasterCommandApi as _, GlVertexApi as _};
+        use crate::backend::gl::api::GlVertexApi as _;
         const OP: &str = "NativeProviderOwner::submit raster-draw";
+        if action.has_dynamic_state {
+            self.context_state
+                .event(StateEvent::DomainFailed(StateDomain::RasterPipeline));
+        }
         let diff = self
             .context_state
             .prepare_pipeline(action.packet)
@@ -840,7 +869,7 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
             })?;
         if !diff.is_empty() {
             self.provider
-                .set_raster_pipeline(&action.pipeline)
+                .apply_raster_pipeline_diff(&action.pipeline, diff)
                 .map_err(|e| {
                     self.context_state.pipeline_failed();
                     map_gl(e, OP)
@@ -1095,7 +1124,7 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
             .at(OP)
         })?;
         let id = self.buffer_id(buffer.name, OP)?;
-        let key = CanonicalBlockId::new(u64::from(id.slot) + 1);
+        let key = CanonicalBlockId::uniform_range(id, offset, size);
         if self.context_state.prepare_uniform_slot(slot, key) {
             self.provider
                 .bind_uniform_buffer(slot, Some(id), offset, size)
@@ -1112,14 +1141,17 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
     ) -> RhiResult<()> {
         use crate::backend::gl::api::GlBindingApi as _;
         const OP: &str = "NativeProviderOwner::submit bind texture";
-        let view = *self.views.get(&view.name.raw()).ok_or_else(|| {
+        let view_ref = view;
+        let view = *self.views.get(&view_ref.name.raw()).ok_or_else(|| {
             RhiError::new(
                 RhiErrorKind::WrongDevice,
                 "native GL texture view backing is not live",
             )
             .at(OP)
         })?;
-        let key = CanonicalBlockId::new(u64::from(view.texture.slot) + 1);
+        // Do not reduce a view to its base texture identity.  Native texture
+        // views (when installed) can have distinct target/range/format state.
+        let key = CanonicalBlockId::new(u64::from(view_ref.name.raw()));
         let (active, bind) = self.context_state.prepare_texture_slot(unit, key);
         if active {
             self.provider
@@ -1128,11 +1160,7 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
         }
         if bind {
             self.provider
-                .bind_texture(
-                    unit,
-                    crate::backend::gl::api::GlTextureTarget::D2,
-                    Some(view.texture),
-                )
+                .bind_texture(unit, view.target, Some(view.texture))
                 .map_err(|e| map_gl(e, OP))?;
         }
         if active || bind {
@@ -1154,9 +1182,14 @@ impl<C: NativePlatformContext> NativeOwnedProvider<C> {
             0,
         );
         self.provider.sampler(OP, id).map_err(|e| map_gl(e, OP))?;
-        self.provider
-            .bind_sampler(unit, Some(id))
-            .map_err(|e| map_gl(e, OP))
+        let key = CanonicalBlockId::object(id);
+        if self.context_state.prepare_sampler_slot(unit, key) {
+            self.provider
+                .bind_sampler(unit, Some(id))
+                .map_err(|e| map_gl(e, OP))?;
+            self.context_state.commit_sampler_slot(unit, key);
+        }
+        Ok(())
     }
 
     fn completion_state(&mut self, serial: u64) -> CompletionState {
@@ -1336,7 +1369,7 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                 // GL core has no independently allocated view in this baseline.
                 // Retain the typed backing identity so a destroyed/lost texture can
                 // never be resurrected by a virtual view carrier.
-                owner
+                let (_, base_desc) = owner
                     .provider
                     .texture(OP, texture)
                     .map_err(|e| map_gl(e, OP))?;
@@ -1347,12 +1380,17 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                     )
                     .at(OP)
                 })?;
-                let _ = crate::backend::gl::translate::view_dimension(descriptor.dimension)?;
+                let dimension = crate::backend::gl::translate::whole_compatible_virtual_view(
+                    &descriptor,
+                    base,
+                    base_desc,
+                )?;
                 let name = owner.virtual_name(OP)?;
                 owner.views.insert(
                     name.raw(),
                     NativeTextureView {
                         texture,
+                        target: binding_target(dimension)?,
                         format: crate::backend::gl::translate::view_format(&descriptor, base)?,
                         mip_level: descriptor.base_mip,
                         base_layer: descriptor.base_layer,
@@ -1491,9 +1529,20 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                     }
                 };
                 let name = owner.virtual_name(OP)?;
+                let pipeline = crate::backend::gl::api::GlRasterPipeline {
+                    program,
+                    vertex_array,
+                    state: packet.state,
+                };
                 let state_packet = StateRasterPipelinePacket {
                     identity: name,
-                    blocks: owner.pipeline_blocks(OP)?,
+                    blocks: owner.pipeline_blocks.intern(&pipeline, OP).map_err(|_| {
+                        RhiError::new(
+                            RhiErrorKind::BackendFailure,
+                            "native GL canonical pipeline namespace exhausted",
+                        )
+                        .at(OP)
+                    })?,
                 };
                 owner
                     .context_state
@@ -1508,11 +1557,7 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                 owner.raster_pipelines.insert(
                     name.raw(),
                     NativeRasterPipeline {
-                        pipeline: crate::backend::gl::api::GlRasterPipeline {
-                            program,
-                            vertex_array,
-                            state: packet.state,
-                        },
+                        pipeline,
                         packet: state_packet,
                     },
                 );
@@ -1780,11 +1825,24 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                         let action = self.worker.call(move |owner| -> RhiResult<_> {
                             const OP: &str = "NativeProviderOwner::submit phase A raster-draw"; owner.ready(OP)?;
                             let stored = owner.raster_pipelines.get(&pipeline.raw()).cloned().ok_or_else(|| RhiError::new(RhiErrorKind::WrongDevice, "native GL raster pipeline backing is not live").at(OP))?;
-                            let mut pipeline = stored.pipeline; if let Some(viewport) = scalars.viewport { pipeline.state.viewport = viewport; } pipeline.state.scissor = scalars.scissor; pipeline.state.blend_constant = scalars.blend_constant; if let Some(depth) = &mut pipeline.state.depth_stencil { depth.stencil_reference = scalars.stencil_reference; }
+                            let mut pipeline = stored.pipeline;
+                            let has_dynamic_state = scalars.viewport.is_some()
+                                || pipeline.state.scissor != scalars.scissor
+                                || pipeline.state.blend_constant != scalars.blend_constant
+                                || pipeline.state.depth_stencil.is_some_and(|value| value.stencil_reference != scalars.stencil_reference);
+                            if let Some(viewport) = scalars.viewport { pipeline.state.viewport = viewport; }
+                            pipeline.state.scissor = scalars.scissor;
+                            pipeline.state.blend_constant = scalars.blend_constant;
+                            if let Some(depth) = &mut pipeline.state.depth_stencil { depth.stencil_reference = scalars.stencil_reference; }
                             let geometry = vertices.into_iter().map(|(slot, name, offset)| Ok(crate::backend::gl::api::GlVertexBufferBinding { slot, buffer: owner.buffer_id(name, OP)?, offset })).collect::<RhiResult<Vec<_>>>()?;
                             let index = index.map(|(name, format, offset)| Ok(crate::backend::gl::api::GlIndexBinding { buffer: owner.buffer_id(name, OP)?, format: match format { crate::api::command::IndexFormat::Uint16 => crate::backend::gl::api::GlIndexFormat::Uint16, crate::api::command::IndexFormat::Uint32 => crate::backend::gl::api::GlIndexFormat::Uint32 }, offset })).transpose()?;
-                            let mut bound = Vec::with_capacity(groups.len()); for (index, group, name, dynamic_offsets) in groups { if !owner.bind_groups.contains_key(&name.raw()) { return Err(RhiError::new(RhiErrorKind::WrongDevice, "native GL bind group backing is not live").at(OP)); } bound.push(NativeBoundGroup { packet: BoundGroupPacket { group, name, index, dynamic_offsets, program_link_epoch: u64::from(pipeline.program.slot) << 32 | u64::from(pipeline.program.generation), dependencies: std::collections::BTreeSet::new() } }); }
-                            Ok(NativePhaseBAction::RasterDraw(NativeRasterDrawAction { pipeline, packet: stored.packet, draw: scalars.draw.draw, geometry, index, geometry_key: owner.canonical(OP)?, bind_groups: bound }))
+                            let mut bound = Vec::with_capacity(groups.len()); for (index, group, name, dynamic_offsets) in groups { if !owner.bind_groups.contains_key(&name.raw()) { return Err(RhiError::new(RhiErrorKind::WrongDevice, "native GL bind group backing is not live").at(OP)); } bound.push(NativeBoundGroup { packet: BoundGroupPacket { group, name, index, dynamic_offsets, program_identity: CanonicalBlockId::object(pipeline.program), dependencies: std::collections::BTreeSet::new() } }); }
+                            let geometry_key = owner.geometry_canonical(NativeGeometryKey {
+                                vertex_array: pipeline.vertex_array,
+                                vertices: geometry.clone(),
+                                index,
+                            }, OP)?;
+                            Ok(NativePhaseBAction::RasterDraw(NativeRasterDrawAction { pipeline, packet: stored.packet, has_dynamic_state, draw: scalars.draw.draw, geometry, index, geometry_key, bind_groups: bound }))
                         }).map_err(worker_error)??; actions.push(action);
                     }
                     crate::api::command::record::RecordedPayload::RasterIndirect(indirect) => {
@@ -1831,6 +1889,10 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                             owner.ready(OP)?;
                             let stored = owner.raster_pipelines.get(&pipeline.raw()).cloned().ok_or_else(|| RhiError::new(RhiErrorKind::WrongDevice, "native GL raster pipeline backing is not live").at(OP))?;
                             let mut pipeline = stored.pipeline;
+                            let has_dynamic_state = scalars.viewport.is_some()
+                                || pipeline.state.scissor != scalars.scissor
+                                || pipeline.state.blend_constant != scalars.blend_constant
+                                || pipeline.state.depth_stencil.is_some_and(|value| value.stencil_reference != scalars.stencil_reference);
                             if let Some(viewport) = scalars.viewport { pipeline.state.viewport = viewport; }
                             pipeline.state.scissor = scalars.scissor;
                             pipeline.state.blend_constant = scalars.blend_constant;
@@ -1840,11 +1902,16 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                             let mut bound = Vec::with_capacity(groups.len());
                             for (index, group, name, dynamic_offsets) in groups {
                                 if !owner.bind_groups.contains_key(&name.raw()) { return Err(RhiError::new(RhiErrorKind::WrongDevice, "native GL bind group backing is not live").at(OP)); }
-                                bound.push(NativeBoundGroup { packet: BoundGroupPacket { group, name, index, dynamic_offsets, program_link_epoch: u64::from(pipeline.program.slot) << 32 | u64::from(pipeline.program.generation), dependencies: std::collections::BTreeSet::new() } });
+                                bound.push(NativeBoundGroup { packet: BoundGroupPacket { group, name, index, dynamic_offsets, program_identity: CanonicalBlockId::object(pipeline.program), dependencies: std::collections::BTreeSet::new() } });
                             }
                             let abi = if indexed { crate::backend::gl::api::GlIndirectAbi::Indexed } else { crate::backend::gl::api::GlIndirectAbi::NonIndexed };
+                            let geometry_key = owner.geometry_canonical(NativeGeometryKey {
+                                vertex_array: pipeline.vertex_array,
+                                vertices: geometry.clone(),
+                                index,
+                            }, OP)?;
                             Ok(NativePhaseBAction::RasterIndirect(NativeRasterIndirectAction {
-                                draw: NativeRasterDrawAction { pipeline, packet: stored.packet, draw: scalars.draw.draw, geometry, index, geometry_key: owner.canonical(OP)?, bind_groups: bound },
+                                draw: NativeRasterDrawAction { pipeline, packet: stored.packet, has_dynamic_state, draw: scalars.draw.draw, geometry, index, geometry_key, bind_groups: bound },
                                 command: crate::backend::gl::api::GlIndirectCommandRange {
                                     range: crate::backend::gl::api::GlBufferRange { buffer: owner.buffer_id(argument_name, OP)?, offset: 0, size: argument_size },
                                     command_offset: arguments_offset,
@@ -1878,9 +1945,9 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                                 if !owner.bind_groups.contains_key(&name.raw()) {
                                     return Err(RhiError::new(RhiErrorKind::WrongDevice, "native GL bind group backing is not live").at(OP));
                                 }
-                                bound.push(NativeBoundGroup { packet: BoundGroupPacket { group, name, index, dynamic_offsets, program_link_epoch: u64::from(program.slot) << 32 | u64::from(program.generation), dependencies: std::collections::BTreeSet::new() } });
+                                bound.push(NativeBoundGroup { packet: BoundGroupPacket { group, name, index, dynamic_offsets, program_identity: CanonicalBlockId::object(program), dependencies: std::collections::BTreeSet::new() } });
                             }
-                            Ok(NativePhaseBAction::ComputeDispatch { program, program_key: CanonicalBlockId::new(u64::from(program.slot) + 1), groups: crate::backend::gl::api::GlDispatchGroups([workgroups.0, workgroups.1, workgroups.2]), bind_groups: bound })
+                            Ok(NativePhaseBAction::ComputeDispatch { program, program_key: CanonicalBlockId::object(program), groups: crate::backend::gl::api::GlDispatchGroups([workgroups.0, workgroups.1, workgroups.2]), bind_groups: bound })
                         }).map_err(worker_error)??;
                         actions.push(action);
                     }
@@ -2064,6 +2131,25 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
             match kind {
                 GlObjectKind::Buffer => {
                     let id = owner.buffer_id(name, OP)?;
+                    // State retirement precedes native deletion: a failed or
+                    // delayed delete must never leave a cache hit referring to
+                    // this identity.
+                    owner.context_state.event(StateEvent::BufferRetired(id));
+                    // The key includes full typed identities, so retaining a
+                    // stale entry would not create a false hit.  Removing it
+                    // nevertheless bounds the private structural interner and
+                    // ensures a future allocation does not inherit dead VAO
+                    // bookkeeping.
+                    owner.geometry_blocks.retain(|key, _| {
+                        !key.vertices.iter().any(|binding| binding.buffer == id)
+                            && !key.index.is_some_and(|index| index.buffer == id)
+                    });
+                    // Native bind-group packets predate the dependency index;
+                    // until every packet carries resource refs, force their
+                    // revalidation rather than retaining a stale applied bind.
+                    owner
+                        .context_state
+                        .event(StateEvent::DomainFailed(StateDomain::Bindings));
                     owner
                         .provider
                         .destroy_buffer_resource(id)
@@ -2071,6 +2157,10 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                 }
                 GlObjectKind::Texture => {
                     let id = owner.texture_id(name, OP)?;
+                    owner.context_state.event(StateEvent::TextureRetired(id));
+                    owner
+                        .context_state
+                        .event(StateEvent::DomainFailed(StateDomain::Bindings));
                     owner
                         .provider
                         .destroy_texture_resource(id)
@@ -2084,6 +2174,10 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                         NativeOwnedProvider::<C>::slot(name, OP)?,
                         0,
                     );
+                    owner.context_state.event(StateEvent::SamplerRetired(id));
+                    owner
+                        .context_state
+                        .event(StateEvent::DomainFailed(StateDomain::Bindings));
                     owner
                         .provider
                         .destroy_sampler(id)
@@ -2102,6 +2196,7 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                             .at(OP)
                     })?;
                     for query in set.queries {
+                        owner.context_state.event(StateEvent::QueryRetired(query));
                         owner
                             .provider
                             .destroy_query(query)
@@ -2110,12 +2205,28 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                 }
                 GlObjectKind::TextureView => {
                     owner.views.remove(&name.raw());
+                    // A view has no native object identity, but a cached
+                    // bind-group may still resolve it.  Force the next bind
+                    // flush to revalidate the private view packet.
+                    owner
+                        .context_state
+                        .event(StateEvent::DomainFailed(StateDomain::Bindings));
                 }
                 GlObjectKind::BindGroup => {
                     owner.bind_groups.remove(&name.raw());
+                    owner.context_state.retire_bind_group(name);
                 }
                 GlObjectKind::RasterPipeline => {
                     if let Some(pipeline) = owner.raster_pipelines.remove(&name.raw()) {
+                        owner
+                            .geometry_blocks
+                            .retain(|key, _| key.vertex_array != pipeline.pipeline.vertex_array);
+                        owner.context_state.event(StateEvent::VertexArrayRetired(
+                            pipeline.pipeline.vertex_array,
+                        ));
+                        owner
+                            .context_state
+                            .event(StateEvent::ProgramRetired(pipeline.pipeline.program));
                         let _ = owner
                             .provider
                             .destroy_vertex_array(pipeline.pipeline.vertex_array);
@@ -2124,6 +2235,9 @@ impl<C: NativePlatformContext> NativeGlOwner for NativeProviderOwner<C> {
                 }
                 GlObjectKind::ComputePipeline => {
                     if let Some(program) = owner.compute_pipelines.remove(&name.raw()) {
+                        owner
+                            .context_state
+                            .event(StateEvent::ProgramRetired(program));
                         let _ = owner.provider.destroy_program(program);
                     }
                 }
@@ -2937,6 +3051,26 @@ fn attachment_view<C: NativePlatformContext>(
         height: extent.height,
         sample_count: desc.sample_count,
     })
+}
+
+/// Maps only bindable GL-family texture targets.  The common vocabulary keeps
+/// 1D for validation, but this executable native route has no proved 1D
+/// allocation/binding lowering and must refuse it rather than bind it as 2D.
+fn binding_target(
+    dimension: crate::backend::gl::api::GlTextureDimension,
+) -> RhiResult<crate::backend::gl::api::GlTextureTarget> {
+    use crate::backend::gl::api::{GlTextureDimension as Dimension, GlTextureTarget as Target};
+    match dimension {
+        Dimension::D2 => Ok(Target::D2),
+        Dimension::D2Array => Ok(Target::D2Array),
+        Dimension::Cube => Ok(Target::Cube),
+        Dimension::D3 => Ok(Target::D3),
+        Dimension::D1 => Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "native GL binding route has no verified 1D texture target",
+        )
+        .at("GL::create_texture_view")),
+    }
 }
 
 fn unsupported<T>(operation: &'static str) -> RhiResult<T> {

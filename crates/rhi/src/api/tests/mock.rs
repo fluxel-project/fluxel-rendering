@@ -1886,6 +1886,44 @@ pub(crate) fn mapped_buffers_for_test(
     mapped_buffers_with_options_for_test(identity, coherent, false)
 }
 
+/// A mapping fixture with only ordinary upload/readback-style map masks.
+///
+/// It deliberately does not publish `MappablePrimaryBuffers`: tests using it
+/// prove that an ordinary `MAP_*` lease is decided by the exact buffer-support
+/// row, not by the broader-primary optional feature.
+pub(crate) fn staging_mapped_buffers_for_test(
+    identity: DeviceIdentity,
+) -> (Device, Arc<MockDevice>) {
+    let mut facts = CapabilityFacts::empty();
+    let limits = BufferSupportLimits::new(1 << 20);
+    let readback = BufferUsage::MAP_READ.union(BufferUsage::COPY_DST);
+    let upload = BufferUsage::MAP_WRITE.union(BufferUsage::COPY_SRC);
+    for usage in BufferUsage::all() {
+        let support = if usage.is_empty()
+            || usage.contains(BufferUsage::MAP_READ) && !usage.is_subset_of(readback)
+            || usage.contains(BufferUsage::MAP_WRITE) && !usage.is_subset_of(upload)
+        {
+            BufferSupport::Unsupported
+        } else {
+            BufferSupport::Supported(limits)
+        };
+        facts.record_buffer_support(usage, support);
+    }
+    facts.record_feature(crate::api::platform::OptionalFeature::CoherentMapping);
+    facts.record_limit(crate::api::platform::LimitKey::MapAlignment, 4);
+    let native = MockDevice::with_capabilities(
+        BackendKind::Dx12,
+        MockProvider::new(BackendKind::Dx12, DeviceInstanceId::new(1)).adapter(),
+        facts,
+        default_lanes(),
+    );
+    (
+        Device::new(identity, observed_backend(native.clone()))
+            .expect("the staging mapping mock exposes base submission lanes"),
+        native,
+    )
+}
+
 /// A mapping-capable mock that also permits an open mapping across submission.
 pub(crate) fn persistent_mapped_buffers_for_test(
     identity: DeviceIdentity,

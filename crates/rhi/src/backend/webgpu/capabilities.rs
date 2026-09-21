@@ -105,11 +105,10 @@ impl WebGpuCapabilityInput {
         // ceiling that is equivalent to RHI MaxSamplerAnisotropy. A browser's
         // private clamp is not a portable device promise.
         facts.record_feature(OptionalFeature::Compute);
-        // `mapAsync`/getMappedRange/unmap is a real browser WebGPU route in the
-        // resource backend. Publishing MAP_* buffer usage without this feature
-        // would be internally contradictory: public `Device::map_buffer` is
-        // intentionally gated by the feature, not just by creation usage.
-        facts.record_feature(OptionalFeature::MappablePrimaryBuffers);
+        // `mapAsync`/getMappedRange/unmap is a real browser WebGPU staging-map
+        // route. WebGPU restricts MAP_READ to COPY_DST and MAP_WRITE to
+        // COPY_SRC, so those exact buffer rows publish ordinary mapping while
+        // MappablePrimaryBuffers correctly remains absent.
         facts.record_feature(OptionalFeature::ComparisonSamplers);
         facts.record_feature(OptionalFeature::BaseVertex);
         facts.record_feature(OptionalFeature::ClearBuffer);
@@ -930,7 +929,7 @@ mod tests {
         let (facts, submission) = input().into_capabilities();
         let available = AvailableCapabilities::from_facts(facts);
         assert!(available.supports_feature(OptionalFeature::Compute));
-        assert!(available.supports_feature(OptionalFeature::MappablePrimaryBuffers));
+        assert!(!available.supports_feature(OptionalFeature::MappablePrimaryBuffers));
         assert_eq!(submission.lanes().len(), 1);
         assert!(
             submission.lanes()[0].domains().contains(

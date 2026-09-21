@@ -9,7 +9,7 @@
 
 use crate::api::command::IndexFormat;
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
-use crate::api::format::TextureFormat;
+use crate::api::format::{TextureFormat, format_aspects};
 use crate::api::pipeline::PipelineInterface;
 use crate::api::pipeline::vertex_input::VertexFormat;
 use crate::api::resource::buffer::{BufferDescriptor, BufferUsage};
@@ -472,6 +472,39 @@ pub(crate) fn view_format(
     texture_format(desc.format.unwrap_or(base))
 }
 
+/// Checks the only TextureView shape that a GL-family implementation without
+/// `glTextureView` can represent without changing shared texture state.
+///
+/// In particular, this is intentionally *not* implemented with
+/// `TEXTURE_BASE_LEVEL`/`TEXTURE_MAX_LEVEL`: those parameters belong to the
+/// texture object, so two portable views of one texture would alias each
+/// other's state.  WebGL2 and GLES 3.x have no native view object at all and
+/// therefore use this boundary. Native GL must use a separately allocated
+/// view once its `GL_ARB_texture_view` route is installed; until then it uses
+/// the same conservative boundary rather than silently dropping a range.
+pub(crate) fn whole_compatible_virtual_view(
+    view: &TextureViewDescriptor,
+    base_format: TextureFormat,
+    base: GlTextureDesc,
+) -> RhiResult<GlTextureDimension> {
+    let dimension = view_dimension(view.dimension)?;
+    let whole_aspects = format_aspects(base_format);
+    if dimension != base.dimension
+        || view.format.unwrap_or(base_format) != base_format
+        || view.aspects != whole_aspects
+        || view.base_mip != 0
+        || view.mip_count != base.mip_level_count
+        || view.base_layer != 0
+        || view.layer_count != base.extent.depth_or_layers
+    {
+        return Err(unsupported(
+            "GL::create_texture_view",
+            "this GL profile has no independent texture-view object; only the base texture's whole, same-format, same-dimension view is representable",
+        ));
+    }
+    Ok(dimension)
+}
+
 pub(crate) fn sampler_descriptor(desc: &SamplerDescriptor) -> RhiResult<GlSamplerDesc> {
     fn address(value: AddressMode) -> RhiResult<GlAddressMode> {
         match value {
@@ -746,6 +779,7 @@ pub(crate) fn preflight_recorded_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::resource::subresource::TextureAspects;
     #[test]
     fn compressed_formats_keep_exact_family_and_srgb() {
         assert_eq!(
@@ -802,6 +836,57 @@ mod tests {
         let desc = BufferDescriptor::new(64, BufferUsage::BLAS_INPUT);
         assert_eq!(
             buffer_descriptor(&desc).unwrap_err().kind(),
+            RhiErrorKind::Unsupported
+        );
+    }
+
+    fn virtual_view_base() -> GlTextureDesc {
+        GlTextureDesc {
+            dimension: GlTextureDimension::D2,
+            extent: GlExtent3d {
+                width: 8,
+                height: 8,
+                depth_or_layers: 1,
+            },
+            mip_level_count: 3,
+            sample_count: 1,
+            format: texture_format(TextureFormat::Rgba8Unorm).unwrap(),
+            usage: GlTextureUsage::SAMPLED,
+        }
+    }
+
+    #[test]
+    fn virtual_view_accepts_only_the_exact_whole_base_shape() {
+        let view =
+            TextureViewDescriptor::new(TextureViewDimension::D2, TextureAspects::COLOR, 0, 3, 0, 1);
+        assert_eq!(
+            whole_compatible_virtual_view(&view, TextureFormat::Rgba8Unorm, virtual_view_base())
+                .unwrap(),
+            GlTextureDimension::D2
+        );
+    }
+
+    #[test]
+    fn virtual_view_refuses_partial_mips_reinterpretation_and_dimension_changes() {
+        let partial =
+            TextureViewDescriptor::new(TextureViewDimension::D2, TextureAspects::COLOR, 1, 1, 0, 1);
+        assert_eq!(
+            whole_compatible_virtual_view(&partial, TextureFormat::Rgba8Unorm, virtual_view_base())
+                .unwrap_err()
+                .kind(),
+            RhiErrorKind::Unsupported
+        );
+        let reinterpreted =
+            TextureViewDescriptor::new(TextureViewDimension::D2, TextureAspects::COLOR, 0, 3, 0, 1)
+                .with_format(TextureFormat::Rgba8UnormSrgb);
+        assert_eq!(
+            whole_compatible_virtual_view(
+                &reinterpreted,
+                TextureFormat::Rgba8Unorm,
+                virtual_view_base()
+            )
+            .unwrap_err()
+            .kind(),
             RhiErrorKind::Unsupported
         );
     }

@@ -38,7 +38,7 @@ use crate::backend::gl::platform::{
 };
 use crate::backend::gl::state::{
     BoundGroupPacket, CanonicalBlockId, ContextState, DerivedCacheKey, DerivedCacheKind,
-    ExecutionMode, PassPacket, RasterPipelineBlocks,
+    ExecutionMode, PassPacket, RasterPipelineBlockInterner,
     RasterPipelinePacket as StateRasterPipelinePacket, ResourceRef, StateEvent,
 };
 use crate::backend::gl::translate;
@@ -77,9 +77,10 @@ pub(super) struct BrowserDriverState {
     /// above retain immutable backing metadata only; they must never become a
     /// second "current GL state" cache.
     context_state: ContextState,
-    /// Monotonic canonical block namespace.  IDs are allocated, never hashed,
-    /// so equal-looking descriptors cannot collide and corrupt a state skip.
+    /// Namespace for non-pipeline state packets (FBO/query/geometry). Raster
+    /// pipeline blocks have their own structural interner below.
     next_canonical_block: u64,
+    pipeline_blocks: RasterPipelineBlockInterner,
     next_virtual: u32,
     next_completion: u64,
     completions: BTreeMap<u64, BrowserCompletion>,
@@ -92,6 +93,7 @@ pub(super) struct BrowserDriverState {
 #[derive(Clone, Copy)]
 struct BrowserTextureView {
     texture: TextureId,
+    target: crate::backend::gl::api::GlTextureTarget,
     base_format: crate::api::format::TextureFormat,
 }
 
@@ -105,6 +107,9 @@ struct BrowserRasterPipeline {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct BrowserGeometryKey {
     pipeline: GlObjectName,
+    /// The carrier follows the public pipeline lifetime; this typed identity
+    /// adds the context epoch and allocation generation for the VAO layout.
+    vertex_array: crate::backend::gl::api::VertexArrayId,
     vertices: Vec<crate::backend::gl::api::GlVertexBufferBinding>,
     index: Option<crate::backend::gl::api::GlIndexBinding>,
 }
@@ -290,13 +295,14 @@ impl BrowserV13PhaseBAction for BrowserRasterDrawAction {
                     format!("WebGL raster pipeline state was not registered: {error:?}"),
                 )
             })?;
-        // `set_raster_pipeline` is currently the typed executor's indivisible
-        // fixed-state install. The authority still decides whether the install
-        // is necessary and is the only writer of applied-state knowledge. When
-        // the executor gains per-block verbs, this branch can lower `diff`
-        // block-by-block without changing this action or the public API.
+        // The portable pipeline remains one object, but GL state does not: the
+        // structural diff is lowered leaf-by-leaf, so switching only blend does
+        // not rebind program, viewport/scissor, depth/stencil, or coverage.
         if !diff.is_empty() {
-            if let Err(error) = owner.executor.set_raster_pipeline(&self.pipeline) {
+            if let Err(error) = owner
+                .executor
+                .apply_raster_pipeline_diff(&self.pipeline, diff)
+            {
                 owner.context_state.pipeline_failed();
                 return Err(map_gl_error(error, "install WebGL2 raster pipeline"));
             }
@@ -602,6 +608,7 @@ impl BrowserDriverState {
             geometry_vaos: HashMap::new(),
             context_state: ContextState::new(ExecutionMode::Optimized),
             next_canonical_block: 1,
+            pipeline_blocks: RasterPipelineBlockInterner::new(),
             next_virtual: 0x8000_0000,
             next_completion: 1,
             completions: BTreeMap::new(),
@@ -612,23 +619,6 @@ impl BrowserDriverState {
         }
     }
 
-    fn allocate_pipeline_blocks(&mut self) -> RhiResult<RasterPipelineBlocks> {
-        let base = self.next_canonical_block;
-        let next = base.checked_add(5).ok_or_else(|| {
-            RhiError::new(
-                RhiErrorKind::BackendFailure,
-                "WebGL canonical state-block namespace exhausted",
-            )
-        })?;
-        self.next_canonical_block = next;
-        Ok(RasterPipelineBlocks {
-            program: CanonicalBlockId::new(base),
-            raster: CanonicalBlockId::new(base + 1),
-            depth_stencil: CanonicalBlockId::new(base + 2),
-            blend: CanonicalBlockId::new(base + 3),
-            multisample: CanonicalBlockId::new(base + 4),
-        })
-    }
     fn allocate_canonical_block(&mut self) -> RhiResult<CanonicalBlockId> {
         let value = self.next_canonical_block;
         self.next_canonical_block = value.checked_add(1).ok_or_else(|| {
@@ -771,7 +761,7 @@ impl BrowserDriverState {
                         let id = self.buffer_id(*buffer)?;
                         if self.context_state.prepare_uniform_slot(
                             slot,
-                            CanonicalBlockId::new(u64::from(id.slot) + 1),
+                            CanonicalBlockId::uniform_range(id, offset, size),
                         ) {
                             self.executor
                                 .bind_uniform_buffer(slot, Some(id), offset, size)
@@ -780,7 +770,7 @@ impl BrowserDriverState {
                                 })?;
                             self.context_state.commit_uniform_slot(
                                 slot,
-                                CanonicalBlockId::new(u64::from(id.slot) + 1),
+                                CanonicalBlockId::uniform_range(id, offset, size),
                             );
                         }
                     }
@@ -828,7 +818,7 @@ impl BrowserDriverState {
                             let id = self.buffer_id(*buffer)?;
                             if self.context_state.prepare_uniform_slot(
                                 unit,
-                                CanonicalBlockId::new(u64::from(id.slot) + 1),
+                                CanonicalBlockId::uniform_range(id, offset, size),
                             ) {
                                 self.executor
                                     .bind_uniform_buffer(unit, Some(id), offset, size)
@@ -837,7 +827,7 @@ impl BrowserDriverState {
                                     })?;
                                 self.context_state.commit_uniform_slot(
                                     unit,
-                                    CanonicalBlockId::new(u64::from(id.slot) + 1),
+                                    CanonicalBlockId::uniform_range(id, offset, size),
                                 );
                             }
                         }
@@ -887,17 +877,14 @@ impl BrowserDriverState {
         unit: u32,
         view: crate::backend::gl::platform::GlTextureViewRef,
     ) -> RhiResult<()> {
-        let source = self
-            .views
-            .get(&view.name.raw())
-            .ok_or_else(|| {
-                RhiError::new(
-                    RhiErrorKind::WrongDevice,
-                    "WebGL texture view backing is not live",
-                )
-            })?
-            .texture;
-        let binding = CanonicalBlockId::new(u64::from(source.slot) + 1);
+        let view_ref = view;
+        let view = self.views.get(&view_ref.name.raw()).ok_or_else(|| {
+            RhiError::new(
+                RhiErrorKind::WrongDevice,
+                "WebGL texture view backing is not live",
+            )
+        })?;
+        let binding = CanonicalBlockId::new(u64::from(view_ref.name.raw()));
         let (activate, bind) = self.context_state.prepare_texture_slot(unit, binding);
         if activate {
             self.executor
@@ -906,11 +893,7 @@ impl BrowserDriverState {
         }
         if bind {
             self.executor
-                .bind_texture(
-                    unit,
-                    crate::backend::gl::api::GlTextureTarget::D2,
-                    Some(source),
-                )
+                .bind_texture(unit, view.target, Some(view.texture))
                 .map_err(|error| map_gl_error(error, "bind WebGL texture"))?;
         }
         if activate || bind {
@@ -935,16 +918,15 @@ impl BrowserDriverState {
                 "WebGL sampler backing is not live",
             )
         })?;
-        self.executor
-            .bind_sampler(
-                unit,
-                Some(SamplerId::new(
-                    self.executor.context_stamp(),
-                    slot,
-                    entry.generation,
-                )),
-            )
-            .map_err(|error| map_gl_error(error, "bind WebGL sampler"))
+        let id = SamplerId::new(self.executor.context_stamp(), slot, entry.generation);
+        let key = CanonicalBlockId::object(id);
+        if self.context_state.prepare_sampler_slot(unit, key) {
+            self.executor
+                .bind_sampler(unit, Some(id))
+                .map_err(|error| map_gl_error(error, "bind WebGL sampler"))?;
+            self.context_state.commit_sampler_slot(unit, key);
+        }
+        Ok(())
     }
     fn retire_geometry(&mut self, predicate: impl Fn(&BrowserGeometryKey) -> bool) {
         let cached = std::mem::take(&mut self.geometry_vaos);
@@ -2006,8 +1988,7 @@ impl BrowserV13ObjectResolver for BrowserDriverState {
                     name,
                     index: group.index.get(),
                     dynamic_offsets: group.dynamic_offsets.clone(),
-                    program_link_epoch: u64::from(pipeline.program.slot) << 32
-                        | u64::from(pipeline.program.generation),
+                    program_identity: CanonicalBlockId::object(pipeline.program),
                     dependencies,
                 },
                 bindings,
@@ -2015,6 +1996,7 @@ impl BrowserV13ObjectResolver for BrowserDriverState {
         }
         let geometry_key = BrowserGeometryKey {
             pipeline: name,
+            vertex_array: pipeline.vertex_array,
             vertices: geometry.clone(),
             index,
         };
@@ -2791,8 +2773,6 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
             )
         })?;
         // Conversion is a preflight: WebGL2 has virtual views, but it must not
-        // accept a dimension/format it cannot represent.
-        let _ = translate::view_dimension(descriptor.dimension)?;
         self.with_state("WebGl2ExecutionDriver::create_texture_view", |state| {
             let entry = state.executor.textures.get(&slot).ok_or_else(|| {
                 RhiError::new(RhiErrorKind::Unsupported, "texture backing is not live")
@@ -2804,11 +2784,12 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
                     "WebGL texture table lost its public base-format metadata",
                 )
             })?;
-            // A view format is never approximated.  At this seam the typed
-            // texture descriptor is the source of truth, including after a
-            // browser context restoration invalidated all old carriers.
-            let _ = translate::view_format(descriptor, base_format)
-                .map_err(|error| error.at("WebGl2ExecutionDriver::create_texture_view"))?;
+            // WebGL2 has no independent view object.  Accept only the exact
+            // whole-texture shape; changing base/max level would mutate shared
+            // texture state and make sibling views alias.
+            let dimension =
+                translate::whole_compatible_virtual_view(descriptor, base_format, entry.desc)
+                    .map_err(|error| error.at("WebGl2ExecutionDriver::create_texture_view"))?;
             // The portable layer has already checked format compatibility; the
             // virtual view retains the generation-safe base texture identity.
             let name = state.next_virtual;
@@ -2822,6 +2803,7 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
                 name,
                 BrowserTextureView {
                     texture: texture_id,
+                    target: browser_binding_target(dimension)?,
                     // `view_format` above has already verified the exact format
                     // route. The public portable validator owns reinterpretation
                     // compatibility; retain the immutable base fact here solely
@@ -2986,9 +2968,22 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
             })?;
             let identity =
                 GlObjectName::new(name, "WebGl2ExecutionDriver::create_raster_pipeline")?;
+            let pipeline = crate::backend::gl::api::GlRasterPipeline {
+                program,
+                vertex_array,
+                state: packet.state,
+            };
             let state_packet = StateRasterPipelinePacket {
                 identity,
-                blocks: state.allocate_pipeline_blocks()?,
+                blocks: state
+                    .pipeline_blocks
+                    .intern(&pipeline, "WebGL canonical pipeline namespace exhausted")
+                    .map_err(|_| {
+                        RhiError::new(
+                            RhiErrorKind::BackendFailure,
+                            "WebGL canonical pipeline namespace exhausted",
+                        )
+                    })?,
             };
             state
                 .context_state
@@ -3002,9 +2997,9 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
             state.raster_pipelines.insert(
                 name,
                 BrowserRasterPipeline {
-                    program,
-                    vertex_array,
-                    state: packet.state,
+                    program: pipeline.program,
+                    vertex_array: pipeline.vertex_array,
+                    state: pipeline.state,
                     state_packet,
                 },
             );
@@ -3075,10 +3070,9 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
                     // into a permanent native leak.
                     let mut failure = None;
                     for query in queries {
+                        state.context_state.event(StateEvent::QueryRetired(query));
                         if let Err(error) = state.executor.destroy_query(query) {
                             failure.get_or_insert(error);
-                        } else {
-                            state.context_state.event(StateEvent::QueryRetired(query));
                         }
                     }
                     if let Some(error) = failure {
@@ -3088,13 +3082,17 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
                 }
                 GlObjectKind::TextureView => {
                     state.views.remove(&name.raw());
+                    // A view is virtual, but an already-applied bind group
+                    // can otherwise survive its retirement without another
+                    // validation/flush.
+                    state.context_state.event(StateEvent::DomainFailed(
+                        crate::backend::gl::state::StateDomain::Bindings,
+                    ));
                     return Ok(());
                 }
                 GlObjectKind::BindGroup => {
                     state.bind_groups.remove(&name.raw());
-                    state.context_state.event(StateEvent::DomainFailed(
-                        crate::backend::gl::state::StateDomain::Bindings,
-                    ));
+                    state.context_state.retire_bind_group(name);
                     return Ok(());
                 }
                 GlObjectKind::ComputePipeline => return Ok(()),
@@ -3142,7 +3140,10 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
                 } else {
                     None
                 };
-                result.map_err(|error| map_gl_error(error, "destroy WebGL2 object"))?;
+                // Publish retirement to the shared state authority before
+                // calling WebGL deletion.  A driver exception is then
+                // conservative (next use rebinds/revalidates), never a stale
+                // cache hit into a deleted or slot-reused object.
                 if let Some(id) = retired_buffer {
                     state.retire_geometry(|key| {
                         key.vertices.iter().any(|binding| binding.buffer == id)
@@ -3156,6 +3157,7 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
                 if let Some(id) = retired_sampler {
                     state.context_state.event(StateEvent::SamplerRetired(id));
                 }
+                result.map_err(|error| map_gl_error(error, "destroy WebGL2 object"))?;
                 if matches!(kind, GlObjectKind::Texture) {
                     state.texture_formats.remove(&slot);
                 }
@@ -3522,6 +3524,23 @@ impl GlExecutionDriver for WebGl2ExecutionDriver {
 /// The old browser executor allocates zero-based Fluxel table slots, while the
 /// v13 driver carrier reserves zero as "no object".  Encoding is deliberately
 /// `slot + 1`, not a browser object address or a GL integer name.
+fn browser_binding_target(
+    dimension: crate::backend::gl::api::GlTextureDimension,
+) -> RhiResult<crate::backend::gl::api::GlTextureTarget> {
+    use crate::backend::gl::api::{GlTextureDimension as Dimension, GlTextureTarget as Target};
+    match dimension {
+        Dimension::D2 => Ok(Target::D2),
+        // The WebGL2 resource allocator currently proves only single-sample
+        // 2D storage.  Refuse all other targets here even if a caller somehow
+        // bypassed capability validation; binding them as D2 is not a view.
+        _ => Err(RhiError::new(
+            RhiErrorKind::Unsupported,
+            "WebGL2 has no verified native texture-view target for this shape",
+        )
+        .at("WebGl2ExecutionDriver::create_texture_view")),
+    }
+}
+
 fn object_name(slot: u32, operation: &'static str) -> RhiResult<GlObjectName> {
     let encoded = slot.checked_add(1).ok_or_else(|| {
         RhiError::new(

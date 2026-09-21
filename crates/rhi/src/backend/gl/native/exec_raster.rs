@@ -13,6 +13,7 @@ use crate::backend::gl::api::{
     GlPrimitiveTopology, GlRasterCommandApi, GlRasterPipeline, GlRasterState,
     GlRasterValidationInfo, GlStencilFaceState, GlStencilOperation, issue_single_draws,
 };
+use crate::backend::gl::state::RasterPipelineDiff;
 
 pub(super) const fn topology_mode(topology: GlPrimitiveTopology) -> u32 {
     match topology {
@@ -80,51 +81,21 @@ const fn blend_operation(operation: GlBlendOperation) -> u32 {
 
 impl GlRasterCommandApi for NativeGlProvider {
     fn set_raster_pipeline(&mut self, pipeline: &GlRasterPipeline) -> Result<(), GlError> {
-        use glow::HasContext as _;
         const OP: &str = "set-raster-pipeline";
-        self.assert_ready(OP)?;
-        let pass = self
-            .pass
-            .as_ref()
-            .ok_or_else(|| Self::validation(OP, "no active render pass"))?;
-        // The program is resolved first even though it is selected last, so that
-        // a dead program is reported before anything about the state is.
-        self.program(OP, pipeline.program)?;
-        pipeline
-            .state
-            .validate(GlRasterValidationInfo {
-                width: pass.width,
-                height: pass.height,
-                max_samples: self.discovery.limits().max_samples,
-                max_color_targets: self.discovery.limits().max_color_attachments,
-            })
-            .map_err(|_| Self::validation(OP, "invalid raster state"))?;
-        if pipeline.state.multisample.sample_count != pass.samples {
-            return Err(Self::validation(
-                OP,
-                "pipeline sample count does not match the active framebuffer",
-            ));
-        }
-        // The program selection goes through the one owner of that fact, so a
-        // compute install that ran in between cannot leave this pipeline's
-        // program unselected without this verb noticing.  The vertex array goes
-        // through the owner of the other binding slot for the same reason: this
-        // install states which array it wants, but what the driver holds is the
-        // provider's record to keep, and both draws read that record rather than
-        // this call's argument.
-        self.ensure_program(OP, pipeline.program)?;
+        self.apply_raster_pipeline_diff(
+            pipeline,
+            RasterPipelineDiff {
+                program: true,
+                raster: true,
+                depth_stencil: true,
+                blend: true,
+                multisample: true,
+            },
+        )?;
+        // The direct Layer-2 API still installs its declared VAO. The v13
+        // driver instead lets the independent geometry domain bind it after
+        // the pipeline diff, because per-draw buffers may differ.
         self.ensure_vertex_array(OP, pipeline.vertex_array)?;
-        // SAFETY: current-context contract; the full validated state is
-        // applied in one fixed order and a failure clears the installation.
-        let applied = unsafe { self.apply_raster_state(OP, &pipeline.state) };
-        if let Err(error) = applied.and_then(|()| self.driver_error(OP)) {
-            self.raster = None;
-            return Err(error);
-        }
-        self.raster = Some(ActiveRaster {
-            program: pipeline.program,
-            topology: pipeline.state.topology,
-        });
         Ok(())
     }
 
@@ -243,16 +214,71 @@ impl GlMultiDrawApi for NativeGlProvider {
 }
 
 impl NativeGlProvider {
+    /// Lowers only the fixed-state leaves selected by the shared context
+    /// authority.  A caller commits the corresponding packet only after this
+    /// returns successfully; an identity hit never reaches this method.
+    pub(super) fn apply_raster_pipeline_diff(
+        &mut self,
+        pipeline: &GlRasterPipeline,
+        diff: RasterPipelineDiff,
+    ) -> Result<(), GlError> {
+        const OP: &str = "apply-raster-pipeline-diff";
+        self.assert_ready(OP)?;
+        let pass = self
+            .pass
+            .as_ref()
+            .ok_or_else(|| Self::validation(OP, "no active render pass"))?;
+        self.program(OP, pipeline.program)?;
+        pipeline
+            .state
+            .validate(GlRasterValidationInfo {
+                width: pass.width,
+                height: pass.height,
+                max_samples: self.discovery.limits().max_samples,
+                max_color_targets: self.discovery.limits().max_color_attachments,
+            })
+            .map_err(|_| Self::validation(OP, "invalid raster state"))?;
+        if pipeline.state.multisample.sample_count != pass.samples {
+            return Err(Self::validation(
+                OP,
+                "pipeline sample count does not match the active framebuffer",
+            ));
+        }
+        let applied = unsafe {
+            if diff.program {
+                self.ensure_program(OP, pipeline.program)?;
+            }
+            if diff.raster {
+                self.apply_raster_block(&pipeline.state);
+            }
+            if diff.depth_stencil {
+                self.apply_depth_stencil_block(OP, &pipeline.state)?;
+            }
+            if diff.blend {
+                self.apply_blend_block(OP, &pipeline.state)?;
+            }
+            if diff.multisample {
+                self.apply_multisample_block(OP, &pipeline.state)?;
+            }
+            Ok(())
+        };
+        if let Err(error) = applied.and_then(|()| self.driver_error(OP)) {
+            self.raster = None;
+            return Err(error);
+        }
+        self.raster = Some(ActiveRaster {
+            program: pipeline.program,
+            topology: pipeline.state.topology,
+        });
+        Ok(())
+    }
+
     /// Applies one complete validated raster state in a fixed order.
     ///
     /// # Safety
     ///
     /// Current-context contract; the state must already be validated.
-    unsafe fn apply_raster_state(
-        &self,
-        op: &'static str,
-        state: &GlRasterState,
-    ) -> Result<(), GlError> {
+    unsafe fn apply_raster_block(&self, state: &GlRasterState) {
         use glow::HasContext as _;
         unsafe {
             let viewport = &state.viewport;
@@ -293,17 +319,26 @@ impl NativeGlProvider {
                 GlFrontFace::Clockwise => glow::CW,
                 GlFrontFace::CounterClockwise => glow::CCW,
             });
-            match &state.depth_stencil {
-                Some(depth_stencil) => self.apply_depth_stencil(op, depth_stencil)?,
-                None => {
+        }
+    }
+
+    unsafe fn apply_depth_stencil_block(
+        &self,
+        op: &'static str,
+        state: &GlRasterState,
+    ) -> Result<(), GlError> {
+        match &state.depth_stencil {
+            Some(depth_stencil) => unsafe { self.apply_depth_stencil(op, depth_stencil) },
+            None => {
+                use glow::HasContext as _;
+                unsafe {
                     self.gl.disable(glow::DEPTH_TEST);
                     self.gl.disable(glow::STENCIL_TEST);
                     self.gl.disable(glow::POLYGON_OFFSET_FILL);
                 }
+                Ok(())
             }
-            self.apply_color_state(op, state)?;
         }
-        Ok(())
     }
 
     /// # Safety
@@ -372,7 +407,7 @@ impl NativeGlProvider {
     /// # Safety
     ///
     /// Current-context contract; the state must already be validated.
-    unsafe fn apply_color_state(
+    unsafe fn apply_blend_block(
         &self,
         op: &'static str,
         state: &GlRasterState,
@@ -427,11 +462,22 @@ impl NativeGlProvider {
                 }
                 None => self.gl.disable(glow::BLEND),
             }
-            // Multisampling is framebuffer state; only the coverage knobs are
-            // pipeline state. glow 0.18 binds no `glSampleMaski` and the
-            // embedded families have no typed command at all, so an explicit
-            // partial sample mask rejects on every native profile instead of
-            // being silently ignored (browser parity).
+        }
+        Ok(())
+    }
+
+    /// # Safety
+    ///
+    /// Current-context contract; the state must already be validated.
+    unsafe fn apply_multisample_block(
+        &self,
+        op: &'static str,
+        state: &GlRasterState,
+    ) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        unsafe {
+            // Multisampling is framebuffer state; only coverage knobs live in
+            // this canonical leaf. glow has no typed `SampleMaski` route.
             if state.multisample.sample_mask != u32::MAX {
                 return Err(Self::validation(
                     op,

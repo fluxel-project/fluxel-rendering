@@ -355,6 +355,17 @@ impl GlCapabilitySnapshot {
         {
             facts.record_feature(OptionalFeature::TimestampQuery);
         }
+        // There is no separate GL extension to discover for comparison
+        // samplers in the profiles this backend accepts. It is nevertheless
+        // not a free-standing "GL has it" fact: the public feature licenses a
+        // descriptor *and* a `SamplerKind::Comparison` binding, so its one
+        // authority is the complete sampler binding lowering route below.
+        // Keep this predicate shared with `record_bindings`; publishing either
+        // half by itself would let descriptor validation and layout validation
+        // disagree about the same operation.
+        if self.comparison_sampler_contract_closed() {
+            facts.record_feature(OptionalFeature::ComparisonSamplers);
+        }
     }
 
     fn record_bindings(&self, facts: &mut CapabilityFacts) {
@@ -448,11 +459,11 @@ impl GlCapabilitySnapshot {
                     BindingSupport::Supported,
                 );
             }
-            for kind in [
-                SamplerKind::Filtering,
-                SamplerKind::NonFiltering,
-                SamplerKind::Comparison,
-            ] {
+            // Filtering and non-filtering samplers use the ordinary packet
+            // route. Comparison is deliberately separate: it has the same
+            // native carrier on accepted GL profiles, but is a public optional
+            // feature and must use the exact predicate that publishes it.
+            for kind in [SamplerKind::Filtering, SamplerKind::NonFiltering] {
                 facts.record_binding_support(
                     BindingSupportKey {
                         visibility,
@@ -464,7 +475,32 @@ impl GlCapabilitySnapshot {
                     BindingSupport::Supported,
                 );
             }
+            if self.comparison_sampler_contract_closed() {
+                facts.record_binding_support(
+                    BindingSupportKey {
+                        visibility,
+                        kind: BindableKind::Sampler {
+                            kind: SamplerKind::Comparison,
+                        },
+                        array: false,
+                        runtime_sized: false,
+                        dynamic_offset: false,
+                    },
+                    BindingSupport::Supported,
+                );
+            }
         }
+    }
+
+    /// The one GL-family truth for the portable comparison-sampler contract.
+    ///
+    /// Desktop GL 4.x, GLES 3.x, and WebGL2 all provide the native comparison
+    /// state, but a native state bit is insufficient. The RHI must also be
+    /// able to carry the sampler through a reflected binding packet. Until
+    /// that packet lowering is closed, both creation's optional feature and
+    /// the comparison binding answer remain negative.
+    fn comparison_sampler_contract_closed(&self) -> bool {
+        self.lowering.bindings
     }
 
     fn format_family_admitted(&self, format: TextureFormat) -> bool {
@@ -604,6 +640,7 @@ fn is_compressed(format: TextureFormat) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::binding::{BindingCount, BindingKind, BindingSupportQuery};
     use crate::api::capability::AvailableCapabilities;
     use crate::api::resource::buffer::BufferSupportQuery;
     use crate::api::resource::texture::{TextureDimension, TextureUsage};
@@ -758,5 +795,56 @@ mod tests {
         let facts = AvailableCapabilities::from_facts(snapshot.into_facts());
         assert!(facts.supports_feature(OptionalFeature::SamplerAnisotropy));
         assert_eq!(facts.limit(LimitKey::MaxSamplerAnisotropy), Some(8));
+    }
+
+    fn sampler_binding_query(kind: SamplerKind) -> BindingSupportQuery {
+        BindingSupportQuery {
+            visibility: ShaderStages::VERTEX,
+            kind: BindingKind::Sampler { kind },
+            count: BindingCount::One,
+            dynamic_offset: false,
+        }
+    }
+
+    #[test]
+    fn comparison_sampler_feature_and_binding_share_the_same_closed_route() {
+        let mut snapshot = baseline(GlFamilyProfile::WebGl2);
+        snapshot.lowering.bindings = true;
+        // Binding support additionally needs a real texture-unit ceiling; a
+        // closed lowering route alone is not permission to invent one.
+        snapshot.limits.max_vertex_texture_image_units = 8;
+        snapshot.limits.max_fragment_texture_image_units = 8;
+        let facts = AvailableCapabilities::from_facts(snapshot.into_facts());
+
+        // Positive: one closed packet route publishes both halves.
+        assert!(facts.supports_feature(OptionalFeature::ComparisonSamplers));
+        assert_eq!(
+            facts.binding_support(&sampler_binding_query(SamplerKind::Comparison)),
+            BindingSupport::Supported
+        );
+
+        // Boundary: comparison admission does not change the ordinary sampler
+        // families that share the packet route.
+        assert_eq!(
+            facts.binding_support(&sampler_binding_query(SamplerKind::Filtering)),
+            BindingSupport::Supported
+        );
+        assert_eq!(
+            facts.binding_support(&sampler_binding_query(SamplerKind::NonFiltering)),
+            BindingSupport::Supported
+        );
+    }
+
+    #[test]
+    fn comparison_sampler_is_fail_closed_until_binding_lowering_exists() {
+        let snapshot = baseline(GlFamilyProfile::Desktop { major: 4, minor: 6 });
+        // The profile has native compare state, but `baseline` intentionally
+        // leaves the sampler binding packet lowering closed.
+        let facts = AvailableCapabilities::from_facts(snapshot.into_facts());
+        assert!(!facts.supports_feature(OptionalFeature::ComparisonSamplers));
+        assert_eq!(
+            facts.binding_support(&sampler_binding_query(SamplerKind::Comparison)),
+            BindingSupport::Unsupported
+        );
     }
 }
