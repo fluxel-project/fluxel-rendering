@@ -573,11 +573,12 @@ impl DeviceBackend for Dx12Device {
     /// upgraded to `DeviceLost` by the liveness cell.
     ///
     /// The upgrade is what closes the loop the spine opens: a serial past the
-    /// first unobservable one is answered `Failed` by [`Dx12CommandSpine`], which
-    /// the portable layer would surface as a backend failure even though the
-    /// device is gone. With the liveness cell consulted last, the same serial
-    /// answers `DeviceLost` — the terminal state section 41.8 requires and the one
-    /// a caller branches on to recover.
+    /// first as-yet-unobservable signal is answered `Failed` by
+    /// [`Dx12CommandSpine`] until a later fence value proves it complete, which
+    /// the portable layer would otherwise surface as a backend failure even
+    /// though the device is gone. With the liveness cell consulted last, the
+    /// same serial answers `DeviceLost` — the terminal state section 41.8
+    /// requires and the one a caller branches on to recover.
     fn completion(&self, serial: u64) -> CompletionState {
         let spine = self.spine.completion(serial);
         if matches!(spine, CompletionState::Complete) {

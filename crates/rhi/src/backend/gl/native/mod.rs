@@ -42,6 +42,15 @@ pub(crate) use probe::{NativeProfileError, parse_native_profile};
 pub(crate) use provider::NativeGlProvider;
 pub(crate) use worker::{NativeOwnerWorker, WorkerStartupError};
 
+// Real GL-family conformance cases live under `crates/rhi/tests` beside the
+// other backend fixtures.  The fixture opens its WGL context here, where raw
+// window/context ownership is still private, then exercises the public Device
+// through the common workload.  It must not turn WGL construction into a
+// portable public API merely to make an integration test convenient.
+#[cfg(all(test, windows, feature = "native-gl-wgl"))]
+#[path = "../../../../tests/gl/wgl_core.rs"]
+mod wgl_core_conformance;
+
 /// Adopts an owner-thread route whose context produced `discovery`.
 ///
 /// WGL/EGL adapters call this only after their platform factory has completed

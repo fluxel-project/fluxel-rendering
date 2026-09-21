@@ -194,3 +194,33 @@ required-features = ["examples"]
 name = "provider_probe"
 path = "examples/provider_probe.rs"
 required-features = ["examples"]
+
+[[example]]
+name = "triangle"
+path = "examples/triangle.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "textured_cube"
+path = "examples/textured_cube.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "compute"
+path = "examples/compute.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "msaa"
+path = "examples/msaa.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "indirect"
+path = "examples/indirect.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "query"
+path = "examples/query.rs"
+required-features = ["examples"]

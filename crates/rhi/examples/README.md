@@ -22,14 +22,24 @@ invoke its `run(&fixture).await` function. `provider_probe` is a complete
 public-API discovery example and can be run directly on a supported native
 target.
 
-The first portable examples are the same small workloads used by the hardware
-baseline, parameterised by a host-created `PlatformProvider`:
+The portable examples are the same small workloads used by the hardware
+baseline, parameterised by a host-created public `PlatformProvider`.  The
+provider constructors (`create_dx12_provider`, `create_vulkan_provider`,
+`create_metal_provider`, and the wasm WebGPU equivalent) are public composition
+functions; no example needs to name the crate-private backend provider.
 
 1. **`headless_compute`** — creates a storage buffer, a compute pipeline and a
    bind group, dispatches one workgroup, reads back eight `u32` values, and
    verifies them on the CPU.
 2. **`offscreen_triangle`** — uploads a triangle, renders it to an 8×8 RGBA8
    texture, reads the texture back, and checks the centre pixel.
+3. **`triangle`** — minimal raster fixture entry point for a window or
+   off-screen target.
+4. **`textured_cube`** — indexed geometry plus texture/sampler binding.
+5. **`compute`** — storage-buffer dispatch and CPU verification.
+6. **`msaa`** — capability-gated multisample render/resolve.
+7. **`indirect`** — capability-gated indirect draw or dispatch.
+8. **`query`** — occlusion query begin/end, resolve and asynchronous readback.
 
 They are deliberately not copies of wgpu's event-loop/framework examples:
 their job is to show Fluxel's resource → recorder → `SubmissionPlan` →

@@ -81,8 +81,9 @@ impl Dx12Failure {
     ///
     /// Read by [`crate::backend::dx12::platform::provider`], which builds a
     /// device-loss summary from it and renders it into the
-    /// [`CompletionFailure`](crate::api::submission::CompletionFailure) a
-    /// permanently unobservable serial answers with.
+    /// [`CompletionFailure`](crate::api::submission::CompletionFailure) an
+    /// as-yet-unobservable serial answers with. A later successful queue signal
+    /// may still establish completion for that earlier batch by fence ordering.
     pub(crate) fn message(&self) -> String {
         match self {
             Self::Unsupported { what, why } => format!("{what}: {why}"),

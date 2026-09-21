@@ -238,9 +238,12 @@ struct SpineState {
     /// on the queue — so it is recorded here and every serial at or beyond it
     /// answers terminally instead of staying `Pending` forever (section 41.8).
     ///
-    /// Only the *first* such serial is kept, because it is the bound below which
-    /// the fence still answers truthfully: later signals are queued behind the
-    /// same broken queue and would each name a larger serial.
+    /// Only the *first* such serial is kept. Until a later successful signal is
+    /// observed, it is the first serial for which the fence has no direct proof.
+    /// A later fence value is nevertheless allowed to supersede this marker:
+    /// queue ordering then proves all earlier accepted batches completed.
+    /// Subsequent failed signals would only name larger serials and add no
+    /// stronger information.
     unobservable: Option<(u64, Dx12Failure)>,
     /// Committed batches whose staging must outlive the fence reaching `serial`.
     ///
@@ -1020,24 +1023,7 @@ impl Dx12CommandSpine {
         let mut state = self.lock();
         let readback_loss = drain(&mut state, reached);
 
-        // Checked before the fence, because a serial at or beyond this bound can
-        // never be observed: the fence value it names was never written, so
-        // asking the fence would answer `Pending` forever (section 41.8), and
-        // asking it about a *later* serial would answer about work that is
-        // unrelated to this one.
-        let answer = if let Some((bound, failure)) = state.unobservable.as_ref() {
-            if serial >= *bound {
-                CompletionState::Failed(CompletionFailure::new(failure.message()))
-            } else if serial <= reached {
-                CompletionState::Complete
-            } else {
-                CompletionState::Pending
-            }
-        } else if serial <= reached {
-            CompletionState::Complete
-        } else {
-            CompletionState::Pending
-        };
+        let answer = completion_answer(serial, reached, state.unobservable.as_ref());
         // `mark_lost` invokes the cleanup handler, which locks this same spine
         // state. Never call it while the drain lock is held.
         drop(state);
@@ -1405,6 +1391,37 @@ fn terminate_pending(state: &Mutex<SpineState>, completion_waiters: &Mutex<Compl
     }
 }
 
+/// Answers one portable completion query from a fence sample and the first
+/// native `Signal` which did not produce its own serial.
+///
+/// A failed `Signal(n)` leaves `n` unobservable *until* a later successful
+/// `Signal(m)` reaches the fence.  Queue ordering makes `m >= n` proof that the
+/// work before it, including batch `n`, completed.  The old implementation
+/// checked the missing-signal bound first and therefore kept reporting
+/// `Failed` even after such a later fence value was observed.  That discarded a
+/// stronger native completion fact and could strand otherwise ready callers.
+///
+/// The bound still matters while the fence is below it: without a later signal,
+/// no event can ever establish completion for that serial, so `Failed` is the
+/// only structured non-pending answer.  A terminal signal failure is upgraded
+/// to `DeviceLost` by `Dx12Device`'s shared loss authority before this answer is
+/// exposed publicly.
+fn completion_answer(
+    serial: u64,
+    reached: u64,
+    unobservable: Option<&(u64, Dx12Failure)>,
+) -> CompletionState {
+    if serial <= reached {
+        return CompletionState::Complete;
+    }
+    if let Some((bound, failure)) = unobservable {
+        if serial >= *bound {
+            return CompletionState::Failed(CompletionFailure::new(failure.message()));
+        }
+    }
+    CompletionState::Pending
+}
+
 /// Publishes everything a reached fence value implies, and terminates the rest.
 ///
 /// The one body behind both [`Dx12CommandSpine::advance`] and
@@ -1524,7 +1541,10 @@ fn payload_name(payload: &RecordedPayload) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_removed_fence_value, rollback_indices};
+    use crate::api::submission::CompletionState;
+    use crate::backend::dx12::failure::Dx12Failure;
+
+    use super::{completion_answer, is_removed_fence_value, rollback_indices};
 
     #[test]
     fn dx12_removal_fence_sentinel_is_never_a_completed_serial() {
@@ -1539,5 +1559,32 @@ mod tests {
         // early batch records and a later batch refuses, all claimed pairs are
         // dropped without shifting an index that is still waiting to be removed.
         assert_eq!(rollback_indices(&[1, 4, 2, 4]), vec![4, 2, 1]);
+    }
+
+    #[test]
+    fn later_successful_signal_proves_an_earlier_missing_signal_batch_complete() {
+        let failed_signal = (
+            7,
+            Dx12Failure::Unsupported {
+                what: "test signal",
+                why: "the test models an unobservable serial",
+            },
+        );
+
+        assert!(matches!(
+            completion_answer(7, 6, Some(&failed_signal)),
+            CompletionState::Failed(_)
+        ));
+        // A later signal is ordered after the un-signalled batch. Once its
+        // fence value is observed, it is a stronger completion fact than the
+        // earlier failed call was a failure fact.
+        assert!(matches!(
+            completion_answer(7, 8, Some(&failed_signal)),
+            CompletionState::Complete
+        ));
+        assert!(matches!(
+            completion_answer(8, 8, Some(&failed_signal)),
+            CompletionState::Complete
+        ));
     }
 }
