@@ -85,7 +85,10 @@ mod tests {
             crate::api::platform::requirements::DeviceRequirements::new(),
         );
         let mut request = provider.request_device(&descriptor).unwrap();
-        let device = match request.poll().unwrap() {
+        let device = match request
+            .poll_or_register_waker(std::task::Waker::noop())
+            .unwrap()
+        {
             RequestProgress::Ready(device) => device,
             RequestProgress::Pending => {
                 assert!(false, "adopted contexts must be ready on the first poll");
@@ -119,7 +122,10 @@ mod tests {
             crate::api::platform::requirements::DeviceRequirements::new(),
         );
         let mut request = provider.request_device(&descriptor).unwrap();
-        let device = match request.poll().unwrap() {
+        let device = match request
+            .poll_or_register_waker(std::task::Waker::noop())
+            .unwrap()
+        {
             RequestProgress::Ready(device) => device,
             RequestProgress::Pending => {
                 assert!(false, "adopted contexts must be ready on the first poll");
@@ -155,7 +161,10 @@ mod tests {
             crate::api::platform::requirements::DeviceRequirements::new(),
         );
         let mut request = provider.request_device(&descriptor).unwrap();
-        let device = match request.poll().unwrap() {
+        let device = match request
+            .poll_or_register_waker(std::task::Waker::noop())
+            .unwrap()
+        {
             RequestProgress::Ready(device) => device,
             RequestProgress::Pending => {
                 assert!(false, "adopted contexts must be ready");

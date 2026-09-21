@@ -24,7 +24,7 @@ gl-family = []
 native-gl-wgl = ["gl-family", "dep:glow", "dep:glutin_wgl_sys", "dep:raw-window-handle"]
 native-gles-egl = ["gl-family", "dep:glow", "dep:khronos-egl", "dep:raw-window-handle"]
 webgl2 = ["gl-family", "dep:glow", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
-webgpu = []
+webgpu = ["dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 test-support = []
 
 [dependencies]
@@ -98,9 +98,11 @@ web-sys = { version = "=0.3.105", optional = true, features = [
     "WebGlTexture",
     "WebGlUniformLocation",
     "WebGlVertexArrayObject",
+    "Gpu",
     "Window",
     "console",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"
+wasm-bindgen-futures = "0.4.55"

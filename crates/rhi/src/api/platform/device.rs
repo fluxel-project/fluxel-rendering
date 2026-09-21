@@ -197,7 +197,11 @@ pub(crate) struct StatisticsState {
     pub(crate) config: StatisticsConfig,
     pub(crate) epoch: u64,
     pub(crate) sequence: u64,
-    pub(crate) started: std::time::Instant,
+    /// Monotonic process timestamp in nanoseconds.  `Instant` is not
+    /// implemented by Rust's `wasm32-unknown-unknown` standard library (it
+    /// panics at runtime), while statistics are part of every Device domain.
+    /// Keep the browser clock conversion here, below the public API boundary.
+    pub(crate) started_nanos: u64,
     pub(crate) cumulative: CumulativeStatistics,
 }
 
@@ -209,7 +213,7 @@ impl RuntimeServices {
                 config: StatisticsConfig::default(),
                 epoch: 1,
                 sequence: 1,
-                started: std::time::Instant::now(),
+                started_nanos: statistics_now_nanos(),
                 cumulative: CumulativeStatistics::default(),
             }),
             observers: Mutex::new(ObserverState {
@@ -220,6 +224,47 @@ impl RuntimeServices {
             captured_work: Mutex::new(HashMap::new()),
             native_capture_active: Mutex::new(false),
         }
+    }
+}
+
+/// Returns a timestamp suitable for elapsed *statistics* only. It never enters
+/// completion, resource lifetime, or presentation ordering, so the browser's
+/// wall-clock resolution cannot become an execution authority.
+pub(crate) fn statistics_now_nanos() -> u64 {
+    #[cfg(all(target_arch = "wasm32", any(feature = "webgpu", feature = "webgl2")))]
+    {
+        // `performance.now()` has the monotonic semantics statistics needs;
+        // unlike `Date.now()` it cannot jump backwards after a wall-clock
+        // adjustment. `web_sys` is available under each browser backend feature.
+        let millis = web_sys::window()
+            .and_then(|window| window.performance())
+            .map(|performance| performance.now())
+            .unwrap_or(0.0);
+        return if millis.is_finite() && millis >= 0.0 {
+            (millis * 1_000_000.0).min(u64::MAX as f64) as u64
+        } else {
+            0
+        };
+    }
+    #[cfg(all(
+        target_arch = "wasm32",
+        not(any(feature = "webgpu", feature = "webgl2"))
+    ))]
+    {
+        // A backend-less wasm build cannot construct a real Device.  Retaining
+        // a defined value keeps API-only wasm compilation free of an unavailable
+        // host clock without inventing a timing capability.
+        return 0;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::OnceLock;
+        static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
+        EPOCH
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64
     }
 }
 

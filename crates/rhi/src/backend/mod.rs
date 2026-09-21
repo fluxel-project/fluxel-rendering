@@ -51,3 +51,6 @@ pub(crate) mod vulkan;
 // browser context ownership are enabled by their narrower provider features.
 #[cfg(feature = "gl-family")]
 pub(crate) mod gl;
+
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+pub(crate) mod webgpu;

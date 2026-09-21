@@ -123,7 +123,7 @@ pub(crate) struct MockProvider {
     instance: DeviceInstanceId,
     enumeration: MockEnumeration,
     presents: bool,
-    /// How many `poll` calls report `Pending` before the request resolves.
+    /// How many polls report `Pending` before the request resolves.
     pending_steps: u32,
     outcome: MockOutcome,
     /// The contract the device this provider produces will report.
@@ -265,9 +265,12 @@ struct MockRequest {
 }
 
 impl DeviceRequestBackend for MockRequest {
-    fn poll(&mut self) -> RhiResult<RequestProgress> {
+    fn poll_or_register_waker(&mut self, waker: &Waker) -> RhiResult<RequestProgress> {
         if self.remaining > 0 {
             self.remaining -= 1;
+            // The mock models immediately schedulable progress: it never relies
+            // on the provider self-waking a pending request.
+            waker.wake_by_ref();
             return Ok(RequestProgress::Pending);
         }
         match &self.outcome {

@@ -26,7 +26,7 @@ impl GlRequest {
 }
 
 impl DeviceRequestBackend for GlRequest {
-    fn poll(&mut self) -> RhiResult<RequestProgress> {
+    fn poll_or_register_waker(&mut self, _waker: &std::task::Waker) -> RhiResult<RequestProgress> {
         // The portable request is still async.  It becomes ready on its first
         // poll, exactly like an adopted WebGL context already made current by
         // the host; a second poll is prohibited by the portable single-shot rule.

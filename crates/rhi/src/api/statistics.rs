@@ -240,7 +240,7 @@ impl DeviceStatistics {
         state.config = config;
         state.epoch = state.epoch.saturating_add(1);
         state.sequence = 1;
-        state.started = std::time::Instant::now();
+        state.started_nanos = crate::api::platform::device::statistics_now_nanos();
         state.cumulative = CumulativeStatistics::default();
         Ok(())
     }
@@ -287,7 +287,8 @@ impl DeviceStatistics {
             self.device.identity(),
             state.epoch,
             sequence,
-            state.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            crate::api::platform::device::statistics_now_nanos()
+                .saturating_sub(state.started_nanos),
             state.cumulative.clone(),
         )
     }

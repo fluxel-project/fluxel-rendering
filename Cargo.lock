@@ -278,6 +278,7 @@ dependencies = [
  "khronos-egl",
  "raw-window-handle",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
  "windows",

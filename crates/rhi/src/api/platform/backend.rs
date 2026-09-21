@@ -70,17 +70,25 @@ pub(crate) trait ProviderBackend: Send + Sync + 'static {
 
 /// An in-flight device request's native side (section 5.9).
 ///
-/// Single-shot by contract: `poll` is called until it reports
+/// Single-shot by contract: `poll_or_register_waker` is called until it reports
 /// [`RequestProgress::Ready`] or an error, and the portable layer retires the
 /// request at that point. A backend therefore does not need to defend against
 /// being polled after it has answered.
 pub(crate) trait DeviceRequestBackend: Send + Sync + 'static {
-    /// Advances the request one step without blocking.
+    /// Advances the request one step without blocking and, when it remains
+    /// pending, registers `waker` for the native event that makes a later poll
+    /// useful.
     ///
     /// This is not a place to spin on a native fence. Section 5.9 requires the
     /// host to keep pumping its own event loop; a backend that blocked here would
     /// deadlock the very browser or window messages the request depends on.
-    fn poll(&mut self) -> RhiResult<RequestProgress>;
+    ///
+    /// `Pending` is a suspension point, not an instruction for the portable
+    /// provider to busy-poll.  A backend that can make progress synchronously
+    /// may wake `waker` before returning `Pending`; one awaiting an OS callback
+    /// or browser promise retains/replaces it and wakes it from that callback.
+    /// It must not retain the waker after returning `Ready` or an error.
+    fn poll_or_register_waker(&mut self, waker: &std::task::Waker) -> RhiResult<RequestProgress>;
 }
 
 /// What a device request's native side has produced so far.

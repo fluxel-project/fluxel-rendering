@@ -403,7 +403,7 @@ fn a_headless_device_is_created_on_the_default_adapter() {
         .expect("a headless device request must succeed on a machine with DXGI");
 
     let progress = request
-        .poll()
+        .poll_or_register_waker(std::task::Waker::noop())
         .expect("a synchronous backend must answer on the first poll");
     let RequestProgress::Ready(device) = progress else {
         panic!("the DX12 path is synchronous, so the first poll must be Ready");

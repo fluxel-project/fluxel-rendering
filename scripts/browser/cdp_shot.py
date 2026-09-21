@@ -407,6 +407,11 @@ def main() -> int:
     # only in the DOM, so this is how the real test suite runs headed on the
     # real GPU and still reports machine-readable results.
     parser.add_argument("--wait-text", default=None)
+    parser.add_argument(
+        "--require-text",
+        default=None,
+        help="additional terminal text which must be present before a successful capture",
+    )
     parser.add_argument("--wait-timeout", type=float, default=300.0)
     args = parser.parse_args()
 
@@ -499,6 +504,13 @@ def main() -> int:
                 if not found:
                     print(f"waited {args.wait_timeout}s for {args.wait_text!r} in the page text")
                     return 1
+                if args.require_text is not None and args.require_text not in text:
+                    print(
+                        f"page reached {args.wait_text!r} but did not report required success text "
+                        f"{args.require_text!r}",
+                        file=sys.stderr,
+                    )
+                    return 3
             else:
                 # A page that reports in its title still says more in its body:
                 # which frames were submitted, which diagnostics were recorded,

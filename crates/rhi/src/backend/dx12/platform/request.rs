@@ -22,13 +22,13 @@ impl Dx12Request {
 }
 
 impl DeviceRequestBackend for Dx12Request {
-    fn poll(&mut self) -> RhiResult<RequestProgress> {
+    fn poll_or_register_waker(&mut self, _waker: &std::task::Waker) -> RhiResult<RequestProgress> {
         let native = self.native.take().ok_or_else(|| {
             RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 "a completed DX12 device request was polled more than once",
             )
-            .at("Dx12Request::poll")
+            .at("Dx12Request::poll_or_register_waker")
         })?;
         Ok(RequestProgress::Ready(Box::new(native)))
     }

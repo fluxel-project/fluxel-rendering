@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the browser WebGL2 test suite **headed on the real GPU** and report it.
+"""Run a browser RHI test suite **headed on the real GPU** and report it.
 
 Why this is two processes and not one
 -------------------------------------
@@ -56,21 +56,17 @@ DRIVER_DIR = Path(
     os.environ.get("FLUXEL_CHROMEDRIVER_DIR", str(REPO / "target" / "tools" / "chromedriver-win64"))
 )
 
-# The suite under test.  Kept identical to `run-wasm-test.sh`'s cargo line so the
-# headed and headless runs are the same artifact.
-CARGO = [
-    "cargo",
-    "test",
-    "-p",
-    "fluxel-rhi",
-    "--target",
-    "wasm32-unknown-unknown",
-    "--no-default-features",
-    "--features",
-    "webgl2",
-    "--lib",
-    "--locked",
-]
+# Software GPU paths are useful for CI diagnosis, but cannot be evidence for a
+# headed real-GPU browser run. Keep this gate outside the test binary too.
+SOFTWARE_GPU_ARGUMENTS = ("swiftshader", "llvmpipe", "warp", "software")
+
+
+def cargo_command(features: str) -> list[str]:
+    """Return the wasm cargo invocation for one browser backend suite."""
+    return [
+        "cargo", "test", "-p", "fluxel-rhi", "--target", "wasm32-unknown-unknown",
+        "--no-default-features", "--features", features, "--lib", "--locked",
+    ]
 
 
 def kill_tree(proc: subprocess.Popen) -> None:
@@ -102,7 +98,23 @@ def main() -> int:
     parser.add_argument("--wait-timeout", type=float, default=300.0)
     parser.add_argument("--debug-port", type=int, default=9225)
     parser.add_argument("--ready-timeout", type=float, default=600.0)
+    parser.add_argument("--features", choices=("webgl2", "webgpu"), default="webgl2",
+                        help="browser backend feature to build and run")
+    parser.add_argument("--chrome-arg", action="append", default=[],
+                        help="extra headed Chrome flag; software GPU routes are refused")
     args = parser.parse_args()
+
+    forbidden = [flag for flag in args.chrome_arg
+                 if any(token in flag.lower() for token in SOFTWARE_GPU_ARGUMENTS)]
+    if forbidden:
+        parser.error("headed real-GPU evidence refuses software GPU arguments: " + ", ".join(forbidden))
+    if args.features == "webgpu":
+        # The first flag asks Chrome to expose the diagnostic fields that the
+        # WebGPU test uses to reject software adapters.  The second lets a
+        # developer test a real adapter which Chrome's conservative blocklist
+        # would otherwise hide; the in-browser assertion still rejects fallback
+        # and known software implementations.
+        args.chrome_arg.extend(["enable-unsafe-webgpu", "ignore-gpu-blocklist"])
 
     env = {
         **os.environ,
@@ -121,7 +133,7 @@ def main() -> int:
     env["PATH"] = str(DRIVER_DIR) + os.pathsep + env.get("PATH", "")
 
     runner = subprocess.Popen(
-        CARGO,
+        cargo_command(args.features),
         cwd=str(REPO),
         env=env,
         stdout=subprocess.PIPE,
@@ -152,6 +164,11 @@ def main() -> int:
                 url,
                 "--wait-text",
                 args.wait_text,
+                # The interactive harness uses the same `test result:` prefix
+                # for failures. Do not turn a completed-but-failing page into
+                # a green real-GPU evidence result.
+                "--require-text",
+                "test result: ok.",
                 "--wait-timeout",
                 str(args.wait_timeout),
                 "--out",
@@ -161,6 +178,8 @@ def main() -> int:
             ]
         if args.browser:
             capture.extend(["--chrome", args.browser])
+        for flag in args.chrome_arg:
+            capture.extend(["--chrome-arg", flag])
         browser = subprocess.Popen(
             capture,
             cwd=str(REPO),

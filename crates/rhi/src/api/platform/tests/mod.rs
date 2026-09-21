@@ -16,11 +16,13 @@
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Wake, Waker};
 
 use crate::api::capability::{CapabilityFacts, EnabledCapabilities};
 use crate::api::error::RhiErrorKind;
 use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
+use crate::api::platform::backend::RequestProgress;
 use crate::api::platform::requirements::{DeviceRequirements, LimitKey, OptionalFeature};
 use crate::api::platform::{
     AdapterId, AdapterSelection, BackendKind, Device, DeviceLossInfo, DeviceRequestDescriptor,
@@ -33,6 +35,98 @@ use crate::api::submission::{
     SubmissionLaneInfo,
 };
 use crate::api::tests::mock::{MockDevice, MockEnumeration, MockProvider};
+
+/// A request seam fixture whose first poll suspends.  It intentionally does not
+/// depend on an executor: the tests poll it directly so they can distinguish a
+/// backend-originated wake from an accidental provider self-wake.
+struct RequestWakeProbe {
+    adapter: crate::api::platform::AdapterInfo,
+    wake_while_pending: bool,
+    pending: bool,
+    polls: Arc<AtomicUsize>,
+}
+
+impl crate::api::platform::backend::DeviceRequestBackend for RequestWakeProbe {
+    fn poll_or_register_waker(&mut self, waker: &Waker) -> crate::api::RhiResult<RequestProgress> {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        if self.pending {
+            self.pending = false;
+            if self.wake_while_pending {
+                waker.wake_by_ref();
+            }
+            return Ok(RequestProgress::Pending);
+        }
+        Ok(RequestProgress::Ready(
+            crate::api::tests::mock::observed_backend(MockDevice::new(
+                BackendKind::Dx12,
+                self.adapter.clone(),
+            )),
+        ))
+    }
+}
+
+struct RequestWakeProbeProvider {
+    instance: DeviceInstanceId,
+    wake_while_pending: bool,
+    polls: Arc<AtomicUsize>,
+}
+
+impl crate::api::platform::backend::ProviderBackend for RequestWakeProbeProvider {
+    fn enumerate_adapters(
+        &self,
+    ) -> crate::api::RhiResult<Option<Vec<crate::api::platform::AdapterInfo>>> {
+        Ok(None)
+    }
+
+    fn supports_presentation(
+        &self,
+        _adapter: AdapterId,
+        _target: &PresentationTarget,
+    ) -> crate::api::RhiResult<bool> {
+        Ok(true)
+    }
+
+    fn request_device(
+        &self,
+        _descriptor: &DeviceRequestDescriptor,
+    ) -> crate::api::RhiResult<Box<dyn crate::api::platform::backend::DeviceRequestBackend>> {
+        Ok(Box::new(RequestWakeProbe {
+            adapter: MockProvider::new(BackendKind::Dx12, self.instance).adapter(),
+            wake_while_pending: self.wake_while_pending,
+            pending: true,
+            polls: self.polls.clone(),
+        }))
+    }
+}
+
+struct WakeCounter(AtomicUsize);
+
+impl Wake for WakeCounter {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn wake_probe_provider(wake_while_pending: bool) -> (PlatformProvider, Arc<AtomicUsize>) {
+    let instance = DeviceInstanceId::new(71);
+    let polls = Arc::new(AtomicUsize::new(0));
+    (
+        PlatformProvider::new(
+            BackendKind::Dx12,
+            instance,
+            Box::new(RequestWakeProbeProvider {
+                instance,
+                wake_while_pending,
+                polls: polls.clone(),
+            }),
+        ),
+        polls,
+    )
+}
 
 /// A device identity under the single v13 device-instance token.
 fn identity(instance: u64) -> DeviceIdentity {
@@ -230,6 +324,49 @@ fn a_pending_request_resolves_through_the_async_boundary() {
         .boxed();
     let provider = PlatformProvider::new(BackendKind::Dx12, instance, native);
     assert!(block_on(provider.request_device(headless_request())).is_ok());
+}
+
+/// A pending request may only be woken by the native request seam.  In
+/// particular, `PlatformProvider` must not turn `Pending` into a busy loop by
+/// waking the executor itself.
+#[test]
+fn pending_request_does_not_self_wake_the_provider_future() {
+    let (provider, polls) = wake_probe_provider(false);
+    let counter = Arc::new(WakeCounter(AtomicUsize::new(0)));
+    let waker = Waker::from(counter.clone());
+    let mut context = Context::from_waker(&waker);
+    let mut request = pin!(provider.request_device(headless_request()));
+
+    assert!(matches!(request.as_mut().poll(&mut context), Poll::Pending));
+    assert_eq!(counter.0.load(Ordering::SeqCst), 0);
+    assert_eq!(polls.load(Ordering::SeqCst), 1);
+
+    // An executor is allowed to poll again for an independent reason; the
+    // backend's next terminal answer is still accepted normally.
+    assert!(matches!(
+        request.as_mut().poll(&mut context),
+        Poll::Ready(Ok(_))
+    ));
+    assert_eq!(polls.load(Ordering::SeqCst), 2);
+}
+
+/// A backend that knows synchronous progress is available may wake before it
+/// returns `Pending`; that wake survives the seam and drives the next poll.
+#[test]
+fn pending_request_propagates_backend_waker_registration() {
+    let (provider, polls) = wake_probe_provider(true);
+    let counter = Arc::new(WakeCounter(AtomicUsize::new(0)));
+    let waker = Waker::from(counter.clone());
+    let mut context = Context::from_waker(&waker);
+    let mut request = pin!(provider.request_device(headless_request()));
+
+    assert!(matches!(request.as_mut().poll(&mut context), Poll::Pending));
+    assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        request.as_mut().poll(&mut context),
+        Poll::Ready(Ok(_))
+    ));
+    assert_eq!(polls.load(Ordering::SeqCst), 2);
 }
 
 /// A failed request is terminal, and the failure reaches the caller intact.

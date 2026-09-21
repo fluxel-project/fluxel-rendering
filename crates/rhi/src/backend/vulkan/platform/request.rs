@@ -18,13 +18,13 @@ impl VulkanRequest {
 }
 
 impl DeviceRequestBackend for VulkanRequest {
-    fn poll(&mut self) -> RhiResult<RequestProgress> {
+    fn poll_or_register_waker(&mut self, _waker: &std::task::Waker) -> RhiResult<RequestProgress> {
         let device = self.device.take().ok_or_else(|| {
             RhiError::new(
                 RhiErrorKind::InvalidUsage,
                 "a completed Vulkan device request was polled more than once",
             )
-            .at("VulkanRequest::poll")
+            .at("VulkanRequest::poll_or_register_waker")
         })?;
         Ok(RequestProgress::Ready(Box::new(device)))
     }

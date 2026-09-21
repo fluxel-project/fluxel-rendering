@@ -413,13 +413,15 @@ impl PlatformProvider {
         // inside the provider: public callers await `Device`, never manually poll
         // a request state machine. Native async backends may replace this bridge
         // with future erasure without changing the public API.
-        std::future::poll_fn(move |context| match request.poll()? {
-            RequestProgress::Pending => {
-                context.waker().wake_by_ref();
-                Poll::Pending
-            }
-            RequestProgress::Ready(native) => {
-                Poll::Ready(Device::new(self.mint_identity(), native))
+        std::future::poll_fn(move |context| {
+            match request.poll_or_register_waker(context.waker())? {
+                // A pending native request owns wake-up responsibility.  Waking here
+                // would turn an OS/browser wait into an executor hot loop and hides
+                // a backend which forgot to connect its completion callback.
+                RequestProgress::Pending => Poll::Pending,
+                RequestProgress::Ready(native) => {
+                    Poll::Ready(Device::new(self.mint_identity(), native))
+                }
             }
         })
         .await
