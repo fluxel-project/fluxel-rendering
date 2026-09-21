@@ -1,16 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["crates/rendergraph", "crates/renderer", "crates/rhi", "crates/rendering-wasm"]
-# `crates/wgpu-hal` is the patched wgpu-hal 30.0.1 source consumed only through
-# `fluxel-rhi`'s path dependency. It is excluded so workspace-wide commands
-# neither build it with `--all-features` nor reach its upstream-only dev
-# surface; being a path dependency inside the repository is what makes the
-# patch travel to Git consumers, which a root `[patch.crates-io]` cannot do.
-# `crates/rhi-old` is the pre-rewrite RHI crate, kept on disk as the reference
-# implementation while its backends are ported to the new `crates/rhi` API. It is
-# excluded rather than deleted so that workspace-wide commands neither build it
-# nor report its failures; it is removed once the port is complete.
-exclude = ["crates/wgpu-hal", "crates/rhi-old"]
 
 [workspace.package]
 version = "0.15.0"

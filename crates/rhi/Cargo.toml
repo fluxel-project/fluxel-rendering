@@ -48,8 +48,8 @@ ash = { version = "=0.38.0", optional = true, default-features = false, features
 khronos-egl = { version = "=6.0.0", features = ["dynamic"], optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-# Keep the Objective-C/Metal stack aligned with the vendored wgpu-hal 30.0.1
-# reference.  Mixing objc2 framework-crate generations is not supported: their
+# Keep the Objective-C/Metal stack aligned with the wgpu-hal 30.0.1 API usage
+# audited during the Metal port. Mixing objc2 framework-crate generations is not supported: their
 # Retained/ProtocolObject types form one ABI-level ownership vocabulary.
 block2 = { version = "=0.6.2", optional = true }
 objc2 = { version = "=0.6.3", optional = true }

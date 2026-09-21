@@ -14,7 +14,7 @@ DX12
 Vulkan
 Metal
 WebGPU
-GL (GL4.x / GLES 3.x / WebGL2)严格参考 E:\moyy\program\rust\fluxel\fluxel-rendering\crates\rhi-old\src\webgl2
+GL (GL4.x / GLES 3.x / WebGL2) 的状态机模型与优化边界以当前 `src/backend/gl` 和对应设计文档为准。
 ```
 
 你的任务不是重新设计 RHI public API，而是：

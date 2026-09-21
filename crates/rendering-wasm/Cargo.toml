@@ -14,13 +14,10 @@ crate-type = ["cdylib", "rlib"]
 # The browser bridge owns the AssetStore the renderer's residency keys on, so it
 # takes the same pinned asset revision the renderer's `gpu-residency` does.
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "22c4eb0e199575aa71b59f3abc6ec3f72d934b9a", version = "=0.13.4" }
-# TEMPORARILY DISABLED 2026-09-20 — RHI contract-first rewrite (0.16-plan.md
-# section 0.3: the whole `crates/rhi` was renamed to `crates/rhi-old` and rebuilt
-# from the specification, with no backend lowered yet). The renderer's
-# `gpu-upload` path and this crate's WebGL2 bridge are written against the old
-# RHI surface and cannot compile until the backend ports land. The dependency is
-# commented out rather than removed — restoring these two lines is the whole
-# change once steps 2-6 of the rewrite are done.
+# The renderer's GPU-upload path and this crate's browser bridge are still
+# disabled until their integration is migrated to the frozen v13 RHI surface.
+# Backend lowering itself is complete; this is now an ecosystem integration
+# task rather than a reason to retain the retired implementation tree.
 #
 # The reason this crate's manifest is the lever: a crate that compiles to nothing
 # on the host target (`#![cfg(target_arch = "wasm32")]` in src/lib.rs) still
