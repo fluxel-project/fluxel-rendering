@@ -30,7 +30,7 @@ use crate::api::presentation::{
     AcquireError, AcquireErrorKind, AcquiredFrameId, CompositeAlphaMode, Extent2d,
     FrameLatencyRange, PresentMode, PresentReceiptId, PresentState, PresentationColorSpace,
     PresentationConfiguration, PresentationExtent, PresentationExtentControl, PresentationFormat,
-    PresentationTarget, PresentationTargetCapabilities, PresentationTimingCapabilities,
+    PresentationTargetCapabilities, PresentationTimingCapabilities,
 };
 use crate::api::resource::TextureUsage;
 use crate::backend::dx12::platform::device::Dx12LossState;
@@ -74,6 +74,7 @@ impl Dx12Presentation {
     }
 
     /// Host integration entry point. The portable target retains only its ObjectId.
+    #[cfg(test)]
     pub(crate) fn register_hwnd_target(&self, hwnd: HWND) -> PresentationTarget {
         let id = ObjectId::next();
         self.targets

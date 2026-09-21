@@ -112,15 +112,4 @@ impl RegisterClass {
             Self::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
         }
     }
-
-    /// The letter a caller sees in a refusal, so the message names the register
-    /// class rather than a number.
-    pub(crate) fn letter(self) -> char {
-        match self {
-            Self::ConstantBuffer => 'b',
-            Self::ShaderResource => 't',
-            Self::UnorderedAccess => 'u',
-            Self::Sampler => 's',
-        }
-    }
 }

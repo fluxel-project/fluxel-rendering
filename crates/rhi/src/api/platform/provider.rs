@@ -300,13 +300,6 @@ impl PlatformProvider {
     ///
     /// Crate-private: only the host/provider integration that owns the native
     /// instance may call this (section 5.1).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by backend composition entry points and contract fixtures"
-        )
-    )]
     pub(crate) fn new(
         backend: BackendKind,
         instance: DeviceInstanceId,

@@ -205,16 +205,4 @@ impl Device {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         out.append(&mut queued);
     }
-
-    /// Records one portable diagnostic on this device.
-    ///
-    /// Kept crate-private so backend and validation paths can report a fact
-    /// without making diagnostics a caller-controlled logging channel.
-    pub(crate) fn report_diagnostic(&self, event: DiagnosticEvent) {
-        self.diagnostics_queue()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(event.clone());
-        self.dispatch_diagnostic(&event);
-    }
 }

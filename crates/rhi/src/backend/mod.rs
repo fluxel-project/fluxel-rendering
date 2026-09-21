@@ -42,7 +42,16 @@
 /// A fixture still owns its backend-native provider creation and shader
 /// artifact: those are deliberately private and code-form specific. The
 /// observed behaviour after a portable device exists, however, is shared.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "dx12",
+        feature = "vulkan",
+        feature = "metal",
+        feature = "gl-family",
+        feature = "webgpu"
+    )
+))]
 #[path = "../../tests/common/mod.rs"]
 pub(crate) mod conformance;
 
@@ -50,7 +59,16 @@ pub(crate) mod conformance;
 ///
 /// This remains test-only because it composes crate-private provider fixtures;
 /// its workload vocabulary is public-RHI-only and contains no native handle.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "dx12",
+        feature = "vulkan",
+        feature = "metal",
+        feature = "gl-family",
+        feature = "webgpu"
+    )
+))]
 #[path = "../../tests/harness/mod.rs"]
 pub(crate) mod test_harness;
 

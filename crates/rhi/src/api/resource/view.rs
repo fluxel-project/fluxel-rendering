@@ -33,6 +33,7 @@
 //!   [`crate::api::resource::subresource`].
 
 use core::fmt;
+#[cfg(test)]
 use std::any::Any;
 use std::sync::Arc;
 
@@ -200,8 +201,10 @@ struct TextureViewInner {
 }
 
 /// Concrete seam token for crate-local descriptor-validation fixtures.
+#[cfg(test)]
 struct ValidationTextureViewBackend;
 
+#[cfg(test)]
 impl TextureViewBackend for ValidationTextureViewBackend {
     fn as_any(&self) -> &dyn Any {
         self
@@ -209,6 +212,7 @@ impl TextureViewBackend for ValidationTextureViewBackend {
 }
 
 impl TextureView {
+    #[cfg(test)]
     pub(crate) fn new(
         id: ObjectId,
         device: DeviceIdentity,

@@ -202,13 +202,6 @@ pub(crate) fn aspect_bits(aspect: TextureAspect) -> TextureAspects {
 ///
 /// Plus the two rules that make a range name something: at least one mip, at
 /// least one layer, and at least one aspect.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the view and hazard-tracking paths call this once api::binding is declared"
-    )
-)]
 pub(crate) fn validate_subresource_range(
     range: TextureSubresourceRange,
     dimension: TextureDimension,

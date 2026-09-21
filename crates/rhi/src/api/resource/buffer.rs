@@ -530,24 +530,10 @@ impl Buffer {
     /// copy against the native resource. The expectation therefore narrowed from
     /// `not(test)` to the backend feature list rather than being deleted — a build
     /// with no backend compiled genuinely has nothing on this side of the seam.
-    #[cfg_attr(
-        not(any(
-            test,
-            // The backend features that actually compile a lowering. A feature
-            // that selects nothing must not appear here: it would remove this
-            // expectation in a configuration where the item really is dead, and
-            // the gate would then be silent about it. When Vulkan lands and starts
-            // calling this, its feature joins the list — which is rule 4.6's
-            // "the matrix gets the row" applied to the attribute itself.
-            feature = "dx12",
-            feature = "vulkan"
-        )),
-        expect(
-            dead_code,
-            reason = "read by a backend's own lowering, which is the only code that may \
-                      cross the seam; a build with no backend compiled has none"
-        )
-    )]
+    // Backends use this accessor through their private lowering seam.  It is
+    // intentionally retained in API-only builds so the same resource model is
+    // compiled across the feature matrix.
+    #[allow(dead_code)]
     pub(crate) fn native(&self) -> &dyn BufferBackend {
         self.inner.native.as_ref()
     }

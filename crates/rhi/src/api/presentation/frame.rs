@@ -255,7 +255,9 @@ struct FrameAttachmentInner {
     native: Box<dyn FrameAttachmentBackend>,
 }
 
+#[cfg(test)]
 struct ValidationFrameAttachmentBackend;
+#[cfg(test)]
 impl FrameAttachmentBackend for ValidationFrameAttachmentBackend {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -267,6 +269,7 @@ impl FrameAttachment {
     ///
     /// Crate-private: an attachment is a view onto a frame the RHI acquired, and a
     /// caller-built one would name a drawable nobody owns.
+    #[cfg(test)]
     pub(crate) fn new(
         frame_id: AcquiredFrameId,
         device: DeviceIdentity,

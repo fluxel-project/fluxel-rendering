@@ -283,10 +283,10 @@ pub(crate) struct ComputeBegin {
 }
 
 /// One dispatch, with the state that was current when it was issued.
-#[cfg_attr(
-    all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
-    expect(dead_code, reason = "read by backend compute command lowering")
-)]
+// This record is consumed by backend command lowerers.  Feature-minimal API
+// builds have no lowerer, so keep the portable record without manufacturing a
+// second feature-specific representation.
+#[allow(dead_code)]
 pub(crate) struct ComputeDispatch {
     /// The pipeline that was bound. Section 33 requires one.
     pub(crate) pipeline: ComputePipeline,

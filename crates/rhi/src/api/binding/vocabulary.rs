@@ -38,16 +38,6 @@ impl BindGroupIndex {
     pub fn get(self) -> u32 {
         self.0
     }
-
-    /// Writes this index's canonical bytes.
-    ///
-    /// Four little-endian bytes rather than one: a group index is an unbounded
-    /// logical position a caller chooses, not a bounded enumeration, so a one-byte
-    /// encoding would alias index 256 with index 0 and make two different
-    /// interfaces intern to one compatibility id.
-    pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.0.to_le_bytes());
-    }
 }
 
 /// The logical slot of one binding within a bind group.

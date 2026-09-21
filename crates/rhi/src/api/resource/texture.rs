@@ -39,6 +39,7 @@
 //! limitation.
 
 use core::fmt;
+#[cfg(test)]
 use std::any::Any;
 use std::sync::Arc;
 
@@ -443,8 +444,10 @@ struct TextureInner {
 /// It is still a concrete backend object, rather than an `Option`, so every
 /// `Texture` has the same ownership invariant. Real device creation uses
 /// `new_backed` and never constructs this token.
+#[cfg(test)]
 struct ValidationTextureBackend;
 
+#[cfg(test)]
 impl TextureBackend for ValidationTextureBackend {
     fn as_any(&self) -> &dyn Any {
         self
@@ -454,6 +457,7 @@ impl TextureBackend for ValidationTextureBackend {
 impl Texture {
     /// Assembles a crate-local validation fixture. Production creation must use
     /// [`Self::new_backed`], which requires the backend allocation to succeed.
+    #[cfg(test)]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: TextureDescriptor) -> Self {
         Self::new_backed(id, device, descriptor, Box::new(ValidationTextureBackend))
     }

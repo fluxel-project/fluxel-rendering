@@ -164,6 +164,7 @@ impl SubmissionPlanBuilder {
     /// enumeration already decided — a lane the device did not offer cannot be
     /// added here, and a plan identity from another device's serial source is
     /// `add_batch`'s problem to notice, not this constructor's.
+    #[cfg(test)]
     pub(crate) fn with_facts(
         plan: SubmissionPlanId,
         device: DeviceIdentity,

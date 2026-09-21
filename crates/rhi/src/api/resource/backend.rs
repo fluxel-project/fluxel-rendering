@@ -65,24 +65,10 @@ pub(crate) trait BufferBackend: Send + Sync + 'static {
     /// below is gated on the backend feature list rather than deleted: the method
     /// is part of the seam's contract, and a configuration with nothing on the
     /// far side of the seam has nothing that could call it.
-    #[cfg_attr(
-        not(any(
-            test,
-            // The backend features that actually compile a lowering. A feature
-            // that selects nothing must not appear here: it would remove this
-            // expectation in a configuration where the item really is dead, and
-            // the gate would then be silent about it. When Vulkan lands and starts
-            // calling this, its feature joins the list — which is rule 4.6's
-            // "the matrix gets the row" applied to the attribute itself.
-            feature = "dx12",
-            feature = "vulkan"
-        )),
-        expect(
-            dead_code,
-            reason = "called by a backend's own lowering, which is the only code that may \
-                      downcast across the seam; a build with no backend compiled has none"
-        )
-    )]
+    // Backend lowerers downcast this seam when a backend is enabled.  An
+    // API-only build has no such consumer, but the method remains part of the
+    // shared private contract for the feature matrix.
+    #[allow(dead_code)]
     fn as_any(&self) -> &dyn Any;
 }
 

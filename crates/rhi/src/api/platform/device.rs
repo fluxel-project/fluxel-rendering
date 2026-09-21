@@ -48,7 +48,7 @@ use crate::api::platform::provider::{AdapterInfo, BackendKind};
 use crate::api::platform::requirements::OptionalFeature;
 use crate::api::statistics::{CumulativeStatistics, StatisticsConfig};
 use crate::api::tooling::CapturedRecordedWork;
-use crate::api::tooling::{SemanticEvent, SemanticEventId, SemanticObserver};
+use crate::api::tooling::SemanticObserver;
 
 /// Whether a device is still usable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,7 +189,6 @@ pub(crate) struct RuntimeServices {
 
 struct ObserverState {
     next: u64,
-    next_event: u64,
     entries: Vec<(u64, Arc<dyn SemanticObserver>)>,
 }
 
@@ -218,7 +217,6 @@ impl RuntimeServices {
             }),
             observers: Mutex::new(ObserverState {
                 next: 1,
-                next_event: 1,
                 entries: Vec::new(),
             }),
             captured_work: Mutex::new(HashMap::new()),
@@ -547,28 +545,6 @@ impl Device {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.entries.retain(|(entry, _)| *entry != id);
-    }
-
-    pub(crate) fn dispatch_diagnostic(&self, diagnostic: &DiagnosticEvent) {
-        let (event, observers) = {
-            let mut state = self
-                .inner
-                .runtime
-                .observers
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let event = SemanticEventId::new(state.next_event);
-            state.next_event = state.next_event.saturating_add(1);
-            let observers = state
-                .entries
-                .iter()
-                .map(|(_, observer)| Arc::clone(observer))
-                .collect::<Vec<_>>();
-            (event, observers)
-        };
-        for observer in observers {
-            observer.on_event(SemanticEvent::Diagnostic { event, diagnostic });
-        }
     }
 
     /// A shared handle to this device's capability snapshot.

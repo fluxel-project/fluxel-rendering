@@ -36,6 +36,7 @@
 //! it: the descriptor half of section 16.1 is decidable now, this half is not.
 
 use core::fmt;
+#[cfg(test)]
 use std::any::Any;
 use std::sync::Arc;
 
@@ -266,8 +267,10 @@ struct SamplerInner {
 }
 
 /// Concrete seam token for crate-local descriptor-validation fixtures.
+#[cfg(test)]
 struct ValidationSamplerBackend;
 
+#[cfg(test)]
 impl SamplerBackend for ValidationSamplerBackend {
     fn as_any(&self) -> &dyn Any {
         self
@@ -275,6 +278,7 @@ impl SamplerBackend for ValidationSamplerBackend {
 }
 
 impl Sampler {
+    #[cfg(test)]
     pub(crate) fn new(id: ObjectId, device: DeviceIdentity, descriptor: SamplerDescriptor) -> Self {
         Self::new_backed(id, device, descriptor, Box::new(ValidationSamplerBackend))
     }

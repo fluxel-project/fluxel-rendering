@@ -193,20 +193,6 @@ pub struct TransientAllocator<'plan> {
 }
 
 impl<'plan> TransientAllocator<'plan> {
-    /// Assembles the plan-scoped allocator returned by the submission builder.
-    pub(crate) fn new(
-        device: DeviceIdentity,
-        plan: SubmissionPlanId,
-        registry: &'plan TransientLifetimeRegistry,
-    ) -> Self {
-        Self {
-            device,
-            plan,
-            registry,
-            device_handle: None,
-        }
-    }
-
     /// Assembles an allocator sharing its plan builder's lifetime registry.
     pub(crate) fn new_with_registry(
         device: DeviceIdentity,
