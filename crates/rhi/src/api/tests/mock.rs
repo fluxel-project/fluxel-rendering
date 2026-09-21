@@ -1176,10 +1176,16 @@ impl DeviceBackend for MockDevice {
         Ok(Box::new(MockSampler))
     }
 
-    fn create_shader(
+    fn create_shader_request(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::shader::backend::ShaderModuleBackend,
+                >,
+        >,
+    > {
         // No refusal here, and the absence is the same decision `create_buffer`
         // records rather than an unfinished arm: section 19.10's acceptance verdict
         // and every canonicality rule about this artifact have already run in
@@ -1192,7 +1198,9 @@ impl DeviceBackend for MockDevice {
         // would be worse than the absence: it would tell a caller its artifact was
         // wrong when the truth is that nothing ever looked at it.
         self.shader_modules.fetch_add(1, Ordering::Relaxed);
-        Ok(Box::new(MockShaderModule::new(artifact.clone())))
+        Ok(crate::api::platform::backend::ready_creation_request(
+            Box::new(MockShaderModule::new(artifact.clone())),
+        ))
     }
 
     fn create_bind_group(
@@ -1214,10 +1222,16 @@ impl DeviceBackend for MockDevice {
         Ok(Box::new(MockBindGroup::new(descriptor.clone())))
     }
 
-    fn create_compute_pipeline(
+    fn create_compute_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::ComputePipelineBackend,
+                >,
+        >,
+    > {
         // No refusal here, and the absence matters more here than anywhere else in
         // this file: this is the one port in the crate whose native call a real
         // driver *can* refuse for a reason no portable check covers — whether the
@@ -1229,14 +1243,24 @@ impl DeviceBackend for MockDevice {
         // on a backend with a driver behind it. That is not a gap in the mock; it
         // is the shape of the question.
         self.compute_pipelines.fetch_add(1, Ordering::Relaxed);
-        Ok(Box::new(MockComputePipeline::new(descriptor.clone())))
+        Ok(crate::api::platform::backend::ready_creation_request(
+            Box::new(MockComputePipeline::new(descriptor.clone())),
+        ))
     }
 
-    fn create_raster_pipeline(
+    fn create_raster_pipeline_request(
         &self,
         _descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
-        Ok(Box::new(MockRasterPipeline))
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::RasterPipelineBackend,
+                >,
+        >,
+    > {
+        Ok(crate::api::platform::backend::ready_creation_request(
+            Box::new(MockRasterPipeline),
+        ))
     }
 
     /// Accepts the plan, and executes none of it.
@@ -1532,11 +1556,17 @@ impl DeviceBackend for ObservedMockDevice {
     ) -> RhiResult<Box<dyn crate::api::resource::backend::SamplerBackend>> {
         self.0.create_sampler(descriptor)
     }
-    fn create_shader(
+    fn create_shader_request(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
-        self.0.create_shader(artifact)
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::shader::backend::ShaderModuleBackend,
+                >,
+        >,
+    > {
+        self.0.create_shader_request(artifact)
     }
     fn create_bind_group(
         &self,
@@ -1544,17 +1574,29 @@ impl DeviceBackend for ObservedMockDevice {
     ) -> RhiResult<Box<dyn crate::api::binding::backend::BindGroupBackend>> {
         self.0.create_bind_group(descriptor)
     }
-    fn create_compute_pipeline(
+    fn create_compute_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
-        self.0.create_compute_pipeline(descriptor)
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::ComputePipelineBackend,
+                >,
+        >,
+    > {
+        self.0.create_compute_pipeline_request(descriptor)
     }
-    fn create_raster_pipeline(
+    fn create_raster_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
-        self.0.create_raster_pipeline(descriptor)
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::RasterPipelineBackend,
+                >,
+        >,
+    > {
+        self.0.create_raster_pipeline_request(descriptor)
     }
     fn submit(
         &self,

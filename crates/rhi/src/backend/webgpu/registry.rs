@@ -225,6 +225,21 @@ pub(super) fn poll_promise(id: WebGpuRequestId, waker: &Waker) -> PromisePoll {
     })
 }
 
+/// Detaches an abandoned Rust waiter from a browser Promise.
+///
+/// JavaScript promises are not cancellable, but retaining their closure pair,
+/// result and wakers after the RHI future was dropped would turn a forgotten
+/// pipeline compile into a registry leak.  Removing the entry is safe: the
+/// callbacks look it up by ID and intentionally do nothing when it is gone.
+pub(super) fn retire_promise(id: WebGpuRequestId) {
+    let _ = OWNER.with(|owner| owner.borrow_mut().requests.remove(&id.0));
+}
+
+#[cfg(test)]
+pub(super) fn pending_promise_count() -> usize {
+    OWNER.with(|owner| owner.borrow().requests.len())
+}
+
 /// Samples a promise without changing its waiter set.
 ///
 /// This is for opportunistic `Device::poll()` progress.  It is intentionally

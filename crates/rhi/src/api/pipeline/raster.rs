@@ -1054,7 +1054,25 @@ impl Device {
             },
         )?;
 
-        let native = self.native().create_raster_pipeline(desc)?;
+        // Do not construct the portable handle while a native asynchronous
+        // compiler is still pending.  This is the same creation transaction as
+        // compute pipelines: success publishes exactly one handle, while a
+        // rejection or device loss publishes none.
+        let mut request = self.native().create_raster_pipeline_request(desc)?;
+        let native =
+            std::future::poll_fn(
+                |context| match request.poll_or_register_waker(context.waker()) {
+                    Ok(crate::api::platform::backend::CreationRequestProgress::Pending) => {
+                        std::task::Poll::Pending
+                    }
+                    Ok(crate::api::platform::backend::CreationRequestProgress::Ready(value)) => {
+                        std::task::Poll::Ready(Ok(value))
+                    }
+                    Err(error) => std::task::Poll::Ready(Err(error)),
+                },
+            )
+            .await?;
+        self.require_active()?;
         Ok(RasterPipeline::new(
             ObjectId::next(),
             identity,

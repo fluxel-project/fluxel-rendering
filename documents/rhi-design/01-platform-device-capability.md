@@ -691,7 +691,10 @@ pub enum OptionalFeature {
     /// Sampler anisotropic filtering.
     ///
     /// WebGL2 requires an extension; Vulkan requires the corresponding feature;
-    /// support cannot be inferred merely from max_anisotropy > 1.
+    /// support cannot be inferred merely from max_anisotropy > 1. DX12, Vulkan,
+    /// and the GL family can publish this fact with a real ceiling. A backend
+    /// which can lower a descriptor field but cannot expose an equivalent,
+    /// trustworthy ceiling (currently WebGPU) must leave it absent.
     SamplerAnisotropy,
 
     /// Fixed-length Buffer / Texture / Sampler binding arrays.
@@ -724,6 +727,8 @@ pub enum LimitKey {
     MaxDynamicStorageBuffersPerPipelineLayout,
 
     /// Meaningful only when OptionalFeature::SamplerAnisotropy is enabled.
+    /// It is the maximum the selected Device has explicitly promised to honour,
+    /// not a backend-private clamp or a specification-wide descriptor range.
     MaxSamplerAnisotropy,
 
     MaxColorAttachments,

@@ -5,6 +5,8 @@ use super::{binding, js, registry, shader, translate};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
 use crate::api::pipeline::backend::{ComputePipelineBackend, RasterPipelineBackend};
 use crate::api::pipeline::{ComputePipelineDescriptor, RasterPipelineDescriptor};
+use crate::api::platform::DeviceStatus;
+use crate::api::platform::backend::{CreationRequestBackend, CreationRequestProgress};
 use crate::api::shader::ShaderModule;
 use js_sys::{Array, Function, Object, Reflect};
 use std::any::Any;
@@ -69,7 +71,16 @@ fn device(r: WebGpuRegistration) -> RhiResult<JsValue> {
         )
     })
 }
-fn create(r: WebGpuRegistration, method: &'static str, d: &Object) -> RhiResult<WebGpuObjectId> {
+
+/// Starts one of WebGPU's native asynchronous pipeline creation calls.
+/// The descriptor is fully lowered before this point; until the Promise settles
+/// its result stays solely in the TLS registry and no portable pipeline handle
+/// can be published.
+fn create_async(
+    r: WebGpuRegistration,
+    method: &'static str,
+    d: &Object,
+) -> RhiResult<registry::WebGpuRequestId> {
     let dev = device(r)?;
     let f = js::property(&dev, method)
         .map_err(|e| err(RhiErrorKind::Unsupported, method, js::message(&e)))?
@@ -78,13 +89,7 @@ fn create(r: WebGpuRegistration, method: &'static str, d: &Object) -> RhiResult<
     let value = f
         .call1(&dev, d)
         .map_err(|e| err(RhiErrorKind::BackendFailure, method, js::message(&e)))?;
-    registry::insert_object(r, value).ok_or_else(|| {
-        err(
-            RhiErrorKind::DeviceLost,
-            method,
-            "device registration was retired",
-        )
-    })
+    Ok(registry::start_device_promise(r, value.into()))
 }
 pub(crate) fn pipeline_layout_for(
     driver: &WebGpuDriver,
@@ -169,10 +174,7 @@ fn stage(r: WebGpuRegistration, s: &ShaderModule) -> RhiResult<JsValue> {
     )?;
     Ok(x.into())
 }
-pub(crate) fn create_compute_pipeline(
-    driver: &WebGpuDriver,
-    d: &ComputePipelineDescriptor,
-) -> RhiResult<WebGpuComputePipeline> {
+fn compute_descriptor(driver: &WebGpuDriver, d: &ComputePipelineDescriptor) -> RhiResult<Object> {
     let r = driver.registration();
     let x = Object::new();
     set(&x, "layout", pipeline_layout_for(driver, &d.interface)?)?;
@@ -180,16 +182,9 @@ pub(crate) fn create_compute_pipeline(
     if let Some(l) = d.label.as_deref() {
         set(&x, "label", JsValue::from_str(l))?;
     }
-    Ok(WebGpuComputePipeline {
-        driver: driver.clone(),
-        registration: r,
-        object: create(r, "createComputePipeline", &x)?,
-    })
+    Ok(x)
 }
-pub(crate) fn create_raster_pipeline(
-    driver: &WebGpuDriver,
-    d: &RasterPipelineDescriptor,
-) -> RhiResult<WebGpuRasterPipeline> {
+fn raster_descriptor(driver: &WebGpuDriver, d: &RasterPipelineDescriptor) -> RhiResult<Object> {
     let r = driver.registration();
     // Every state below is native WebGPU state, never a guessed fallback.  The
     // portable validator has already rejected optional modes this baseline has
@@ -334,11 +329,178 @@ pub(crate) fn create_raster_pipeline(
     if let Some(l) = d.label.as_deref() {
         set(&x, "label", JsValue::from_str(l))?;
     }
-    Ok(WebGpuRasterPipeline {
+    Ok(x)
+}
+
+/// Pending `createComputePipelineAsync` request.  The promise is detached from
+/// the TLS registry on drop; browser compilation may continue, but it can no
+/// longer retain a Rust waiter or publish a pipeline after its Future vanished.
+struct WebGpuComputePipelineRequest {
+    driver: WebGpuDriver,
+    request: Option<registry::WebGpuRequestId>,
+}
+
+impl Drop for WebGpuComputePipelineRequest {
+    fn drop(&mut self) {
+        if let Some(request) = self.request.take() {
+            registry::retire_promise(request);
+        }
+    }
+}
+
+impl CreationRequestBackend<dyn ComputePipelineBackend> for WebGpuComputePipelineRequest {
+    fn poll_or_register_waker(
+        &mut self,
+        waker: &std::task::Waker,
+    ) -> RhiResult<CreationRequestProgress<dyn ComputePipelineBackend>> {
+        let registration = self.driver.registration();
+        if registry::device_status(registration) != Some(DeviceStatus::Active) {
+            self.request.take().map(registry::retire_promise);
+            return Err(err(
+                RhiErrorKind::DeviceLost,
+                "GPUDevice.createComputePipelineAsync",
+                registry::device_loss(registration)
+                    .map(|loss| loss.message().to_owned())
+                    .unwrap_or_else(|| "WebGPU device registration was retired".into()),
+            ));
+        }
+        let request = self.request.ok_or_else(|| {
+            err(
+                RhiErrorKind::BackendFailure,
+                "GPUDevice.createComputePipelineAsync",
+                "pipeline request was polled after completion",
+            )
+        })?;
+        match registry::poll_promise(request, waker) {
+            registry::PromisePoll::Pending => Ok(CreationRequestProgress::Pending),
+            registry::PromisePoll::Failed(message) => {
+                self.request = None;
+                let kind = if registry::device_status(registration) != Some(DeviceStatus::Active)
+                    || message.starts_with("DeviceLost:")
+                {
+                    RhiErrorKind::DeviceLost
+                } else {
+                    RhiErrorKind::BackendFailure
+                };
+                Err(err(kind, "GPUDevice.createComputePipelineAsync", message))
+            }
+            registry::PromisePoll::Ready(value) => {
+                self.request = None;
+                let object = registry::insert_object(registration, value).ok_or_else(|| {
+                    err(
+                        RhiErrorKind::DeviceLost,
+                        "GPUDevice.createComputePipelineAsync",
+                        "device registration was retired before pipeline publication",
+                    )
+                })?;
+                Ok(CreationRequestProgress::Ready(Box::new(
+                    WebGpuComputePipeline {
+                        driver: self.driver.clone(),
+                        registration,
+                        object,
+                    },
+                )))
+            }
+        }
+    }
+}
+
+/// Pending `createRenderPipelineAsync`; see the compute request for lifetime
+/// rules.  Separate types retain the backend trait's precise output type.
+struct WebGpuRasterPipelineRequest {
+    driver: WebGpuDriver,
+    request: Option<registry::WebGpuRequestId>,
+}
+
+impl Drop for WebGpuRasterPipelineRequest {
+    fn drop(&mut self) {
+        if let Some(request) = self.request.take() {
+            registry::retire_promise(request);
+        }
+    }
+}
+
+impl CreationRequestBackend<dyn RasterPipelineBackend> for WebGpuRasterPipelineRequest {
+    fn poll_or_register_waker(
+        &mut self,
+        waker: &std::task::Waker,
+    ) -> RhiResult<CreationRequestProgress<dyn RasterPipelineBackend>> {
+        let registration = self.driver.registration();
+        if registry::device_status(registration) != Some(DeviceStatus::Active) {
+            self.request.take().map(registry::retire_promise);
+            return Err(err(
+                RhiErrorKind::DeviceLost,
+                "GPUDevice.createRenderPipelineAsync",
+                registry::device_loss(registration)
+                    .map(|loss| loss.message().to_owned())
+                    .unwrap_or_else(|| "WebGPU device registration was retired".into()),
+            ));
+        }
+        let request = self.request.ok_or_else(|| {
+            err(
+                RhiErrorKind::BackendFailure,
+                "GPUDevice.createRenderPipelineAsync",
+                "pipeline request was polled after completion",
+            )
+        })?;
+        match registry::poll_promise(request, waker) {
+            registry::PromisePoll::Pending => Ok(CreationRequestProgress::Pending),
+            registry::PromisePoll::Failed(message) => {
+                self.request = None;
+                let kind = if registry::device_status(registration) != Some(DeviceStatus::Active)
+                    || message.starts_with("DeviceLost:")
+                {
+                    RhiErrorKind::DeviceLost
+                } else {
+                    RhiErrorKind::BackendFailure
+                };
+                Err(err(kind, "GPUDevice.createRenderPipelineAsync", message))
+            }
+            registry::PromisePoll::Ready(value) => {
+                self.request = None;
+                let object = registry::insert_object(registration, value).ok_or_else(|| {
+                    err(
+                        RhiErrorKind::DeviceLost,
+                        "GPUDevice.createRenderPipelineAsync",
+                        "device registration was retired before pipeline publication",
+                    )
+                })?;
+                Ok(CreationRequestProgress::Ready(Box::new(
+                    WebGpuRasterPipeline {
+                        driver: self.driver.clone(),
+                        registration,
+                        object,
+                    },
+                )))
+            }
+        }
+    }
+}
+
+pub(crate) fn create_compute_pipeline_request(
+    driver: &WebGpuDriver,
+    descriptor: &ComputePipelineDescriptor,
+) -> RhiResult<Box<dyn CreationRequestBackend<dyn ComputePipelineBackend>>> {
+    let registration = driver.registration();
+    let native = compute_descriptor(driver, descriptor)?;
+    let request = create_async(registration, "createComputePipelineAsync", &native)?;
+    Ok(Box::new(WebGpuComputePipelineRequest {
         driver: driver.clone(),
-        registration: r,
-        object: create(r, "createRenderPipeline", &x)?,
-    })
+        request: Some(request),
+    }))
+}
+
+pub(crate) fn create_raster_pipeline_request(
+    driver: &WebGpuDriver,
+    descriptor: &RasterPipelineDescriptor,
+) -> RhiResult<Box<dyn CreationRequestBackend<dyn RasterPipelineBackend>>> {
+    let registration = driver.registration();
+    let native = raster_descriptor(driver, descriptor)?;
+    let request = create_async(registration, "createRenderPipelineAsync", &native)?;
+    Ok(Box::new(WebGpuRasterPipelineRequest {
+        driver: driver.clone(),
+        request: Some(request),
+    }))
 }
 
 /// Builds the exact `GPUBlendState` dictionary rather than relying on WebGPU

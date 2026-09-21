@@ -100,6 +100,28 @@ that a slot is reset exactly for the work that writes it.
 WebGL2 probes its actual query and timer-query extension; pipeline statistics
 remain Unsupported where unavailable.
 
+### WebGPU query-profile boundary
+
+WebGPU has a direct `resolveQuerySet()` command, with a 256-byte aligned
+destination offset. That alone cannot enable the Fluxel query family: a useful
+resolve first requires a query set that can be legally recorded. A WebGPU
+render-pass descriptor chooses exactly one `occlusionQuerySet` when the pass
+begins, whereas one portable `RasterScope` may legally begin/end slots from
+different sets in sequence. Rejecting the second set only during submission
+would make a public capability promise a program that fails after recording.
+
+Timestamp writes have the same semantic impedance: current WebGPU pass
+`timestampWrites` represent beginning/end descriptor boundaries, while the RHI
+records an exact arbitrary command-stream position. Rewriting the latter into a
+boundary changes the measured interval. Consequently WebGPU deliberately
+publishes none of `OcclusionQuery`, `TimestampQuery`,
+`TimestampInsideEncoder`, `TimestampInsideRasterScope`,
+`TimestampInsideComputeScope`, or `QueryResolve`, even when the browser offers
+`timestamp-query`; it publishes neither query limits nor a fictitious 8-byte
+alignment. A future WebGPU query profile must first express one fixed pass set
+and explicit pass-boundary timestamps in public recording vocabulary, then
+enable creation, validation, lowering, and resolve together.
+
 ## 67.4 Resources, mapping, formats, and samplers
 
 `BufferUsage` includes `MAP_READ`, `MAP_WRITE`, `INDIRECT`, `QUERY_RESOLVE`,

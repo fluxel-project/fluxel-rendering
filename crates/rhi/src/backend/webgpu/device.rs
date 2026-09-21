@@ -164,12 +164,20 @@ impl DeviceBackend for WebGpuDevice {
             .map(|value| Box::new(value) as Box<dyn crate::api::resource::backend::SamplerBackend>)
     }
 
-    fn create_shader(
+    fn create_shader_request(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::shader::backend::ShaderModuleBackend,
+                >,
+        >,
+    > {
         super::shader::create_shader(&self.driver, artifact).map(|value| {
-            Box::new(value) as Box<dyn crate::api::shader::backend::ShaderModuleBackend>
+            crate::api::platform::backend::ready_creation_request(
+                Box::new(value) as Box<dyn crate::api::shader::backend::ShaderModuleBackend>
+            )
         })
     }
 
@@ -181,22 +189,30 @@ impl DeviceBackend for WebGpuDevice {
             .map(|value| Box::new(value) as Box<dyn crate::api::binding::backend::BindGroupBackend>)
     }
 
-    fn create_compute_pipeline(
+    fn create_compute_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
-        super::pipeline::create_compute_pipeline(&self.driver, descriptor).map(|value| {
-            Box::new(value) as Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>
-        })
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::ComputePipelineBackend,
+                >,
+        >,
+    > {
+        super::pipeline::create_compute_pipeline_request(&self.driver, descriptor)
     }
 
-    fn create_raster_pipeline(
+    fn create_raster_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
-        super::pipeline::create_raster_pipeline(&self.driver, descriptor).map(|value| {
-            Box::new(value) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
-        })
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::RasterPipelineBackend,
+                >,
+        >,
+    > {
+        super::pipeline::create_raster_pipeline_request(&self.driver, descriptor)
     }
 
     fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
@@ -261,6 +277,10 @@ fn feature_names(owner: &JsValue) -> BTreeSet<String> {
             "texture-compression-etc2",
             "texture-compression-astc",
             "indirect-first-instance",
+            // Discovery only; capabilities.rs intentionally refuses the
+            // stronger portable query recording contract.
+            "timestamp-query",
+            "timestamp-query-inside-passes",
         ],
     )
     .into_iter()

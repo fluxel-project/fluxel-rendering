@@ -431,10 +431,28 @@ impl Device {
             .at("Device::create_shader"));
         }
 
-        // The one backend call. Everything above it is a portable verdict about
-        // the artifact and about this device; this is the backend's answer to how
-        // its own API wants the bytes.
-        let native = self.native().create_shader(artifact)?;
+        // Native creation may itself be asynchronous (for example, a browser
+        // compiler Promise).  The portable handle is deliberately minted only
+        // after that request succeeds: a pending or rejected compiler request
+        // must never leak a usable-looking ShaderModule.
+        let mut request = self.native().create_shader_request(artifact)?;
+        let native =
+            std::future::poll_fn(
+                |context| match request.poll_or_register_waker(context.waker()) {
+                    Ok(crate::api::platform::backend::CreationRequestProgress::Pending) => {
+                        std::task::Poll::Pending
+                    }
+                    Ok(crate::api::platform::backend::CreationRequestProgress::Ready(value)) => {
+                        std::task::Poll::Ready(Ok(value))
+                    }
+                    Err(error) => std::task::Poll::Ready(Err(error)),
+                },
+            )
+            .await?;
+        // A loss may race a successful native Promise settlement.  Do not
+        // publish a new portable handle for an already-terminal identity.
+        self.require_active()
+            .map_err(|error| error.at("Device::create_shader"))?;
         Ok(ShaderModule::new(
             ObjectId::next(),
             self.identity(),

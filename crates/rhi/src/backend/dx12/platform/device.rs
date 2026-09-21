@@ -458,11 +458,19 @@ impl DeviceBackend for Dx12Device {
     /// [`Self::create_buffer`]: nothing in this method touches the device. The
     /// portable layer's `require_active` has already refused a lost device, and a
     /// backend that re-checked would be discipline 2's duplicate opinion.
-    fn create_shader(
+    fn create_shader_request(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
-        Ok(Box::new(shader::create_shader(artifact)))
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::shader::backend::ShaderModuleBackend,
+                >,
+        >,
+    > {
+        Ok(crate::api::platform::backend::ready_creation_request(
+            Box::new(shader::create_shader(artifact)),
+        ))
     }
 
     /// Writes a validated group into the shared view and sampler descriptor heaps.
@@ -483,26 +491,40 @@ impl DeviceBackend for Dx12Device {
     /// Builds the root signature and compute PSO, observing terminal driver
     /// failures through the same device loss authority as every other native
     /// creation path.
-    fn create_compute_pipeline(
+    fn create_compute_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::ComputePipelineBackend,
+                >,
+        >,
+    > {
         pipeline::create_compute_pipeline(&self.device, descriptor)
             .map(|pipeline| {
                 Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>
             })
             .map_err(|failure| self.observe_failure(failure, "Dx12Device::create_compute_pipeline"))
+            .map(crate::api::platform::backend::ready_creation_request)
     }
 
-    fn create_raster_pipeline(
+    fn create_raster_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::RasterPipelineBackend,
+                >,
+        >,
+    > {
         pipeline::create_raster_pipeline(&self.device, descriptor)
             .map(|pipeline| {
                 Box::new(pipeline) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
             })
             .map_err(|failure| self.observe_failure(failure, "Dx12Device::create_raster_pipeline"))
+            .map(crate::api::platform::backend::ready_creation_request)
     }
 
     fn create_pipeline_cache(

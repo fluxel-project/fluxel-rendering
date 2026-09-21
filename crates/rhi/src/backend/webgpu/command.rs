@@ -133,10 +133,14 @@ impl WebGpuCommandSpine {
                         RecordedPayload::DebugPush(_)
                         | RecordedPayload::DebugPop
                         | RecordedPayload::DebugMarker(_) => {}
-                        // WebGPU lacks these P0 operations as direct commands.
-                        // Do not emulate them with a hidden compute/render pass:
-                        // a capability claim must describe the operation actually
-                        // lowered, not a backend-private approximation.
+                        // WebGPU exposes parts of the query API, but not the
+                        // stronger portable recording contract. A render pass
+                        // fixes one occlusionQuerySet in its descriptor, while
+                        // RasterScope permits several sequentially; its
+                        // timestamp descriptors denote boundaries rather than
+                        // TimestampWrite's exact command position. This is an
+                        // intentional fail-closed Phase-A refusal, not a
+                        // missing method wrapper.
                         RecordedPayload::RasterBegin(begin) => {
                             preflight_raster_begin(begin, self.registration())?
                         }

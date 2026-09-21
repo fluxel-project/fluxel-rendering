@@ -117,6 +117,71 @@ pub(crate) enum RequestProgress {
     Ready(Box<dyn DeviceBackend>),
 }
 
+/// The native half of an object-creation request.
+///
+/// Public creation verbs already return futures because a native API is allowed
+/// to compile or validate an object asynchronously.  Keeping that suspension
+/// behind this crate-private seam lets a backend use such an API without
+/// changing the portable object model: no handle exists until `Ready` is
+/// returned.  Backends whose native creation is immediate return the private
+/// [`ready_creation_request`] adapter from their request implementation.
+///
+/// Like device requests, `Pending` must retain/register `waker` for the native
+/// event that makes a later poll useful.  It is never permission to busy-poll.
+pub(crate) trait CreationRequestBackend<T: ?Sized>: Send + Sync + 'static {
+    fn poll_or_register_waker(
+        &mut self,
+        waker: &std::task::Waker,
+    ) -> RhiResult<CreationRequestProgress<T>>;
+}
+
+/// One poll result from a native object-creation request.
+pub(crate) enum CreationRequestProgress<T: ?Sized> {
+    Pending,
+    Ready(Box<T>),
+}
+
+/// Immediate adapter for native APIs whose creation call completes inline.
+///
+/// This is intentionally a private implementation detail, rather than making
+/// all backends invent a one-poll request type merely because WebGPU offers
+/// asynchronous pipeline compilation.
+struct ReadyCreationRequest<T: ?Sized> {
+    value: Option<Box<T>>,
+}
+
+impl<T: ?Sized> ReadyCreationRequest<T> {
+    const fn new(value: Box<T>) -> Self {
+        Self { value: Some(value) }
+    }
+}
+
+impl<T: ?Sized + Send + Sync + 'static> CreationRequestBackend<T> for ReadyCreationRequest<T> {
+    fn poll_or_register_waker(
+        &mut self,
+        _waker: &std::task::Waker,
+    ) -> RhiResult<CreationRequestProgress<T>> {
+        // The facade retires a request after Ready, so reaching this branch is
+        // a backend-contract violation rather than a second successful create.
+        let value = self.value.take().ok_or_else(|| {
+            crate::api::error::RhiError::new(
+                crate::api::error::RhiErrorKind::BackendFailure,
+                "an object-creation request was polled after completion",
+            )
+        })?;
+        Ok(CreationRequestProgress::Ready(value))
+    }
+}
+
+/// Boxes an immediate native result into the sole creation-request contract.
+/// Native backends use this at their implementation boundary; it is not a
+/// second synchronous `DeviceBackend` API.
+pub(crate) fn ready_creation_request<T: ?Sized + Send + Sync + 'static>(
+    value: Box<T>,
+) -> Box<dyn CreationRequestBackend<T>> {
+    Box::new(ReadyCreationRequest::new(value))
+}
+
 /// The native device behind a [`crate::api::platform::Device`].
 ///
 /// This trait owns the device's liveness, which is why there is no `mark_lost`
@@ -339,10 +404,14 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// compiler. A backend that could not do the work must report
     /// [`crate::api::RhiErrorKind::Unsupported`] rather than return an object that
     /// will fail at first use (discipline 3: never a silent substitute).
-    fn create_shader(
+    /// Starts shader creation.  Immediate native APIs return
+    /// [`ready_creation_request`] from their implementation.
+    fn create_shader_request(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>>;
+    ) -> RhiResult<
+        Box<dyn CreationRequestBackend<dyn crate::api::shader::backend::ShaderModuleBackend>>,
+    >;
 
     /// Assembles the native descriptor packet behind one bind group.
     ///
@@ -387,15 +456,23 @@ pub(crate) trait DeviceBackend: Send + Sync + 'static {
     /// [`crate::api::RhiErrorKind::BackendFailure`], not `InvalidUsage`, because
     /// the caller's descriptor had already passed every check this crate can make
     /// (discipline 4).
-    fn create_compute_pipeline(
+    /// Starts compute-pipeline creation.  WebGPU overrides this to use its
+    /// native Promise API; immediate APIs return [`ready_creation_request`].
+    fn create_compute_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>>;
+    ) -> RhiResult<
+        Box<dyn CreationRequestBackend<dyn crate::api::pipeline::backend::ComputePipelineBackend>>,
+    >;
 
-    fn create_raster_pipeline(
+    /// Starts raster-pipeline creation.  See
+    /// [`Self::create_compute_pipeline_request`] for the asynchronous contract.
+    fn create_raster_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>>;
+    ) -> RhiResult<
+        Box<dyn CreationRequestBackend<dyn crate::api::pipeline::backend::RasterPipelineBackend>>,
+    >;
 
     /// Creates a mesh/task pipeline, or returns `Unsupported` before any native
     /// work when the backend did not publish mesh support.

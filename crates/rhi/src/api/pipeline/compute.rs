@@ -344,8 +344,26 @@ impl Device {
             },
         )?;
 
-        // The one backend call, and the last statement that can fail.
-        let native = self.native().create_compute_pipeline(desc)?;
+        // A backend may compile asynchronously.  No portable pipeline exists
+        // until the native request resolves, preserving the invariant that a
+        // rejected compile cannot be observed as a usable pipeline handle.
+        let mut request = self.native().create_compute_pipeline_request(desc)?;
+        let native =
+            std::future::poll_fn(
+                |context| match request.poll_or_register_waker(context.waker()) {
+                    Ok(crate::api::platform::backend::CreationRequestProgress::Pending) => {
+                        std::task::Poll::Pending
+                    }
+                    Ok(crate::api::platform::backend::CreationRequestProgress::Ready(value)) => {
+                        std::task::Poll::Ready(Ok(value))
+                    }
+                    Err(error) => std::task::Poll::Ready(Err(error)),
+                },
+            )
+            .await?;
+        // A native compiler completion and device loss can race.  Terminal loss
+        // wins over publication of a fresh logical handle.
+        self.require_active()?;
 
         Ok(ComputePipeline::new(
             ObjectId::next(),

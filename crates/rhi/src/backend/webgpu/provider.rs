@@ -301,6 +301,18 @@ fn webgpu_optional_feature(feature: OptionalFeature) -> Option<Option<&'static s
         OptionalFeature::IndirectDraw | OptionalFeature::IndirectFirstInstance => {
             Some("indirect-first-instance")
         }
+        // Do not map `timestamp-query`: resolveQuerySet has a direct WebGPU
+        // lowering (and a 256-byte destination-offset alignment), but the
+        // whole public family is not representable. WebGPU fixes one occlusion
+        // set at render-pass creation and exposes pass timestamp boundaries,
+        // while the RHI records sequential sets and exact command positions.
+        // Returning None preserves fail-closed request and fact semantics.
+        OptionalFeature::OcclusionQuery
+        | OptionalFeature::TimestampQuery
+        | OptionalFeature::TimestampInsideEncoder
+        | OptionalFeature::TimestampInsideRasterScope
+        | OptionalFeature::TimestampInsideComputeScope
+        | OptionalFeature::QueryResolve => return None,
         _ => return None,
     })
 }

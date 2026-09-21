@@ -93,9 +93,17 @@ impl WebGpuCapabilityInput {
         // These are core WebGPU encoder operations and have a corresponding
         // WebGPU lowering path. Compression is represented per exact texture
         // format below rather than as a coarse public boolean. Deliberately
-        // absent: timestamp, external texture, mesh and ray features. Their
-        // native feature names are not sufficient evidence until their concrete
-        // lowering is closed.
+        // absent: the complete query family, external texture, mesh and ray
+        // features. This is stricter than merely checking `timestamp-query`:
+        // WebGPU fixes an occlusion query set in the render-pass descriptor,
+        // while a portable RasterScope can legally use more than one QuerySet
+        // sequentially. WebGPU pass timestamps describe boundaries rather than
+        // the portable API's exact arbitrary command positions. Publishing
+        // either fact would turn valid recorded work into a submit-time refusal.
+        // SamplerAnisotropy is also deliberately absent:
+        // WebGPU accepts maxAnisotropy but does not expose a GPUSupportedLimits
+        // ceiling that is equivalent to RHI MaxSamplerAnisotropy. A browser's
+        // private clamp is not a portable device promise.
         facts.record_feature(OptionalFeature::Compute);
         // `mapAsync`/getMappedRange/unmap is a real browser WebGPU route in the
         // resource backend. Publishing MAP_* buffer usage without this feature
@@ -971,6 +979,34 @@ mod tests {
                 .expect("core format")
                 .filterable()
         );
+    }
+
+    #[test]
+    fn query_feature_strings_remain_fail_closed_until_recording_contract_matches() {
+        let mut input = input();
+        for name in ["timestamp-query", "timestamp-query-inside-passes"] {
+            input.adapter_features.insert(name.to_owned());
+            input.device_features.insert(name.to_owned());
+        }
+        let (facts, submission) = input.into_capabilities();
+        let available = AvailableCapabilities::from_facts(facts.clone());
+        let enabled = crate::api::capability::EnabledCapabilities::from_facts(facts, submission);
+
+        // The native feature names are not enough: see the WebGPU
+        // query-profile boundary in the design document.
+        for feature in [
+            OptionalFeature::OcclusionQuery,
+            OptionalFeature::TimestampQuery,
+            OptionalFeature::TimestampInsideEncoder,
+            OptionalFeature::TimestampInsideRasterScope,
+            OptionalFeature::TimestampInsideComputeScope,
+            OptionalFeature::QueryResolve,
+        ] {
+            assert!(!available.supports_feature(feature));
+        }
+        assert_eq!(available.limit(LimitKey::MaxQueriesPerQuerySet), None);
+        assert_eq!(available.limit(LimitKey::QueryResolveBufferAlignment), None);
+        assert_eq!(enabled.timestamp_queries().period_nanos, None);
     }
 
     #[test]

@@ -1775,7 +1775,30 @@ OptionalFeature::SamplerAnisotropy must be enabled
 value <= DeviceLimits::MaxSamplerAnisotropy
 ~~~
 
-WebGL2 anisotropy comes from an extension and therefore cannot be an unconditional Base capability.
+This is an RHI-wide optional capability, not a WebGL-only escape hatch. DX12
+has a descriptor-defined `1..=16` range, Vulkan publishes the enabled
+`samplerAnisotropy` feature together with its physical-device limit, and the
+GL family publishes the acquired extension's queried limit. Consequently an
+application may request a value greater than one whenever the selected
+device publishes both facts; it is never silently degraded to isotropic
+filtering.
+
+WebGL2 anisotropy comes from an extension and therefore cannot be an
+unconditional Base capability. WebGPU is deliberately more conservative for
+now: its `GPUSamplerDescriptor.maxAnisotropy` field is lowered privately, but
+the standard API does not expose a `GPUSupportedLimits` value equivalent to
+`MaxSamplerAnisotropy`. Browser implementations clamp to their own supported
+ceiling. Fluxel therefore does **not** publish `SamplerAnisotropy` or
+`MaxSamplerAnisotropy` for WebGPU, and public requests above one fail before
+native creation rather than relying on an unqueryable clamp. Should that fact
+become portable and queryable, enabling it is a capability-probe change, not a
+sampler API redesign.
+
+WebGPU additionally requires all of `mag_filter`, `min_filter`, and
+`mip_filter` to be `Linear` when `max_anisotropy > 1`. This backend-specific
+native validation is stricter than the portable sampler-kind classification;
+while WebGPU remains fail-closed above one it cannot be reached through the
+public API.
 
 The following must also be validated:
 

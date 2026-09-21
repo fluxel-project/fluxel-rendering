@@ -411,6 +411,13 @@ pub(crate) fn create_sampler(
         )?;
     }
     if descriptor.max_anisotropy > 1 {
+        // Public RHI validation currently makes this branch unreachable for
+        // WebGPU: capability discovery intentionally does not publish an
+        // unqueryable browser clamp as MaxSamplerAnisotropy. Retain exact
+        // descriptor lowering so a future queryable capability seam does not
+        // need a second sampler representation. WebGPU additionally requires
+        // mag/min/mipmap filtering all to be Linear for this value; that must
+        // be validated before this native call if the capability is published.
         field(
             &d,
             "maxAnisotropy",

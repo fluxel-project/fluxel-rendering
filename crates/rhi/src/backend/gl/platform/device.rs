@@ -883,10 +883,16 @@ impl DeviceBackend for GlDevice {
             }) as _
         })
     }
-    fn create_shader(
+    fn create_shader_request(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::shader::backend::ShaderModuleBackend,
+                >,
+        >,
+    > {
         self.active("GlDevice::create_shader")?;
         self.observe(
             self.driver.create_shader(artifact),
@@ -898,6 +904,7 @@ impl DeviceBackend for GlDevice {
                 name,
             }) as _
         })
+        .map(crate::api::platform::backend::ready_creation_request)
     }
     fn create_bind_group(
         &self,
@@ -917,10 +924,16 @@ impl DeviceBackend for GlDevice {
             }) as _
         })
     }
-    fn create_compute_pipeline(
+    fn create_compute_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::ComputePipelineBackend,
+                >,
+        >,
+    > {
         self.active("GlDevice::create_compute_pipeline")?;
         let packet = GlComputePipelinePacket {
             shader: Self::shader_ref(&descriptor.shader)
@@ -937,11 +950,18 @@ impl DeviceBackend for GlDevice {
                 name,
             }) as _
         })
+        .map(crate::api::platform::backend::ready_creation_request)
     }
-    fn create_raster_pipeline(
+    fn create_raster_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::RasterPipelineBackend,
+                >,
+        >,
+    > {
         self.active("GlDevice::create_raster_pipeline")?;
         let packet = GlRasterPipelinePacket {
             vertex: Self::shader_ref(&descriptor.vertex)
@@ -964,6 +984,7 @@ impl DeviceBackend for GlDevice {
                 name,
             }) as _
         })
+        .map(crate::api::platform::backend::ready_creation_request)
     }
     fn submit(
         &self,

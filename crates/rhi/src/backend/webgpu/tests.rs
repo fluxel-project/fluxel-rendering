@@ -5,6 +5,10 @@
 //! live with the lowering that owns their fixtures.  A software adapter is
 //! rejected instead of being allowed to count as GPU evidence.
 
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
+
 use js_sys::Reflect;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
@@ -12,6 +16,7 @@ use wasm_bindgen_test::*;
 
 use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::identity::DeviceInstanceId;
+use crate::api::pipeline::{ComputePipelineDescriptor, PipelineInterfaceDescriptor};
 use crate::api::platform::{
     AdapterSelection, BackendKind, DeviceRequestDescriptor, DeviceRequirements, DeviceStatus,
     PlatformProvider,
@@ -20,10 +25,30 @@ use crate::api::resource::{BufferDescriptor, BufferUsage};
 use crate::api::resource::{
     TextureAspects, TextureDescriptor, TextureUsage, TextureViewDescriptor, TextureViewDimension,
 };
+use crate::api::shader::{
+    ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderCode,
+    ShaderInterface, ShaderRequirements, ShaderStage,
+};
 
-use super::{WebGpuProvider, js};
+use super::{WebGpuProvider, js, registry};
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+fn compute_artifact(source: &'static str, hash_byte: u8) -> ShaderArtifact {
+    ShaderArtifact::new(
+        ShaderStage::Compute,
+        "main",
+        ShaderCode::Wgsl(Arc::from(source)),
+        ShaderAbiVersion { major: 1, minor: 0 },
+        ShaderInterface::new(),
+        ShaderRequirements::new(),
+        ArtifactHash([hash_byte; 32]),
+        ArtifactProducerVersion {
+            major: 0,
+            minor: 16,
+        },
+    )
+}
 
 /// A headed evidence invocation must have selected a hardware WebGPU adapter.
 ///
@@ -138,6 +163,56 @@ async fn provider_request_creates_a_healthy_webgpu_device() {
     assert_eq!(
         view.descriptor().format,
         Some(TextureFormat::Rgba8UnormSrgb)
+    );
+
+    // Pipeline creation must cross the request-only backend seam and await the
+    // browser's native Promise. Dropping a pending public future retires its
+    // private registry entry; a later JS settlement cannot publish a handle.
+    let shader = device
+        .create_shader(&compute_artifact(
+            "@compute @workgroup_size(1) fn main() {}",
+            0x51,
+        ))
+        .await
+        .expect("valid WGSL shader module");
+    let interface = device
+        .create_pipeline_interface(&PipelineInterfaceDescriptor::new(Vec::new()))
+        .expect("empty pipeline interface");
+    let pipeline_desc = ComputePipelineDescriptor::new(shader.clone(), interface.clone());
+    let baseline_promises = registry::pending_promise_count();
+    let mut abandoned = Box::pin(device.create_compute_pipeline(&pipeline_desc));
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    assert!(matches!(
+        abandoned.as_mut().poll(&mut context),
+        Poll::Pending
+    ));
+    assert_eq!(registry::pending_promise_count(), baseline_promises + 1);
+    drop(abandoned);
+    assert_eq!(registry::pending_promise_count(), baseline_promises);
+
+    device
+        .create_compute_pipeline(&pipeline_desc)
+        .await
+        .expect("createComputePipelineAsync must resolve through the RHI future");
+
+    // Native asynchronous validation failures remain structured creation
+    // errors and never publish a usable pipeline handle.
+    let bad_shader = device
+        .create_shader(&compute_artifact(
+            "@compute @workgroup_size(1) fn not_main() {}",
+            0x52,
+        ))
+        .await
+        .expect("createShaderModule itself accepts the module object");
+    let bad_desc = ComputePipelineDescriptor::new(bad_shader, interface);
+    assert_eq!(
+        device
+            .create_compute_pipeline(&bad_desc)
+            .await
+            .expect_err("missing WGSL entry point must reject the pipeline Promise")
+            .kind(),
+        crate::api::RhiErrorKind::BackendFailure
     );
 
     // Compression is an adapter/device feature pair, not a WebGPU baseline.

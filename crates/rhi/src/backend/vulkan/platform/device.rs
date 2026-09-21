@@ -610,10 +610,16 @@ impl DeviceBackend for VulkanDevice {
             .map_err(|failure| self.observe_failure(failure))
     }
 
-    fn create_shader(
+    fn create_shader_request(
         &self,
         artifact: &crate::api::shader::ShaderArtifact,
-    ) -> RhiResult<Box<dyn crate::api::shader::backend::ShaderModuleBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::shader::backend::ShaderModuleBackend,
+                >,
+        >,
+    > {
         shader::create_shader(self.shared.clone(), artifact)
             .map(|value| {
                 Box::new(value) as Box<dyn crate::api::shader::backend::ShaderModuleBackend>
@@ -624,6 +630,7 @@ impl DeviceBackend for VulkanDevice {
                     "VulkanDevice::create_shader_module",
                 )))
             })
+            .map(crate::api::platform::backend::ready_creation_request)
     }
 
     fn create_bind_group(
@@ -635,26 +642,40 @@ impl DeviceBackend for VulkanDevice {
             .map_err(|failure| self.observe_failure(failure))
     }
 
-    fn create_compute_pipeline(
+    fn create_compute_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::ComputePipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::ComputePipelineBackend,
+                >,
+        >,
+    > {
         pipeline::create_compute_pipeline(self.shared.clone(), descriptor)
             .map(|value| {
                 Box::new(value) as Box<dyn crate::api::pipeline::backend::ComputePipelineBackend>
             })
             .map_err(|failure| self.observe_failure(failure))
+            .map(crate::api::platform::backend::ready_creation_request)
     }
 
-    fn create_raster_pipeline(
+    fn create_raster_pipeline_request(
         &self,
         descriptor: &crate::api::pipeline::RasterPipelineDescriptor,
-    ) -> RhiResult<Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>> {
+    ) -> RhiResult<
+        Box<
+            dyn crate::api::platform::backend::CreationRequestBackend<
+                    dyn crate::api::pipeline::backend::RasterPipelineBackend,
+                >,
+        >,
+    > {
         pipeline::create_raster_pipeline(self.shared.clone(), descriptor)
             .map(|value| {
                 Box::new(value) as Box<dyn crate::api::pipeline::backend::RasterPipelineBackend>
             })
             .map_err(|failure| self.observe_failure(failure))
+            .map(crate::api::platform::backend::ready_creation_request)
     }
 
     fn presentation(&self) -> Option<&dyn crate::api::presentation::backend::PresentationBackend> {
