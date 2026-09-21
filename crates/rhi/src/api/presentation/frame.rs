@@ -184,6 +184,16 @@ impl AcquiredFrameId {
     pub fn device_identity(&self) -> DeviceIdentity {
         self.device
     }
+
+    /// Backend-private serial used to prove that an abandon consumes the exact
+    /// acquired frame still outstanding for its presentation lease.
+    ///
+    /// Applications cannot construct or compare backend frame serials, but a
+    /// configured-surface backend must reject a stale `AcquiredFrameId` rather
+    /// than consuming a newer frame from the same lease.
+    pub(crate) fn serial(&self) -> u64 {
+        self.serial
+    }
 }
 
 /// Where a frame is in its lifecycle.

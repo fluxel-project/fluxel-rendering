@@ -817,18 +817,17 @@ impl VulkanCommandSpine {
                             )?
                         }
                     },
-                    // Debug markup has no execution semantics and no portable
-                    // capability gate. Refusing it would make an otherwise
-                    // supported workload fail merely because diagnostics were
-                    // added. The Vulkan 1.0 baseline therefore accepts it as a
-                    // no-op when VK_EXT_debug_utils is not enabled.
+                    // Debug markup has no execution semantics, but silently
+                    // dropping a recorded command would violate Fluxel's
+                    // no-hidden-fallback rule. Until VK_EXT_debug_utils is
+                    // enabled for this device slice, Phase A rejects it before
+                    // any native work is accepted.
                     //
                     // TODO(tooling): enable VK_EXT_debug_utils when the instance
                     // advertises it and lower these three payloads (plus scope
                     // labels) to vkCmdBegin/End/InsertDebugUtilsLabelEXT. Keep
-                    // this correct no-op fallback for loaders without the
-                    // extension; debug labels must never become a required
-                    // execution capability.
+                    // the structured refusal for loaders without the
+                    // extension.
                     RecordedPayload::DebugPush(_)
                     | RecordedPayload::DebugPop
                     | RecordedPayload::DebugMarker(_) => {

@@ -264,6 +264,17 @@ Device loss is terminal; P0 recreation obtains a new `DeviceIdentity`.
   into terminal states; v13 has no `Device::lost()` future or separate public
   loss-event API, and idle loss may first be observed by the next RHI call.
 - [x] `wait_idle().await` is only for shutdown/diagnostics.
+- [ ] GL-family backend evidence: the shared private state machine is exercised
+  through independent Desktop GL/WGL, GLES/EGL, and adopted WebGL2 providers;
+  no public session/token/context ownership type is introduced.
+- [ ] GL facts are admitted per exact route by `(core version OR extensions)`
+  plus loaded function entry points and context-specific probes; an extension
+  name or API-family label alone never enables a fact.
+- [ ] GL-family release evidence includes Win11 WGL at the highest available
+  GL 4.x level, Android EGL at the actual reported ES 3.x level (minimum ES
+  3.0), and real WebGL2 contexts in Win11 Chrome and Edge. Each covers
+  capability publication, state-machine execution, default-framebuffer/WSI
+  behavior where applicable, and terminal context-loss propagation.
 
 ## Capability / Format / Route / Surface
 

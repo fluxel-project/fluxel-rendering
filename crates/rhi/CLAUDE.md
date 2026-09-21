@@ -547,6 +547,19 @@ pipeline-emulation state
 
 不能让 GL 全局状态污染 public RHI semantic。
 
+GL 状态机与 GL 调用封装严格采用
+`E:\moyy\program\rust\参考\webgl2_performance` 的模型和优化思路；代码应按
+当前 v13 identity/generation、结构化错误与 retirement 规则重写，不要求复制旧代码。
+每个 context 只有一个实际接线的状态权威，不能保留一套未被 lowering 使用的旁路状态机。
+pipeline 必须先做完整对象身份快判，再分别判断 program、raster、depth、stencil、blend
+等不可变状态块；bind group 使用 dirty mask 并在 draw/dispatch 前集中逐槽更新；vertex/index
+buffer 形成 geometry key 并复用 VAO；active texture、每个 texture/sampler/UBO/SSBO/image
+槽、framebuffer、viewport/scissor、clear 与 pixel-store 状态均由该权威追踪。资源退休必须反向
+失效绑定槽和依赖它的 VAO/FBO；任何绕过封装的 raw GL 调用必须声明并执行精确 invalidation，
+无法证明范围时 invalidation ALL。context loss/replacement 后所有已知状态变为 Unknown。
+稳定对象 ID、generation 或 canonical structural key 可以替代旧实现的指针比较；不得为了模仿
+指针快判额外引入可有可无的 Arc/Rc。
+
 ---
 
 ## WebGL2

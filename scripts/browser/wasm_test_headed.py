@@ -14,7 +14,9 @@ Why this is two processes and not one
 
 So this script pairs the interactive harness with `cdp_shot.py`: the harness
 provides the page and the real results, the capture vehicle provides a headed
-browser on the real adapter and reads the verdict out of the DOM.
+Chrome or Edge instance on the real adapter and reads the verdict out of the
+DOM. Release evidence invokes it twice with explicit `--browser` paths; one
+Chromium-family result is not accepted as evidence for the other browser.
 
 The verdict is read from the page text, not the title: the interactive harness
 never changes its title.  Both the harness and the browser are torn down on
@@ -90,6 +92,11 @@ def kill_tree(proc: subprocess.Popen) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--browser",
+        default=None,
+        help="explicit Chrome or Edge executable; required by release evidence runs",
+    )
     parser.add_argument("--out", default=str(REPO / "target" / "evidence" / "wasm-suite-real-gpu.png"))
     parser.add_argument("--wait-text", default="test result:")
     parser.add_argument("--wait-timeout", type=float, default=300.0)
@@ -138,8 +145,7 @@ def main() -> int:
             print("the harness never announced a page to open", file=sys.stderr)
             return 1
 
-        browser = subprocess.Popen(
-            [
+        capture = [
                 sys.executable,
                 str(CAPTURE),
                 "--url",
@@ -152,7 +158,11 @@ def main() -> int:
                 args.out,
                 "--debug-port",
                 str(args.debug_port),
-            ],
+            ]
+        if args.browser:
+            capture.extend(["--chrome", args.browser])
+        browser = subprocess.Popen(
+            capture,
             cwd=str(REPO),
         )
         browser.wait(timeout=args.wait_timeout + 300)

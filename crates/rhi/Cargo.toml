@@ -21,19 +21,22 @@ dx12 = ["dep:windows"]
 vulkan = ["dep:ash"]
 android-wsi-evidence = ["vulkan"]
 gl-family = []
-native-gl-wgl = ["gl-family"]
-native-gles-egl = ["gl-family"]
-webgl2 = ["gl-family"]
+native-gl-wgl = ["gl-family", "dep:glow", "dep:glutin_wgl_sys", "dep:raw-window-handle"]
+native-gles-egl = ["gl-family", "dep:glow", "dep:khronos-egl", "dep:raw-window-handle"]
+webgl2 = ["gl-family", "dep:glow", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 webgpu = []
 test-support = []
 
 [dependencies]
+glow = { version = "=0.18.0", optional = true }
+raw-window-handle = { version = "=0.6.2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Vulkan is loaded dynamically so enabling the backend does not create a link-
 # time dependency on a platform loader. Native handles remain confined to
 # `src/backend/vulkan`.
 ash = { version = "=0.38.0", optional = true, default-features = false, features = ["loaded", "std"] }
+khronos-egl = { version = "=6.0.0", features = ["dynamic"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # The owned Direct3D 12 backend's binding, and nothing else uses it: no module
@@ -70,6 +73,33 @@ windows = { version = "=0.62.2", optional = true, features = [
     # the binding puts the `cfg` on the function, so a build with only the
     # former links nothing at all.
     "Win32_Security",
+] }
+glutin_wgl_sys = { version = "=0.6.1", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "=0.3.105", optional = true }
+wasm-bindgen = { version = "=0.2.128", optional = true }
+web-sys = { version = "=0.3.105", optional = true, features = [
+    "Document",
+    "HtmlCanvasElement",
+    "Performance",
+    "WebGl2RenderingContext",
+    "WebGlActiveInfo",
+    "WebGlBuffer",
+    "WebGlContextAttributes",
+    "WebGlContextEvent",
+    "WebGlFramebuffer",
+    "WebGlProgram",
+    "WebGlQuery",
+    "WebGlRenderbuffer",
+    "WebGlSampler",
+    "WebGlShader",
+    "WebGlSync",
+    "WebGlTexture",
+    "WebGlUniformLocation",
+    "WebGlVertexArrayObject",
+    "Window",
+    "console",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

@@ -84,10 +84,9 @@ DEFAULT_OUT = Path("target/gl4-raster-readback")
 
 
 def run_fixture(manifest: Path, draws: int, extent: tuple[int, int], colour: Path,
-                timeout: float) -> dict:
+                timeout: float, gl_version: str | None) -> dict:
     """Runs the fixture over a real drawable and returns the report it printed."""
-    completed = subprocess.run(
-        [
+    command = [
             "cargo",
             "run",
             "--offline",
@@ -102,7 +101,11 @@ def run_fixture(manifest: Path, draws: int, extent: tuple[int, int], colour: Pat
             str(draws),
             "--readback",
             str(colour),
-        ],
+        ]
+    if gl_version is not None:
+        command.extend(["--gl-version", gl_version])
+    completed = subprocess.run(
+        command,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -122,6 +125,9 @@ def main() -> int:
                         help=f"fixture manifest, default {DEFAULT_MANIFEST}")
     parser.add_argument("--draws", type=int, default=1)
     parser.add_argument("--extent", default="640x480", help="WIDTHxHEIGHT of the window")
+    parser.add_argument("--gl-version", default=None,
+                        choices=("4.0", "4.1", "4.2", "4.3", "4.4", "4.5", "4.6"),
+                        help="minimum WGL core version; omit for highest available")
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--out", type=Path, default=None,
                         help=f"where to keep the artifacts, default {DEFAULT_OUT}")
@@ -140,7 +146,7 @@ def main() -> int:
 
     try:
         report = run_fixture(manifest, arguments.draws, (width, height), colour_path,
-                             arguments.timeout)
+                             arguments.timeout, arguments.gl_version)
     except (RuntimeError, ValueError) as error:
         print(f"the run produced no report: {error}", file=sys.stderr)
         return 1

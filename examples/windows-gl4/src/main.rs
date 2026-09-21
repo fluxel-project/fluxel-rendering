@@ -40,6 +40,8 @@
 //!
 //! ```powershell
 //! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --frames 1
+//! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --gl-version 4.0
+//! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --gl-version 4.6 --draws 1
 //! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --draws 2000 --mode oracle
 //! cargo run --manifest-path examples/windows-gl4/Cargo.toml -- --draws 1 --readback target/evidence/gl4.rgba
 //! ```
@@ -49,8 +51,8 @@ use std::process::ExitCode;
 
 use fluxel_host::{Window, WindowConfig};
 use fluxel_rhi::test_support::{
-    ColourReadback, NativeGlContextReport, NativeGlDrawReport, drive_desktop_gl4_draws,
-    observe_desktop_gl4_context,
+    ColourReadback, DesktopGlVersion, NativeGlContextReport, NativeGlDrawReport,
+    drive_desktop_gl4_draws_minimum_version, observe_desktop_gl4_context_minimum_version,
 };
 
 /// The default client extent, and the extent the context is opened for.
@@ -72,6 +74,11 @@ fn main() -> ExitCode {
     let mut mode = String::from("optimized");
     let mut mode_given = false;
     let mut readback: Option<PathBuf> = None;
+    // `None` intentionally means the normal production-like WGL path: request
+    // the highest available core context, falling back to the v13 GL 4.0
+    // floor. A concrete value is a minimum-version fixture request, useful for
+    // walking the 4.0--4.6 compatibility matrix on one GL 4.6-capable machine.
+    let mut gl_version: Option<DesktopGlVersion> = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -110,6 +117,13 @@ fn main() -> ExitCode {
                 Some(path) => readback = Some(PathBuf::from(path)),
                 None => {
                     eprintln!("--readback wants the path to write the colour target to");
+                    return ExitCode::from(2);
+                }
+            },
+            "--gl-version" => match arguments.next().as_deref().and_then(parse_gl_version) {
+                Some(parsed) => gl_version = Some(parsed),
+                None => {
+                    eprintln!("--gl-version wants one of 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, or 4.6");
                     return ExitCode::from(2);
                 }
             },
@@ -161,13 +175,26 @@ fn main() -> ExitCode {
     // `PixelFormatAlreadyConfigured` refuses, so the flag picks a path rather
     // than adding one.
     let (report, workload) = if draws == 0 {
-        match observe_desktop_gl4_context(&window, extent, CONTEXT_IDENTITY) {
+        match observe_desktop_gl4_context_minimum_version(
+            &window,
+            extent,
+            CONTEXT_IDENTITY,
+            gl_version,
+        ) {
             Ok(report) => (report, None),
             Err(error) => return report_failure(&error),
         }
     } else {
         let wanted = readback.is_some();
-        match drive_desktop_gl4_draws(&window, extent, CONTEXT_IDENTITY, &mode, draws, wanted) {
+        match drive_desktop_gl4_draws_minimum_version(
+            &window,
+            extent,
+            CONTEXT_IDENTITY,
+            &mode,
+            draws,
+            wanted,
+            gl_version,
+        ) {
             Ok(report) => (report.context.clone(), Some(report)),
             Err(error) => return report_failure(&error),
         }
@@ -219,6 +246,14 @@ fn parse_extent(raw: &str) -> Option<[u32; 2]> {    let (width, height) = raw.sp
     (width > 0 && height > 0).then_some([width, height])
 }
 
+/// A v13 desktop GL minimum version for the WGL fixture.
+fn parse_gl_version(raw: &str) -> Option<DesktopGlVersion> {
+    let (major, minor) = raw.split_once('.')?;
+    let major = major.parse().ok()?;
+    let minor = minor.parse().ok()?;
+    DesktopGlVersion::new(major, minor)
+}
+
 /// The report as one JSON object.
 ///
 /// Hand-written rather than derived: this fixture is a consumer of a
@@ -235,8 +270,23 @@ fn parse_extent(raw: &str) -> Option<[u32; 2]> {    let (width, height) = raw.sp
 fn render(report: &NativeGlContextReport, workload: Option<&NativeGlDrawReport>) -> String {
     let mut fields = vec![
         ("opened".to_owned(), "true".to_owned()),
+        (
+            "requested_minimum_version".to_owned(),
+            report
+                .requested_minimum_version
+                .as_deref()
+                .map(json_string)
+                .unwrap_or_else(|| "null".to_owned()),
+        ),
         ("profile".to_owned(), json_string(&report.profile)),
+        // `version` remains for existing consumers. `observed_version` makes
+        // the minimum-request/actual-context distinction explicit in a matrix
+        // record, where WGL may report a newer core context than requested.
         ("version".to_owned(), json_string(&report.version)),
+        (
+            "observed_version".to_owned(),
+            json_string(&report.version),
+        ),
         (
             "shading_language_version".to_owned(),
             json_string(&report.shading_language_version),

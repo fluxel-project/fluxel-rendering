@@ -606,7 +606,11 @@ fn record_buffer_support(
     storage_ceiling: u64,
 ) {
     for usage in BufferUsage::all() {
-        let support = if usage.is_empty() {
+        let support = if usage.is_empty()
+            || usage.contains(BufferUsage::BLAS_INPUT)
+            || usage.contains(BufferUsage::TLAS_INPUT)
+            || usage.contains(BufferUsage::ACCELERATION_STRUCTURE_SCRATCH)
+        {
             BufferSupport::Unsupported
         } else {
             let mut ceiling = general_ceiling;

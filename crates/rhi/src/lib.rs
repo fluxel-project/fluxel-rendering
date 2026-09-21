@@ -58,16 +58,23 @@
 //!
 //! # Status
 //!
-//! The crate is being rebuilt contract-first. [`api`] holds the public surface,
-//! written from the specification with its validation and refusal paths fixed
-//! before any lowering exists; a verb whose body is `unimplemented!()` has its
-//! contract settled and its implementation still to arrive. Backends land under
+//! The crate is built contract-first. [`api`] holds the public surface, written
+//! from the specification with validation and refusal paths fixed before native
+//! lowering is admitted. An unavailable lowering must fail structurally before
+//! native work is accepted; reachable `todo!()` / `unimplemented!()` paths and
+//! dummy success are not valid capability implementations. Backends land under
 //! `backend/`; portable defaults and crate-private implementation contracts live
 //! beside the public vocabulary in the corresponding `api/` domain.
 
 #![deny(missing_docs)]
 
 pub mod api;
+
+/// Fixture-only hardware evidence reports. This is intentionally not part of
+/// the portable RHI vocabulary and exists only when a harness opts in.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support;
 
 // Native lowering, one module per backend. Crate-private for the same reason,
 // and feature- and target-gated because a backend that is not being built must

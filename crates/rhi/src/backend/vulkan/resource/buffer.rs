@@ -508,7 +508,22 @@ fn usage(value: BufferUsage) -> vk::BufferUsageFlags {
     if value.contains(BufferUsage::STORAGE) {
         flags |= vk::BufferUsageFlags::STORAGE_BUFFER;
     }
-    // MAP_* selects host-visible memory rather than a Vulkan buffer-usage
-    // flag. Keep it out of this native mask; Vulkan exposes no MAP usage bit.
+    if value.contains(BufferUsage::INDIRECT) {
+        flags |= vk::BufferUsageFlags::INDIRECT_BUFFER;
+    }
+    // Vulkan has no MAP usage bit, but VkBufferCreateInfo::usage may not be
+    // empty. Give map-only buffers a harmless transfer role which also matches
+    // their direction: CPU reads consume device-written bytes, while CPU
+    // writes produce bytes for device consumption. The memory-property choice
+    // remains the part which actually makes these allocations host visible.
+    if value.contains(BufferUsage::MAP_READ) {
+        flags |= vk::BufferUsageFlags::TRANSFER_DST;
+    }
+    if value.contains(BufferUsage::MAP_WRITE) {
+        flags |= vk::BufferUsageFlags::TRANSFER_SRC;
+    }
+    // Acceleration-structure input/scratch usages are deliberately absent.
+    // Capability facts reject them until the matching KHR feature set and
+    // command lowering are enabled together.
     flags
 }

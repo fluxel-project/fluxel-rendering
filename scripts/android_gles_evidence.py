@@ -291,6 +291,8 @@ def main() -> int:
     parser.add_argument("--serial", default=None, help="device serial, if several are attached")
     parser.add_argument("--draws", type=int, default=1)
     parser.add_argument("--extent", default="64x64", help="WIDTHxHEIGHT of the pbuffer")
+    parser.add_argument("--gles-version", default=None, choices=("3.0", "3.1", "3.2"),
+                        help="strict GLES profile; omit to discover highest available")
     parser.add_argument("--mode", default="optimized", choices=("optimized", "oracle"))
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--out", type=Path, default=None,
@@ -327,6 +329,8 @@ def main() -> int:
             f"{remote_binary} --extent {width}x{height} --draws {arguments.draws} "
             f"--mode {arguments.mode} --readback {remote_colour}"
         )
+        if arguments.gles_version is not None:
+            invocation += f" --gles-version {arguments.gles_version}"
         completed = run(
             [adb, "-s", serial, "shell", invocation], timeout=arguments.timeout
         )

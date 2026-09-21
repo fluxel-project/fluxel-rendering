@@ -510,7 +510,8 @@ impl ReadbackTicket {
             // calling this, its feature joins the list — which is rule 4.6's
             // "the matrix gets the row" applied to the attribute itself.
             feature = "dx12",
-            feature = "vulkan"
+            feature = "vulkan",
+            feature = "webgl2"
         )),
         expect(
             dead_code,

@@ -436,6 +436,46 @@ HGLRC / EGLContext / WebGLRenderingContext
 
 These only belong to the platform integration / backend-private seam.
 
+### 5.1.1 GL-family provider and capability admission
+
+The GL family has one backend-private `backend/gl` lowering/state machine, but
+it has three distinct provider sources:
+
+```text
+Desktop GL provider  -> adopted WGL / desktop context
+GLES provider        -> adopted EGL / ES context
+WebGL2 provider      -> adopted WebGL2 context
+```
+
+They do not share a public context/session/token object, adapter identity, or
+`DeviceIdentity`. The shared lowering receives backend-private context access
+only; RHI resources are owned by the ordinary Device/context identity model.
+
+The portability floors are Desktop GL 4.0, GLES 3.0, and WebGL2. A provider
+uses the highest GL 4.x or ES 3.x context actually made current. It must not
+artificially limit its facts to the floor. Conversely, a feature is not enabled
+because a backend family, a version string, or an extension name sounds
+compatible. For every individual capability/format/route, admission requires:
+
+```text
+(sufficient core version OR every required extension)
+AND every required function entry point is loaded and callable
+AND the context-specific limits / format probe accept the exact request
+```
+
+This test is deliberately fine-grained. For example, an extension may enable a
+format route while a missing synchronization or indirect-draw entry point keeps
+only that independent route unavailable. The provider publishes the resulting
+facts and rejects an unavailable request as `Unsupported` before a GL call; it
+must not claim a broad "extension supported" capability and discover a missing
+entry point while executing a command.
+
+GL, EGL, WGL, and WebGL context loss is terminal Device loss. Once observed,
+the backend records stable loss information, wakes every pending RHI future,
+and makes later operations return `DeviceLost`. Recreating a host context is a
+fresh provider/device request and creates a new identity; it never revives
+objects associated with the lost context.
+
 ---
 
 ## 5.2 BackendKind

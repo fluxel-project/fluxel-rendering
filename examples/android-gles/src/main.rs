@@ -36,6 +36,11 @@
 //!     --extent 64x64 --draws 1 --readback /data/local/tmp/colour.rgba
 //! ```
 //!
+//! To test a GLES compatibility floor rather than discovering the highest
+//! profile the driver accepts, add `--gles-version 3.0`, `3.1`, or `3.2`. A
+//! 3.1 case accepts an observed 3.1 or 3.2 context, but rejects 3.0. The JSON
+//! records both `requested_minimum_version` and the observed `version`.
+//!
 //! # The picture
 //!
 //! With `--readback PATH` the run also reads its colour target back and writes
@@ -53,7 +58,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use fluxel_rhi::test_support::{
-    ColourReadback, NativeGlContextReport, NativeGlDrawReport, drive_gles_pbuffer_draws,
+    ColourReadback, EglGlesVersion, NativeGlContextReport, NativeGlDrawReport,
+    drive_gles_pbuffer_draws,
 };
 
 /// The default pbuffer extent, and the extent the context is opened for.
@@ -77,6 +83,9 @@ fn main() -> ExitCode {
     let mut draws = 1_u32;
     let mut mode = String::from("optimized");
     let mut readback: Option<PathBuf> = None;
+    // `None` means highest-supported discovery (3.2 -> 3.1 -> 3.0). A value
+    // is a minimum profile assertion: a newer observed context is valid.
+    let mut gles_version = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -101,6 +110,13 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
+            "--gles-version" => match arguments.next().as_deref().and_then(parse_gles_version) {
+                Some(parsed) => gles_version = Some(parsed),
+                None => {
+                    eprintln!("--gles-version wants one of: 3.0, 3.1, 3.2");
+                    return ExitCode::from(2);
+                }
+            },
             "--readback" => match arguments.next() {
                 Some(path) => readback = Some(PathBuf::from(path)),
                 None => {
@@ -116,7 +132,14 @@ fn main() -> ExitCode {
     }
 
     let wanted = readback.is_some();
-    let report = match drive_gles_pbuffer_draws(extent, CONTEXT_IDENTITY, &mode, draws, wanted) {
+    let report = match drive_gles_pbuffer_draws(
+        extent,
+        CONTEXT_IDENTITY,
+        &mode,
+        draws,
+        wanted,
+        gles_version,
+    ) {
         Ok(report) => report,
         Err(error) => return report_failure(&error),
     };
@@ -158,6 +181,20 @@ fn parse_extent(raw: &str) -> Option<[u32; 2]> {
     (width > 0 && height > 0).then_some([width, height])
 }
 
+/// Parses the fixture's deliberately small exact-profile vocabulary.
+///
+/// The CLI has no `latest` spelling: omitting the option is the only way to
+/// request discovery fallback, so a matrix invocation cannot accidentally turn
+/// a minimum-version case into an unrecorded discovery run.
+fn parse_gles_version(raw: &str) -> Option<EglGlesVersion> {
+    match raw {
+        "3.0" => Some(EglGlesVersion::V3_0),
+        "3.1" => Some(EglGlesVersion::V3_1),
+        "3.2" => Some(EglGlesVersion::V3_2),
+        _ => None,
+    }
+}
+
 /// The report as one JSON object.
 ///
 /// Hand-written rather than derived: this fixture is a consumer of a doc-hidden
@@ -172,6 +209,14 @@ fn parse_extent(raw: &str) -> Option<[u32; 2]> {
 fn render(report: &NativeGlContextReport, workload: Option<&NativeGlDrawReport>) -> String {
     let mut fields = vec![
         ("opened".to_owned(), "true".to_owned()),
+        (
+            "requested_minimum_version".to_owned(),
+            report
+                .requested_minimum_version
+                .as_deref()
+                .map(json_string)
+                .unwrap_or_else(|| "null".to_owned()),
+        ),
         ("profile".to_owned(), json_string(&report.profile)),
         ("version".to_owned(), json_string(&report.version)),
         (

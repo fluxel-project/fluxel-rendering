@@ -150,7 +150,10 @@ impl BufferUsage {
     /// leaving it out of the walk would leave it out of whatever table the walk
     /// fills, which is the one outcome the completeness rule exists to prevent.
     #[cfg_attr(
-        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        all(
+            not(test),
+            not(any(feature = "dx12", feature = "vulkan", feature = "gl-family"))
+        ),
         expect(
             dead_code,
             reason = "the DX12 and Vulkan capability ports enumerate this complete key space; without either feature it is unreachable outside tests"

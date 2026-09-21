@@ -1,0 +1,1096 @@
+//! Native executable owner for every GL-family command domain.
+//!
+//! The Host owns the platform context; this type borrows its already-current
+//! `glow` dispatch table and owns only Fluxel object tables, pass/raster
+//! records, and the pixel-store snapshot. Raw GL names live inside these
+//! records and never participate in identity comparisons.
+
+use std::collections::BTreeMap;
+
+use super::discovery::{NativeDiscoveryError, discover_current_glow};
+use crate::backend::gl::api::GlFamilyApi as _;
+use crate::backend::gl::api::{
+    BufferId, ContextStamp, FramebufferId, GlBufferDesc, GlContextLifecycle, GlDiscoverySnapshot,
+    GlError, GlFenceLeaseBook, GlIndexBinding, GlPixelStoreState, GlPrimitiveTopology,
+    GlProgramDescriptor, GlRenderBufferDesc, GlSurfaceLeaseBook, GlSurfaceSize, GlTextureDesc,
+    GlVertexLayout, OwnerThreadIdentity, ProgramId, QueryId, RenderbufferId, SamplerId, ShaderId,
+    SyncId, TextureId, VertexArrayId,
+};
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(crate) struct NativeGlProvider {
+    /// A provider owns its dispatch table.  The table contains loader-resolved
+    /// entry points, not a platform context handle; the WGL/EGL owner still
+    /// makes the actual context current before every call.  Owning this value
+    /// avoids a self-reference between a thread-affine surface and its object
+    /// tables when the pair is constructed on `NativeOwnerWorker`.
+    pub(super) gl: glow::Context,
+    pub(super) discovery: GlDiscoverySnapshot,
+    pub(super) lifecycle: GlContextLifecycle,
+    pub(super) owner: OwnerThreadIdentity,
+    pub(super) next_slot: u32,
+    pub(super) buffers: BTreeMap<BufferId, (glow::NativeBuffer, GlBufferDesc)>,
+    pub(super) textures: BTreeMap<TextureId, (glow::NativeTexture, GlTextureDesc)>,
+    pub(super) renderbuffers:
+        BTreeMap<RenderbufferId, (glow::NativeRenderbuffer, GlRenderBufferDesc)>,
+    pub(super) samplers: BTreeMap<SamplerId, glow::NativeSampler>,
+    pub(super) shaders: BTreeMap<ShaderId, glow::NativeShader>,
+    pub(super) programs: BTreeMap<ProgramId, NativeProgram>,
+    pub(super) vertex_arrays: BTreeMap<VertexArrayId, NativeVertexArray>,
+    pub(super) framebuffers: BTreeMap<FramebufferId, NativeFramebuffer>,
+    pub(super) queries: BTreeMap<QueryId, NativeQuery>,
+    pub(super) syncs: BTreeMap<SyncId, glow::NativeFence>,
+    pub(super) fences: GlFenceLeaseBook,
+    pub(super) surface: GlSurfaceLeaseBook,
+    pub(super) surface_suspended: bool,
+    /// The Host-reported extent of the drawable, absent until reported.
+    ///
+    /// Not a default: this family has no core query for the default
+    /// framebuffer's size, so an unreported extent is an unknown one, and the
+    /// presentation domain answers it with suspension instead of a lease.
+    pub(super) surface_extent: Option<GlSurfaceSize>,
+    pub(super) pass: Option<ActivePass>,
+    pub(super) raster: Option<ActiveRaster>,
+    /// The program the driver is known to hold, or `None` when no program is
+    /// selected.
+    ///
+    /// `None` is a fact and not a default: a freshly created context selects no
+    /// program, and a link clears the selection when its reflection scope ends,
+    /// so both are recorded here rather than assumed.  This is the one place the
+    /// provider answers "which program is current", and
+    /// [`Self::ensure_program`] is the only writer.
+    pub(super) current_program: Option<ProgramId>,
+    /// The vertex array the modelled driver holds, or `None` when it holds none.
+    ///
+    /// GL has one vertex-array binding slot, and the provider models the slot
+    /// rather than the intent of each verb for the same reason
+    /// [`Self::current_program`] exists: two verbs reach it -- a pipeline install
+    /// and an input reconcile -- and the install's choice is the older of the
+    /// two by the time a draw runs.  A raster draw resolves *this* record and not
+    /// the array the pipeline install named, because the geometry domain may
+    /// legitimately have replaced that array in between: under the uncached
+    /// execution mode it replaces it on every request.  Reading the install-time
+    /// identity instead made the draw validate a fact about the past and refuse
+    /// the array the driver was actually holding, which is the defect that made
+    /// the uncached differential unable to complete a single frame.
+    ///
+    /// Only the two verbs that bind a real array write it: the input domain's
+    /// `bind_vertex_array` and [`Self::ensure_vertex_array`], which is where a
+    /// pipeline install and both draw routes re-assert the binding.
+    pub(super) bound_vertex_array: Option<VertexArrayId>,
+    /// The query currently recording a measurement, if any.
+    pub(super) active_query: Option<QueryId>,
+    /// The compute program the caller selected for dispatch work, if any.
+    ///
+    /// This is the caller's choice, not a claim about the driver: which program
+    /// the driver actually holds is [`Self::current_program`]'s to say, because a
+    /// raster pipeline install writes that same slot.  A dispatch resolves this
+    /// record and re-asserts it through [`Self::ensure_program`], which is why
+    /// the two are separate fields rather than one.
+    pub(super) active_compute_program: Option<ProgramId>,
+    pub(super) pixel_store: GlPixelStoreState,
+}
+
+/// A linked raster or compute program record with its validated descriptor.
+pub(super) struct NativeProgram {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeProgram,
+    pub(super) descriptor: GlProgramDescriptor,
+}
+
+/// A created VAO with its structural layout and last recorded index binding.
+pub(super) struct NativeVertexArray {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeVertexArray,
+    pub(super) layout: GlVertexLayout,
+    pub(super) index: Option<GlIndexBinding>,
+}
+
+/// A created framebuffer with its validated descriptor.
+pub(super) struct NativeFramebuffer {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeFramebuffer,
+    pub(super) descriptor: crate::backend::gl::api::GlFramebufferDescriptor,
+}
+
+/// The target a query object last recorded a measurement for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum QueryTarget {
+    SamplesPassed,
+    TimeElapsed,
+    Timestamp,
+}
+
+pub(super) struct NativeQuery {
+    pub(super) generation: u32,
+    pub(super) raw: glow::NativeQuery,
+    pub(super) target: Option<QueryTarget>,
+}
+
+/// Facts of the render pass currently recording on this context.
+pub(super) struct ActivePass {
+    pub(super) target: crate::backend::gl::api::GlRenderTarget,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) samples: u32,
+    /// Per color attachment; `true` when `end_render_pass` must invalidate.
+    pub(super) discard_color: Vec<bool>,
+    pub(super) discard_depth_stencil: Option<bool>,
+}
+
+/// The raster pipeline installed for the active pass.
+pub(super) struct ActiveRaster {
+    /// The program this pipeline installed.
+    ///
+    /// Recorded rather than assumed: a compute install or a link can leave
+    /// another program current, so a draw has to be able to re-assert this one
+    /// through [`NativeGlProvider::ensure_program`].
+    pub(super) program: ProgramId,
+    /// The topology this pipeline installed.
+    ///
+    /// The vertex array is deliberately *not* recorded here even though the
+    /// install names one.  GL's vertex-array binding is a single slot that the
+    /// input domain also writes, and the slot's owner is
+    /// [`NativeGlProvider::bound_vertex_array`]; a copy kept per pipeline would
+    /// go stale the moment the geometry domain reconciled inputs, which under the
+    /// uncached execution mode is on every single request.
+    pub(super) topology: GlPrimitiveTopology,
+}
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+impl NativeGlProvider {
+    /// # Safety
+    ///
+    /// Same as [`discover_current_glow`]: the caller keeps `gl` current and
+    /// exclusively owned by this thread for the provider's entire lifetime.
+    pub(crate) unsafe fn from_current(
+        gl: glow::Context,
+        stamp: ContextStamp,
+    ) -> Result<Self, NativeDiscoveryError> {
+        // SAFETY: forwarded from this constructor's current-context contract.
+        let discovery = unsafe { discover_current_glow(&gl, stamp) }?;
+        Ok(Self::assemble(gl, discovery))
+    }
+
+    /// Assembles the provider over an already-collected discovery snapshot.
+    ///
+    /// The caller must guarantee `gl` is the exact context that produced
+    /// `discovery` and that it is current on the calling thread.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`Self::from_current`].
+    pub(crate) unsafe fn from_discovered(
+        gl: glow::Context,
+        discovery: GlDiscoverySnapshot,
+    ) -> Self {
+        Self::assemble(gl, discovery)
+    }
+
+    fn assemble(gl: glow::Context, discovery: GlDiscoverySnapshot) -> Self {
+        Self {
+            gl,
+            discovery,
+            lifecycle: GlContextLifecycle::Active,
+            owner: OwnerThreadIdentity::current(),
+            next_slot: 0,
+            buffers: BTreeMap::new(),
+            textures: BTreeMap::new(),
+            renderbuffers: BTreeMap::new(),
+            samplers: BTreeMap::new(),
+            shaders: BTreeMap::new(),
+            programs: BTreeMap::new(),
+            vertex_arrays: BTreeMap::new(),
+            framebuffers: BTreeMap::new(),
+            queries: BTreeMap::new(),
+            syncs: BTreeMap::new(),
+            fences: GlFenceLeaseBook::default(),
+            surface: GlSurfaceLeaseBook::new(),
+            surface_suspended: false,
+            // The Host has reported no extent yet, so the executor starts with
+            // none: a provider that guessed a size here would hand out a lease
+            // for a drawable it has never been told about.
+            surface_extent: None,
+            pass: None,
+            raster: None,
+            current_program: None,
+            bound_vertex_array: None,
+            active_query: None,
+            active_compute_program: None,
+            pixel_store: GlPixelStoreState::DEFAULT,
+        }
+    }
+
+    /// Allocates one monotonically increasing slot.
+    ///
+    /// Slots are never reused within one context generation, so the `0`
+    /// object generation stays sound; any future slot-reuse design must
+    /// introduce per-slot generations first.
+    pub(super) fn slot(&mut self, operation: &'static str) -> Result<u32, GlError> {
+        let slot = self.next_slot;
+        self.next_slot = self
+            .next_slot
+            .checked_add(1)
+            .ok_or(GlError::OutOfMemory { operation })?;
+        Ok(slot)
+    }
+
+    pub(super) fn validation(operation: &'static str, message: &'static str) -> GlError {
+        GlError::Validation {
+            operation,
+            message: message.into(),
+        }
+    }
+
+    pub(super) fn driver_error(&self, operation: &'static str) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        // SAFETY: upheld by NativeGlProvider::from_current.
+        let error = unsafe { self.gl.get_error() };
+        (error == glow::NO_ERROR)
+            .then_some(())
+            .ok_or_else(|| GlError::Driver {
+                operation,
+                message: format!("GL error 0x{error:04x}"),
+            })
+    }
+
+    /// Shared framebuffer-completeness observation for copy and pass work.
+    pub(super) fn require_complete(&self, operation: &'static str) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        // SAFETY: current-context contract.
+        let status = unsafe { self.gl.check_framebuffer_status(glow::FRAMEBUFFER) };
+        if status == glow::FRAMEBUFFER_COMPLETE {
+            Ok(())
+        } else {
+            Err(GlError::IncompleteFramebuffer { operation, status })
+        }
+    }
+
+    pub(super) fn buffer(
+        &self,
+        operation: &'static str,
+        id: BufferId,
+    ) -> Result<(glow::NativeBuffer, GlBufferDesc), GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.buffers
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "buffer is not live"))
+    }
+
+    pub(super) fn texture(
+        &self,
+        operation: &'static str,
+        id: TextureId,
+    ) -> Result<(glow::NativeTexture, GlTextureDesc), GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.textures
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "texture is not live"))
+    }
+
+    pub(super) fn renderbuffer(
+        &self,
+        operation: &'static str,
+        id: RenderbufferId,
+    ) -> Result<(glow::NativeRenderbuffer, GlRenderBufferDesc), GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.renderbuffers
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "renderbuffer is not live"))
+    }
+
+    pub(super) fn sampler(
+        &self,
+        operation: &'static str,
+        id: SamplerId,
+    ) -> Result<glow::NativeSampler, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        // Map keys are full identities, so a hit implies the same generation.
+        self.samplers
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "sampler is not live"))
+    }
+
+    pub(super) fn shader(
+        &self,
+        operation: &'static str,
+        id: ShaderId,
+    ) -> Result<glow::NativeShader, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.shaders
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Self::validation(operation, "shader is not live"))
+    }
+
+    pub(super) fn program(
+        &self,
+        operation: &'static str,
+        id: ProgramId,
+    ) -> Result<&NativeProgram, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.programs
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "program is not live"))
+    }
+
+    /// Makes `program` the driver's current program, if it is not already.
+    ///
+    /// GL has exactly one current program, and three verbs can change it: a
+    /// link (which runs its reflection inside a bind scope and clears the
+    /// selection when it ends), a raster pipeline install, and a compute program
+    /// install.  [`Self::current_program`] records which one the driver holds,
+    /// and this is the only function that writes both it and the driver, which is
+    /// what makes "the driver holds this program" a fact rather than an
+    /// assumption.
+    ///
+    /// It is called by every verb that *uses* a program rather than by every verb
+    /// that selects one, because the two selections are not additive: a compute
+    /// install between a raster install and a draw leaves the compute program
+    /// current, and a raster install between a compute install and a dispatch
+    /// leaves the raster one.  Re-asserting at the point of use is what makes each
+    /// verb correct without either having to know that the other ran, and the
+    /// comparison makes it free when nothing did.
+    pub(super) fn ensure_program(
+        &mut self,
+        operation: &'static str,
+        program: ProgramId,
+    ) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        let raw = self.program(operation, program)?.raw;
+        if self.current_program == Some(program) {
+            return Ok(());
+        }
+        // SAFETY: current-context contract; the record was resolved live above,
+        // so the name handed to GL belongs to this context.
+        unsafe {
+            self.gl.use_program(Some(raw));
+        }
+        self.current_program = Some(program);
+        Ok(())
+    }
+
+    pub(super) fn vertex_array(
+        &self,
+        operation: &'static str,
+        id: VertexArrayId,
+    ) -> Result<&NativeVertexArray, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.vertex_arrays
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "vertex array is not live"))
+    }
+
+    /// Makes `array` the vertex array the driver holds, if it is not already.
+    ///
+    /// The mirror of [`Self::ensure_program`] for the other binding slot GL has,
+    /// and it exists for the same reason: several verbs reach the vertex-array
+    /// binding -- an input reconcile, a pipeline install, and the empty array a
+    /// compute dispatch binds -- so "which array the driver holds" is a fact
+    /// about the binding rather than about any one verb, and
+    /// [`Self::bound_vertex_array`] is where it is recorded.  Every verb that
+    /// *uses* the binding re-asserts it here rather than trusting whatever the
+    /// last writer intended, and the comparison makes that free when nothing else
+    /// ran in between.
+    ///
+    /// Returns the live record so the caller reads the index binding and layout
+    /// from the array that is actually bound, which is the whole point: a raster
+    /// install names the array it wants, but by draw time the geometry domain may
+    /// legitimately have replaced it.
+    pub(super) fn ensure_vertex_array(
+        &mut self,
+        operation: &'static str,
+        array: VertexArrayId,
+    ) -> Result<&NativeVertexArray, GlError> {
+        use glow::HasContext as _;
+        let raw = self.vertex_array(operation, array)?.raw;
+        if self.bound_vertex_array != Some(array) {
+            // SAFETY: current-context contract; the record was resolved live
+            // above, so the name handed to GL belongs to this context.
+            unsafe {
+                self.gl.bind_vertex_array(Some(raw));
+            }
+            self.bound_vertex_array = Some(array);
+        }
+        self.vertex_array(operation, array)
+    }
+
+    pub(super) fn framebuffer(
+        &self,
+        operation: &'static str,
+        id: FramebufferId,
+    ) -> Result<&NativeFramebuffer, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.framebuffers
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "framebuffer is not live"))
+    }
+
+    pub(super) fn query(
+        &self,
+        operation: &'static str,
+        id: QueryId,
+    ) -> Result<&NativeQuery, GlError> {
+        self.validate_object_context(operation, id.context)?;
+        self.queries
+            .get(&id)
+            .filter(|entry| entry.generation == id.generation)
+            .ok_or_else(|| Self::validation(operation, "query is not live"))
+    }
+
+    /// Clears every executable table. Context loss makes every borrowed GL
+    /// name invalid; only Fluxel-owned state is reset, and no driver call is
+    /// made against a possibly-dead object.
+    pub(super) fn reset_executable_state(&mut self) {
+        self.buffers.clear();
+        self.textures.clear();
+        self.renderbuffers.clear();
+        self.samplers.clear();
+        self.shaders.clear();
+        self.programs.clear();
+        self.vertex_arrays.clear();
+        self.framebuffers.clear();
+        self.queries.clear();
+        self.syncs.clear();
+        self.fences.revoke_all();
+        self.pass = None;
+        self.raster = None;
+        self.current_program = None;
+        self.bound_vertex_array = None;
+        self.active_query = None;
+        self.active_compute_program = None;
+        let _ = self.surface.invalidate_generation();
+        // The recorded extent dies with the context generation it was observed
+        // under: a replacement context may serve a differently sized drawable,
+        // and a lease carrying the old extent would be a wrong size that nothing
+        // reports. The Host re-reports the extent through `resize_surface`.
+        self.surface_extent = None;
+    }
+}
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+impl crate::backend::gl::api::GlFamilyApi for NativeGlProvider {
+    fn lifecycle(&self) -> GlContextLifecycle {
+        self.lifecycle
+    }
+    fn owner_thread(&self) -> OwnerThreadIdentity {
+        self.owner
+    }
+    fn assert_owner_thread(&self, operation: &'static str) -> Result<(), GlError> {
+        let actual = OwnerThreadIdentity::current();
+        (actual == self.owner)
+            .then_some(())
+            .ok_or(GlError::WrongThread {
+                operation,
+                expected: self.owner,
+                actual,
+            })
+    }
+    fn discovery(&self) -> &GlDiscoverySnapshot {
+        &self.discovery
+    }
+    fn context_lost(&mut self) -> Result<(), GlError> {
+        self.assert_ready("context-lost")?;
+        self.lifecycle = GlContextLifecycle::Lost;
+        self.reset_executable_state();
+        Ok(())
+    }
+    /// Completes restoration over the replacement context.
+    ///
+    /// The Host must have created a new native context and made it current on
+    /// the owner thread before calling. WGL and EGL entry points dispatch to
+    /// the *current* context, so the borrowed `glow` table remains valid for
+    /// the replacement context and rediscovery observes the new generation
+    /// (audit P1-9). Epoch strictly increases and every object table, lease
+    /// book, and derived record is invalidated before `Active` is restored.
+    fn context_restored(&mut self) -> Result<ContextStamp, GlError> {
+        self.assert_owner_thread("context-restored")?;
+        if self.lifecycle != GlContextLifecycle::Lost {
+            return Err(Self::validation("context-restored", "context is not lost"));
+        }
+        let stamp = self.discovery.context_stamp();
+        let epoch = stamp.epoch.checked_next().ok_or_else(|| GlError::Driver {
+            operation: "context-restored",
+            message: "context epoch exhausted".into(),
+        })?;
+        let new_stamp = ContextStamp::new(stamp.device, epoch);
+        // SAFETY: the caller contract guarantees the replacement context is
+        // current on this thread for the whole rediscovery call.
+        let discovery = unsafe { discover_current_glow(&self.gl, new_stamp) }.map_err(|error| {
+            GlError::Driver {
+                operation: "context-restored",
+                message: format!("native GL rediscovery failed: {error:?}"),
+            }
+        })?;
+        self.discovery = discovery;
+        self.lifecycle = GlContextLifecycle::Active;
+        self.reset_executable_state();
+        self.pixel_store = GlPixelStoreState::DEFAULT;
+        Ok(new_stamp)
+    }
+}
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+impl NativeGlProvider {
+    /// Restores over a freshly created `glow` table after context loss.
+    ///
+    /// Use this when the Host rebuilt the context through a new loader
+    /// instance. The replacement table becomes provider-owned immediately.
+    ///
+    /// # Safety
+    ///
+    /// `gl` must be current on the owner thread and must be the context that
+    /// will serve every later provider call.
+    pub(crate) unsafe fn restore_with_current(&mut self, gl: glow::Context) {
+        self.gl = gl;
+    }
+}
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+impl crate::backend::gl::api::GlResourceApi for NativeGlProvider {
+    fn create_buffer_resource(&mut self, desc: GlBufferDesc) -> Result<BufferId, GlError> {
+        use glow::HasContext as _;
+        self.assert_ready("create-buffer")?;
+        desc.validate().map_err(|error| GlError::Validation {
+            operation: "create-buffer",
+            message: error.message(),
+        })?;
+        let size = i32::try_from(desc.size)
+            .map_err(|_| Self::validation("create-buffer", "buffer exceeds GLsizei"))?;
+        // SAFETY: current-context contract; all validation completed before GL mutation.
+        let name = unsafe { self.gl.create_buffer() }.map_err(|message| GlError::Driver {
+            operation: "create-buffer",
+            message,
+        })?;
+        // COPY_WRITE_BUFFER is Layer 1-private scratch: bound immediately before
+        // the allocation, not restored on return (`GlCopyDomainApi` documents
+        // why).
+        // SAFETY: see above.
+        unsafe {
+            self.gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(name));
+            self.gl
+                .buffer_data_size(glow::COPY_WRITE_BUFFER, size, BUFFER_ALLOCATION_USAGE);
+        }
+        if let Err(error) = self.driver_error("create-buffer") {
+            unsafe { self.gl.delete_buffer(name) };
+            return Err(error);
+        }
+        let id = BufferId::new(self.context_stamp(), self.slot("create-buffer")?, 0);
+        self.buffers.insert(id, (name, desc));
+        Ok(id)
+    }
+    fn create_texture_resource(&mut self, desc: GlTextureDesc) -> Result<TextureId, GlError> {
+        use glow::HasContext as _;
+        const OP: &str = "create-texture";
+        self.assert_ready(OP)?;
+        desc.validate()
+            .map_err(|_| Self::validation(OP, "invalid texture descriptor"))?;
+        let internal = native_texture_format(desc.format).ok_or(GlError::Unsupported {
+            operation: OP,
+            reason: "format has no proven native texture storage mapping",
+        })?;
+        let class = texture_storage_class(
+            self.discovery.context().profile(),
+            &self.discovery.limits(),
+            self.discovery.formats(),
+            desc,
+        )
+        .map_err(|reason| GlError::Unsupported {
+            operation: OP,
+            reason,
+        })?;
+        let width = i32::try_from(desc.extent.width)
+            .map_err(|_| Self::validation(OP, "width exceeds GLsizei"))?;
+        let height = i32::try_from(desc.extent.height)
+            .map_err(|_| Self::validation(OP, "height exceeds GLsizei"))?;
+        let levels = i32::try_from(desc.mip_level_count)
+            .map_err(|_| Self::validation(OP, "mip count exceeds GLsizei"))?;
+        let samples = i32::try_from(desc.sample_count)
+            .map_err(|_| Self::validation(OP, "sample count exceeds GLsizei"))?;
+        // SAFETY: current-context contract; all profile/format/size validation preceded mutation.
+        let name = unsafe { self.gl.create_texture() }.map_err(|message| GlError::Driver {
+            operation: OP,
+            message,
+        })?;
+        unsafe {
+            match class {
+                TextureStorageClass::SingleSample => {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(name));
+                    if desc.format.compressed_info().is_none() {
+                        self.gl
+                            .tex_storage_2d(glow::TEXTURE_2D, levels, internal, width, height);
+                    }
+                }
+                TextureStorageClass::Multisample => {
+                    // Sample locations are fixed: a resolve reads every texel's
+                    // samples as one block, and the per-texel locations that the
+                    // alternative would expose are not expressible in this
+                    // layer's vocabulary.
+                    self.gl
+                        .bind_texture(glow::TEXTURE_2D_MULTISAMPLE, Some(name));
+                    self.gl.tex_storage_2d_multisample(
+                        glow::TEXTURE_2D_MULTISAMPLE,
+                        samples,
+                        internal,
+                        width,
+                        height,
+                        true,
+                    );
+                }
+            }
+        }
+        if let Err(error) = self.driver_error(OP) {
+            unsafe { self.gl.delete_texture(name) };
+            return Err(error);
+        }
+        let id = TextureId::new(self.context_stamp(), self.slot(OP)?, 0);
+        self.textures.insert(id, (name, desc));
+        Ok(id)
+    }
+    fn create_render_buffer(
+        &mut self,
+        desc: GlRenderBufferDesc,
+    ) -> Result<RenderbufferId, GlError> {
+        use glow::HasContext as _;
+        const OP: &str = "create-render-buffer";
+        self.assert_ready(OP)?;
+        desc.validate()
+            .map_err(|_| Self::validation(OP, "invalid renderbuffer descriptor"))?;
+        let limits = self.discovery.limits();
+        if desc.width > limits.max_renderbuffer_size || desc.height > limits.max_renderbuffer_size {
+            return Err(Self::validation(
+                OP,
+                "renderbuffer extent exceeds the discovered limit",
+            ));
+        }
+        if desc.samples > limits.max_samples {
+            return Err(Self::validation(
+                OP,
+                "renderbuffer sample count exceeds the discovered limit",
+            ));
+        }
+        let facts = self
+            .discovery
+            .formats()
+            .get_for(
+                crate::backend::gl::api::GlFormatResourceKind::Renderbuffer,
+                desc.format,
+                desc.samples,
+            )
+            .ok_or(GlError::Unsupported {
+                operation: OP,
+                reason: "no exact renderbuffer format fact for this context",
+            })?;
+        if !facts.renderable {
+            return Err(GlError::Unsupported {
+                operation: OP,
+                reason: "format lacks renderable evidence at this sample count",
+            });
+        }
+        let internal = native_texture_format(desc.format).ok_or(GlError::Unsupported {
+            operation: OP,
+            reason: "format has no proven native renderbuffer mapping",
+        })?;
+        let width =
+            i32::try_from(desc.width).map_err(|_| Self::validation(OP, "width exceeds GLsizei"))?;
+        let height = i32::try_from(desc.height)
+            .map_err(|_| Self::validation(OP, "height exceeds GLsizei"))?;
+        // SAFETY: current-context contract; limits and facts were checked first.
+        let name = unsafe { self.gl.create_renderbuffer() }.map_err(|message| GlError::Driver {
+            operation: OP,
+            message,
+        })?;
+        unsafe {
+            self.gl.bind_renderbuffer(glow::RENDERBUFFER, Some(name));
+            if desc.samples > 1 {
+                self.gl.renderbuffer_storage_multisample(
+                    glow::RENDERBUFFER,
+                    desc.samples as i32,
+                    internal,
+                    width,
+                    height,
+                );
+            } else {
+                self.gl
+                    .renderbuffer_storage(glow::RENDERBUFFER, internal, width, height);
+            }
+        }
+        if let Err(error) = self.driver_error(OP) {
+            unsafe { self.gl.delete_renderbuffer(name) };
+            return Err(error);
+        }
+        let id = RenderbufferId::new(self.context_stamp(), self.slot(OP)?, 0);
+        self.renderbuffers.insert(id, (name, desc));
+        Ok(id)
+    }
+    fn destroy_buffer_resource(&mut self, id: BufferId) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        self.assert_ready("destroy-buffer")?;
+        let (name, _) = self.buffer("destroy-buffer", id)?;
+        // SAFETY: current-context contract; liveness was checked before GL mutation.
+        unsafe { self.gl.delete_buffer(name) };
+        self.driver_error("destroy-buffer")?;
+        self.buffers.remove(&id);
+        Ok(())
+    }
+    fn destroy_texture_resource(&mut self, id: TextureId) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        self.assert_ready("destroy-texture")?;
+        let (name, _) = self.texture("destroy-texture", id)?;
+        // SAFETY: current-context contract; liveness was checked before mutation.
+        unsafe { self.gl.delete_texture(name) };
+        self.driver_error("destroy-texture")?;
+        self.textures.remove(&id);
+        Ok(())
+    }
+    fn destroy_render_buffer(&mut self, id: RenderbufferId) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        const OP: &str = "destroy-render-buffer";
+        self.assert_ready(OP)?;
+        let (name, _) = self.renderbuffer(OP, id)?;
+        // SAFETY: current-context contract; liveness was checked before mutation.
+        unsafe { self.gl.delete_renderbuffer(name) };
+        self.driver_error(OP)?;
+        self.renderbuffers.remove(&id);
+        Ok(())
+    }
+}
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+impl crate::backend::gl::api::GlSamplerApi for NativeGlProvider {
+    fn create_sampler(
+        &mut self,
+        desc: crate::backend::gl::api::GlSamplerDesc,
+    ) -> Result<SamplerId, GlError> {
+        use glow::HasContext as _;
+        self.assert_ready("create-sampler")?;
+        desc.validate_for(&self.discovery)
+            .map_err(|_| Self::validation("create-sampler", "invalid sampler descriptor"))?;
+        // SAFETY: current-context contract; descriptor was fully preflighted.
+        let name = unsafe { self.gl.create_sampler() }.map_err(|message| GlError::Driver {
+            operation: "create-sampler",
+            message,
+        })?;
+        // SAFETY: see above. Every parameter comes from a validated closed enum/value.
+        unsafe {
+            self.gl
+                .sampler_parameter_i32(name, 0x2802, native_wrap(desc.address_mode_u));
+            self.gl
+                .sampler_parameter_i32(name, 0x2803, native_wrap(desc.address_mode_v));
+            self.gl
+                .sampler_parameter_i32(name, 0x8072, native_wrap(desc.address_mode_w));
+            self.gl
+                .sampler_parameter_i32(name, 0x2800, native_mag(desc.mag_filter));
+            self.gl.sampler_parameter_i32(
+                name,
+                0x2801,
+                native_min(desc.min_filter, desc.mipmap_filter),
+            );
+            self.gl
+                .sampler_parameter_f32(name, 0x813A, f32::from_bits(desc.lod_min_bits));
+            self.gl
+                .sampler_parameter_f32(name, 0x813B, f32::from_bits(desc.lod_max_bits));
+            if let Some(compare) = desc.compare {
+                self.gl.sampler_parameter_i32(name, 0x884C, 0x884E);
+                self.gl
+                    .sampler_parameter_i32(name, 0x884D, native_compare(compare));
+            }
+            if let Some(anisotropy) = desc.max_anisotropy_bits {
+                self.gl
+                    .sampler_parameter_f32(name, 0x84FE, f32::from_bits(anisotropy));
+            }
+        }
+        if let Err(error) = self.driver_error("create-sampler") {
+            unsafe { self.gl.delete_sampler(name) };
+            return Err(error);
+        }
+        let id = SamplerId::new(self.context_stamp(), self.slot("create-sampler")?, 0);
+        self.samplers.insert(id, name);
+        Ok(id)
+    }
+    fn destroy_sampler(&mut self, id: SamplerId) -> Result<(), GlError> {
+        use glow::HasContext as _;
+        self.assert_ready("destroy-sampler")?;
+        let name = self.sampler("destroy-sampler", id)?;
+        // SAFETY: current-context contract; liveness was checked before mutation.
+        unsafe { self.gl.delete_sampler(name) };
+        self.driver_error("destroy-sampler")?;
+        self.samplers.remove(&id);
+        Ok(())
+    }
+}
+
+/// The storage class one texture allocation must be created through.
+///
+/// The two classes are distinct GL targets with distinct lifetime rules, not
+/// two settings of one target: multisample storage has a single level, cannot
+/// be sampled, and cannot be allocated immutably through the single-sample
+/// entry point.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TextureStorageClass {
+    /// Immutable single-sample storage, mip chain included.
+    SingleSample,
+    /// Immutable multisample storage: one level, no sampler access.
+    Multisample,
+}
+
+/// Decides how one texture descriptor may be allocated on this context.
+///
+/// The decision is one function rather than a check inside each allocation
+/// branch because the same recorded facts decide both branches: whether an
+/// exact fact exists at the descriptor's own sample count, and whether the
+/// descriptor's declared usage is one the fact actually supports. Keeping the
+/// usage check here is also what keeps this provider from accepting storage the
+/// recorder already refuses -- a descriptor that asks for sampled usage on
+/// storage no sampler can read is rejected before an object exists, instead of
+/// at the first bind with a GL error that names a different operation.
+///
+/// The failure is a reason string rather than a `GlError` so the same decision
+/// can be exercised without a live context; the caller attaches the operation.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) fn texture_storage_class(
+    profile: crate::backend::gl::api::GlFamilyProfile,
+    limits: &crate::backend::gl::api::GlLimits,
+    formats: &crate::backend::gl::api::GlFormatTable,
+    desc: GlTextureDesc,
+) -> Result<TextureStorageClass, &'static str> {
+    // This provider allocates only the two-dimensional target, so the shape
+    // gate is here rather than in each branch: a layered or three-dimensional
+    // descriptor has no target to bind, and the fact table has no per-dimension
+    // row that could stand in for one.
+    if desc.dimension != crate::backend::gl::api::GlTextureDimension::D2 {
+        return Err("native texture storage covers the two-dimensional target only");
+    }
+    let facts = formats
+        .get_for(
+            crate::backend::gl::api::GlFormatResourceKind::Texture,
+            desc.format,
+            desc.sample_count,
+        )
+        .ok_or("format has no discovery evidence at this sample count")?;
+    if desc
+        .usage
+        .contains(crate::backend::gl::api::GlTextureUsage::SAMPLED)
+        && !facts.sampled
+    {
+        return Err("format is not sampled at this sample count");
+    }
+    if desc
+        .usage
+        .contains(crate::backend::gl::api::GlTextureUsage::RENDER_ATTACHMENT)
+        && !facts.renderable
+    {
+        return Err("format is not renderable at this sample count");
+    }
+    if desc
+        .usage
+        .contains(crate::backend::gl::api::GlTextureUsage::COPY_SOURCE)
+        && !facts.copy_source
+    {
+        return Err("format is not a copy source at this sample count");
+    }
+    if desc
+        .usage
+        .contains(crate::backend::gl::api::GlTextureUsage::COPY_DESTINATION)
+        && !facts.copy_destination
+    {
+        return Err("format is not a copy destination at this sample count");
+    }
+    if desc
+        .usage
+        .contains(crate::backend::gl::api::GlTextureUsage::STORAGE_BINDING)
+        && !facts.storage_read
+        && !facts.storage_write
+    {
+        return Err("format has no discovered image access at this sample count");
+    }
+    if desc.sample_count <= 1 {
+        return Ok(TextureStorageClass::SingleSample);
+    }
+    if !super::discovery::supports_multisample_texture_storage(profile) {
+        return Err("this context has no multisample texture storage");
+    }
+    // The per-class ceiling is not re-applied here: it is what bounded the fact
+    // this decision just required, and a snapshot whose fact table exceeded its
+    // own recorded ceilings is already rejected when the snapshot is built, so
+    // repeating the comparison could never change the outcome. The multisample
+    // ceiling is a different bound and is checked: it governs every multisample
+    // allocation regardless of format class, and the fact table does not
+    // constrain a texture fact by it.
+    if desc.sample_count > limits.max_samples {
+        return Err("sample count exceeds the recorded multisample ceiling");
+    }
+    Ok(TextureStorageClass::Multisample)
+}
+
+/// Allocation usage applied to every native buffer (audit P2-11).
+///
+/// The policy is one explicit, auditable constant per family: `STATIC_DRAW`
+/// matches the native desktop residency model where the 0.14 cache re-uploads
+/// through `bufferSubData` while the driver is free to place the store in
+/// device-local memory. A `DYNAMIC_DRAW` fast path may only be introduced
+/// after profiling attributes a benefit (plan "Private: upload-ring/orphaning
+/// strategy").
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) const BUFFER_ALLOCATION_USAGE: u32 = glow::STATIC_DRAW;
+
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+const fn native_wrap(mode: crate::backend::gl::api::GlAddressMode) -> i32 {
+    match mode {
+        crate::backend::gl::api::GlAddressMode::ClampToEdge => 0x812F,
+        crate::backend::gl::api::GlAddressMode::Repeat => 0x2901,
+        crate::backend::gl::api::GlAddressMode::MirroredRepeat => 0x8370,
+    }
+}
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+const fn native_mag(mode: crate::backend::gl::api::GlFilterMode) -> i32 {
+    match mode {
+        crate::backend::gl::api::GlFilterMode::Nearest => 0x2600,
+        crate::backend::gl::api::GlFilterMode::Linear => 0x2601,
+    }
+}
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+const fn native_min(
+    min: crate::backend::gl::api::GlFilterMode,
+    mip: crate::backend::gl::api::GlMipmapFilterMode,
+) -> i32 {
+    match (min, mip) {
+        (
+            crate::backend::gl::api::GlFilterMode::Nearest,
+            crate::backend::gl::api::GlMipmapFilterMode::Nearest,
+        ) => 0x2700,
+        (
+            crate::backend::gl::api::GlFilterMode::Linear,
+            crate::backend::gl::api::GlMipmapFilterMode::Nearest,
+        ) => 0x2701,
+        (
+            crate::backend::gl::api::GlFilterMode::Nearest,
+            crate::backend::gl::api::GlMipmapFilterMode::Linear,
+        ) => 0x2702,
+        (
+            crate::backend::gl::api::GlFilterMode::Linear,
+            crate::backend::gl::api::GlMipmapFilterMode::Linear,
+        ) => 0x2703,
+    }
+}
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+const fn native_compare(compare: crate::backend::gl::api::GlCompareFunction) -> i32 {
+    match compare {
+        crate::backend::gl::api::GlCompareFunction::Never => 0x0200,
+        crate::backend::gl::api::GlCompareFunction::Less => 0x0201,
+        crate::backend::gl::api::GlCompareFunction::Equal => 0x0202,
+        crate::backend::gl::api::GlCompareFunction::LessEqual => 0x0203,
+        crate::backend::gl::api::GlCompareFunction::Greater => 0x0204,
+        crate::backend::gl::api::GlCompareFunction::NotEqual => 0x0205,
+        crate::backend::gl::api::GlCompareFunction::GreaterEqual => 0x0206,
+        crate::backend::gl::api::GlCompareFunction::Always => 0x0207,
+    }
+}
+
+/// The native internal/storage format constant of one discovered `GlFormat`.
+///
+/// Only formats with a settled mapping are listed; every other format fails
+/// closed at its domain's evidence gate even if it maps here.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) const fn native_texture_format(
+    format: crate::backend::gl::api::GlFormat,
+) -> Option<u32> {
+    match format {
+        crate::backend::gl::api::GlFormat::Rgba8Unorm => Some(glow::RGBA8),
+        crate::backend::gl::api::GlFormat::Rgba8Srgb => Some(glow::SRGB8_ALPHA8),
+        crate::backend::gl::api::GlFormat::Rgba16Float => Some(glow::RGBA16F),
+        crate::backend::gl::api::GlFormat::Rgba32Float => Some(glow::RGBA32F),
+        crate::backend::gl::api::GlFormat::Depth32Float => Some(glow::DEPTH_COMPONENT32F),
+        crate::backend::gl::api::GlFormat::Depth16Unorm => Some(glow::DEPTH_COMPONENT16),
+        crate::backend::gl::api::GlFormat::Depth24PlusStencil8 => Some(glow::DEPTH24_STENCIL8),
+        // S3TC/BC, RGTC and BPTC tokens are deliberately written from the GL
+        // registry rather than approximated by an uncompressed storage
+        // format.  The discovery table is the admission authority; this map
+        // only gives an already admitted exact format its native spelling.
+        crate::backend::gl::api::GlFormat::Bc1RgbUnorm => Some(0x83F0),
+        crate::backend::gl::api::GlFormat::Bc1RgbaUnorm => Some(0x83F1),
+        crate::backend::gl::api::GlFormat::Bc2RgbaUnorm => Some(0x83F2),
+        crate::backend::gl::api::GlFormat::Bc3RgbaUnorm => Some(0x83F3),
+        crate::backend::gl::api::GlFormat::Bc1RgbSrgb => Some(0x8C4C),
+        crate::backend::gl::api::GlFormat::Bc1RgbaSrgb => Some(0x8C4D),
+        crate::backend::gl::api::GlFormat::Bc2RgbaSrgb => Some(0x8C4E),
+        crate::backend::gl::api::GlFormat::Bc3RgbaSrgb => Some(0x8C4F),
+        crate::backend::gl::api::GlFormat::Bc4RUnorm => Some(0x8DBB),
+        crate::backend::gl::api::GlFormat::Bc4RSnorm => Some(0x8DBC),
+        crate::backend::gl::api::GlFormat::Bc5RgUnorm => Some(0x8DBD),
+        crate::backend::gl::api::GlFormat::Bc5RgSnorm => Some(0x8DBE),
+        crate::backend::gl::api::GlFormat::Bc6hRgbUfloat => Some(0x8E8F),
+        crate::backend::gl::api::GlFormat::Bc6hRgbSfloat => Some(0x8E8E),
+        crate::backend::gl::api::GlFormat::Bc7RgbaUnorm => Some(0x8E8C),
+        crate::backend::gl::api::GlFormat::Bc7RgbaSrgb => Some(0x8E8D),
+        crate::backend::gl::api::GlFormat::Etc2Rgb8Unorm => Some(0x9274),
+        crate::backend::gl::api::GlFormat::Etc2Rgb8Srgb => Some(0x9275),
+        crate::backend::gl::api::GlFormat::Etc2Rgb8A1Unorm => Some(0x9276),
+        crate::backend::gl::api::GlFormat::Etc2Rgb8A1Srgb => Some(0x9277),
+        crate::backend::gl::api::GlFormat::Etc2Rgba8Unorm => Some(0x9278),
+        crate::backend::gl::api::GlFormat::Etc2Rgba8Srgb => Some(0x9279),
+        crate::backend::gl::api::GlFormat::EacR11Unorm => Some(0x9270),
+        crate::backend::gl::api::GlFormat::EacR11Snorm => Some(0x9271),
+        crate::backend::gl::api::GlFormat::EacRg11Unorm => Some(0x9272),
+        crate::backend::gl::api::GlFormat::EacRg11Snorm => Some(0x9273),
+        crate::backend::gl::api::GlFormat::Astc { block, color_space } => {
+            use crate::backend::gl::api::{GlAstcBlock as B, GlCompressedColorSpace as C};
+            let index = match block {
+                B::B4x4 => 0,
+                B::B5x4 => 1,
+                B::B5x5 => 2,
+                B::B6x5 => 3,
+                B::B6x6 => 4,
+                B::B8x5 => 5,
+                B::B8x6 => 6,
+                B::B8x8 => 7,
+                B::B10x5 => 8,
+                B::B10x6 => 9,
+                B::B10x8 => 10,
+                B::B10x10 => 11,
+                B::B12x10 => 12,
+                B::B12x12 => 13,
+            };
+            // KHR ASTC HDR selects the linear token plus an independently
+            // discovered HDR decode profile; it must never be rewritten as
+            // the sRGB token.
+            Some(match color_space {
+                C::Linear | C::Hdr => 0x93B0 + index,
+                C::Srgb => 0x93D0 + index,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The framebuffer attachment point for a depth/stencil view format.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) const fn depth_attachment_point(
+    format: crate::backend::gl::api::GlFormat,
+) -> Option<u32> {
+    match format {
+        crate::backend::gl::api::GlFormat::Depth16Unorm
+        | crate::backend::gl::api::GlFormat::Depth32Float => Some(glow::DEPTH_ATTACHMENT),
+        crate::backend::gl::api::GlFormat::Depth24PlusStencil8 => {
+            Some(glow::DEPTH_STENCIL_ATTACHMENT)
+        }
+        _ => None,
+    }
+}
+
+/// Whether a depth/stencil format carries a stencil plane.
+#[cfg(any(feature = "native-gl-wgl", feature = "native-gles-egl"))]
+pub(super) const fn has_stencil_plane(format: crate::backend::gl::api::GlFormat) -> bool {
+    matches!(
+        format,
+        crate::backend::gl::api::GlFormat::Depth24PlusStencil8
+    )
+}

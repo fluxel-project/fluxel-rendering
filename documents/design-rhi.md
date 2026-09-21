@@ -157,7 +157,41 @@ transient allocation semantics, device validation, submission, completion,
 presentation, retirement, logical observation, and backend lowering. A fixed
 renderer is only the first consumer of these contracts.
 
-## 5.1 Ten-class native-lowering status matrix
+## 5.1 GL-family backend admission
+
+`backend/gl` is one private lowering and state-machine implementation shared
+by Desktop OpenGL, OpenGL ES, and WebGL2. This does not turn their platform
+integration into one provider: Desktop GL, GLES, and adopted WebGL2 contexts
+are separately created backend-private providers, each bound to its host
+context and its own terminal `DeviceIdentity`.
+
+The minimum supported contexts are Desktop GL 4.0, GLES 3.0, and WebGL2. A
+provider uses the highest actually created GL 4.x or ES 3.x context; it never
+lowers itself to the minimum merely because that is the portability floor.
+Every published fact has an exact route: required core version **or** named
+extension(s), plus every required loaded function entry point. A version or an
+extension string alone is insufficient. Facts are therefore feature-granular:
+one absent entry point or dependent extension disables only the affected route,
+which must return structured `Unsupported` before GL entry.
+
+Context loss is device loss, not a browser/session recovery protocol. On a
+loss observable from GL, EGL, WGL, or WebGL2, the Device becomes terminal and
+wakes pending RHI futures as specified in module 01. Context/session/token
+objects stay backend-private and cannot escape into RHI resource ownership.
+
+GL-family closure requires real evidence for the exact provider routes:
+
+| Provider route | Required environment evidence |
+| --- | --- |
+| Desktop GL | Win11 WGL, using the highest available GL 4.x context |
+| GLES | Android device/emulator EGL, using the version reported by that EGL context (at least ES 3.0) |
+| WebGL2 | Win11 Chrome and Win11 Edge, each in a real WebGL2 context |
+
+Each route covers device request/capability publication, resource and command
+state-machine behavior, presentation/default-framebuffer behavior where
+applicable, completion/loss propagation, and the supported extension route.
+
+## 5.2 Ten-class native-lowering status matrix
 
 The v13 public surface already carries all ten cross-platform native-lowering
 classes below. They are implementation work, not deferred public API design.
@@ -190,7 +224,7 @@ Private `TODO` comments are permitted only when they name the carrying
 semantics, the required fallback, and the condition for advertising the
 enhancement.
 
-## 5.2 Advanced native-lowering TODO boundary
+## 5.3 Advanced native-lowering TODO boundary
 
 The following ten families are **not deferred public API design**: their public
 types, capability/limit vocabulary, portable validation, positive/negative/

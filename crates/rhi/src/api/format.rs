@@ -436,7 +436,10 @@ impl FormatFacts {
     /// Device/Adapter contract", so only the device that probed them may
     /// assemble them.
     #[cfg_attr(
-        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        all(
+            not(test),
+            not(any(feature = "dx12", feature = "vulkan", feature = "gl-family"))
+        ),
         expect(
             dead_code,
             reason = "the DX12 and Vulkan capability ports construct probed texture limits; without either backend this is test-only"

@@ -448,7 +448,10 @@ impl CapabilityFacts {
     /// [`Self::recorded`], and see the note in `backend::dx12::provider` about why
     /// the provider that builds one today does not publish it.
     #[cfg_attr(
-        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        all(
+            not(test),
+            not(any(feature = "dx12", feature = "vulkan", feature = "gl-family"))
+        ),
         expect(
             dead_code,
             reason = "the DX12 and Vulkan providers start enumeration here and the mock backend starts its own here; with those backends compiled out nothing reaches this"
@@ -777,7 +780,7 @@ impl CapabilityFacts {
 impl CapabilityFacts {
     /// Records that the contract offers `feature`.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "gl-family"))),
         expect(
             dead_code,
             reason = "the DX12 capability port is the only caller until Vulkan publishes an implemented optional feature"
@@ -794,7 +797,10 @@ impl CapabilityFacts {
     /// bytecode, while Vulkan records `SpirV`; this is why the method takes no
     /// device and no probe result.
     #[cfg_attr(
-        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        all(
+            not(test),
+            not(any(feature = "dx12", feature = "vulkan", feature = "gl-family"))
+        ),
         expect(
             dead_code,
             reason = "DX12 and Vulkan record the code forms their implemented module paths consume; without either backend this is test-only"
@@ -833,7 +839,7 @@ impl CapabilityFacts {
 
     /// Records the facts for `format`.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "gl-family"))),
         expect(
             dead_code,
             reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
@@ -845,7 +851,10 @@ impl CapabilityFacts {
 
     /// Records the answer to a buffer support query.
     #[cfg_attr(
-        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        all(
+            not(test),
+            not(any(feature = "dx12", feature = "vulkan", feature = "gl-family"))
+        ),
         expect(
             dead_code,
             reason = "the DX12 and Vulkan capability ports call this while building their complete buffer-support tables; without either feature it is unreachable outside tests"
@@ -889,7 +898,7 @@ impl CapabilityFacts {
     /// every backend to invent a value it is then told to ignore. A backend records
     /// what it knows; the accessor derives the same key from whatever query arrives.
     #[cfg_attr(
-        all(not(test), not(feature = "dx12")),
+        all(not(test), not(any(feature = "dx12", feature = "gl-family"))),
         expect(
             dead_code,
             reason = "the DX12 capability port is the only caller, and it is compiled out without the dx12 feature"
@@ -928,7 +937,10 @@ impl CapabilityFacts {
 
     /// Records the answer to a route query.
     #[cfg_attr(
-        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        all(
+            not(test),
+            not(any(feature = "dx12", feature = "vulkan", feature = "gl-family"))
+        ),
         expect(
             dead_code,
             reason = "the DX12 and Vulkan capability ports record implemented routes; without either backend this is test-only"
@@ -1238,7 +1250,10 @@ impl AvailableCapabilities {
     /// providers for why a `not(test)` expectation on an item they reference would sit
     /// unfulfilled whenever that backend is compiled.
     #[cfg_attr(
-        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        all(
+            not(test),
+            not(any(feature = "dx12", feature = "vulkan", feature = "gl-family"))
+        ),
         expect(
             dead_code,
             reason = "the only callers are the contract tests and the DX12/Vulkan providers; with both backends compiled out, adapter enumeration is what will publish one"
