@@ -47,5 +47,5 @@ The v0.7.0 workspace release contains discrete indexed, uniform, texture-load,
 UV, sampler, sRGB, Lambert, and vertex-color recipes without broadening them
 into a general API.
 
-See [RHI public API v1](../design-rhi.md),
-[RHI design](../design-rhi.md), and [Renderer design](../design-renderer.md).
+See [RHI architecture](../../crates/rhi/documents/design-rhi.md) and
+[Renderer design](../design-renderer.md).

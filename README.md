@@ -63,9 +63,9 @@ release. See [RELEASING.md](RELEASING.md) for the release gate.
 ## Documentation
 
 - [Workspace architecture](documents/design-overview.md)
-- [Foundation cross-layer contract](documents/design-foundation-interfaces.md)
+- [Workspace architecture](documents/design-overview.md)
 - [RenderGraph design](documents/design-rendergraph.md)
-- [RHI design](documents/design-rhi.md)
+- [RHI design](crates/rhi/documents/design-rhi.md)
 - [Portable capture/replay design](documents/design-capture-replay.md)
 - [Renderer design](documents/design-renderer.md)
 - [Foundation versions 0.16-0.20](documents/version-plan.md)
@@ -116,9 +116,9 @@ native RHI contract/backends, `0.17` closes every declared RHI backend/profile,
 implements portable capture/replay. New high-level renderer/scene/runtime work
 resumes only after all five ecosystem gates pass. The executable breakdown is
 the [foundation version plan](documents/version-plan.md). The sole normative
-RHI API source is [RHI design](documents/design-rhi.md) together with its
-`rhi-design` modules; the [foundation cross-layer
-contract](documents/design-foundation-interfaces.md) defines only cross-layer
+RHI API architecture source is [RHI design](crates/rhi/documents/design-rhi.md);
+rustdoc and contract tests define descriptor-level detail. The
+[workspace architecture](documents/design-overview.md) records cross-layer
 invariants and integration boundaries.
 
 The `0.15` retained historical baseline closures are:
@@ -155,7 +155,7 @@ objects through provider-owned imports and consume each export's reported
 outgoing state. The executor may privately reuse compatible whole-resource
 transients, but callers must never depend on a transient's physical identity.
 Details and lifetime limits are in [the RenderGraph design](documents/design-rendergraph.md),
-[the RHI design](documents/design-rhi.md), and
+[the RHI design](crates/rhi/documents/design-rhi.md), and
 [ADR-0009](documents/adr/0009-resource-floor-and-reuse-safety.md).
 
 The corresponding supported-target limits and release evidence are maintained

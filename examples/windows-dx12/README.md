@@ -3,7 +3,7 @@
 > **Historical 0.15 evidence only.** The accepted-unknown/quarantine behavior
 > described below is retained to reproduce the Stage-1 fault evidence; it is
 > not RHI API v1. Future implementation follows
-> [RHI API v1](../../documents/design-rhi.md): `Device::submit()` returns an
+> [RHI architecture](../../crates/rhi/documents/design-rhi.md): `Device::submit()` returns an
 > `SubmissionReceipt` once any work is accepted, and later failure or retirement
 > is resolved through terminal `CompletionState` / `PresentState`.
 

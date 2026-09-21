@@ -19,7 +19,7 @@
 //!
 //! What is left over is exactly one thing: the native allocation. It has no
 //! portable spelling — section 59 excludes `GpuAddress`, and
-//! `design-rhi.md:59-60` excludes native handles generally — so the trait below
+//! ADR-0002 excludes native handles generally — so the trait below
 //! is the only place it can be named at all, and it names it as an opaque
 //! [`Any`] rather than as a type.
 //!

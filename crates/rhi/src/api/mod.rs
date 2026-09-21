@@ -1,15 +1,14 @@
 //! Fluxel RHI API freeze v13 — the portable interface.
 //!
-//! This tree is written from `documents/rhi-design/01`–`09` and from nothing
-//! else. Where the rest of this crate holds an implementation, this module holds
+//! This tree follows the focused RHI ADRs and the compact crate design guide.
+//! Where the rest of this crate holds an implementation, this module holds
 //! the *contract*: the public types, the refusal paths, and the invariants that
 //! a backend must lower without being consulted about legality.
 //!
 //! # Layout
 //!
-//! Specification section 2 fixes the submodule list. The specification spells
-//! the module `rhi`; this crate spells it `api`, and the submodules below are
-//! that list verbatim:
+//! The public module tree is intentionally small; this crate spells the RHI
+//! root `api`, and the submodules below are its stable vocabulary:
 //!
 //! ```text
 //! platform      capability    format        resource      shader
@@ -20,11 +19,8 @@
 //! and the backend tree it names is `crate::backend::{dx12, vulkan, metal,
 //! webgpu, gl}`.
 //!
-//! Identity and error are the two exceptions to that list. Sections 3 and 4 sit
-//! at the root of module 01, before the platform chapter, because every other
-//! module refers to them; they live in [`identity`] and [`error`] here and are
-//! re-exported at this module's root so that the path a caller writes matches the
-//! path the specification's own examples use.
+//! Identity and error sit at the root because every other module refers to
+//! them; they live in [`identity`] and [`error`] and are re-exported here.
 //!
 //! # What this module owns
 //!
@@ -32,18 +28,17 @@
 //! commands, and the backend owns lowering only. No upper-layer scheduling
 //! contract enters this API. Capability is instance data for an adapter, device,
 //! format, surface, or route, and is never inferred from the presence of a Rust
-//! trait (root section 3.1).
+//! trait.
 //!
-//! Two rules from the root specification decide most of the shape below:
+//! Two rules decide most of the shape below:
 //!
 //! 1. *Any public operation must first perform O(1) identity validation before
-//!    touching the backend* (section 3.1), and a problem portable validation can
-//!    find may not be handed to a backend for a driver to discover (section 4).
+//!    touching the backend*, and a problem portable validation can find may not
+//!    be handed to a backend for a driver to discover.
 //!    This is why the public verbs here are validating façades rather than thin
 //!    wrappers over a native call.
-//! 2. *Capability is instance data* (root section 3.1). This is why there is no
-//!    `trait ComputeApi` to bound a generic on, and why section 59 lists nine
-//!    capability traits that are explicitly absent.
+//! 2. *Capability is instance data*. This is why there is no `trait ComputeApi`
+//!    to bound a generic on.
 //!
 //! # Status
 //!
@@ -76,10 +71,10 @@ pub mod submission;
 // These are deliberately not part of the exported contract.
 pub(crate) mod internal;
 
-// The capture and diagnostic tooling SPI (module 07). Doc-hidden because it is an
+// The capture and diagnostic tooling SPI. Doc-hidden because it is an
 // audience statement rather than a stability one: this is what a capture tool
 // consumes, not what a rendering caller learns. The semver rule for its types is
-// fixed separately by section 47.20.1.
+// fixed by its own semver policy.
 //
 // Written as a plain comment rather than an outer doc comment on purpose. Rustdoc
 // merges an outer doc on a module declaration with the module's own `//!` doc and
@@ -90,12 +85,8 @@ pub(crate) mod internal;
 #[doc(hidden)]
 pub mod tooling;
 
-// The v13 chapters are written as of 2026-09-20: 01 (platform, capability,
-// identity, error), 02 (format, resource), 03 (shader, binding, pipeline), 04
-// (command), 05 (submission, presentation), 06 (statistics, diagnostics,
-// transient resources), 07 (tooling), 08 (freeze governance), and 09 (the
-// capability-complete feature families). Each public family must keep its
-// positive, refusal, and boundary conformance tests adjacent to this contract.
+// Each public family keeps positive, refusal, and boundary conformance tests
+// adjacent to this contract.
 
 pub use error::{RhiError, RhiErrorKind, RhiResult};
 pub use identity::{DeviceIdentity, DeviceInstanceId, Label, ObjectId};

@@ -21,7 +21,7 @@
 //! participate in cycle detection"), and section 41.4 requires the RHI to
 //! validate a new plan against work already in flight — both are whole-plan
 //! questions that a command-at-a-time seam could not answer. The spec never
-//! assigns per-verb backend duties at all; `design-rhi.md` declares native
+//! assigns per-verb backend duties at all; ADR-0012 declares native
 //! lowering explicitly unfrozen, so the shape below is this crate's own design
 //! and not a transcription.
 //!

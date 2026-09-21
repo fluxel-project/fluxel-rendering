@@ -2,8 +2,8 @@
 
 > `0.15` historical usage guide. Do not copy its `ExecutionPlan`, native-like
 > state, or presentation-token spelling into the `0.18+` graph. The sole
-> normative RHI API authority is [Fluxel RHI API v1](../../documents/design-rhi.md).
-> [Foundation interfaces](../../documents/design-foundation-interfaces.md) are
+> RHI architectural authority is [Fluxel RHI design](../rhi/documents/design-rhi.md).
+> [Workspace architecture](../../documents/design-overview.md) is
 > cross-layer architecture, not a second RHI API. Also read the
 > [RenderGraph architecture](../../documents/design-rendergraph.md) and the
 > [version plan](../../documents/version-plan.md).

@@ -7,9 +7,10 @@
 This plan deliberately pauses new high-level rendering work for five minor
 versions. The goal is not to keep the current fixed renderer running through
 every intermediate commit; the goal is to rebuild and prove the foundation in
-dependency order, then reconnect the higher layers once. The stable semantic
-RHI's sole normative API target is [RHI API v1](design-rhi.md). The
-[foundation interface contract](design-foundation-interfaces.md) owns only the
+dependency order, then reconnect the higher layers once. The stable RHI
+architecture target is [RHI design](../crates/rhi/documents/design-rhi.md);
+public details live in rustdoc and contract tests. The
+[workspace architecture](design-overview.md) owns only the
 cross-layer framework and Graph/capture integration.
 
 ## 1. Non-negotiable order
@@ -64,8 +65,8 @@ commit during validation and to a released tag before closure.
 
 Every version must satisfy all applicable rows before the next version opens.
 
-1. Public RHI interfaces match [RHI API v1](design-rhi.md), while cross-layer
-   interfaces match the [foundation contract](design-foundation-interfaces.md).
+1. Public RHI interfaces match [RHI design](../crates/rhi/documents/design-rhi.md), while cross-layer
+   interfaces match the [workspace architecture](design-overview.md).
    Deviations require an accepted ADR and an update to the owning contract.
 2. Unit/contract tests cover success, every named structured refusal, stale
    generation, and loss/terminal lifecycle.
@@ -495,8 +496,8 @@ the gate above and enters the roadmap through a concrete consumer.
 ## 11. Claude Code execution protocol
 
 The implementation agent starts from the first incomplete gate and continues
-strictly in version order. It must read `AGENTS.md`, `documents/design-rhi.md`,
-the complete owning `documents/rhi-design/` module, this plan, and the affected
+strictly in version order. It must read `AGENTS.md`,
+`crates/rhi/documents/design-rhi.md`, the affected ADR, this plan, and the affected
 layer design before editing code. It may temporarily comment out or feature-
 gate higher-level consumers while rebuilding RHI, but it may not delete them,
 invent a compatibility API, or use old implementation shapes as authority.
@@ -514,5 +515,5 @@ For each gate the agent must:
 The bootstrap command from the `fluxel-rendering` repository is:
 
 ```powershell
-claude --add-dir .. "Read AGENTS.md and documents/version-plan.md in full. Follow section 11 as the controlling workflow. Treat documents/design-rhi.md and its ordered documents/rhi-design modules as the sole RHI API v1 authority. Start at the first incomplete 0.16 gate, implement and verify gates one at a time, and continue through 0.20 only after each prior exit gate and affected Fluxel ecosystem integration gate truly passes. Do not implement from historical stage journals or legacy code when they conflict with the normative documents; do not omit, rename, or defer any P0 interface. Higher layers may be temporarily commented out or feature-gated during RHI replacement, but preserve their source and reactivate them at the owning integration gate. Record exact evidence and never claim completion from a single-library green test."
+claude --add-dir .. "Read AGENTS.md and documents/version-plan.md in full. Follow section 11 as the controlling workflow. Treat crates/rhi/documents/design-rhi.md, the relevant ADR, rustdoc, and contract tests as the RHI authority. Start at the first incomplete 0.16 gate, implement and verify gates one at a time, and continue through 0.20 only after each prior exit gate and affected Fluxel ecosystem integration gate truly passes. Do not implement from historical stage journals or legacy code when they conflict with the public API; do not omit, rename, or defer any P0 interface. Higher layers may be temporarily commented out or feature-gated during RHI replacement, but preserve their source and reactivate them at the owning integration gate. Record exact evidence and never claim completion from a single-library green test."
 ```

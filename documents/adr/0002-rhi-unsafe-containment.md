@@ -29,4 +29,4 @@ RenderGraph can state portable contracts without inheriting HAL safety rules.
 0.1.0 established the boundary; 0.1.1 resource leasing and 0.1.2–0.1.4 native
 execution validated it. 0.2.8 preserves it while splitting the private module.
 
-See [RHI design](../design-rhi.md) for the current native boundary.
+See [RHI design](../../crates/rhi/documents/design-rhi.md) for the current native boundary.

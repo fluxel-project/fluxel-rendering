@@ -46,4 +46,4 @@ unavailable or fails.
 0.1.2 C01–C03, 0.1.3 K01–K02, and 0.1.4 R01/R02/X01 established the pattern.
 0.2.0–0.2.7 extended it through U01–U08 and exact-SHA release reruns.
 
-See [RHI design](../design-rhi.md) for the current test-evidence boundary.
+See [RHI design](../../crates/rhi/documents/design-rhi.md) for the current test-evidence boundary.

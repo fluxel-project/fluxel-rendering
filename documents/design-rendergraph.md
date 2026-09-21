@@ -1,13 +1,13 @@
 # Fluxel RenderGraph architecture
 
 This document describes the RenderGraph architecture completed by `0.18` and
-`0.19`. The [foundation interface
-contract](design-foundation-interfaces.md) defines only cross-layer invariants
+`0.19`. The [workspace
+architecture](design-overview.md) defines only cross-layer invariants
 and Graph/capture integration boundaries; it is not a RHI type or error
 inventory. The strict RHI-before-Graph delivery gates are in the [version
 plan](version-plan.md). All RHI-facing types, errors, and validation are
-governed exclusively by [RHI public API v1](design-rhi.md) and its `rhi-design`
-modules, especially sections 37-38 and 50-51.
+governed by the public API, its rustdoc/tests, and [RHI architecture](../crates/rhi/documents/design-rhi.md)
+with the relevant ADRs.
 
 ## Purpose and boundary
 

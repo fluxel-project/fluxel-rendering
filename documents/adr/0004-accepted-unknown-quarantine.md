@@ -1,7 +1,7 @@
 # ADR-0004: Quarantine accepted-unknown GPU work
 
 **Status:** Superseded by the normative [RHI API v1 submission acceptance
-contract](../rhi-design/05-submission-completion-presentation.md#413-devicesubmit-acceptance-contract)
+contract](../../crates/rhi/documents/design-rhi.md)
 for 0.16.
 
 **Supersession note.** This ADR preserves the evidence and safety concern from
@@ -50,5 +50,5 @@ after acceptance poisons an affected generation when its state is unknown.
 0.2.1–0.2.7 snapshot fault fixtures exercised partial acceptance, failure,
 drop, and subsequent reuse behavior.
 
-See [RHI design](../design-rhi.md) and [Renderer design](../design-renderer.md)
+See [RHI design](../../crates/rhi/documents/design-rhi.md) and [Renderer design](../design-renderer.md)
 for the current lifecycle contract.

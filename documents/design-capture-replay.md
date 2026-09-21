@@ -2,7 +2,7 @@
 
 This document explains the capture/replay architecture scheduled for `0.20`.
 RHI tooling, object, command, submission, and presentation semantics are frozen
-by [RHI API v1](design-rhi.md). Capture artifact/runtime interfaces are owned by
+by [RHI API architecture](../crates/rhi/documents/design-rhi.md). Capture artifact/runtime interfaces are owned by
 this document and the [version plan](version-plan.md).
 
 RHI tooling SPI v1 is frozen and implemented in `0.16`; RenderGraph consumes it

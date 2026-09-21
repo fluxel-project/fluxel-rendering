@@ -2,9 +2,9 @@
 
 > Architecture status: this is the post-foundation workspace/layer target. The
 > active implementation order is [versions 0.16-0.20](version-plan.md), and the
-> sole normative RHI API source is [RHI design](design-rhi.md) together with
-> its `rhi-design` modules. The [foundation interface
-> contract](design-foundation-interfaces.md) is cross-layer only. RHI must be
+> RHI architecture source is [RHI design](../crates/rhi/documents/design-rhi.md);
+> rustdoc and contract tests define descriptor-level detail. This document is
+> cross-layer only. RHI must be
 > completed on every declared backend before RenderGraph implementation begins;
 > RenderGraph must then be completed before portable capture/replay. New
 > renderer/scene/canvas/runtime work resumes only after the `0.20` gate.
@@ -107,10 +107,10 @@ containment boundary is recorded in
 [ADR-0002](adr/0002-rhi-unsafe-containment.md).
 
 For layer-specific contracts, see [Renderer design](design-renderer.md),
-[RenderGraph design](design-rendergraph.md), [RHI design](design-rhi.md), and
-[capture/replay design](design-capture-replay.md). [RHI design](design-rhi.md)
-and its `rhi-design` modules are the sole normative RHI API; the
-[foundation interface contract](design-foundation-interfaces.md) records only
+[RenderGraph design](design-rendergraph.md), [RHI design](../crates/rhi/documents/design-rhi.md), and
+[capture/replay design](design-capture-replay.md). RHI rustdoc and contract
+tests define descriptor-level API detail; [RHI design](../crates/rhi/documents/design-rhi.md)
+and its ADR sequence define architecture; this workspace document records only
 cross-layer invariants and integration boundaries.
 
 ## Frame data flow
@@ -216,7 +216,7 @@ RHI resolves plan resources against opaque native resources, verifies device
 identity, descriptors, declared incoming semantic use against Fluxel-known
 history, and actual allowed usage, then lowers only declared commands. The
 precise resource-use, lane, submission, completion, presentation, and
-retirement semantics are defined by [RHI design](design-rhi.md) and its
+retirement semantics are defined by [RHI design](../crates/rhi/documents/design-rhi.md) and its ADRs;
 `rhi-design` modules; this overview does not define an alternate RHI state
 machine.
 
@@ -370,7 +370,7 @@ The target RHI matrix replaces that implementation description in `0.16` and
 `0.17`: real DX12, Vulkan, and Metal first, followed by browser WebGPU and the
 GL-family desktop GL/GLES/WebGL2 profiles under the single v1 device-identity,
 capability, submission, completion, presentation, and retirement contract. The
-exact API is normative only in [RHI design](design-rhi.md) and its modules; the
+exact API is defined by rustdoc and tests, with [RHI design](../crates/rhi/documents/design-rhi.md) recording its architectural boundary; the
 exact gates are in [version-plan.md](version-plan.md), and prior baseline
 evidence is not reused as proof of the replacement.
 

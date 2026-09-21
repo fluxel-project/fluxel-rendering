@@ -67,7 +67,7 @@ pub enum BackendKind {
 /// Provider-scoped adapter identity.
 ///
 /// Opaque: a caller may compare, hash, and print it, but cannot construct one
-/// (section 3, `design-rhi.md:L140`). Section 5.4 fixes what it is *not* — not an
+/// (ADR-0012). It is not a browser session/token or native context wrapper.
 /// enumeration index, not a native pointer, LUID, or `VkPhysicalDevice`, and not
 /// a persistent cross-process hardware ID — and what it is guaranteed for: being
 /// passed back to the same provider that produced it.

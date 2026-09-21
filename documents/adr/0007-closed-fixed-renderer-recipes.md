@@ -53,5 +53,5 @@ suites establish the seven `RasterRecipe` combinations. v0.7.0 records their
 mapping and rollback invariants without promoting them to general material or
 pipeline APIs.
 
-See [RHI public API v1](../design-rhi.md) and
+See [RHI architecture](../../crates/rhi/documents/design-rhi.md) and
 [Renderer design](../design-renderer.md) for the current fixed-renderer shape.

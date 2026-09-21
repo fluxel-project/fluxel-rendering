@@ -51,10 +51,9 @@
 //!
 //! # Where the rules live
 //!
-//! The normative sources are `documents/design-rhi.md` and the numbered modules
-//! under `documents/rhi-design/`. This crate is written from them, not the other
-//! way round: a disagreement between this code and those modules is a defect in
-//! this code.
+//! Architecture decisions live under `documents/adr/`; the compact map is
+//! `crates/rhi/documents/design-rhi.md`. The public API is specified by this
+//! crate's rustdoc and contract tests, not by a duplicate prose specification.
 //!
 //! # Status
 //!
