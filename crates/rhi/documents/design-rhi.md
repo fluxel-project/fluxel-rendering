@@ -28,6 +28,12 @@ The public modules are `platform`, `capability`, `format`, `resource`,
 `shader`, `binding`, `pipeline`, `command`, `submission`, `presentation`,
 `statistics`, `diagnostics`, and crate-private tooling support.
 
+Native host composition enters through the public crate-level provider factories
+(`create_dx12_provider`, `create_vulkan_provider`, `create_metal_provider`, or
+the browser `create_webgpu_provider` where their target features exist). These
+functions return only `PlatformProvider`; native instances, surfaces, and
+window handles stay in the host/backend seam.
+
 ## Invariants
 
 - Every object belongs to one opaque `DeviceIdentity`; loss terminates that
@@ -61,6 +67,8 @@ The public modules are `platform`, `capability`, `format`, `resource`,
 | [0019](../../../documents/adr/0019-portable-logical-statistics.md) | Keep statistics logical rather than native profiling. |
 | [0020](../../../documents/adr/0020-optional-feature-family-admission.md) | Admit optional feature families as complete portable contracts. |
 | [0021](../../../documents/adr/0021-shader-owned-immediate-abi.md) | Derive executable immediate-data ABI from shader artifacts, not interface supersets. |
+| [0022](../../../documents/adr/0022-hardware-conformance-evidence.md) | Separate portable contract tests, headless hardware conformance, and presentation smoke evidence. |
+| [0023](../../../documents/adr/0023-host-rhi-integration-boundary.md) | Keep host-window lifetime and RHI presentation integration in separate dependency domains. |
 
 Existing ADRs cover unsafe/native containment, serial lowering policy,
 conformance evidence, platform test gates, and the GL-family private boundary.

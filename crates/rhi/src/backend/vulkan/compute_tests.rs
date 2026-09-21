@@ -11,30 +11,26 @@
 use core::future::Future;
 use core::task::{Context, Poll, Waker};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use crate::api::binding::{
     BindGroupDescriptor, BindGroupEntry, BindGroupIndex, BindGroupLayoutDescriptor, BindingCount,
     BindingKind, BindingResource, BindingSlot, BindingSlotId, BufferBindingAccess,
 };
-use crate::api::command::{ComputeScopeDescriptor, RecorderDescriptor};
 use crate::api::error::RhiErrorKind;
-use crate::api::identity::{DeviceInstanceId, Label};
+use crate::api::identity::DeviceInstanceId;
 use crate::api::pipeline::{ComputePipelineDescriptor, PipelineInterfaceDescriptor};
 use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::platform::requirements::DeviceRequirements;
 use crate::api::platform::{BackendKind, Device, PlatformProvider};
 use crate::api::resource::buffer::{BufferDescriptor, BufferRange, BufferUsage};
-use crate::api::resource::transfer::{ReadbackRequest, ReadbackViewData};
 use crate::api::shader::{
     ArtifactHash, ArtifactProducerVersion, ComputeWorkgroupSize, ShaderAbiVersion, ShaderArtifact,
     ShaderCode, ShaderInterface, ShaderRequirements, ShaderResourceRequirement, ShaderStage,
     ShaderStages,
 };
-use crate::api::submission::{
-    CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
-};
+use crate::api::submission::{LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder};
+use crate::backend::test_harness::{block_on, require_complete};
 
 use super::platform::VulkanProvider;
 
@@ -372,28 +368,15 @@ fn buffer_compute_dispatch_keeps_dropped_caller_handles_alive_until_readback() {
         ))
         .expect("the Vulkan storage-buffer descriptor set must be created");
 
-    let mut recorder = device
-        .create_recorder(&RecorderDescriptor::new())
-        .expect("Vulkan recorder creation failed");
-    {
-        let mut compute = recorder
-            .begin_compute(&ComputeScopeDescriptor::new())
-            .expect("Vulkan facts advertise compute");
-        compute.set_pipeline(&pipeline).unwrap();
-        compute
-            .set_bind_group(BindGroupIndex::new(0), &group, &[])
-            .unwrap();
-        compute.dispatch(1, 1, 1).unwrap();
-        compute.end().unwrap();
-    }
-    let ticket = recorder
-        .encode_readback(ReadbackRequest::Buffer {
-            label: Label(Some("Vulkan compute output".into())),
-            src: output.clone(),
-            range: BufferRange::new(0, SIZE),
-        })
-        .expect("the compute output carries COPY_SRC");
-    let work = recorder.finish().unwrap();
+    let mut common =
+        crate::backend::conformance::cases::compute::record_single_storage_buffer_compute(
+            &device,
+            &pipeline,
+            &group,
+            output.clone(),
+            SIZE,
+            "Vulkan direct compute",
+        );
 
     // `RecordedWork` and accepted-batch retention, not the caller's variables,
     // must keep every native shader/pipeline/descriptor/resource alive.  Dropping
@@ -408,33 +391,110 @@ fn buffer_compute_dispatch_keeps_dropped_caller_handles_alive_until_readback() {
 
     let mut plan = SubmissionPlanBuilder::new(&device);
     let point = plan
-        .add_batch(compute_lane(&device), vec![work])
+        .add_batch(compute_lane(&device), vec![common.take_work()])
         .expect("the graphics queue's compute lane accepts compute plus readback");
     let receipt = ready(device.submit(plan.build().unwrap()))
         .expect("the complete dispatch must lower before native work is accepted");
     let completion = receipt.completion_for(point).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while matches!(
-        device.completion_state(completion).unwrap(),
-        CompletionState::Pending
-    ) && Instant::now() < deadline
-    {
-        std::thread::yield_now();
-    }
-    assert!(matches!(
-        device.completion_state(completion).unwrap(),
-        CompletionState::Complete
+    block_on(require_complete(
+        &device,
+        completion,
+        "Vulkan storage-buffer compute/readback",
     ));
-    let view = ticket
-        .try_read()
-        .expect("completed Vulkan compute readback must be terminally readable")
-        .expect("completion must publish the compute bytes");
-    let ReadbackViewData::Buffer { bytes } = view.data() else {
-        panic!("compute buffer readback returned texture data");
+    let expected = (17..17 + WORDS as u32).collect::<Vec<_>>();
+    block_on(
+        crate::backend::conformance::cases::compute::assert_direct_compute_output(
+            &common.ticket,
+            &expected,
+            "Vulkan direct compute",
+        ),
+    );
+}
+
+/// A GPU-provided dispatch tuple must reach `vkCmdDispatchIndirect`, rather
+/// than being read by the CPU and replaced with a direct dispatch.  The output
+/// shader is the same deterministic storage-buffer fixture as the direct case;
+/// only the source of the three workgroup counts differs.
+#[test]
+fn indirect_compute_dispatch_reads_gpu_arguments_and_publishes_readback() {
+    let Some(provider) = provider() else {
+        return;
     };
-    let values = bytes
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
-        .collect::<Vec<_>>();
-    assert_eq!(values, (17..17 + WORDS as u32).collect::<Vec<_>>());
+    if ready(provider.enumerate_adapters())
+        .expect("Vulkan enumeration failed")
+        .as_ref()
+        .is_none_or(Vec::is_empty)
+    {
+        return;
+    }
+    let device = ready(provider.request_device(DeviceRequestDescriptor::new(
+        AdapterSelection::Default,
+        DeviceRequirements::new(),
+    )))
+    .expect("default Vulkan device request failed");
+    assert!(
+        device
+            .capabilities()
+            .supports_feature(crate::api::platform::OptionalFeature::IndirectDispatch),
+        "Vulkan publishes indirect dispatch only when its lowering is available"
+    );
+
+    let shader = ready(device.create_shader(&compute_artifact())).unwrap();
+    let layout = device
+        .create_bind_group_layout(&BindGroupLayoutDescriptor::new(vec![BindingSlot::new(
+            BindingSlotId::new(0),
+            ShaderStages::COMPUTE,
+            BindingKind::StorageBuffer {
+                access: BufferBindingAccess::ReadWrite,
+                min_size: SIZE,
+            },
+        )]))
+        .unwrap();
+    let interface = device
+        .create_pipeline_interface(&PipelineInterfaceDescriptor::new(vec![layout.clone()]))
+        .unwrap();
+    let pipeline =
+        ready(device.create_compute_pipeline(&ComputePipelineDescriptor::new(shader, interface)))
+            .unwrap();
+    let output = device
+        .create_buffer(&BufferDescriptor::new(
+            SIZE,
+            BufferUsage::STORAGE.union(BufferUsage::COPY_SRC),
+        ))
+        .unwrap();
+    let group = device
+        .create_bind_group(
+            &BindGroupDescriptor::new(layout).with_entry(BindGroupEntry::new(
+                BindingSlotId::new(0),
+                BindingResource::Buffer(crate::api::resource::BufferBinding::new(
+                    output.clone(),
+                    BufferRange::new(0, SIZE),
+                )),
+            )),
+        )
+        .unwrap();
+
+    let mut common = crate::backend::conformance::record_single_indirect_compute(
+        &device,
+        &pipeline,
+        &group,
+        output,
+        SIZE,
+        "Vulkan indirect compute",
+    );
+    let mut plan = SubmissionPlanBuilder::new(&device);
+    let point = plan
+        .add_batch(compute_lane(&device), vec![common.take_work()])
+        .unwrap();
+    let receipt = ready(device.submit(plan.build().unwrap())).unwrap();
+    block_on(require_complete(
+        &device,
+        receipt.completion_for(point).unwrap(),
+        "Vulkan indirect compute/readback",
+    ));
+    block_on(crate::backend::conformance::assert_readback_u32_words(
+        &common.ticket,
+        &(17..17 + WORDS as u32).collect::<Vec<_>>(),
+        "Vulkan indirect compute",
+    ));
 }

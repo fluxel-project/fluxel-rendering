@@ -37,6 +37,23 @@
 //! `crate::api` item that mentions a backend name is a defect however convenient
 //! it is: it would make the next platform's architecture a copy of this one's.
 
+/// Test-only building blocks shared by native hardware conformance fixtures.
+///
+/// A fixture still owns its backend-native provider creation and shader
+/// artifact: those are deliberately private and code-form specific. The
+/// observed behaviour after a portable device exists, however, is shared.
+#[cfg(test)]
+#[path = "../../tests/common/mod.rs"]
+pub(crate) mod conformance;
+
+/// Platform-neutral conformance execution and result classification.
+///
+/// This remains test-only because it composes crate-private provider fixtures;
+/// its workload vocabulary is public-RHI-only and contains no native handle.
+#[cfg(test)]
+#[path = "../../tests/harness/mod.rs"]
+pub(crate) mod test_harness;
+
 // Each backend is behind both its feature and its target. The target half is not
 // redundant: `dx12` is in `default`, so a Linux or wasm build enables the feature
 // without having the binding crate at all.

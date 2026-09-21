@@ -44,6 +44,13 @@ examples = []
 glow = { version = "=0.18.0", optional = true }
 raw-window-handle = { version = "=0.6.2", optional = true }
 
+# Hardware fixtures and examples are the only RHI consumers allowed to depend
+# on the native host.  The library itself remains host-free; a fixture retains
+# the host window while its backend-private presentation target borrows it.
+[dev-dependencies]
+fluxel-host = { path = "../../../fluxel-host" }
+raw-window-handle = "=0.6.2"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Vulkan is loaded dynamically so enabling the backend does not create a link-
 # time dependency on a platform loader. Native handles remain confined to

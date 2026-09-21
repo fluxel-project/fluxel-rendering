@@ -279,12 +279,15 @@ struct ProviderInner {
 /// [`crate::api::DeviceIdentity`]. The provider itself is therefore a factory
 /// held by shared handle rather than a singleton.
 ///
-/// The portable core does not expose a constructor (section 5.1): a provider is
-/// created by Fluxel's host or platform integration, because that is where the
-/// native instance it wraps becomes available. Nothing here names `HWND`,
-/// `IDXGIAdapter`, `VkInstance`, `CAMetalLayer`, a `GPU` object, or a
-/// `WebGLRenderingContext` — section 5.1 keeps those on the integration side of
-/// the seam.
+/// A provider is created by Fluxel's host or platform integration, because that
+/// is where the native instance it wraps becomes available. The backend-facing
+/// constructor remains crate-private; public backend composition functions
+/// such as [`crate::create_dx12_provider`] and
+/// [`crate::create_vulkan_provider`] return this portable value without
+/// exposing `HWND`, `IDXGIAdapter`, `VkInstance`, `CAMetalLayer`, a `GPU`
+/// object, or a `WebGLRenderingContext`. This keeps the native seam private
+/// while allowing high-level examples and applications to use only public RHI
+/// objects after provider creation.
 #[derive(Clone)]
 pub struct PlatformProvider {
     /// Shared rather than cloned into each handle, so each clone refers to the
@@ -301,7 +304,7 @@ impl PlatformProvider {
         not(test),
         expect(
             dead_code,
-            reason = "called by the contract tests; the host integration that owns a native instance is not written"
+            reason = "called by backend composition entry points and contract fixtures"
         )
     )]
     pub(crate) fn new(

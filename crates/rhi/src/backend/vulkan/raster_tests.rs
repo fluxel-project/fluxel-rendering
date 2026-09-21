@@ -10,14 +10,9 @@
 use core::future::Future;
 use core::task::{Context, Poll, Waker};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use crate::api::command::{
-    ColorAttachment, ColorAttachmentView, ColorClearValue, LoadOp, RasterScopeDescriptor,
-    RecorderDescriptor, StoreOp,
-};
 use crate::api::format::TextureFormat;
-use crate::api::identity::{DeviceInstanceId, Label};
+use crate::api::identity::DeviceInstanceId;
 use crate::api::pipeline::{
     ColorTargetState, PipelineInterfaceDescriptor, RasterPipelineDescriptor,
 };
@@ -25,18 +20,17 @@ use crate::api::platform::provider::AdapterSelection;
 use crate::api::platform::request::DeviceRequestDescriptor;
 use crate::api::platform::requirements::DeviceRequirements;
 use crate::api::platform::{BackendKind, Device, PlatformProvider};
-use crate::api::resource::subresource::{Origin3d, TextureAspect, TextureSubresourceLayers};
-use crate::api::resource::texture::{Extent3d, TextureDescriptor, TextureUsage};
-use crate::api::resource::transfer::{ReadbackRequest, ReadbackViewData};
-use crate::api::resource::view::{TextureViewDescriptor, TextureViewDimension};
+use crate::api::resource::texture::Extent3d;
 use crate::api::shader::{
     ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderCode,
     ShaderInterface, ShaderLocation, ShaderLocationInterface, ShaderNumericType,
     ShaderRequirements, ShaderStage,
 };
-use crate::api::submission::{
-    CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
+use crate::api::submission::{LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder};
+use crate::backend::conformance::cases::raster::{
+    OffscreenRasterFixture, assert_offscreen_raster_rgba8, record_offscreen_raster_rgba8,
 };
+use crate::backend::test_harness::{block_on, require_complete};
 
 use super::platform::VulkanProvider;
 
@@ -193,90 +187,42 @@ fn offscreen_raster_draw_transitions_to_readback_and_retains_native_objects() {
     )
     .expect("the advertised Vulkan RGBA8 raster pipeline must lower");
 
-    let texture = device
-        .create_texture(&TextureDescriptor::new_2d(
-            8,
-            8,
-            TextureFormat::Rgba8Unorm,
-            TextureUsage::COLOR_ATTACHMENT.union(TextureUsage::COPY_SRC),
-        ))
-        .expect("the advertised Vulkan offscreen attachment must create");
-    let descriptor = TextureViewDescriptor::whole(&texture, TextureViewDimension::D2).unwrap();
-    let view = device
-        .create_texture_view(&texture, &descriptor)
-        .expect("the offscreen attachment view must create");
+    let mut recording = record_offscreen_raster_rgba8(
+        &device,
+        OffscreenRasterFixture {
+            pipeline: pipeline.clone(),
+            vertex: None,
+            vertices: 0..3,
+            instances: 0..1,
+            sample: (4, 4),
+            expected: [32, 128, 223, 255],
+        },
+        Extent3d::d2(8, 8),
+        "Vulkan offscreen raster",
+    );
 
-    let mut recorder = device
-        .create_recorder(&RecorderDescriptor::new())
-        .expect("Vulkan recorder creation failed");
-    {
-        let mut raster = recorder
-            .begin_raster(&RasterScopeDescriptor::new().with_color(
-                ShaderLocation::new(0),
-                ColorAttachment {
-                    view: ColorAttachmentView::Texture(view.clone()),
-                    load: LoadOp::Clear(ColorClearValue::Float([0.0, 0.0, 0.0, 1.0])),
-                    store: StoreOp::Store,
-                    resolve: None,
-                    depth_slice: None,
-                },
-            ))
-            .expect("Vulkan facts advertise this color attachment");
-        raster.set_pipeline(&pipeline).unwrap();
-        raster.draw(0..3, 0..1).unwrap();
-        raster.end().unwrap();
-    }
-    let ticket = recorder
-        .encode_readback(ReadbackRequest::Texture {
-            label: Label(Some("Vulkan offscreen raster output".into())),
-            src: texture.clone(),
-            subresource: TextureSubresourceLayers {
-                aspect: TextureAspect::Color,
-                mip_level: 0,
-                base_layer: 0,
-                layer_count: 1,
-            },
-            origin: Origin3d { x: 0, y: 0, z: 0 },
-            extent: Extent3d::d2(8, 8),
-        })
-        .expect("the raster attachment is a declared COPY_SRC texture");
-    let work = recorder.finish().unwrap();
-
-    // The recorded work and accepted-batch retention, rather than these caller
-    // handles, own the pipeline, shader modules, attachment/view and native
-    // render-pass objects until the GPU completion publishes the readback.
-    drop(view);
-    drop(texture);
+    // `record_offscreen_raster_rgba8` keeps only its public expectation. The
+    // recorded work and accepted-batch retention, rather than the fixture's
+    // caller-side handles, own all shaders, PSO and attachment objects now.
     drop(pipeline);
     drop(interface);
     drop(fragment);
     drop(vertex);
 
     let mut plan = SubmissionPlanBuilder::new(&device);
-    let point = plan.add_batch(raster_lane(&device), vec![work]).unwrap();
+    let point = plan
+        .add_batch(raster_lane(&device), vec![recording.take_work()])
+        .unwrap();
     let receipt = ready(device.submit(plan.build().unwrap()))
         .expect("the complete raster/readback batch must lower before native acceptance");
     let completion = receipt.completion_for(point).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while matches!(
-        device.completion_state(completion).unwrap(),
-        CompletionState::Pending
-    ) && Instant::now() < deadline
-    {
-        std::thread::yield_now();
-    }
-    assert!(matches!(
-        device.completion_state(completion).unwrap(),
-        CompletionState::Complete
+    block_on(require_complete(
+        &device,
+        completion,
+        "Vulkan offscreen raster/readback",
     ));
-    let view = ticket
-        .try_read()
-        .expect("completed Vulkan raster readback must be terminally readable")
-        .expect("completion must publish the raster texels");
-    let ReadbackViewData::Texture { bytes, layout } = view.data() else {
-        panic!("raster texture readback returned buffer data");
-    };
-    let pixel = &bytes[..4];
-    assert_eq!(pixel, &[32, 128, 223, 255]);
-    assert!(layout.total_size >= 4);
+    block_on(assert_offscreen_raster_rgba8(
+        &recording,
+        "Vulkan offscreen raster",
+    ));
 }

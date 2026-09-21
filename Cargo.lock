@@ -262,6 +262,14 @@ version = "0.13.4"
 source = "git+https://github.com/fluxel-project/fluxel-bases.git?rev=22c4eb0e199575aa71b59f3abc6ec3f72d934b9a#22c4eb0e199575aa71b59f3abc6ec3f72d934b9a"
 
 [[package]]
+name = "fluxel-host"
+version = "0.2.0"
+dependencies = [
+ "raw-window-handle",
+ "windows",
+]
+
+[[package]]
 name = "fluxel-renderer"
 version = "0.15.0"
 dependencies = [
@@ -297,6 +305,7 @@ version = "0.15.0"
 dependencies = [
  "ash",
  "block2 0.6.2",
+ "fluxel-host",
  "glow",
  "glutin_wgl_sys",
  "js-sys",

@@ -9,7 +9,6 @@
 use core::future::Future;
 use core::task::{Context, Poll, Waker};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use crate::api::binding::{
     BindGroupDescriptor, BindGroupEntry, BindGroupIndex, BindGroupLayoutDescriptor, BindingCount,
@@ -36,9 +35,8 @@ use crate::api::shader::{
     ShaderCode, ShaderInterface, ShaderRequirements, ShaderResourceRequirement, ShaderStage,
     ShaderStages,
 };
-use crate::api::submission::{
-    CompletionState, LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder,
-};
+use crate::api::submission::{LaneWorkDomains, SubmissionLaneId, SubmissionPlanBuilder};
+use crate::backend::test_harness::{block_on, require_complete};
 
 use super::platform::VulkanProvider;
 
@@ -550,22 +548,12 @@ fn compute_sampled_filtering_and_storage_images_round_trip_through_vulkan() {
     let receipt = ready(device.submit(plan.build().unwrap()))
         .expect("the complete image workload must lower before native work is accepted");
     let completion = receipt.completion_for(point).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while matches!(
-        device.completion_state(completion).unwrap(),
-        CompletionState::Pending
-    ) && Instant::now() < deadline
-    {
-        std::thread::yield_now();
-    }
-    assert!(matches!(
-        device.completion_state(completion).unwrap(),
-        CompletionState::Complete
+    block_on(require_complete(
+        &device,
+        completion,
+        "Vulkan sampled/storage image readback",
     ));
-    let view = ticket
-        .try_read()
-        .expect("completed Vulkan storage-image readback must be terminally readable")
-        .expect("completion must publish the storage-image texel");
+    let view = block_on(ticket.read()).expect("completed Vulkan storage-image readback failed");
     let ReadbackViewData::Texture { bytes, .. } = view.data() else {
         panic!("storage-image readback returned buffer data");
     };

@@ -80,6 +80,94 @@ pub mod test_support;
 // contribute no code at all.
 pub(crate) mod backend;
 
+static NEXT_PUBLIC_PROVIDER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0xF1_0000_0000_0000);
+
+/// Opens the native DX12 provider owned by this process.
+///
+/// This is the host/platform composition seam used by applications, tests and
+/// examples. It returns only the portable [`api::platform::PlatformProvider`];
+/// DXGI factories, adapters and native devices remain backend-private. A host
+/// still supplies any presentation target separately through the presentation
+/// API. The function is available only when the DX12 backend is compiled on
+/// Windows.
+#[cfg(all(feature = "dx12", windows))]
+pub fn create_dx12_provider() -> api::error::RhiResult<api::platform::PlatformProvider> {
+    use api::identity::DeviceInstanceId;
+    use api::platform::provider::{BackendKind, PlatformProvider};
+    let instance = DeviceInstanceId::new(
+        NEXT_PUBLIC_PROVIDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    let native = backend::dx12::Dx12Provider::new(instance)?;
+    Ok(PlatformProvider::new(
+        BackendKind::Dx12,
+        instance,
+        Box::new(native),
+    ))
+}
+
+/// Opens the native Vulkan provider owned by this process.
+///
+/// Like [`create_dx12_provider`], this is a composition entry point rather
+/// than a native-handle escape hatch. Vulkan instance/device/queue objects stay
+/// below the backend seam and callers interact with the returned provider only
+/// through the portable API. The provider loads Vulkan dynamically.
+#[cfg(all(feature = "vulkan", not(target_arch = "wasm32")))]
+pub fn create_vulkan_provider() -> api::error::RhiResult<api::platform::PlatformProvider> {
+    use api::identity::DeviceInstanceId;
+    use api::platform::provider::{BackendKind, PlatformProvider};
+    let instance = DeviceInstanceId::new(
+        NEXT_PUBLIC_PROVIDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    let native = backend::vulkan::VulkanProvider::new(instance)?;
+    Ok(PlatformProvider::new(
+        BackendKind::Vulkan,
+        instance,
+        Box::new(native),
+    ))
+}
+
+/// Opens the native Metal provider on an Apple target.
+///
+/// Surface/layer registration remains a host concern; this function only
+/// creates the provider used for adapter/device discovery and returns the same
+/// portable handle as the other native composition entry points.
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
+pub fn create_metal_provider() -> api::error::RhiResult<api::platform::PlatformProvider> {
+    use api::identity::DeviceInstanceId;
+    use api::platform::provider::{BackendKind, PlatformProvider};
+    let instance = DeviceInstanceId::new(
+        NEXT_PUBLIC_PROVIDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    let native = backend::metal::MetalProvider::new(instance);
+    Ok(PlatformProvider::new(
+        BackendKind::Metal,
+        instance,
+        Box::new(native),
+    ))
+}
+
+/// Opens the browser WebGPU provider after the browser host has installed its
+/// canvas/device bridge.
+///
+/// Adapter selection and device creation remain asynchronous browser futures;
+/// this function only creates the portable provider handle and does not expose
+/// a `GPU`/`GPUDevice` value.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+pub fn create_webgpu_provider() -> api::error::RhiResult<api::platform::PlatformProvider> {
+    use api::identity::DeviceInstanceId;
+    use api::platform::provider::{BackendKind, PlatformProvider};
+    let instance = DeviceInstanceId::new(
+        NEXT_PUBLIC_PROVIDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    let native = backend::webgpu::WebGpuProvider::new(instance);
+    Ok(PlatformProvider::new(
+        BackendKind::WebGpu,
+        instance,
+        Box::new(native),
+    ))
+}
+
 /// Android NativeActivity-only Vulkan WSI integration bridge.
 ///
 /// This is intentionally hidden from the portable RHI contract: it accepts an

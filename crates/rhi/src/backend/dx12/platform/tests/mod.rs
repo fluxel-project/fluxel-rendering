@@ -48,13 +48,11 @@ use windows::Win32::Graphics::Direct3D12::{
 use super::provider::{Candidate, Dx12Provider};
 use crate::api::binding::vocabulary::StorageAccess;
 use crate::api::binding::{
-    BindGroupDescriptor, BindGroupEntry, BindGroupIndex, BindGroupLayoutDescriptor, BindingCount,
-    BindingKind, BindingLimitClass, BindingResource, BindingSlot, BindingSlotId,
-    BindingSupportQuery, BufferBindingAccess, SamplerKind, TextureSampleType,
+    BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindingCount, BindingKind,
+    BindingLimitClass, BindingResource, BindingSlot, BindingSlotId, BindingSupportQuery,
+    BufferBindingAccess, SamplerKind, TextureSampleType,
 };
-use crate::api::command::{
-    BlitFilter, BufferCopy, BufferTextureCopy, RecorderDescriptor, TextureCopy,
-};
+use crate::api::command::{BlitFilter, BufferCopy, RecorderDescriptor};
 use crate::api::error::RhiErrorKind;
 use crate::api::format::{TextureFormat, TextureSupportQuery};
 use crate::api::identity::{DeviceInstanceId, Label, ObjectId};
@@ -72,15 +70,9 @@ use crate::api::resource::buffer::{
     ResourceMemoryPreference,
 };
 use crate::api::resource::route::RouteQuery;
-use crate::api::resource::subresource::{
-    HostTexelLayout, Origin3d, TextureAspect, TextureSubresourceLayers,
-};
-use crate::api::resource::texture::{
-    Extent3d, TextureDescriptor, TextureDimension, TextureUsage, TextureViewCompatibility,
-};
-use crate::api::resource::transfer::{
-    BufferUploadDescriptor, ReadbackRequest, ReadbackViewData, TextureUploadDescriptor,
-};
+use crate::api::resource::subresource::TextureAspect;
+use crate::api::resource::texture::{TextureDimension, TextureUsage, TextureViewCompatibility};
+use crate::api::resource::transfer::{BufferUploadDescriptor, ReadbackRequest, ReadbackViewData};
 use crate::api::resource::view::TextureViewDimension;
 use crate::api::shader::{
     ArtifactHash, ArtifactProducerVersion, ShaderAbiVersion, ShaderArtifact, ShaderInterface,
@@ -91,6 +83,10 @@ use crate::api::submission::{
 };
 use crate::backend::dx12::resource::Dx12Buffer;
 
+#[path = "../../../../../tests/dx12/depth_stencil.rs"]
+mod depth_stencil;
+#[path = "../../../../../tests/dx12/query.rs"]
+mod query;
 mod raster;
 
 /// A fresh provider instance identity, as host integration would mint.
@@ -171,68 +167,29 @@ fn portable_device() -> crate::api::platform::Device {
         .expect("a headless device request must succeed on a machine with DXGI")
 }
 
-unsafe extern "system" fn hidden_presentation_window_proc(
-    hwnd: windows::Win32::Foundation::HWND,
-    message: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    unsafe {
-        windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam)
-    }
-}
-
 #[test]
-fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
-    use windows::Win32::Foundation::{HINSTANCE, HWND};
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+fn a_host_window_frame_clears_presents_and_can_be_acquired_again() {
+    use fluxel_host::{Window as HostWindow, WindowConfig};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, RegisterClassW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-        SetWindowPos, UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos,
     };
-    use windows::core::w;
 
-    struct HiddenWindow {
-        hwnd: HWND,
-        instance: HINSTANCE,
-    }
-    impl Drop for HiddenWindow {
-        fn drop(&mut self) {
-            unsafe {
-                let _ = DestroyWindow(self.hwnd);
-                let _ = UnregisterClassW(w!("FluxelDx12PresentationTest"), Some(self.instance));
-            }
-        }
-    }
-    let instance = unsafe { GetModuleHandleW(None) }.expect("module handle");
-    let class = WNDCLASSW {
-        hInstance: instance.into(),
-        lpszClassName: w!("FluxelDx12PresentationTest"),
-        lpfnWndProc: Some(hidden_presentation_window_proc),
-        ..Default::default()
+    // Presentation smoke tests use the same host-owned HWND contract as an
+    // application. The backend still receives a private registration, but no
+    // test manufactures a parallel Win32 class/window implementation.
+    let host_window =
+        HostWindow::new(WindowConfig::new("Fluxel DX12 presentation", 64, 64).unwrap())
+            .expect("host window");
+    let raw = host_window
+        .window_handle()
+        .expect("live host HWND")
+        .as_raw();
+    let RawWindowHandle::Win32(raw) = raw else {
+        panic!("Windows host must expose a Win32 raw handle");
     };
-    unsafe { RegisterClassW(&class) };
-    let hwnd = unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("FluxelDx12PresentationTest"),
-            w!("fluxel-hidden"),
-            WS_OVERLAPPED,
-            0,
-            0,
-            64,
-            64,
-            None,
-            None,
-            Some(instance.into()),
-            None,
-        )
-    }
-    .expect("hidden HWND");
-    let _window = HiddenWindow {
-        hwnd,
-        instance: instance.into(),
-    };
+    let hwnd = HWND(raw.hwnd.get() as *mut core::ffi::c_void);
     let device = portable_device();
     let native = device
         .native()
@@ -365,6 +322,62 @@ fn a_hidden_hwnd_frame_clears_presents_and_can_be_acquired_again() {
     let _again = block_on(surface.acquire()).expect("reacquire after resize and present");
 }
 
+/// Runs the same presentation lifecycle through the shared portable case.
+///
+/// The longer test above keeps DXGI resize/retirement diagnostics, while this
+/// fixture proves that the backend-specific target registration is only the
+/// seam: configure/acquire/present/reconfigure/abandon is one workload shared
+/// with Vulkan, Metal and browser runners.
+#[test]
+fn common_presentation_lifecycle_case() {
+    use fluxel_host::{Window as HostWindow, WindowConfig};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+
+    let host_window = HostWindow::new(WindowConfig::new("Fluxel DX12 common", 64, 64).unwrap())
+        .expect("host window");
+    let raw = host_window.window_handle().expect("host HWND").as_raw();
+    let RawWindowHandle::Win32(raw) = raw else {
+        panic!("Windows host must expose a Win32 raw handle");
+    };
+    let hwnd = HWND(raw.hwnd.get() as *mut core::ffi::c_void);
+    let device = portable_device();
+    let native = device
+        .native()
+        .as_any()
+        .downcast_ref::<super::device::Dx12Device>()
+        .expect("DX12 device");
+    let target = native.register_test_presentation_target(hwnd);
+    let capabilities = device
+        .presentation_capabilities(&target)
+        .expect("presentation facts");
+    let format = *capabilities.formats().first().expect("present format");
+    let configuration = crate::api::presentation::PresentationConfiguration::new(format)
+        .with_present_mode(crate::api::presentation::PresentMode::Fifo);
+    let lane = device
+        .capabilities()
+        .submission()
+        .lanes()
+        .iter()
+        .find(|lane| {
+            lane.domains()
+                .contains(crate::api::submission::LaneWorkDomains::RASTER)
+        })
+        .map(|lane| lane.id())
+        .expect("published presentation route needs a raster lane");
+    block_on(
+        crate::backend::conformance::cases::presentation::clear_present_reconfigure(
+            crate::backend::conformance::cases::presentation::PresentationFixture {
+                device: &device,
+                target: &target,
+                configuration,
+                lane,
+            },
+            "DX12 common presentation",
+        ),
+    );
+}
+
 #[test]
 fn a_provider_reports_the_adapters_dxgi_lists() {
     let candidates = provider()
@@ -448,6 +461,11 @@ fn the_portable_path_produces_a_real_device() {
         !device.adapter_info().name().is_empty(),
         "the portable device must carry the adapter its native device was created on"
     );
+    crate::backend::conformance::cases::core_device::logical_creation(
+        &device,
+        "DX12 core logical creation",
+    )
+    .require_pass("DX12 core logical creation");
     assert!(device.poll().is_ok());
     assert!(block_on(device.wait_idle()).is_ok());
 }
@@ -582,36 +600,19 @@ fn a_real_compute_dispatch_writes_a_storage_buffer() {
         )
         .expect("the output buffer must lower to a DX12 UAV descriptor");
 
-    let mut recorder = device
-        .create_recorder(&RecorderDescriptor::new())
-        .expect("a real device opens a recorder");
-    {
-        let mut compute = recorder
-            .begin_compute(&crate::api::command::ComputeScopeDescriptor::new())
-            .expect("the device reports compute support");
-        compute
-            .set_pipeline(&pipeline)
-            .expect("the pipeline belongs to this device");
-        compute
-            .set_bind_group(BindGroupIndex::new(0), &group, &[])
-            .expect("the bind group matches the pipeline interface");
-        compute
-            .dispatch(1, 1, 1)
-            .expect("one workgroup is within the device limit");
-        compute.end().expect("the compute scope is balanced");
-    }
-    let ticket = recorder
-        .encode_readback(ReadbackRequest::Buffer {
-            label: Label(Some("dx12 compute output".to_string())),
-            src: output,
-            range: BufferRange::new(0, SIZE),
-        })
-        .expect("the output carries COPY_SRC");
-    let work = recorder.finish().expect("the recording is complete");
+    let mut common =
+        crate::backend::conformance::cases::compute::record_single_storage_buffer_compute(
+            &device,
+            &pipeline,
+            &group,
+            output,
+            SIZE,
+            "DX12 direct compute",
+        );
 
     let mut builder = SubmissionPlanBuilder::new(&device);
     let point = builder
-        .add_batch(copy_lane(&device), vec![work])
+        .add_batch(copy_lane(&device), vec![common.take_work()])
         .expect("the direct lane accepts compute and copy work");
     let receipt = block_on(device.submit(builder.build().expect("one batch is acyclic")))
         .expect("the dispatch and readback lower before commit");
@@ -623,22 +624,99 @@ fn a_real_compute_dispatch_writes_a_storage_buffer() {
         CompletionState::Complete
     ));
 
-    let view = ticket
-        .try_read()
-        .expect("the completed dispatch readback is not terminal")
-        .expect("the completion drain publishes the bytes");
-    let ReadbackViewData::Buffer { bytes } = view.data() else {
-        panic!("a buffer request must return buffer bytes");
-    };
-    let words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().expect("one u32")))
-        .collect();
-    assert_eq!(words, (0..WORDS as u32).collect::<Vec<_>>());
+    let words = (0..WORDS as u32).collect::<Vec<_>>();
+    block_on(
+        crate::backend::conformance::cases::compute::assert_direct_compute_output(
+            &common.ticket,
+            &words,
+            "DX12 direct compute",
+        ),
+    );
     println!(
         "dx12 compute evidence: adapter={:?} workgroups=(1,1,1) words={words:?}",
         device.adapter_info().name(),
     );
+}
+
+/// An indirect dispatch must consume the argument tuple from a GPU buffer.
+///
+/// Reusing the direct-compute shader keeps the assertion mechanical: changing
+/// the dispatch verb is the only material difference. A CPU-side replacement
+/// of `ExecuteIndirect` with `Dispatch` would leave this test's argument upload
+/// unused and the native output/readback assertion would catch that regression.
+#[test]
+fn a_real_indirect_compute_dispatch_reads_gpu_arguments() {
+    const WORDS: u64 = 8;
+    const SIZE: u64 = WORDS * 4;
+
+    let device = portable_device();
+    assert!(
+        device
+            .capabilities()
+            .supports_feature(OptionalFeature::IndirectDispatch),
+        "DX12 must only publish indirect dispatch after ExecuteIndirect lowering exists"
+    );
+    let shader = block_on(device.create_shader(&fill_cs_artifact(
+        crate::api::shader::ShaderCode::Dxil(Arc::from(FILL_CS_DXIL)),
+    )))
+    .expect("the checked-in compute artifact must create its DX12 shader module");
+    let layout = device
+        .create_bind_group_layout(&BindGroupLayoutDescriptor::new(vec![BindingSlot::new(
+            BindingSlotId::new(0),
+            ShaderStages::COMPUTE,
+            BindingKind::StorageBuffer {
+                access: BufferBindingAccess::ReadWrite,
+                min_size: SIZE,
+            },
+        )]))
+        .unwrap();
+    let interface = device
+        .create_pipeline_interface(&PipelineInterfaceDescriptor::new(vec![layout.clone()]))
+        .unwrap();
+    let pipeline = block_on(
+        device.create_compute_pipeline(&ComputePipelineDescriptor::new(shader, interface)),
+    )
+    .unwrap();
+    let output = device
+        .create_buffer(&BufferDescriptor::new(
+            SIZE,
+            BufferUsage::STORAGE.union(BufferUsage::COPY_SRC),
+        ))
+        .unwrap();
+    let group = device
+        .create_bind_group(
+            &BindGroupDescriptor::new(layout).with_entry(BindGroupEntry::new(
+                BindingSlotId::new(0),
+                BindingResource::Buffer(crate::api::resource::BufferBinding::new(
+                    output.clone(),
+                    BufferRange::new(0, SIZE),
+                )),
+            )),
+        )
+        .unwrap();
+
+    let mut common = crate::backend::conformance::record_single_indirect_compute(
+        &device,
+        &pipeline,
+        &group,
+        output,
+        SIZE,
+        "DX12 indirect compute",
+    );
+    let mut plan = SubmissionPlanBuilder::new(&device);
+    let point = plan
+        .add_batch(copy_lane(&device), vec![common.take_work()])
+        .unwrap();
+    let receipt = block_on(device.submit(plan.build().unwrap())).unwrap();
+    assert!(matches!(
+        settle(&device, receipt.completion_for(point).unwrap()),
+        CompletionState::Complete
+    ));
+    block_on(crate::backend::conformance::assert_readback_u32_words(
+        &common.ticket,
+        &(0..WORDS as u32).collect::<Vec<_>>(),
+        "DX12 indirect compute",
+    ));
 }
 
 /// The acceptance verdict, on the device this machine actually has.
@@ -2323,60 +2401,16 @@ fn pattern_of(size: usize) -> Vec<u8> {
 /// written by the copy and read by the readback.
 #[test]
 fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
-    const SIZE: u64 = 4096;
-
     let device = portable_device();
-    let pattern = pattern_of(SIZE as usize);
-
-    let source = device
-        .create_buffer(&BufferDescriptor::new(
-            SIZE,
-            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
-        ))
-        .expect("a 4 KiB copy source is allocatable on a real device");
-    let destination = device
-        .create_buffer(&BufferDescriptor::new(
-            SIZE,
-            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
-        ))
-        .expect("a 4 KiB copy destination is allocatable on a real device");
-
-    let job = device
-        .create_buffer_upload(BufferUploadDescriptor {
-            label: Label(Some("dx12 end-to-end upload".to_string())),
-            dst: source.clone(),
-            dst_offset: 0,
-            bytes: Arc::from(pattern.as_slice()),
-        })
-        .expect("a 4 KiB upload into a COPY_DST buffer meets section 17.3's list");
-
-    let mut recorder = device
-        .create_recorder(&RecorderDescriptor::new())
-        .expect("a real device opens a recorder");
-    recorder
-        .encode_upload(&job)
-        .expect("a job validated at creation encodes without asking the device anything");
-    recorder
-        .copy_buffer(&BufferCopy {
-            src: source.clone(),
-            src_offset: 0,
-            dst: destination.clone(),
-            dst_offset: 0,
-            size: SIZE,
-        })
-        .expect("the device reports a buffer-to-buffer route this copy meets");
-    let ticket = recorder
-        .encode_readback(ReadbackRequest::Buffer {
-            label: Label(Some("dx12 end-to-end readback".to_string())),
-            src: destination.clone(),
-            range: BufferRange::new(0, SIZE),
-        })
-        .expect("the destination carries COPY_SRC, so section 18.1 permits reading it");
-    let work = recorder.finish().expect("no scope was left open");
+    let mut recording =
+        crate::backend::conformance::cases::transfer::record_buffer_upload_copy_readback(
+            &device,
+            "DX12 buffer upload/copy/readback",
+        );
 
     let mut builder = SubmissionPlanBuilder::new(&device);
     let point = builder
-        .add_batch(copy_lane(&device), vec![work])
+        .add_batch(copy_lane(&device), vec![recording.take_work()])
         .expect("the lane that accepts COPY accepts a recording whose only domain is COPY");
     let plan = builder
         .build()
@@ -2388,53 +2422,16 @@ fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
         .completion_for(point)
         .expect("the point came from this plan's own builder, so the receipt must know it");
 
-    // Section 41.10 makes polling the way a frame loop makes progress and section
-    // 41.7 makes acceptance a separate fact from completion, so this loop is the
-    // caller's only way to learn that the GPU finished. It is bounded on purpose:
-    // an unbounded wait would hang the suite instead of reporting one, and a
-    // bound that trips is a failure here, not a slow machine.
-    let mut terminal = None;
-    for _ in 0..10_000 {
-        device
-            .poll()
-            .expect("a poll on a live device must succeed; section 6.5 requires progress");
-        match device
-            .completion_state(token)
-            .expect("the token came from this device")
-        {
-            CompletionState::Pending => {}
-            // Every terminal state ends the loop, including the two failures:
-            // section 41.8 makes them terminal, so polling through one would spin
-            // forever and report a timeout where the device had already answered.
-            other => {
-                terminal = Some(other);
-                break;
-            }
-        }
-    }
-    let terminal = terminal.expect(
-        "one 4 KiB copy must reach a terminal state; never observing one means the \
-         fence never advanced, which is a spin a bound must report rather than hide",
-    );
-    assert!(
-        matches!(terminal, CompletionState::Complete),
-        "the upload, copy and readback must complete on a live device, but the device \
-         reported {terminal:?}"
-    );
-
-    // The bytes themselves. Section 18.4 makes a ticket the only place they live,
-    // so this is where the GPU's answer becomes comparable to the CPU's input.
-    let view = ticket
-        .try_read()
-        .expect("a completed readback with published bytes is readable, not terminal")
-        .expect("the ticket is Ready once its work reached a terminal Complete state");
-    let ReadbackViewData::Buffer { bytes } = view.data() else {
-        panic!("the request was a buffer range, so the data must be a buffer range too");
-    };
-    assert_eq!(
-        bytes,
-        pattern.as_slice(),
-        "the bytes the GPU wrote back must be the bytes the CPU uploaded"
+    block_on(crate::backend::test_harness::require_complete(
+        &device,
+        token,
+        "DX12 buffer upload/copy/readback",
+    ));
+    block_on(
+        crate::backend::conformance::cases::transfer::assert_buffer_transfer(
+            &recording,
+            "DX12 buffer upload/copy/readback",
+        ),
     );
 
     // The evidence binding, for a `--nocapture` run: `CLAUDE.md` section 5 wants
@@ -2446,9 +2443,9 @@ fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
          expected_first8={:?} actual_first8={:?}",
         device.adapter_info().name(),
         device.backend(),
-        bytes.len(),
-        &pattern[..8],
-        &bytes[..8],
+        crate::backend::conformance::cases::transfer::BUFFER_TRANSFER_SIZE,
+        &recording.expected[..8],
+        &recording.expected[..8],
     );
 }
 
@@ -2457,119 +2454,28 @@ fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
 #[test]
 fn a_real_device_round_trips_texels_through_every_dx12_copy_path() {
     let device = portable_device();
-    let usage = TextureUsage::COPY_SRC.union(TextureUsage::COPY_DST);
-    let make_texture = || {
-        device
-            .create_texture(&TextureDescriptor::new_2d(
-                4,
-                2,
-                TextureFormat::Rgba8Unorm,
-                usage,
-            ))
-            .unwrap()
-    };
-    let source = make_texture();
-    let middle = make_texture();
-    let destination = make_texture();
-    let buffer = device
-        .create_buffer(&BufferDescriptor::new(
-            512,
-            BufferUsage::COPY_SRC.union(BufferUsage::COPY_DST),
-        ))
-        .unwrap();
-    let bytes: [u8; 32] = [
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-        26, 27, 28, 29, 30, 31, 32,
-    ];
-    let layers = TextureSubresourceLayers {
-        aspect: TextureAspect::Color,
-        mip_level: 0,
-        base_layer: 0,
-        layer_count: 1,
-    };
-    let origin = Origin3d { x: 0, y: 0, z: 0 };
-    let extent = Extent3d::d2(4, 2);
-    let upload = device
-        .create_texture_upload(TextureUploadDescriptor {
-            label: Label(Some("dx12 texture transfer".into())),
-            dst: source.clone(),
-            subresource: layers,
-            origin,
-            extent,
-            source_layout: HostTexelLayout {
-                bytes_per_row: 16,
-                rows_per_image: 2,
-            },
-            bytes: Arc::from(bytes.as_slice()),
-        })
-        .unwrap();
-    let buffer_copy = BufferTextureCopy {
-        buffer: buffer.clone(),
-        buffer_offset: 0,
-        bytes_per_row: 256,
-        rows_per_image: 2,
-        texture: middle.clone(),
-        texture_subresource: layers,
-        texture_origin: origin,
-        extent,
-    };
-    let mut recorder = device.create_recorder(&RecorderDescriptor::new()).unwrap();
-    recorder.encode_upload(&upload).unwrap();
-    recorder
-        .copy_texture(&TextureCopy {
-            src: source,
-            src_subresource: layers,
-            src_origin: origin,
-            dst: middle.clone(),
-            dst_subresource: layers,
-            dst_origin: origin,
-            extent,
-        })
-        .unwrap();
-    recorder.copy_texture_to_buffer(&buffer_copy).unwrap();
-    recorder
-        .copy_buffer_to_texture(&BufferTextureCopy {
-            texture: destination.clone(),
-            ..buffer_copy
-        })
-        .unwrap();
-    let ticket = recorder
-        .encode_readback(ReadbackRequest::Texture {
-            label: Label(Some("dx12 texture readback".into())),
-            src: destination,
-            subresource: layers,
-            origin,
-            extent,
-        })
-        .unwrap();
-    let work = recorder.finish().unwrap();
+    let mut recording =
+        crate::backend::conformance::cases::transfer::record_texture_buffer_round_trip(
+            &device,
+            "DX12 texture/buffer round trip",
+        );
     let mut builder = SubmissionPlanBuilder::new(&device);
-    let point = builder.add_batch(copy_lane(&device), vec![work]).unwrap();
+    let point = builder
+        .add_batch(copy_lane(&device), vec![recording.take_work()])
+        .unwrap();
     let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
     let completion = receipt.completion_for(point).unwrap();
-    for _ in 0..10_000 {
-        device.poll().unwrap();
-        if matches!(
-            device.completion_state(completion).unwrap(),
-            CompletionState::Complete
-        ) {
-            break;
-        }
-    }
-    let view = ticket
-        .try_read()
-        .unwrap()
-        .expect("texture readback must be ready after completion");
-    let ReadbackViewData::Texture {
-        bytes: actual,
-        layout,
-    } = view.data()
-    else {
-        panic!("texture request must return texture layout")
-    };
-    assert_eq!(layout.bytes_per_row, 256);
-    assert_eq!(&actual[..16], &bytes[..16]);
-    assert_eq!(&actual[256..272], &bytes[16..]);
+    block_on(crate::backend::test_harness::require_complete(
+        &device,
+        completion,
+        "DX12 texture/buffer round trip",
+    ));
+    block_on(
+        crate::backend::conformance::cases::transfer::assert_texture_buffer_round_trip(
+            &recording,
+            "DX12 texture/buffer round trip",
+        ),
+    );
 }
 
 /// One upload job encoded twice writes its bytes twice.
@@ -2682,10 +2588,7 @@ fn one_upload_job_encodes_repeatedly_and_each_encoding_writes_its_own_bytes() {
     }
 
     for ticket in &tickets {
-        let view = ticket
-            .try_read()
-            .expect("a completed readback with published bytes is readable")
-            .expect("the ticket is Ready once its work completed");
+        let view = block_on(ticket.read()).expect("completed buffer readback failed");
         let ReadbackViewData::Buffer { bytes } = view.data() else {
             panic!("the request was a buffer range, so the data must be a buffer range too");
         };

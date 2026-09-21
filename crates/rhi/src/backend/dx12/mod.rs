@@ -117,6 +117,7 @@ mod failure;
 mod ffi;
 mod pipeline;
 mod platform;
+pub(crate) use platform::Dx12Provider;
 mod presentation;
 mod resource;
 mod shader;

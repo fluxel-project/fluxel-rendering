@@ -189,6 +189,13 @@ set.
 
 ## Examples and further reading
 
+- [`tests/`](tests/) is the real-adapter conformance baseline: focused
+  readback assertions are distinct from portable unit tests and from visible
+  surface smoke tests.
+- [`examples/`](examples/) explains the host-injected v13 workloads and the
+  public provider-composition entry points. Examples may create a portable
+  provider through those functions, but never receive a native provider or
+  platform handle.
 - [`crates/rendergraph/examples/`](../rendergraph/examples/) shows render-graph
   declaration and compilation on top of the RHI vocabulary.
 - [`crates/renderer/examples/01_headless_frame.rs`](../renderer/examples/01_headless_frame.rs)

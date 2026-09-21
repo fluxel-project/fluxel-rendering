@@ -61,5 +61,7 @@ pub(crate) mod facts;
 mod provider;
 mod request;
 
+pub(crate) use provider::Dx12Provider;
+
 #[cfg(test)]
 mod tests;

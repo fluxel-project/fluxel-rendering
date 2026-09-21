@@ -253,7 +253,7 @@ fn raster_readback(
         settle(device, receipt.completion_for(point).unwrap()),
         CompletionState::Complete
     ));
-    let view = ticket.try_read().unwrap().expect("raster readback ready");
+    let view = block_on(ticket.read()).expect("raster readback failed");
     let ReadbackViewData::Texture { bytes, .. } = view.data() else {
         panic!("texture readback");
     };
