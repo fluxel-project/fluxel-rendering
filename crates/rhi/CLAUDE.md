@@ -1295,3 +1295,10 @@ WebGL2
 最终都必须服从同一条规则：
 
 > **Public semantic 属于 Fluxel；native mechanics 属于 backend。**
+
+## Repository language rule
+
+All documentation committed to GitHub must be written in English. This
+includes README files, ADRs, version notes, test/example documentation, and
+code comments that describe public decisions. Chinese may be used in local
+conversation or scratch notes, but it must be translated before commit.
