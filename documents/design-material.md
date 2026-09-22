@@ -911,6 +911,9 @@ render-target requirements
 ```
 
 The exact cross-crate shape should be finalized together with `fluxel-shader`.
+Material and shader code may directly reuse RHI's portable shader, pipeline,
+and binding vocabulary. They must not create a parallel GPU contract or expose
+backend-private API objects.
 
 ---
 

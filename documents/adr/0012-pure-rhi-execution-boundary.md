@@ -1,6 +1,12 @@
 # ADR-0012: Keep RHI limited to portable execution
 
-**Status:** Accepted
+**Status:** Accepted (clarified)
+
+> Clarification (post-foundation target): this ADR keeps RHI free of
+> RenderGraph-owned declarations and renderer policy. It does not require
+> RenderGraph to be a pure IR with no RHI dependency. RenderGraph directly
+> reuses the portable RHI contract; only backend-private APIs remain outside
+> RenderGraph.
 
 ## Context
 

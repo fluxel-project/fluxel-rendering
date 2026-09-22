@@ -21,7 +21,7 @@ fields or backend implementation detail. An ADR may later be marked
 - [ADR-0015: Freeze plan-scoped transient lifetimes with dedicated fallback](0015-plan-scoped-transient-allocation.md)
 - [ADR-0014: Treat device loss as a terminal identity state](0014-terminal-device-loss.md)
 - [ADR-0013: Make only future-event operations asynchronous](0013-async-operation-boundary.md)
-- [ADR-0012: Keep RHI limited to portable execution](0012-pure-rhi-execution-boundary.md)
+- [ADR-0012: Keep RHI limited to portable execution — clarified: RenderGraph directly uses the portable RHI contract](0012-pure-rhi-execution-boundary.md)
 - [ADR-0010: Keep fixed-asset residency renderer-private — RHI semantics superseded by API v1](0010-renderer-private-fixed-asset-residency.md)
 - [ADR-0009: Keep the resource floor closed and reuse stateful — historical 0.12–0.15](0009-resource-floor-and-reuse-safety.md)
 - [ADR-0008: Execute platform-specific test paths natively](0008-native-platform-test-gates.md)

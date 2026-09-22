@@ -22,47 +22,11 @@ Blender-authored material -> Fluxel material/shader semantics
 Preview and runtime consume the same Material IR, shader variant, parameters,
 textures, and renderer path. Fluxel does not aim to reproduce EEVEE or Cycles.
 
-## Architecture and ownership
-
-```text
-Blender native add-on and tools
-  material translation / preview / export / diagnostics
-                |
-                v
-material and shader semantics
-                |
-                v
-fluxel-renderer: scene preparation -> FramePipeline
-  ├──> fluxel-rendergraph: pure graph compiler / IR
-  ├──> fluxel-rhi: pure execution
-  └──> workspace-private graph/RHI bridge
-       -> RecordedWork / SubmissionPlan
-```
-
-RenderGraph declares logical requirements and compiles them into immutable graph
-plans. RHI owns live device-affine objects and execution. The renderer-private
-bridge projects enabled RHI capabilities into a `GraphTargetProfile`, prepares
-live RHI bindings for logical slots, and lowers an instantiated graph into
-recorded work and submission. Neither public crate depends on the other.
-
-`GraphTargetProfile` is a lossless-for-graph projection of enabled RHI
-capabilities: it may omit facts irrelevant to graph compilation, but it must
-never manufacture, strengthen, or reinterpret an RHI capability. Device
-identity/generation validation, usage legality, completion-safe lifetime,
-frame attachments, and pipeline/binding compatibility remain bridge/RHI work,
-not graph concepts.
-
-The common public model contains RenderGraph resources, RHI bindings,
-Device/Surface/Completion, and generation-aware ownership. WebGPU, WebGL,
-native handles, and reference-counted leases remain backend-private. Neither
-the public nor backend resource model uses browser sessions or asset tokens.
-
-`fluxel-bases` owns durable logical asset identity, while this workspace owns
-only renderer-private per-device GPU residency. Geometry and material handles
-are conceptual typed references; when backed by Fluxel assets, their durable
-identity is `AssetId<K>` plus `ContentGeneration`, not a parallel identity
-domain. A material instance may have renderer-domain identity distinct from its
-material asset.
+Architecture and ownership are specified by the
+[workspace architecture](design-overview.md), [renderer](design-renderer.md),
+[RenderGraph](design-rendergraph.md), [material](design-material.md), and
+[RHI](../crates/rhi/documents/design-rhi.md) designs. This product plan only
+orders the outcomes that exercise those contracts.
 
 ## Delivery order
 
@@ -74,7 +38,7 @@ named plans rather than release-number promises:
    identity; prove one Rust-only material-to-shader vertical slice.
 2. **Minimal scene and Forward plan.** Establish the smallest
    RenderScene/RenderView/RenderObject vocabulary, the `FramePipeline` SPI,
-   the renderer-private graph/RHI bridge, and one Forward implementation.
+   direct RenderGraph/RHI integration, and one Forward implementation.
 3. **Scene preparation and Deferred plan.** Complete culling, deterministic
    ordering, material selection, diagnostics, and Deferred as an independent
    pipeline proof.

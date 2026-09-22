@@ -59,19 +59,11 @@ Introduce the smallest `RenderScene`, `RenderObject`, and `RenderView`
 vocabulary sufficient to freeze the consumer shape, a custom `FramePipeline`
 SPI, and one built-in Forward proof.
 
-The renderer-private bridge is the only graph/RHI integration owner:
-
-```text
-RHI enabled capabilities -> GraphTargetProfile -> RenderGraph compile
-CompiledGraph + logical frame inputs -> GraphInstantiation -> GraphExecutionPlan
-live RHI resources/bindings/frame attachment -> prepared RHI bindings
-GraphExecutionPlan + prepared RHI bindings -> RecordedWork / SubmissionPlan
-```
-
-RenderGraph knows logical slots, descriptors, required usage, definedness, and
-semantic import/export contracts. It does not receive RHI objects, device
-identities, leases, frame attachments, pipelines, or binding objects. The bridge
-and RHI validate those live facts before recording and submission.
+The completion gate is an end-to-end Forward frame that resolves a material
+variant, builds and compiles RenderGraph work through the direct portable RHI
+contract, records/submits it, and retains deterministic validation evidence.
+The exact layer contracts remain in the renderer, RenderGraph, material, and
+RHI design documents.
 
 ## Scene preparation and Deferred plan
 
@@ -119,22 +111,15 @@ adapter prove a stable boundary; future adapters must not push platform-specific
 behavior into that core.
 
 Canvas 2D and minimal text consume the renderer and prepared-resource model.
-They must not introduce DOM, CSS, browser-session, or token-based resource
-ownership into the core. Declarative UI is built above those services. It may
-use Vue-inspired ergonomics, but it is not Vue-compatible and does not import
-Vue component/runtime semantics.
+Declarative UI is built above those services. It may use Vue-inspired
+ergonomics, but it is not Vue-compatible and does not import Vue
+component/runtime semantics.
 
 ## Cross-plan invariants
 
 - Rust owns material and shader semantics; Blender is an authoring frontend.
-- RenderGraph is a pure graph compiler/IR and RHI is pure execution. Their
-  bridge/lowering is renderer-owned and workspace-private.
-- `GraphTargetProfile` is the sole RHI-capability projection for graph compile;
-  it never manufactures, strengthens, or reinterprets RHI capability facts.
 - The custom pipeline SPI and built-in pipelines share material/shader
   contracts.
-- Device/context identity plus generation is the public resource-affinity
-  model; browser sessions and tokens never enter the architecture.
 - Unsupported features fail explicitly and never silently approximate.
 - Cross-repository claims require evidence from an integrated artifact, not
   only a local library test.

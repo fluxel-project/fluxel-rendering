@@ -24,9 +24,9 @@ The workspace is organised around four crates:
 
 | Crate | Responsibility |
 | --- | --- |
-| `fluxel-rendergraph` | A pure graph compiler and IR: typed declarations, validation, dependency compilation, and immutable graph plans. It owns no GPU execution. |
-| `fluxel-rhi` | Pure portable GPU execution: device-affine resources, recording, lowering, submission, completion, and presentation. It does not know RenderGraph. |
-| `fluxel-renderer` | Renderer policy, scene preparation, and renderer-owned workspace-private graph-to-RHI bridge/lowering. |
+| `fluxel-rendergraph` | GPU-work planning: typed declarations, versions, validation, dependencies, culling, lifetimes, and immutable graph plans. It directly uses RHI portable contracts. |
+| `fluxel-rhi` | Portable GPU execution: device-affine resources, capabilities, recording, submission, completion, and presentation; native backends remain private. |
+| `fluxel-renderer` | RenderScene and FramePipeline policy: scene preparation, material/shader resolution, culling, sorting, and graph construction. |
 | `fluxel-rendering-wasm` | Non-published wasm-bindgen capsule for the named WebGL2 and WebGPU browser proofs; JavaScript remains the RAF and DOM lifecycle owner. |
 
 The optional `gpu-upload` slice publishes immutable GPU snapshot generations
@@ -148,14 +148,14 @@ graph declarations expose a typed `UnsupportedCapability` requirement with the
 observed capability snapshot, so a host can choose a fallback before context or
 resource work begins.
 
-For application integration, begin with the typed RenderGraph declaration and
-compile it against the selected backend's observed capabilities; bind persistent
-objects through provider-owned imports and consume each export's reported
-outgoing state. The executor may privately reuse compatible whole-resource
-transients, but callers must never depend on a transient's physical identity.
-Details and lifetime limits are in [the RenderGraph design](documents/design-rendergraph.md),
-[the RHI design](crates/rhi/documents/design-rhi.md), and
-[ADR-0009](documents/adr/0009-resource-floor-and-reuse-safety.md).
+For application integration, a `FramePipeline` resolves material/shader
+variants, builds a typed RenderGraph, and records it directly through the
+selected RHI device's portable contract. Per-frame imports can bind RHI
+resources directly; backends and native synchronization remain private.
+RenderGraph analyzes logical transient lifetimes while RHI realizes allocation,
+so callers must never depend on a transient's physical identity. Details are in
+[the RenderGraph design](documents/design-rendergraph.md), [the RHI design](crates/rhi/documents/design-rhi.md),
+and [ADR-0009](documents/adr/0009-resource-floor-and-reuse-safety.md).
 
 The corresponding supported-target limits and release evidence are maintained
 in the ecosystem roadmap and GitHub Releases. The resource floor remains a

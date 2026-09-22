@@ -1,248 +1,72 @@
 # fluxel-rendergraph
 
-> `0.15` historical usage guide. Do not copy its `ExecutionPlan`, native-like
-> state, or presentation-token spelling into the planned graph architecture. The sole
-> RHI architectural authority is [Fluxel RHI design](../rhi/documents/design-rhi.md).
-> [Workspace architecture](../../documents/design-overview.md) is
-> cross-layer architecture, not a second RHI API. Also read the
-> [RenderGraph architecture](../../documents/design-rendergraph.md) and the
-> [implementation plan](../../documents/version-plan.md).
+`fluxel-rendergraph` plans portable GPU work for Fluxel. A frame pipeline
+declares passes, logical resources, versions, and accesses; the graph derives
+dependencies, validates definedness, culls dead work, analyzes lifetimes, and
+produces a deterministic plan.
 
-`fluxel-rendergraph` is a typed, retained pure graph compiler and IR for
-planning GPU work. It owns neither GPU execution nor an RHI dependency; the
-renderer owns the workspace-private lowering bridge to RHI.
-You declare resource accesses during graph setup; the compiler derives pass
-dependencies, validates resource versions against a renderer-projected
-`GraphTargetProfile`, removes dead
-work, and produces an immutable plan. It is for renderers that need pass
-ordering and resource-state requirements to be explicit rather than encoded in
-ad-hoc command recording order.
+It directly depends on [`fluxel-rhi`](../rhi/README.md) for portable GPU
+vocabulary. RHI supplies descriptors, formats, usage flags, resource uses,
+capability facts, recording scopes, resources, pipelines, bindings,
+submission, and presentation. RenderGraph adds only graph-specific meaning; it
+does not duplicate those APIs or access backend-private native objects.
 
-The current release supplies the declaration/compiler contract and a
-single-queue execution SPI verified by the deterministic CPU-only `TestRhi`.
-The companion
-[`fluxel-rhi`](https://github.com/fluxel-project/fluxel-rendering/tree/main/crates/rhi)
-crate implements fixed Raster, Compute, and Copy subsets on native DX12 and
-Vulkan through the same immutable plan. The native profile is limited to
-R01 clear/triangle, R02 indexed viewport/scissor, and X01's closed
-Raster→Compute→Copy recipe; surfaces, renderer lowering, and a general shader
-or pipeline API remain outside it.
+Read [the RenderGraph design](../../documents/design-rendergraph.md) for the
+target architecture and [the implementation plan](../../documents/version-plan.md)
+for delivery order. This README also records the historical `0.15` examples and
+fixed execution evidence; they do not freeze the next public graph API.
 
-## Installation
+## Frame integration
 
-```toml
-[dependencies.fluxel-rendergraph]
-git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.16.0"
+```text
+RenderScene -> FramePipeline + Material / Shader -> RenderGraph -> RHI
+
+CompiledGraph + per-frame RHI bindings
+        -> RHI RecordedWork -> RHI SubmissionPlan
 ```
 
-The crate is not published on crates.io yet, so the Git dependency is the
-current installation path. It requires Rust 1.87
-or newer, uses edition 2024, and has no production GPU dependency.
+Material and shader variants are resolved by `FramePipeline` before pass
+declaration. Imports may be reusable logical slots, but each frame can bind
+them directly to RHI buffers, textures, pipelines, bindings, or a
+`FrameAttachment`. `FrameAttachment` is not a texture.
 
-## Quick start
+`CompiledGraph` is associated with the current device and capability
+environment. On device loss or replacement, compile again. Do not build a
+second capability profile or promise cross-device graph reuse until evidence
+shows that the optimization is needed.
 
-The smallest complete example declares an uninitialized transient buffer,
-initializes it in a compute pass, exports its successor version, and compiles
-the graph against the application's observed capabilities:
+## What the graph owns
 
-```rust
-use fluxel_rendergraph::{
-    BufferCapabilities, BufferDesc, BufferRange, BufferWriteUse, CompileError,
-    DeviceCapabilities, ExportBufferContract, QueueCapabilities,
-    QueueDescriptor, QueueId, RenderGraph, ResourceAccessState, WriteCoverage,
-};
+- logical resources, versions, definedness, and typed pass-local access;
+- declared reads/writes, explicit dependencies, and RAW/WAR/WAW analysis;
+- roots, dead-pass culling, deterministic scheduling, and diagnostics;
+- logical lifetimes and alias opportunities.
 
-fn main() -> Result<(), CompileError> {
-    let capabilities = DeviceCapabilities::builder()
-        .queue(QueueDescriptor::new(
-            QueueId::new(0),
-            QueueCapabilities::new(false, true, false, false),
-        ))
-        .buffers(BufferCapabilities::new(false, true, false))
-        .build();
+RHI realizes physical allocation and native synchronization. Dedicated
+transient allocation is valid baseline behavior; aliasing is optional.
 
-    let mut graph = RenderGraph::<()>::new();
-    let output = graph.create_buffer("output", BufferDesc { size: 256 });
-    let output = graph.add_compute_pass(
-        "initialize",
-        |pass| {
-            let (next, write) = pass.write_buffer(
-                output,
-                BufferWriteUse::Storage,
-                BufferRange::whole(),
-                WriteCoverage::Full,
-            );
-            (next, write)
-        },
-        |_commands, _resolver, _write, _frame| Ok(()),
-    );
+## Pass recording
 
-    graph.export_buffer(
-        output.output,
-        ExportBufferContract {
-            final_state: ResourceAccessState::ShaderStorageWrite,
-        },
-    );
-    let compiled = graph.compile(&capabilities)?;
-    println!("retained passes: {}", compiled.graph.execution_order().len());
-    Ok(())
-}
-```
+Passes record through RHI raster, compute, or copy scopes, optionally wrapped
+only to enforce graph-declared resource access and command family. The graph
+must not create a second draw/dispatch/copy/pipeline/binding command language
+for later translation.
 
-`capabilities` is a historical fixture spelling. In the target architecture,
-the renderer-private bridge projects the selected RHI device's immutable
-capability snapshot into `GraphTargetProfile`; applications do not maintain a
-second capability truth. The same
-program is checked in as [`00_minimal_compile.rs`](examples/00_minimal_compile.rs);
-from this repository, run it with:
+## Historical examples and verification
+
+The numbered examples remain useful implementation evidence for the retained
+declaration/compiler contract:
 
 ```sh
 cargo run -p fluxel-rendergraph --example 00_minimal_compile
+cargo test -p fluxel-rendergraph
 ```
 
-When compilation returns `CompileErrorKind::UnsupportedSemanticRequirement`,
-`error.context.unsupported` contains a typed `CapabilityRequirement` and the
-full observed `DeviceCapabilities` snapshot. Use those fields for fallback or
-user-facing diagnostics; `DiagnosticContext::detail` is descriptive text, not
-a matching contract. This reports declared resource and queue semantics only,
-and does not introduce a general pipeline API.
-
-## Core concepts
-
-### Versions and typed access handles
-
-`TextureVersion` and `BufferVersion` represent logical contents. A read borrows
-a version; a write consumes it and returns its successor. Setup also returns a
-pass-local `*Read`, `*Write`, or `*ReadWrite` handle. The execute callback can
-resolve and use only those declared handles. This keeps data dependencies
-visible to the compiler while pipelines, descriptors, samplers, and native
-resources stay outside the graph.
-
-See [`10_resource_versions.rs`](examples/10_resource_versions.rs) for a
-read/write chain and [`08_multi_reader.rs`](examples/08_multi_reader.rs) for
-fan-out reads.
-
-### Passes, roots, and culling
-
-`add_raster_pass`, `add_compute_pass`, and `add_copy_pass` separate setup
-(declaration) from repeatable execution. Exported versions, presentation
-targets, and declared side effects are graph roots. Only work required by a
-root is retained; `CompileReport::culled_passes` explains what was removed.
-
-[`09_culling.rs`](examples/09_culling.rs) demonstrates root-driven culling.
-Use `depends_on` only for external protocol or diagnostic ordering that no GPU
-resource can express—never as a substitute for a resource access.
-
-### Imports, exports, and frames
-
-Transient resources are graph-owned declarations. Persistent resources are
-declared as logical import slots with descriptor, semantic, required-usage, and
-definedness contracts. Exports specify the required final semantic use. A
-compiled graph remains reusable and profile-affine: logical frame values belong
-to `GraphInstantiation`, while device affinity begins only in the
-renderer-private bridge. Device identity never belongs to `CompiledGraph` or
-`GraphExecutionPlan`.
-
-The bridge resolves logical slots into `PreparedRhiBindings`. Before recording,
-bridge/RHI preflight checks physical resource identity and generation,
-descriptor and allowed usage, known incoming state, and completion-safe
-retention. Providers derive allowed operations from creation and native facts;
-they must not copy the compiled requirement into a binding.
-
-Renderer-private GPU residency is resolved outside RenderGraph. Graph setup and
-pass callbacks receive neither `AssetStore`, an asset lookup handle, nor a
-concrete RHI snapshot/lease. Residency does not add an asset identity, cache, or
-generic shader contract to RenderGraph.
-
-Start with [`01_copy_buffer.rs`](examples/01_copy_buffer.rs) for an import and
-export, then [`14_two_frame_dynamic.rs`](examples/14_two_frame_dynamic.rs) for
-one graph instantiated with distinct frame inputs.
-
-### Execution integration
-
-The target architecture instantiates a compiled graph into a logical
-`GraphExecutionPlan`. The renderer-private bridge combines that plan with
-prepared RHI resources, pipelines, bindings, samplers, and an acquired
-`FrameAttachment`, then produces `RecordedWork` and `SubmissionPlan`. Historical
-`FrameExecutor`/`TestRhi` paths remain implementation evidence, not the future
-public boundary. For a present root, this historical implementation resolved an acquired image
-with a one-shot adapter value. In v1, an acquired `FrameAttachment` is a
-distinct RHI presentation object, not an imported `Texture` or a token. The
-renderer consumes it through `SubmissionPlanBuilder::present_after`, receives a
-`PresentReceipt`, and explicitly calls `abandon` if the frame is not submitted.
-No browser/session/token concept enters the Graph or RHI resource model. Native
-surface and swapchain objects never enter graph declarations or pass callbacks.
-On Windows, `fluxel-rhi` separately executes the same immutable plan on DX12
-and Vulkan for fixed Raster, Compute, and Copy release fixtures. Its support
-is not a general graph shader surface: a renderer/RHI provider registers opaque
-fixed pipeline and binding objects, while the graph continues to own only
-declared resource accesses, ordering, states, and dispatch validation. X01 is
-one closed sampled `Rgba8Unorm` texture-to-packed-storage-buffer recipe, not a
-general texture-compute feature.
-[`20_headless_frame_pipeline.rs`](examples/20_headless_frame_pipeline.rs) is
-the full CPU-only Raster → Compute → Copy integration fixture.
-
-## Examples
-
-The numbered examples are a progressive tour and run with
-`cargo run --example <name>`.
-
-- `01_copy_buffer`, `02_compute_buffer`, `03_raster_triangle`: executable
-  TestRhi command-recording paths.
-- `04_frame_pipeline`, `05_import_export_history`, `11_subresource`: resource
-  contracts, attachment/range semantics, and persistent history.
-- `06_explicit_order`, `07_compile_diagnostics`, `09_culling`: compiler
-  diagnostics and graph retention.
-- `12_capability_fallback`, `15_sampled_indexed_draw`, `18_backend_variants`:
-  capability-dependent declarations and renderer-facing bindings.
-- `19_invalid_graphs` and `20_headless_frame_pipeline`: failure shapes and the
-  most complete executable protocol fixture.
-
-## Performance characteristics
-
-Compilation is CPU-side planning. It derives dependencies and transitions from
-declared accesses, culls unreachable work, and produces an immutable snapshot
-that can be instantiated repeatedly. The current executor lowers one serial,
-single-queue plan; it does not claim multi-queue overlap, transient aliasing,
-parallel recording, native GPU throughput, or GPU timing performance.
-
-Repository benchmarks measure compiler and CPU `TestRhi` protocol work, not
-GPU performance.
-
-## Platform compatibility
-
-The core crate is platform-neutral and its normal library build has no native
-GPU dependency. It supports platforms on which Rust 1.87 is supported. Native
-device discovery is deliberately separate in `fluxel-rhi`; its current
-headless bootstrap targets DX12 on Windows and Vulkan where supported by that
-crate and its drivers.
-
-## Current limits
-
-- Real-GPU execution is limited to the fixed Raster, Compute, and Copy profile
-  on Windows DX12/Vulkan. R01/R02/X01 pass their exact CPU oracles on both
-  backends with Required validation on the recorded release hardware.
-- No native surface acquisition, resize/recreation, or present execution in
-  RenderGraph itself. It only declares an imported presentable resource and
-  final present intent; RHI owns native presentation.
-- No native multi-queue lowering, resource aliasing, or GPU conformance claim.
-- The execution SPI is provisional while the first native backend is built;
-  declaration semantics and compiler diagnostics are the stable center.
-
-## Verification
-
-From the repository root:
-
-```sh
-cargo test
-cargo run --example 00_minimal_compile
-```
-
-For architecture and rationale, read
-[`documents/design-rendergraph.md`](https://github.com/fluxel-project/fluxel-rendering/blob/main/documents/design-rendergraph.md).
+Current fixed native evidence is intentionally limited. It is not a general
+shader or pipeline promise; see RHI documentation and release conformance
+evidence for supported backend details.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option.
+Licensed under either [Apache License, Version 2.0](../../LICENSE-APACHE) or
+[MIT license](../../LICENSE-MIT) at your option.

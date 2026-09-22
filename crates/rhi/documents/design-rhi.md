@@ -44,8 +44,9 @@ window handles stay in the host/backend seam.
   lowering, lifetime/loss handling, and conformance evidence.
 - `command::ResourceUse` is derived from recorded commands. It includes
   scheduling-only query-slot writes and resolve reads without pretending a
-  `QuerySet` is a buffer. RenderGraph declarations and scheduler contracts are
-  intentionally outside RHI.
+  `QuerySet` is a buffer. RenderGraph owns declarations and scheduling, while
+  directly reusing this portable vocabulary; RHI itself does not own graph
+  policy or types.
 - Only operations which may wait for a future event are async. Logical object
   creation, validation, capability queries, and recording are synchronous.
 - `submit(Err)` accepts no native work. `submit(Ok)` transfers plan ownership;

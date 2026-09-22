@@ -15,8 +15,9 @@
 > Delivery order: the minimal scene milestone freezes only `RenderScene`,
 > `RenderObject`, `RenderView`, the `FramePipeline` SPI, and one Forward proof.
 > The complete scene-preparation milestone adds culling and proves the SPI again
-> with Deferred. The renderer owns the workspace-private lowering bridge from RenderGraph IR to RHI
-> `RecordedWork` and `SubmissionPlan`; RenderGraph and RHI remain independent.
+> with Deferred. The renderer directly builds RenderGraph work against RHI's
+> portable contract; it owns scene policy and ordinary integration glue, not a
+> Graph/RHI translation layer.
 
 ---
 
@@ -186,7 +187,7 @@ future draw/material preparation service seams
 FramePipeline SPI
 FramePipelineContext
 
-RenderGraph authoring integration
+RenderGraph authoring and direct RHI integration
 
 renderer-level errors and results
 ```
