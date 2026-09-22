@@ -11,6 +11,12 @@
 > Historical fixed recipes, `FixedFrameRenderer`, legacy snapshot gates, and old
 > execution-plan terminology are implementation history only and are not part of
 > the future renderer contract.
+>
+> Delivery order: `0.18` freezes only minimal `RenderScene`, `RenderObject`,
+> `RenderView`, the `FramePipeline` SPI, and one Forward proof. `0.19` completes
+> scene preparation/culling and proves the SPI again with Deferred. The renderer
+> owns the workspace-private lowering bridge from RenderGraph IR to RHI
+> `RecordedWork` and `SubmissionPlan`; RenderGraph and RHI remain independent.
 
 ---
 

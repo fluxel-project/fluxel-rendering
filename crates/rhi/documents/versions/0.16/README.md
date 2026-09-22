@@ -5,23 +5,26 @@
 0.16 keeps the v13 public RHI contract frozen. The main work in this release
 is cross-platform test and example infrastructure rather than a new API revision:
 
-- 公共 provider 组合入口：`create_dx12_provider`、
-  `create_vulkan_provider`、`create_metal_provider`，以及 wasm WebGPU 入口。
-  上层 examples 不再需要访问 crate-private provider 或 native handle。
-- 公共 conformance workload 矩阵，覆盖 triangle、indexed triangle、
-  uniform/texture/sampler、storage compute、transfer/readback、depth/stencil、
-  MSAA/resolve、indirect、occlusion query、multiview、mapping、BC/ETC2/ASTC
-  和 presentation resize/recreate 13 个类别，并为每项固定 capability gate
-  与 `Pass/Unsupported/Skipped/Failure` 判定规则。
-- examples 入口：`triangle`、`textured_cube`、`compute`、`msaa`、
-  `indirect`、`query`，以及既有的 `offscreen_triangle`、`headless_compute`、
-  `clear_present`、`provider_probe`。
-- GL/WGL 公共 fixture 接入；GL/GLES/WebGL2 仍由 host-owned context 适配，
-  native context 不进入 RHI 公共对象模型。
-- DX12 completion 顺序修复：较早的不可观察 signal 在后续 fence 成功到达时，
-  按队列顺序正确发布完成；transfer resource 保留到对应 fence 完成。
-- provider probe 的 Metal/WebGPU 分支补齐，wasm 分支使用浏览器 Promise
-  调度，不在浏览器线程上阻塞等待。
+- Public provider-composition entry points: `create_dx12_provider`,
+  `create_vulkan_provider`, `create_metal_provider`, and the wasm WebGPU
+  entry point. Higher-level examples no longer access crate-private providers
+  or native handles.
+- A public conformance-workload matrix covering 13 categories: triangle,
+  indexed triangle, uniform/texture/sampler, storage compute,
+  transfer/readback, depth/stencil, MSAA/resolve, indirect, occlusion query,
+  multiview, mapping, BC/ETC2/ASTC, and presentation resize/recreate. Each
+  category has a fixed capability gate and `Pass`/`Unsupported`/`Skipped`/
+  `Failure` outcome rule.
+- Example entry points: `triangle`, `textured_cube`, `compute`, `msaa`,
+  `indirect`, and `query`, plus the existing `offscreen_triangle`,
+  `headless_compute`, `clear_present`, and `provider_probe`.
+- Public GL/WGL fixture integration. GL/GLES/WebGL2 still use a host-owned
+  context adapter; a native context does not enter the public RHI object model.
+- DX12 completion ordering fix: an earlier unobservable signal is published in
+  queue order when a later fence succeeds; transfer resources remain alive
+  until their corresponding fence completes.
+- Completed Metal/WebGPU branches in provider probing. The wasm path uses
+  browser Promise scheduling and never blocks the browser thread.
 
 ## Test results
 

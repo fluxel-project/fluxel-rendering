@@ -38,8 +38,10 @@ window handles stay in the host/backend seam.
 
 - Every object belongs to one opaque `DeviceIdentity`; loss terminates that
   identity and a replacement device receives a new one.
-- Capability facts are the authority. A supported fact requires validation,
-  native lowering, lifetime/loss handling, and conformance evidence.
+- Capability facts are the authority. Backends must finalize and validate one
+  immutable capability snapshot before exposing a device; every public query on
+  that snapshot is total. A supported fact requires validation, native
+  lowering, lifetime/loss handling, and conformance evidence.
 - `command::ResourceUse` is derived from recorded commands. It includes
   scheduling-only query-slot writes and resolve reads without pretending a
   `QuerySet` is a buffer. RenderGraph declarations and scheduler contracts are
@@ -52,6 +54,13 @@ window handles stay in the host/backend seam.
   the acquired-frame lifecycle that produced it.
 - Transient lifetimes use `PlanPoint` ordering. `Dedicated` allocation is the
   correct baseline; aliasing is a private, capability-gated optimization.
+
+The total-query rule above is the required contract, not a claim that the
+current constructor already checks every finite query domain. In the `0.16`
+implementation, a missing required finite-domain entry can still reach the
+query-time panic used to identify an incomplete enumeration. Snapshot
+finalization must move that failure into device construction so a successfully
+published device never exposes it.
 
 ## Decision records
 
@@ -75,12 +84,13 @@ conformance evidence, platform test gates, and the GL-family private boundary.
 
 ## Current TODO boundary
 
-The public vocabulary already carries advanced mesh/task shaders, ray tracing,
-cooperative matrices, aliasing, external interop, multiplanar formats, native
-debug capture, HDR/timing, and advanced descriptor indexing. A backend keeps
-each incomplete fact disabled and returns structured `Unsupported` before
-native work. It must not replace an incomplete path with a panic, dummy
-success, or silent fallback.
+The public vocabulary already carries provisional/experimental advanced
+mesh/task shaders, ray tracing, cooperative matrices, aliasing, external
+interop, multiplanar formats, native debug capture, HDR/timing, and advanced
+descriptor indexing. These names do not freeze a descriptor ABI or promise
+availability. A backend keeps each incomplete fact disabled and returns
+structured `Unsupported` before native work. It must not replace an incomplete
+path with a panic, dummy success, or silent fallback.
 
 Current examples include transient physical aliasing, counted indirect paths,
 Metal timestamp/statistics, WebGPU timestamp placement/conversion, and

@@ -1,7 +1,7 @@
 # Fluxel RenderGraph architecture
 
-This document describes the RenderGraph architecture completed by `0.18` and
-`0.19`. The [workspace
+This document describes the RenderGraph architecture introduced in `0.18` and
+completed with scene preparation in `0.19`. The [workspace
 architecture](design-overview.md) defines only cross-layer invariants
 and Graph/capture integration boundaries; it is not a RHI type or error
 inventory. The strict RHI-before-Graph delivery gates are in the [version
@@ -24,9 +24,10 @@ authoring
 
 Renderer decides what a frame means. RenderGraph decides which declared work is
 valid and necessary, how logical contents flow, and what ordering/lifetime the
-work requires. RHI validates and executes the portable plan. Backend selects
-native synchronization, descriptors, allocation realization, encoders, and
-queues.
+work requires. RHI validates and executes portable recorded work and submission
+plans. A renderer-owned, workspace-private bridge lowers graph IR into RHI
+objects; neither public crate depends on the other. Backend selects native
+synchronization, descriptors, allocation realization, encoders, and queues.
 
 RenderGraph owns no scene, asset manager, material policy, native handle,
 barrier, queue family, heap, fence, command list, swapchain, or host lifecycle.
@@ -42,8 +43,9 @@ The design depends on four inseparable properties:
 4. an explicit `GraphExecutionPlan -> SubmissionPlan` boundary.
 
 A mutable graph definition is never itself an executable native plan. A compiled
-graph contains no device object, but its capability and opaque allocation
-profiles are part of its cache identity.
+graph contains no device object. It is capability-affine: its capability, route,
+and opaque allocation profiles are part of its cache identity, while a per-frame
+instantiation is device-affine.
 
 ## Pass declaration and authority
 
@@ -164,7 +166,7 @@ opaque `TransientAllocationRequirements` query. This is required even though
 Graph owns logical overlap: size, alignment, compatibility class, and
 dedicated-only constraints decide whether target storage can actually alias.
 
-`CompiledGraph` records graph generation, target device identity, capability
+`CompiledGraph` records graph generation, a capability-compatibility
 fingerprint, allocation/presentation fingerprints, an immutable logical plan
 template, retained recipes, and report. It is not the per-frame
 `GraphExecutionPlan`. Changes to graph definition, enabled
@@ -177,7 +179,8 @@ Instantiation binds persistent imports, acquired frames, and declared
 layout/sampler/pipeline object slots to a compiled graph. Before calling a
 provider, allocating a transient, or opening an encoder it validates:
 
-- identity and generation;
+- device identity and generation for every bound resource/object, plus the
+  compiled graph's capability-compatibility contract;
 - descriptor and required/allowed usage;
 - initial semantic use against Fluxel-known history;
 - initial contents and definedness;

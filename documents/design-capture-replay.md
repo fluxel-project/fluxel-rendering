@@ -1,13 +1,13 @@
 # Fluxel portable capture and replay architecture
 
-This document explains the capture/replay architecture scheduled for `0.20`.
+This document explains the capture/replay architecture scheduled for `0.22`.
 RHI tooling, object, command, submission, and presentation semantics are frozen
 by [RHI API architecture](../crates/rhi/documents/design-rhi.md). Capture artifact/runtime interfaces are owned by
 this document and the [version plan](version-plan.md).
 
 RHI tooling SPI v1 is frozen and implemented in `0.16`; RenderGraph consumes it
 through `0.18`/`0.19`. This document does not authorize a persistent capture
-file ABI before `0.20`.
+file ABI before `0.22`.
 
 ## Boundary
 
@@ -256,7 +256,7 @@ The finalized manifest, not the mere presence of chunks, decides what is closed.
 The intended storage properties are an append-only write path, finalized
 manifest, content-addressed deduplicated blobs, optional compression, chunk and
 manifest integrity, optional signature/envelope metadata, and lazy blob access.
-The concrete chunk/schema technology is selected and frozen only in `0.20` after
+The concrete chunk/schema technology is selected and frozen only in `0.22` after
 end-to-end proof.
 
 Artifact input is untrusted. The parser checks bounds and integer overflow,
@@ -278,7 +278,7 @@ prefix, and replay rejects an inconsistent manifest before driver submission.
 
 ## Completion criteria
 
-The capture/replay architecture closes only when the `0.20` gates in the
+The capture/replay architecture closes only when the `0.22` gates in the
 [version plan](version-plan.md) pass: dependency-closed ranges, mutation and
 snapshot coverage, compatible same/cross-backend replay, direct/adapted/
 unsupported negotiation, loss/partial handling, malicious-input parser tests,

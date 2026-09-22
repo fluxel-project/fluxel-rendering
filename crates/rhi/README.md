@@ -117,9 +117,14 @@ let support = device.capabilities().texture_support(TextureSupportQuery::new(/* 
 ```
 
 The same rule applies to formats, binding forms, routes, presentation modes,
-query profiles, and limits.  A capability reported as unsupported must be
-handled by a fallback or rejected by the caller; the RHI does not silently
-emulate a feature with different semantics.
+query profiles, and limits. The frozen contract requires a finalized immutable
+snapshot whose public queries are total. Construction-time finalization of
+every finite query domain is still an implementation closure item: the current
+snapshot can panic when a backend omits a required finite-domain entry. That is
+a backend-construction defect, not a supported public outcome, and must be
+rejected before the device is exposed. A capability reported as unsupported
+must be handled by a fallback or rejected by the caller; the RHI does not
+silently emulate a feature with different semantics.
 
 ## Async and lifetime model
 
@@ -186,11 +191,12 @@ browser objects, context state, and native synchronization remain backend
 private.  The portable API exposes logical lanes, plan points, completion
 points, and resource intent instead.
 
-Some vocabulary intentionally remains fail-closed until the complete portable
-path is available on a backend.  Consult the capability snapshot rather than
-assuming that a descriptor type implies support; advanced mesh/ray-tracing and
-transient-aliasing families are documented as staged work in the design/ADR
-set.
+Some vocabulary intentionally remains provisional/experimental and fail-closed
+until the complete portable path is available on a backend. Consult the
+capability snapshot rather than assuming that a descriptor type implies support;
+advanced mesh/task shader, ray-tracing, cooperative-matrix, and
+transient-aliasing families are staged work in the design/ADR set and do not
+freeze descriptor ABI.
 
 ## Examples and further reading
 

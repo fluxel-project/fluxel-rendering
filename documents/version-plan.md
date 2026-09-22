@@ -17,7 +17,7 @@ release:
   |
 0.17  shader assembly + material system        detailed
   |
-0.18  RenderGraph + renderer framework         detailed
+0.18  minimal scene + Forward framework        detailed
   |
 0.19  RenderScene                              detailed
   |
@@ -29,7 +29,9 @@ release:
   |
 0.23  JavaScript API interface                coarse
   |
-0.24  Declarative Vue-like UI + Canvas 2D     coarse
+0.24  Canvas 2D + minimal text                coarse
+  |
+0.25  Declarative Vue-like UI                  coarse
 ```
 
 Every version must still have a named owner, structured refusal behavior,
@@ -54,6 +56,12 @@ migration plan, and affected backend evidence.
 
 This is the next implementation priority. Keep the scope narrow enough to
 produce one complete Rust-to-shader vertical slice.
+
+Before feature work closes, device construction must finalize and validate all
+finite capability-query domains so no successfully published snapshot can
+reach a query-time missing-entry panic. The renderer-owned private graph/RHI
+bridge is the only integration owner; neither public crate depends on the
+other.
 
 ### Material work
 
@@ -92,37 +100,40 @@ Rust MaterialGraph
 ```
 
 Blender import is not part of this version. The complete proof is Rust-only;
-Blender translation begins in `0.21`.
+Blender translation begins in `0.20`.
 
-## 4. Version 0.18 — RenderGraph and renderer framework
+## 4. Version 0.18 — minimal scene and Forward framework
 
 ### Scope
 
 Build on the `0.17` material/shader contracts and connect renderer policy to
 RenderGraph:
 
+- minimal `RenderScene`, `RenderObject`, and `RenderView` vocabulary sufficient
+  to freeze the consumer shape;
 - a custom `FramePipeline` SPI for application-defined pipelines;
-- a built-in Forward pipeline;
-- a built-in Deferred pipeline;
-- RenderGraph lowering for all pipeline routes.
+- one built-in Forward pipeline proof; and
+- renderer-owned, workspace-private lowering from graph IR to RHI
+  `RecordedWork` and `SubmissionPlan`.
 
 ### Acceptance
 
-The custom SPI and both built-in pipelines lower representative work to
-RenderGraph using the same compiled material variant and shader interface. The
-full retained scene model is defined in `0.19`.
+The minimal scene and custom SPI lower representative Forward work through the
+same compiled material variant and shader interface. RenderGraph remains a pure
+compiler/IR and RHI remains pure execution; neither depends on the other.
 
 ## 5. Version 0.19 — RenderScene
 
 ### Scope
 
-Define the renderer-facing scene and frame-preparation model:
+Complete the renderer-facing scene and frame-preparation model:
 
 - `RenderScene`, `RenderObject`, `RenderView`, and stable scene identities;
 - culling, deterministic ordering, visibility, and frame preparation;
 - material/shader variant selection;
 - scene-to-`FramePipeline`-to-RenderGraph construction;
 - renderer diagnostics and retained scene fixtures.
+- Deferred as a second, independent `FramePipeline` proof after Forward.
 
 ### Acceptance
 
@@ -166,23 +177,30 @@ Expose a deliberately narrow JavaScript API over the established Rust
 contracts. JavaScript is an integration surface; it does not own GPU resources,
 shader semantics, material identity, or the RenderScene model.
 
-## 10. Version 0.24 — Declarative UI and Canvas 2D
+## 10. Version 0.24 — Canvas 2D and minimal text
 
-Define a declarative Vue-like UI framework and a Canvas 2D API on top of the
-Fluxel renderer and prepared resources. Both remain consumers of the same
-RenderGraph/RHI architecture and must not introduce DOM, CSS, browser session,
-or token-based resource ownership into the core.
+Define Canvas 2D and minimal text on top of the Fluxel renderer and prepared
+resources. They remain consumers of the same RenderGraph/RHI architecture and
+must not introduce DOM, CSS, browser session, or token-based resource ownership
+into the core.
 
-## 11. Later evolution
+## 11. Version 0.25 — Declarative UI
+
+Build the declarative Vue-like UI layer as a consumer of the established Canvas
+and text services. It does not redefine rendering, resource ownership, or the
+graph/RHI boundary.
+
+## 12. Later evolution
 
 Later work expands Blender semantics, renderer features, custom-pipeline
 examples, shader caching, animation, lighting, and backend evidence as the
 completed route requires.
 
-## 8. Cross-version invariants
+## 13. Cross-version invariants
 
 - Rust owns material and shader semantics; Blender is an authoring frontend.
-- Renderers lower through RenderGraph and execute through the same RHI model.
+- RenderGraph is a pure graph compiler/IR and RHI is pure execution. Their
+  bridge/lowering is renderer-owned and workspace-private.
 - The custom pipeline SPI and built-in pipelines share material/shader
   contracts.
 - Device/context identity plus generation is the only public resource-affinity

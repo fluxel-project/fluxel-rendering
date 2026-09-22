@@ -1,9 +1,11 @@
 # Fluxel Renderer
 
 > `0.15` historical usage guide and post-foundation renderer baseline. Renderer
-> work is paused during `0.16`-`0.20` except for required migration/evidence and
+> work is paused during `0.16`-`0.17` except for required migration/evidence and
 > may be explicitly dormant while lower layers are replaced. Resume only through
-> [the foundation version plan](../../documents/version-plan.md); do not treat
+> [the foundation version plan](../../documents/version-plan.md). `0.18` starts
+> minimal scene/SPI/Forward work and `0.19` completes scene preparation and
+> adds Deferred; do not treat
 > old graph/RHI spellings below as the new contract.
 >
 > **RHI API v1 boundary.** The fixed Stage-1 recipes and all
@@ -40,7 +42,7 @@ pipeline/bind-group API, or own windows and swapchains.
 ```toml
 [dependencies.fluxel-renderer]
 git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.15.0"
+tag = "v0.16.0"
 features = ["gpu-upload"]
 ```
 
@@ -61,7 +63,7 @@ branch:
 ```toml
 [dependencies]
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "22c4eb0e199575aa71b59f3abc6ec3f72d934b9a", version = "=0.13.4" }
-fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0", features = ["gpu-residency"] }
+fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0", features = ["gpu-residency"] }
 ```
 
 Residency is private renderer policy keyed exactly by

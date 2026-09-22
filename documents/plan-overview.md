@@ -42,14 +42,11 @@ fluxel-material: MaterialGraph -> Material IR -> assets/instances
 fluxel-shader: modules/templates -> features -> ShaderArtifact/variant
                 |
                 v
-fluxel-renderer: RenderScene -> preparation -> FramePipeline
-  custom pipeline SPI + built-in Forward + built-in Deferred
-                |
-                v
-fluxel-rendergraph: logical passes/resources -> execution plan
-                |
-                v
-fluxel-rhi: device identity -> bindings -> commands -> completion
+fluxel-renderer: scene preparation -> FramePipeline
+  ├──> fluxel-rendergraph: pure graph compiler/IR
+  ├──> fluxel-rhi: pure execution
+  └──> workspace-private bridge: GraphExecutionPlan
+       -> RHI RecordedWork / SubmissionPlan
 ```
 
 The public architecture contains RenderGraph resources, RHI bindings,
@@ -92,19 +89,19 @@ The next product train is:
 0.17  Shader assembly + material system
   -> MaterialGraph, Material IR, runtime instances
   -> shader modules, composition, reflection, variants, and cache
-0.18  RenderGraph + Renderer Framework
-  -> custom FramePipeline SPI
-  -> built-in Forward and Deferred pipelines
-  -> renderer lowering into RenderGraph
-0.19  RenderScene
-  -> scene/object/view model, preparation, culling, and ordering
-  -> material/shader selection and frame construction
+0.18  Minimal scene + Forward framework
+  -> minimal RenderScene/RenderObject/RenderView and custom FramePipeline SPI
+  -> one built-in Forward proof and renderer-owned bridge/lowering
+0.19  Complete RenderScene and Deferred proof
+  -> scene/object/view preparation, culling, ordering, and material selection
+  -> Deferred as the second independent pipeline proof
 0.20  Blender-native authoring and preview loop
   -> native add-on/tools, viewport preview, export, runtime equivalence
 0.21  Preview/runtime equivalence, export, and integration hardening
 0.22  RenderScene recording and replay
 0.23  JavaScript API interface
-0.24  Declarative Vue-like UI framework + Canvas 2D API
+0.24  Canvas 2D API + minimal text
+0.25  Declarative Vue-like UI framework
 ```
 
 These versions describe sequencing, not a promise that every item fits one
@@ -162,20 +159,21 @@ Rust MaterialGraph -> Material IR -> composed artifact
     -> renderer-facing material instance
 ```
 
-Blender integration is not part of `0.17`; it begins in `0.21`. The `0.17`
+Blender integration is not part of `0.17`; it begins in `0.20`. The `0.17`
 proof is Rust-only. Unsupported material features fail with structured
 diagnostics; they are never silently approximated.
 
 ## 6. RenderGraph and renderer direction
 
 `fluxel-renderer` is a framework for renderer policy, not one fixed recipe. It
-provides `RenderScene`, object/view preparation, culling, deterministic
-ordering, material/shader variant selection, a `FramePipeline` SPI, RenderGraph
-lowering, and renderer diagnostics.
+provides the minimal scene vocabulary and `FramePipeline` SPI in `0.18`, then
+completes object/view preparation, culling, deterministic ordering,
+material/shader variant selection, and diagnostics in `0.19`.
 
 The custom SPI allows applications and tools to define pipelines while keeping
-the same scene, material, shader, RenderGraph, and RHI contracts. Fluxel also
-ships two initial built-in pipelines:
+the same scene, material, shader, RenderGraph, and RHI contracts. Fluxel ships
+Forward first to prove the SPI, then Deferred in `0.19` as an independent
+second implementation:
 
 ```text
 Forward:  depth, ordering, lighting, and material evaluation
@@ -193,7 +191,7 @@ RenderScene -> RenderView/RenderObject -> culling/order
             -> material/shader selection -> FramePipeline -> RenderGraph
 ```
 
-`0.20` applies recording and replay to the whole RenderScene-driven path. The
+`0.22` applies recording and replay to the whole RenderScene-driven path. The
 recording boundary includes scene inputs, material/shader decisions,
 frame/pipeline configuration, and portable execution evidence. Replay uses the
 normal renderer, RenderGraph, and RHI path rather than a second implementation.

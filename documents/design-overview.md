@@ -32,13 +32,14 @@ The completed baseline and next delivery order are:
 ```text
 0.16       Completed RHI baseline
 0.17       Shader assembly and material system
-0.18       RenderGraph + renderer framework, custom SPI, Forward, Deferred
-0.19       RenderScene and frame preparation
+0.18       Minimal RenderScene/View/Object, custom SPI, and Forward proof
+0.19       Complete scene preparation/culling and Deferred proof
 0.20       Blender-native editor, preview, and material/scene import
 0.21       Preview/runtime equivalence, export, and integration hardening
 0.22       RenderScene recording and replay
 0.23       JavaScript API interface
-0.24       Declarative Vue-like UI and Canvas 2D API
+0.24       Canvas 2D and minimal text
+0.25       Declarative Vue-like UI
 ```
 
 RHI definitions include canonical descriptor/command/submission observation,
@@ -80,21 +81,25 @@ frame scheduler.
 application / asset system
         |
         v
-fluxel-renderer  ---->  fluxel-rendergraph  ---->  fluxel-rhi
- scene policy             portable plan              native execution
+fluxel-renderer
+  ├──> fluxel-rendergraph       pure graph compiler / IR
+  ├──> fluxel-rhi               pure execution
+  └──> workspace-private bridge: GraphExecutionPlan
+       -> RHI RecordedWork / SubmissionPlan
 ```
 
-Dependencies point downward. The renderer may use RenderGraph declarations and
-RHI's safe opaque objects; RenderGraph does not depend on RHI or renderer; RHI
-implements the execution SPI defined by RenderGraph. Native HAL types never
-travel upward, and renderer concepts such as assets, materials, or visibility
-never become graph concepts.
+The renderer may use RenderGraph declarations and RHI's safe opaque objects.
+RenderGraph does not depend on RHI or renderer, and RHI does not know
+RenderGraph. A renderer-owned workspace-private bridge owns lowering from graph
+IR to RHI `RecordedWork` and `SubmissionPlan`. Native HAL types never travel
+upward, and renderer concepts such as assets, materials, or visibility never
+become graph concepts.
 
 | Layer | Owns | Explicitly does not own |
 | --- | --- | --- |
 | `fluxel-renderer` | Domain inputs, renderer policy, fixed per-device GPU residency, GPU snapshot publication, fixed frame coordination, closed recipes, and the visible fixed-frame transaction | Logical asset loading/cache identity, graph compilation, native handles, barriers, swapchains, or host/window policy |
-| `fluxel-rendergraph` | Logical resources and versions, declared accesses, validation, dependencies, culling, transitions, and immutable execution plans | Scenes, asset handles, shader/pipeline policy, allocation, native handles, queue submission, or readback implementation |
-| `fluxel-rhi` | Device-affine native resources, opaque artifacts/bindings, backend lowering, command recording, submission, completion, diagnostics, and presentation as defined by the normative RHI API | Scene selection, asset policy, host/window ownership, general renderer lowering, or a public general graphics API |
+| `fluxel-rendergraph` | Pure graph compiler/IR: logical resources and versions, declared accesses, validation, dependencies, culling, transitions, and immutable graph plans | Scenes, asset handles, shader/pipeline policy, GPU execution, native handles, queue submission, or readback implementation |
+| `fluxel-rhi` | Pure execution: device-affine native resources, opaque artifacts/bindings, command recording, submission, completion, diagnostics, and presentation as defined by the normative RHI API | RenderGraph, scene selection, asset policy, host/window ownership, renderer lowering, or a public general graphics API |
 
 Assets cross a repository boundary without moving platform or GPU policy into
 one shared crate. `fluxel-bases` owns durable logical identity, typed handles,
@@ -194,12 +199,13 @@ From those declarations RenderGraph derives the dependency DAG, validity and
 initialization checks, dead-pass culling, required usage, and semantic-use/
 memory-dependency requirements.
 
-Compilation produces an immutable, target-aware `CompiledGraph`. The
+Compilation produces an immutable, capability-affine `CompiledGraph`. The
 snapshot contains portable semantics, not an encoder, command buffer, queue,
-or native allocation, but it may be specialized to the selected capability and
-opaque allocation-requirements profile. Imports are stable slots; each frame
-binds concrete resources to them. Exports name roots and carry a portable final
-semantic-use contract for the next graph or external consumer. More detail is in the
+native allocation, or `DeviceIdentity`; it may be specialized to the selected
+capability and opaque allocation-requirements profile. `GraphInstantiation` is
+device-affine: each frame binds concrete resources to stable import slots.
+Exports name roots and carry a portable final semantic-use contract for the next
+graph or external consumer. More detail is in the
 [RenderGraph design](design-rendergraph.md).
 
 An import binding identifies a provider-selected physical object and generation,
@@ -221,7 +227,7 @@ identity, descriptors, declared incoming semantic use against Fluxel-known
 history, and actual allowed usage, then lowers only declared commands. The
 precise resource-use, lane, submission, completion, presentation, and
 retirement semantics are defined by [RHI design](../crates/rhi/documents/design-rhi.md) and its ADRs;
-`rhi-design` modules; this overview does not define an alternate RHI state
+RHI modules; this overview does not define an alternate RHI state
 machine.
 
 An export reports the final portable semantic use established by the plan.
@@ -318,15 +324,15 @@ crates/
     src/upload/   immutable snapshot upload/publication domains
     src/fixed_frame/ closed recipes, owned packets, and fixed-frame submissions
     src/shader/   private fixed shader sources/selection
-  rendergraph/    portable graph declaration, validation, compiler, execution SPI
-    src/compile/  dependency, validation, culling, transition-plan compilation
-    src/execution/ frame instantiation and portable execution protocol
-    src/plan/     immutable plan data and contracts
+  rendergraph/    portable graph declaration, validation, compiler, and graph IR
+    src/compile/  dependency, validation, culling, and graph-plan compilation
+    src/execution/ current per-frame binding, recording, and submission protocol
+    src/plan/     immutable graph IR/data and contracts
     src/test_rhi/  deterministic CPU-only execution-protocol backend
   rhi/            safe native resource and execution facade
-    src/resource/ owned resources, uploads, leases, shader artifacts
-    src/execution/ plan providers, command recording, completion helpers
-    src/imp/      private HAL/native implementation and platform stubs
+    src/api/      portable platform, resource, binding, command, submission,
+                  presentation, statistics, diagnostics, and tooling contracts
+    src/backend/  private DX12, Vulkan, Metal, WebGPU, and GL implementations
 documents/
   design-*.md     target layer designs plus explicitly marked historical baselines
   adr/            durable architectural decisions and alternatives
@@ -335,9 +341,11 @@ documents/
 
 Each source module has one clear responsibility. Composition modules expose
 only declarations, narrow shared contracts, and re-exports; implementation is
-split by independently changing concerns. This preserves the `imp` subtree as
-the sole unsafe/native containment boundary and keeps a public facade stable
-while internal implementation evolves.
+split by independently changing concerns. This preserves `backend` as the
+unsafe/native containment boundary and keeps the public `api` facade stable
+while internal implementation evolves. The target `GraphInstantiation` name
+describes the device-affine architectural role; the `0.16` source still exposes
+that per-frame input through `execution::FrameInputs`.
 
 ## Platform boundary
 

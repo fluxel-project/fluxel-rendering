@@ -23,9 +23,9 @@ The workspace is organised around four crates:
 
 | Crate | Responsibility |
 | --- | --- |
-| `fluxel-rendergraph` | Typed resource declarations, dependency compilation, validation, immutable execution plans, and the CPU-only `TestRhi` protocol. |
-| `fluxel-rhi` | DX12/Vulkan native ownership, fixed RenderGraph execution, and the narrow backend-neutral presentation boundary. |
-| `fluxel-renderer` | Scene/domain data, immutable GPU snapshots, ordered render packets, fixed indexed draws, and visible-frame transactions. |
+| `fluxel-rendergraph` | A pure graph compiler and IR: typed declarations, validation, dependency compilation, and immutable graph plans. It owns no GPU execution. |
+| `fluxel-rhi` | Pure portable GPU execution: device-affine resources, recording, lowering, submission, completion, and presentation. It does not know RenderGraph. |
+| `fluxel-renderer` | Renderer policy, scene preparation, and renderer-owned workspace-private graph-to-RHI bridge/lowering. |
 | `fluxel-rendering-wasm` | Non-published wasm-bindgen capsule for the named WebGL2 and WebGPU browser proofs; JavaScript remains the RAF and DOM lifecycle owner. |
 
 The optional `gpu-upload` slice publishes immutable GPU snapshot generations
@@ -51,17 +51,16 @@ The workspace releases its three publishable crates together. Git consumers must
 release tag rather than follow `main`:
 
 ```toml
-fluxel-rendergraph = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0" }
-fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0" }
-fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.15.0" }
+fluxel-rendergraph = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0" }
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0" }
+fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0" }
 ```
 
-`v0.15.0` and each publishable package's `0.15.0` version identify the same workspace
+`v0.16.0` and each publishable package's `0.16.0` version identify the same workspace
 release. See [RELEASING.md](RELEASING.md) for the release gate.
 
 ## Documentation
 
-- [Workspace architecture](documents/design-overview.md)
 - [Workspace architecture](documents/design-overview.md)
 - [RenderGraph design](documents/design-rendergraph.md)
 - [RHI design](crates/rhi/documents/design-rhi.md)
@@ -110,11 +109,13 @@ only stage/status authority. This README records only the workspace's current
 supported paths and recommended entry points.
 
 The completed `0.16` release is the RHI baseline. `0.17` starts shader
-assembly and the material system, `0.18` combines RenderGraph with the renderer
-framework, `0.19` defines RenderScene, `0.20` starts the native Blender editor,
-`0.21` closes preview/runtime equivalence and export, `0.22` records and
-replays the complete RenderScene path, `0.23` adds the JavaScript API, and
-`0.24` adds the declarative UI and Canvas 2D layers. The executable breakdown is
+assembly and the material system. `0.18` establishes minimal `RenderScene`,
+`RenderView`, and `RenderObject` inputs, the `FramePipeline` SPI, the
+renderer-owned bridge, and one Forward proof. `0.19` completes scene
+preparation/culling and adds Deferred as the second pipeline proof. `0.20`
+starts native Blender tooling, `0.22` records and replays the complete
+RenderScene path, `0.23` adds the JavaScript API, `0.24` adds Canvas 2D and
+minimal text, and `0.25` adds declarative UI. The executable breakdown is
 the [version plan](documents/version-plan.md). The sole normative
 RHI API architecture source is [RHI design](crates/rhi/documents/design-rhi.md);
 rustdoc and contract tests define descriptor-level detail. The

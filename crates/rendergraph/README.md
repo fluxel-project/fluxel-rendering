@@ -8,7 +8,9 @@
 > [RenderGraph architecture](../../documents/design-rendergraph.md) and the
 > [version plan](../../documents/version-plan.md).
 
-`fluxel-rendergraph` is a typed, retained render graph for planning GPU work.
+`fluxel-rendergraph` is a typed, retained pure graph compiler and IR for
+planning GPU work. It owns neither GPU execution nor an RHI dependency; the
+renderer owns the workspace-private lowering bridge to RHI.
 You declare resource accesses during graph setup; the compiler derives pass
 dependencies, validates resource versions and device capabilities, removes dead
 work, and produces an immutable plan. It is for renderers that need pass
@@ -30,7 +32,7 @@ or pipeline API remain outside it.
 ```toml
 [dependencies.fluxel-rendergraph]
 git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.15.0"
+tag = "v0.16.0"
 ```
 
 The crate is not published on crates.io yet, so the Git dependency is the
@@ -134,8 +136,12 @@ resource can express—never as a substitute for a resource access.
 Transient resources are graph-owned declarations. Persistent GPU resources are
 declared as import slots with descriptor, initial state, ownership, and content
 contracts, then bound for each frame by the renderer. Exports specify the
-required final state. A compiled graph remains reusable: per-frame values and
-import bindings belong to `FrameInputs`, not to graph compilation.
+required final state. A compiled graph remains reusable and capability-affine:
+per-frame values and import bindings belong to the device-affine instantiation,
+not to graph compilation. The `0.16` public spelling for those values is
+`FrameInputs`; the target architecture names the complete binding/preflight
+object `GraphInstantiation`. A capability-compatible replacement device can
+instantiate the same graph; device identity never belongs to `CompiledGraph`.
 
 Every bound physical resource reports its actual allowed domain operations.
 Before recording, frame resolution checks that this set covers the compiled
