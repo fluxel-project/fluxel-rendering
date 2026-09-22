@@ -1,13 +1,13 @@
 # Fluxel Rendering workspace architecture
 
 > Architecture status: this is the post-foundation workspace/layer target. The
-> active implementation order is [the version plan](version-plan.md), and the
+> active implementation order is [the implementation plan](version-plan.md), and the
 > RHI architecture source is [RHI design](../crates/rhi/documents/design-rhi.md);
 > rustdoc and contract tests define descriptor-level detail. This document is
-> cross-layer only. `0.16` RHI is complete. The next implementation order is
-> shader/material, RenderGraph and renderer pipelines, RenderScene, Blender
-> tooling, equivalence/export, recording/replay, JavaScript, declarative UI,
-> and Canvas 2D.
+> cross-layer only. The RHI baseline is complete. The next implementation order
+> is shader/material, RenderGraph and renderer pipelines, RenderScene, Blender
+> tooling, equivalence/export, recording/replay, JavaScript, Canvas/text, and
+> declarative UI.
 
 Fluxel Rendering is a layered Rust workspace for turning Blender-authored
 materials and renderer-selected scene data into portable GPU work, then
@@ -27,19 +27,19 @@ which record why durable choices were made.
 
 ## Current execution mode
 
-The completed baseline and next delivery order are:
+The completed RHI baseline and next delivery order are:
 
 ```text
-0.16       Completed RHI baseline
-0.17       Shader assembly and material system
-0.18       Minimal RenderScene/View/Object, custom SPI, and Forward proof
-0.19       Complete scene preparation/culling and Deferred proof
-0.20       Blender-native editor, preview, and material/scene import
-0.21       Preview/runtime equivalence, export, and integration hardening
-0.22       RenderScene recording and replay
-0.23       JavaScript API interface
-0.24       Canvas 2D and minimal text
-0.25       Declarative Vue-like UI
+completed RHI baseline
+  -> shader assembly and material system
+  -> minimal RenderScene/View/Object, custom SPI, and Forward proof
+  -> complete scene preparation/culling and Deferred proof
+  -> Blender-native editor, preview, and material/scene import
+  -> preview/runtime equivalence, export, and integration hardening
+  -> RenderScene recording and replay
+  -> JavaScript API interface
+  -> Canvas 2D and minimal text
+  -> declarative UI
 ```
 
 RHI definitions include canonical descriptor/command/submission observation,
@@ -84,16 +84,20 @@ application / asset system
 fluxel-renderer
   ├──> fluxel-rendergraph       pure graph compiler / IR
   ├──> fluxel-rhi               pure execution
-  └──> workspace-private bridge: GraphExecutionPlan
+  └──> workspace-private graph/RHI bridge
+       -> GraphTargetProfile / prepared RHI bindings
        -> RHI RecordedWork / SubmissionPlan
 ```
 
 The renderer may use RenderGraph declarations and RHI's safe opaque objects.
 RenderGraph does not depend on RHI or renderer, and RHI does not know
-RenderGraph. A renderer-owned workspace-private bridge owns lowering from graph
-IR to RHI `RecordedWork` and `SubmissionPlan`. Native HAL types never travel
-upward, and renderer concepts such as assets, materials, or visibility never
-become graph concepts.
+RenderGraph. A renderer-owned workspace-private bridge projects enabled RHI
+capabilities into `GraphTargetProfile`, validates live RHI bindings for logical
+graph slots, and lowers graph IR to RHI `RecordedWork` and `SubmissionPlan`.
+`GraphTargetProfile` may omit facts irrelevant to compilation, but never
+manufactures, strengthens, or reinterprets RHI capability facts. Native HAL
+types never travel upward, and renderer concepts such as assets, materials, or
+visibility never become graph concepts.
 
 | Layer | Owns | Explicitly does not own |
 | --- | --- | --- |
@@ -108,8 +112,9 @@ Platform readers live in `fluxel-host` or `fluxel-jsbridge`; this workspace
 owns only renderer-private, per-device GPU residency: fixed upload, recreation,
 and frame-safe retirement. The renderer resolves an appropriate GPU-ready
 snapshot by `(AssetId, ContentGeneration, DeviceIdentity)` during preparation,
-before it declares the frame. RenderGraph receives only the resulting physical
-binding and its contract. The reason for this boundary is recorded in
+before it declares the frame. RenderGraph receives a logical import slot and
+semantic contract; the renderer-private bridge prepares and validates the
+corresponding physical binding. The reason for this boundary is recorded in
 [ADR-0001](adr/0001-assets-outside-rendergraph.md) and
 [ADR-0010](adr/0010-renderer-private-fixed-asset-residency.md). The native
 containment boundary is recorded in
@@ -134,8 +139,8 @@ application scene/domain data
   -> acquire one RHI presentable image when presentation is requested
   -> RenderGraph declarations
   -> target-aware immutable CompiledGraph
-  -> per-frame GraphInstantiation and GraphExecutionPlan
-  -> RHI RecordedWork and SubmissionPlan lowering
+  -> per-frame GraphInstantiation with logical inputs
+  -> bridge-prepared RHI bindings and RHI RecordedWork / SubmissionPlan lowering
   -> serial-base or capability-routed submission
   -> completion, export semantic use, presentation, and retirement
 ```
@@ -202,23 +207,24 @@ memory-dependency requirements.
 Compilation produces an immutable, capability-affine `CompiledGraph`. The
 snapshot contains portable semantics, not an encoder, command buffer, queue,
 native allocation, or `DeviceIdentity`; it may be specialized to the selected
-capability and opaque allocation-requirements profile. `GraphInstantiation` is
-device-affine: each frame binds concrete resources to stable import slots.
-Exports name roots and carry a portable final semantic-use contract for the next
-graph or external consumer. More detail is in the
+`GraphTargetProfile` and opaque allocation-requirements profile.
+`GraphInstantiation` supplies logical frame inputs to stable import slots;
+renderer-private bridge code binds live RHI objects separately. Exports name
+roots and carry a portable final semantic-use contract for the next graph or
+external consumer. More detail is in the
 [RenderGraph design](design-rendergraph.md).
 
-An import binding identifies a provider-selected physical object and generation,
-its declared initial semantic use, Fluxel-known history, allowed usage, and a
-completion-safe lease. The executor checks these facts; an export records the
-actual final semantic use established by execution rather than a guessed native
-state. Compatible compiled graphs may privately reuse a
-completed transient allocation only when target allocation requirements,
+An import declares its slot, descriptor, initial semantic use, required usage,
+and definedness. The bridge validates the provider-selected RHI object,
+generation, allowed usage, known history, and completion-safe lifetime before
+recording. An export records the final semantic use established by execution
+rather than a guessed native state. Compatible compiled graphs may privately
+reuse completed transient allocations only when target allocation requirements,
 logical lifetime, and semantic history allow it. Reuse is segregated by device
-and compiled-graph generation; graph
-or device invalidation prevents a new checkout while non-terminal work
-continues to retain its old-generation lease. It is not public aliasing or a
-caller-visible cache. See [ADR-0009](adr/0009-resource-floor-and-reuse-safety.md).
+and compiled-graph generation; graph or device invalidation prevents a new
+checkout while non-terminal work continues to retain its old-generation lease.
+It is not public aliasing or a caller-visible cache. See
+[ADR-0009](adr/0009-resource-floor-and-reuse-safety.md).
 
 ### RHI resolution, execution, and completion
 
@@ -383,7 +389,7 @@ real DX12, Vulkan, and Metal, followed by browser WebGPU and the
 GL-family desktop GL/GLES/WebGL2 profiles under the single v1 device-identity,
 capability, submission, completion, presentation, and retirement contract. The
 exact API is defined by rustdoc and tests, with [RHI design](../crates/rhi/documents/design-rhi.md) recording its architectural boundary; the
-exact gates are in [version-plan.md](version-plan.md), and prior baseline
+exact gates are in [the implementation plan](version-plan.md), and prior baseline
 evidence is not reused as proof of the replacement.
 
 Windows MSVC is the primary Windows development/native test environment. Linux

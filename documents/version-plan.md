@@ -1,210 +1,140 @@
-# Fluxel rendering version plan
+# Fluxel Rendering Plan
 
-> Status: active execution plan from the completed `0.16` baseline.
->
-> `0.16` is complete: the declared RHI contracts and backend work are closed
-> for the current release. This plan does not reopen that foundation. Detailed
-> RHI behavior remains specified by `crates/rhi/documents/design-rhi.md`, its
-> ADRs, and contract tests.
+> Status: active execution plan. The completed RHI baseline is the foundation;
+> its detailed behavior remains specified by the RHI design, ADRs, rustdoc,
+> and contract tests. This plan sequences future work without assigning it to
+> specific release numbers.
 
-## 1. Delivery model
+## Delivery model
 
-The plan becomes intentionally broader as it moves away from the current
-release:
+Work moves from a narrow vertical proof toward broader product integration:
 
 ```text
-0.16  completed RHI baseline
-  |
-0.17  shader assembly + material system        detailed
-  |
-0.18  minimal scene + Forward framework        detailed
-  |
-0.19  RenderScene                              detailed
-  |
-0.20  Blender-native plugin/tooling loop       detailed
-  |
-0.21  Preview/runtime equivalence and export   detailed
-  |
-0.22  RenderScene recording + replay           detailed
-  |
-0.23  JavaScript API interface                coarse
-  |
-0.24  Canvas 2D + minimal text                coarse
-  |
-0.25  Declarative Vue-like UI                  coarse
+completed RHI baseline
+  -> material and shader
+  -> minimal scene and Forward
+  -> scene preparation and Deferred
+  -> Blender authoring
+  -> preview/runtime equivalence and export
+  -> capture and replay
+  -> JavaScript
+  -> Canvas 2D and text
+  -> declarative UI
 ```
 
-Every version must still have a named owner, structured refusal behavior,
-tests, retained evidence, and an ecosystem-level acceptance slice. A version
-is not closed by a single crate's green test suite.
+Every plan needs a named owner, structured refusal behavior, retained tests and
+evidence, and an ecosystem-level acceptance slice. A single crate's green test
+suite cannot close a plan.
 
-## 2. Version 0.16 — completed RHI baseline
+## Material and shader plan
 
-### Scope
+Define `MaterialDomain::Surface`, typed material values and graph handles,
+validation/diagnostics, Material IR, static versus dynamic parameters,
+`MaterialAsset`, and `MaterialInstance`. The initial node vocabulary is kept
+small: constants, parameters, UVs, texture sampling, arithmetic, vector
+operations, normal mapping, and surface outputs for base color, metallic,
+roughness, normal, emissive, and opacity.
 
-The portable RHI contract, device/context identity and generation rules,
-resource ownership, bindings, command recording, submission/completion, loss
-behavior, presentation boundary, and declared backend evidence.
+Define shader modules, pass templates, geometry/material/pass interfaces,
+target profiles, feature analysis, canonical variant keys, source/IR assembly,
+reflection into `ShaderInterface`, and portable artifact/cache identity.
+Dynamic values update instance data or bindings; static choices affect variant
+identity. Identical material structure with different dynamic values shares one
+variant.
 
-### Status
-
-Complete for the current release. Do not add new RHI concepts merely to start
-the higher-level work. Any contract change requires a new consumer, ADR,
-migration plan, and affected backend evidence.
-
-## 3. Version 0.17 — shader assembly and material system
-
-This is the next implementation priority. Keep the scope narrow enough to
-produce one complete Rust-to-shader vertical slice.
-
-Before feature work closes, device construction must finalize and validate all
-finite capability-query domains so no successfully published snapshot can
-reach a query-time missing-entry panic. The renderer-owned private graph/RHI
-bridge is the only integration owner; neither public crate depends on the
-other.
-
-### Material work
-
-- Define `MaterialDomain::Surface`, typed material values, typed graph handles,
-  diagnostics, and graph validation.
-- Implement the minimal `MaterialGraph` node vocabulary: constants,
-  parameters, UVs, texture sampling, arithmetic, vector operations, and normal
-  mapping.
-- Define `SurfaceOutput` for base color, metallic, roughness, normal, emissive,
-  and opacity.
-- Lower a validated graph into a semantic `Material IR`.
-- Separate dynamic instance data from static variant decisions.
-- Define `MaterialAsset`, `MaterialInstance`, parameter schema, and cache
-  identity without making GPU objects part of the material model.
-
-### Shader work
-
-- Define shader modules, pass templates, geometry/material/pass interfaces, and
-  target profiles.
-- Analyze required features and generate canonical material variant keys.
-- Assemble source/IR into a validated `ShaderArtifact` and reflected
-  `ShaderInterface` accepted by the RHI.
-- Establish portable artifact and variant cache identity.
-- Prove that materials with identical structure but different dynamic values
-  share one variant.
-
-### Acceptance
+The acceptance proof is Rust-only:
 
 ```text
-Rust MaterialGraph
-  -> Material IR
-  -> shader composition
+MaterialGraph -> Material IR -> shader composition
   -> ShaderArtifact + ShaderInterface
-  -> CompiledMaterialVariant
-  -> MaterialInstance consumed by renderer preparation
+  -> compiled material variant -> renderer preparation
 ```
 
-Blender import is not part of this version. The complete proof is Rust-only;
-Blender translation begins in `0.20`.
+Unsupported material features return structured diagnostics rather than silent
+approximations. Blender translation begins only after this proof.
 
-## 4. Version 0.18 — minimal scene and Forward framework
+## Minimal scene and Forward plan
 
-### Scope
+Introduce the smallest `RenderScene`, `RenderObject`, and `RenderView`
+vocabulary sufficient to freeze the consumer shape, a custom `FramePipeline`
+SPI, and one built-in Forward proof.
 
-Build on the `0.17` material/shader contracts and connect renderer policy to
-RenderGraph:
+The renderer-private bridge is the only graph/RHI integration owner:
 
-- minimal `RenderScene`, `RenderObject`, and `RenderView` vocabulary sufficient
-  to freeze the consumer shape;
-- a custom `FramePipeline` SPI for application-defined pipelines;
-- one built-in Forward pipeline proof; and
-- renderer-owned, workspace-private lowering from graph IR to RHI
-  `RecordedWork` and `SubmissionPlan`.
+```text
+RHI enabled capabilities -> GraphTargetProfile -> RenderGraph compile
+CompiledGraph + logical frame inputs -> GraphInstantiation -> GraphExecutionPlan
+live RHI resources/bindings/frame attachment -> prepared RHI bindings
+GraphExecutionPlan + prepared RHI bindings -> RecordedWork / SubmissionPlan
+```
 
-### Acceptance
+RenderGraph knows logical slots, descriptors, required usage, definedness, and
+semantic import/export contracts. It does not receive RHI objects, device
+identities, leases, frame attachments, pipelines, or binding objects. The bridge
+and RHI validate those live facts before recording and submission.
 
-The minimal scene and custom SPI lower representative Forward work through the
-same compiled material variant and shader interface. RenderGraph remains a pure
-compiler/IR and RHI remains pure execution; neither depends on the other.
+## Scene preparation and Deferred plan
 
-## 5. Version 0.19 — RenderScene
+Complete renderer-facing scene preparation: stable scene identities,
+visibility, culling, deterministic ordering, material/shader variant selection,
+diagnostics, and retained fixtures. Add Deferred as a second, independent
+`FramePipeline` proof after Forward. Both pipelines consume the same material
+and shader contracts and execute through the same graph/RHI boundary.
 
-### Scope
+## Blender authoring, equivalence, and export plans
 
-Complete the renderer-facing scene and frame-preparation model:
+The Blender plan provides ShaderNodeTree-to-MaterialGraph translation, mesh,
+transform, camera, light, material assignment, and texture extraction;
+structured unsupported-node/material/shader diagnostics; and Fluxel viewport
+preview. Initial supported nodes are Material Output, Principled BSDF, Image
+Texture, Texture Coordinate, Normal Map, RGB, Value, Add, Multiply, and Mix.
+Coverage expands only with a Fluxel semantic and validation test.
 
-- `RenderScene`, `RenderObject`, `RenderView`, and stable scene identities;
-- culling, deterministic ordering, visibility, and frame preparation;
-- material/shader variant selection;
-- scene-to-`FramePipeline`-to-RenderGraph construction;
-- renderer diagnostics and retained scene fixtures.
-- Deferred as a second, independent `FramePipeline` proof after Forward.
-
-### Acceptance
-
-One complete Rust scene can be prepared, lowered through either built-in
-pipeline or the custom SPI, and executed through RenderGraph and RHI.
-
-## 6. Version 0.20 — Blender-native editor and tooling
-
-Start Blender integration after the Rust rendering path and RenderScene model
-are complete:
-
-- ShaderNodeTree to `MaterialGraph` translation;
-- mesh, transform, camera, light, material assignment, and texture extraction;
-- structured unsupported-node and shader/material diagnostics in Blender;
-- Fluxel viewport preview through the renderer.
-
-## 7. Version 0.21 — Preview/runtime equivalence and export
-
-Close the authoring-to-runtime loop:
+The equivalence plan closes the authoring-to-runtime loop:
 
 ```text
 Blender scene -> Fluxel import -> viewport preview
              -> export -> standalone runtime -> equivalence comparison
 ```
 
-Add deterministic comparison fixtures, asset-version handling, and integration
-diagnostics. The first supported node subset is Material Output, Principled
-BSDF, Image Texture, Texture Coordinate, Normal Map, RGB, Value, Add,
-Multiply, and Mix.
+It retains deterministic comparison fixtures, content-generation handling, and
+integration diagnostics.
 
-## 8. Version 0.22 — RenderScene recording and replay
+## Capture and replay plan
 
-Record and replay the complete RenderScene-driven path, including scene inputs,
-view/frame configuration, material/shader decisions, pipeline selection,
+Capture and replay the dependency-closed RenderScene path, including scene
+inputs, view/frame configuration, material/shader decisions, pipeline choice,
 RenderGraph inputs, portable execution evidence, and output observations.
-Replay uses the normal renderer, RenderGraph, and RHI contracts.
+Replay uses the normal renderer, RenderGraph, and RHI contracts; it is not a
+second renderer. See [capture/replay design](design-capture-replay.md) for the
+artifact and replay boundary.
 
-## 9. Version 0.23 — JavaScript API interface
+## JavaScript, Canvas/text, and declarative UI plans
 
-Expose a deliberately narrow JavaScript API over the established Rust
-contracts. JavaScript is an integration surface; it does not own GPU resources,
-shader semantics, material identity, or the RenderScene model.
+The JavaScript plan exposes a deliberately narrow integration surface over
+established Rust contracts. JavaScript does not own GPU resources, shader
+semantics, material identity, or the RenderScene model. A language-level SDK
+core may be extracted once an established Rust contract and at least one real
+adapter prove a stable boundary; future adapters must not push platform-specific
+behavior into that core.
 
-## 10. Version 0.24 — Canvas 2D and minimal text
+Canvas 2D and minimal text consume the renderer and prepared-resource model.
+They must not introduce DOM, CSS, browser-session, or token-based resource
+ownership into the core. Declarative UI is built above those services. It may
+use Vue-inspired ergonomics, but it is not Vue-compatible and does not import
+Vue component/runtime semantics.
 
-Define Canvas 2D and minimal text on top of the Fluxel renderer and prepared
-resources. They remain consumers of the same RenderGraph/RHI architecture and
-must not introduce DOM, CSS, browser session, or token-based resource ownership
-into the core.
-
-## 11. Version 0.25 — Declarative UI
-
-Build the declarative Vue-like UI layer as a consumer of the established Canvas
-and text services. It does not redefine rendering, resource ownership, or the
-graph/RHI boundary.
-
-## 12. Later evolution
-
-Later work expands Blender semantics, renderer features, custom-pipeline
-examples, shader caching, animation, lighting, and backend evidence as the
-completed route requires.
-
-## 13. Cross-version invariants
+## Cross-plan invariants
 
 - Rust owns material and shader semantics; Blender is an authoring frontend.
 - RenderGraph is a pure graph compiler/IR and RHI is pure execution. Their
   bridge/lowering is renderer-owned and workspace-private.
+- `GraphTargetProfile` is the sole RHI-capability projection for graph compile;
+  it never manufactures, strengthens, or reinterprets RHI capability facts.
 - The custom pipeline SPI and built-in pipelines share material/shader
   contracts.
-- Device/context identity plus generation is the only public resource-affinity
-  model; browser sessions/tokens never enter the architecture.
-- Unsupported features fail explicitly and do not silently approximate.
-- Cross-repository claims require evidence from the integrated artifact, not
+- Device/context identity plus generation is the public resource-affinity
+  model; browser sessions and tokens never enter the architecture.
+- Unsupported features fail explicitly and never silently approximate.
+- Cross-repository claims require evidence from an integrated artifact, not
   only a local library test.

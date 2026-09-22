@@ -15,9 +15,10 @@ mini-game adapters drive its WASM form; native hosts drive its library form.
 
 ## Workspace
 
-The table below describes the retained `0.15` workspace and the completed
-`0.16` RHI baseline. The next release starts the shader assembly and material
-system route; older higher-level interfaces are not the replacement contract.
+The table below describes the retained historical workspace and the completed
+RHI baseline. The next implementation plan starts the shader assembly and
+material-system route; older higher-level interfaces are not the replacement
+contract.
 
 The workspace is organised around four crates:
 
@@ -66,7 +67,7 @@ release. See [RELEASING.md](RELEASING.md) for the release gate.
 - [RHI design](crates/rhi/documents/design-rhi.md)
 - [Portable capture/replay design](documents/design-capture-replay.md)
 - [Renderer design](documents/design-renderer.md)
-- [Version plan from the completed 0.16 baseline](documents/version-plan.md)
+- [Implementation plan](documents/version-plan.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Fluxel ecosystem roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
 - [RenderGraph guide](crates/rendergraph/README.md)
@@ -108,15 +109,12 @@ The organization
 only stage/status authority. This README records only the workspace's current
 supported paths and recommended entry points.
 
-The completed `0.16` release is the RHI baseline. `0.17` starts shader
-assembly and the material system. `0.18` establishes minimal `RenderScene`,
-`RenderView`, and `RenderObject` inputs, the `FramePipeline` SPI, the
-renderer-owned bridge, and one Forward proof. `0.19` completes scene
-preparation/culling and adds Deferred as the second pipeline proof. `0.20`
-starts native Blender tooling, `0.22` records and replays the complete
-RenderScene path, `0.23` adds the JavaScript API, `0.24` adds Canvas 2D and
-minimal text, and `0.25` adds declarative UI. The executable breakdown is
-the [version plan](documents/version-plan.md). The sole normative
+The completed RHI baseline is followed by material/shader work, a minimal
+scene and Forward proof, scene preparation and a Deferred proof, Blender
+authoring, preview/runtime equivalence and export, capture/replay, JavaScript,
+Canvas 2D with text, and finally declarative UI. This order intentionally keeps
+JavaScript before Canvas/text and declarative UI. The executable breakdown is
+the [implementation plan](documents/version-plan.md). The sole normative
 RHI API architecture source is [RHI design](crates/rhi/documents/design-rhi.md);
 rustdoc and contract tests define descriptor-level detail. The
 [workspace architecture](documents/design-overview.md) records cross-layer

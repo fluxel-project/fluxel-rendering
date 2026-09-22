@@ -56,11 +56,12 @@ window handles stay in the host/backend seam.
   correct baseline; aliasing is a private, capability-gated optimization.
 
 The total-query rule above is the required contract, not a claim that the
-current constructor already checks every finite query domain. In the `0.16`
-implementation, a missing required finite-domain entry can still reach the
-query-time panic used to identify an incomplete enumeration. Snapshot
-finalization must move that failure into device construction so a successfully
-published device never exposes it.
+current constructor already checks every finite query domain. The current
+implementation can still route a missing required finite-domain entry to the
+query-time panic used to identify an incomplete enumeration. Capability
+snapshot finalization is an entry gate for the next implementation plan: it
+must move that failure into device construction so a successfully published
+device never exposes it.
 
 ## Decision records
 

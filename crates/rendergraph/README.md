@@ -1,18 +1,19 @@
 # fluxel-rendergraph
 
 > `0.15` historical usage guide. Do not copy its `ExecutionPlan`, native-like
-> state, or presentation-token spelling into the `0.18+` graph. The sole
+> state, or presentation-token spelling into the planned graph architecture. The sole
 > RHI architectural authority is [Fluxel RHI design](../rhi/documents/design-rhi.md).
 > [Workspace architecture](../../documents/design-overview.md) is
 > cross-layer architecture, not a second RHI API. Also read the
 > [RenderGraph architecture](../../documents/design-rendergraph.md) and the
-> [version plan](../../documents/version-plan.md).
+> [implementation plan](../../documents/version-plan.md).
 
 `fluxel-rendergraph` is a typed, retained pure graph compiler and IR for
 planning GPU work. It owns neither GPU execution nor an RHI dependency; the
 renderer owns the workspace-private lowering bridge to RHI.
 You declare resource accesses during graph setup; the compiler derives pass
-dependencies, validates resource versions and device capabilities, removes dead
+dependencies, validates resource versions against a renderer-projected
+`GraphTargetProfile`, removes dead
 work, and produces an immutable plan. It is for renderers that need pass
 ordering and resource-state requirements to be explicit rather than encoded in
 ad-hoc command recording order.
@@ -89,8 +90,10 @@ fn main() -> Result<(), CompileError> {
 }
 ```
 
-`capabilities` is application/RHI-owned. The example uses a portable fixture;
-a real integration supplies facts observed from its selected device. The same
+`capabilities` is a historical fixture spelling. In the target architecture,
+the renderer-private bridge projects the selected RHI device's immutable
+capability snapshot into `GraphTargetProfile`; applications do not maintain a
+second capability truth. The same
 program is checked in as [`00_minimal_compile.rs`](examples/00_minimal_compile.rs);
 from this repository, run it with:
 
@@ -133,27 +136,24 @@ resource can express—never as a substitute for a resource access.
 
 ### Imports, exports, and frames
 
-Transient resources are graph-owned declarations. Persistent GPU resources are
-declared as import slots with descriptor, initial state, ownership, and content
-contracts, then bound for each frame by the renderer. Exports specify the
-required final state. A compiled graph remains reusable and capability-affine:
-per-frame values and import bindings belong to the device-affine instantiation,
-not to graph compilation. The `0.16` public spelling for those values is
-`FrameInputs`; the target architecture names the complete binding/preflight
-object `GraphInstantiation`. A capability-compatible replacement device can
-instantiate the same graph; device identity never belongs to `CompiledGraph`.
+Transient resources are graph-owned declarations. Persistent resources are
+declared as logical import slots with descriptor, semantic, required-usage, and
+definedness contracts. Exports specify the required final semantic use. A
+compiled graph remains reusable and profile-affine: logical frame values belong
+to `GraphInstantiation`, while device affinity begins only in the
+renderer-private bridge. Device identity never belongs to `CompiledGraph` or
+`GraphExecutionPlan`.
 
-Every bound physical resource reports its actual allowed domain operations.
-Before recording, frame resolution checks that this set covers the compiled
-requirement for both imports and backend-created transients. Providers derive
-allowed operations from creation and native facts; they must not copy the
-compiled requirement into the binding.
+The bridge resolves logical slots into `PreparedRhiBindings`. Before recording,
+bridge/RHI preflight checks physical resource identity and generation,
+descriptor and allowed usage, known incoming state, and completion-safe
+retention. Providers derive allowed operations from creation and native facts;
+they must not copy the compiled requirement into a binding.
 
-Renderer-private GPU residency is resolved before this boundary. A frame binds
-only the selected concrete snapshot, its state, and lease; graph setup and pass
-callbacks receive neither `AssetStore` nor an asset lookup handle. Residency
-does not add an asset identity, cache, or generic shader contract to
-RenderGraph.
+Renderer-private GPU residency is resolved outside RenderGraph. Graph setup and
+pass callbacks receive neither `AssetStore`, an asset lookup handle, nor a
+concrete RHI snapshot/lease. Residency does not add an asset identity, cache, or
+generic shader contract to RenderGraph.
 
 Start with [`01_copy_buffer.rs`](examples/01_copy_buffer.rs) for an import and
 export, then [`14_two_frame_dynamic.rs`](examples/14_two_frame_dynamic.rs) for
@@ -161,11 +161,12 @@ one graph instantiated with distinct frame inputs.
 
 ### Execution integration
 
-`FrameExecutor` resolves a compiled graph through an `ExecutionBackend`, a
-`FrameResourceProvider`, and a renderer-owned `RenderObjectProvider`. The
-provided `TestRhi` validates protocol order, transitions, binding checks, and
-completion-based retirement; it does not run shaders or emulate GPU memory.
-For a present root, this historical implementation resolved an acquired image
+The target architecture instantiates a compiled graph into a logical
+`GraphExecutionPlan`. The renderer-private bridge combines that plan with
+prepared RHI resources, pipelines, bindings, samplers, and an acquired
+`FrameAttachment`, then produces `RecordedWork` and `SubmissionPlan`. Historical
+`FrameExecutor`/`TestRhi` paths remain implementation evidence, not the future
+public boundary. For a present root, this historical implementation resolved an acquired image
 with a one-shot adapter value. In v1, an acquired `FrameAttachment` is a
 distinct RHI presentation object, not an imported `Texture` or a token. The
 renderer consumes it through `SubmissionPlanBuilder::present_after`, receives a

@@ -1,11 +1,10 @@
 # Fluxel RenderGraph architecture
 
-This document describes the RenderGraph architecture introduced in `0.18` and
-completed with scene preparation in `0.19`. The [workspace
+This document describes the planned RenderGraph architecture. The [workspace
 architecture](design-overview.md) defines only cross-layer invariants
 and Graph/capture integration boundaries; it is not a RHI type or error
-inventory. The strict RHI-before-Graph delivery gates are in the [version
-plan](version-plan.md). All RHI-facing types, errors, and validation are
+inventory. The strict RHI-before-Graph delivery gates are in the
+[implementation plan](version-plan.md). All RHI-facing types, errors, and validation are
 governed by the public API, its rustdoc/tests, and [RHI architecture](../crates/rhi/documents/design-rhi.md)
 with the relevant ADRs.
 
@@ -14,10 +13,11 @@ with the relevant ADRs.
 ```text
 authoring
   -> logical validation, versions, dependencies, roots, culling, lifetime
-  -> target capability/lane/allocation-requirements compilation
+  -> GraphTargetProfile capability/lane/storage-class compilation
   -> immutable CompiledGraph
-  -> per-frame GraphInstantiation
+  -> logical frame inputs + GraphInstantiation
   -> GraphExecutionPlan
+  -> renderer-private bridge + PreparedRhiBindings
   -> RHI RecordedWork + SubmissionPlan
   -> completion and retirement
 ```
@@ -43,9 +43,28 @@ The design depends on four inseparable properties:
 4. an explicit `GraphExecutionPlan -> SubmissionPlan` boundary.
 
 A mutable graph definition is never itself an executable native plan. A compiled
-graph contains no device object. It is capability-affine: its capability, route,
-and opaque allocation profiles are part of its cache identity, while a per-frame
-instantiation is device-affine.
+graph contains no device object. It is profile-affine: its graph-relevant
+capability, route, and storage-class facts are part of its cache identity.
+Device affinity begins only when the renderer-private bridge prepares concrete
+RHI bindings and lowers the logical execution plan.
+
+The capability flow has one authority:
+
+```text
+RHI EnabledCapabilities
+        |
+        | renderer-private, lossless-for-Graph projection
+        v
+GraphTargetProfile
+        |
+        v
+RenderGraph::compile -> CompiledGraph
+```
+
+`GraphTargetProfile` is not a second hardware-capability system. It may omit
+facts irrelevant to graph compilation, but it must never manufacture,
+strengthen, or reinterpret an RHI capability. The bridge owns the projection
+and tests every projected fact against the source capability snapshot.
 
 ## Pass declaration and authority
 
@@ -68,14 +87,15 @@ dependency sources of truth.
 Setup runs synchronously once, every builder method reports
 `GraphAuthoringError` immediately, and the retained handle bundle is owned and
 `'static`. Raster/compute pipelines, bind-group layouts, and samplers use typed
-graph object slots. Instantiation binds compatible live device objects; logical
+graph object slots. Instantiation binds logical per-frame slot values; logical
 bind-group recipes refer only to setup-produced resource handles and are
-realized after transient allocation. The raster, compute, and copy recorders
-consume only resolver-produced references, never raw RHI objects.
+realized by the bridge after physical resource preparation. The raster,
+compute, and copy recipes consume only resolver-produced logical references,
+never raw RHI objects.
 
 Setup executes before recording and creates typed handles such as `BufferRead`,
 `BufferWrite`, `TextureRead`, `TextureWrite`, `ColorAttachment`,
-`DepthStencilAttachment`, and `FrameAttachmentWrite`. Execute receives a
+`DepthStencilAttachment`, and `PresentationWrite`. Execute receives a
 resolver that accepts only handles created for that pass. It cannot fetch an
 arbitrary global RHI resource.
 
@@ -83,15 +103,15 @@ Attachment builder descriptors carry load/store/clear/render-area and resolve
 target policy, while the compiler-owned normalized form carries the resulting
 `before`/`after` versions. A resolve target is a separate write with a returned
 version. Direct rendering or resolve into a presentation target stays in the
-`FrameAttachmentVersion` domain; `FrameAttachment` never becomes `Texture`.
+logical `PresentationVersion` domain; it never becomes `TextureVersion`.
 Direct MSAA resolve to a frame version is admitted only when the active
-presentation facts and RHI route facts prove the target, format, sample count,
-and resolve route. Otherwise Graph must declare an ordinary single-sample
+presentation facts in `GraphTargetProfile` prove the target, format, sample
+count, and resolve route. Otherwise Graph must declare an ordinary single-sample
 intermediate resolve target followed by a final raster write to
-`FrameAttachmentVersion`.
+`PresentationVersion`.
 
 This is a correctness boundary: graph dependencies are derived from the full
-declaration, and the RHI/capture layer can mechanically verify every command
+declaration, and bridge/RHI tooling can mechanically verify every command
 reference against it. An explicit `depends_on` supplements non-resource
 semantics; it cannot replace a resource read/write declaration.
 
@@ -100,8 +120,8 @@ semantics; it cannot replace a resource read/write declaration.
 Logical resources are:
 
 - graph-created transient buffer or texture;
-- persistent imported RHI buffer or texture;
-- acquired presentation `FrameAttachment`;
+- persistent `ImportSlot` for a buffer or texture;
+- logical presentation slot;
 - exported/extracted result; or
 - a future typed external-memory resource, which is not an ordinary import.
 
@@ -120,19 +140,23 @@ necessary even when two accesses have equal texture-layout intent.
 
 Import and export contracts speak in portable semantic use, not native state:
 
-- imports declare descriptor, physical device resource identity, initial
-  semantic use, initial contents, external ownership, required usage, and lease;
+- imports declare a typed slot, descriptor, initial semantic contract, required
+  usage, and definedness;
 - exports declare final semantic use and retention boundary.
 
-Instantiation validates those declarations against Fluxel-known ownership and
-history. It cannot promise to query a driver for a universal actual state. The
-checks include identity/generation, descriptor, allowed usage, semantic-use
-compatibility, definedness, and completion-safe lease.
+Graph instantiation validates logical frame inputs, slot coverage, descriptor
+contracts, semantic-use compatibility, and definedness. It does not receive or
+validate a physical resource, device identity, generation, or completion lease.
 
-The same physical generation cannot back two live logical resources without an
-explicit alias/external-ownership contract. External memory/synchronization
-requires separate ownership-transfer, producer/consumer synchronization,
-handle-safety, loss, and failure design.
+The renderer-private bridge resolves each slot into `PreparedRhiBindings` and
+checks the concrete RHI resource's device identity/generation, descriptor,
+allowed usage, Fluxel-known state, ownership, and completion-safe retention.
+RHI remains the authority for whether the object is valid and executable.
+
+The bridge rejects binding the same physical generation to incompatible live
+logical slots unless a separately designed alias/external-ownership contract
+permits it. External memory/synchronization requires separate ownership-transfer,
+producer/consumer synchronization, handle-safety, loss, and failure design.
 
 ## Roots and culling
 
@@ -155,16 +179,19 @@ Compilation occurs in a fixed semantic order:
 4. target capability and route validation;
 5. dependency/hazard construction and cycle detection;
 6. reverse-reachability culling;
-7. logical serial schedule (`0.19` may select proved pairwise lane routes);
+7. logical serial schedule, with proved pairwise lane routes enabled only by a
+   later scheduling milestone;
 8. resource lifetime intervals;
-9. opaque allocation-requirements queries and conservative no-alias planning
-   (`0.19` activates compatible reuse/alias decisions);
+9. profile-backed storage compatibility and conservative no-alias planning,
+   with reuse/alias decisions enabled only after their evidence gate;
 10. immutable plan and deterministic report.
 
-The target supplies enabled facts, lane routes, presentation facts, and an
-opaque `TransientAllocationRequirements` query. This is required even though
-Graph owns logical overlap: size, alignment, compatibility class, and
-dedicated-only constraints decide whether target storage can actually alias.
+`GraphTargetProfile` supplies graph-relevant enabled facts, lane routes,
+presentation routes, and opaque storage compatibility classes projected by the
+bridge. Graph owns logical overlap and can propose compatible lifetimes, but it
+does not call an RHI allocation service or claim that a proposal is physically
+realizable. Dedicated-only constraints and final allocation realization remain
+RHI concerns.
 
 `CompiledGraph` records graph generation, a capability-compatibility
 fingerprint, allocation/presentation fingerprints, an immutable logical plan
@@ -173,27 +200,33 @@ template, retained recipes, and report. It is not the per-frame
 capabilities, relevant format/surface routes, lane routes, or allocation profile
 invalidate the cache entry. No native object is cached in it.
 
-## Per-frame instantiation
+## Per-frame instantiation and concrete preparation
 
-Instantiation binds persistent imports, acquired frames, and declared
-layout/sampler/pipeline object slots to a compiled graph. Before calling a
-provider, allocating a transient, or opening an encoder it validates:
+`GraphInstantiation` combines a `CompiledGraph` with logical frame inputs. It
+validates that every import, presentation, object, and parameter slot is present
+exactly once and satisfies the compiled logical contract. Missing, duplicate,
+and unknown slots are distinct errors. A successful instantiation produces a
+device-independent `GraphExecutionPlan`.
 
-- device identity and generation for every bound resource/object, plus the
-  compiled graph's capability-compatibility contract;
-- descriptor and required/allowed usage;
-- initial semantic use against Fluxel-known history;
-- initial contents and definedness;
-- owner lease and retention;
-- frame generation and exactly-once consumption; and
-- every resource and object binding is present once and has the required device
-  generation, compatibility fingerprint, and target signature.
+The renderer-private bridge then combines that plan with concrete inputs:
 
-Failure is side-effect free at this stage. Missing, duplicate, and unknown slots
-are different errors. A successful instantiation binds the compiled template
-into a per-frame `GraphExecutionPlan`; lowering then creates recorded work, a
-`SubmissionPlan`, and typed export/readback/present/retirement output slots.
-Readback roots are P0 graph behavior; only a general Host pass is deferred.
+```text
+GraphExecutionPlan
+        +
+PreparedRhiBindings
+RHI FrameAttachment
+RHI resources, pipelines, bindings, and samplers
+        |
+        v
+RecordedWork + SubmissionPlan
+```
+
+Before allocation or encoder creation, bridge/RHI preflight validates device
+identity and generation, descriptors and allowed usage, Fluxel-known incoming
+state, completion-safe retention, frame generation and exactly-once consumption,
+object compatibility, and the exact capability snapshot behind the target
+profile. Preflight failure is side-effect free. Readback roots are baseline
+graph behavior; only a general Host pass is deferred.
 
 ## Dependency and RHI boundary
 
@@ -232,30 +265,31 @@ Two optimizations remain distinct:
 - same-frame aliasing of distinct logical resources whose lifetimes do not
   overlap and whose opaque requirements are compatible.
 
-Graph consumes API v1 `TransientAllocationService`: RHI returns opaque
-`AllocationRequirements`, Graph computes logical intervals and a proposed
-`TransientAllocationPlan`, and RHI returns a realization. The conservative
-no-alias plan is mandatory.
+Graph computes logical intervals and may group resources only by opaque
+compatibility facts already present in `GraphTargetProfile`. It emits a logical
+transient proposal. The renderer bridge asks RHI to realize that proposal, and
+RHI may refuse it or select dedicated allocations. The conservative no-alias,
+one-allocation-per-resource realization is mandatory.
 `AliasBoundary` names prior occupants, new resource, first use, and required
 first contents. Native alias barriers and memory placement remain backend
 private.
 
 Imported, exported, external, and presentable resources cannot participate in
-ordinary transient aliasing while leased. Reuse is segregated by device and
-compiled-graph generation and waits for terminal GPU completion. A no-alias,
-one-allocation-per-resource fallback must always work; aliasing is never required
-for correctness.
+ordinary transient aliasing while retained. Physical reuse is segregated by
+device and bridge-owned plan generation and waits for terminal GPU completion.
+Aliasing is never required for correctness.
 
 ## Presentation and readback
 
-An acquired frame enters as `FrameAttachment`, not texture. Present is an
-observable root. Lowering consumes the frame with
+Graph declares a logical presentation slot, not a `FrameAttachment` or texture.
+Present is an observable root. During lowering, the bridge binds an acquired RHI
+`FrameAttachment` and consumes it with
 `SubmissionPlanBuilder::present_after(frame, PlanPoint)` and exposes the
 resulting present receipt; Graph does not invent a parallel presentation
 request. Present mode stays in RHI presentation configuration.
 
 ```text
-acquire -> bind FrameAttachment -> declared graph use -> planned present
+acquire -> prepare RHI presentation binding -> declared logical graph use -> planned present
         -> accepted submission -> present completion/loss
 ```
 
@@ -285,11 +319,13 @@ The graph error model separates authoring, compile, instantiation, recording,
 and lowering. It preserves pass/resource/version IDs and covers stale handles,
 wrong-pass authority, undeclared use, undefined read, checked range failures,
 format/usage/route mismatch, overlapping subresources, cycle, missing root,
-import semantic/lease mismatch, missing frame binding, frame double consume,
-alias overlap, allocation refusal, and backend lowering failure.
+import semantic mismatch, missing logical slot, alias overlap, and invalid
+profile facts. Bridge/RHI errors separately cover wrong device/generation,
+disallowed usage, unsafe retention, missing concrete binding, frame double
+consume, allocation refusal, and backend lowering failure.
 
 Compile and report output must be deterministic for identical graph and target
-facts. CPU-only tests cover every validation class; `TestRhi` proves the plan
+facts. CPU-only graph and bridge fixtures cover every validation class and plan
 protocol; production backends prove output, completion, and refusal behavior.
 
 ## Module map
@@ -304,10 +340,10 @@ crates/rendergraph/src/
   schedule/        lanes and execution dependencies
   lifetime/        intervals, requirements and alias planning
   compile/         immutable CompiledGraph and CompileReport
-  instantiate/     per-frame binding and preflight
-  plan/            GraphExecutionPlan and RHI SPI
+  instantiate/     logical per-frame inputs and slot validation
+  plan/            device-independent GraphExecutionPlan
   trace/           deterministic report, visualization and FrozenGraphIR
-  test_rhi/        CPU-only protocol implementation
+  test_support/    CPU-only graph/profile fixtures
 ```
 
 The module shape may evolve. The ownership boundary and compilation phases may
@@ -315,11 +351,12 @@ not be collapsed merely to mirror one backend.
 
 ## Deferred graph features
 
-The following remain evidence-gated after `0.19`: a general Host pass, typed
-blackboard, reusable subgraph/templates, conditional passes, history/temporal
+The following remain evidence-gated after the complete scene-preparation plan:
+a general Host pass, typed blackboard, reusable subgraph/templates, conditional passes, history/temporal
 rings, multi-device and external-memory/sync nodes, XR compositor nodes,
 sparse/residency and video nodes, adaptive memory/cost scheduling, and debugger
 step/checkpoint features. They cannot reserve empty public traits or handles.
 
-The graph phase is “complete” when the scoped `0.18`/`0.19` gates pass on the
-full backend matrix, not when every deferred domain has been guessed in advance.
+The graph phase is complete when the scoped graph and scene-preparation gates
+pass on the full backend matrix, not when every deferred domain has been guessed
+in advance.

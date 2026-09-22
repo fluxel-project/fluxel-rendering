@@ -1,19 +1,18 @@
-# Fluxel Rendering Roadmap and System Plan
+# Fluxel Rendering Product Plan
 
-> Status: active product direction
->
-> This is the high-level plan for the Fluxel rendering ecosystem. Normative
-> low-level contracts remain in `design-rhi.md`, the RenderGraph design, the
-> ADRs, and `version-plan.md`.
+> Status: active product direction. This document sequences product outcomes;
+> it does not freeze public API detail. Normative low-level contracts remain in
+> the RHI design, RenderGraph design, ADRs, and the
+> [implementation plan](version-plan.md).
 
-## 1. Product direction
+## Product direction
 
 Fluxel is a Rust rendering framework whose primary authoring experience is
 native Blender integration. Rust owns rendering semantics, shader assembly,
-material runtime, RenderGraph, and renderer execution. Blender is the editor
-and authoring environment, not a second rendering authority.
+material runtime, RenderGraph, and renderer execution. Blender is an authoring
+and diagnostic frontend, not a second rendering authority.
 
-The acceptance criterion is:
+The intended authoring loop is:
 
 ```text
 Blender-authored material -> Fluxel material/shader semantics
@@ -21,208 +20,84 @@ Blender-authored material -> Fluxel material/shader semantics
 ```
 
 Preview and runtime consume the same Material IR, shader variant, parameters,
-textures, and renderer path:
+textures, and renderer path. Fluxel does not aim to reproduce EEVEE or Cycles.
 
-```text
-Fluxel in Blender == Fluxel in the standalone runtime
-```
-
-The goal is not to reproduce EEVEE or Cycles.
-
-## 2. Main architecture
+## Architecture and ownership
 
 ```text
 Blender native add-on and tools
   material translation / preview / export / diagnostics
                 |
                 v
-fluxel-material: MaterialGraph -> Material IR -> assets/instances
-                |
-                v
-fluxel-shader: modules/templates -> features -> ShaderArtifact/variant
+material and shader semantics
                 |
                 v
 fluxel-renderer: scene preparation -> FramePipeline
-  ├──> fluxel-rendergraph: pure graph compiler/IR
+  ├──> fluxel-rendergraph: pure graph compiler / IR
   ├──> fluxel-rhi: pure execution
-  └──> workspace-private bridge: GraphExecutionPlan
-       -> RHI RecordedWork / SubmissionPlan
+  └──> workspace-private graph/RHI bridge
+       -> RecordedWork / SubmissionPlan
 ```
 
-The public architecture contains RenderGraph resources, RHI bindings,
+RenderGraph declares logical requirements and compiles them into immutable graph
+plans. RHI owns live device-affine objects and execution. The renderer-private
+bridge projects enabled RHI capabilities into a `GraphTargetProfile`, prepares
+live RHI bindings for logical slots, and lowers an instantiated graph into
+recorded work and submission. Neither public crate depends on the other.
+
+`GraphTargetProfile` is a lossless-for-graph projection of enabled RHI
+capabilities: it may omit facts irrelevant to graph compilation, but it must
+never manufacture, strengthen, or reinterpret an RHI capability. Device
+identity/generation validation, usage legality, completion-safe lifetime,
+frame attachments, and pipeline/binding compatibility remain bridge/RHI work,
+not graph concepts.
+
+The common public model contains RenderGraph resources, RHI bindings,
 Device/Surface/Completion, and generation-aware ownership. WebGPU, WebGL,
-native handles, and reference-counted leases remain backend-private. No public
-or backend resource model uses browser sessions or asset tokens.
+native handles, and reference-counted leases remain backend-private. Neither
+the public nor backend resource model uses browser sessions or asset tokens.
 
-## 3. Workspace and ecosystem ownership
+`fluxel-bases` owns durable logical asset identity, while this workspace owns
+only renderer-private per-device GPU residency. Geometry and material handles
+are conceptual typed references; when backed by Fluxel assets, their durable
+identity is `AssetId<K>` plus `ContentGeneration`, not a parallel identity
+domain. A material instance may have renderer-domain identity distinct from its
+material asset.
 
-```text
-fluxel-rendering/
-  crates/rhi/          portable RHI and backend execution
-  crates/rendergraph/  graph authoring, compilation, and execution plans
-  crates/material/     material graph and Material IR
-  crates/shader/       shader assembly, reflection, and variants
-  crates/renderer/     scene preparation and FramePipeline contracts
-  tools/blender/       native Blender add-on/tooling package
-```
+## Delivery order
 
-`material`, `shader`, and Blender tooling become public boundaries only after
-working vertical slices prove their need. A proposed crate is not itself a
-commitment to an API.
+The completed RHI baseline is the foundation. Future work proceeds through
+named plans rather than release-number promises:
 
-`fluxel-bases` remains the home of shared platform-neutral mechanisms;
-`fluxel-host` owns native host lifecycle; `fluxel-jsbridge` remains a platform
-and JavaScript adapter. None of them is the semantic authority for rendering.
+1. **Material and shader plan.** Define MaterialGraph, Material IR, runtime
+   instances, shader modules, composition, reflection, variants, and cache
+   identity; prove one Rust-only material-to-shader vertical slice.
+2. **Minimal scene and Forward plan.** Establish the smallest
+   RenderScene/RenderView/RenderObject vocabulary, the `FramePipeline` SPI,
+   the renderer-private graph/RHI bridge, and one Forward implementation.
+3. **Scene preparation and Deferred plan.** Complete culling, deterministic
+   ordering, material selection, diagnostics, and Deferred as an independent
+   pipeline proof.
+4. **Blender authoring plan.** Translate supported Blender data, provide
+   diagnostics and viewport preview, and establish the initial export route.
+5. **Equivalence and export plan.** Prove preview/runtime equivalence with
+   retained fixtures and integration diagnostics.
+6. **Capture and replay plan.** Record and replay dependency-closed
+   RenderScene execution through the normal renderer, graph, and RHI path.
+7. **JavaScript plan.** Expose a narrow language-level integration surface over
+   established Rust contracts. A shared SDK core may be extracted once an
+   established Rust contract and a real adapter prove a stable language boundary;
+   later adapters must not force platform behavior into that core.
+8. **Canvas and text plan.** Add Canvas 2D and minimal text as consumers of the
+   same renderer and prepared-resource model.
+9. **Declarative UI plan.** Build declarative UI on Canvas and text. It may seek
+   Vue-inspired ergonomics, but it is neither Vue compatibility nor a DOM/CSS
+   runtime.
 
-## 4. Delivery sequence
+Each plan closes only with an integrated, end-to-end evidence slice. A green
+test suite in one crate does not establish an ecosystem contract.
 
-The current `0.16` release is the completed RHI baseline. It remains the
-lower-layer contract for the next train:
-
-```text
-0.16  completed RHI protocol and backend baseline
-```
-
-The next product train is:
-
-```text
-0.17  Shader assembly + material system
-  -> MaterialGraph, Material IR, runtime instances
-  -> shader modules, composition, reflection, variants, and cache
-0.18  Minimal scene + Forward framework
-  -> minimal RenderScene/RenderObject/RenderView and custom FramePipeline SPI
-  -> one built-in Forward proof and renderer-owned bridge/lowering
-0.19  Complete RenderScene and Deferred proof
-  -> scene/object/view preparation, culling, ordering, and material selection
-  -> Deferred as the second independent pipeline proof
-0.20  Blender-native authoring and preview loop
-  -> native add-on/tools, viewport preview, export, runtime equivalence
-0.21  Preview/runtime equivalence, export, and integration hardening
-0.22  RenderScene recording and replay
-0.23  JavaScript API interface
-0.24  Canvas 2D API + minimal text
-0.25  Declarative Vue-like UI framework
-```
-
-These versions describe sequencing, not a promise that every item fits one
-release. Each train requires an end-to-end evidence slice before expansion.
-
-## 5. Next version: shader assembly and material system
-
-This is the immediate priority after the completed `0.16` RHI baseline.
-
-### 5.1 Material system
-
-Define and implement:
-
-```text
-MaterialDomain::Surface
-MaterialValueType and typed values
-MaterialGraph and typed node handles
-graph validation and diagnostics
-Material IR and graph lowering
-static versus dynamic parameters
-MaterialAsset / MaterialInstance
-SurfaceOutput contract
-```
-
-The first vocabulary is small: constants, parameters, UVs, texture sampling,
-arithmetic, vector operations, normal mapping, and surface outputs for base
-color, metallic, roughness, normal, emissive, and opacity. Blender compatibility
-maps into these semantics; it does not define them.
-
-### 5.2 Shader assembly
-
-Define and implement:
-
-```text
-shader module and pass-template contracts
-geometry/material/pass interfaces
-feature analysis and canonical variant keys
-shader composition and source/IR generation
-reflection into ShaderInterface
-ShaderArtifact production and validation
-portable shader cache identity
-```
-
-Dynamic values update bindings or instance data. Static choices affect the
-variant key. Identical material structure with different runtime values shares
-one shader variant.
-
-### 5.3 Acceptance
-
-The first proof is Rust-only:
-
-```text
-Rust MaterialGraph -> Material IR -> composed artifact
-    -> reflected interface -> compiled material variant
-    -> renderer-facing material instance
-```
-
-Blender integration is not part of `0.17`; it begins in `0.20`. The `0.17`
-proof is Rust-only. Unsupported material features fail with structured
-diagnostics; they are never silently approximated.
-
-## 6. RenderGraph and renderer direction
-
-`fluxel-renderer` is a framework for renderer policy, not one fixed recipe. It
-provides the minimal scene vocabulary and `FramePipeline` SPI in `0.18`, then
-completes object/view preparation, culling, deterministic ordering,
-material/shader variant selection, and diagnostics in `0.19`.
-
-The custom SPI allows applications and tools to define pipelines while keeping
-the same scene, material, shader, RenderGraph, and RHI contracts. Fluxel ships
-Forward first to prove the SPI, then Deferred in `0.19` as an independent
-second implementation:
-
-```text
-Forward:  depth, ordering, lighting, and material evaluation
-Deferred: G-buffer, lighting, material evaluation, and composition
-```
-
-Both consume the same compiled material variants and lower through RenderGraph.
-
-## 7. RenderScene and recording/replay
-
-`0.19` defines the complete renderer-facing scene and frame-preparation model:
-
-```text
-RenderScene -> RenderView/RenderObject -> culling/order
-            -> material/shader selection -> FramePipeline -> RenderGraph
-```
-
-`0.22` applies recording and replay to the whole RenderScene-driven path. The
-recording boundary includes scene inputs, material/shader decisions,
-frame/pipeline configuration, and portable execution evidence. Replay uses the
-normal renderer, RenderGraph, and RHI path rather than a second implementation.
-
-## 8. Blender-native editor/tooling direction
-
-Starting in `0.20`, Blender integration is a first-class product path, not a late JavaScript
-facade. The native add-on/tool package progressively provides:
-
-```text
-Blender shader-node -> Fluxel MaterialGraph translation
-scene/mesh/material extraction
-Fluxel material and shader diagnostics in Blender
-Fluxel viewport preview through the Fluxel renderer
-asset export and rebuild reporting
-preview/runtime equivalence fixtures
-```
-
-The initial supported nodes are Material Output, Principled BSDF, Image
-Texture, Texture Coordinate, Normal Map, RGB, Value, Add, Multiply, and Mix.
-Coverage expands only when a Fluxel semantic and validation test exists.
-
-## 9. Later product route
-
-After the Blender loop, the roadmap continues with preview/runtime equivalence,
-export and integration hardening, then complete RenderScene recording/replay,
-the JavaScript API interface, a declarative Vue-like UI framework, and a Canvas
-2D API. These layers consume the established Rust rendering contracts; they do
-not redefine material semantics, renderer pipelines, RenderGraph, or RHI.
-
-## 10. Product milestone
+## Product milestone
 
 ```text
 Create a cube and material in Blender
@@ -234,6 +109,6 @@ Create a cube and material in Blender
   -> compare preview and runtime output
 ```
 
-After this succeeds, expand node coverage, renderer features, and custom
-pipeline examples incrementally. Do not create a second shader implementation
-for Blender or for either built-in renderer.
+After this works, expand node coverage, renderer features, and custom pipeline
+examples incrementally. Do not create a second shader implementation for
+Blender or for individual built-in renderers.

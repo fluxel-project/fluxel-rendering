@@ -12,10 +12,10 @@
 > execution-plan terminology are implementation history only and are not part of
 > the future renderer contract.
 >
-> Delivery order: `0.18` freezes only minimal `RenderScene`, `RenderObject`,
-> `RenderView`, the `FramePipeline` SPI, and one Forward proof. `0.19` completes
-> scene preparation/culling and proves the SPI again with Deferred. The renderer
-> owns the workspace-private lowering bridge from RenderGraph IR to RHI
+> Delivery order: the minimal scene milestone freezes only `RenderScene`,
+> `RenderObject`, `RenderView`, the `FramePipeline` SPI, and one Forward proof.
+> The complete scene-preparation milestone adds culling and proves the SPI again
+> with Deferred. The renderer owns the workspace-private lowering bridge from RenderGraph IR to RHI
 > `RecordedWork` and `SubmissionPlan`; RenderGraph and RHI remain independent.
 
 ---
@@ -351,6 +351,21 @@ pub struct MaterialHandle {
 ```
 
 These are not RHI buffers, textures, bind groups, or pipelines.
+
+`GeometryHandle` and `MaterialHandle` are conceptual typed logical references,
+not independent asset identity domains. When they are backed by Fluxel assets,
+their durable identity is the corresponding `AssetId<K>` plus
+`ContentGeneration`, for example:
+
+```rust
+type GeometryAssetId = AssetId<GeometryAsset>;
+type MaterialAssetId = AssetId<MaterialAsset>;
+```
+
+A renderer may assign a separate identity to a `MaterialInstance`, because an
+instance is mutable renderer-domain state rather than the material asset. That
+instance must retain its material asset reference; it must not replace or mint a
+parallel durable material identity.
 
 Resolution happens later:
 

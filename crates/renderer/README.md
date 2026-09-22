@@ -1,11 +1,11 @@
 # Fluxel Renderer
 
 > `0.15` historical usage guide and post-foundation renderer baseline. Renderer
-> work is paused during `0.16`-`0.17` except for required migration/evidence and
-> may be explicitly dormant while lower layers are replaced. Resume only through
-> [the foundation version plan](../../documents/version-plan.md). `0.18` starts
-> minimal scene/SPI/Forward work and `0.19` completes scene preparation and
-> adds Deferred; do not treat
+> work remains limited to required migration/evidence while the RHI and
+> material/shader foundations are established. Resume feature work only through
+> [the implementation plan](../../documents/version-plan.md). The minimal
+> scene milestone proves the scene/SPI boundary with Forward; the complete
+> scene-preparation milestone adds culling and proves it again with Deferred. Do not treat
 > old graph/RHI spellings below as the new contract.
 >
 > **RHI API v1 boundary.** The fixed Stage-1 recipes and all
