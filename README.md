@@ -111,9 +111,10 @@ supported paths and recommended entry points.
 
 The completed `0.16` release is the RHI baseline. `0.17` starts shader
 assembly and the material system, `0.18` combines RenderGraph with the renderer
-framework, `0.19` defines RenderScene, `0.20` records and replays the complete
-RenderScene path, and `0.21` starts the native Blender editor/preview loop.
-Canvas, UI, and JavaScript integration remain candidates rather than active milestones. The executable breakdown is
+framework, `0.19` defines RenderScene, `0.20` starts the native Blender editor,
+`0.21` closes preview/runtime equivalence and export, `0.22` records and
+replays the complete RenderScene path, `0.23` adds the JavaScript API, and
+`0.24` adds the declarative UI and Canvas 2D layers. The executable breakdown is
 the [version plan](documents/version-plan.md). The sole normative
 RHI API architecture source is [RHI design](crates/rhi/documents/design-rhi.md);
 rustdoc and contract tests define descriptor-level detail. The

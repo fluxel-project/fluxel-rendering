@@ -21,11 +21,15 @@ release:
   |
 0.19  RenderScene                              detailed
   |
-0.20  RenderScene recording + replay           detailed
+0.20  Blender-native plugin/tooling loop       detailed
   |
-0.21  Blender-native plugin/tooling loop       detailed
+0.21  Preview/runtime equivalence and export   detailed
   |
-0.22+ ecosystem extensions and candidates      coarse
+0.22  RenderScene recording + replay           detailed
+  |
+0.23  JavaScript API interface                coarse
+  |
+0.24  Declarative Vue-like UI + Canvas 2D     coarse
 ```
 
 Every version must still have a named owner, structured refusal behavior,
@@ -125,39 +129,55 @@ Define the renderer-facing scene and frame-preparation model:
 One complete Rust scene can be prepared, lowered through either built-in
 pipeline or the custom SPI, and executed through RenderGraph and RHI.
 
-## 6. Version 0.20 — RenderScene recording and replay
+## 6. Version 0.20 — Blender-native editor and tooling
+
+Start Blender integration after the Rust rendering path and RenderScene model
+are complete:
+
+- ShaderNodeTree to `MaterialGraph` translation;
+- mesh, transform, camera, light, material assignment, and texture extraction;
+- structured unsupported-node and shader/material diagnostics in Blender;
+- Fluxel viewport preview through the renderer.
+
+## 7. Version 0.21 — Preview/runtime equivalence and export
+
+Close the authoring-to-runtime loop:
+
+```text
+Blender scene -> Fluxel import -> viewport preview
+             -> export -> standalone runtime -> equivalence comparison
+```
+
+Add deterministic comparison fixtures, asset-version handling, and integration
+diagnostics. The first supported node subset is Material Output, Principled
+BSDF, Image Texture, Texture Coordinate, Normal Map, RGB, Value, Add,
+Multiply, and Mix.
+
+## 8. Version 0.22 — RenderScene recording and replay
 
 Record and replay the complete RenderScene-driven path, including scene inputs,
 view/frame configuration, material/shader decisions, pipeline selection,
 RenderGraph inputs, portable execution evidence, and output observations.
 Replay uses the normal renderer, RenderGraph, and RHI contracts.
 
-## 7. Version 0.21 — Blender-native editor and tooling
+## 9. Version 0.23 — JavaScript API interface
 
-Start Blender integration only after the Rust rendering path and its
-RenderScene recording/replay evidence are complete:
+Expose a deliberately narrow JavaScript API over the established Rust
+contracts. JavaScript is an integration surface; it does not own GPU resources,
+shader semantics, material identity, or the RenderScene model.
 
-- ShaderNodeTree to `MaterialGraph` translation;
-- mesh, transform, camera, light, material assignment, and texture extraction;
-- structured unsupported-node and shader/material diagnostics in Blender;
-- Fluxel viewport preview through the renderer;
-- initial export of material, mesh, texture, and scene assets.
+## 10. Version 0.24 — Declarative UI and Canvas 2D
 
-The first supported node subset is Material Output, Principled BSDF, Image
-Texture, Texture Coordinate, Normal Map, RGB, Value, Add, Multiply, and Mix.
-Each supported node requires a Fluxel semantic and a validation fixture.
+Define a declarative Vue-like UI framework and a Canvas 2D API on top of the
+Fluxel renderer and prepared resources. Both remain consumers of the same
+RenderGraph/RHI architecture and must not introduce DOM, CSS, browser session,
+or token-based resource ownership into the core.
 
-## 8. Version 0.22 and later — broad extension direction
+## 11. Later evolution
 
-Keep later planning coarse until the first product loop is proven. Possible
-extensions include additional Blender semantics, more renderer features,
-custom-pipeline samples, stronger shader caching, animation/lighting breadth,
-and broader backend evidence.
-
-JavaScript material APIs, CSS-like styling, Canvas/UI frameworks, browser-first
-editor UX, and general DevTools remain candidates. They are not release goals
-in this plan and require a demonstrated consumer after the Blender/material/
-renderer route is stable.
+Later work expands Blender semantics, renderer features, custom-pipeline
+examples, shader caching, animation, lighting, and backend evidence as the
+completed route requires.
 
 ## 8. Cross-version invariants
 

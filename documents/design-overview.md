@@ -4,10 +4,10 @@
 > active implementation order is [the version plan](version-plan.md), and the
 > RHI architecture source is [RHI design](../crates/rhi/documents/design-rhi.md);
 > rustdoc and contract tests define descriptor-level detail. This document is
-> cross-layer only. RHI must be
-> `0.16` RHI is complete. The next implementation order is shader/material,
-> renderer pipelines, and Blender tooling. Canvas, UI, and JavaScript
-> integration are candidates rather than active milestones.
+> cross-layer only. `0.16` RHI is complete. The next implementation order is
+> shader/material, RenderGraph and renderer pipelines, RenderScene, Blender
+> tooling, equivalence/export, recording/replay, JavaScript, declarative UI,
+> and Canvas 2D.
 
 Fluxel Rendering is a layered Rust workspace for turning Blender-authored
 materials and renderer-selected scene data into portable GPU work, then
@@ -34,9 +34,11 @@ The completed baseline and next delivery order are:
 0.17       Shader assembly and material system
 0.18       RenderGraph + renderer framework, custom SPI, Forward, Deferred
 0.19       RenderScene and frame preparation
-0.20       RenderScene recording and replay
-0.21       Blender-native editor, preview, and export loop
-0.22+      Integration hardening and broader extensions
+0.20       Blender-native editor, preview, and material/scene import
+0.21       Preview/runtime equivalence, export, and integration hardening
+0.22       RenderScene recording and replay
+0.23       JavaScript API interface
+0.24       Declarative Vue-like UI and Canvas 2D API
 ```
 
 RHI definitions include canonical descriptor/command/submission observation,

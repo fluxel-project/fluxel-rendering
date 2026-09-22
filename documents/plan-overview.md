@@ -63,10 +63,10 @@ or backend resource model uses browser sessions or asset tokens.
 fluxel-rendering/
   crates/rhi/          portable RHI and backend execution
   crates/rendergraph/  graph authoring, compilation, and execution plans
-  crates/material/     candidate material graph and Material IR
-  crates/shader/       candidate shader assembly, reflection, and variants
+  crates/material/     material graph and Material IR
+  crates/shader/       shader assembly, reflection, and variants
   crates/renderer/     scene preparation and FramePipeline contracts
-  tools/blender/       candidate native Blender add-on/tooling package
+  tools/blender/       native Blender add-on/tooling package
 ```
 
 `material`, `shader`, and Blender tooling become public boundaries only after
@@ -99,11 +99,12 @@ The next product train is:
 0.19  RenderScene
   -> scene/object/view model, preparation, culling, and ordering
   -> material/shader selection and frame construction
-0.20  RenderScene recording + replay
-  -> record the complete RenderScene-driven frame path
-  -> replay through renderer, RenderGraph, and RHI
-0.21  Blender-native authoring and preview loop
+0.20  Blender-native authoring and preview loop
   -> native add-on/tools, viewport preview, export, runtime equivalence
+0.21  Preview/runtime equivalence, export, and integration hardening
+0.22  RenderScene recording and replay
+0.23  JavaScript API interface
+0.24  Declarative Vue-like UI framework + Canvas 2D API
 ```
 
 These versions describe sequencing, not a promise that every item fits one
@@ -199,7 +200,7 @@ normal renderer, RenderGraph, and RHI path rather than a second implementation.
 
 ## 8. Blender-native editor/tooling direction
 
-Starting in `0.21`, Blender integration is a first-class product path, not a late JavaScript
+Starting in `0.20`, Blender integration is a first-class product path, not a late JavaScript
 facade. The native add-on/tool package progressively provides:
 
 ```text
@@ -215,23 +216,13 @@ The initial supported nodes are Material Output, Principled BSDF, Image
 Texture, Texture Coordinate, Normal Map, RGB, Value, Add, Multiply, and Mix.
 Coverage expands only when a Fluxel semantic and validation test exists.
 
-## 9. Candidates, not current roadmap
+## 9. Later product route
 
-These are removed from the active route and may be reconsidered after the
-Blender/material/renderer loop proves its value:
-
-```text
-JavaScript material mutation APIs
-CSS-like style systems
-Canvas/UI frameworks and declarative UI
-browser-first editor experiences
-general DevTools UI
-additional JS host/platform integrations
-```
-
-Existing JS/browser adapters remain compatibility infrastructure when needed;
-they do not set the next product milestone or introduce a parallel resource
-architecture.
+After the Blender loop, the roadmap continues with preview/runtime equivalence,
+export and integration hardening, then complete RenderScene recording/replay,
+the JavaScript API interface, a declarative Vue-like UI framework, and a Canvas
+2D API. These layers consume the established Rust rendering contracts; they do
+not redefine material semantics, renderer pipelines, RenderGraph, or RHI.
 
 ## 10. Product milestone
 
