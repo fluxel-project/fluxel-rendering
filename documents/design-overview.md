@@ -9,13 +9,13 @@ Fluxel Rendering turns renderer-selected scene data into portable GPU work.
 Its architecture favors one owner for each meaning and reuses the portable GPU
 contract instead of duplicating it for crate separation.
 
-## Frame path
+## Frame execution
 
 ```text
-Application / Game Scene
-        -> RenderScene
-        -> FramePipeline SPI <-> Material / Shader
+RenderScene
+        -> FramePipeline
         -> RenderGraph
+        -> Shader / Pipeline + Material Runtime
         -> RHI
         -> private DX12 / Vulkan / Metal / WebGPU / GL backends
 ```
@@ -23,29 +23,55 @@ Application / Game Scene
 - `RenderScene` is render-domain scene data: no gameplay logic or GPU objects.
 - `FramePipeline` decides how this frame renders: Forward, Deferred, tile,
   path-tracing, or a custom strategy.
-- `Material` and `Shader` resolve shader variants, bindings, and pipeline
-  requirements while the frame pipeline builds passes.
 - `RenderGraph` plans GPU work: versions, dependencies, lifetimes, culling,
   scheduling, and graph diagnostics.
+- At execution, a pass selects its prepared shader/pipeline and binds its
+  material-runtime data through graph pass-local authority.
 - `RHI` owns actual resources, commands, submission, completion, presentation,
   device lifecycle, and portable capabilities.
 - Backends implement the RHI privately.
 
-## Dependency direction and ownership
-
-The core GPU-planning dependency spine is:
+## Material compilation
 
 ```text
-fluxel-renderer
-        -> fluxel-rendergraph
-        -> fluxel-rhi
-        -> private backends
+MaterialGraph
+        -> Material IR
+        -> Shader System
+        -> ShaderArtifact / Pipeline requirements
 ```
 
-This spine is not the complete crate dependency graph. Renderer also consumes
-material and shader services during frame construction; those subsystems may
-use RHI portable shader, pipeline, and binding vocabulary. Whether material and
-shader become separate crates is a later boundary decision.
+This is a compilation and generation relationship, not the frame-execution
+path above. A compiled material variant is runtime input to the pipeline; its
+authoring graph is not walked by a pass.
+
+## Ownership DAG and portable contracts
+
+The architecture is an ownership DAG, not a single crate dependency chain.
+The concrete split between `material` and `shader` crates remains a later
+decision. The intended semantic ownership relationships are:
+
+```text
+Material compiler -> Shader System
+Renderer -> Material Runtime
+Renderer -> Shader System
+Renderer -> RenderGraph
+RHI -> private backends
+```
+
+`renderer` consumes material/shader services and RenderGraph. This does not
+restrict portable RHI-contract reuse, which is intentionally direct:
+
+```text
+Renderer -----------------+
+RenderGraph --------------+
+Shader / Pipeline --------+--> RHI portable API
+Material runtime ---------+
+```
+
+RHI is not an API that upper layers must reach only by forwarding through their
+immediate neighbor. These direct uses are dependency edges to the shared GPU
+foundation, but they do not transfer each caller's higher-level semantic
+ownership to RHI.
 RenderGraph directly uses RHI portable descriptors, formats, usages, capability
 facts, resource uses, command scopes, submission primitives, and presentation
 facts. It must never touch backend-private native objects.

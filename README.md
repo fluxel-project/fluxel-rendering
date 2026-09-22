@@ -46,6 +46,14 @@ Seven proven raster paths share one private, closed recipe mapping.
 Package READMEs are the detailed user documentation published with each crate;
 this file is only the workspace entry point.
 
+The architecture is an ownership DAG, not a universal linear dependency path:
+frame execution is `RenderScene -> FramePipeline -> RenderGraph -> Shader /
+Pipeline + Material Runtime -> RHI`, while material compilation is
+`MaterialGraph -> Material IR -> Shader System -> ShaderArtifact / Pipeline
+requirements`. Renderer, RenderGraph, shader/pipeline code, and material
+runtime may each reuse RHI portable contracts where needed; normal frame work
+continues to preserve RenderGraph pass-local resource authority.
+
 ## Released source dependency
 
 The workspace releases its three publishable crates together. Git consumers must pin the

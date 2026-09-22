@@ -15,9 +15,9 @@
 > Delivery order: the minimal scene milestone freezes only `RenderScene`,
 > `RenderObject`, `RenderView`, the `FramePipeline` SPI, and one Forward proof.
 > The complete scene-preparation milestone adds culling and proves the SPI again
-> with Deferred. The renderer directly builds RenderGraph work against RHI's
-> portable contract; it owns scene policy and ordinary integration glue, not a
-> Graph/RHI translation layer.
+> with Deferred. The renderer authors RenderGraph work using RHI's portable
+> contract; it owns scene policy and ordinary integration glue, not a Graph/RHI
+> translation layer or a bypass around graph pass-local resource authority.
 
 ---
 
@@ -32,24 +32,33 @@ Game / Engine Scene
         |
         | extract rendering-only state
         v
-    RenderScene
+RenderScene
         |
         v
-   FramePipeline SPI
+FramePipeline SPI
         |
         | cull / sort / prepare
-        | select material/shader variants
+        | resolve material variants and shader/pipeline requirements
         | declare logical resources and passes
         v
-    RenderGraph
+RenderGraph
         |
         v
-       RHI
+Shader / Pipeline + Material Runtime
+        |
+        v
+RHI
 ```
 
 The central contract is:
 
 > A `FramePipeline` converts `RenderScene + RenderView` into a `RenderGraph`.
+
+The diagram is an execution path, not a rule that forces crate dependencies
+into a chain. Renderer consumes RenderGraph and material/shader services;
+RenderGraph, shader/pipeline code, and material runtime may each use RHI's
+portable contracts directly. Normal frame GPU work still enters through
+RenderGraph, whose pass-local authority controls graph resources.
 
 `fluxel-renderer` defines the language and common services for building a
 renderer. It does **not** define the renderer itself.
@@ -1114,7 +1123,7 @@ FramePipeline::build
         |
         +-- CullingService
         +-- SortingService
-        +-- material/shader preparation
+        +-- material-variant and shader/pipeline resolution
         +-- feature builders
         |
         v
@@ -1122,6 +1131,12 @@ RenderGraph declaration
         |
         v
 RenderGraph compile / instantiate
+        |
+        v
+pass-local graph authority
+        |
+        v
+Shader / Pipeline + Material Runtime binding
         |
         v
 RHI execution
@@ -1175,6 +1190,9 @@ FramePipeline
 
 RenderGraph
     = frame work, resource dependencies, and execution planning
+
+Shader / Pipeline + Material Runtime
+    = prepared execution objects and per-instance binding data selected by a pass
 
 RHI
     = portable GPU execution

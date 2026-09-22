@@ -19,7 +19,7 @@ Blender is the primary authoring environment.
 
 Fluxel owns the rendering semantics.
 
-The intended flow is:
+Material compilation is a generation relationship:
 
 ```text
 Blender Shader Nodes
@@ -35,20 +35,21 @@ Material IR
 Shader Composition / Compiler
         |
         v
-ShaderArtifact + ShaderInterface
-        |
-        v
-CompiledMaterialVariant
-        |
-        v
-FramePipeline / Renderer
-        |
-        v
-RenderGraph
-        |
-        v
-RHI
+ShaderArtifact / Pipeline requirements
 ```
+
+The corresponding frame-execution relationship is separate:
+
+```text
+RenderScene
+        -> FramePipeline
+        -> RenderGraph
+        -> Shader / Pipeline + Material Runtime
+        -> RHI
+```
+
+At runtime a graph pass selects or uses a prepared shader/pipeline and binds
+`MaterialInstance` data. It does not compile or traverse `MaterialGraph`.
 
 The key consistency rule is:
 
@@ -129,26 +130,29 @@ fluxel-rhi
     submission
 ```
 
-The dependency direction should be approximately:
+The semantic ownership relationships should be approximately:
 
 ```text
-material
-    |
-    v
-shader substrate
-
-renderer
-    |
-    +---- consumes material compiled output
-    |
-    v
-rendergraph
-    |
-    v
-rhi
+Material compiler -> Shader System
+Renderer -> Material Runtime
+Renderer -> Shader System
+Renderer -> RenderGraph
 ```
 
 `fluxel-material` must not depend on `fluxel-renderer`.
+`fluxel-renderer` consumes material/shader services and RenderGraph. Direct
+portable-contract dependencies converge on the shared GPU foundation:
+
+```text
+Renderer -----------------+
+RenderGraph --------------+
+Shader / Pipeline --------+--> RHI portable API
+Material runtime ---------+
+```
+
+These are real dependency edges, but they do not transfer material, shader,
+renderer, or graph semantics into RHI. No RHI user must forward through another
+crate.
 
 ---
 
@@ -1440,29 +1444,16 @@ Step 10
 ## 36. Final Architecture
 
 ```text
-Blender / procedural frontend
-        |
-        v
-MaterialGraph
-        |
-        v
-Material IR
-        |
-        v
-Shader Composition / Compiler
-        |
-        v
-CompiledMaterialVariant
-        |
-        v
-FramePipeline
-        |
-        v
-RenderGraph
-        |
-        v
-RHI
+MaterialGraph -> Material IR -> Shader System
+        -> ShaderArtifact / Pipeline requirements
+
+RenderScene -> FramePipeline -> RenderGraph
+        -> Shader / Pipeline + Material Runtime -> RHI
 ```
+
+The first line is material compilation; the second is frame execution. They are
+related through prepared variants and requirements, not by making an authoring
+graph part of pass recording.
 
 The defining rules are:
 

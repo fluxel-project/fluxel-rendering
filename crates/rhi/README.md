@@ -5,6 +5,12 @@ vocabulary for devices, resources, shader artifacts, recorded commands,
 submission, completion, and presentation, while keeping DX12, Vulkan, Metal,
 WebGPU, and the GL family behind the backend seam.
 
+RHI is a shared portable-contract layer, not a required layer-by-layer
+forwarding path: RenderGraph, shader/pipeline code, and material runtime may
+use it directly. In normal frame execution, however, graph passes receive
+graph pass-local authority rather than a bare RHI recorder, so declared graph
+resource access remains authoritative.
+
 It is intended to be used below a renderer or render graph, not as a scene
 graph, asset cache, shader compiler, or native-handle wrapper.  In particular,
 the public API never exposes `ID3D12Device`, `VkDevice`, `MTLDevice`,

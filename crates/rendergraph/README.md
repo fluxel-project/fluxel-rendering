@@ -19,14 +19,17 @@ fixed execution evidence; they do not freeze the next public graph API.
 ## Frame integration
 
 ```text
-RenderScene -> FramePipeline + Material / Shader -> RenderGraph -> RHI
+RenderScene -> FramePipeline -> RenderGraph
+        -> Shader / Pipeline + Material Runtime -> RHI
 
 CompiledGraph + per-frame RHI bindings
         -> RHI RecordedWork -> RHI SubmissionPlan
 ```
 
-Material and shader variants are resolved by `FramePipeline` before pass
-declaration. Imports may be reusable logical slots, but each frame can bind
+Material and shader/pipeline requirements are resolved by `FramePipeline`
+before pass declaration. At execution, a pass selects the prepared
+shader/pipeline and binds material-runtime data through graph pass-local
+authority. Imports may be reusable logical slots, but each frame can bind
 them directly to RHI buffers, textures, pipelines, bindings, or a
 `FrameAttachment`. `FrameAttachment` is not a texture.
 
@@ -47,11 +50,11 @@ transient allocation is valid baseline behavior; aliasing is optional.
 
 ## Pass recording
 
-Each pass records through graph pass-local authority or a resolver, not a bare
-mutable RHI recorder. The authority holds the corresponding RHI raster,
-compute, or copy scope, enforces the pass's declared resource access and
-command family, and accepts only resources, pipelines, and bindings resolved
-for that pass. Its callback-facing operations reuse RHI's
+Each pass records through graph pass-local authority, including its pass-local
+resolver, not a bare mutable RHI recorder. The authority holds the
+corresponding RHI raster, compute, or copy scope, enforces the pass's declared
+resource access and command family, and accepts only resources, pipelines, and
+bindings resolved for that pass. Its callback-facing operations reuse RHI's
 draw/dispatch/copy/pipeline/binding command vocabulary and semantics directly;
 the graph must not create a second command language for later translation.
 

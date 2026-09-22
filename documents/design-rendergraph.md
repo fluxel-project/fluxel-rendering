@@ -13,13 +13,19 @@ only by [the RHI design](../crates/rhi/documents/design-rhi.md).
 ## Position in the frame path
 
 ```text
-Application / Game Scene
-        -> RenderScene
-        -> FramePipeline SPI <-> Material / Shader
+RenderScene
+        -> FramePipeline
         -> RenderGraph
+        -> Shader / Pipeline + Material Runtime
         -> RHI portable API
         -> private backends
 ```
+
+This is the frame-execution path, not a universal crate dependency chain.
+Material compilation is separately `MaterialGraph -> Material IR -> Shader
+System -> ShaderArtifact / Pipeline requirements`. Renderer, RenderGraph,
+shader/pipeline code, and material runtime may each reuse RHI portable
+contracts; only graph execution retains graph pass-local resource authority.
 
 `FramePipeline` resolves material and shader variants before it declares a
 pass. Consequently it can declare the pass's reads, writes, attachments,
@@ -87,12 +93,12 @@ plan caching. They are not mandatory layers. `RecordedWork` and
 
 ## Pass recording
 
-Pass callbacks receive graph pass-local authority or a resolver, not the RHI
-recorder itself. That authority holds the corresponding RHI portable raster,
-compute, or copy recording scope and resolves only resources, pipelines, and
-bindings declared for the pass. Resource-bearing commands accept only values
-resolved through that authority, so a callback cannot introduce undeclared
-resources.
+Pass callbacks receive graph pass-local authority, including its pass-local
+resolver, rather than the RHI recorder itself. The authority holds the
+corresponding RHI portable raster, compute, or copy recording scope and
+resolves only resources, pipelines, and bindings declared for the pass.
+Resource-bearing commands accept only values resolved through that authority,
+so a callback cannot introduce undeclared resources.
 
 This graph authority owns permission and resource resolution only. Its
 callback-facing operations reuse RHI's command vocabulary and semantics
