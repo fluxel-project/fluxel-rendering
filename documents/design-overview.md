@@ -33,6 +33,8 @@ Application / Game Scene
 
 ## Dependency direction and ownership
 
+The core GPU-planning dependency spine is:
+
 ```text
 fluxel-renderer
         -> fluxel-rendergraph
@@ -40,8 +42,10 @@ fluxel-renderer
         -> private backends
 ```
 
-Material and shader subsystems are renderer consumers used during frame
-construction and may use RHI portable shader, pipeline, and binding vocabulary.
+This spine is not the complete crate dependency graph. Renderer also consumes
+material and shader services during frame construction; those subsystems may
+use RHI portable shader, pipeline, and binding vocabulary. Whether material and
+shader become separate crates is a later boundary decision.
 RenderGraph directly uses RHI portable descriptors, formats, usages, capability
 facts, resource uses, command scopes, submission primitives, and presentation
 facts. It must never touch backend-private native objects.

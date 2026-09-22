@@ -87,11 +87,19 @@ plan caching. They are not mandatory layers. `RecordedWork` and
 
 ## Pass recording
 
-Pass callbacks use RHI's portable raster, compute, and copy recording scopes,
-or a thin graph permission wrapper around them. A wrapper may restrict a pass
-to its declared resources and command family; it must not restate `draw`,
-`dispatch`, `copy`, pipeline binding, bind-group binding, viewport, or scissor
-and translate those calls later.
+Pass callbacks receive graph pass-local authority or a resolver, not the RHI
+recorder itself. That authority holds the corresponding RHI portable raster,
+compute, or copy recording scope and resolves only resources, pipelines, and
+bindings declared for the pass. Resource-bearing commands accept only values
+resolved through that authority, so a callback cannot introduce undeclared
+resources.
+
+This graph authority owns permission and resource resolution only. Its
+callback-facing operations reuse RHI's command vocabulary and semantics
+directly—`draw`, `dispatch`, `copy`, pipeline binding, bind-group binding,
+viewport, and scissor—and delegate to the held RHI scope without a second
+command model or later translation. This preserves the graph declaration as
+the authority for dependencies, lifetimes, culling, and alias analysis.
 
 Recorded commands derive RHI `ResourceUse`. Graph declarations provide the
 planning contract; RHI command recording provides the portable execution

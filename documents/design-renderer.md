@@ -182,7 +182,9 @@ renderer-domain identities
 CullingService
 SortingService
 
-future draw/material preparation service seams
+material-variant and shader/pipeline resolution service seams
+
+evidence-driven draw preparation service seams
 
 FramePipeline SPI
 FramePipelineContext
@@ -609,19 +611,24 @@ pub struct FramePipelineContext<'a> {
 }
 ```
 
-Future additions may include real services such as:
+The initial minimum context may omit material-backed services while the scene
+and SPI shape are being established. Once a material-backed Forward pipeline
+is implemented, however, `FramePipelineContext` must receive real renderer
+services for material-variant resolution and shader/pipeline resolution. The
+pipeline uses those services before pass declaration to establish its shader,
+pipeline, binding, and resource requirements; it must not bypass the renderer
+by consulting global material, shader, or pipeline state directly.
+
+Additional services may be introduced when their contracts exist, for example:
 
 ```text
-material resolver
-shader composition/compiler
-pipeline resolver/cache
 draw-packet builder
 history service
+shader composition/compiler (when it is distinct from shader/pipeline resolution)
 ```
 
-They must be added only when those contracts exist.
-
-No placeholder service is required today.
+Draw-packet preparation and history remain evidence-driven additions. No
+placeholder service is required before its contract exists.
 
 ---
 

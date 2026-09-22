@@ -47,10 +47,13 @@ transient allocation is valid baseline behavior; aliasing is optional.
 
 ## Pass recording
 
-Passes record through RHI raster, compute, or copy scopes, optionally wrapped
-only to enforce graph-declared resource access and command family. The graph
-must not create a second draw/dispatch/copy/pipeline/binding command language
-for later translation.
+Each pass records through graph pass-local authority or a resolver, not a bare
+mutable RHI recorder. The authority holds the corresponding RHI raster,
+compute, or copy scope, enforces the pass's declared resource access and
+command family, and accepts only resources, pipelines, and bindings resolved
+for that pass. Its callback-facing operations reuse RHI's
+draw/dispatch/copy/pipeline/binding command vocabulary and semantics directly;
+the graph must not create a second command language for later translation.
 
 ## Historical examples and verification
 
