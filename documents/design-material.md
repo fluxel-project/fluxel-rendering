@@ -1,251 +1,524 @@
 # Fluxel Material System Design
 
-> Status: **Active next-version architecture**
->
-> Scope: Material authoring graph, material semantic model, Material IR, lowering boundary,
-> Blender integration boundary, and renderer-facing compiled material contract.
->
-> This document is the primary semantic contract for the next version's shader
-> assembly and material work. It does not define the full Blender add-on UI or
-> the implementation details of the two built-in renderer pipelines.
+## 1. Purpose
+
+This document defines the architecture and implementation plan for the Fluxel material system.
+
+The material system is designed around four explicit boundaries:
+
+```text
+MaterialGraph      = static material structure
+Material Fragment  = dynamic shader process
+Material IR        = normalized composition/link metadata
+Naga IR            = executable shader program IR
+```
+
+Fluxel does not implement its own material editor or shader compiler frontend.
+
+The intended toolchain is:
+
+```text
+Blender
+  -> Fluxel MaterialGraph
+  -> Material IR
+  -> Shader Composition
+  -> WGSL ShaderModule
+  -> Naga
+  -> RHI ShaderArtifact / Pipeline
+```
+
+Blender is the primary visual authoring environment.
+
+WGSL is the Fluxel-facing shader source language for custom material code, shader fragments, and custom pipeline shader modules.
+
+Naga owns shader parsing, validation, executable shader IR, and target translation.
+
+Fluxel owns material semantics, composition, resource contracts, variant semantics, and integration with `FramePipeline`, `RenderGraph`, and RHI.
 
 ---
 
-## 1. Core Decision
+## 2. Architectural Position
 
-Fluxel should not design its material system as a clone of Blender's node editor.
+Material compilation and frame execution are related but distinct flows.
 
-Blender is the primary authoring environment.
-
-Fluxel owns the rendering semantics.
-
-Material compilation is a generation relationship:
+### Material compilation
 
 ```text
 Blender Shader Nodes
-        |
-        | Blender -> Fluxel translation
-        v
+        ↓
 Fluxel MaterialGraph
-        |
-        v
+        ↓
 Material IR
-        |
-        v
-Shader Composition / Compiler
-        |
-        v
-ShaderArtifact / Pipeline requirements
+        ↓
+Shader Composer
+        ↓
+WGSL ShaderModule
+        ↓
+Naga
+        ↓
+ShaderArtifact / ShaderInterface / Pipeline Requirements
 ```
 
-The corresponding frame-execution relationship is separate:
+### Frame execution
 
 ```text
 RenderScene
-        -> FramePipeline
-        -> RenderGraph
-        -> Shader / Pipeline + Material Runtime
-        -> RHI
+        ↓
+FramePipeline
+        ↓
+RenderGraph
+        ↓
+Shader / Pipeline + Material Runtime
+        ↓
+RHI
 ```
 
-At runtime a graph pass selects or uses a prepared shader/pipeline and binds
-`MaterialInstance` data. It does not compile or traverse `MaterialGraph`.
+The authoring graph is never interpreted during frame execution.
 
-The key consistency rule is:
-
-> Blender preview and game runtime must execute the same Fluxel material semantics.
-
-The target is therefore:
-
-```text
-Fluxel in Blender == Fluxel in Game
-```
-
-not:
-
-```text
-EEVEE == Fluxel
-Cycles == Fluxel
-```
-
-Blender provides the editing UX.
-
-Fluxel provides the material semantics and the actual preview renderer.
+At runtime, `FramePipeline` selects prepared material/shader variants, declares graph work, and pass execution binds material runtime data through RHI portable contracts.
 
 ---
 
-## 2. Crate Ownership
+## 3. Core Mental Model
 
-The material system should **not** live inside `fluxel-renderer`.
-
-Recommended workspace structure:
+The material system is split into:
 
 ```text
-fluxel-rendering/
-    crates/
-        rhi/
-        rendergraph/
-        material/
-        shader/
-        renderer/
+static structure
++
+dynamic process
 ```
 
-Suggested responsibilities:
+### Static structure
+
+Static structure answers:
 
 ```text
-fluxel-material
-    MaterialGraph
-    material node vocabulary
-    MaterialDomain
-    MaterialValueType
-    material parameters
-    Material IR
-    graph validation
-    graph -> Material IR lowering
-
-fluxel-shader
-    shader fragments/modules
-    shader composition
-    shader target profile
-    permutation/variant resolution
-    source generation / compiler frontend
-    reflection
-    ShaderArtifact production
-
-fluxel-renderer
-    RenderScene
-    Culling / Sorting
-    FramePipeline SPI
-    material-variant selection
-    RenderGraph construction
-
-fluxel-rendergraph
-    pass/resource dependency graph
-
-fluxel-rhi
-    ShaderArtifact acceptance
-    bindings
-    pipelines
-    commands
-    submission
+What nodes/fragments exist?
+What are their typed inputs and outputs?
+How are they connected?
+Which parameters exist?
+Which GPU resources are required?
+Which static features are enabled?
+Which final material semantics are produced?
 ```
 
-The semantic ownership relationships should be approximately:
-
-```text
-Material compiler -> Shader System
-Renderer -> Material Runtime
-Renderer -> Shader System
-Renderer -> RenderGraph
-```
-
-`fluxel-material` must not depend on `fluxel-renderer`.
-`fluxel-renderer` consumes material/shader services and RenderGraph. Direct
-portable-contract dependencies converge on the shared GPU foundation:
-
-```text
-Renderer -----------------+
-RenderGraph --------------+
-Shader / Pipeline --------+--> RHI portable API
-Material runtime ---------+
-```
-
-These are real dependency edges, but they do not transfer material, shader,
-renderer, or graph semantics into RHI. No RHI user must forward through another
-crate.
-
----
-
-## 3. First Implementation Priority
-
-Do **not** begin with a large list of material nodes.
-
-The first thing to define is the stable semantic substrate:
-
-```text
-1. MaterialDomain
-2. MaterialValueType
-3. Material parameter model
-4. Material output contract
-5. Material IR
-6. MaterialGraph -> Material IR lowering
-7. Minimal MaterialGraph node API
-8. Blender-node mapping
-```
-
-The reason is simple:
-
-> UI nodes are replaceable frontends; Material IR is the semantic contract.
-
-If the public API is designed directly around Blender node classes, Fluxel will inherit
-Blender's UI vocabulary and compatibility burden.
-
----
-
-## 4. MaterialGraph vs Material IR
-
-These are different objects.
-
-### 4.1 MaterialGraph
-
-MaterialGraph is an editable authoring representation.
-
-It contains:
-
-```text
-nodes
-typed input/output ports
-connections
-parameters
-domain
-material outputs
-source/editor metadata
-```
-
-It is suitable for:
-
-```text
-Blender import
-visual editing
-serialization
-diagnostics
-hot reload
-tooling
-```
-
-### 4.2 Material IR
-
-Material IR is the compiler-facing semantic representation.
-
-It contains:
-
-```text
-typed values
-typed operations
-resource reads
-parameters
-domain outputs
-static decisions
-normalized semantic operations
-```
-
-It does not preserve editor layout or Blender UI concepts unless retained as optional provenance.
-
-The pipeline is:
+This belongs to:
 
 ```text
 MaterialGraph
-    |
-    | validate + lower
-    v
 Material IR
+```
+
+### Dynamic process
+
+Dynamic process answers:
+
+```text
+Given these inputs, how is the value computed?
+Which expressions run?
+Which functions are called?
+Which textures are sampled?
+Which branches or loops execute?
+What value is returned?
+```
+
+This belongs to:
+
+```text
+WGSL Material Fragments
+Naga IR
+```
+
+Fluxel must not duplicate Naga by inventing another executable shader instruction language inside Material IR.
+
+---
+
+## 4. MaterialGraph
+
+`MaterialGraph` is the editable authoring representation of a material.
+
+It represents the static topology of the material.
+
+Conceptually:
+
+```text
+UV0
+  ↓
+TextureSample ────┐
+                  Multiply ───→ Surface.BaseColor
+TintColor ────────┘
+```
+
+A `MaterialGraph` owns:
+
+```text
+nodes
+typed ports
+connections
+parameters
+resource references
+static feature values
+material domain
+material outputs
+source provenance
+editor/tool metadata
+```
+
+It does not own:
+
+```text
+native GPU objects
+RenderGraph passes
+command recording
+pipeline submission
+backend-specific shader code
+Naga IR
+```
+
+### 4.1 MaterialGraph as authoring AST
+
+A useful analogy is:
+
+```text
+MaterialGraph ≈ typed authoring AST / data-flow graph
+```
+
+Blender nodes, a Rust builder, tests, procedural material generation, or future importers may all construct the same Fluxel `MaterialGraph`.
+
+The graph is not Blender-specific.
+
+Blender is one frontend.
+
+---
+
+## 5. Material Fragment
+
+A `Material Fragment` is a reusable dynamic shader implementation with a typed interface.
+
+Conceptually:
+
+```wgsl
+fn procedural_color(
+    uv: vec2f,
+    time: f32,
+) -> vec3f {
+    let x = sin(uv.x * 20.0 + time);
+    return vec3f(x, 1.0 - x, 0.5);
+}
+```
+
+The fragment defines:
+
+```text
+function implementation
+typed inputs
+typed outputs
+required resources
+optional helper functions
+optional static requirements
+semantic role
+source provenance
+```
+
+A fragment may implement:
+
+```text
+multiply
+normal mapping
+texture sampling helper
+BRDF term
+procedural noise
+custom user code
+project-specific shading logic
+```
+
+### 5.1 Fragment metadata
+
+Fluxel stores metadata describing how the fragment participates in material composition.
+
+Conceptually:
+
+```rust
+pub struct ShaderFragment {
+    pub module: ShaderModuleId,
+    pub function: String,
+
+    pub inputs: Vec<FragmentInput>,
+    pub outputs: Vec<FragmentOutput>,
+
+    pub resources: Vec<FragmentResource>,
+    pub semantic: FragmentSemantic,
+}
+```
+
+The executable function body remains WGSL.
+
+Fluxel does not translate the function body into a parallel `MaterialInstruction` language.
+
+---
+
+## 6. Code Nodes Are First-Class
+
+Custom code is a core material capability, not an optional escape hatch.
+
+A material system with custom rendering pipelines must allow user-defined shader logic without requiring Fluxel to add a built-in node for every operation.
+
+The material graph therefore supports a first-class code/fragment node.
+
+Conceptually:
+
+```text
+Fluxel Code Node
+
+inputs:
+    uv       : vec2f
+    strength : f32
+
+outputs:
+    color    : vec3f
+
+resources:
+    noise_tex : Texture2D
+
+implementation:
+    WGSL function/module
+```
+
+Example:
+
+```wgsl
+fn evaluate_noise(
+    uv: vec2f,
+    strength: f32,
+) -> vec3f {
+    let v = sin(uv.x * 32.0) * cos(uv.y * 32.0);
+    return vec3f(v * strength);
+}
+```
+
+The graph treats this node like any other typed node.
+
+Its implementation is supplied by WGSL rather than a built-in Fluxel node kind.
+
+### 6.1 Why Code Nodes Matter
+
+Built-in nodes are useful for:
+
+```text
+common authoring operations
+Blender translation
+portable semantic helpers
+diagnostics
+discoverability
+```
+
+Code nodes provide:
+
+```text
+open-ended expressiveness
+project-specific shading
+custom BRDF logic
+procedural effects
+research/experimental shading
+custom FramePipeline integration
+```
+
+Fluxel must not require the core material node enum to grow indefinitely in order to express new shader logic.
+
+---
+
+## 7. WGSL as the Shader Source Language
+
+Fluxel uses WGSL as its author-facing shader source language.
+
+WGSL is used for:
+
+```text
+Material Fragment implementations
+Material Code Nodes
+shader templates
+custom FramePipeline shader modules
+shared shader modules/helpers
+```
+
+Fluxel does not expose GLSL, HLSL, MSL, or backend-native shader syntax as the primary authoring contract.
+
+Those may exist as backend/output forms where required.
+
+### 7.1 Static features are not preprocessor macros
+
+Fluxel does not depend on a C/GLSL-style preprocessor model such as:
+
+```c
+#define USE_NORMAL_MAP
+#ifdef USE_NORMAL_MAP
+#endif
+```
+
+Static configuration belongs to Fluxel variant semantics.
+
+Conceptually:
+
+```text
+static feature:
+    use_normal_map = true
+    alpha_test = false
+    skinning = true
+```
+
+The shader composer specializes the material/shader composition before final WGSL validation and compilation.
+
+WGSL `override` values may be used where appropriate, but Fluxel's material variant system is not defined by WGSL preprocessor behavior.
+
+---
+
+## 8. Material IR
+
+`Material IR` is not an executable shader language.
+
+It is the normalized, editor-independent composition description of one material configuration.
+
+A useful analogy is:
+
+```text
+Material IR ≈ typed link/composition manifest
+```
+
+rather than:
+
+```text
+Material IR ≈ LLVM IR
+```
+
+### 8.1 Material IR responsibilities
+
+Material IR records:
+
+```text
+material domain
+typed parameters
+GPU resource requirements
+shader fragment references
+fragment input/output contracts
+connections between fragment ports
+static feature decisions
+material output mapping
+source provenance
+variant-relevant metadata
+```
+
+Conceptually:
+
+```rust
+pub struct MaterialIr {
+    pub domain: MaterialDomain,
+
+    pub parameters: Vec<MaterialParameter>,
+    pub resources: Vec<MaterialResource>,
+
+    pub fragments: Vec<ShaderFragmentRef>,
+    pub connections: Vec<MaterialConnection>,
+
+    pub static_features: Vec<StaticFeature>,
+    pub outputs: MaterialOutputs,
+
+    pub provenance: MaterialProvenance,
+}
+```
+
+### 8.2 Material IR does not contain shader instructions
+
+Material IR must not define an executable instruction set such as:
+
+```text
+LoadParameter
+TextureSample
+Add
+Multiply
+Branch
+Normalize
+Return
+```
+
+Those are shader-program semantics and belong to WGSL/Naga.
+
+If a built-in material node performs multiplication, its lowered Material IR references the appropriate fragment/function and records its connections.
+
+For example:
+
+```text
+Fragment F0:
+    function = sample_base_color
+
+Fragment F1:
+    function = multiply_color
+
+Connections:
+    UV0                -> F0.uv
+    BaseTexture        -> F0.texture
+    F0.color           -> F1.a
+    TintColor          -> F1.b
+    F1.result          -> Surface.BaseColor
+```
+
+The actual multiplication implementation lives in WGSL.
+
+---
+
+## 9. MaterialGraph to Material IR Lowering
+
+Lowering removes authoring/editor structure that is irrelevant to shader composition and normalizes the material into a deterministic composition model.
+
+```text
+MaterialGraph
+        ↓
+validate
+        ↓
+resolve static features
+        ↓
+normalize nodes/fragments
+        ↓
+collect parameters/resources
+        ↓
+normalize connections
+        ↓
+Material IR
+```
+
+Lowering may perform:
+
+```text
+graph validation
+type validation
+cycle detection
+domain validation
+static-feature resolution
+dead-node elimination
+constant propagation where useful
+resource collection
+parameter collection
+fragment deduplication
+connection normalization
+output validation
+provenance retention
+```
+
+Lowering must not:
+
+```text
+create RHI objects
+create RenderGraph passes
+perform GPU submission
+translate to backend-native shader syntax
+duplicate Naga's executable IR
 ```
 
 ---
 
-## 5. Material Domains
+## 10. Material Domain
 
-The initial design should make domain explicit.
+A material belongs to an explicit domain.
 
 Conceptually:
 
@@ -258,161 +531,131 @@ pub enum MaterialDomain {
 }
 ```
 
-Only `Surface` needs to be implemented first.
-
-Domain determines:
+The first required domain is:
 
 ```text
-which inputs exist
-which outputs are legal
-which semantic operations are legal
-which renderer passes may consume the material
+Surface
 ```
 
-A material graph is never allowed to create RenderGraph passes.
+A domain defines:
+
+```text
+legal semantic inputs
+legal material outputs
+required output shape
+which FramePipeline/pass contexts may consume the material
+```
+
+A material graph does not own pass construction.
 
 ---
 
-## 6. Material Value Types
+## 11. Surface Material Contract
 
-Material graph ports must be strongly typed.
+The standard surface contract expresses material semantics rather than a particular shading pipeline.
 
 Conceptually:
 
 ```rust
-#[non_exhaustive]
-pub enum MaterialValueType {
-    Bool,
-    Float,
-    Vec2,
-    Vec3,
-    Vec4,
-
-    Color3,
-    Color4,
-
-    Normal3,
-
-    Texture2D,
-    Sampler,
+pub struct SurfaceOutput {
+    pub base_color: Color3,
+    pub metallic: Float,
+    pub roughness: Float,
+    pub normal: Normal3,
+    pub emissive: Color3,
+    pub opacity: Float,
 }
 ```
 
-The exact set should remain small initially.
+The exact representation may use graph-local typed handles.
 
-Semantic types such as:
+The important rule is:
 
 ```text
-Color3
-Normal3
+Material describes surface semantics.
+FramePipeline decides how those semantics are consumed.
 ```
 
-are intentionally distinct from plain vectors where useful.
+The same material may therefore participate in:
 
-This lets validation reject meaningless connections before shader compilation.
+```text
+Forward shading
+Deferred GBuffer generation
+Depth-only pass
+Shadow pass
+custom project passes
+```
+
+without embedding a Forward or Deferred renderer inside the material definition.
 
 ---
 
-## 7. Typed Value Handles
+## 12. Blender Integration
 
-The Rust authoring API should expose typed handles rather than stringly-typed ports.
+Blender is the primary material authoring UI.
 
-Conceptually:
+The intended path is:
 
-```rust
-pub struct Value<T> {
-    node: MaterialNodeId,
-    output: MaterialPortId,
-    _marker: PhantomData<T>,
-}
+```text
+Blender ShaderNodeTree
+        ↓
+Fluxel Blender Adapter
+        ↓
+Fluxel MaterialGraph
+        ↓
+Material IR
+        ↓
+Shader Composer
+        ↓
+WGSL
+        ↓
+Naga
+        ↓
+Fluxel Renderer / RHI
 ```
 
-Marker types may include:
+The Blender adapter owns:
 
-```rust
-pub struct Float;
-pub struct Vec2;
-pub struct Vec3;
-pub struct Vec4;
-pub struct Color3;
-pub struct Color4;
-pub struct Normal3;
+```text
+Blender node mapping
+Blender socket mapping
+parameter extraction
+texture/resource references
+source provenance
+unsupported-node diagnostics
+Code Node editing/integration
+incremental recompile triggers
+asset export
 ```
 
-This makes:
+The material core does not import Blender APIs.
 
-```rust
-let roughness: Value<Float>;
-let base_color: Value<Color3>;
+### 12.1 Principled BSDF
+
+Blender `Principled BSDF` is not the fundamental Fluxel material model.
+
+It is translated into Fluxel surface semantics.
+
+Example:
+
+```text
+Principled Base Color  -> Surface.BaseColor
+Principled Metallic    -> Surface.Metallic
+Principled Roughness   -> Surface.Roughness
+Principled Normal      -> Surface.Normal
+Principled Emission    -> Surface.Emissive
+Principled Alpha       -> Surface.Opacity
 ```
 
-different at compile time.
+Unsupported Principled features must fail explicitly rather than silently approximate behavior.
 
 ---
 
-## 8. MaterialGraph
+## 13. Built-In Material Nodes
 
-Conceptual API:
+Fluxel may provide a deliberately small built-in node vocabulary for common authoring operations and Blender translation.
 
-```rust
-pub struct MaterialGraph {
-    /* editable typed DAG */
-}
-```
-
-Creation:
-
-```rust
-let mut graph = MaterialGraph::new(MaterialDomain::Surface);
-```
-
-The graph owns:
-
-```text
-MaterialNodeId
-MaterialPortId
-connections
-parameters
-surface output
-diagnostic provenance
-```
-
----
-
-## 9. Node Identity
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct MaterialNodeId(u64);
-```
-
-Node identity is graph-local authoring identity.
-
-It is not:
-
-```text
-ShaderArtifact identity
-pipeline identity
-GPU object identity
-Blender node pointer
-```
-
-Blender integration may retain a source mapping:
-
-```text
-Blender node identifier
-    -> MaterialNodeId
-```
-
-for diagnostics and hot reload.
-
----
-
-## 10. Minimal Node Vocabulary
-
-The first version should intentionally support only a small semantic subset.
-
-### Sources
+Examples:
 
 ```text
 Constant
@@ -420,17 +663,8 @@ Parameter
 TexCoord
 VertexColor
 Texture2DParameter
-```
-
-### Texture
-
-```text
 SampleTexture2D
-```
 
-### Arithmetic
-
-```text
 Add
 Subtract
 Multiply
@@ -439,1032 +673,810 @@ Min
 Max
 Clamp
 Lerp
-```
 
-### Vector
-
-```text
 Dot
 Normalize
 Combine
 Split
-```
 
-### Semantic helpers
-
-```text
 NormalMap
+
+Code / ShaderFragment
 ```
 
-This is enough to prove the architecture.
+Built-in nodes are not the semantic ceiling of the system.
 
-Do not start by reproducing hundreds of Blender nodes.
-
----
-
-## 11. Node API
-
-The recommended public Rust API is a typed builder over an internal node representation.
-
-Example:
-
-```rust
-let mut material = MaterialGraph::new(MaterialDomain::Surface);
-
-let uv = material.tex_coord(0)?;
-
-let albedo = material.texture2d_parameter(
-    "base_color_texture",
-)?;
-
-let sampled = material.sample_texture2d(
-    albedo,
-    uv,
-)?;
-
-let tint = material.color3_parameter(
-    "base_color",
-    [1.0, 1.0, 1.0],
-)?;
-
-let base_color = material.mul(
-    sampled.rgb(),
-    tint,
-)?;
-
-material.set_surface_output(SurfaceOutput {
-    base_color,
-    roughness: material.float_constant(0.5)?,
-    metallic: material.float_constant(0.0)?,
-    normal: material.default_normal()?,
-    emissive: material.color3_constant([0.0, 0.0, 0.0])?,
-    opacity: material.float_constant(1.0)?,
-})?;
-```
-
-This API is intended for:
-
-```text
-Blender translator
-tests
-procedural material generation
-other future authoring tools
-```
-
-Game runtime code normally consumes compiled material assets instead.
-
----
-
-## 12. Raw Node Representation
-
-Internally, each authoring operation lowers to an explicit node kind.
-
-Conceptually:
-
-```rust
-#[non_exhaustive]
-pub enum MaterialNodeKind {
-    FloatConstant(f32),
-    Vec2Constant([f32; 2]),
-    Vec3Constant([f32; 3]),
-    Vec4Constant([f32; 4]),
-
-    Parameter(MaterialParameterId),
-
-    TexCoord {
-        channel: u8,
-    },
-
-    SampleTexture2D,
-
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-
-    Min,
-    Max,
-    Clamp,
-    Lerp,
-
-    Dot,
-    Normalize,
-
-    NormalMap,
-}
-```
-
-The public API should prefer typed helpers.
-
-The raw enum exists for:
-
-```text
-serialization
-tooling
-compiler inspection
-graph import
-```
-
-It should not become a giant Blender-node compatibility enum.
-
----
-
-## 13. Connections
-
-MaterialGraph is a typed DAG.
-
-Conceptually:
-
-```rust
-pub fn connect<T>(
-    &mut self,
-    output: Value<T>,
-    input: Input<T>,
-) -> Result<(), MaterialGraphError>;
-```
-
-Validation rejects:
-
-```text
-wrong type
-foreign graph
-stale handle
-multiple source for single input
-cycle
-invalid domain operation
-missing required input
-```
-
-No implicit numeric/vector conversion should be assumed initially.
-
-Conversions should be explicit operations.
+The code/fragment node guarantees extensibility.
 
 ---
 
 ## 14. Parameters
 
-Static and dynamic values must be separated.
+Material parameters are explicitly divided into dynamic and static categories.
 
-Conceptually:
+### Dynamic parameters
 
-```rust
-pub enum MaterialParameterKind {
-    Dynamic,
-    Static,
-}
-```
-
-Dynamic examples:
+Examples:
 
 ```text
 base color
 roughness
-texture
-normal intensity
-emissive color
+texture binding
+emissive intensity
+animation time
+per-instance values
 ```
 
-Static examples:
+Dynamic changes update runtime data or bindings and should not require shader recompilation.
+
+### Static parameters
+
+Examples:
 
 ```text
-feature switch
+normal map enabled
+alpha test enabled
 shading mode
-alpha-test enabled
+skinning enabled
 optional expensive branch
 ```
 
-The rule is:
+Static changes may change:
 
 ```text
-dynamic parameter
-    -> runtime binding / uniform data
-
-static parameter
-    -> material variant identity / shader compilation
+MaterialVariantKey
+fragment selection
+shader composition
+pipeline requirements
 ```
-
-Changing a dynamic scalar must not compile a new shader.
 
 ---
 
-## 15. Parameter Schema
+## 15. Material Resources
+
+Material resource declarations describe required portable GPU resources.
+
+Examples:
+
+```text
+Texture2D
+Sampler
+uniform data
+storage/read-only data where supported
+```
+
+The material layer owns the logical material requirement.
+
+RHI owns actual GPU resources and binding objects.
+
+Renderer/material runtime resolves a material resource requirement to a concrete per-device GPU resource before/during frame preparation.
+
+Material IR must not contain:
+
+```text
+VkImage
+ID3D12Resource
+MTLTexture
+descriptor heap index
+native binding handles
+```
+
+---
+
+## 16. Shader Composition
+
+The Shader Composer combines:
+
+```text
+Material IR
++
+WGSL Material Fragments
++
+FramePipeline / pass shader template
++
+geometry interface requirements
++
+target capability facts
++
+static variant decisions
+```
+
+into one complete WGSL `ShaderModule`.
 
 Conceptually:
 
-```rust
-pub struct MaterialParameterSchema {
-    parameters: Vec<MaterialParameter>,
-}
+```text
+Material IR
+        \
+WGSL fragments
+          \
+Forward/Deferred/custom pass template
+            \
+geometry/pass interface
+              ↓
+          Shader Composer
+              ↓
+       complete WGSL module
 ```
 
-```rust
-pub struct MaterialParameter {
-    pub id: MaterialParameterId,
-    pub name: String,
-    pub value_type: MaterialValueType,
-    pub kind: MaterialParameterKind,
-    pub default_value: MaterialValue,
-}
+### 16.1 Example
+
+Material IR may establish:
+
+```text
+Surface.BaseColor = fragment_A.result
+Surface.Normal    = fragment_B.result
+Surface.Roughness = parameter_roughness
 ```
 
-Material instances later reference this schema.
+A Forward template may consume it as:
+
+```text
+surface = evaluate_material(material_input)
+color = evaluate_lighting(surface, lighting_context)
+return color
+```
+
+A Deferred template may consume the same material composition as:
+
+```text
+surface = evaluate_material(material_input)
+write_gbuffer(surface)
+```
+
+Material semantics remain shared while pass behavior differs.
 
 ---
 
-## 16. Surface Output Contract
+## 17. Naga Boundary
 
-The first supported domain should define one explicit semantic output.
+Naga is the executable shader compiler/IR boundary.
 
-Conceptually:
+Fluxel supplies complete WGSL source/module composition.
 
-```rust
-pub struct SurfaceOutput {
-    pub base_color: Value<Color3>,
-
-    pub metallic: Value<Float>,
-    pub roughness: Value<Float>,
-
-    pub normal: Value<Normal3>,
-
-    pub emissive: Value<Color3>,
-    pub opacity: Value<Float>,
-}
-```
-
-This is intentionally a semantic structure, not a shader function.
-
-The renderer/shader system decides how these values participate in:
+Naga owns:
 
 ```text
-Forward shading
-Deferred GBuffer
-Depth-only pass
-Shadow pass
-other pipeline variants
-```
-
-MaterialGraph itself does not know those passes.
-
----
-
-## 17. Standard Surface vs Blender Principled BSDF
-
-Blender's `Principled BSDF` should not become the foundational Fluxel node type.
-
-Instead:
-
-```text
-Blender Principled BSDF
-        |
-        | translator
-        v
-Fluxel SurfaceOutput / StandardSurface semantics
-```
-
-Only the subset whose semantics Fluxel explicitly supports is translated.
-
-Unsupported inputs fail with structured diagnostics.
-
-Example:
-
-```text
-Principled Base Color
-    -> SurfaceOutput.base_color
-
-Principled Metallic
-    -> SurfaceOutput.metallic
-
-Principled Roughness
-    -> SurfaceOutput.roughness
-
-Principled Normal
-    -> SurfaceOutput.normal
-
-Principled Emission
-    -> SurfaceOutput.emissive
-
-Principled Alpha
-    -> SurfaceOutput.opacity
-```
-
-Other Principled features may initially return:
-
-```text
-UnsupportedMaterialFeature
-```
-
-rather than silently approximate them.
-
----
-
-## 18. Material IR
-
-The compiler-facing IR should be smaller and more normalized than MaterialGraph.
-
-Conceptually:
-
-```rust
-pub struct MaterialModule {
-    pub domain: MaterialDomain,
-    pub parameters: MaterialParameterSchema,
-    pub instructions: Vec<MaterialInstruction>,
-    pub outputs: MaterialOutputs,
-}
-```
-
-Example instruction family:
-
-```rust
-#[non_exhaustive]
-pub enum MaterialInstruction {
-    Constant {
-        result: MaterialValueId,
-        value: MaterialValue,
-    },
-
-    LoadParameter {
-        result: MaterialValueId,
-        parameter: MaterialParameterId,
-    },
-
-    TextureSample2D {
-        result: MaterialValueId,
-        texture: MaterialValueId,
-        uv: MaterialValueId,
-    },
-
-    Add {
-        result: MaterialValueId,
-        lhs: MaterialValueId,
-        rhs: MaterialValueId,
-    },
-
-    Multiply {
-        result: MaterialValueId,
-        lhs: MaterialValueId,
-        rhs: MaterialValueId,
-    },
-
-    Lerp {
-        result: MaterialValueId,
-        a: MaterialValueId,
-        b: MaterialValueId,
-        t: MaterialValueId,
-    },
-
-    Normalize {
-        result: MaterialValueId,
-        value: MaterialValueId,
-    },
-}
-```
-
-This is conceptual shape only.
-
-The real IR may use dense IDs and typed instruction tables.
-
----
-
-## 19. Graph Lowering
-
-Compilation begins:
-
-```rust
-pub fn lower_material_graph(
-    graph: &MaterialGraph,
-    target: &MaterialLoweringTarget,
-) -> Result<MaterialModule, MaterialCompileError>;
-```
-
-Lowering performs:
-
-```text
-graph validation
-domain validation
-static-switch resolution
+WGSL parsing
+WGSL validation
+executable shader IR
+control-flow validation
 type validation
-constant folding
-dead-node elimination
-parameter collection
-resource collection
-topological ordering
-normalization into Material IR
+resource validation
+target translation where supported
 ```
-
-It must not create RHI objects.
-
----
-
-## 20. Material Compile Target
-
-Material compilation consumes normalized renderer/shader target facts.
 
 Conceptually:
 
-```rust
-pub struct MaterialLoweringTarget {
-    pub profile: ShaderTargetProfile,
-    pub features: MaterialFeatureSet,
-}
-```
-
-It must not contain:
-
 ```text
-VkDevice
-ID3D12Device
-MTLDevice
-WebGPUDevice
-native descriptor
-native compiler pointer
+WGSL ShaderModule
+        ↓
+Naga frontend
+        ↓
+Naga IR
+        ↓
+SPIR-V / MSL / HLSL / GLSL / WGSL output as required
 ```
 
-The target is canonicalizable and suitable for cache keys.
+Fluxel does not define another executable shader IR above Naga.
 
 ---
 
-## 21. Compiled Material Variant
+## 18. Shader Artifact
 
-The material system's renderer-facing product is not the graph.
+The shader system converts validated shader output into a renderer/RHI-consumable artifact.
+
+Associated information may include:
+
+```text
+ShaderInterface
+stage entry points
+resource/binding requirements
+vertex input requirements
+render-target requirements
+variant identity
+reflection
+cache identity
+```
+
+The exact public shape should reuse RHI portable shader/pipeline vocabulary where appropriate.
+
+---
+
+## 19. Material Variant
+
+A compiled material variant is the runtime representation of one static material configuration.
 
 Conceptually:
 
 ```rust
 pub struct CompiledMaterialVariant {
-    pub domain: MaterialDomain,
-
+    pub material: MaterialAssetId,
     pub variant_key: MaterialVariantKey,
 
-    pub shader_requirements: MaterialShaderRequirements,
-
+    pub shader_artifacts: Vec<ShaderArtifactRef>,
     pub parameter_schema: MaterialParameterSchema,
+    pub resource_schema: MaterialResourceSchema,
 
-    pub interface_requirements: MaterialInterfaceRequirements,
+    pub pipeline_requirements: PipelineRequirements,
 }
 ```
 
-After shader composition/compiler work, this may reference or contain:
+A variant is affected by static choices.
 
-```text
-ShaderArtifact(s)
-ShaderInterface
-PipelineInterface requirements
-binding map
-vertex requirements
-render-target requirements
-```
-
-The exact cross-crate shape should be finalized together with `fluxel-shader`.
-Material and shader code may directly reuse RHI's portable shader, pipeline,
-and binding vocabulary. They must not create a parallel GPU contract or expose
-backend-private API objects.
+Dynamic material-instance values are not part of shader compilation identity unless they change static behavior.
 
 ---
 
-## 22. Renderer Boundary
+## 20. Material Instance
 
-Renderer consumes compiled material semantics.
+`MaterialInstance` is runtime parameter/resource state over a compiled material family.
 
-It does not interpret the editable graph.
+Conceptually:
 
-Correct:
+```rust
+pub struct MaterialInstance {
+    pub material: MaterialAssetId,
+    pub static_variant: MaterialVariantKey,
+    pub parameters: MaterialParameterValues,
+    pub resources: MaterialResourceValues,
+}
+```
+
+It does not own:
 
 ```text
 MaterialGraph
-    -> Material IR
-    -> CompiledMaterialVariant
-    -> Renderer
+Blender nodes
+Naga IR
+RenderGraph passes
+native descriptor handles
 ```
 
-Incorrect:
+Renderer/material runtime resolves the instance into the bindings required by the selected compiled variant.
+
+---
+
+## 21. FramePipeline Integration
+
+`FramePipeline` owns rendering policy.
+
+During frame preparation/building it may:
 
 ```text
-Renderer
-    -> walk MaterialGraph nodes every frame
+select material variant
+select shader/pipeline
+resolve material runtime bindings
+decide pass topology
+declare RenderGraph resources
+declare RenderGraph passes
 ```
 
-The renderer may select among already compiled variants based on:
+Conceptually:
 
 ```text
+RenderObject
+    ↓
+MaterialInstance
+    ↓
+Material Variant Resolver
+    ↓
+CompiledMaterialVariant
+    ↓
 FramePipeline
-pass kind
-mesh/vertex requirements
-target profile
-enabled renderer features
+    ↓
+RenderGraph pass declaration
+```
+
+### 21.1 Preparation vs execution
+
+During graph construction:
+
+```text
+FramePipeline selects/resolves:
+    shader
+    pipeline
+    material bindings
+    resource requirements
+```
+
+During graph execution:
+
+```text
+RenderGraph pass uses:
+    selected shader/pipeline
+    material runtime data
+    declared resources
 ```
 
 ---
 
-## 23. RenderGraph Boundary
+## 22. RenderGraph Boundary
 
-MaterialGraph cannot:
+Material code cannot:
 
 ```text
-create passes
-order passes
+create or order RenderGraph passes
 own SceneColor
 own Depth
 own History
-submit work
-create presentation targets
+submit GPU work
+control graph scheduling
+own presentation
 ```
 
 RenderGraph cannot:
 
 ```text
-interpret material nodes
-compile Material IR
-understand Blender nodes
+interpret Blender nodes
+compile MaterialGraph
+interpret Material IR semantics
+compile WGSL
+own material assets
 ```
 
 The boundary is:
 
 ```text
 CompiledMaterialVariant
-        |
-        v
-FramePipeline chooses usage
-        |
-        v
+        ↓
+FramePipeline chooses how to use it
+        ↓
 RenderGraph pass
 ```
 
 ---
 
-## 24. Blender Integration
+## 23. RHI Boundary
 
-Blender is an authoring frontend.
+RHI is the shared portable GPU foundation.
 
-The integration flow is:
+Material runtime, shader system, renderer, and RenderGraph may each reuse RHI portable contracts where required.
+
+RHI owns:
 
 ```text
-Blender ShaderNodeTree
-        |
-        v
-Fluxel Blender Adapter
-        |
-        | supported-node translation
-        v
+device identity
+portable shader/pipeline objects
+buffers/textures/samplers
+bindings
+recording
+submission
+completion
+presentation
+physical allocation
+backend realization
+```
+
+RHI does not own:
+
+```text
 MaterialGraph
-        |
-        v
 Material IR
-        |
-        v
-Fluxel Shader Compiler
-        |
-        v
-Fluxel Renderer
-        |
-        v
-Blender Viewport
+material semantics
+material variants
+FramePipeline policy
+Blender translation
 ```
 
-The Blender adapter owns:
-
-```text
-mapping Blender node types
-mapping Blender sockets
-mapping Blender parameters
-source-location/provenance
-unsupported-node diagnostics
-incremental recompile trigger
-asset export
-```
-
-The material core does not import Blender APIs.
+No upper layer may depend on backend-private native API objects.
 
 ---
 
-## 25. Blender Support Policy
+## 24. Identity and Caching
 
-Fluxel supports an explicit Blender node subset.
+Material/shader compilation must distinguish identities rather than use one universal material hash.
 
-For example, an initial subset may include:
-
-```text
-Material Output
-Principled BSDF subset
-
-Image Texture
-Texture Coordinate
-Normal Map
-
-RGB / Value
-
-Math subset
-Vector Math subset
-Mix
-
-Separate / Combine
-```
-
-A node is supported only when Fluxel defines equivalent semantics.
-
-Unsupported behavior must be explicit.
-
-Do not silently substitute an approximate node.
-
----
-
-## 26. Preview Consistency
-
-WYSIWYG depends on sharing the same execution semantics.
-
-Blender editing mode should eventually use:
-
-```text
-Fluxel MaterialGraph
-Fluxel Material IR
-Fluxel Shader Composition
-Fluxel FramePipeline
-Fluxel RHI
-```
-
-for viewport rendering.
-
-Game runtime uses the same layers.
-
-Therefore the preview does not attempt to reproduce EEVEE.
-
-It runs Fluxel itself.
-
----
-
-## 27. Exported Material Asset
-
-The runtime asset should not require Blender.
-
-Conceptually:
-
-```text
-Blender file
-    |
-    v
-Fluxel exporter
-    |
-    v
-Material asset
-```
-
-The asset may contain:
-
-```text
-MaterialGraph or normalized Material IR
-parameter schema
-static variant configuration
-texture/resource references
-source provenance
-compiler/version metadata
-```
-
-For shipping builds, a cooked form may instead contain precompiled/cached variants.
-
-Exact serialization belongs to a later asset-format design.
-
----
-
-## 28. Error Model
-
-Material errors should be structured.
-
-Possible families:
-
-```rust
-#[non_exhaustive]
-pub enum MaterialErrorKind {
-    InvalidGraph,
-    TypeMismatch,
-    Cycle,
-    MissingInput,
-    InvalidDomainOperation,
-    UnsupportedNode,
-    UnsupportedFeature,
-    InvalidParameter,
-    CompileFailure,
-}
-```
-
-Diagnostics should carry enough source information for Blender to highlight the offending node/socket.
-
-Conceptually:
-
-```rust
-pub struct MaterialDiagnostic {
-    pub kind: MaterialErrorKind,
-    pub node: Option<MaterialNodeId>,
-    pub port: Option<MaterialPortId>,
-    pub message: String,
-    pub source: Option<MaterialSourceRef>,
-}
-```
-
----
-
-## 29. Source Provenance
-
-Tool integrations need source mapping.
-
-Conceptually:
-
-```rust
-pub enum MaterialSourceRef {
-    Blender {
-        node_tree: String,
-        node: String,
-        socket: Option<String>,
-    },
-
-    Generated {
-        label: String,
-    },
-}
-```
-
-The exact representation should not leak Blender into the core semantic model.
-
-A generic provenance payload or adapter-owned mapping may be preferable in the final implementation.
-
----
-
-## 30. Caching Identity
-
-Do not use one material hash for every purpose.
-
-At minimum, distinguish:
+Relevant identities may include:
 
 ```text
 MaterialGraph identity
 Material IR identity
 Material static variant identity
 Shader composition identity
+WGSL module identity
+Naga compilation identity
 ShaderArtifact identity
 ShaderInterface compatibility
-pipeline identity
+Pipeline identity
 ```
 
 Dynamic instance parameter changes must not invalidate shader compilation identity.
 
 ---
 
-## 31. Material Instance
+## 25. Source Provenance and Diagnostics
 
-A material instance is runtime parameter data over a compiled material family.
+Diagnostics must remain traceable to authoring sources.
 
-Conceptually:
-
-```rust
-pub struct MaterialInstance {
-    material: MaterialAssetId,
-    parameters: MaterialParameterValues,
-}
-```
-
-It does not contain:
+Material IR and shader composition should preserve enough provenance to report errors back to:
 
 ```text
-MaterialGraph editor nodes
-RHI descriptor indices
-native texture handles
-compiled RenderGraph passes
+Blender node
+Blender socket
+Code Node
+WGSL source span
+generated fragment
+material parameter
+material output
 ```
 
-The renderer resolves instance data against the compiled parameter schema.
+Naga diagnostics should be remapped through retained source provenance where possible.
 
 ---
 
-## 32. MaterialGraph API Summary
+## 26. Error Model
 
-The initial Rust authoring API should approximately expose:
+Errors should remain owned by the subsystem that understands them.
 
-```rust
-pub struct MaterialGraph;
-
-impl MaterialGraph {
-    pub fn new(domain: MaterialDomain) -> Self;
-
-    pub fn float_constant(&mut self, value: f32) -> Result<Value<Float>, MaterialGraphError>;
-
-    pub fn color3_constant(
-        &mut self,
-        value: [f32; 3],
-    ) -> Result<Value<Color3>, MaterialGraphError>;
-
-    pub fn float_parameter(
-        &mut self,
-        name: impl Into<String>,
-        default: f32,
-    ) -> Result<Value<Float>, MaterialGraphError>;
-
-    pub fn color3_parameter(
-        &mut self,
-        name: impl Into<String>,
-        default: [f32; 3],
-    ) -> Result<Value<Color3>, MaterialGraphError>;
-
-    pub fn texture2d_parameter(
-        &mut self,
-        name: impl Into<String>,
-    ) -> Result<Value<Texture2D>, MaterialGraphError>;
-
-    pub fn tex_coord(
-        &mut self,
-        channel: u8,
-    ) -> Result<Value<Vec2>, MaterialGraphError>;
-
-    pub fn sample_texture2d(
-        &mut self,
-        texture: Value<Texture2D>,
-        uv: Value<Vec2>,
-    ) -> Result<Value<Color4>, MaterialGraphError>;
-
-    pub fn add<T>(
-        &mut self,
-        lhs: Value<T>,
-        rhs: Value<T>,
-    ) -> Result<Value<T>, MaterialGraphError>
-    where
-        T: AddMaterialValue;
-
-    pub fn mul<A, B>(
-        &mut self,
-        lhs: Value<A>,
-        rhs: Value<B>,
-    ) -> Result<Value<<A as MulMaterialValue<B>>::Output>, MaterialGraphError>
-    where
-        A: MulMaterialValue<B>;
-
-    pub fn lerp<T>(
-        &mut self,
-        a: Value<T>,
-        b: Value<T>,
-        t: Value<Float>,
-    ) -> Result<Value<T>, MaterialGraphError>
-    where
-        T: LerpMaterialValue;
-
-    pub fn set_surface_output(
-        &mut self,
-        output: SurfaceOutput,
-    ) -> Result<(), MaterialGraphError>;
-
-    pub fn validate(
-        &self,
-    ) -> Result<(), MaterialGraphError>;
-
-    pub fn lower(
-        &self,
-        target: &MaterialLoweringTarget,
-    ) -> Result<MaterialModule, MaterialCompileError>;
-}
-```
-
-This is a design target, not frozen ABI.
-
----
-
-## 33. What Not to Freeze Yet
-
-Do not freeze yet:
+Material graph errors:
 
 ```text
-hundreds of node kinds
-full Blender compatibility
-full Principled BSDF
-Subsurface
-Hair
-Volume
-Coat
-Sheen
-Anisotropy
-procedural noise library
-MaterialX compatibility
-shader source language
-shader cache file format
-GPU binding ABI
-material asset binary format
+type mismatch
+cycle
+missing connection
+invalid domain operation
+invalid parameter
+unsupported Blender translation
 ```
 
-Those require real implementation evidence.
+Material composition errors:
+
+```text
+missing fragment
+port mismatch
+resource conflict
+invalid output mapping
+static feature conflict
+```
+
+WGSL/Naga errors:
+
+```text
+syntax
+type
+control flow
+resource/interface validation
+```
+
+Renderer errors:
+
+```text
+variant not available
+material instance/schema mismatch
+resource resolution failure
+unsupported pass requirement
+```
+
+RHI errors:
+
+```text
+shader/pipeline creation
+binding incompatibility
+resource/device mismatch
+submission/completion/presentation
+```
 
 ---
 
-## 34. Initial Vertical Slice
+## 27. Relationship to slot-graph
 
-The first useful end-to-end proof should be intentionally small.
+`slot-graph` may be reused by `MaterialGraph` where its generic typed DAG mechanics are useful.
 
-### Supported Blender nodes
+Potential reuse includes:
+
+```text
+stable node IDs
+typed slots
+connection validation
+topological traversal
+cycle detection
+subgraph composition
+```
+
+MaterialGraph semantics remain owned by the material subsystem.
+
+RenderGraph remains independent from `slot-graph`; its GPU resource-version and hazard model is specialized enough to remain its own graph system.
+
+---
+
+## 28. Authoring and Runtime Asset Forms
+
+The authoring form may contain:
+
+```text
+MaterialGraph
+Code Node WGSL
+source provenance
+parameter defaults
+resource references
+```
+
+The normalized/cooked form may contain:
+
+```text
+Material IR
+normalized fragment references
+static variant configuration
+parameter/resource schemas
+compiled/cached shader variants
+source/compiler version metadata
+```
+
+Shipping runtime does not require Blender.
+
+Exact serialization format is a separate asset-format decision.
+
+---
+
+## 29. Initial Supported Surface
+
+The first implementation should prove architecture rather than node breadth.
+
+### Material domain
+
+```text
+Surface
+```
+
+### Built-in nodes
+
+```text
+Constant
+Parameter
+TexCoord
+Texture2DParameter
+SampleTexture2D
+Add
+Multiply
+Lerp
+Normalize
+NormalMap
+Code / ShaderFragment
+```
+
+### Standard outputs
+
+```text
+BaseColor
+Metallic
+Roughness
+Normal
+Emissive
+Opacity
+```
+
+### Blender translation subset
 
 ```text
 Material Output
-Principled BSDF:
-    Base Color
-    Metallic
-    Roughness
-    Normal
-    Emission
-    Alpha
-
+Principled BSDF subset
 Image Texture
 Texture Coordinate
 Normal Map
-Value
 RGB
-Multiply
+Value
 Add
+Multiply
 Mix
+Code / custom WGSL node
 ```
 
-### Fluxel semantic output
+Unsupported nodes fail with structured diagnostics.
+
+---
+
+## 30. Implementation Plan
+
+### Phase A — Semantic substrate
+
+Implement:
 
 ```text
+MaterialDomain
+MaterialValueType
+typed ports
+MaterialParameterSchema
+MaterialResourceSchema
 SurfaceOutput
+MaterialGraph identity/provenance
 ```
 
-### Proof
+### Phase B — Fragment model
 
-The same material is:
+Implement:
 
 ```text
-edited in Blender
-translated to MaterialGraph
-lowered to Material IR
-compiled by Fluxel
-previewed by Fluxel inside Blender
-exported
-rendered by Fluxel runtime
+ShaderFragment metadata
+WGSL module/source representation
+typed fragment inputs/outputs
+resource requirements
+Code Node
+built-in nodes backed by fragments
 ```
 
-and both Fluxel outputs match within the declared rendering tolerance.
+### Phase C — Material IR
+
+Implement:
+
+```text
+MaterialGraph validation
+static feature resolution
+fragment normalization
+parameter/resource collection
+connection normalization
+dead-node elimination
+Material IR serialization/debug dump
+```
+
+Acceptance:
+
+```text
+Material IR contains composition metadata only
+no executable shader instruction language exists in Material IR
+deterministic graph input produces deterministic Material IR
+```
+
+### Phase D — Shader composition
+
+Implement:
+
+```text
+WGSL fragment composition
+symbol/name isolation
+resource binding reconciliation
+material evaluation function generation
+pass-template integration
+source map/provenance retention
+```
+
+Acceptance:
+
+```text
+Material IR + pass template -> complete WGSL module
+```
+
+### Phase E — Naga integration
+
+Implement:
+
+```text
+WGSL parse
+validation
+Naga IR generation
+reflection/interface extraction
+portable shader artifact creation
+diagnostic source remapping
+```
+
+### Phase F — Material variants/runtime
+
+Implement:
+
+```text
+MaterialVariantKey
+CompiledMaterialVariant
+dynamic/static parameter split
+runtime parameter/resource binding
+pipeline requirement extraction
+cache identity
+```
+
+### Phase G — FramePipeline integration
+
+Implement:
+
+```text
+material variant resolver
+shader/pipeline resolver
+FramePipeline material services
+RenderGraph pass declaration using resolved shader/material requirements
+```
+
+### Phase H — Blender integration
+
+Implement:
+
+```text
+Blender node translation
+Code Node UX/integration
+source provenance
+preview recompile
+unsupported-node diagnostics
+```
+
+Acceptance:
+
+```text
+Blender material -> Fluxel preview
+same exported material -> Fluxel runtime
+equivalent Fluxel rendering semantics
+```
 
 ---
 
-## 35. Recommended Implementation Order
+## 31. Non-Goals
+
+Do not make the first implementation depend on:
 
 ```text
-Step 1
-    MaterialDomain
-    MaterialValueType
-    typed Value<T>
-
-Step 2
-    SurfaceOutput
-    parameter schema
-
-Step 3
-    minimal MaterialGraph
-    typed arithmetic / texture nodes
-
-Step 4
-    Material IR
-    graph lowering
-    validation / diagnostics
-
-Step 5
-    shader-composition boundary
-
-Step 6
-    one fixed Fluxel surface shader consumer
-
-Step 7
-    Blender translator for the supported subset
-
-Step 8
-    Fluxel Blender viewport integration
-
-Step 9
-    material asset export/import
-
-Step 10
-    grow the supported Blender subset only from real needs
+hundreds of Blender nodes
+full Principled BSDF coverage
+MaterialX compatibility
+custom Fluxel material editor
+custom shader language
+custom executable shader IR
+GLSL/HLSL authoring
+backend-native shader code in material assets
+full shader debugger
+all possible material domains
 ```
 
 ---
 
-## 36. Final Architecture
+## 32. Final Architecture
 
 ```text
-MaterialGraph -> Material IR -> Shader System
-        -> ShaderArtifact / Pipeline requirements
+AUTHORING
 
-RenderScene -> FramePipeline -> RenderGraph
-        -> Shader / Pipeline + Material Runtime -> RHI
+Blender Shader Editor
+        ↓
+MaterialGraph
+(static structure)
+        ↓
+Material IR
+(normalized composition/link metadata)
+        ↓
+Shader Composer
+        ↑
+Material Fragments / Code Nodes
+(dynamic WGSL processes)
+        ↓
+Complete WGSL ShaderModule
+        ↓
+Naga
+(executable shader IR/compiler)
+        ↓
+ShaderArtifact / ShaderInterface / Pipeline Requirements
+
+
+RUNTIME
+
+RenderScene
+        ↓
+FramePipeline
+        ↓
+resolve MaterialInstance
+        ↓
+CompiledMaterialVariant
+        ↓
+RenderGraph
+        ↓
+use Shader / Pipeline + Material Runtime bindings
+        ↓
+RHI
+        ↓
+private GPU backend
 ```
-
-The first line is material compilation; the second is frame execution. They are
-related through prepared variants and requirements, not by making an authoring
-graph part of pass recording.
 
 The defining rules are:
 
-> Blender is the primary material authoring UI.
+> `MaterialGraph` describes static material structure.
 
-> Fluxel owns the material semantics.
+> `Material Fragment` describes dynamic shader computation.
 
-> MaterialGraph is an authoring frontend, not a renderer.
+> `Material IR` describes how fragments, parameters, resources, and material outputs are composed.
 
-> Material IR is the stable compiler-facing semantic representation.
+> WGSL is Fluxel's shader source language.
 
-> `fluxel-renderer` consumes compiled material variants but does not own or interpret the material graph.
+> Naga owns executable shader IR and shader-language compilation.
 
-> Blender preview and game runtime use the same Fluxel material/shader/rendering path.
+> Code Nodes are first-class material nodes.
+
+> Blender is the primary visual material editor.
+
+> `FramePipeline` decides how compiled material semantics participate in rendering.
+
+> RenderGraph owns GPU-work dependencies and lifetimes, not material semantics.
+
+> RHI owns portable GPU execution, not material or renderer policy.
