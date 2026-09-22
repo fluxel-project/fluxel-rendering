@@ -1,38 +1,42 @@
 # Fluxel Rendering workspace architecture
 
 > Architecture status: this is the post-foundation workspace/layer target. The
-> active implementation order is [versions 0.16-0.20](version-plan.md), and the
+> active implementation order is [the version plan](version-plan.md), and the
 > RHI architecture source is [RHI design](../crates/rhi/documents/design-rhi.md);
 > rustdoc and contract tests define descriptor-level detail. This document is
 > cross-layer only. RHI must be
-> completed on every declared backend before RenderGraph implementation begins;
-> RenderGraph must then be completed before portable capture/replay. New
-> renderer/scene/canvas/runtime work resumes only after the `0.20` gate.
+> `0.16` RHI is complete. The next implementation order is shader/material,
+> renderer pipelines, and Blender tooling. Canvas, UI, and JavaScript
+> integration are candidates rather than active milestones.
 
-Fluxel Rendering is a layered Rust workspace for turning renderer-selected
-scene data into portable GPU work, then executing that work through a small,
-safe native boundary. The layers are deliberately separate: the renderer
+Fluxel Rendering is a layered Rust workspace for turning Blender-authored
+materials and renderer-selected scene data into portable GPU work, then
+executing that work through a small, safe native boundary. The layers are
+deliberately separate: shader/material semantics are reusable, the renderer
 chooses *what a frame means*, RenderGraph derives *what work and ordering that
 meaning requires*, and RHI performs *how a selected backend owns and executes
 the work*.
 
 This document is the architectural entry point for the workspace. It describes
-the stable layer model and the higher-level system to reconnect after the
-foundation train. During `0.16`-`0.20`, higher layers may be explicitly dormant
+the stable layer model and the higher-level system built on the completed RHI.
+Higher layers may be explicitly dormant while their dependencies are developed
 while their dependencies are replaced; that temporary build state does not
 change ownership or authorize a second architecture. This document does
 not replace the crate designs, which define each layer in detail, or the ADRs,
 which record why durable choices were made.
 
-## Foundation-first execution mode
+## Current execution mode
 
-The dependency order is also the delivery order:
+The completed baseline and next delivery order are:
 
 ```text
-0.16-0.17  Portable RHI and all backend/profile evidence
-0.18-0.19  RenderGraph correctness, allocation, scheduling, and trace
-0.20       Portable capture/replay
-after 0.20 reconnect and extend renderer/scene/runtime work
+0.16       Completed RHI baseline
+0.17       Shader assembly and material system
+0.18       RenderGraph + renderer framework, custom SPI, Forward, Deferred
+0.19       RenderScene and frame preparation
+0.20       RenderScene recording and replay
+0.21       Blender-native editor, preview, and export loop
+0.22+      Integration hardening and broader extensions
 ```
 
 RHI definitions include canonical descriptor/command/submission observation,
@@ -59,11 +63,9 @@ accident of callback order or one backend's behavior. Its central goals are:
 - evidence that distinguishes CPU protocol tests, compile checks, and real GPU
   conformance.
 
-It is not a scene/asset database, shader authoring framework, or host runtime.
-The `0.16`-`0.20` foundation train implements portable RHI/Graph contracts
-without exposing native mechanisms or turning backend features into universal support.
-General material authoring and stable public asset/cache ABI remain outside
-that foundation. The following is retained `0.15` historical evidence only:
+It is not a scene/asset database or host runtime. Shader assembly, material
+semantics, renderer pipelines, and Blender tooling are the intended next
+higher-level consumers. The following is retained `0.15` historical evidence only:
 the proven Windows presentation slice supported DX12 and Vulkan through one
 narrow RHI surface façade. It handled resize/minimize/restore as generation
 changes and independent acquired-frame tickets, while the harness privately
@@ -339,7 +341,7 @@ while internal implementation evolves.
 
 The portable graph and default renderer-domain model are not tied to a native
 API. The remainder of this paragraph records the retained `0.15` baseline, not
-the completion state of the rewritten `0.16`-`0.20` foundation. That baseline's
+the completion state of the rewritten `0.16` RHI baseline. That baseline's
 native execution is Windows-focused, with headless DX12/Vulkan feature
 selection and a backend-neutral DX12/Vulkan surface-generation/ticket path. The
 Windows proof harness owns its bounded three-slot admission and back-pressure
@@ -366,8 +368,8 @@ generation. An image registry may exist for the same residency bookkeeping, but
 the legacy-unlit browser path does not claim to sample a resident image; that
 browser-only contract does not broaden native Surface.
 
-The target RHI matrix replaces that implementation description in `0.16` and
-`0.17`: real DX12, Vulkan, and Metal first, followed by browser WebGPU and the
+The completed `0.16` RHI baseline replaces that implementation description:
+real DX12, Vulkan, and Metal, followed by browser WebGPU and the
 GL-family desktop GL/GLES/WebGL2 profiles under the single v1 device-identity,
 capability, submission, completion, presentation, and retirement contract. The
 exact API is defined by rustdoc and tests, with [RHI design](../crates/rhi/documents/design-rhi.md) recording its architectural boundary; the

@@ -15,10 +15,9 @@ mini-game adapters drive its WASM form; native hosts drive its library form.
 
 ## Workspace
 
-The table below describes the retained `0.15` workspace. During the
-`0.16`-`0.20` foundation train, individual higher-level targets may be
-explicitly dormant and their old internal interfaces are not the replacement
-contract.
+The table below describes the retained `0.15` workspace and the completed
+`0.16` RHI baseline. The next release starts the shader assembly and material
+system route; older higher-level interfaces are not the replacement contract.
 
 The workspace is organised around four crates:
 
@@ -68,7 +67,7 @@ release. See [RELEASING.md](RELEASING.md) for the release gate.
 - [RHI design](crates/rhi/documents/design-rhi.md)
 - [Portable capture/replay design](documents/design-capture-replay.md)
 - [Renderer design](documents/design-renderer.md)
-- [Foundation versions 0.16-0.20](documents/version-plan.md)
+- [Version plan from the completed 0.16 baseline](documents/version-plan.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Fluxel ecosystem roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
 - [RenderGraph guide](crates/rendergraph/README.md)
@@ -110,12 +109,12 @@ The organization
 only stage/status authority. This README records only the workspace's current
 supported paths and recommended entry points.
 
-The next five minor versions are a strict foundation train: `0.16` closes the
-native RHI contract/backends, `0.17` closes every declared RHI backend/profile,
-`0.18` and `0.19` close RenderGraph in two correctness-first steps, and `0.20`
-implements portable capture/replay. New high-level renderer/scene/runtime work
-resumes only after all five ecosystem gates pass. The executable breakdown is
-the [foundation version plan](documents/version-plan.md). The sole normative
+The completed `0.16` release is the RHI baseline. `0.17` starts shader
+assembly and the material system, `0.18` combines RenderGraph with the renderer
+framework, `0.19` defines RenderScene, `0.20` records and replays the complete
+RenderScene path, and `0.21` starts the native Blender editor/preview loop.
+Canvas, UI, and JavaScript integration remain candidates rather than active milestones. The executable breakdown is
+the [version plan](documents/version-plan.md). The sole normative
 RHI API architecture source is [RHI design](crates/rhi/documents/design-rhi.md);
 rustdoc and contract tests define descriptor-level detail. The
 [workspace architecture](documents/design-overview.md) records cross-layer

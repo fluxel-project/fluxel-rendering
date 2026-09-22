@@ -1,739 +1,250 @@
-# Fluxel × Blender Integration Overview Plan
+# Fluxel Rendering Roadmap and System Plan
 
-## 1. Goal
+> Status: active product direction
+>
+> This is the high-level plan for the Fluxel rendering ecosystem. Normative
+> low-level contracts remain in `design-rhi.md`, the RenderGraph design, the
+> ADRs, and `version-plan.md`.
 
-Build one complete authoring-to-runtime loop:
+## 1. Product direction
 
-```text
-Blender
-   ↓ author
-Fluxel Material / RenderScene
-   ↓ compile
-Fluxel Renderer
-   ↓
-Blender Viewport Preview
-   ↓ export
-Fluxel Assets
-   ↓
-Game Runtime
-```
+Fluxel is a Rust rendering framework whose primary authoring experience is
+native Blender integration. Rust owns rendering semantics, shader assembly,
+material runtime, RenderGraph, and renderer execution. Blender is the editor
+and authoring environment, not a second rendering authority.
 
-The main acceptance criterion is:
-
-> The same Blender scene and material produce the same Fluxel result in Blender preview and in the exported Fluxel runtime.
-
-The goal is not:
+The acceptance criterion is:
 
 ```text
-Fluxel == EEVEE
-Fluxel == Cycles
+Blender-authored material -> Fluxel material/shader semantics
+    -> Fluxel renderer -> Blender preview and exported runtime
 ```
 
-The goal is:
+Preview and runtime consume the same Material IR, shader variant, parameters,
+textures, and renderer path:
 
 ```text
-Fluxel in Blender == Fluxel in Runtime
+Fluxel in Blender == Fluxel in the standalone runtime
 ```
 
-Blender is the authoring environment.
+The goal is not to reproduce EEVEE or Cycles.
 
-Fluxel owns the rendering semantics.
-
----
-
-## 2. Architecture
+## 2. Main architecture
 
 ```text
-Blender
-│
-├─ Scene Objects
-├─ Mesh / UV
-├─ Material Nodes
-├─ Texture Assets
-└─ Camera / Lights
-        │
-        ▼
-Fluxel Blender Adapter
-        │
-        ├─ Scene -> RenderScene
-        ├─ Material Nodes -> MaterialGraph
-        └─ Assets -> Fluxel asset references
-        │
-        ▼
-Fluxel Core
-│
-├─ MaterialGraph
-│    ↓
-├─ Material IR
-│    ↓
-├─ Shader Composition
-│    ↓
-├─ ShaderArtifact
-│
-├─ RenderScene
-│
-└─ FramePipeline
-     ↓
- RenderGraph
-     ↓
-    RHI
+Blender native add-on and tools
+  material translation / preview / export / diagnostics
+                |
+                v
+fluxel-material: MaterialGraph -> Material IR -> assets/instances
+                |
+                v
+fluxel-shader: modules/templates -> features -> ShaderArtifact/variant
+                |
+                v
+fluxel-renderer: RenderScene -> preparation -> FramePipeline
+  custom pipeline SPI + built-in Forward + built-in Deferred
+                |
+                v
+fluxel-rendergraph: logical passes/resources -> execution plan
+                |
+                v
+fluxel-rhi: device identity -> bindings -> commands -> completion
 ```
 
-Blender is only an authoring frontend.
+The public architecture contains RenderGraph resources, RHI bindings,
+Device/Surface/Completion, and generation-aware ownership. WebGPU, WebGL,
+native handles, and reference-counted leases remain backend-private. No public
+or backend resource model uses browser sessions or asset tokens.
 
-Rendering is always performed by Fluxel.
-
----
-
-## 3. Repository and Crate Layout
-
-Recommended long-term workspace:
+## 3. Workspace and ecosystem ownership
 
 ```text
 fluxel-rendering/
-├─ fluxel-rhi
-├─ fluxel-rendergraph
-├─ fluxel-material
-├─ fluxel-shader
-└─ fluxel-renderer
+  crates/rhi/          portable RHI and backend execution
+  crates/rendergraph/  graph authoring, compilation, and execution plans
+  crates/material/     candidate material graph and Material IR
+  crates/shader/       candidate shader assembly, reflection, and variants
+  crates/renderer/     scene preparation and FramePipeline contracts
+  tools/blender/       candidate native Blender add-on/tooling package
 ```
 
-Blender integration should live separately:
+`material`, `shader`, and Blender tooling become public boundaries only after
+working vertical slices prove their need. A proposed crate is not itself a
+commitment to an API.
+
+`fluxel-bases` remains the home of shared platform-neutral mechanisms;
+`fluxel-host` owns native host lifecycle; `fluxel-jsbridge` remains a platform
+and JavaScript adapter. None of them is the semantic authority for rendering.
+
+## 4. Delivery sequence
+
+The current `0.16` release is the completed RHI baseline. It remains the
+lower-layer contract for the next train:
 
 ```text
-fluxel-blender
+0.16  completed RHI protocol and backend baseline
 ```
 
-Responsibilities:
+The next product train is:
 
 ```text
-Blender Python add-on
-Blender Node -> Fluxel MaterialGraph
-Blender Scene -> RenderScene
-Fluxel viewport integration
-Fluxel asset export
-Diagnostics
+0.17  Shader assembly + material system
+  -> MaterialGraph, Material IR, runtime instances
+  -> shader modules, composition, reflection, variants, and cache
+0.18  RenderGraph + Renderer Framework
+  -> custom FramePipeline SPI
+  -> built-in Forward and Deferred pipelines
+  -> renderer lowering into RenderGraph
+0.19  RenderScene
+  -> scene/object/view model, preparation, culling, and ordering
+  -> material/shader selection and frame construction
+0.20  RenderScene recording + replay
+  -> record the complete RenderScene-driven frame path
+  -> replay through renderer, RenderGraph, and RHI
+0.21  Blender-native authoring and preview loop
+  -> native add-on/tools, viewport preview, export, runtime equivalence
 ```
 
-Dependency direction:
+These versions describe sequencing, not a promise that every item fits one
+release. Each train requires an end-to-end evidence slice before expansion.
 
-```text
-Blender Adapter
-      ↓
-material / renderer
-      ↓
-shader
-      ↓
-rendergraph
-      ↓
-rhi
-```
+## 5. Next version: shader assembly and material system
 
----
+This is the immediate priority after the completed `0.16` RHI baseline.
 
-## 4. Stage 0 — Finish the Foundation
+### 5.1 Material system
 
-Prerequisites:
-
-```text
-RHI
-RenderGraph
-Capture / Replay foundation
-```
-
-Finish the current `0.16-0.20` foundation train first.
-
-Do not start Blender integration yet.
-
-The RHI foundation must already support:
-
-```text
-ShaderArtifact
-ShaderInterface
-PipelineInterface
-RasterPipeline
-ComputePipeline
-Bindings
-```
-
-Otherwise the material system has no stable lower-layer contract.
-
----
-
-## 5. Stage 1 — Minimal Material Core
-
-Create:
-
-```text
-fluxel-material
-```
-
-Start with a very small semantic model:
+Define and implement:
 
 ```text
 MaterialDomain::Surface
-
-MaterialValueType
-
-Float
-Vec2
-Vec3
-Color3
-Color4
-Normal3
-Texture2D
+MaterialValueType and typed values
+MaterialGraph and typed node handles
+graph validation and diagnostics
+Material IR and graph lowering
+static versus dynamic parameters
+MaterialAsset / MaterialInstance
+SurfaceOutput contract
 ```
 
-Minimal node set:
+The first vocabulary is small: constants, parameters, UVs, texture sampling,
+arithmetic, vector operations, normal mapping, and surface outputs for base
+color, metallic, roughness, normal, emissive, and opacity. Blender compatibility
+maps into these semantics; it does not define them.
+
+### 5.2 Shader assembly
+
+Define and implement:
 
 ```text
-Constant
-Parameter
-TexCoord
-Texture2D
-SampleTexture2D
-
-Add
-Multiply
-Mix
-Clamp
-Normalize
-NormalMap
+shader module and pass-template contracts
+geometry/material/pass interfaces
+feature analysis and canonical variant keys
+shader composition and source/IR generation
+reflection into ShaderInterface
+ShaderArtifact production and validation
+portable shader cache identity
 ```
 
-Initial output contract:
+Dynamic values update bindings or instance data. Static choices affect the
+variant key. Identical material structure with different runtime values shares
+one shader variant.
+
+### 5.3 Acceptance
+
+The first proof is Rust-only:
 
 ```text
-SurfaceOutput
-├─ base_color
-├─ metallic
-├─ roughness
-├─ normal
-├─ emissive
-└─ opacity
+Rust MaterialGraph -> Material IR -> composed artifact
+    -> reflected interface -> compiled material variant
+    -> renderer-facing material instance
 ```
 
-Acceptance:
+Blender integration is not part of `0.17`; it begins in `0.21`. The `0.17`
+proof is Rust-only. Unsupported material features fail with structured
+diagnostics; they are never silently approximated.
+
+## 6. RenderGraph and renderer direction
+
+`fluxel-renderer` is a framework for renderer policy, not one fixed recipe. It
+provides `RenderScene`, object/view preparation, culling, deterministic
+ordering, material/shader variant selection, a `FramePipeline` SPI, RenderGraph
+lowering, and renderer diagnostics.
+
+The custom SPI allows applications and tools to define pipelines while keeping
+the same scene, material, shader, RenderGraph, and RHI contracts. Fluxel also
+ships two initial built-in pipelines:
 
 ```text
-Rust code
--> MaterialGraph
--> Material IR
+Forward:  depth, ordering, lighting, and material evaluation
+Deferred: G-buffer, lighting, material evaluation, and composition
 ```
 
-No Blender integration yet.
+Both consume the same compiled material variants and lower through RenderGraph.
 
----
+## 7. RenderScene and recording/replay
 
-## 6. Stage 2 — Shader Composition
-
-Create:
+`0.19` defines the complete renderer-facing scene and frame-preparation model:
 
 ```text
-fluxel-shader
+RenderScene -> RenderView/RenderObject -> culling/order
+            -> material/shader selection -> FramePipeline -> RenderGraph
 ```
 
-Inputs:
+`0.20` applies recording and replay to the whole RenderScene-driven path. The
+recording boundary includes scene inputs, material/shader decisions,
+frame/pipeline configuration, and portable execution evidence. Replay uses the
+normal renderer, RenderGraph, and RHI path rather than a second implementation.
+
+## 8. Blender-native editor/tooling direction
+
+Starting in `0.21`, Blender integration is a first-class product path, not a late JavaScript
+facade. The native add-on/tool package progressively provides:
 
 ```text
-Material IR
-+
-Pass shader template
-+
-Geometry interface
-+
-Target profile
+Blender shader-node -> Fluxel MaterialGraph translation
+scene/mesh/material extraction
+Fluxel material and shader diagnostics in Blender
+Fluxel viewport preview through the Fluxel renderer
+asset export and rebuild reporting
+preview/runtime equivalence fixtures
 ```
 
-Outputs:
+The initial supported nodes are Material Output, Principled BSDF, Image
+Texture, Texture Coordinate, Normal Map, RGB, Value, Add, Multiply, and Mix.
+Coverage expands only when a Fluxel semantic and validation test exists.
+
+## 9. Candidates, not current roadmap
+
+These are removed from the active route and may be reconsidered after the
+Blender/material/renderer loop proves its value:
 
 ```text
-ShaderArtifact
-ShaderInterface
-MaterialVariantKey
+JavaScript material mutation APIs
+CSS-like style systems
+Canvas/UI frameworks and declarative UI
+browser-first editor experiences
+general DevTools UI
+additional JS host/platform integrations
 ```
 
-Main responsibilities:
+Existing JS/browser adapters remain compatibility infrastructure when needed;
+they do not set the next product milestone or introduce a parallel resource
+architecture.
+
+## 10. Product milestone
 
 ```text
-Feature analysis
-Variant canonicalization
-Permutation pruning
-Shader cache
+Create a cube and material in Blender
+  -> import supported nodes
+  -> build Material IR and shader variant
+  -> preview through a Fluxel built-in pipeline
+  -> export Fluxel assets
+  -> render the same scene in a standalone Rust runtime
+  -> compare preview and runtime output
 ```
 
-Do not generate every possible feature combination.
-
-Use:
-
-```text
-Material IR
-    ↓
-RequiredFeatures
-    ↓
-Canonical VariantKey
-    ↓
-Shader Composition
-```
-
-Acceptance:
-
-Two materials with different runtime parameters but the same structure should share the same shader variant.
-
----
-
-## 7. Stage 3 — Minimal RenderScene + FramePipeline
-
-Implement:
-
-```text
-RenderScene
-RenderObject
-RenderView
-CullingService
-SortingService
-FramePipeline
-```
-
-The first implementation only needs:
-
-```text
-Transform
-Bounds
-GeometryHandle
-MaterialHandle
-Camera
-one basic light
-```
-
-A first pipeline can be very small:
-
-```text
-Cull
--> Sort
--> Main Raster Pass
-```
-
-The purpose is not to provide a default renderer.
-
-The purpose is to prove:
-
-```text
-RenderScene
--> FramePipeline
--> RenderGraph
-```
-
-as the official path.
-
----
-
-## 8. Stage 4 — Material Runtime
-
-Add:
-
-```text
-MaterialAsset
-MaterialInstance
-CompiledMaterialVariant
-```
-
-Keep these responsibilities separate:
-
-```text
-MaterialGraph        authoring
-Material IR          compiler input
-Compiled Variant     renderer input
-MaterialInstance     runtime parameters
-```
-
-Dynamic parameters may include:
-
-```text
-base_color
-roughness
-metallic
-texture
-emissive
-```
-
-Changing them must not require shader recompilation.
-
-Acceptance:
-
-```text
-material.set("roughness", 0.8)
-```
-
-only updates runtime parameter data.
-
----
-
-## 9. Stage 5 — Blender Material Import
-
-Start Blender integration only after the Fluxel material path works without Blender.
-
-Support a deliberately small Blender node subset:
-
-```text
-Material Output
-
-Principled BSDF:
-- Base Color
-- Metallic
-- Roughness
-- Normal
-- Emission
-- Alpha
-
-Image Texture
-Texture Coordinate
-Normal Map
-RGB
-Value
-Math: Add / Multiply
-Mix
-```
-
-Translation:
-
-```text
-Blender ShaderNodeTree
-        ↓
-Fluxel Blender Adapter
-        ↓
-MaterialGraph
-        ↓
-Material IR
-```
-
-Unsupported nodes must fail explicitly.
-
-Do not silently approximate unsupported behavior.
-
----
-
-## 10. Stage 6 — Blender Scene Import
-
-Support:
-
-```text
-Mesh
-Transform
-UV
-Camera
-Material assignment
-basic Light
-```
-
-Translation:
-
-```text
-Blender Scene
-        ↓
-RenderScene
-```
-
-Do not import unrelated systems yet:
-
-```text
-gameplay
-physics
-game logic
-navigation
-full animation system
-```
-
-The first target is rendering data only.
-
----
-
-## 11. Stage 7 — Blender Viewport Preview
-
-This is the first major end-to-end milestone.
-
-Implement Blender viewport integration:
-
-```text
-Blender Scene
-        ↓
-RenderScene
-
-Blender Material Nodes
-        ↓
-MaterialGraph
-        ↓
-Material IR
-
-        ↓
-Fluxel FramePipeline
-        ↓
-RenderGraph
-        ↓
-RHI
-        ↓
-Blender Viewport
-```
-
-At this point Blender becomes:
-
-```text
-Scene Editor
-Material Editor
-Fluxel Preview Tool
-```
-
-Fluxel does not need its own scene or material editor.
-
----
-
-## 12. Stage 8 — Asset Export
-
-Add:
-
-```text
-Export Fluxel Project
-```
-
-Exported data may include:
-
-```text
-RenderScene assets
-Mesh assets
-Texture assets
-Material assets
-Compiled / cooked material variants
-```
-
-The runtime must not depend on Blender.
-
-```text
-.blend
-   ↓ build/export
-Fluxel assets
-   ↓
-Game Runtime
-```
-
----
-
-## 13. Stage 9 — Preview / Runtime Equivalence
-
-Build automated validation around the same input:
-
-```text
-Scene
-Material
-Camera
-Light
-```
-
-Run it through:
-
-```text
-Blender Fluxel Preview
-```
-
-and:
-
-```text
-Standalone Fluxel Runtime
-```
-
-Compare the framebuffer.
-
-Both paths must share:
-
-```text
-same Material IR
-same shader composition
-same shader variant
-same material parameters
-same textures
-same FramePipeline
-same color management
-```
-
-There must not be two independent shader implementations.
-
----
-
-## 14. Stage 10 — Expand Blender Compatibility
-
-Only after the full loop works, gradually add:
-
-```text
-more Math nodes
-Vector Math
-ColorRamp
-Mapping
-procedural textures
-more Principled inputs
-transparent / masked materials
-more normal features
-```
-
-Rule:
-
-> Every supported Blender node must map to an explicitly defined Fluxel semantic.
-
-Do not implement Blender nodes merely because Blender exposes them.
-
----
-
-## 15. Later — JS Runtime Material Control
-
-After `MaterialInstance` is stable:
-
-```text
-JS
- ↓
-MaterialInstance
-```
-
-Example:
-
-```js
-material.set("roughness", 0.6);
-material.set("damage", 0.8);
-```
-
-CSS is still unnecessary at this stage.
-
----
-
-## 16. Much Later — Style System
-
-Only add a CSS-like layer when there is a real need for:
-
-```text
-object classification
-material assignment
-parameter overrides
-state-dependent styling
-```
-
-The style layer should only do:
-
-```text
-selector
--> material selection
--> MaterialInstance parameter overrides
-```
-
-It must not rebuild the MaterialGraph.
-
-The intended separation is:
-
-```text
-Blender
-    = material structure
-
-Style
-    = material assignment / parameters
-
-JS
-    = runtime mutation
-```
-
----
-
-## 17. DevTools
-
-DevTools should come last.
-
-Possible inspection path:
-
-```text
-RenderObject
-├─ matched style
-├─ material
-├─ parameters
-├─ variant key
-├─ ShaderArtifact
-├─ RenderGraph passes
-└─ GPU resources
-```
-
-This is a debugging tool, not a material editor.
-
----
-
-## 18. Recommended Execution Order
-
-```text
-0. RHI / RenderGraph foundation
-        ↓
-1. Material semantic model
-        ↓
-2. MaterialGraph
-        ↓
-3. Material IR
-        ↓
-4. Shader Composition
-        ↓
-5. RenderScene + FramePipeline
-        ↓
-6. Material Runtime
-        ↓
-7. Blender Material Adapter
-        ↓
-8. Blender Scene Adapter
-        ↓
-9. Fluxel Blender Viewport
-        ↓
-10. Export / Runtime
-        ↓
-11. Preview == Runtime validation
-        ↓
-12. Expand Blender node coverage
-        ↓
-13. JS material mutation
-        ↓
-14. CSS-like Style
-        ↓
-15. DevTools
-```
-
----
-
-## 19. First Major Product Milestone
-
-The first milestone worth treating as a product-level proof is:
-
-```text
-In Blender:
-
-Create a Cube
-↓
-Connect Principled BSDF
-↓
-Add a texture
-↓
-Set Roughness / Metallic
-↓
-Select Fluxel Render Engine
-↓
-See the Fluxel result in the Viewport
-↓
-Export
-↓
-Open in standalone Fluxel Runtime
-↓
-Get the same rendered result
-```
-
-Once this works, the architecture is proven.
-
-Everything after that is incremental expansion:
-
-```text
-more nodes
-more materials
-more pipelines
-JS
-CSS
-DevTools
-```
-
-rather than another foundation rewrite.
+After this succeeds, expand node coverage, renderer features, and custom
+pipeline examples incrementally. Do not create a second shader implementation
+for Blender or for either built-in renderer.

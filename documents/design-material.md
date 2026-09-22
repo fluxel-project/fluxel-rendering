@@ -1,12 +1,13 @@
 # Fluxel Material System Design
 
-> Status: **Proposed architecture**
+> Status: **Active next-version architecture**
 >
 > Scope: Material authoring graph, material semantic model, Material IR, lowering boundary,
 > Blender integration boundary, and renderer-facing compiled material contract.
 >
-> Non-goal: This document does not define the final shader-composition/compiler implementation,
-> GPU pipeline cache, Blender add-on implementation, or a built-in PBR renderer.
+> This document is the primary semantic contract for the next version's shader
+> assembly and material work. It does not define the full Blender add-on UI or
+> the implementation details of the two built-in renderer pipelines.
 
 ---
 

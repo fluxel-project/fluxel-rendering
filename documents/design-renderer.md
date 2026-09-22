@@ -6,7 +6,7 @@
 > asset-to-render preparation boundaries, and RenderGraph authoring.
 >
 > This document replaces the retained `0.15` fixed-renderer architecture as the
-> renderer design target after the `0.16-0.20` foundation train.
+> renderer design target built on the completed `0.16` RHI baseline.
 >
 > Historical fixed recipes, `FixedFrameRenderer`, legacy snapshot gates, and old
 > execution-plan terminology are implementation history only and are not part of

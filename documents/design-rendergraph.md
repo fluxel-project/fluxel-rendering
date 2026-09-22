@@ -271,10 +271,10 @@ data. Trace covers passes, resource versions/uses, dependencies, roots/culling,
 lanes, semantic transitions, lifetimes, allocation requirements, aliases,
 transient statistics, and submission mapping.
 
-`0.19` may serialize this as `GraphTraceArtifact` for diagnostics. It cannot be
-accepted by replay. Graph also exports canonical `FrozenGraphIR`, but normal
-`0.20` replay uses captured `PortableCommandIR`; Graph IR is provenance and
-validation. Recompiling it is a separately labeled comparison mode.
+Graph may serialize this as `GraphTraceArtifact` for diagnostics. It cannot be
+accepted by replay. Graph also exports canonical `FrozenGraphIR`, while replay
+uses captured `PortableCommandIR`; Graph IR is provenance and validation.
+Recompiling it is a separately labeled comparison mode.
 
 ## Validation and errors
 
