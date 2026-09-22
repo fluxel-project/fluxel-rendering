@@ -1,3 +1,6 @@
+# Local planning and review drafts
+/draft/
+
 # Rust build output
 /target/
 
