@@ -32,12 +32,35 @@ Capture records no native command bytes, handles, pointers, descriptor indices,
 GPU addresses, barrier bits, queue objects, fence values, OS handles, or Rust
 memory layout.
 
-## Layer ownership
+## Capture layers and ownership
+
+Capture is deliberately layered. A GPU/RenderGraph-only capture is useful for
+low-level diagnosis, but it is not a substitute for the renderer-level record
+needed to reproduce and inspect scene decisions.
+
+```text
+Renderer Capture
+  RenderScene, RenderView(s), frame configuration, selected FramePipeline,
+  MaterialAssetRef, MaterialInstance state, variant and shader decisions
+        |
+        v
+RenderGraph Capture
+  graph inputs, FrozenGraphIR, declared-use and provenance mapping
+        |
+        v
+RHI Capture
+  PortableCommandIR, objects, resource contents, submissions, and observations
+```
+
+Each lower layer is evidence for the layer above; it does not become the owner
+of that layer's semantics. A complete scene capture includes all three layers.
+An explicitly scoped graph or GPU capture may omit renderer data, and must say
+so in its manifest rather than claiming to be a complete RenderScene capture.
 
 | Layer | Capture responsibility | Replay responsibility |
 | --- | --- | --- |
-| Renderer | request range, observations, and external-input policy | choose mode and consume report |
-| RenderGraph | emit `FrozenGraphIR` and declared-use mapping | validate provenance; recompile only in comparison mode |
+| Renderer | capture `RenderScene`, `RenderView`s, frame configuration, selected `FramePipeline`, `MaterialAssetRef`s, material-instance parameter/resource state, resolved variants, shader and pipeline decisions, request range, observations, and external-input policy | scene replay through the normal renderer / `FramePipeline`; choose mode and consume report |
+| RenderGraph | capture graph inputs, emit `FrozenGraphIR`, and preserve declared-use mapping | validate provenance; recompile from renderer inputs and compare when scene replay requests it |
 | RHI tooling SPI | expose borrowed canonical objects, command-ordered actual uses, mutations, submission, present, completion, and terminal loss | no replay product responsibility |
 | Backend | optional native-tool attachment and diagnostics | lower through its normal production path |
 | Artifact layer | schema, typed IDs, manifest, blobs, integrity, privacy | bounded parsing and version handling |
@@ -49,10 +72,15 @@ they are never portable replay truth. The ID is generated at arm time and stored
 in the finalized artifact header; it is provenance/correlation only, not a
 device identity, native handle, integrity hash, object ID, or replay key.
 
-## Two IRs, one replay source of truth
+## Capture representations and replay authority
 
-An artifact contains both:
+A complete scene artifact contains three connected representations:
 
+- `RendererCapture`: the scene-level inputs and decisions that led to graph
+  authoring: `RenderScene`, views, frame configuration, selected
+  `FramePipeline`, `MaterialAssetRef`s, `MaterialInstance` parameter/resource
+  state, material variants, shader/pipeline decisions, and renderer-to-graph
+  inputs;
 - `FrozenGraphIR`: why work was retained and ordered—pass declarations,
   logical resource versions/uses, dependencies, roots/culling, lanes,
   import/export, lifetime, and alias provenance;
@@ -60,13 +88,32 @@ An artifact contains both:
   for execution, plus object definitions and submission semantics.
 
 Commands must be covered by the corresponding declared graph uses. This is a
-validation relation, not permission to regenerate one IR from the other.
+validation relation, not permission to regenerate one representation from
+another. Renderer decisions and graph inputs are likewise recorded facts, not
+facts inferred backwards from commands.
 
-Normal replay always replays `PortableCommandIR`. Graph compiler versions,
-culling, scheduling, merging, and lowering evolve, so recompiling
-`FrozenGraphIR` would not reliably reproduce the captured work. The optional
-`RecompileComparison` mode exists specifically to expose those differences and
-must label its result as comparison, not replay.
+There are two explicitly different replay paths:
+
+```text
+Scene Replay
+  RendererCapture
+      -> normal Renderer / selected FramePipeline
+      -> RenderGraph recompilation
+      -> graph and decision comparison against FrozenGraphIR
+
+GPU Replay
+  PortableCommandIR
+      -> normal RHI reconstruction and execution
+```
+
+Scene Replay is the high-level route: it reruns the normal renderer and its
+selected `FramePipeline`, then compares the produced graph and decisions with
+the captured graph evidence. Graph compiler versions, culling, scheduling,
+merging, and lowering can evolve, so it must label differences as comparison
+results, never silently claim GPU reproduction. GPU Replay uses
+`PortableCommandIR` as its execution source of truth. `FrozenGraphIR` remains
+provenance and comparison evidence in that route; it is not an authority to
+regenerate commands.
 
 ## Requested scope and replayable closure
 
@@ -135,11 +182,27 @@ claim to be a representative performance trace.
 
 ## Shader and pipeline reconstruction
 
-The shader artifact created by normal RHI operation already declares its replay
-provenance and acceptance scope:
+`ShaderArtifact` is a shader-system compilation product, not an RHI-created
+semantic object. The shader system owns composition, reflection, variants,
+artifact identity, and cache; RHI consumes an accepted artifact to create its
+portable shader and pipeline objects.
+
+```text
+WGSL
+  -> Naga
+  -> Shader System
+       |- ShaderArtifact
+       |- ShaderInterface
+       `- Pipeline Requirements
+  -> RHI creates shader / pipeline objects
+```
+
+The captured shader artifact declares its replay provenance and acceptance
+scope:
 
 - portable source/IR with canonical producer identity and compile options can be
-  regenerated for compatible backend families;
+  recompiled by the shader system for compatible backend families, then consumed
+  by RHI;
 - executable-only artifacts carry an explicit backend-family or exact
   capability-contract acceptance scope.
 
@@ -211,12 +274,16 @@ commands nor bit-exact replay truth and cannot affect reconstruction legality.
 
 ## Replay transaction
 
-Replay is fail-closed and ordered:
+Both replay modes are fail-closed. Scene Replay first restores the captured
+scene-level fixtures and invokes the normal renderer and selected
+`FramePipeline`; it records the resulting graph and decision comparison before
+any optional execution. GPU Replay is ordered as follows:
 
 1. parse with size/count/recursion/decompression bounds and validate integrity;
 2. inspect requirements and choose provider/device;
 3. negotiate and produce the initial decision/report;
-4. load/recompile accepted shader artifacts and create layouts/pipelines;
+4. load/recompile accepted shader artifacts through the shader system, then
+   create RHI layouts/pipelines;
 5. create resources, views, samplers, and bind groups;
 6. restore snapshots and external fixtures;
 7. cross-validate Graph IR, Command IR, objects, and declared uses;
@@ -226,7 +293,10 @@ Replay is fail-closed and ordered:
 11. diff and report the first failing pass/work/command and related markers;
 12. retire every object through normal completion-safe RHI behavior.
 
-Failure at any step forbids submitting later unvalidated work.
+Failure at any step forbids submitting later unvalidated work. A Scene Replay
+comparison failure is reported as renderer/graph divergence; it does not grant
+permission to substitute its newly generated commands for the captured
+`PortableCommandIR` in GPU Replay.
 
 Negotiation and execution are bound to the same explicit live `Device` identity
 and generation. Replay revalidates negotiation for the device passed to the
@@ -236,8 +306,11 @@ creation or submission if stale.
 
 ## Partial capture
 
-A capture is complete, partial, or failed. Missing a required snapshot, command
-tail, shader/pipeline descriptor, external input, or integrity record can never
+A capture is complete, partial, or failed within its declared scope. A complete
+scene capture requires the renderer, graph, and RHI layers; a deliberately
+scoped graph/GPU capture declares the missing higher layer. Missing a required
+snapshot, command tail, shader/pipeline descriptor, external input, integrity
+record, or required renderer/graph section for the requested scope can never
 produce a complete replayable artifact. A dependency-closed prefix finalized
 before device loss may be partial and replayable. Missing optional backend
 diagnostics may also yield a replayable partial artifact.
@@ -283,4 +356,5 @@ The capture/replay architecture closes only when the gates in the
 [implementation plan](version-plan.md) pass: dependency-closed ranges, mutation and
 snapshot coverage, compatible same/cross-backend replay, direct/adapted/
 unsupported negotiation, loss/partial handling, malicious-input parser tests,
-and proof that normal replay is independent of current graph compiler output.
+and proof that GPU Replay is independent of current graph compiler output while
+Scene Replay reports its graph/compiler comparison explicitly.

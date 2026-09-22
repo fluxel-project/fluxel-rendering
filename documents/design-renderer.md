@@ -358,7 +358,8 @@ pub struct GeometryHandle {
 }
 
 pub struct MaterialHandle {
-    /* opaque */
+    pub asset: MaterialAssetRef,
+    /* optional renderer-domain instance selection/state */
 }
 ```
 
@@ -372,12 +373,19 @@ their durable identity is the corresponding `AssetId<K>` plus
 ```rust
 type GeometryAssetId = AssetId<GeometryAsset>;
 type MaterialAssetId = AssetId<MaterialAsset>;
+
+pub struct MaterialAssetRef {
+    pub id: MaterialAssetId,
+    pub generation: ContentGeneration,
+}
 ```
 
 A renderer may assign a separate identity to a `MaterialInstance`, because an
 instance is mutable renderer-domain state rather than the material asset. That
-instance must retain its material asset reference; it must not replace or mint a
-parallel durable material identity.
+instance and `MaterialHandle` must retain `MaterialAssetRef`; a
+`MaterialInstanceId` must not replace or mint a parallel durable material
+identity. In particular, `AssetId<MaterialAsset>` alone is insufficient after
+content replacement or hot reload.
 
 Resolution happens later:
 

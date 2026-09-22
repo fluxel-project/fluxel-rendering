@@ -24,7 +24,9 @@ Blender
   -> Shader Composition
   -> WGSL ShaderModule
   -> Naga
-  -> RHI ShaderArtifact / Pipeline
+  -> Shader System
+       -> ShaderArtifact / ShaderInterface / Pipeline Requirements
+       -> RHI shader/pipeline creation
 ```
 
 Blender is the primary visual authoring environment.
@@ -33,7 +35,11 @@ WGSL is the Fluxel-facing shader source language for custom material code, shade
 
 Naga owns shader parsing, validation, executable shader IR, and target translation.
 
-Fluxel owns material semantics, composition, resource contracts, variant semantics, and integration with `FramePipeline`, `RenderGraph`, and RHI.
+Fluxel's shader system owns `ShaderArtifact`, `ShaderInterface`, pipeline
+requirements, and their cache identities. RHI consumes those portable products to
+create shader and pipeline objects; it is not their semantic owner. Fluxel owns
+material semantics, composition, resource contracts, variant semantics, and
+integration with `FramePipeline`, `RenderGraph`, and RHI.
 
 ---
 
@@ -56,7 +62,12 @@ WGSL ShaderModule
         ↓
 Naga
         ↓
-ShaderArtifact / ShaderInterface / Pipeline Requirements
+Shader System
+        ├─ ShaderArtifact
+        ├─ ShaderInterface
+        └─ Pipeline Requirements
+                ↓
+               RHI shader/pipeline creation
 ```
 
 ### Frame execution
@@ -235,7 +246,9 @@ project-specific shading logic
 
 ### 5.1 Fragment metadata
 
-Fluxel stores metadata describing how the fragment participates in material composition.
+Fluxel stores metadata describing the authoring exposure and semantic names by
+which a fragment participates in material composition. It is not a second
+executable interface definition.
 
 Conceptually:
 
@@ -252,7 +265,15 @@ pub struct ShaderFragment {
 }
 ```
 
-The executable function body remains WGSL.
+The executable function body and its exact callable/resource interface remain
+WGSL. WGSL plus Naga reflection are the executable interface truth.
+
+During composition, the shader system must compare the metadata with Naga's
+reflected WGSL interface exactly, then produce one `NormalizedFragmentInterface`
+for Material IR and subsequent composition. Names, parameter directions, types,
+returns, binding classes, and resource requirements must agree. A mismatch (for
+example metadata `vec3f` versus WGSL `vec4f`) is a compilation error; Fluxel must
+not continue by trusting either declaration opportunistically.
 
 Fluxel does not translate the function body into a parallel `MaterialInstruction` language.
 
@@ -864,7 +885,10 @@ Fluxel does not define another executable shader IR above Naga.
 
 ## 18. Shader Artifact
 
-The shader system converts validated shader output into a renderer/RHI-consumable artifact.
+The shader system owns the conversion of validated shader output into a
+renderer/RHI-consumable `ShaderArtifact`, together with its `ShaderInterface` and
+`PipelineRequirements`. These are shader-system compilation products, not RHI
+semantic objects.
 
 Associated information may include:
 
@@ -879,7 +903,10 @@ reflection
 cache identity
 ```
 
-The exact public shape should reuse RHI portable shader/pipeline vocabulary where appropriate.
+The exact public shape should reuse RHI portable shader/pipeline vocabulary where
+appropriate. RHI consumes an artifact and requirements to create its portable
+shader/pipeline objects and execute GPU work; it does not create, own, or cache
+the `ShaderArtifact` itself.
 
 ---
 
@@ -887,11 +914,24 @@ The exact public shape should reuse RHI portable shader/pipeline vocabulary wher
 
 A compiled material variant is the runtime representation of one static material configuration.
 
+Material asset identity is durable only as the pair of its asset ID and content
+generation. This prevents a hot reload or replacement under the same
+`AssetId<MaterialAsset>` from reusing a variant compiled for old content.
+
+```rust
+pub type MaterialAssetId = AssetId<MaterialAsset>;
+
+pub struct MaterialAssetRef {
+    pub id: MaterialAssetId,
+    pub generation: ContentGeneration,
+}
+```
+
 Conceptually:
 
 ```rust
 pub struct CompiledMaterialVariant {
-    pub material: MaterialAssetId,
+    pub material: MaterialAssetRef,
     pub variant_key: MaterialVariantKey,
 
     pub shader_artifacts: Vec<ShaderArtifactRef>,
@@ -916,12 +956,16 @@ Conceptually:
 
 ```rust
 pub struct MaterialInstance {
-    pub material: MaterialAssetId,
+    pub material: MaterialAssetRef,
     pub static_variant: MaterialVariantKey,
     pub parameters: MaterialParameterValues,
     pub resources: MaterialResourceValues,
 }
 ```
+
+`MaterialInstanceId` may identify mutable renderer-domain instance state, but it
+cannot replace `MaterialAssetRef`: every instance and every variant retains the
+asset ID plus generation it represents.
 
 It does not own:
 
@@ -1055,6 +1099,9 @@ MaterialGraph
 Material IR
 material semantics
 material variants
+ShaderArtifact
+ShaderInterface
+PipelineRequirements
 FramePipeline policy
 Blender translation
 ```
@@ -1073,6 +1120,7 @@ Relevant identities may include:
 MaterialGraph identity
 Material IR identity
 Material static variant identity
+MaterialAssetRef (AssetId + ContentGeneration)
 Shader composition identity
 WGSL module identity
 Naga compilation identity
@@ -1288,6 +1336,7 @@ Implement:
 
 ```text
 ShaderFragment metadata
+authoring exposure/semantic names (not executable interface truth)
 WGSL module/source representation
 typed fragment inputs/outputs
 resource requirements
@@ -1345,7 +1394,8 @@ WGSL parse
 validation
 Naga IR generation
 reflection/interface extraction
-portable shader artifact creation
+exact metadata-to-reflection validation and NormalizedFragmentInterface creation
+shader-system artifact/interface/requirement creation
 diagnostic source remapping
 ```
 
@@ -1438,6 +1488,7 @@ Naga
 (executable shader IR/compiler)
         ↓
 ShaderArtifact / ShaderInterface / Pipeline Requirements
+ (owned by Shader System; consumed by RHI creation)
 
 
 RUNTIME
