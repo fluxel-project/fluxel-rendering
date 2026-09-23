@@ -444,10 +444,11 @@ impl Device {
     /// [`RhiErrorKind::BackendFailure`] when the enumeration violates the base
     /// guarantee, naming which half of it was violated.
     pub(crate) fn new(identity: DeviceIdentity, native: Box<dyn DeviceBackend>) -> RhiResult<Self> {
-        let capabilities = EnabledCapabilities::from_facts(
-            native.capability_facts(),
-            native.submission_capabilities(),
-        );
+        // The provider enumerated lanes with the unbound ordinal form; this is the
+        // one moment the device identity is known and can be composed into them,
+        // making every lane this device reports device-scoped (section 40.1).
+        let submission = native.submission_capabilities().scoped_to(identity);
+        let capabilities = EnabledCapabilities::from_facts(native.capability_facts(), submission);
         // The `Compute` feature is read back out of the contract that was just
         // interned rather than asked of the backend separately: section 7.2's rule
         // is about the *enabled* feature set, and reading it from anywhere else

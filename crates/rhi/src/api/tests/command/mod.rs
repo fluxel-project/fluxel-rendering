@@ -154,7 +154,7 @@ fn lanes() -> crate::api::submission::SubmissionCapabilities {
     let mut domains = LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY);
     domains = domains.union(LaneWorkDomains::COMPUTE);
     SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(0),
         SubmissionLaneClass::General,
         domains,
     )])

@@ -329,7 +329,7 @@ struct Liveness {
 /// exists to catch.
 fn default_lanes() -> SubmissionCapabilities {
     SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(0),
         SubmissionLaneClass::General,
         LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
     )])
@@ -339,7 +339,7 @@ fn default_lanes() -> SubmissionCapabilities {
 /// must advertise the matching execution domain as well.
 fn query_lanes() -> SubmissionCapabilities {
     SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(0),
         SubmissionLaneClass::General,
         LaneWorkDomains::RASTER
             .union(LaneWorkDomains::COMPUTE)

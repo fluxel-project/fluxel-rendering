@@ -274,12 +274,12 @@ fn an_acquire_refusal_is_not_a_present_outcome() {
 #[test]
 fn a_lane_row_names_its_lane_and_its_two_counts() {
     let graphics = LaneIntervalStatistics {
-        lane: SubmissionLaneId::new(0),
+        lane: SubmissionLaneId::unscoped(0),
         batches_accepted: 5,
         recorded_work_items: 11,
     };
     let transfer = LaneIntervalStatistics {
-        lane: SubmissionLaneId::new(1),
+        lane: SubmissionLaneId::unscoped(1),
         batches_accepted: 2,
         recorded_work_items: 2,
     };
@@ -297,7 +297,7 @@ fn a_lane_row_names_its_lane_and_its_two_counts() {
     // A lane with a row is a lane that was used; the counts can still be zero
     // for a batch that carried no work items, and those are different statements.
     let empty_batch = LaneIntervalStatistics {
-        lane: SubmissionLaneId::new(2),
+        lane: SubmissionLaneId::unscoped(2),
         batches_accepted: 1,
         recorded_work_items: 0,
     };

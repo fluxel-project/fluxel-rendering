@@ -585,7 +585,7 @@ fn an_observer_keeps_what_it_copies_and_drops_every_borrow() {
         plan,
         batches: vec![CapturedSubmissionBatch {
             point,
-            lane: SubmissionLaneId::new(0),
+            lane: SubmissionLaneId::new(device, 0),
             work: vec![object(40)],
         }],
         dependencies: Vec::new(),
@@ -823,7 +823,7 @@ fn a_captured_plan_states_the_relation_rather_than_the_counts() {
     // presentation followed.
     let device = identity(4);
     let (plan, point, submitted, overall) = plan_fixture(device);
-    let lane = SubmissionLaneId::new(0);
+    let lane = SubmissionLaneId::new(device, 0);
     let present_id = PresentPlanId::new(plan, 0);
     let receipt_id = PresentReceiptId::new(device, 1);
     let frame = AcquiredFrameId::new(device, 1);

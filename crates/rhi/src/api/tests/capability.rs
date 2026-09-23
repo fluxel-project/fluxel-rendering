@@ -902,18 +902,18 @@ fn the_fingerprint_moves_exactly_when_the_id_does() {
 #[test]
 fn two_devices_differing_only_in_their_lanes_have_different_ids() {
     let one_lane = enabled_over(lanes(&[(
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(0),
         SubmissionLaneClass::General,
         LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
     )]));
     let two_lanes = enabled_over(lanes(&[
         (
-            SubmissionLaneId::new(0),
+            SubmissionLaneId::unscoped(0),
             SubmissionLaneClass::General,
             LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
         ),
         (
-            SubmissionLaneId::new(1),
+            SubmissionLaneId::unscoped(1),
             SubmissionLaneClass::Compute,
             LaneWorkDomains::COMPUTE,
         ),
@@ -941,12 +941,12 @@ fn two_devices_differing_only_in_their_lanes_have_different_ids() {
 #[test]
 fn lanes_reported_in_a_different_order_intern_to_the_same_id() {
     let raster = (
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(0),
         SubmissionLaneClass::General,
         LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
     );
     let compute = (
-        SubmissionLaneId::new(1),
+        SubmissionLaneId::unscoped(1),
         SubmissionLaneClass::Compute,
         LaneWorkDomains::COMPUTE,
     );
@@ -966,8 +966,8 @@ fn a_reported_dependency_route_changes_the_id() {
     let plain = two_split_lanes();
     let mut routed = plain.clone();
     routed.record_dependency_route(
-        SubmissionLaneId::new(0),
-        SubmissionLaneId::new(1),
+        SubmissionLaneId::unscoped(0),
+        SubmissionLaneId::unscoped(1),
         LaneDependencyRoute::Gpu,
     );
 
@@ -986,25 +986,25 @@ fn a_reported_dependency_route_changes_the_id() {
 fn routes_recorded_in_a_different_order_intern_to_the_same_id() {
     let mut forward = two_split_lanes();
     forward.record_dependency_route(
-        SubmissionLaneId::new(0),
-        SubmissionLaneId::new(1),
+        SubmissionLaneId::unscoped(0),
+        SubmissionLaneId::unscoped(1),
         LaneDependencyRoute::Gpu,
     );
     forward.record_dependency_route(
-        SubmissionLaneId::new(1),
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(1),
+        SubmissionLaneId::unscoped(0),
         LaneDependencyRoute::Collapse,
     );
 
     let mut backward = two_split_lanes();
     backward.record_dependency_route(
-        SubmissionLaneId::new(1),
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(1),
+        SubmissionLaneId::unscoped(0),
         LaneDependencyRoute::Collapse,
     );
     backward.record_dependency_route(
-        SubmissionLaneId::new(0),
-        SubmissionLaneId::new(1),
+        SubmissionLaneId::unscoped(0),
+        SubmissionLaneId::unscoped(1),
         LaneDependencyRoute::Gpu,
     );
 
@@ -1018,12 +1018,12 @@ fn routes_recorded_in_a_different_order_intern_to_the_same_id() {
 fn two_split_lanes() -> SubmissionCapabilities {
     lanes(&[
         (
-            SubmissionLaneId::new(0),
+            SubmissionLaneId::unscoped(0),
             SubmissionLaneClass::Graphics,
             LaneWorkDomains::RASTER,
         ),
         (
-            SubmissionLaneId::new(1),
+            SubmissionLaneId::unscoped(1),
             SubmissionLaneClass::Transfer,
             LaneWorkDomains::COPY,
         ),

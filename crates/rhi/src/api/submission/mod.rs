@@ -64,6 +64,7 @@
 
 use crate::api::capability::{encode_entry, write_section};
 use crate::api::error::{RhiError, RhiErrorKind, RhiResult};
+use crate::api::identity::{DeviceIdentity, DeviceInstanceId};
 use crate::api::resource::transient::TransientLifetime;
 use std::sync::Mutex;
 
@@ -109,20 +110,32 @@ impl TransientLifetimeRegistry {
 /// that reason: several logical lanes do not promise hardware overlap, and one
 /// native queue does not prevent several logical scheduling lanes.
 ///
+/// The runtime identity is **device-scoped**: a lane belongs to the device that
+/// reported it (section 40.1's "lane belongs to current Device" rule), so the
+/// identity carries that device. A lane minted by one device is refused by
+/// another's plan builder as [`RhiErrorKind::WrongDevice`], which is why this
+/// type is a pair of the owning device and an ordinal within it rather than a
+/// bare ordinal. The ordinal is the stable part: [`Self::encode_into`] writes
+/// only it, so two devices that offer the same lanes encode to the same
+/// capability bytes.
+///
 /// There is no public constructor and no public numeric accessor, so the value is
 /// evidence of equality rather than an ordinal a caller could count with — the
 /// same rule [`crate::api::capability::CapabilityCompatibilityId`] follows. A
 /// caller learns a lane ID from [`SubmissionLaneInfo::id`] and uses it to add a
 /// batch; it never names one by number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SubmissionLaneId(u16);
+pub struct SubmissionLaneId {
+    device: DeviceIdentity,
+    ordinal: u16,
+}
 
 impl SubmissionLaneId {
-    /// Mints a lane identity during device enumeration.
+    /// Mints the runtime-scoped identity of one enumerated lane.
     ///
     /// Crate-private: a lane exists because a device reported it, so only the
-    /// enumeration path may name one. A caller that could mint a lane ID could
-    /// ask for work on a lane the device never offered.
+    /// enumeration path may name one, and the device half is what makes a lane
+    /// from one device unusable on another.
     ///
     /// The expectation is gated on `all(not(test), not(feature = "dx12"))` rather
     /// than on either alone, for the reason `api::capability` records on
@@ -137,13 +150,59 @@ impl SubmissionLaneId {
             reason = "minted by the DX12/Vulkan providers that enumerate lanes and the test-build mock"
         )
     )]
-    pub(crate) fn new(value: u16) -> Self {
-        Self(value)
+    pub(crate) fn new(device: DeviceIdentity, ordinal: u16) -> Self {
+        Self { device, ordinal }
+    }
+
+    /// Mints an unbound ordinal-only lane identity for backend enumeration.
+    ///
+    /// A provider reports the lanes it offers *before* the device identity is
+    /// minted (`Device::new` is what composes the two), so during enumeration the
+    /// device half is a reserved "unbound" marker. `Device::new` replaces it with
+    /// the real identity via [`SubmissionCapabilities::scoped_to`], so the marker
+    /// never escapes to a caller. Instance id 0 is reserved for this: real devices
+    /// are minted from id 1 onwards (the test mock uses 1+), and another backend
+    /// reporting instance 0 would be refused before the marker could be misread.
+    #[cfg_attr(
+        all(not(test), not(any(feature = "dx12", feature = "vulkan"))),
+        expect(
+            dead_code,
+            reason = "used by the DX12/Vulkan providers that enumerate lanes before a device identity is known"
+        )
+    )]
+    pub(crate) fn unscoped(ordinal: u16) -> Self {
+        Self {
+            device: DeviceIdentity::new(DeviceInstanceId::new(0)),
+            ordinal,
+        }
+    }
+
+    /// The device this lane is scoped to.
+    ///
+    /// What makes a lane from one device unusable on another: section 40.1's
+    /// "lane belongs to current Device" rule is a full `SubmissionLaneId` equality
+    /// (device and ordinal together) in [`SubmissionCapabilities::lane`], and this
+    /// half is the part that stops an ordinal collision from being accepted.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the backend ports and capture tooling as lanes become observable"
+        )
+    )]
+    pub(crate) fn device(&self) -> DeviceIdentity {
+        self.device
     }
 
     /// Writes this identity into a canonical encoding.
+    ///
+    /// Only the stable ordinal is written, never the device half. A lane's device
+    /// is a runtime fact about who owns it, not a contract the RHI holds (two
+    /// devices of identical capability offer identical lanes and must compare
+    /// equal); encoding it would make every device's fingerprint distinct no
+    /// matter how aligned its surface was.
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.0.to_le_bytes());
+        out.extend_from_slice(&self.ordinal.to_le_bytes());
     }
 }
 
@@ -444,6 +503,40 @@ impl SubmissionCapabilities {
         Self {
             lanes,
             routes: Vec::new(),
+        }
+    }
+
+    /// Returns a copy of this snapshot with every lane and route scoped to
+    /// `device`.
+    ///
+    /// Called by [`crate::api::platform::Device::new`] once the device identity is
+    /// minted: providers enumerate lanes through [`SubmissionLaneId::unscoped`]
+    /// (the device half is a reserved marker), and this is the one place the real
+    /// identity replaces it. After this, every lane a caller reads carries the
+    /// device, and a lane minted by another device misses [`Self::lane`] and is
+    /// refused as `WrongDevice`. Routes are rescoped with the same identity so
+    /// both halves of a route pair match the caller's lane tokens.
+    pub(crate) fn scoped_to(&self, device: DeviceIdentity) -> Self {
+        fn scoped(id: SubmissionLaneId, device: DeviceIdentity) -> SubmissionLaneId {
+            SubmissionLaneId::new(device, id.ordinal)
+        }
+        Self {
+            lanes: self
+                .lanes
+                .iter()
+                .map(|lane| {
+                    SubmissionLaneInfo::new(
+                        scoped(lane.id, device),
+                        lane.class,
+                        lane.domains,
+                    )
+                })
+                .collect(),
+            routes: self
+                .routes
+                .iter()
+                .map(|(from, to, route)| (scoped(*from, device), scoped(*to, device), *route))
+                .collect(),
         }
     }
 

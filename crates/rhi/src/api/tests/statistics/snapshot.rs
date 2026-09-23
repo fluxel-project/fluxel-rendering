@@ -247,7 +247,7 @@ fn an_uncollected_working_set_is_not_an_empty_one() {
     // cumulative record does not have — which is the asymmetry that makes the
     // interval unbuildable from two snapshots.
     let row = LaneIntervalStatistics {
-        lane: SubmissionLaneId::new(0),
+        lane: SubmissionLaneId::unscoped(0),
         batches_accepted: 3,
         recorded_work_items: 4,
     };

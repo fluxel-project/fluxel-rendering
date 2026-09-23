@@ -753,7 +753,7 @@ impl DeviceBackend for GlDevice {
         // Compute without also supplying a GL compute executor; this baseline
         // therefore admits raster/copy only.
         SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
-            SubmissionLaneId::new(0),
+            SubmissionLaneId::unscoped(0),
             SubmissionLaneClass::General,
             LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
         )])

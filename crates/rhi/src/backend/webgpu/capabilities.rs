@@ -149,7 +149,7 @@ impl WebGpuCapabilityInput {
         }
 
         let lane = SubmissionLaneInfo::new(
-            SubmissionLaneId::new(0),
+            SubmissionLaneId::unscoped(0),
             SubmissionLaneClass::General,
             LaneWorkDomains::RASTER
                 .union(LaneWorkDomains::COMPUTE)

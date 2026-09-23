@@ -341,7 +341,7 @@ impl Dx12Provider {
         );
 
         let submission = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
-            SubmissionLaneId::new(0),
+            SubmissionLaneId::unscoped(0),
             SubmissionLaneClass::General,
             LaneWorkDomains::RASTER
                 .union(LaneWorkDomains::COMPUTE)

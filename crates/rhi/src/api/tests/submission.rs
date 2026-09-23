@@ -1306,8 +1306,8 @@ fn a_device_backed_transient_is_materialized_before_submission() {
     let identity = device_identity(1);
     let (device, native) = buffers_for_test(identity, 64);
     let mut builder = SubmissionPlanBuilder::new(&device);
-    let acquire = builder.reserve_batch(lane_id(0)).unwrap();
-    let release = builder.reserve_batch(lane_id(0)).unwrap();
+    let acquire = builder.reserve_batch(device_lane(&device, 0)).unwrap();
+    let release = builder.reserve_batch(device_lane(&device, 0)).unwrap();
     let allocator = builder.transient_allocator();
     let buffer = allocator
         .create_buffer(
@@ -1351,8 +1351,8 @@ fn submit_refuses_a_deferred_transient_fixture_before_backend_lowering() {
         identity,
         device.capabilities().submission().clone(),
     );
-    let acquire = builder.reserve_batch(lane_id(0)).unwrap();
-    let release = builder.reserve_batch(lane_id(0)).unwrap();
+    let acquire = builder.reserve_batch(device_lane(&device, 0)).unwrap();
+    let release = builder.reserve_batch(device_lane(&device, 0)).unwrap();
     let allocator = builder.transient_allocator();
     let buffer = allocator
         .create_buffer(
@@ -1465,7 +1465,7 @@ fn submit_refuses_a_mapped_buffer_without_persistent_mapping() {
     });
     let mut builder = SubmissionPlanBuilder::new(&device);
     builder
-        .add_batch(lane_id(0), vec![raster_work(identity, vec![use_])])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, vec![use_])])
         .unwrap();
 
     let error = block_on(device.submit(builder.build().unwrap())).unwrap_err();
@@ -1494,7 +1494,7 @@ fn submit_accepts_a_mapped_buffer_when_persistent_mapping_is_enabled() {
     });
     let mut builder = SubmissionPlanBuilder::new(&device);
     builder
-        .add_batch(lane_id(0), vec![raster_work(identity, vec![use_])])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, vec![use_])])
         .unwrap();
 
     block_on(device.submit(builder.build().unwrap())).unwrap();
@@ -1522,7 +1522,7 @@ fn completion_state_refuses_a_foreign_point_and_reports_a_lost_device() {
     let mut builder = SubmissionPlanBuilder::new(&device);
     let batch = builder
         .add_batch(
-            lane_id(0),
+            device_lane(&device, 0),
             vec![raster_work(device_identity_value, Vec::new())],
         )
         .unwrap();
@@ -1631,10 +1631,10 @@ fn a_validated_plan_is_accepted_and_its_receipt_reports_every_batch() {
 
     let mut builder = SubmissionPlanBuilder::new(&device);
     let first = builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .expect("the mock's lane 0 accepts raster work");
     let second = builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .expect("the mock's lane 0 accepts raster work");
     let plan = builder.build().expect("a batch with no edge is acyclic");
 
@@ -1689,7 +1689,7 @@ fn completion_is_pending_until_the_device_reports_it() {
 
     let mut builder = SubmissionPlanBuilder::new(&device);
     let point = builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
 
@@ -1748,7 +1748,7 @@ fn device_loss_reaches_every_reported_serial() {
     native.hold_completion();
     let mut builder = SubmissionPlanBuilder::new(&device);
     let point = builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
     let receipt = block_on(device.submit(plan)).unwrap();
@@ -1797,7 +1797,7 @@ fn device_loss_preserves_an_already_complete_point() {
     let (device, native) = paired_device_for_test(identity);
     let mut builder = SubmissionPlanBuilder::new(&device);
     let point = builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
     let token = receipt.completion_for(point).unwrap();
@@ -1824,7 +1824,7 @@ fn wait_completion_resolves_after_a_pending_mock_is_released() {
     native.hold_completion();
     let mut builder = SubmissionPlanBuilder::new(&device);
     let point = builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
     let token = receipt.completion_for(point).unwrap();
@@ -1854,7 +1854,7 @@ fn a_serial_the_device_never_reported_is_terminal() {
 
     let mut builder = SubmissionPlanBuilder::new(&device);
     builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
     let receipt = block_on(device.submit(plan)).unwrap();
@@ -1906,7 +1906,7 @@ fn a_refused_plan_never_reaches_the_backend() {
     // A plan carrying a presentation, on a device that is otherwise fine.
     let mut builder = SubmissionPlanBuilder::new(&device);
     let point = builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     builder
         .present_after(acquired_frame(1, identity), point)
@@ -1934,7 +1934,7 @@ fn a_refused_plan_never_reaches_the_backend() {
     // which is checked first of all.
     let mut builder = SubmissionPlanBuilder::new(&device);
     builder
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
@@ -1958,13 +1958,13 @@ fn two_plans_on_one_device_are_distinguishable() {
 
     let mut first = SubmissionPlanBuilder::new(&device);
     first
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let first = first.build().unwrap();
 
     let mut second = SubmissionPlanBuilder::new(&device);
     second
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let second = second.build().unwrap();
 
@@ -1976,7 +1976,7 @@ fn two_plans_on_one_device_are_distinguishable() {
     // not answered for by the first plan's receipt.
     let mut third = SubmissionPlanBuilder::new(&device);
     let foreign = third
-        .add_batch(lane_id(0), vec![raster_work(identity, Vec::new())])
+        .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let third = third.build().unwrap();
     // Built and then dropped: what the check needs is a point from a plan other
@@ -2022,7 +2022,7 @@ fn plan_id(device: DeviceIdentity, serial: u64) -> SubmissionPlanId {
 
 /// A lane identity.
 fn lane_id(value: u16) -> SubmissionLaneId {
-    SubmissionLaneId::new(value)
+    SubmissionLaneId::unscoped(value)
 }
 
 /// One lane's facts.
@@ -2035,6 +2035,89 @@ fn everything() -> LaneWorkDomains {
     LaneWorkDomains::RASTER
         .union(LaneWorkDomains::COPY)
         .union(LaneWorkDomains::COMPUTE)
+}
+
+/// The device-scoped identity of one lane a live `device` offered.
+///
+/// [`SubmissionPlanBuilder::new`] builds against the device's own (scoped)
+/// submission caps, so a batch lane must be a lane that device actually reported
+/// — read from its caps rather than minted with an unbound ordinal.
+fn device_lane(device: &Device, ordinal: u16) -> SubmissionLaneId {
+    device
+        .capabilities()
+        .submission()
+        .lanes()
+        .get(ordinal as usize)
+        .expect("the mock device offers the requested lane")
+        .id()
+}
+
+// -- B2: SubmissionLaneId device affinity ------------------------------------
+
+/// A lane minted by one device is refused by another device's plan builder.
+///
+/// Once `Device::new` scopes every enumerated lane to its device (via
+/// `SubmissionCapabilities::scoped_to`), a lane token carries the device that
+/// offered it. Passing it to a builder for a different device misses that
+/// builder's lane table, and section 40.1's "lane belongs to current Device"
+/// rule answers `WrongDevice` rather than accepting a lane from elsewhere.
+#[test]
+fn a_lane_from_another_device_is_refused_as_wrong_device() {
+    let a = device_identity(30);
+    let b = device_identity(31);
+    let make = |device| {
+        SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
+            SubmissionLaneId::unscoped(0),
+            SubmissionLaneClass::General,
+            everything(),
+        )])
+        .scoped_to(device)
+    };
+    let caps_a = make(a);
+    let caps_b = make(b);
+    let a_lane = caps_a.lanes()[0].id();
+    assert_eq!(a_lane.device(), a, "a lane carries the device that scoped it");
+    assert_ne!(a_lane.device(), b);
+
+    // Device B's builder refuses A's lane as WrongDevice.
+    let mut builder_b = SubmissionPlanBuilder::with_facts(plan_id(b, 1), b, caps_b);
+    assert_eq!(
+        builder_b.reserve_batch(a_lane).unwrap_err().kind(),
+        RhiErrorKind::WrongDevice,
+        "a lane minted by device A is not a lane device B offers"
+    );
+
+    // Device A's own builder accepts the same token.
+    let mut builder_a = SubmissionPlanBuilder::with_facts(plan_id(a, 1), a, caps_a);
+    assert!(builder_a.reserve_batch(a_lane).is_ok());
+}
+
+/// Two devices with identical lanes produce the same capability bytes.
+///
+/// The canonical encoding writes only each lane's stable ordinal, never the
+/// device half: the device is a runtime fact about who owns the lane, not a
+/// contract the RHI holds, so two devices of identical capability must compare
+/// equal no matter which instance reported them.
+#[test]
+fn two_devices_with_identical_lanes_encode_identically() {
+    let a = device_identity(40);
+    let b = device_identity(41);
+    let make = |device| {
+        SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
+            SubmissionLaneId::unscoped(0),
+            SubmissionLaneClass::General,
+            everything(),
+        )])
+        .scoped_to(device)
+    };
+    let mut bytes_a = Vec::new();
+    let mut bytes_b = Vec::new();
+    make(a).encode_into(&mut bytes_a);
+    make(b).encode_into(&mut bytes_b);
+    assert_eq!(
+        bytes_a, bytes_b,
+        "a lane's device half is runtime state, never part of the stable contract"
+    );
 }
 
 /// A builder over one lane, with no cross-lane routes reported.

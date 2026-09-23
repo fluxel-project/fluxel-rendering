@@ -469,7 +469,7 @@ fn a_device_whose_enumeration_violates_the_base_guarantee_is_refused() {
     // A lane that takes raster work and nothing else: no lane accepts the
     // `RASTER | COPY` pair the guarantee requires.
     let lanes_without_copy = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
-        SubmissionLaneId::new(0),
+        SubmissionLaneId::unscoped(0),
         SubmissionLaneClass::Graphics,
         LaneWorkDomains::RASTER,
     )]);
@@ -514,12 +514,12 @@ fn declared_facts() -> CapabilityFacts {
 fn declared_submission() -> SubmissionCapabilities {
     SubmissionCapabilities::new(vec![
         SubmissionLaneInfo::new(
-            SubmissionLaneId::new(0),
+            SubmissionLaneId::unscoped(0),
             SubmissionLaneClass::General,
             LaneWorkDomains::RASTER.union(LaneWorkDomains::COPY),
         ),
         SubmissionLaneInfo::new(
-            SubmissionLaneId::new(1),
+            SubmissionLaneId::unscoped(1),
             SubmissionLaneClass::Compute,
             LaneWorkDomains::COMPUTE,
         ),

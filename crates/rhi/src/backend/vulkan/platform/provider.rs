@@ -623,7 +623,7 @@ impl VulkanProvider {
                 .get_physical_device_memory_properties(candidate.physical)
         };
         let submission = SubmissionCapabilities::new(vec![SubmissionLaneInfo::new(
-            SubmissionLaneId::new(0),
+            SubmissionLaneId::unscoped(0),
             SubmissionLaneClass::Graphics,
             // v13's base submission invariant requires a graphics lane that
             // carries RASTER|COPY. COMPUTE and raster are both closed by native

@@ -279,19 +279,19 @@ fn query_slot_hazards_require_a_plan_dependency_only_when_ranges_overlap() {
     let lanes = || {
         let mut capabilities = SubmissionCapabilities::new(vec![
             SubmissionLaneInfo::new(
-                SubmissionLaneId::new(0),
+                SubmissionLaneId::new(identity, 0),
                 SubmissionLaneClass::General,
                 LaneWorkDomains::COPY,
             ),
             SubmissionLaneInfo::new(
-                SubmissionLaneId::new(1),
+                SubmissionLaneId::new(identity, 1),
                 SubmissionLaneClass::General,
                 LaneWorkDomains::COPY,
             ),
         ]);
         capabilities.record_dependency_route(
-            SubmissionLaneId::new(0),
-            SubmissionLaneId::new(1),
+            SubmissionLaneId::new(identity, 0),
+            SubmissionLaneId::new(identity, 1),
             crate::api::submission::LaneDependencyRoute::Gpu,
         );
         capabilities
@@ -299,10 +299,10 @@ fn query_slot_hazards_require_a_plan_dependency_only_when_ranges_overlap() {
     let mut unordered =
         SubmissionPlanBuilder::with_facts(SubmissionPlanId::new(identity, 90), identity, lanes());
     unordered
-        .add_batch(SubmissionLaneId::new(0), vec![writer(0)])
+        .add_batch(SubmissionLaneId::new(identity, 0), vec![writer(0)])
         .unwrap();
     unordered
-        .add_batch(SubmissionLaneId::new(1), vec![resolver()])
+        .add_batch(SubmissionLaneId::new(identity, 1), vec![resolver()])
         .unwrap();
     assert_eq!(
         unordered.build().unwrap_err().kind(),
@@ -312,10 +312,10 @@ fn query_slot_hazards_require_a_plan_dependency_only_when_ranges_overlap() {
     let mut ordered =
         SubmissionPlanBuilder::with_facts(SubmissionPlanId::new(identity, 91), identity, lanes());
     let producer = ordered
-        .add_batch(SubmissionLaneId::new(0), vec![writer(0)])
+        .add_batch(SubmissionLaneId::new(identity, 0), vec![writer(0)])
         .unwrap();
     let consumer = ordered
-        .add_batch(SubmissionLaneId::new(1), vec![resolver()])
+        .add_batch(SubmissionLaneId::new(identity, 1), vec![resolver()])
         .unwrap();
     ordered.add_dependency(producer, consumer).unwrap();
     assert!(ordered.build().is_ok());
@@ -325,10 +325,10 @@ fn query_slot_hazards_require_a_plan_dependency_only_when_ranges_overlap() {
     let mut disjoint =
         SubmissionPlanBuilder::with_facts(SubmissionPlanId::new(identity, 92), identity, lanes());
     disjoint
-        .add_batch(SubmissionLaneId::new(0), vec![writer(1)])
+        .add_batch(SubmissionLaneId::new(identity, 0), vec![writer(1)])
         .unwrap();
     disjoint
-        .add_batch(SubmissionLaneId::new(1), vec![resolver()])
+        .add_batch(SubmissionLaneId::new(identity, 1), vec![resolver()])
         .unwrap();
     assert!(disjoint.build().is_ok());
 }
