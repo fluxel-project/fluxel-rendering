@@ -39,6 +39,28 @@ portable vocabulary has no HLSL form (section 19.2), and DXIL is what a DX12 dev
 consumes. Keeping both files makes the provenance legible while leaving exactly one
 of them as test input.
 
+## `sparse_mrt_ps.dxil`
+
+A one-pixel-shader, two-output fragment program for the sparse-MRT raster test.
+The single entry `ps_sparse_mrt` writes `SV_Target0` (a solid `0.25, 0.5, 0.75, 1.0`)
+and `SV_Target3` (a solid `0.5, 0.25, 0.125, 1.0`), leaving MRT holes at locations
+1 and 2.  The DX12 backend fills those holes with null RTVs; the test reads both
+real targets back and asserts each color independently.
+
+| | |
+|---|---|
+| Profile | `ps_6_0` |
+| Entry point | `ps_sparse_mrt` |
+| Outputs | `SV_Target0` + `SV_Target3` |
+| Size | 2868 bytes |
+| `dxc` | `dxcompiler.dll`, from Vulkan SDK `1.4.357.0` |
+
+Regenerate:
+
+```sh
+dxc -T ps_6_0 -E ps_sparse_mrt -Fo sparse_mrt_ps.dxil sparse_mrt.hlsl
+```
+
 ## `triangle_vs.dxil`, `solid_ps.dxil`, and `sampled_ps.dxil`
 
 These are the vertex and fragment halves of the real DX12 offscreen-raster

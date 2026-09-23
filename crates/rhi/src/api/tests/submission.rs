@@ -1159,6 +1159,7 @@ fn a_receipt_carries_the_presents_of_its_plan() {
         vec![PresentReceipt::new(
             PresentReceiptId::new(device, 2),
             present,
+            std::sync::Arc::new(crate::api::presentation::present::PresentOutcome::new(device)),
         )],
     );
 

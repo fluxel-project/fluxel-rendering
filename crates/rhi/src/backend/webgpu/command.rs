@@ -608,12 +608,21 @@ impl WebGpuCommandSpine {
                 _ => None,
             })
             .collect();
-        for entry in state.serials.values_mut() {
-            if matches!(entry, SerialState::AwaitReadbacks(id) if published_readback_completions.contains(id))
-            {
-                *entry = SerialState::Complete;
+        for id in published_readback_completions {
+            for entry in state.serials.values_mut() {
+                if matches!(entry, SerialState::AwaitReadbacks(current) if *current == id) {
+                    *entry = SerialState::Complete;
+                }
             }
         }
+        // Prune completed serials. They stay answerable as `Complete` because
+        // `state` answers any serial at or below `issued` that is absent from the
+        // map as `Complete` (the `None` arm below), so a terminal row per
+        // submission would be bookkeeping that grows without bound for no caller
+        // benefit. Failed serials are *kept* so they keep answering `Failed`
+        // rather than falling through to the `Complete` fallback; a row is only
+        // pruned once it is genuinely terminal-complete.
+        state.serials.retain(|_, entry| !matches!(entry, SerialState::Complete));
     }
 
     fn state(&self, serial: u64, waker: Option<&Waker>) -> CompletionState {

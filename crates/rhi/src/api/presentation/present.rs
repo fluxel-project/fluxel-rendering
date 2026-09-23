@@ -204,17 +204,129 @@ pub enum PresentState {
 pub struct PresentReceipt {
     id: PresentReceiptId,
     plan_id: PresentPlanId,
+    /// The shared observation backing. Terminal outcome lives here, so a live
+    /// receipt answers `present_state` without the backend retaining an unbounded
+    /// present-history map; when the last `PresentReceipt` clone drops, this Arc
+    /// is dropped and the outcome is reclaimed.
+    backing: std::sync::Arc<PresentOutcome>,
+}
+
+/// Shared outcome behind one observed presentation.
+///
+/// Holds the terminal answer a live `PresentReceipt` can be asked about
+/// repeatedly with the same result (section 45.5). Instances are referenced
+/// strongly by the `PresentReceipt`(s) that observe them and weakly by the
+/// process registry that lets a bare `PresentReceiptId` query reach a live
+/// outcome. When the last `PresentReceipt` drops, the strong reference is gone,
+/// the registry's `Weak` upgrade fails, and the outcome is reclaimed — so
+/// presentation bookkeeping scales with *live* receipts rather than with total
+/// presents since device creation.
+pub(crate) struct PresentOutcome {
+    device: DeviceIdentity,
+    state: std::sync::Mutex<PresentState>,
+}
+
+impl PresentOutcome {
+    pub(crate) fn new(device: DeviceIdentity) -> Self {
+        Self {
+            device,
+            state: std::sync::Mutex::new(PresentState::Pending),
+        }
+    }
+
+    pub(crate) fn device(&self) -> DeviceIdentity {
+        self.device
+    }
+
+    /// Publishes a terminal state into this outcome. Called by a backend while
+    /// lowering an accepted present for this receipt's id.
+    pub(crate) fn set(&self, state: PresentState) {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = state;
+    }
+
+    /// Reads the current published state.
+    pub(crate) fn get(&self) -> PresentState {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// Process-wide registry from a bare present id to the live outcome it names.
+///
+/// Weak handles: the outcome is owned by its `PresentReceipt`(s); this table
+/// only lets a poll-by-id reach an outcome that is still alive. An entry whose
+/// strong refs have all dropped fails to upgrade and is dead weight, pruned on
+/// a later insertion or, at worst, harmless until collected. Touched only on
+/// submit/present/query, never on a per-frame hot path that runs without a
+/// presentation.
+static PRESENT_OUTCOMES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PresentReceiptId, std::sync::Weak<PresentOutcome>>>,
+> = std::sync::LazyLock::new(|| {
+    std::sync::Mutex::new(std::collections::HashMap::new())
+});
+
+/// Pastes a live outcome into the process registry so a bare id can reach it.
+pub(crate) fn register_outcome(
+    id: PresentReceiptId,
+    outcome: &std::sync::Arc<PresentOutcome>,
+) {
+    let mut table = PRESENT_OUTCOMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Opportunistic reaper: throw out entries whose outcome is already gone so
+    // a long-running app that drops many receipts does not accumulate tombstones.
+    table.retain(|_, weak| weak.strong_count() > 0);
+    table.insert(id, std::sync::Arc::downgrade(outcome));
+}
+
+/// Resolves a live outcome for a bare present id, or `None` when the receipt
+/// that named it has all been dropped.
+pub(crate) fn live_outcome(id: PresentReceiptId) -> Option<std::sync::Arc<PresentOutcome>> {
+    PRESENT_OUTCOMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&id)
+        .and_then(std::sync::Weak::upgrade)
+}
+
+/// How many entries the present registry currently holds.
+///
+/// Test-only: the measurable half of the boundedness guarantee. A process that
+/// presents and drops many receipts must not accumulate a tombstone per present —
+/// and the regression it guards against (a strong per-present history map) keeps
+/// every entry forever and reads as a count proportional to total presents. The
+/// pruner runs on insertion, so after presenting and dropping a large batch, the
+/// next registration folds the whole batch back down to a small working set.
+#[cfg(test)]
+pub(crate) fn present_registry_entry_count() -> usize {
+    PRESENT_OUTCOMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .len()
 }
 
 impl PresentReceipt {
     /// Assembles the receipt for an accepted presentation.
     ///
     /// Crate-private: a receipt exists because a plan was accepted.
-    pub(crate) fn new(id: PresentReceiptId, plan_id: PresentPlanId) -> Self {
-        Self { id, plan_id }
+    pub(crate) fn new(
+        id: PresentReceiptId,
+        plan_id: PresentPlanId,
+        outcome: std::sync::Arc<PresentOutcome>,
+    ) -> Self {
+        Self {
+            id,
+            plan_id,
+            backing: outcome,
+        }
     }
 
-    /// This receipt's identity, which `Device::present_state` is queried with.
+    /// This receipt's identity, for identity checks and diagnostics.
     pub fn id(&self) -> PresentReceiptId {
         self.id
     }
@@ -226,6 +338,17 @@ impl PresentReceipt {
     /// can tell their outcomes apart.
     pub fn plan_id(&self) -> PresentPlanId {
         self.plan_id
+    }
+
+    /// The device this receipt observes, kept here so `present_state` validates
+    /// identity without a backend round-trip.
+    pub(crate) fn device_identity(&self) -> DeviceIdentity {
+        self.backing.device()
+    }
+
+    /// The shared outcome this receipt observes.
+    pub(crate) fn outcome(&self) -> &std::sync::Arc<PresentOutcome> {
+        &self.backing
     }
 }
 
@@ -256,7 +379,10 @@ impl Device {
     /// Cross-device receipts are refused rather than answered: a receipt names work
     /// accepted on one device, and another device has no such presentation.
     ///
-    /// Panics until the presentation backend exists; both checks above are real.
+    /// The backing outcome is what answers, not the backend: a present that a
+    /// backend published into the live outcome keeps answering identically for
+    /// as long as any receipt that names it is alive, and stops being answerable
+    /// once the last such receipt is dropped (the outcome is reclaimed then).
     pub fn present_state(&self, receipt: PresentReceiptId) -> RhiResult<PresentState> {
         if receipt.device_identity() != self.identity() {
             return Err(RhiError::new(
@@ -265,21 +391,20 @@ impl Device {
             )
             .at("Device::present_state"));
         }
-        self.native()
-            .presentation()
+        crate::api::presentation::present::live_outcome(receipt)
+            .map(|outcome| outcome.get())
             .ok_or_else(|| {
                 RhiError::new(
-                    RhiErrorKind::Unsupported,
-                    "this backend does not implement presentation",
+                    RhiErrorKind::InvalidUsage,
+                    "this present receipt is no longer live; every holder has been dropped",
                 )
                 .at("Device::present_state")
-            })?
-            .present_state(receipt)
+            })
     }
 
     /// Waits for presentation ownership to reach a terminal outcome.
     pub async fn wait_present(&self, receipt: PresentReceiptId) -> RhiResult<PresentState> {
-        std::future::poll_fn(|context| {
+        std::future::poll_fn(|_| {
             if receipt.device_identity() != self.identity() {
                 return std::task::Poll::Ready(Err(RhiError::new(
                     RhiErrorKind::WrongDevice,
@@ -287,17 +412,16 @@ impl Device {
                 )
                 .at("Device::wait_present")));
             }
-            let Some(backend) = self.native().presentation() else {
-                return std::task::Poll::Ready(Err(RhiError::new(
-                    RhiErrorKind::Unsupported,
-                    "this backend does not implement presentation",
+            match crate::api::presentation::present::live_outcome(receipt) {
+                Some(outcome) => match outcome.get() {
+                    PresentState::Pending => std::task::Poll::Pending,
+                    terminal => std::task::Poll::Ready(Ok(terminal)),
+                },
+                None => std::task::Poll::Ready(Err(RhiError::new(
+                    RhiErrorKind::InvalidUsage,
+                    "this present receipt is no longer live; every holder has been dropped",
                 )
-                .at("Device::wait_present")));
-            };
-            match backend.present_state_or_register_waker(receipt, context.waker()) {
-                Ok(PresentState::Pending) => std::task::Poll::Pending,
-                Ok(terminal) => std::task::Poll::Ready(Ok(terminal)),
-                Err(error) => std::task::Poll::Ready(Err(error)),
+                .at("Device::wait_present"))),
             }
         })
         .await

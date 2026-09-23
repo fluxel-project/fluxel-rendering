@@ -418,6 +418,10 @@ impl Device {
         // dropped on the way out — section 41.9's release path, and the reason
         // nothing below reads it again.
         let identity = self.identity();
+        let mut present_outcomes: Vec<(
+            crate::api::presentation::PresentReceiptId,
+            std::sync::Arc<crate::api::presentation::present::PresentOutcome>,
+        )> = Vec::new();
         let present_requests: Vec<crate::api::submission::backend::BackendPresent> = plan
             .presents()
             .iter()
@@ -425,13 +429,26 @@ impl Device {
                 plan.frames()
                     .iter()
                     .find(|frame| frame.id() == present.frame)
-                    .map(|frame| crate::api::submission::backend::BackendPresent {
-                        after: present.after,
-                        receipt: crate::api::presentation::PresentReceiptId::new(
+                    .map(|frame| {
+                        let id = crate::api::presentation::PresentReceiptId::new(
                             identity,
                             self.serials().next_present(),
-                        ),
-                        attachment: frame.attachment(),
+                        );
+                        // Register the live outcome *before* the backend submit,
+                        // so a backend lowering an accepted present can publish
+                        // its terminal state into this receipt's outcome. The
+                        // outcome is reclaimed when the last PresentReceipt is
+                        // dropped, keeping present history bounded.
+                        let outcome = std::sync::Arc::new(
+                            crate::api::presentation::present::PresentOutcome::new(identity),
+                        );
+                        crate::api::presentation::present::register_outcome(id, &outcome);
+                        present_outcomes.push((id, outcome));
+                        crate::api::submission::backend::BackendPresent {
+                            after: present.after,
+                            receipt: id,
+                            attachment: frame.attachment(),
+                        }
                     })
             })
             .collect();
@@ -512,9 +529,9 @@ impl Device {
             points,
             plan.presents()
                 .iter()
-                .zip(&present_requests)
-                .map(|(present, request)| {
-                    crate::api::presentation::PresentReceipt::new(request.receipt, present.id)
+                .zip(&present_outcomes)
+                .map(|(present, (id, outcome))| {
+                    crate::api::presentation::PresentReceipt::new(*id, present.id, outcome.clone())
                 })
                 .collect(),
         ))

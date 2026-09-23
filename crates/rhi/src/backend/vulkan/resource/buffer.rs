@@ -277,6 +277,14 @@ impl Drop for VulkanMappingRequest {
 }
 
 /// A native map lease. Its destructor is the unique matching `vkUnmapMemory`.
+///
+/// `vkMapMemory` maps the whole allocation (`allocation_size`); the pointer here
+/// is advanced to the portable `range` so the *view* is the sub-range even though
+/// the *native grant* is the whole allocation. That is fine because the portable
+/// `Buffer` lease is the sole authoritative gate — `Device::map_buffer` holds the
+/// buffer's one portable lease, so a second overlapping `vkMapMemory` can never be
+/// requested from here. The lease granule is therefore the whole `Buffer`, not the
+/// requested range.
 struct VulkanMappedBuffer {
     shared: Arc<VulkanShared>,
     memory: vk::DeviceMemory,

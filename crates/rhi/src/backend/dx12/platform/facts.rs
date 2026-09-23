@@ -1114,15 +1114,12 @@ fn texture_answer(
         return TextureSupport::Unsupported;
     }
 
-    // D3D12 itself can create multisampled resources, but this backend cannot
-    // yet lower their attachment lifecycle: RTV/DSV creation and raster scope
-    // transitions deliberately refuse them, and resolve has no command lowering.
-    // Capability is an end-to-end promise, so publishing the native allocation
-    // fact here would be a lie until all of those paths and their conformance
-    // tests exist.
-    if sample_count > 1 {
-        return TextureSupport::Unsupported;
-    }
+    // D3D12 can create multisampled resources. The raster/resolve lifecycle is
+    // now lowered (RTV/DSV creation, raster scope transitions, and scope-end
+    // `ResolveSubresource`), so a multisampled attachment this backend can
+    // actually drive is advertised from the real driver fact rather than
+    // blanket-refused. quality == 0 is still rejected below, so an allocation
+    // that the driver cannot sample-qualify stays out.
 
     // The raster backend owns 2D DSVs plus 2D and explicit-slice 3D RTVs. D3D
     // depth/stencil views and 1D attachments are still absent, so do not turn a

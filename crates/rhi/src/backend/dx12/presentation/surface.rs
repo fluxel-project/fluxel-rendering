@@ -30,7 +30,7 @@ use crate::api::presentation::{
     AcquireError, AcquireErrorKind, AcquiredFrameId, CompositeAlphaMode, Extent2d,
     FrameLatencyRange, PresentMode, PresentReceiptId, PresentState, PresentationColorSpace,
     PresentationConfiguration, PresentationExtent, PresentationExtentControl, PresentationFormat,
-    PresentationTargetCapabilities, PresentationTimingCapabilities,
+    PresentationTarget, PresentationTargetCapabilities, PresentationTimingCapabilities,
 };
 use crate::api::resource::TextureUsage;
 use crate::backend::dx12::platform::device::Dx12LossState;
@@ -45,7 +45,6 @@ pub(crate) struct Dx12Presentation {
     // is the one genuinely shared piece of state: both owners must agree that a
     // target remains leased until the configured lease is dropped.
     leased: Arc<Mutex<HashSet<ObjectId>>>,
-    presents: Arc<Mutex<HashMap<PresentReceiptId, PresentState>>>,
     loss: Arc<Dx12LossState>,
 }
 
@@ -68,14 +67,16 @@ impl Dx12Presentation {
             factory,
             targets: Mutex::new(HashMap::new()),
             leased: Arc::new(Mutex::new(HashSet::new())),
-            presents: Arc::new(Mutex::new(HashMap::new())),
             loss,
         })
     }
 
-    /// Host integration entry point. The portable target retains only its ObjectId.
-    #[cfg(test)]
-    pub(crate) fn register_hwnd_target(&self, hwnd: HWND) -> PresentationTarget {
+    /// Host/production integration entry point. Registers an HWND as a presentation
+/// target that a later `configure` can lower to a swapchain. The portable target
+/// retains only its ObjectId; the HWND stays behind this module's boundary.
+/// This is the production seam requested by A5: `register_test_hwnd` remains the
+/// test alias, but the target itself is not test-only.
+pub(crate) fn register_hwnd_target(&self, hwnd: HWND) -> PresentationTarget {
         let id = ObjectId::next();
         self.targets
             .lock()
@@ -141,7 +142,6 @@ impl PresentationBackend for Dx12Presentation {
             self.factory.clone(),
             self.queue.clone(),
             Arc::clone(&self.leased),
-            Arc::clone(&self.presents),
             Arc::clone(&self.loss),
             device,
             target,
@@ -158,11 +158,13 @@ impl PresentationBackend for Dx12Presentation {
     }
 
     fn present_state(&self, receipt: PresentReceiptId) -> RhiResult<PresentState> {
-        self.presents
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&receipt)
-            .cloned()
+        // The portable outcome is the answer, not a DX12 resident history: a
+        // present's terminal state is published into the live outcome by
+        // `FrameAttachmentBackend::present`. Reading it here keeps the backend
+        // view consistent with `Device::present_state` and retains no per-device
+        // present map.
+        crate::api::presentation::present::live_outcome(receipt)
+            .map(|outcome| outcome.get())
             .ok_or_else(|| {
                 RhiError::new(RhiErrorKind::InvalidUsage, "unknown DX12 present receipt")
             })
@@ -215,7 +217,6 @@ pub(crate) struct Dx12FrameAttachment {
     // small but real window where `ResizeBuffers` could race a live reference.
     resource: Option<windows::Win32::Graphics::Direct3D12::ID3D12Resource>,
     swapchain: Option<IDXGISwapChain3>,
-    presents: Arc<Mutex<HashMap<PresentReceiptId, PresentState>>>,
     loss: Arc<Dx12LossState>,
     state: Arc<Mutex<SwapchainState>>,
     serial: u64,
@@ -254,10 +255,12 @@ impl FrameAttachmentBackend for Dx12FrameAttachment {
                 },
             },
         };
-        self.presents
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(receipt, state);
+        // Publish into the live portable outcome keyed by this receipt's id.
+        // The outcome is reclaimed when the last `PresentReceipt` is dropped, so
+        // no per-device history map is retained here.
+        if let Some(outcome) = crate::api::presentation::present::live_outcome(receipt) {
+            outcome.set(state);
+        }
         self.state
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -269,10 +272,9 @@ impl FrameAttachmentBackend for Dx12FrameAttachment {
         // but before this relation is reached.  The portable receipt must still
         // have a terminal answer; silently leaving it unknown would strand
         // `wait_present` even though the execution domain is already lost.
-        self.presents
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(receipt, state);
+        if let Some(outcome) = crate::api::presentation::present::live_outcome(receipt) {
+            outcome.set(state);
+        }
         self.state
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -322,7 +324,6 @@ struct Dx12ConfiguredPresentation {
     // dropped before its frame lease is finished.
     _device: ID3D12Device,
     leased: Arc<Mutex<HashSet<ObjectId>>>,
-    presents: Arc<Mutex<HashMap<PresentReceiptId, PresentState>>>,
     loss: Arc<Dx12LossState>,
     device: DeviceIdentity,
     target: ObjectId,
@@ -336,7 +337,6 @@ impl Dx12ConfiguredPresentation {
         factory: IDXGIFactory4,
         queue: ID3D12CommandQueue,
         leased: Arc<Mutex<HashSet<ObjectId>>>,
-        presents: Arc<Mutex<HashMap<PresentReceiptId, PresentState>>>,
         loss: Arc<Dx12LossState>,
         device: DeviceIdentity,
         target: ObjectId,
@@ -364,7 +364,6 @@ impl Dx12ConfiguredPresentation {
         Ok(Self {
             _device: device_native,
             leased,
-            presents,
             loss,
             device,
             target,
@@ -522,7 +521,6 @@ impl ConfiguredPresentationBackend for Dx12ConfiguredPresentation {
             attachment: Box::new(Dx12FrameAttachment {
                 resource: Some(resource),
                 swapchain: Some(state.swapchain.clone()),
-                presents: Arc::clone(&self.presents),
                 loss: Arc::clone(&self.loss),
                 state: Arc::clone(&self.state),
                 serial,

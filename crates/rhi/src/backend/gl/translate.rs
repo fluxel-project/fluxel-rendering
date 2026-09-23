@@ -890,4 +890,108 @@ mod tests {
             RhiErrorKind::Unsupported
         );
     }
+
+    // -- Resource-bearing pipeline boundary (A4.4) -----------------------------
+    //
+    // GL has no uniform/block reflection-name table in ABI 1.0, so
+    // `pipeline_layout_from_artifacts` fails closed for *every* resource-bearing
+    // pipeline at creation, before any program is handed to a provider. The two
+    // guards are that a fully declared and compatible resource-bearing pipeline
+    // is refused, and that a no-resource pipeline still lowers to an empty
+    // layout (never a placeholder for bindings the submit path might later claim).
+
+    /// A shader artifact for the layout lowerer, at the ABI the GL lowering
+    /// requires, optionally declaring one uniform-buffer resource at (0, 0).
+    fn shader(vertex_resources: bool, hash: u8) -> ShaderArtifact {
+        use crate::api::shader::{
+            ArtifactHash, ArtifactProducerVersion, ShaderInterface, ShaderResourceRequirement,
+            ShaderStage, vocabulary::IMPLEMENTED_ABI,
+        };
+        let interface = if vertex_resources {
+            ShaderInterface::new().with_resource(ShaderResourceRequirement {
+                group: crate::api::binding::BindGroupIndex::new(0),
+                slot: crate::api::binding::BindingSlotId::new(0),
+                kind: crate::api::binding::BindingKind::UniformBuffer { min_size: 64 },
+                count: crate::api::binding::BindingCount::One,
+            })
+        } else {
+            ShaderInterface::new()
+        };
+        ShaderArtifact::new(
+            ShaderStage::Vertex,
+            "vs_main",
+            ShaderCode::Wgsl(std::sync::Arc::from(
+                "@vertex fn vs_main() -> vec4f { return vec4f(0,0,0,1); }",
+            )),
+            IMPLEMENTED_ABI,
+            interface,
+            crate::api::shader::ShaderRequirements::new(),
+            ArtifactHash([hash; 32]),
+            ArtifactProducerVersion {
+                major: 0,
+                minor: 16,
+            },
+        )
+    }
+
+    /// An empty-interface layout: a group-0 slot-0 declaration, or no groups.
+    fn pipeline_interface(with_slot: bool) -> PipelineInterface {
+        use crate::api::binding::{BindingSlot, LayoutFingerprint};
+        use crate::api::identity::{DeviceIdentity, DeviceInstanceId, ObjectId};
+        use crate::api::pipeline::{
+            PipelineInterface, PipelineInterfaceCompatibilityId, PipelineInterfaceDescriptor,
+        };
+        let device = DeviceIdentity::new(DeviceInstanceId::new(1));
+        let groups = if with_slot {
+            vec![crate::api::binding::BindGroupLayout::new(
+                ObjectId::new(11),
+                device,
+                crate::api::binding::BindGroupLayoutDescriptor::new(vec![BindingSlot::new(
+                    crate::api::binding::BindingSlotId::new(0),
+                    crate::api::shader::ShaderStages::VERTEX,
+                    crate::api::binding::BindingKind::UniformBuffer { min_size: 64 },
+                )])
+                .canonicalized(),
+                crate::api::binding::BindGroupLayoutCompatibilityId::new(1),
+                LayoutFingerprint([1; 32]),
+            )]
+        } else {
+            Vec::new()
+        };
+        PipelineInterface::new(
+            ObjectId::new(12),
+            device,
+            PipelineInterfaceDescriptor::new(groups),
+            PipelineInterfaceCompatibilityId::new(1),
+            LayoutFingerprint([2; 32]),
+        )
+    }
+
+    #[test]
+    fn resource_bearing_pipeline_is_refused_at_gl_lowering() {
+        // The interface genuinely declares the slot the shader uses, so the
+        // refusal cannot be blamed on a missing declaration: the fail-closed rule
+        // (`no reflection-name mapping`) is what stops it.
+        let interface = pipeline_interface(true);
+        let artifact = shader(true, 7);
+        assert_eq!(
+            pipeline_layout_from_artifacts(&interface, &[&artifact])
+                .unwrap_err()
+                .kind(),
+            RhiErrorKind::Unsupported,
+            "a resource-bearing pipeline must be refused before any native work"
+        );
+    }
+
+    #[test]
+    fn no_resource_pipeline_lowers_to_an_empty_layout() {
+        // A pipeline whose artifacts genuinely declare no resources gets the
+        // empty bindings list — never a placeholder an execution path could use
+        // to bind resources the lowering refused.
+        let interface = pipeline_interface(false);
+        let artifact = shader(false, 8);
+        let layout = pipeline_layout_from_artifacts(&interface, &[&artifact])
+            .expect("a resource-free pipeline lowers");
+        assert!(layout.bindings.is_empty());
+    }
 }

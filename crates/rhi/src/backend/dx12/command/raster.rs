@@ -54,10 +54,38 @@ use super::{dx12_buffer, dx12_texture};
 
 pub(super) struct RasterScopeState {
     colors: Vec<Dx12RenderAttachment>,
+    /// CPU RTV heaps backing the null descriptors that fill sparse-MRT holes.
+    /// A null RTV has no resource, so these are the only thing keeping the
+    /// descriptor alive through the scope; dropped with the scope.  Never read —
+    /// it is an ownership field: the handles it owns are referenced by the
+    /// `color_handles` span handed to `OMSetRenderTargets`, and releasing the
+    /// heap while that span is live would free the descriptors mid-draw.
+    #[allow(dead_code)]
+    null_rtv_heaps: Vec<ID3D12DescriptorHeap>,
+    /// Multisample→single-sample color resolves to issue at scope end, one per
+    /// attachment that declared `resolve`. Each carries the source (MSAA) and
+    /// destination (single-sample) native resources and the destination view's
+    /// subresource index. Resolved lazily in `lower_raster_end` so the source is
+    /// still `RESOLVE_SOURCE` when the resolve fires.
+    resolves: Vec<Dx12ColorResolve>,
+    /// Parallel to `colors`: whether that color attachment is the source of a
+    /// resolve. A resolve source leaves in `RESOLVE_SOURCE` (not `RENDER_TARGET`)
+    /// once the resolve block has transitioned it, so `lower_raster_end` picks
+    /// the leaving start state from this rather than assuming every color is a
+    /// plain render target.
+    color_resolves: Vec<bool>,
     depth_view: Option<TextureView>,
     depth_heap: Option<ID3D12DescriptorHeap>,
     depth_read_only: bool,
     attachment_extent: Extent3d,
+}
+
+/// One color-attachment resolve: source MSAA texture into a single-sample target.
+struct Dx12ColorResolve {
+    src: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    dst: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    dst_subresource: u32,
+    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
 }
 
 /// The DX12-native shape shared by ordinary texture attachments and swapchain
@@ -86,27 +114,41 @@ pub(super) fn lower_raster_begin(
     begin: &RasterBegin,
     _committed: &mut CommittedBatch,
 ) -> Result<RasterScopeState, Dx12Failure> {
-    // OMSetRenderTargets needs a dense handle array. Sparse portable MRT is
-    // valid, but needs explicit null descriptors; retain an honest refusal until
-    // that descriptor form is represented here.
-    for (expected, (location, _)) in begin.colors.iter().enumerate() {
-        if *location != expected as u32 {
-            return Err(unsupported(
-                "a sparse color-attachment set",
-                "DX12 lowering has not yet allocated null RTV descriptors for MRT holes",
-            ));
-        }
-    }
     let mut entering = Transitions::default();
     let mut color_attachments = Vec::with_capacity(begin.colors.len());
+    let mut resolves = Vec::new();
+    let mut color_resolves = Vec::with_capacity(begin.colors.len());
     for (_, color) in &begin.colors {
-        if color.resolve.is_some() {
-            return Err(unsupported(
-                "a raster attachment resolve",
-                "ResolveSubresource lowering is not implemented yet",
-            ));
-        }
+        color_resolves.push(color.resolve.is_some());
         let attachment = lower_color_attachment(device, &color.view, color.depth_slice)?;
+        // A resolve target is part of the attachment (section 31.1): it is a
+        // single-sampled texture the multisampled source resolves into at scope
+        // end. Resolve is only meaningful alongside a multisampled source.
+        if let Some(target) = &color.resolve {
+            let src = attachment.resource.clone();
+            let ColorAttachmentView::Texture(target_view) = target else {
+                return Err(unsupported(
+                    "a resolve target that is not a texture view",
+                    "only texture resolves are lowered on this backend",
+                ));
+            };
+            let dst = dx12_texture(target_view.texture())?.resource().clone();
+            let format = dxgi_format(target_view.format()).ok_or_else(|| {
+                unsupported(
+                    "a resolve target whose format has no DXGI mapping",
+                    "DX12 cannot resolve into it",
+                )
+            })?;
+            // Whole-subresource resolve for the common single-layer, base-mip
+            // single-sample target. A layered/resolved-mip target would need a
+            // subresource index derived from the view.
+            resolves.push(Dx12ColorResolve {
+                src,
+                dst,
+                dst_subresource: 0,
+                format,
+            });
+        }
         entering.push(
             &attachment.resource,
             attachment.enter_state,
@@ -114,9 +156,62 @@ pub(super) fn lower_raster_begin(
         );
         color_attachments.push(attachment);
     }
-    let color_handles = color_attachments
+
+    // Sparse portable MRT is a legal scope: `begin.colors` carries each
+    // attachment's own `location`, so locations need not be dense. D3D12
+    // `OMSetRenderTargets` takes a dense array indexed by attachment slot, so a
+    // hole (a location with no attachment) must be filled with an explicit null
+    // RTV descriptor. The null descriptor's format is taken from the first real
+    // attachment; writes to a null slot are discarded by the fixed-function
+    // stage, which is exactly what "no attachment at this slot" means.
+    let max_location = begin
+        .colors
         .iter()
-        .map(|attachment| attachment.handle)
+        .map(|(location, _)| *location)
+        .max()
+        .unwrap_or(0);
+    let null_format = begin
+        .colors
+        .first()
+        .and_then(|(_, color)| dxgi_format(color.view.format()));
+    let mut handle_by_location: Vec<Option<D3D12_CPU_DESCRIPTOR_HANDLE>> =
+        vec![None; (max_location + 1) as usize];
+    for ((location, _), attachment) in begin.colors.iter().zip(&color_attachments) {
+        handle_by_location[*location as usize] = Some(attachment.handle);
+    }
+    // One CPU RTV heap per hole, created eagerly. A null RTV has no backing
+    // resource; it lives exactly as long as the scope, matching the real
+    // attachments' per-descriptor heap lifetime.
+    let mut null_rtv_heaps = Vec::new();
+    if let Some(format) = null_format {
+        for slot in handle_by_location.iter_mut() {
+            if slot.is_none() {
+                let heap = cpu_heap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV)?;
+                let handle = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
+                let desc = D3D12_RENDER_TARGET_VIEW_DESC {
+                    Format: format,
+                    ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
+                    Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
+                        Texture2D: D3D12_TEX2D_RTV {
+                            MipSlice: 0,
+                            PlaneSlice: 0,
+                        },
+                    },
+                };
+                // `pResource = None` creates an RTV with no backing resource;
+                // writes to this slot are discarded rather than reaching any
+                // memory. This is the D3D12-native spelling of a sparse MRT hole.
+                unsafe { device.CreateRenderTargetView(None, Some(&desc), handle) };
+                *slot = Some(handle);
+                null_rtv_heaps.push(heap);
+            }
+        }
+    }
+    let color_handles = handle_by_location
+        .iter()
+        .map(|handle| {
+            handle.expect("every MRT slot is either a real or a null RTV descriptor")
+        })
         .collect::<Vec<_>>();
     let (depth_stencil, depth_view, depth_heap, depth_read_only) =
         if let Some(depth) = &begin.depth_stencil {
@@ -151,9 +246,15 @@ pub(super) fn lower_raster_begin(
             depth_stencil.as_ref().map(std::ptr::from_ref),
         );
     }
-    for ((_, attachment), handle) in begin.colors.iter().zip(&color_handles) {
+    // Clear each real attachment at its own location. `color_handles` is indexed
+    // by attachment slot (sparse, with null RTVs at holes), so a real attachment
+    // may sit at a higher index than its position in `begin.colors`; the zip
+    // below must therefore look each attachment up by stored location rather
+    // than by enumeration order.
+    for (location, attachment) in &begin.colors {
+        let handle = color_handles[*location as usize];
         if let LoadOp::Clear(value) = attachment.load {
-            unsafe { list.ClearRenderTargetView(*handle, &clear_color(value), None) };
+            unsafe { list.ClearRenderTargetView(handle, &clear_color(value), None) };
         }
     }
     if let (Some(depth), Some(handle)) = (&begin.depth_stencil, depth_stencil) {
@@ -198,6 +299,9 @@ pub(super) fn lower_raster_begin(
         })?;
     Ok(RasterScopeState {
         colors: color_attachments,
+        null_rtv_heaps,
+        resolves,
+        color_resolves,
         depth_view,
         depth_heap,
         depth_read_only,
@@ -655,17 +759,68 @@ pub(super) fn lower_raster_end(
 ) {
     let RasterScopeState {
         colors,
+        null_rtv_heaps: _,
+        resolves,
+        color_resolves,
         depth_view,
         depth_heap,
         depth_read_only,
         attachment_extent: _,
     } = scope;
+
+    // Multisample color resolve, before the source leaves RENDER_TARGET. Each
+    // attachment's resolve target receives the resolved single-sample result.
+    if !resolves.is_empty() {
+        let mut resolve_transitions = Transitions::default();
+        for op in &resolves {
+            resolve_transitions.push(
+                &op.src,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+            );
+            resolve_transitions.push(
+                &op.dst,
+                D3D12_RESOURCE_STATE_COMMON,
+                D3D12_RESOURCE_STATE_RESOLVE_DEST,
+            );
+        }
+        resolve_transitions.record(list);
+        for op in &resolves {
+            // SAFETY: both resources are live DXGI allocations owned by the
+            // attached texture views, and the resolve is issued while the source
+            // is still `RESOLVE_SOURCE`.
+            unsafe {
+                list.ResolveSubresource(
+                    &op.dst,
+                    op.dst_subresource,
+                    &op.src,
+                    0,
+                    op.format,
+                )
+            };
+        }
+    }
+
     let mut leaving = Transitions::default();
-    for attachment in &colors {
+    // A resolve source leaves from `RESOLVE_SOURCE` (it was transitioned there
+    // by the resolve block above), not from `RENDER_TARGET`. Transitioning a
+    // resolve source from `RENDER_TARGET` to COMMON would name a start state it
+    // is no longer in, which D3D12 treats as a resource-state violation.
+    for (index, attachment) in colors.iter().enumerate() {
+        let from = if color_resolves.get(index).copied().unwrap_or(false) {
+            D3D12_RESOURCE_STATE_RESOLVE_SOURCE
+        } else {
+            D3D12_RESOURCE_STATE_RENDER_TARGET
+        };
+        leaving.push(&attachment.resource, from, attachment.leave_state);
+    }
+    for op in &resolves {
+        // The resolved destination returns to COMMON with the source's leaving
+        // phase, so a later copy/read is legal.
         leaving.push(
-            &attachment.resource,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            attachment.leave_state,
+            &op.dst,
+            D3D12_RESOURCE_STATE_RESOLVE_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
         );
     }
     if let Some(view) = &depth_view {
@@ -704,12 +859,10 @@ fn create_rtv(
 ) -> Result<(ID3D12DescriptorHeap, D3D12_CPU_DESCRIPTOR_HANDLE), Dx12Failure> {
     let texture = dx12_texture(view.texture())?;
     let descriptor = view.descriptor();
-    if view.texture().descriptor().sample_count != 1 {
-        return Err(unsupported(
-            "a multisampled color attachment view",
-            "DX12 multisample RTV lowering is not enabled by this backend",
-        ));
-    }
+    // A multisampled color attachment is a legitimate MSAA render target: the
+    // resource carries `SampleDesc.Count = sample_count`, and an RTV on it is
+    // dimensioned by D3D12 to match. The color RTV form is identical regardless
+    // of sample count; only resolve-aware layout differs, handled in scope end.
     let format = dxgi_format(view.format()).ok_or_else(|| {
         unsupported(
             "a color attachment format without DXGI mapping",
@@ -803,10 +956,13 @@ fn create_dsv(
             descriptor.dimension,
             TextureViewDimension::D2 | TextureViewDimension::D2Array
         )
-        || view.texture().descriptor().sample_count != 1
     {
+        // A multisampled 2D depth attachment is legitimate MSAA; the DSV form is
+        // the same 2D descriptor regardless of sample count (D3D12 reads the
+        // sample count from the resource). Only 2D (and 2D-array) depth is
+        // lowered here.
         return Err(unsupported(
-            "a non-single-sample 2D depth attachment view",
+            "a non-2D depth attachment view",
             "DX12 raster lowering currently implements 2D DSV descriptors",
         ));
     }
@@ -938,6 +1094,9 @@ mod tests {
     fn default_dynamic_state_uses_the_recorded_attachment_extent() {
         let scope = RasterScopeState {
             colors: Vec::new(),
+            null_rtv_heaps: Vec::new(),
+            resolves: Vec::new(),
+            color_resolves: Vec::new(),
             depth_view: None,
             depth_heap: None,
             depth_read_only: false,

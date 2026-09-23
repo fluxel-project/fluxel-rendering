@@ -858,7 +858,11 @@ fn a_present_receipt_reports_the_presentation_it_is_about() {
     let device = device_identity(1);
     let plan = SubmissionPlanId::new(device, 1);
     let present = PresentPlanId::new(plan, 0);
-    let receipt = PresentReceipt::new(PresentReceiptId::new(device, 5), present);
+    let receipt = PresentReceipt::new(
+        PresentReceiptId::new(device, 5),
+        present,
+        std::sync::Arc::new(crate::api::presentation::present::PresentOutcome::new(device)),
+    );
 
     assert_eq!(receipt.plan_id(), present);
     assert_eq!(receipt.id().device_identity(), device);
@@ -919,6 +923,97 @@ fn present_state_refuses_a_foreign_receipt_before_backend_state() {
         RhiErrorKind::WrongDevice,
         "identity is validated before receipt-specific terminal state"
     );
+}
+
+/// The process registry must stay bounded under many present-and-drop cycles.
+///
+/// Section 45's boundedness guarantee: presentation bookkeeping scales with *live*
+/// receipts, not with total presents since device creation. Each cycle registers
+/// an outcome and then drops the only strong reference, leaving a dead Weak
+/// tombstone; the next registration prunes the whole batch back down. A regression
+/// that stored a strong outcome per present would leave all 10 000 behind.
+#[test]
+fn presenting_and_dropping_ten_thousand_receipts_keeps_registry_storage_bounded() {
+    use std::sync::Arc;
+
+    let device = device_identity(9002);
+
+    // 10 000 present/drop cycles: register an outcome, then drop the only strong
+    // reference (no receipt clone is retained), so each entry becomes a tombstone.
+    for serial in 0..10_000u64 {
+        let id = PresentReceiptId::new(device, serial);
+        let outcome = Arc::new(
+            crate::api::presentation::present::PresentOutcome::new(device),
+        );
+        crate::api::presentation::present::register_outcome(id, &outcome);
+    }
+
+    // The tombstones are still present until a pruner runs. The next registration
+    // reaps just before inserting, which is the moment boundedness is observable.
+    let kept_id = PresentReceiptId::new(device, 10_000);
+    let kept = Arc::new(crate::api::presentation::present::PresentOutcome::new(device));
+    crate::api::presentation::present::register_outcome(kept_id, &kept);
+
+    assert!(
+        crate::api::presentation::present::present_registry_entry_count() < 256,
+        "10k presented-and-dropped receipts must not accumulate in the registry"
+    );
+
+    // The dropped receipts no longer answer, and the one kept live still does.
+    for serial in 0..10_000u64 {
+        assert!(
+            crate::api::presentation::present::live_outcome(PresentReceiptId::new(device, serial))
+                .is_none(),
+            "a receipt whose last observation owner dropped must be reclaimable"
+        );
+    }
+    assert!(crate::api::presentation::present::live_outcome(kept_id).is_some());
+}
+
+/// `Failed` and `DeviceLost` are published faithfully and stably: once terminal,
+/// repeated queries return the same terminal value, and a `Pending` outcome is
+/// never reported as terminal. This is the not-misreported half of the receipt
+/// contract (section 45.5) — a caller that polls twice must get the same answer,
+/// and a failure must not turn into an unrelated state.
+#[test]
+fn failed_and_device_lost_are_reported_faithfully_and_consistently() {
+    use std::sync::Arc;
+
+    let identity = device_identity(1);
+    let (device, _native) = paired_device_for_test(identity);
+    let id = PresentReceiptId::new(identity, 7);
+    let outcome = Arc::new(
+        crate::api::presentation::present::PresentOutcome::new(identity),
+    );
+    crate::api::presentation::present::register_outcome(id, &outcome);
+
+    // No terminal state published yet: the receipt is still pending.
+    assert!(matches!(device.present_state(id).unwrap(), PresentState::Pending));
+
+    // Publish a failure; repeated queries report the same failure, not a generic
+    // terminal state that hides the reason.
+    let failure = PresentFailure::new("the present system refused the image");
+    outcome.set(PresentState::Failed(failure));
+    for _ in 0..3 {
+        match device.present_state(id).unwrap() {
+            PresentState::Failed(reported) => {
+                assert_eq!(reported.message(), "the present system refused the image");
+            }
+            other => panic!("a published failure must be reported as Failed, got {other:?}"),
+        }
+    }
+
+    // Publish device loss; repeated queries report the same loss, not a `Failed`.
+    let loss = DeviceLossInfo::new("the device was lost mid-present".into());
+    outcome.set(PresentState::DeviceLost(loss));
+    for _ in 0..3 {
+        match device.present_state(id).unwrap() {
+            PresentState::DeviceLost(reported) => {
+                assert_eq!(reported.message(), "the device was lost mid-present");
+            }
+            other => panic!("a published loss must be reported as DeviceLost, got {other:?}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
