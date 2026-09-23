@@ -55,7 +55,7 @@ fn empty_occlusion_query_fixture_runs_the_portable_case() {
     let point = plan
         .add_batch(raster_copy_lane(&device), vec![common.take_work()])
         .expect("Vulkan lane accepts raster, query, resolve, and readback work");
-    let receipt = block_on(device.submit(plan.build().expect("plan"))).expect("submit");
+    let receipt = device.submit(plan.build().expect("plan")).expect("submit");
     block_on(require_complete(
         &device,
         receipt.completion_for(point).expect("completion"),

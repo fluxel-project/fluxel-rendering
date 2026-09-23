@@ -76,11 +76,11 @@ fn loader_enumeration_request_identity_and_idle() {
         "Vulkan core logical creation",
     )
     .require_pass("Vulkan core logical creation");
-    ready(first.wait_idle()).expect("fresh Vulkan device did not idle");
+    first.wait_idle_blocking().expect("fresh Vulkan device did not idle");
     let second =
         ready(provider.request_device(descriptor)).expect("second Vulkan device request failed");
     assert_ne!(first.identity(), second.identity());
-    ready(second.wait_idle()).expect("second Vulkan device did not idle");
+    second.wait_idle_blocking().expect("second Vulkan device did not idle");
 }
 
 fn copy_lane(device: &crate::api::platform::Device) -> SubmissionLaneId {
@@ -113,7 +113,7 @@ fn an_empty_plan_is_a_completed_noop_without_native_submission() {
     .expect("default Vulkan device request failed");
     let plan =
         crate::backend::conformance::cases::core_device::empty_plan(&device, "Vulkan empty plan");
-    let receipt = ready(device.submit(plan)).expect("an empty Vulkan plan is an accepted no-op");
+    let receipt = device.submit(plan).expect("an empty Vulkan plan is an accepted no-op");
     assert!(matches!(
         device.completion_state(receipt.completion()).unwrap(),
         CompletionState::Complete
@@ -143,7 +143,7 @@ fn upload_copy_and_readback_move_bytes_on_a_real_vulkan_queue() {
     let point = plan
         .add_batch(copy_lane(&device), vec![recording.take_work()])
         .unwrap();
-    let receipt = ready(device.submit(plan.build().unwrap())).unwrap();
+    let receipt = device.submit(plan.build().unwrap()).unwrap();
     let completion = receipt.completion_for(point).unwrap();
 
     block_on(require_complete(
@@ -190,7 +190,7 @@ fn texture_upload_copy_and_readback_move_texels_on_a_real_vulkan_queue() {
     let upload_point = upload_plan
         .add_batch(copy_lane(&device), vec![recording.take_upload_work()])
         .unwrap();
-    let upload_receipt = ready(device.submit(upload_plan.build().unwrap())).unwrap();
+    let upload_receipt = device.submit(upload_plan.build().unwrap()).unwrap();
     let upload_completion = upload_receipt.completion_for(upload_point).unwrap();
     block_on(require_complete(
         &device,
@@ -205,7 +205,7 @@ fn texture_upload_copy_and_readback_move_texels_on_a_real_vulkan_queue() {
     let point = plan
         .add_batch(copy_lane(&device), vec![recording.take_work()])
         .unwrap();
-    let receipt = ready(device.submit(plan.build().unwrap())).unwrap();
+    let receipt = device.submit(plan.build().unwrap()).unwrap();
     let completion = receipt.completion_for(point).unwrap();
     block_on(require_complete(
         &device,

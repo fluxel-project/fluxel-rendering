@@ -393,7 +393,7 @@ fn buffer_compute_dispatch_keeps_dropped_caller_handles_alive_until_readback() {
     let point = plan
         .add_batch(compute_lane(&device), vec![common.take_work()])
         .expect("the graphics queue's compute lane accepts compute plus readback");
-    let receipt = ready(device.submit(plan.build().unwrap()))
+    let receipt = device.submit(plan.build().unwrap())
         .expect("the complete dispatch must lower before native work is accepted");
     let completion = receipt.completion_for(point).unwrap();
     block_on(require_complete(
@@ -486,7 +486,7 @@ fn indirect_compute_dispatch_reads_gpu_arguments_and_publishes_readback() {
     let point = plan
         .add_batch(compute_lane(&device), vec![common.take_work()])
         .unwrap();
-    let receipt = ready(device.submit(plan.build().unwrap())).unwrap();
+    let receipt = device.submit(plan.build().unwrap()).unwrap();
     block_on(require_complete(
         &device,
         receipt.completion_for(point).unwrap(),

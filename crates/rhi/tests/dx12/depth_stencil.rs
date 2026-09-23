@@ -149,7 +149,7 @@ fn vertex_buffer(device: &crate::api::platform::Device) -> Buffer {
         )
         .expect("upload batch");
     let receipt =
-        block_on(device.submit(plan.build().expect("upload plan"))).expect("upload submit");
+        device.submit(plan.build().expect("upload plan")).expect("upload submit");
     assert!(matches!(
         settle(
             device,
@@ -179,7 +179,7 @@ fn depth_stencil_fixture_runs_the_portable_strict_depth_boundary_case() {
     let point = plan
         .add_batch(copy_lane(&device), vec![recording.take_work()])
         .expect("D3D12 direct lane accepts the portable raster/copy workload");
-    let receipt = block_on(device.submit(plan.build().expect("plan"))).expect("submit");
+    let receipt = device.submit(plan.build().expect("plan")).expect("submit");
     assert!(matches!(
         settle(&device, receipt.completion_for(point).expect("completion")),
         CompletionState::Complete

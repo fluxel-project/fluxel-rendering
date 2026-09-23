@@ -299,7 +299,7 @@ pub mod android_vulkan_wsi {
             .map_err(|e| e.to_string())?;
         plan.present_after(frame, point)
             .map_err(|e| e.to_string())?;
-        let receipt = block_on(device.submit(plan.build().map_err(|e| e.to_string())?))
+        let receipt = device.submit(plan.build().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let present =
             block_on(device.wait_present(receipt.presents()[0].id())).map_err(|e| e.to_string())?;

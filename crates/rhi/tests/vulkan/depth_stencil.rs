@@ -64,7 +64,7 @@ fn depth_stencil_fixture_runs_the_portable_clear_store_case() {
     let point = plan
         .add_batch(raster_copy_lane(&device), vec![recording.take_work()])
         .expect("Vulkan raster/copy lane accepts the portable clear-store workload");
-    let receipt = block_on(device.submit(plan.build().expect("plan"))).expect("submit");
+    let receipt = device.submit(plan.build().expect("plan")).expect("submit");
     block_on(require_complete(
         &device,
         receipt.completion_for(point).expect("completion"),

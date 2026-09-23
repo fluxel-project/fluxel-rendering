@@ -236,7 +236,7 @@ fn a_host_window_frame_clears_presents_and_can_be_acquired_again() {
     let mut plan = crate::api::submission::SubmissionPlanBuilder::new(&device);
     let point = plan.add_batch(lane, vec![work]).expect("batch");
     plan.present_after(frame, point).expect("present plan");
-    let receipt = block_on(device.submit(plan.build().expect("plan"))).expect("submit");
+    let receipt = device.submit(plan.build().expect("plan")).expect("submit");
     assert!(matches!(
         block_on(device.wait_present(receipt.presents()[0].id())),
         Ok(crate::api::presentation::PresentState::Accepted)
@@ -313,7 +313,7 @@ fn a_host_window_frame_clears_presents_and_can_be_acquired_again() {
         .expect("batch after resize");
     plan.present_after(frame, point)
         .expect("present plan after resize");
-    let receipt = block_on(device.submit(plan.build().expect("plan after resize")))
+    let receipt = device.submit(plan.build().expect("plan after resize"))
         .expect("submit after resize");
     assert!(matches!(
         block_on(device.wait_present(receipt.presents()[0].id())),
@@ -467,7 +467,7 @@ fn the_portable_path_produces_a_real_device() {
     )
     .require_pass("DX12 core logical creation");
     assert!(device.poll().is_ok());
-    assert!(block_on(device.wait_idle()).is_ok());
+    assert!(device.wait_idle_blocking().is_ok());
 }
 
 /// The checked-in DXIL blob, summarised rather than only embedded.
@@ -614,7 +614,7 @@ fn a_real_compute_dispatch_writes_a_storage_buffer() {
     let point = builder
         .add_batch(copy_lane(&device), vec![common.take_work()])
         .expect("the direct lane accepts compute and copy work");
-    let receipt = block_on(device.submit(builder.build().expect("one batch is acyclic")))
+    let receipt = device.submit(builder.build().expect("one batch is acyclic"))
         .expect("the dispatch and readback lower before commit");
     let completion = receipt
         .completion_for(point)
@@ -707,7 +707,7 @@ fn a_real_indirect_compute_dispatch_reads_gpu_arguments() {
     let point = plan
         .add_batch(copy_lane(&device), vec![common.take_work()])
         .unwrap();
-    let receipt = block_on(device.submit(plan.build().unwrap())).unwrap();
+    let receipt = device.submit(plan.build().unwrap()).unwrap();
     assert!(matches!(
         settle(&device, receipt.completion_for(point).unwrap()),
         CompletionState::Complete
@@ -2416,7 +2416,7 @@ fn a_real_device_moves_bytes_from_the_cpu_to_a_buffer_and_back_to_the_cpu() {
         .build()
         .expect("a single batch has no edge that could be cyclic");
 
-    let receipt = block_on(device.submit(plan))
+    let receipt = device.submit(plan)
         .expect("acceptance does not await completion, and section 41.7 forbids it doing so");
     let token = receipt
         .completion_for(point)
@@ -2463,7 +2463,7 @@ fn a_real_device_round_trips_texels_through_every_dx12_copy_path() {
     let point = builder
         .add_batch(copy_lane(&device), vec![recording.take_work()])
         .unwrap();
-    let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
+    let receipt = device.submit(builder.build().unwrap()).unwrap();
     let completion = receipt.completion_for(point).unwrap();
     block_on(crate::backend::test_harness::require_complete(
         &device,
@@ -2567,7 +2567,7 @@ fn one_upload_job_encodes_repeatedly_and_each_encoding_writes_its_own_bytes() {
         // because the spine allocates staging per batch: a second plan submitted
         // while the first is still in flight is the case where a spine that
         // reused one staging allocation would corrupt the first copy.
-        let receipt = block_on(device.submit(plan))
+        let receipt = device.submit(plan)
             .expect("a second submission is accepted while the first may still be running");
         tokens.push(
             receipt

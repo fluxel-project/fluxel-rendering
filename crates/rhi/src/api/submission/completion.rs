@@ -319,7 +319,13 @@ impl Device {
     /// terminal path — the frame's own `Drop` performs the no-throw abandonment
     /// bookkeeping, so a caller that ignores the error still does not leak a
     /// drawable. No submission happens on that path, by construction.
-    pub async fn submit(&self, mut plan: SubmissionPlan) -> RhiResult<SubmissionReceipt> {
+    ///
+    /// _Acceptance is not completion._ This call never waits for the GPU: it
+    /// preflights, accepts, and returns the receipt, and the caller then polls or
+    /// awaits completion through [`Self::wait_completion`] (or the present outcome
+    /// through `wait_present`). A caller that only called `submit` has observed
+    /// acceptance, not that any work ran.
+    pub fn submit(&self, mut plan: SubmissionPlan) -> RhiResult<SubmissionReceipt> {
         if let DeviceStatus::Lost = self.status() {
             return Err(RhiError::new(
                 RhiErrorKind::DeviceLost,

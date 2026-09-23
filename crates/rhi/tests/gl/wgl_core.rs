@@ -100,7 +100,7 @@ fn wgl_fixture_runs_public_core_creation_and_empty_submission_cases() {
     let plan = SubmissionPlanBuilder::new(&device)
         .build()
         .unwrap_or_else(|error| panic!("WGL public empty-plan construction failed: {error}"));
-    let receipt = block_on(device.submit(plan))
+    let receipt = device.submit(plan)
         .unwrap_or_else(|error| panic!("WGL public empty-plan submission failed: {error}"));
     assert!(matches!(
         device.completion_state(receipt.completion()).unwrap(),

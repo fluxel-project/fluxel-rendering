@@ -661,9 +661,17 @@ impl Device {
     /// retirement. On a restricted host or backend this returns
     /// [`crate::api::error::RhiErrorKind::Unsupported`] rather than pretending to
     /// have waited.
-    pub async fn wait_idle(&self) -> RhiResult<()> {
+    ///
+    /// This is explicitly *blocking*, and it is deliberately not spelled async:
+    /// an `async fn { native.wait_idle() }` would promise suspension the call
+    /// cannot give — the native primitive synchronously blocks the calling thread
+    /// until the driver reports idle. The name carries that, so a caller that
+    /// needs a non-blocking wait uses [`Self::wait_completion`] on the receipt
+    /// instead. WebGPU has no host-blocking queue-completion primitive and
+    /// answers `Unsupported` here.
+    pub fn wait_idle_blocking(&self) -> RhiResult<()> {
         self.require_active()
-            .map_err(|error| error.at("Device::wait_idle"))?;
+            .map_err(|error| error.at("Device::wait_idle_blocking"))?;
         self.inner.native.wait_idle()
     }
 

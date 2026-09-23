@@ -409,7 +409,7 @@ fn a_device_reports_backend_facts() {
     assert_eq!(device.status(), DeviceStatus::Active);
     assert!(device.loss_info().is_none());
     assert!(device.poll().is_ok());
-    assert!(block_on(device.wait_idle()).is_ok());
+    assert!(device.wait_idle_blocking().is_ok());
 
     // Section 7.1 asks tooling to describe what it observes by a process-local
     // object ID, and this is where a device says what its own is.
@@ -625,7 +625,7 @@ fn a_lost_device_refuses_creation_and_says_why() {
     );
     assert_eq!(device.poll().unwrap_err().kind(), RhiErrorKind::DeviceLost);
     assert_eq!(
-        block_on(device.wait_idle()).unwrap_err().kind(),
+        device.wait_idle_blocking().unwrap_err().kind(),
         RhiErrorKind::DeviceLost
     );
 

@@ -118,7 +118,6 @@ pub(crate) async fn clear_present_reconfigure(fixture: PresentationFixture<'_>, 
         .submit(plan.build().unwrap_or_else(|error| {
             panic!("{label}: presentation plan validation failed: {error}")
         }))
-        .await
         .unwrap_or_else(|error| panic!("{label}: presentation submission failed: {error}"));
     require_complete(device, receipt.completion(), label).await;
     assert_eq!(

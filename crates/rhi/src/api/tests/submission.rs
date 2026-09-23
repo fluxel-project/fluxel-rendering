@@ -1336,7 +1336,7 @@ fn a_device_backed_transient_is_materialized_before_submission() {
     builder
         .set_batch(release, vec![raster_work(identity, Vec::new())])
         .unwrap();
-    block_on(device.submit(builder.build().unwrap())).unwrap();
+    device.submit(builder.build().unwrap()).unwrap();
 }
 
 /// A fact-only builder deliberately has no native allocation factory. Its
@@ -1379,7 +1379,7 @@ fn submit_refuses_a_deferred_transient_fixture_before_backend_lowering() {
         .unwrap();
 
     assert_eq!(
-        block_on(device.submit(builder.build().unwrap()))
+        device.submit(builder.build().unwrap())
             .unwrap_err()
             .kind(),
         RhiErrorKind::InvalidUsage
@@ -1438,7 +1438,7 @@ fn submit_refuses_a_foreign_plan_and_a_lost_device() {
     // The device is checked after its own liveness, so a lost device answers
     // `DeviceLost` for any plan, foreign or not.
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
-    let error = block_on(device.submit(plan)).unwrap_err();
+    let error = device.submit(plan).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
     assert_eq!(error.operation(), Some("Device::submit"));
 }
@@ -1468,7 +1468,7 @@ fn submit_refuses_a_mapped_buffer_without_persistent_mapping() {
         .add_batch(device_lane(&device, 0), vec![raster_work(identity, vec![use_])])
         .unwrap();
 
-    let error = block_on(device.submit(builder.build().unwrap())).unwrap_err();
+    let error = device.submit(builder.build().unwrap()).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::InvalidUsage);
     assert_eq!(error.object(), Some(buffer.id()));
     buffer.end_map();
@@ -1497,7 +1497,7 @@ fn submit_accepts_a_mapped_buffer_when_persistent_mapping_is_enabled() {
         .add_batch(device_lane(&device, 0), vec![raster_work(identity, vec![use_])])
         .unwrap();
 
-    block_on(device.submit(builder.build().unwrap())).unwrap();
+    device.submit(builder.build().unwrap()).unwrap();
     buffer.end_map();
 }
 
@@ -1526,7 +1526,7 @@ fn completion_state_refuses_a_foreign_point_and_reports_a_lost_device() {
             vec![raster_work(device_identity_value, Vec::new())],
         )
         .unwrap();
-    let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
+    let receipt = device.submit(builder.build().unwrap()).unwrap();
     let point = receipt.completion_for(batch).unwrap();
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
     assert!(matches!(
@@ -1561,7 +1561,7 @@ async fn shape_frame_loop_through_submission(
     let present = builder.present_after(frame, drawing)?;
     let plan = builder.build()?;
 
-    let receipt = device.submit(plan).await?;
+    let receipt = device.submit(plan)?;
     let completion = receipt.completion_for(drawing)?;
     let _ = receipt.completion();
     for presented in receipt.presents() {
@@ -1601,7 +1601,7 @@ async fn shape_two_presents_in_one_plan(
 
     // A caller reading the two outcomes after a submit must go through the
     // receipt's present list, because `present_after` consumed the frame tokens.
-    let receipt = device.submit(plan).await?;
+    let receipt = device.submit(plan)?;
     for present in receipt.presents() {
         let _ = present.plan_id();
     }
@@ -1638,7 +1638,7 @@ fn a_validated_plan_is_accepted_and_its_receipt_reports_every_batch() {
         .expect("the mock's lane 0 accepts raster work");
     let plan = builder.build().expect("a batch with no edge is acyclic");
 
-    let receipt = block_on(device.submit(plan))
+    let receipt = device.submit(plan)
         .expect("the mock backend accepts a plan the portable layer validated");
 
     assert_eq!(native.submissions(), 1);
@@ -1696,7 +1696,7 @@ fn completion_is_pending_until_the_device_reports_it() {
     // Section 41.7: acceptance happens *while* the work is unfinished. A submit
     // that waited for completion here would be the blocking frame-loop call
     // section 41.10 forbids.
-    let receipt = block_on(device.submit(plan)).expect("acceptance does not await completion");
+    let receipt = device.submit(plan).expect("acceptance does not await completion");
     let token = receipt.completion_for(point).unwrap();
     assert!(
         matches!(
@@ -1751,7 +1751,7 @@ fn device_loss_reaches_every_reported_serial() {
         .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
-    let receipt = block_on(device.submit(plan)).unwrap();
+    let receipt = device.submit(plan).unwrap();
     let token = receipt.completion_for(point).unwrap();
 
     assert!(matches!(
@@ -1799,7 +1799,7 @@ fn device_loss_preserves_an_already_complete_point() {
     let point = builder
         .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
-    let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
+    let receipt = device.submit(builder.build().unwrap()).unwrap();
     let token = receipt.completion_for(point).unwrap();
 
     assert!(matches!(
@@ -1826,7 +1826,7 @@ fn wait_completion_resolves_after_a_pending_mock_is_released() {
     let point = builder
         .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
-    let receipt = block_on(device.submit(builder.build().unwrap())).unwrap();
+    let receipt = device.submit(builder.build().unwrap()).unwrap();
     let token = receipt.completion_for(point).unwrap();
 
     let waker = Waker::noop();
@@ -1857,7 +1857,7 @@ fn a_serial_the_device_never_reported_is_terminal() {
         .add_batch(device_lane(&device, 0), vec![raster_work(identity, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
-    let receipt = block_on(device.submit(plan)).unwrap();
+    let receipt = device.submit(plan).unwrap();
 
     // A serial above anything this device minted. Constructed through the same
     // crate-private constructor the portable layer uses, because that is the only
@@ -1895,7 +1895,7 @@ fn a_refused_plan_never_reaches_the_backend() {
         .add_batch(lane_id(0), vec![raster_work(other, Vec::new())])
         .unwrap();
     let plan = builder.build().unwrap();
-    let error = block_on(device.submit(plan)).unwrap_err();
+    let error = device.submit(plan).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::WrongDevice);
     assert_eq!(
         native.submissions(),
@@ -1912,7 +1912,7 @@ fn a_refused_plan_never_reaches_the_backend() {
         .present_after(acquired_frame(1, identity), point)
         .expect("the frame is this device's");
     let plan = builder.build().unwrap();
-    let error = block_on(device.submit(plan)).unwrap_err();
+    let error = device.submit(plan).unwrap_err();
     assert_eq!(
         error.kind(),
         RhiErrorKind::Unsupported,
@@ -1938,7 +1938,7 @@ fn a_refused_plan_never_reaches_the_backend() {
         .unwrap();
     let plan = builder.build().unwrap();
     native.mark_lost(DeviceLossInfo::new("simulated loss".into()));
-    let error = block_on(device.submit(plan)).unwrap_err();
+    let error = device.submit(plan).unwrap_err();
     assert_eq!(error.kind(), RhiErrorKind::DeviceLost);
     assert_eq!(native.submissions(), 0);
 }
@@ -1983,7 +1983,7 @@ fn two_plans_on_one_device_are_distinguishable() {
     // than the receipt's, and section 41.9 makes dropping an unsubmitted plan
     // legal — it submits nothing and abandons only what it consumed.
     drop(third);
-    let receipt = block_on(device.submit(first)).unwrap();
+    let receipt = device.submit(first).unwrap();
     assert_eq!(
         receipt.completion_for(foreign).unwrap_err().kind(),
         RhiErrorKind::InvalidUsage

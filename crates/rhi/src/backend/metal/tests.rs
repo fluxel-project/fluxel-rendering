@@ -212,7 +212,7 @@ fn compute_binding_dispatch_completion_and_readback_close_end_to_end() {
     let point = plan
         .add_batch(lane(&device, LaneWorkDomains::COMPUTE), vec![work])
         .unwrap();
-    let receipt = ready(device.submit(plan.build().unwrap())).expect("Metal submit failed");
+    let receipt = device.submit(plan.build().unwrap()).expect("Metal submit failed");
     let completion = receipt.completion_for(point).unwrap();
     block_on(require_complete(
         &device,
@@ -333,7 +333,7 @@ fn rgba8_texture_upload_copy_and_readback_close_end_to_end() {
     let point = plan
         .add_batch(lane(&device, LaneWorkDomains::COPY), vec![work])
         .expect("Metal copy batch construction failed");
-    let receipt = ready(device.submit(plan.build().unwrap())).expect("Metal texture submit failed");
+    let receipt = device.submit(plan.build().unwrap()).expect("Metal texture submit failed");
     let completion = receipt.completion_for(point).unwrap();
     block_on(require_complete(
         &device,

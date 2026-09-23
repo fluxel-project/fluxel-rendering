@@ -58,7 +58,7 @@ pub async fn run(
     let mut plan = SubmissionPlanBuilder::new(&device);
     let point = plan.add_batch(lane, vec![work])?;
     plan.present_after(frame, point)?;
-    let receipt = device.submit(plan.build()?).await?;
+    let receipt = device.submit(plan.build()?)?;
     let present = receipt
         .presents()
         .first()

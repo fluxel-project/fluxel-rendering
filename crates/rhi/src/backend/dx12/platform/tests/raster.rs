@@ -202,7 +202,7 @@ fn vertex_buffer(device: &crate::api::platform::Device) -> crate::api::resource:
     let work = recorder.finish().unwrap();
     let mut plan = SubmissionPlanBuilder::new(device);
     let point = plan.add_batch(copy_lane(device), vec![work]).unwrap();
-    let receipt = block_on(device.submit(plan.build().unwrap())).unwrap();
+    let receipt = device.submit(plan.build().unwrap()).unwrap();
     assert!(matches!(
         settle(device, receipt.completion_for(point).unwrap()),
         CompletionState::Complete
@@ -248,7 +248,7 @@ fn raster_readback(
     let work = recorder.finish().unwrap();
     let mut plan = SubmissionPlanBuilder::new(device);
     let point = plan.add_batch(copy_lane(device), vec![work]).unwrap();
-    let receipt = block_on(device.submit(plan.build().unwrap())).unwrap();
+    let receipt = device.submit(plan.build().unwrap()).unwrap();
     assert!(matches!(
         settle(device, receipt.completion_for(point).unwrap()),
         CompletionState::Complete
@@ -350,7 +350,7 @@ fn a_fragment_sampled_texture_and_sampler_reach_the_raster_output() {
     let point = upload_plan
         .add_batch(copy_lane(&device), vec![upload_recorder.finish().unwrap()])
         .unwrap();
-    let receipt = block_on(device.submit(upload_plan.build().unwrap())).unwrap();
+    let receipt = device.submit(upload_plan.build().unwrap()).unwrap();
     assert!(matches!(
         settle(&device, receipt.completion_for(point).unwrap()),
         CompletionState::Complete
@@ -539,7 +539,7 @@ fn sparse_raster_readback(
     let work = recorder.finish().unwrap();
     let mut plan = SubmissionPlanBuilder::new(device);
     let point = plan.add_batch(copy_lane(device), vec![work]).unwrap();
-    let receipt = block_on(device.submit(plan.build().unwrap())).unwrap();
+    let receipt = device.submit(plan.build().unwrap()).unwrap();
     assert!(matches!(
         settle(device, receipt.completion_for(point).unwrap()),
         CompletionState::Complete

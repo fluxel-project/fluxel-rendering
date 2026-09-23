@@ -90,7 +90,7 @@ pub async fn run(fixture: &impl HeadlessComputeFixture) -> RhiResult<()> {
 
     let mut plan = SubmissionPlanBuilder::new(&device);
     plan.add_batch(lane, vec![work])?;
-    let receipt = device.submit(plan.build()?).await?;
+    let receipt = device.submit(plan.build()?)?;
     // Submission acceptance and terminal GPU completion are distinct facts.
     let _completion = device.wait_completion(receipt.completion()).await?;
 

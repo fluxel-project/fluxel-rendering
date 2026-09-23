@@ -102,7 +102,7 @@ pub async fn run(fixture: &impl OffscreenTriangleFixture) -> RhiResult<()> {
     let work = recorder.finish()?;
     let mut plan = SubmissionPlanBuilder::new(&device);
     plan.add_batch(lane, vec![work])?;
-    let receipt = device.submit(plan.build()?).await?;
+    let receipt = device.submit(plan.build()?)?;
     let _completion = device.wait_completion(receipt.completion()).await?;
     let mapped = ticket.read().await?;
     let ReadbackViewData::Texture { bytes, layout, .. } = mapped.data() else {

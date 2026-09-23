@@ -182,7 +182,7 @@ fn host_win32_surface_acquires_clears_presents_reconfigures_and_abandons() {
         .expect("presentation raster batch");
     plan.present_after(frame, point)
         .expect("presentation is ordered after its raster use");
-    let receipt = block_on(device.submit(plan.build().expect("presentation plan")))
+    let receipt = device.submit(plan.build().expect("presentation plan"))
         .expect("Vulkan clear and present submit");
     assert_eq!(receipt.presents().len(), 1);
     assert!(matches!(

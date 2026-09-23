@@ -545,7 +545,7 @@ fn compute_sampled_filtering_and_storage_images_round_trip_through_vulkan() {
 
     let mut plan = SubmissionPlanBuilder::new(&device);
     let point = plan.add_batch(compute_lane(&device), vec![work]).unwrap();
-    let receipt = ready(device.submit(plan.build().unwrap()))
+    let receipt = device.submit(plan.build().unwrap())
         .expect("the complete image workload must lower before native work is accepted");
     let completion = receipt.completion_for(point).unwrap();
     block_on(require_complete(

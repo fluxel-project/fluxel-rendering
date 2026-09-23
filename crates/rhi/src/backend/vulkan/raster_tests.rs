@@ -213,7 +213,7 @@ fn offscreen_raster_draw_transitions_to_readback_and_retains_native_objects() {
     let point = plan
         .add_batch(raster_lane(&device), vec![recording.take_work()])
         .unwrap();
-    let receipt = ready(device.submit(plan.build().unwrap()))
+    let receipt = device.submit(plan.build().unwrap())
         .expect("the complete raster/readback batch must lower before native acceptance");
     let completion = receipt.completion_for(point).unwrap();
     block_on(require_complete(
