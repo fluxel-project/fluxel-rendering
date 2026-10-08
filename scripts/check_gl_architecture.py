@@ -6,7 +6,7 @@ and ``extern crate`` declarations after removing Rust comments and literals, so
 architecture names mentioned in documentation, comments, and test strings do
 not become false violations.  It additionally confines the Layer 1-private
 scratch binding targets to provider execution bodies.  A missing
-``crates/rhi/src/webgl2`` tree is a successful no-op: the check is intended to
+``../fluxel-rhi/src/webgl2`` tree is a successful no-op: the check is intended to
 land before every planned layer.
 """
 
@@ -19,7 +19,8 @@ import re
 import sys
 
 
-WEBGL_RELATIVE_ROOT = Path("crates/rhi/src/webgl2")
+RHI_RELATIVE_ROOT = Path("../fluxel-rhi")
+WEBGL_RELATIVE_ROOT = RHI_RELATIVE_ROOT / "src/webgl2"
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 USE_DECLARATION = re.compile(
     r"\b(?:pub(?:\s*\([^)]*\))?\s+)?use\s+([^;]+);", re.MULTILINE
@@ -228,8 +229,9 @@ def scratch_binding_allowed(relative: Path) -> bool:
     return len(parts) >= 2 and parts[0] == "api" and parts[1] in ("native", "browser")
 
 
-def check(root: Path) -> list[Violation]:
-    webgl_root = root / WEBGL_RELATIVE_ROOT
+def check(root: Path, rhi_root: Path | None = None) -> list[Violation]:
+    rhi_root = rhi_root or root / RHI_RELATIVE_ROOT
+    webgl_root = rhi_root / "src/webgl2"
     violations: list[Violation] = []
     observed: set[tuple[Path, int, str, str]] = set()
 
@@ -239,7 +241,7 @@ def check(root: Path) -> list[Violation]:
             observed.add(key)
             violations.append(Violation(path, line, layer, dependency))
 
-    manifest = root / "crates/rhi/Cargo.toml"
+    manifest = rhi_root / "Cargo.toml"
     if manifest.is_file():
         source = manifest.read_text(encoding="utf-8", errors="replace")
         for match in FORBIDDEN_PROVIDER_DEPENDENCY.finditer(source):
@@ -310,7 +312,7 @@ def main() -> int:
     violations = check(root)
     if violations:
         for violation in violations:
-            relative = violation.path.relative_to(root).as_posix()
+            relative = violation.path.relative_to(root.parent).as_posix()
             print(f"{relative}:{violation.line}: {violation.layer} must not reference {violation.dependency}")
         return 1
     if not args.quiet:

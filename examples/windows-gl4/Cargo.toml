@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 # Default features off: this fixture is a GL-family build, and the DX12/Vulkan
 # HAL path is neither reachable from it nor built for it.
-fluxel-rhi = { path = "../../crates/rhi", default-features = false, features = [
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "97a003fb11e30bd97ec62efe82e031f7bcf26ab5", default-features = false, features = [
     "native-gl-wgl",
     "test-support",
 ] }

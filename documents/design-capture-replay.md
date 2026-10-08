@@ -2,7 +2,7 @@
 
 This document explains the planned portable capture/replay architecture. RHI
 tooling, object, command, submission, and presentation semantics are defined by
-[RHI API architecture](../crates/rhi/documents/design-rhi.md). Capture
+[RHI API architecture](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md). Capture
 artifact/runtime interfaces are owned by this document and the
 [implementation plan](version-plan.md).
 

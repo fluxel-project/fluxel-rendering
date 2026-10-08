@@ -52,10 +52,10 @@ manager, render graph, or native GPU object into `api`.
 
 ## Consequences
 
-- `crates/rhi/tests/common` contains one portable workload per contract and
-  `crates/rhi/tests/harness` owns async terminal/outcome policy. Native host
+- the sibling `fluxel-rhi/tests/common` contains one portable workload per contract and
+  `fluxel-rhi/tests/harness` owns async terminal/outcome policy. Native host
   setup belongs to adapter fixtures, not to backend-local test bodies.
-- `crates/rhi/examples` may use the adapter so examples do not name
+- `fluxel-rhi/examples` may use the adapter so examples do not name
   HWND, `ANativeWindow`, UIKit, DOM canvas, Vulkan surfaces, or DXGI objects.
 - Windows, Android, iOS, and browser adapters can mature independently; a
   platform without a host adapter is `Skipped`, not a reason to weaken an RHI

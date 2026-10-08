@@ -25,7 +25,7 @@ fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", re
 # would keep `cargo check --workspace` red on Windows for the entire rewrite.
 # fluxel-renderer = { path = "../renderer", features = ["gpu-upload", "gpu-residency", "webgl2-residency"] }
 fluxel-renderer = { path = "../renderer" }
-# fluxel-rhi = { path = "../rhi", default-features = false, features = ["webgl2", "webgpu"] }
+# fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "97a003fb11e30bd97ec62efe82e031f7bcf26ab5", default-features = false, features = ["webgl2", "webgpu"] }
 js-sys = "0.3.77"
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"

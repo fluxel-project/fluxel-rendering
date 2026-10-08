@@ -1,7 +1,7 @@
 # ADR-0009: Keep the resource floor closed and reuse stateful
 
 **Status:** Historical (0.12–0.15). Superseded for all RHI semantics by
-[Fluxel RHI architecture](../../crates/rhi/documents/design-rhi.md).
+[Fluxel RHI architecture](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md).
 
 ## Context
 
@@ -47,7 +47,7 @@ safe retirement.
 
 This ADR no longer defines a resource floor, acceptance state, completion, or
 loss protocol. Those are defined by the public RHI API and its
-[architecture guide](../../crates/rhi/documents/design-rhi.md).
+[architecture guide](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md).
 The old fixed floor and accepted-unknown quarantine are historical evidence,
 not APIs that implementations may continue to expose.
 

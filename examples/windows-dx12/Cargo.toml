@@ -12,5 +12,5 @@ publish = false
 
 [dependencies]
 fluxel-renderer = { path = "../../crates/renderer", features = ["gpu-upload"] }
-fluxel-rhi = { path = "../../crates/rhi", features = ["dx12", "vulkan", "test-support"] }
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "97a003fb11e30bd97ec62efe82e031f7bcf26ab5", features = ["dx12", "vulkan", "test-support"] }
 fluxel-host = { path = "../../../fluxel-host" }

@@ -25,7 +25,7 @@ textures, and renderer path. Fluxel does not aim to reproduce EEVEE or Cycles.
 Architecture and ownership are specified by the
 [workspace architecture](design-overview.md), [renderer](design-renderer.md),
 [RenderGraph](design-rendergraph.md), [material](design-material.md), and
-[RHI](../crates/rhi/documents/design-rhi.md) designs. This product plan only
+[RHI](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md) designs. This product plan only
 orders the outcomes that exercise those contracts.
 
 ## Delivery order

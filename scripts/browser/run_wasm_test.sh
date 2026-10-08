@@ -10,7 +10,7 @@
 # to hang.  `wasm_test_headed.py` is that path -- it starts this same cargo line
 # with NO_HEADLESS set and drives cdp_shot.py against the harness (EXP-031).
 set -u
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../../../fluxel-rhi"
 
 # A download rather than source, so it stays under the regenerable tree; point
 # elsewhere with FLUXEL_CHROMEDRIVER_DIR.

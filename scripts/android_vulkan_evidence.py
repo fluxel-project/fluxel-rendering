@@ -186,7 +186,10 @@ def build_test_binary(root: Path, ndk: Path, target: str, api: int, online: bool
     ]
     if not online:
         command.append("--offline")
-    completed = run(command, cwd=root, env=environment)
+    rhi_root = root.parent / "fluxel-rhi"
+    if not (rhi_root / "Cargo.toml").is_file():
+        raise Failure(f"RHI repository is missing next to rendering repository: {rhi_root}")
+    completed = run(command, cwd=rhi_root, env=environment)
     if completed.returncode != 0:
         raise Failure(
             "the Android Vulkan test executable did not build:\n"

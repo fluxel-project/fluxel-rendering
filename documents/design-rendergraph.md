@@ -8,7 +8,7 @@ is not a backend abstraction.
 The current implementation order is in [the implementation plan](version-plan.md).
 The portable GPU contract—devices, descriptors, resource uses, command
 recording, submission, completion, presentation, and capabilities—is defined
-only by [the RHI design](../crates/rhi/documents/design-rhi.md).
+only by [the RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md).
 
 ## Position in the frame path
 

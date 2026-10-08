@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/rendergraph", "crates/renderer", "crates/rhi", "crates/rendering-wasm"]
+members = [
+    "crates/rendergraph",
+    "crates/renderer",
+    "crates/rendering-wasm",
+]
 
 [workspace.package]
 version = "0.16.0"

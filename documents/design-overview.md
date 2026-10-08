@@ -1,7 +1,7 @@
 # Fluxel Rendering workspace architecture
 
 > Architecture status: post-foundation target. The active work order is [the
-> implementation plan](version-plan.md). [RHI design](../crates/rhi/documents/design-rhi.md)
+> implementation plan](version-plan.md). [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md)
 > is the authoritative portable GPU contract; crate rustdoc and contract tests
 > define descriptor-level behavior.
 
@@ -135,4 +135,4 @@ and conformance evidence before publication.
 See [renderer design](design-renderer.md),
 [RenderGraph design](design-rendergraph.md),
 [material design](design-material.md), and
-[RHI design](../crates/rhi/documents/design-rhi.md) for layer-specific detail.
+[RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md) for layer-specific detail.

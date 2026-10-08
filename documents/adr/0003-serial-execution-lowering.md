@@ -33,4 +33,4 @@ queue lock; 0.1.4 proved Raster→Compute→Copy in one submission. No release h
 claimed multi-queue or parallel-recording support.
 
 See [RenderGraph architecture](../design-rendergraph.md) and
-[RHI design](../../crates/rhi/documents/design-rhi.md) for the current execution contract.
+[RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md) for the current execution contract.

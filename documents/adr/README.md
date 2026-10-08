@@ -4,7 +4,7 @@ This directory preserves the small set of decisions that constrain future
 work. Plans and reviews record a release's investigation and evidence; an ADR
 records only a decision that remains relevant after that release.
 
-The compact [RHI architecture guide](../../crates/rhi/documents/design-rhi.md)
+The compact [RHI architecture guide](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md)
 describes the current model and points to code. Each ADR records one durable
 boundary, why it was chosen, and its cost; it does not duplicate descriptor
 fields or backend implementation detail. An ADR may later be marked

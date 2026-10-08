@@ -5,7 +5,7 @@ declares passes, logical resources, versions, and accesses; the graph derives
 dependencies, validates definedness, culls dead work, analyzes lifetimes, and
 produces a deterministic plan.
 
-It directly depends on [`fluxel-rhi`](../rhi/README.md) for portable GPU
+It directly depends on [`fluxel-rhi`](https://github.com/fluxel-project/fluxel-rhi) for portable GPU
 vocabulary. RHI supplies descriptors, formats, usage flags, resource uses,
 capability facts, recording scopes, resources, pipelines, bindings,
 submission, and presentation. RenderGraph adds only graph-specific meaning; it

@@ -23,7 +23,8 @@ dependencies = [
 
 [[package]]
 name = "fluxel-rhi"
-version = "0.15.0"
+version = "0.16.0"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=97a003fb11e30bd97ec62efe82e031f7bcf26ab5#97a003fb11e30bd97ec62efe82e031f7bcf26ab5"
 dependencies = [
  "glow",
  "khronos-egl",

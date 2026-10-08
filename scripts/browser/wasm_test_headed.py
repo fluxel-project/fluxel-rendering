@@ -46,8 +46,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-CAPTURE = Path(__file__).resolve().parent / "cdp_shot.py"
+REPO = Path(__file__).resolve().parents[3] / "fluxel-rhi"
+CAPTURE = REPO / "scripts" / "browser" / "cdp_shot.py"
 READY = re.compile(r"available at (http://\S+)")
 
 # The driver binary is a download, so it is not versioned; the environment

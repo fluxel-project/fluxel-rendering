@@ -27,9 +27,11 @@ dependencies = [
 
 [[package]]
 name = "fluxel-rhi"
-version = "0.15.0"
+version = "0.16.0"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=97a003fb11e30bd97ec62efe82e031f7bcf26ab5#97a003fb11e30bd97ec62efe82e031f7bcf26ab5"
 dependencies = [
  "ash",
+ "raw-window-handle",
 ]
 
 [[package]]
@@ -47,6 +49,12 @@ dependencies = [
  "cfg-if",
  "windows-link",
 ]
+
+[[package]]
+name = "raw-window-handle"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "windows-link"

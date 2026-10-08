@@ -15,7 +15,7 @@ publish = false
 # paths are neither reachable from it nor built for it.  There is deliberately no
 # `fluxel-host` edge: this surface has no window to own, and a dependency on the
 # native host would say otherwise.
-fluxel-rhi = { path = "../../crates/rhi", default-features = false, features = [
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "97a003fb11e30bd97ec62efe82e031f7bcf26ab5", default-features = false, features = [
     "native-gles-egl",
     "test-support",
 ] }

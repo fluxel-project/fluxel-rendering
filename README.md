@@ -1,7 +1,7 @@
 # Fluxel Rendering
 
 `fluxel-rendering` is Fluxel's host-agnostic Rust rendering kernel. Its typed
-render graph, native RHI boundary, and renderer layer provide portable drawing
+render graph and renderer layer provide portable drawing
 semantics and GPU execution without owning an application host. Cross-frame
 logical asset identity, platform services, runtime packaging, and language SDKs belong
 to adjacent Fluxel repositories described in the
@@ -15,17 +15,19 @@ mini-game adapters drive its WASM form; native hosts drive its library form.
 
 ## Workspace
 
-The table below describes the retained historical workspace and the completed
-RHI baseline. The next implementation plan starts the shader assembly and
+The table below describes the rendering workspace and its dependency on the
+separate RHI repository. The next implementation plan starts the shader assembly and
 material-system route; older higher-level interfaces are not the replacement
 contract.
 
-The workspace is organised around four crates:
+The workspace is organised around three crates:
+
+The renderer and hardware examples pin one RHI Git revision. RHI-specific
+diagnostic scripts use a sibling `fluxel-rhi` checkout when run locally.
 
 | Crate | Responsibility |
 | --- | --- |
 | `fluxel-rendergraph` | GPU-work planning: typed declarations, versions, validation, dependencies, culling, lifetimes, and immutable graph plans. It directly uses RHI portable contracts. |
-| `fluxel-rhi` | Portable GPU execution: device-affine resources, capabilities, recording, submission, completion, and presentation; native backends remain private. |
 | `fluxel-renderer` | RenderScene and FramePipeline policy: scene preparation, material/shader resolution, culling, sorting, and graph construction. |
 | `fluxel-rendering-wasm` | Non-published wasm-bindgen capsule for the named WebGL2 and WebGPU browser proofs; JavaScript remains the RAF and DOM lifecycle owner. |
 
@@ -40,7 +42,7 @@ placement; the renderer lowers it into the existing camera/material uniform
 contract without exposing a general scene or pipeline API.
 The default build remains the portable headless domain model.
 
-The fixed renderer and RHI slices are split into single-responsibility modules.
+The fixed renderer and RHI slices are split across their dedicated repositories.
 Seven proven raster paths share one private, closed recipe mapping.
 
 Package READMEs are the detailed user documentation published with each crate;
@@ -56,30 +58,30 @@ continues to preserve RenderGraph pass-local resource authority.
 
 ## Released source dependency
 
-The workspace releases its three publishable crates together. Git consumers must pin the
-release tag rather than follow `main`:
+Git consumers must pin a tag or revision rather than follow `main`.
+`fluxel-rhi` has its own repository; this workspace uses the migration revision
+until the first independent RHI release tag exists:
 
 ```toml
 fluxel-rendergraph = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0" }
-fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0" }
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "97a003fb11e30bd97ec62efe82e031f7bcf26ab5" }
 fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0" }
 ```
 
-`v0.16.0` and each publishable package's `0.16.0` version identify the same workspace
-release. See [RELEASING.md](RELEASING.md) for the release gate.
+See [RELEASING.md](RELEASING.md) for the rendering workspace release gate.
 
 ## Documentation
 
 - [Workspace architecture](documents/design-overview.md)
 - [RenderGraph design](documents/design-rendergraph.md)
-- [RHI design](crates/rhi/documents/design-rhi.md)
+- [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md)
 - [Portable capture/replay design](documents/design-capture-replay.md)
 - [Renderer design](documents/design-renderer.md)
 - [Implementation plan](documents/version-plan.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Fluxel ecosystem roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
 - [RenderGraph guide](crates/rendergraph/README.md)
-- [RHI guide](crates/rhi/README.md)
+- [RHI guide](https://github.com/fluxel-project/fluxel-rhi)
 
 ## Quick verification
 
@@ -123,7 +125,7 @@ authoring, preview/runtime equivalence and export, capture/replay, JavaScript,
 Canvas 2D with text, and finally declarative UI. This order intentionally keeps
 JavaScript before Canvas/text and declarative UI. The executable breakdown is
 the [implementation plan](documents/version-plan.md). The sole normative
-RHI API architecture source is [RHI design](crates/rhi/documents/design-rhi.md);
+RHI API architecture source is [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md);
 rustdoc and contract tests define descriptor-level detail. The
 [workspace architecture](documents/design-overview.md) records cross-layer
 invariants and integration boundaries.
@@ -162,7 +164,7 @@ selected RHI device's portable contract. Per-frame imports can bind RHI
 resources directly; backends and native synchronization remain private.
 RenderGraph analyzes logical transient lifetimes while RHI realizes allocation,
 so callers must never depend on a transient's physical identity. Details are in
-[the RenderGraph design](documents/design-rendergraph.md), [the RHI design](crates/rhi/documents/design-rhi.md),
+[the RenderGraph design](documents/design-rendergraph.md), [the RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md),
 and [ADR-0009](documents/adr/0009-resource-floor-and-reuse-safety.md).
 
 The corresponding supported-target limits and release evidence are maintained

@@ -1,8 +1,9 @@
 # Releasing Fluxel Renderer
 
-Each workspace release uses one package version and one annotated tag. For
+Each rendering-workspace release uses one package version and one annotated tag. For
 example, package version `0.7.0` is released as `v0.7.0`; the tag points to the
-same commit consumed by all three Git dependencies.
+same commit consumed by the rendering workspace's Git dependencies. `fluxel-rhi`
+is released from its separate repository.
 
 Before creating that tag, commit the release candidate and make sure the
 checkout is clean. On a Windows `x86_64-pc-windows-msvc` machine with both

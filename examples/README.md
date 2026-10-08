@@ -7,7 +7,7 @@ Package-specific examples remain beside their crates:
 
 - `crates/rendergraph/examples/` covers graph declaration, compilation, and
   the CPU-only `TestRhi` execution protocol;
-- `crates/rhi/examples/` covers native device discovery and opening;
+- the sibling `fluxel-rhi/examples/` crate covers native device discovery and opening;
 - `crates/renderer/examples/01_headless_frame.rs` exercises the public
   upload → poll → snapshot → draw → poll lifecycle without presentation or
   test-only readback. Run it with `--features gpu-upload` and either `dx12` or
