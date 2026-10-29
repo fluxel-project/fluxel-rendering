@@ -622,6 +622,14 @@ Future draw preparation answers:
 > Which concrete geometry, material variant, shader program, and pipeline
 > requirements does each draw use?
 
+Preparation also turns shader reflection and a material variant's parameter,
+uniform, texture, buffer, and sampler schema into a concrete binding-use
+manifest. For every buffer or texture it names the RHI resource, relevant
+range, access, shader stage, device identity, and generation. The active
+pipeline declares that manifest to Graph before recording; binding a material
+object does not bypass graph resource declaration or dependency analysis.
+Samplers remain validated binding inputs but are not memory accesses.
+
 This layer must not be invented prematurely before the material/shader contracts
 are ready. GPU-driven paths may instead produce candidate data for GPU culling,
 compaction, sorting, and indirect arguments; they are not forced to create a
@@ -651,22 +659,33 @@ object or draw. Features may add object types and passes without a growing core
 material/shader extension contract; graph-only hooks are insufficient for, for
 example, area lights.
 
-Every feature GPU operation, resource access, and queue dependency is declared
-through the renderer's RenderGraph. A feature cannot submit work directly to
-RHI or hide a side graph. `FramePipeline` owns phase policy; features contribute
-content to the selected phases.
+Every feature's frame GPU operation, resource access, and queue dependency is
+declared through the renderer's RenderGraph. A feature cannot submit frame work
+directly to RHI or hide a side graph. `FramePipeline` owns phase policy;
+features contribute content to the selected phases. Persistent residency upload
+is a renderer preparation service with the limited contract described in section
+21; a feature supplies CPU data and requirements to that service, never an
+independent submission path.
 
 The first extensibility gate is deliberately small: the renderer's built-in mesh
 feature plus one feature implemented in a separate Rust crate. It must exercise
 batched incremental input, feature-owned storage, a declared phase, and graph
-resource/pass contribution. Terrain, water, particles, and full skeletal
-animation remain later consumers of this boundary.
+resource/pass contribution. This proves only the exercised subset of the
+extension interface. Stabilizing cross-pass contribution or shader/material
+extension contracts waits for a second materially different feature that uses
+those contracts. Terrain, water, particles, and full skeletal animation remain
+later consumers of this boundary.
 
 ---
 
 ## 15. FramePipeline SPI
 
-The core SPI is intentionally small.
+The core SPI is intentionally small. `pipeline/` remains a renderer-owned
+module and hides graph compilation, executor state, and renderer internals. The
+public extension surface is the `FramePipeline` trait plus its controlled
+context, handles, and error types. That permits an external Rust crate to
+implement a pipeline without exposing mutable graph compiler state or making
+the module a separate crate or a stable plugin ABI.
 
 Conceptually:
 
@@ -792,7 +811,18 @@ FramePipeline
     -> RHI
 ```
 
-No hidden RHI submission path is allowed beside RenderGraph.
+FramePipeline and Features cannot submit outside RenderGraph. The explicit
+residency upload service in section 21 shares the same RHI synchronization and
+resource-lifetime model.
+
+Graph authoring has three distinct products. A definition records the selected
+passes, topology, logical resources, and declared resource uses. Compilation
+turns a definition into a device-specific plan. Per-frame instantiation binds
+the current imports, attachments, prepared material bindings, and dynamic
+values. The last step may refresh a binding only when it preserves the compiled
+layout and already-declared concrete resource-use manifest. A topology, binding
+layout, access, or resource-edge change makes a new definition and recompiles;
+it must not be hidden in a cached plan.
 
 ---
 
@@ -870,7 +900,8 @@ RenderGraph execution
 ```
 
 Its future `Subgraph` concept may package reusable CPU preparation/features, but
-all GPU work still becomes ordinary RenderGraph passes.
+all frame GPU work still becomes ordinary RenderGraph passes. CPU preparation
+may request residency uploads through the service below.
 
 No `slot-graph` node or subgraph identity needs to cross the renderer public API.
 
@@ -910,6 +941,35 @@ own persistent asset lifetime
 It consumes already-resolved render/GPU resources through explicit graph
 imports/bindings.
 
+### 21.1 Residency upload and frame work
+
+GPU residency upload is distinct from frame-graph work. The renderer's
+residency coordinator may upload CPU-prepared immutable or streaming content,
+including terrain tiles, bone-palette input data, and particle seed/input data,
+through RHI before graph recording. It owns the upload request, resource
+identity, accepted producer submission, completion evidence, and failure/loss
+outcome. It records each completed or pending upload as an imported resource
+state and producer dependency for the graph; a consuming graph pass cannot read
+the resource until the dependency is represented in the shared RHI submission
+and completion model.
+
+The coordinator also orders upload writes after any previous readers/writers of
+the destination range, or allocates a fresh realization while the old one is in
+flight. Staging storage and destination resources remain retained until their
+respective last-use completion. Readiness requires an observed producer
+completion or an enforceable RHI submission dependency; a CPU-ready flag alone
+is insufficient. A single-queue implementation may use queue ordering and a
+bounded completion wait where required; multiple queues are not a prerequisite.
+
+Per-frame GPU work belongs in RenderGraph: GPU skinning, particle simulation,
+culling, indirect-argument generation, and other dispatch/draw/copy work are
+ordinary graph passes with declared reads and writes. The coordinator is not a
+second frame scheduler and cannot create invisible resource accesses. A feature
+may request residency preparation, but cannot submit it; cross-device or stale
+generation resources, unsupported uses, failed uploads, and unavailable
+completion dependencies return structured preparation/graph/RHI errors before
+the consuming pass records.
+
 A device-local cache, if used, must key by enough identity to prevent stale or
 cross-device reuse, conceptually including:
 
@@ -917,6 +977,7 @@ cross-device reuse, conceptually including:
 logical asset identity
 content generation
 DeviceIdentity
+DeviceGeneration
 ```
 
 Exact cache ownership belongs to the renderer/resource preparation layer, not
@@ -1280,7 +1341,7 @@ RenderFeature
     = feature-owned typed storage and batch work that contributes to pipeline phases
 
 FramePipeline
-    = internal renderer SPI and built-in/external policy that converts
+    = renderer-owned public Rust SPI and built-in/external policy that converts
       RenderScene + RenderView into RenderGraph
 
 RenderGraph

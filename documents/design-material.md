@@ -5,8 +5,12 @@
 This document defines the architecture and implementation plan for
 `fluxel-material`. It is paired with the independent `fluxel-shader` crate:
 material owns authoring semantics and lowering to Material IR, while shader owns
-WGSL composition, Naga integration, reflection, variants, artifacts, and cache
-identity. Neither crate owns renderer policy or RenderGraph construction.
+complete-program assembly, Naga integration, reflection, variants, artifacts,
+and cache identity. Material supplies the functions, parameters/uniform schema,
+resource schema, call topology, and generated `evaluate_material` source needed
+by a material. Shader turns generic source units plus a pass template into a
+complete staged program. Neither crate owns renderer policy or RenderGraph
+construction.
 
 The material system is designed around four explicit boundaries:
 
@@ -25,6 +29,7 @@ The intended Rust toolchain is:
 Rust builder / procedural generator / tests
   -> Fluxel MaterialGraph
   -> Material IR
+  -> Material-generated evaluation WGSL / ShaderCompositionRequest
   -> Shader Composition
   -> WGSL ShaderModule
   -> Naga
@@ -57,6 +62,8 @@ Rust builder / procedural generator / tests
 Fluxel MaterialGraph
         ↓
 Material IR
+        ↓
+Material-generated evaluation WGSL / ShaderCompositionRequest
         ↓
 Shader Composer
         ↓
@@ -709,6 +716,25 @@ RHI owns actual GPU resources and binding objects.
 
 Renderer/material runtime resolves a material resource requirement to a concrete per-device GPU resource before/during frame preparation.
 
+The shader reflection and compiled material variant expose a binding-use
+manifest. For every declared binding it identifies the logical material slot,
+binding class, shader stages, abstract access (sampled/read, uniform read,
+storage read/write), and any subresource or buffer-range requirement available
+from the interface. Preparation resolves each slot to its concrete portable RHI
+texture, buffer, sampler, and binding, preserving device/context identity plus
+generation and concrete access ranges. A sampler is listed separately even when
+it is paired with a texture in WGSL.
+
+Before a pass is accepted, `FramePipeline` maps that concrete manifest to the
+pass's Graph declarations. Graph validates that every texture, buffer, sampler,
+and declared range/access used by the bound material is present and compatible,
+then includes buffer/texture accesses in dependency and hazard analysis.
+Samplers are retained and validated binding inputs, with no memory hazards of
+their own. Declaring only a
+bind group or material instance is insufficient. Missing, stale, cross-device,
+or incompatible bindings fail before recording; Graph never needs to interpret
+material semantics to perform this validation.
+
 Material IR must not contain:
 
 ```text
@@ -723,14 +749,26 @@ native binding handles
 
 ## 15. Shader Composition
 
-The Shader Composer combines:
+`fluxel-shader` owns a deliberately neutral `ShaderCompositionRequest`. It
+contains generic WGSL source units, declared callable and resource interfaces,
+requested entry points/stages, a pass template, geometry interfaces, target
+facts, and static specialization values. It has no `MaterialIr`,
+`MaterialGraph`, or material-domain field.
+
+Material lowers its private `MaterialIr` into this request. That lowering
+selects and names WGSL fragment functions, emits the material parameter/uniform
+and resource declarations, and generates the `evaluate_material` function that
+expresses the material call topology. A pipeline supplies the pass template and
+the Shader Composer owns all complete-program assembly. Thus `fluxel-material`
+may depend on Shader's generic request API, while Shader never depends back on
+Material and no third IR or crate is introduced.
+
+The Shader Composer combines the request's:
 
 ```text
-Material IR
+generic WGSL source units, including material-generated evaluation code
 +
-WGSL Material Fragments
-+
-FramePipeline / pass shader template
+FramePipeline-provided pass shader template
 +
 geometry interface requirements
 +
@@ -741,14 +779,14 @@ static variant decisions
 
 into one complete WGSL `ShaderModule`.
 
-Conceptually:
+Conceptually, the private Material-to-Shader handoff is:
 
 ```text
 Material IR
         \
-WGSL fragments
+Material lowering -> ShaderCompositionRequest
           \
-Forward/Deferred/custom pass template
+generic WGSL source units + Forward/Deferred/custom pass template
             \
 geometry/pass interface
               ↓
@@ -757,7 +795,7 @@ geometry/pass interface
        complete WGSL module
 ```
 
-### 16.1 Example
+### 15.1 Example
 
 Material IR may establish:
 
@@ -966,8 +1004,16 @@ During graph execution:
 RenderGraph pass uses:
     selected shader/pipeline
     material runtime data
-    declared resources
+    every concrete resource access in the resolved binding-use manifest
 ```
+
+Preparation may resolve residency and create/update persistent material
+bindings, but it cannot hide an access from the frame graph. GPU-residency
+uploads are governed by the renderer/RHI upload coordination path and its
+completion evidence; frame rendering, compute, copy, and material binding
+accesses are Graph work. If an upload's visibility is required by a frame pass,
+its completion dependency is imported into Graph/RHI submission planning before
+that pass records. This is synchronization, not a second frame scheduler.
 
 ---
 
@@ -1003,6 +1049,12 @@ FramePipeline chooses how to use it
         ↓
 RenderGraph pass
 ```
+
+A Graph pass is one execution node, not one shader program. A raster pass may
+record many draws and select multiple graphics pipelines, each with a vertex
+stage and optional fragment stage. A compute pass records one or more dispatches using compute
+pipelines. A copy pass requires no shader. Raster and compute work are separate
+pass declarations unless an RHI contract explicitly supports a combined scope.
 
 ---
 
@@ -1192,6 +1244,10 @@ Exact serialization format is a separate asset-format decision.
 ## 28. Initial Supported Surface
 
 The first implementation should prove architecture rather than node breadth.
+The vocabulary below describes the initial direction, not a requirement to
+implement every node and surface output before textured output or the MVP.
+Start with the fixed material functions and outputs required by that consumer;
+broader nodes and Code Nodes belong to material expansion.
 
 ### Material domain
 
@@ -1236,24 +1292,34 @@ and completion-governed resource retirement against the stable RHI. Material and
 shader work then targets a real renderer consumer instead of creating a second
 execution model.
 
-### Phase A — Semantic substrate
+### Phase A — Executable shader spine
 
-Implement:
+Before implementing a complete MaterialGraph or Code Nodes, prove one small
+WGSL vertex/fragment pair through Naga validation/reflection and the selected
+RHI's actual shader and graphics-pipeline creation path. The proof uses a
+fixed parameter/resource schema and renders a real
+textured fixture through the existing Graph/RHI foundation. It is an early
+consumer of Shader, not evidence that the material system is complete.
+
+Acceptance:
 
 ```text
-MaterialDomain
-MaterialValueType
-typed ports
-MaterialParameterSchema
-MaterialResourceSchema
-SurfaceOutput
-MaterialGraph identity/provenance
+WGSL source -> Naga -> ShaderArtifact / ShaderInterface
+    -> selected RHI shader + pipeline creation -> real Graph/RHI fixture
 ```
 
-This phase begins the independent `fluxel-material` crate. It has no renderer
-dependency.
+The fixture retains compiler and runtime diagnostics, reflected bindings, and
+the exact RHI revision. It proves that material abstractions will have a real
+consumer before the authoring graph expands.
 
-### Phase B — Fragment model
+### Phase B — Semantic substrate
+
+Implement the minimum `MaterialDomain`, typed values/ports, parameter/uniform
+and resource schemas, selected surface outputs, and graph identity/provenance
+required by that executable consumer. This begins `fluxel-material`, without a
+renderer dependency.
+
+### Phase C — Fragment model
 
 Implement:
 
@@ -1263,11 +1329,13 @@ authoring exposure/semantic names (not executable interface truth)
 WGSL module/source representation
 typed fragment inputs/outputs
 resource requirements
-Code Node
 built-in nodes backed by fragments
 ```
 
-### Phase C — Material IR
+First-class Code Nodes use this same source-unit and reflection path during
+post-MVP expansion; they do not block the fixed-function material consumer.
+
+### Phase D — Material IR
 
 Implement:
 
@@ -1289,7 +1357,7 @@ no executable shader instruction language exists in Material IR
 deterministic graph input produces deterministic Material IR
 ```
 
-### Phase D — Shader composition
+### Phase E — Shader composition
 
 Implement:
 
@@ -1297,24 +1365,25 @@ Implement:
 WGSL fragment composition
 symbol/name isolation
 resource binding reconciliation
-material evaluation function generation
+material-side evaluation function generation and ShaderCompositionRequest conversion
 pass-template integration
 source map/provenance retention
 ```
 
-These phases establish the independent `fluxel-shader` crate. `fluxel-material`
-requests composition through semantic inputs; it does not duplicate shader
-compilation or Naga IR.
+These phases extend the independent `fluxel-shader` crate established by Phase A.
+`fluxel-material` lowers its semantics to `ShaderCompositionRequest`; it does
+not pass `MaterialIr` to Shader or duplicate shader compilation or Naga IR.
 
 Acceptance:
 
 ```text
-Material IR + pass template -> complete WGSL module
+Material IR -> ShaderCompositionRequest + pass template -> complete WGSL module
 ```
 
-### Phase E — Naga integration
+### Phase F — Naga integration
 
-Implement:
+Extend the Phase A Naga path to composed sources; do not defer actual compiler
+or RHI integration to this phase. Implement:
 
 ```text
 WGSL parse
@@ -1326,7 +1395,7 @@ shader-system artifact/interface/requirement creation
 diagnostic source remapping
 ```
 
-### Phase F — Material variants/runtime
+### Phase G — Material variants/runtime
 
 Implement:
 
@@ -1339,7 +1408,7 @@ pipeline requirement extraction
 cache identity
 ```
 
-### Phase G — FramePipeline integration
+### Phase H — FramePipeline integration
 
 Implement:
 
@@ -1353,7 +1422,7 @@ RenderGraph pass declaration using resolved shader/material requirements
 Acceptance is a Rust-only vertical slice through the normal renderer path:
 
 ```text
-MaterialGraph -> Material IR -> shader composition -> ShaderArtifact + ShaderInterface
+MaterialGraph -> Material IR -> ShaderCompositionRequest -> shader composition -> ShaderArtifact + ShaderInterface
     -> CompiledMaterialVariant -> renderer preparation -> internal RenderGraph -> RHI
 ```
 
@@ -1390,6 +1459,11 @@ MaterialGraph
         ↓
 Material IR
 (normalized composition/link metadata)
+        ↓
+Material lowering
+        ↓
+ShaderCompositionRequest
+(generic source units and interfaces; owned by Shader)
         ↓
 Shader Composer
         ↑
@@ -1432,6 +1506,9 @@ The defining rules are:
 
 > `Material IR` describes how fragments, parameters, resources, and material outputs are composed.
 
+> Material lowers that private composition into a generic
+> `ShaderCompositionRequest`; Shader never receives `MaterialIr`.
+
 > WGSL is Fluxel's shader source language.
 
 > Naga owns executable shader IR and shader-language compilation.
@@ -1441,5 +1518,8 @@ The defining rules are:
 > `FramePipeline` decides how compiled material semantics participate in rendering.
 
 > RenderGraph owns GPU-work dependencies and lifetimes, not material semantics.
+
+> A bound material contributes its reflected, concrete binding-use manifest to
+> every Graph pass that uses it.
 
 > RHI owns portable GPU execution, not material or renderer policy.

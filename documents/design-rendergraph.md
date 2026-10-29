@@ -27,8 +27,9 @@ RenderScene
 ```
 
 This is the frame-execution path, not a universal crate dependency chain.
-Material compilation is separately `MaterialGraph -> Material IR -> Shader
-System -> ShaderArtifact / Pipeline requirements`. Renderer, RenderGraph,
+Material compilation is separately `MaterialGraph -> Material IR -> generated
+evaluation WGSL / ShaderCompositionRequest -> Shader System + pass template
+-> ShaderArtifact / Pipeline requirements`. Renderer, RenderGraph,
 shader/pipeline code, and material runtime may each reuse RHI portable
 contracts; only graph execution retains graph pass-local resource authority.
 
@@ -38,12 +39,15 @@ pipeline, bindings, and draw or dispatch work accurately. RenderGraph then
 plans that work; it does not interpret material graphs, select a rendering
 strategy, load assets, or own presentation.
 
-A pass is not a material or a shader container. A raster pass may record draws
-using several prepared material variants and GPU pipelines; a material may
-participate in several passes, such as depth and main shading. Compute work
-may use Shader directly without Material, while copy and clear work may need
-neither. These relationships do not make the complete Material/Shader system
-a prerequisite for a minimal Graph/RHI execution proof.
+A pass is an execution node, not a material or a shader program. A raster pass
+may record many draws, switch among prepared graphics pipelines, and use a
+vertex stage plus an optional fragment stage for each draw. A compute pass may
+record one or more dispatches using compute pipelines. A copy or clear pass
+needs no shader. Compute and raster work are separate pipeline uses: a single
+pass is never a combined vertex/compute/fragment program. A material may also
+participate in several passes, such as depth and main shading. These
+relationships do not make the complete Material/Shader system a prerequisite
+for a minimal Graph/RHI execution proof.
 
 ## Ownership
 
@@ -77,9 +81,12 @@ abstraction benefit.
 The foundation gate reuses a compiled plan across 2–3 overlapping frames,
 retains distinct completion points, and proves safe reuse/retirement without
 waiting for device idle each frame. Cover invalid device/generation binds,
-partial submission failure, and device loss. Features declare all GPU accesses
-through Graph and do not submit separately. The implementation plan defines
-the selected real-backend matrix and exact dependency evidence.
+partial submission failure, and device loss. Features declare all frame GPU
+accesses through Graph and do not submit separately. Renderer residency uploads
+may precede graph recording only through the shared upload coordinator and its
+imported producer dependencies; they are not a feature submission path. The
+implementation plan defines the selected real-backend matrix and exact
+dependency evidence.
 
 The ordinary path is short:
 
@@ -97,12 +104,32 @@ device and its capability environment. Device loss or replacement means the
 graph is compiled again. The design intentionally does not promise cross-device
 reuse through capability, allocation, or presentation fingerprints.
 
+A graph definition contains pass topology, logical resources, declared uses,
+and stable binding layouts. Compilation derives a device-specific plan from
+that definition. Per-frame instantiation supplies changing imports, attachment
+images, dynamic offsets, and prepared binding values. Changing a resource value
+inside an already-declared binding can reuse the plan only after its concrete
+use manifest is revalidated. A changed pass set, resource edge, access mode,
+binding layout, or other topology fact creates a new definition and requires
+recompilation; it is not a dynamic binding refresh.
+
 A graph may retain logical import slots when that makes a stable definition
 reusable. Per-frame bindings bind those slots directly to RHI `Buffer`,
 `Texture`, `Pipeline`, binding objects, or `FrameAttachment` values. RHI and
 RenderGraph validate device identity and generation, descriptors, permitted
 usage, known resource state, presentation lifetime, and pipeline/binding
 compatibility without copying that model into a bridge.
+
+Every pipeline/binding declaration has a resource-use manifest. Shader
+reflection supplies the abstract binding slots, stages, and access classes;
+material and draw preparation resolve those slots to concrete buffer and texture
+references, subresource or byte ranges, and the device identity and generation
+of each resource. The pipeline must declare that concrete manifest as graph
+reads or writes before recording begins. Graph validates it against the pass
+declaration and folds buffer/texture accesses into hazard analysis, transitions,
+and dependencies. Samplers are retained and validated as bindings, but do not
+create memory hazards of their own. Binding a valid object alone is never proof
+that the resources it contains are graph-declared.
 
 `GraphInstantiation` or `GraphExecutionPlan` may exist only when they provide a
 real graph-only benefit, such as stable dynamic bindings, deterministic
@@ -118,6 +145,13 @@ corresponding RHI portable raster, compute, or copy recording scope and
 resolves only resources, pipelines, and bindings declared for the pass.
 Resource-bearing commands accept only values resolved through that authority,
 so a callback cannot introduce undeclared resources.
+
+Before a pass callback records any command, graph instantiation verifies the
+prepared binding manifest against the compiled declaration: binding layout,
+concrete resources and ranges, access mode/stage, device identity/generation,
+and current imported state must agree. A mismatch is a structured graph or RHI
+error before backend recording. This check applies again when a cached plan is
+instantiated with refreshed bindings.
 
 This graph authority owns permission and resource resolution only. Its
 callback-facing operations reuse RHI's command vocabulary and semantics

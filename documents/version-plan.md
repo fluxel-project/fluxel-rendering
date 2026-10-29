@@ -10,7 +10,7 @@
 ```text
 Foundation: existing Bases asset core + stable RHI dependency baseline
   + renderer-internal Graph foundation and integration
-  -> material semantics + independent Shader core
+  -> Shader + Material core: minimal WGSL/Naga -> real RHI compilation first
   -> Renderer MVP: scene/frame boundary + FramePipeline and plugin seams
      -> minimal material-backed Forward + independent Rust Feature proof
   -> material/pipeline/Feature expansion
@@ -79,6 +79,10 @@ baseline; aliasing and multi-queue optimization are follow-up choices.
 - Reuse a compiled plan; submit 2–3 live frames before waiting, retain distinct
   completion points, and prevent early reuse/retirement. Cover caller-handle
   drops and partial submission failure; per-frame device-idle is not this proof.
+- Separate the stable Graph definition, device-specific compiled plan, and
+  per-frame bindings. Revalidate compatible binding changes; recompile on
+  topology, dependency, or incompatible use changes. Demonstrate both reuse and
+  topology invalidation, including a newly aliased dynamic binding.
 - Reject mismatched device/context identity or generation, invalid imports,
   incompatible usages, and unavailable capabilities before backend work.
   Loss invalidates device-specific plans; restoration recompiles for the new
@@ -87,14 +91,21 @@ baseline; aliasing and multi-queue optimization are follow-up choices.
   material cost depends on them. Missing facts trigger a bounded consumer-led
   RHI request, not an invented graph capability or cost model.
 
-## 2. Material semantics and Shader core
+## 2. Shader and Material core
 
 Owners: `fluxel-material` for semantics; `fluxel-shader` for compilation.
 
-First define the minimum material semantics, normalized fragment metadata,
+First prove minimal WGSL -> Naga -> ShaderArtifact -> real RHI shader/pipeline
+creation with a small executable consumer. Do not wait for full MaterialGraph,
+Code Nodes, or the complete authoring toolchain to exercise actual GPU compilation.
+Then define the minimum material semantics, normalized fragment metadata,
 binding ABI, and shader interface needed by the first renderer. Material IR
 records typed semantics and composition; WGSL/Naga remain the executable
-language/IR. Do not implement a second shader language or compiler.
+language/IR. Material owns function definitions/references, parameter/uniform
+schemas, call composition, and evaluation-WGSL generation. It converts its IR
+into Shader-owned `ShaderCompositionRequest` with WGSL and generic interface
+metadata; Shader never imports MaterialIr. Renderer supplies pass templates.
+Do not implement a second shader language or compiler.
 
 Build Shader as an independent crate reusable by Material, compute, particles,
 and PostFX. It owns composition, reflection, artifacts/interfaces, target
@@ -103,7 +114,9 @@ author-facing input; other source formats require a selected consumer and
 validation scope. Shader does not depend on Material or Renderer. Material
 consumes Shader and does not depend on Renderer or own graph passes/submission.
 
-**Acceptance:** compose multiple fragments, compare metadata with reflected
+**Acceptance:** retain real RHI shader/pipeline compilation and execution
+evidence for the initial WGSL route, then compose multiple fragments, compare
+metadata with reflected
 interfaces, and produce the artifacts/bindings needed by the selected RHI.
 Cover static-key changes, dynamic-value sharing, cache invalidation, missing
 fragments, type/binding mismatch, and unsupported target features.
@@ -132,7 +145,9 @@ universal object layout, or general system scheduler.
 
 ### 3.2 FramePipeline SPI and Rust plugin contracts
 
-Implement `FramePipeline` explicitly as the frame-policy SPI inside Renderer.
+Implement `FramePipeline` as a public Rust extension trait and controlled
+context facade owned by a module inside Renderer. External crates can implement
+it without access to Graph compiler, allocator, or scheduler internals.
 It consumes scene/view snapshots, selects phases, resolves material variants
 and shader/pipeline requirements through renderer services, and declares work
 to Graph. Establish the phase vocabulary and compatibility checks needed by
@@ -150,7 +165,7 @@ dynamic DLL loading, or stable plugin binary ABI is required.
 ### 3.3 Minimal Forward and independent plugin integration
 
 Prove basic visibility, phase-specific deterministic ordering/batching, an
-internal replaceable `FramePipeline` SPI, and a built-in minimal Forward path.
+externally implementable `FramePipeline` SPI, and a built-in minimal Forward path.
 Object sorting is distinct from Graph scheduling. Dynamic dispatch may occur
 per Feature batch, not through per-object virtual `draw()`. Keep room for
 GPU-generated indirect arguments without forcing a final CPU DrawList.
@@ -169,18 +184,29 @@ Bases snapshots + batched updates
 The external Feature lives in a separate Rust crate and owns typed data. It
 must prove batch updates, pipeline-phase participation, and declared Graph
 resource access without modifying Renderer Core for a new object type. Cover
+the full resource-use manifest inside material bindings, including missing
+texture/buffer declarations, incompatible ranges/access, stale device
+generations, and dynamic binding changes. Include a residency upload whose
+consumer waits on its producer through RHI and cannot retire it early. Cover
 unavailable phases, incompatible shader/binding requirements, failed preparation,
-and unsupported capabilities. All GPU work is Graph-visible; Features cannot
-submit separately or own another frame scheduler. Retain an ordinary adapter
-and an ECS-style batch fixture without adding an ECS dependency. Stabilize
-extension contracts only after this proof. Complete terrain, water, particles,
-or skinning systems are not MVP gates.
+and unsupported capabilities. Frame GPU work is Graph-visible; Features cannot
+submit separately or own another frame scheduler. CPU-prepared inputs may use
+the renderer residency upload coordinator, whose RHI producer dependencies,
+incoming states, ranges, and completion evidence are imported before Graph
+consumption. GPU skinning/simulation/culling remain Graph passes. Retain an
+ordinary adapter and an ECS-style batch fixture without adding an ECS dependency.
+Stabilize only the exercised extension subset after this proof. Complete
+terrain, water, particles, or skinning systems are not MVP gates.
 
 Retain checkpoint evidence for the scene/frame boundary, FramePipeline phase
 policy, and external plugin separately, then close the MVP with their combined
 material-backed real-target run. In particular, compiling a registration trait
 does not prove extensibility. Verify the external consumer before stabilizing
-the extension contracts.
+the exercised extension contracts. Demonstrate an external FramePipeline
+implementation as well as the external Feature; registration alone proves
+neither pipeline replacement nor a complete rendering path. The integrated
+artifact must use a custom material function through the normal composition
+route, rather than only a closed built-in shader recipe.
 
 ## 4. Material, pipeline, and Feature expansion
 
@@ -188,6 +214,9 @@ Owners: Material/Shader for semantics; Renderer/Feature crates for algorithms.
 
 Consume the extension seams proved by the MVP. Refine them only with selected
 pipeline/Feature consumers and rerun the affected independent Rust plugin.
+Require a second, materially different Feature to validate cross-pass and
+shader-extension contracts before stabilizing them; one simple MVP Feature
+cannot certify every extension seam.
 
 Expand code nodes, graph lowering, variants, PBR, Forward+, shadows, and PostFX
 incrementally. Prove Deferred as an independent second `FramePipeline` using
@@ -230,6 +259,16 @@ cache policy, per-device residency, and graph transients distinct.
 - JavaScript wrappers
 
 These items have no delivery order, design, API, or acceptance plan.
+
+## Future engine runtime (separate planning)
+
+Game Scene, TypeScript gameplay runtime, the game loop, Rust/TS bindings, and
+script hot reload are a long-term direction without an approved implementation
+stage. They do not block this rendering plan. Preserve the adapter boundary:
+TypeScript Gameplay / Scene -> Scene Adapter -> Batch ChangeSets -> RenderScene
+-> FramePipeline -> RenderGraph -> RHI. Adapters map identities; Renderer owns
+generational RenderIds and snapshots. `fluxel-jsbridge` remains platform
+lifecycle adaptation, separate from a future gameplay script runtime.
 
 ## Evidence and completion
 

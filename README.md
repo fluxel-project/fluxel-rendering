@@ -57,10 +57,18 @@ this file is only the workspace entry point.
 The architecture is an ownership DAG, not a universal linear dependency path:
 frame execution is `RenderScene -> FramePipeline -> RenderGraph -> Shader /
 Pipeline + Material Runtime -> RHI`, while material compilation is
-`MaterialGraph -> Material IR -> Shader System -> ShaderArtifact / Pipeline
+`MaterialGraph -> Material IR -> evaluation WGSL / ShaderCompositionRequest
+-> Shader System + pass template -> ShaderArtifact / Pipeline
 requirements`. Renderer, RenderGraph, shader/pipeline code, and material
 runtime may each reuse RHI portable contracts where needed; normal frame work
 continues to preserve RenderGraph pass-local resource authority.
+
+Material owns material functions, parameters/uniform schemas, and call-code
+generation; Shader owns complete programs/modules, entry points, compilation,
+metadata, and reflection, without importing Material IR. A Graph pass describes
+GPU work and resource dependencies, and may use multiple prepared pipelines.
+Residency uploads use renderer coordination and share RHI dependency/completion
+tracking with Graph consumers. See the [architecture boundaries](documents/design-overview.md).
 
 ## Released source dependency
 
