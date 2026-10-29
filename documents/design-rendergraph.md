@@ -38,6 +38,13 @@ pipeline, bindings, and draw or dispatch work accurately. RenderGraph then
 plans that work; it does not interpret material graphs, select a rendering
 strategy, load assets, or own presentation.
 
+A pass is not a material or a shader container. A raster pass may record draws
+using several prepared material variants and GPU pipelines; a material may
+participate in several passes, such as depth and main shading. Compute work
+may use Shader directly without Material, while copy and clear work may need
+neither. These relationships do not make the complete Material/Shader system
+a prerequisite for a minimal Graph/RHI execution proof.
+
 ## Ownership
 
 RenderGraph owns graph-specific semantics:

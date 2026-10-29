@@ -34,13 +34,27 @@ through completion. This plan creates no independent Assets project.
    artifacts, variant identity, and caching.
 4. **Material and Renderer MVP.** Render a real textured 3D mesh through
    Material, Shader, a minimal Forward pipeline, internal Graph, and RHI.
-   Include batch incremental scene updates and a minimal external Rust Feature.
+   Explicit checkpoints establish scene/frame snapshots, the `FramePipeline`
+   SPI and phase policy, Rust plugin contracts, and the integrated Forward
+   path with batch updates and a minimal external Rust Feature. Verify that
+   external consumer before stabilizing extension contracts.
 5. **Material and pipeline expansion.** Grow code nodes, PBR, Forward+, shadows,
    PostFX, and selected Features. Prove Deferred over shared scene/material
    contracts as a second pipeline.
 6. **Performance and resource strategy.** Measure representative workloads,
    residency, memory stability, uploads, and frames in flight. Select streaming,
    LOD, GPU culling, indirect work, and multi-queue optimization by actual need.
+
+Items 1 and 2 form one foundation closure. After ownership and exact dependency
+selection, independent Bases-reuse and Graph/RHI work can proceed in parallel;
+their combined integration proof remains required before the next milestone.
+Graph fixtures can use direct RHI resources and small prepared shaders without
+waiting for the full Material/Shader system or an asset-loading framework.
+
+The MVP proves pipeline replacement, typed batch-oriented RenderFeatures, and
+the controlled material/shader seams needed by the selected feature. Expansion
+consumes these verified contracts. Rust crate plugins are in scope; dynamic DLL
+loading and a stable plugin binary ABI are unscheduled.
 
 Each early milestone delivers a runnable vertical slice. Advanced algorithms
 are not all prerequisites for the MVP. The separate Graph crate,

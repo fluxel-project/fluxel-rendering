@@ -8,10 +8,11 @@
 ## Delivery model
 
 ```text
-Stable RHI + existing Bases asset core
-  -> renderer-internal Graph foundation and integration
+Foundation: existing Bases asset core + stable RHI dependency baseline
+  + renderer-internal Graph foundation and integration
   -> material semantics + independent Shader core
-  -> Material + data-oriented Renderer MVP + external Feature proof
+  -> Renderer MVP: scene/frame boundary + FramePipeline and plugin seams
+     -> minimal material-backed Forward + independent Rust Feature proof
   -> material/pipeline/Feature expansion
   -> measured performance and resource strategies
 ```
@@ -21,6 +22,12 @@ lock inputs, and normal, boundary, and failure cases. Reuse existing code where
 it satisfies the contract. New dependencies, identity domains, schedulers, or
 abstraction layers require a demonstrated consumer. Completion requires a real
 integrated artifact, not independently green library tests.
+
+Sections 0 and 1 are work packages of the same foundation closure. Establish
+ownership and the selected dependency baseline first; independent asset-reuse
+and Graph/RHI work may then proceed in parallel. Close their combined
+producer/consumer proof before advancing to section 2. This does not authorize
+skipping an earlier gate or building a complete asset-loading system first.
 
 ## 0. Reuse and dependency baseline
 
@@ -52,6 +59,11 @@ the standalone `fluxel-rendergraph` package as consumers migrate; do not
 maintain two engines. Preserve logical resources/versions, typed pass-local
 access, definedness, hazards, deterministic DAG scheduling, transient lifetimes,
 and diagnostics. Graph remains unaware of materials and rendering algorithms.
+
+Use direct RHI resources and small fixture shaders for the first executable
+Graph proof. The full Material/Shader system is not a prerequisite: copy and
+clear work may need no shader, and raster fixtures can use prepared shaders.
+Later material-backed integration must consume the same Graph implementation.
 
 Use the current [RHI Core contract](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md)
 directly for device facts, descriptors, recording, submission, and completion.
@@ -100,10 +112,15 @@ fragments, type/binding mismatch, and unsupported target features.
 
 Owner: Rendering, with an independently compiled Rust Feature consumer.
 
+Deliver this milestone through the checkpoints below. They are internal work
+packages with runnable focused proofs, not independent claims of MVP closure.
+
 Implement the minimum MaterialGraph/IR, material assets/instances, parameters,
 and compiled variants needed for a real textured 3D mesh. Define selected
 surface outputs and explicit refusal for unsupported semantics; do not silently
 approximate. Dynamic values share variants; static choices affect identity.
+
+### 3.1 Scene data and frame snapshot boundary
 
 Renderer owns render-only camera/views, stable generational RenderIds, typed
 dense storage, and batch incremental updates. Caller adapters map ECS entities
@@ -112,6 +129,25 @@ boundary before concurrent reads. Validate empty batches, stale IDs,
 duplicate/conflicting updates, removal/reuse, and capacity limits. Use dirty
 ranges rather than full-world copies/uploads. Do not add an ECS, query language,
 universal object layout, or general system scheduler.
+
+### 3.2 FramePipeline SPI and Rust plugin contracts
+
+Implement `FramePipeline` explicitly as the frame-policy SPI inside Renderer.
+It consumes scene/view snapshots, selects phases, resolves material variants
+and shader/pipeline requirements through renderer services, and declares work
+to Graph. Establish the phase vocabulary and compatibility checks needed by
+the minimal Forward path; Graph schedules declared work rather than choosing
+rendering policy. This SPI is distinct from an RHI GPU pipeline object.
+
+Prove three related extension seams: replaceable frame-pipeline implementations,
+`RenderFeature` registration with typed storage and batch preparation/phase
+contributions, and controlled Material/Shader extensions for shading behavior.
+Features contribute to phases selected by the active pipeline. A pass-only
+plugin hook cannot establish support for a feature that changes shading.
+Keep these seams minimal for the selected consumer; no generic plugin framework,
+dynamic DLL loading, or stable plugin binary ABI is required.
+
+### 3.3 Minimal Forward and independent plugin integration
 
 Prove basic visibility, phase-specific deterministic ordering/batching, an
 internal replaceable `FramePipeline` SPI, and a built-in minimal Forward path.
@@ -140,9 +176,18 @@ and an ECS-style batch fixture without adding an ECS dependency. Stabilize
 extension contracts only after this proof. Complete terrain, water, particles,
 or skinning systems are not MVP gates.
 
+Retain checkpoint evidence for the scene/frame boundary, FramePipeline phase
+policy, and external plugin separately, then close the MVP with their combined
+material-backed real-target run. In particular, compiling a registration trait
+does not prove extensibility. Verify the external consumer before stabilizing
+the extension contracts.
+
 ## 4. Material, pipeline, and Feature expansion
 
 Owners: Material/Shader for semantics; Renderer/Feature crates for algorithms.
+
+Consume the extension seams proved by the MVP. Refine them only with selected
+pipeline/Feature consumers and rerun the affected independent Rust plugin.
 
 Expand code nodes, graph lowering, variants, PBR, Forward+, shadows, and PostFX
 incrementally. Prove Deferred as an independent second `FramePipeline` using
