@@ -1,22 +1,20 @@
-# ADR-0013: Make only future-event operations asynchronous
+# ADR-0013: Make asynchronous boundaries describe real future events
 
-**Status:** Accepted
-
-## Context
-
-Thread safety and a future event are different properties. Turning ordinary
-logical creation and recording into futures obscures ownership without adding
-an asynchronous boundary.
+**Status:** Accepted principle; current signatures belong to RHI.
 
 ## Decision
 
-Adapter/device request, shader/pipeline compilation, submission, completion,
-readback, presentation lifecycle, and idle waiting are async. Capability
-queries, logical buffer/texture/view/sampler/binding creation, validation,
-recording, statistics, and diagnostics remain synchronous.
+Use an asynchronous API only when the operation needs a future external event,
+such as device acquisition, backend compilation, surface acquisition or
+presentation, completion observation, mapping, or a wait. Validation, resource
+description, and command recording remain ordinary operations unless the
+selected RHI contract says otherwise.
+
+Thread safety alone does not justify a future. The independent
+[RHI Core design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md)
+is authoritative for current method signatures and execution models.
 
 ## Consequences
 
-Backends may use immediate-ready implementations for an async operation, while
-concurrent synchronous calls remain ordinary calls. A new async API requires a
-real externally completed event.
+Renderer does not wrap synchronous RHI work in a speculative async layer, and
+does not infer completion from submission or task completion.

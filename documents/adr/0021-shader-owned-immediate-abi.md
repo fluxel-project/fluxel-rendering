@@ -1,34 +1,22 @@
-# ADR-0021: Make executable shaders own immediate-data ABI
+# ADR-0021: Keep executable shader requirements authoritative
 
-**Status:** Accepted
+**Status:** Superseded as a concrete RHI ABI record; retained principle.
 
-## Context
+## Historical context
 
-`PipelineInterface` may intentionally be a compatible superset so renderers can
-share it across pipelines. Native shader argument locations, however, are
-compiled into an executable artifact. Deriving immediate-data argument presence
-or indices from every range in a pipeline-interface superset lets an unused
-range change a Metal `[[buffer(n)]]` ABI, or leave a shader-read argument
-unbound.
+This ADR formerly named `ShaderInterface`, `PipelineInterface`, and
+`ShaderAbiVersion` as current RHI types. They are not the selected independent
+RHI public contract and must not be recreated by migration code.
 
-## Decision
+## Durable principle
 
-Each `ShaderInterface` declares the non-overlapping immediate byte intervals
-its entry point reads. Pipeline construction requires every such interval to be
-contained in a stage-visible `PipelineInterface` immediate range. The interface
-remains a logical superset; it never assigns native immediate ABI.
-
-For a fixed `ShaderAbiVersion`, a backend derives native immediate argument
-presence, index and executable byte extent exclusively from the participating
-shader interfaces and its frozen private ABI. Legal writes to a declared but
-artifact-unused range have no executable observer and may be omitted by native
+Only a compiled shader program can establish which bindings and immediate data
+it actually reads. Logical layouts may be compatible supersets, but must not
+silently assign backend-native argument locations or make an artifact-unused
+range mandatory. Composition/reflection verifies the portable interface before
+pipeline use; the opened RHI device owns route selection and private native ABI
 lowering.
 
-## Consequences
-
-Toolchains must reflect immediate reads into `ShaderInterface`, alongside
-ordinary resource requirements. An artifact declaration is still a toolchain
-contract; the RHI does not parse arbitrary native source to reconstruct it.
-The shared pipeline validation prevents an incomplete immediate-layout contract
-on every backend, while Metal additionally relies on it to keep direct argument
-indices stable.
+The target Shader boundary is specified by [Shader design](../design-shader.md)
+and [Material design](../design-material.md). Exact current RHI shader types
+and validation belong to the independent RHI documentation.

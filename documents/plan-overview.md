@@ -1,129 +1,97 @@
 # Fluxel Rendering Product Plan
 
 > Status: active target direction. The organization [roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
-> owns ecosystem order; [version-plan.md](version-plan.md) supplies implementation
-> gates. Target architecture is not a claim of completed implementation.
+> owns stage order; [version-plan.md](version-plan.md) defines executable work
+> packages and acceptance. Target architecture does not imply implementation.
 
 ## Product direction
 
-Fluxel provides a complete, extensible, data-oriented real-time renderer without
-requiring an ECS, game scene model, host, or particular rendering strategy.
-Renderer owns views/camera data, visibility, draw preparation, sorting, batching,
-GPU residency coordination, and frame execution.
+Fluxel provides an extensible, data-oriented real-time renderer without requiring
+an ECS, gameplay scene model, host, or fixed rendering strategy. Renderer owns
+views, visibility, preparation, sorting/batching, resource coordination, and frame
+execution. Logical assets remain in Bases; portable GPU execution remains in RHI.
 
-The target workspace has three principal crates: `fluxel-shader`,
-`fluxel-material`, and `fluxel-renderer`. RenderGraph and the replaceable
-`FramePipeline` SPI are renderer modules. Shader provides reusable compilation
-infrastructure; Material owns material semantics and consumes Shader. Neither
-depends on Renderer. See [workspace architecture](design-overview.md).
+The target has three principal crates: `fluxel-shader`, `fluxel-material`, and
+`fluxel-renderer`. Graph and FramePipeline are renderer-owned modules, with a
+controlled public Rust facade for pipeline/Feature implementations. Shader and
+Material are independent of Renderer; Material consumes Shader's generic source
+and interface vocabulary. See [workspace architecture](design-overview.md).
 
-`fluxel-assets` remains in `fluxel-bases`, retaining logical identity, immutable
-content generations, producer coordination, and CPU cache policy. Callers own
-loading, decoding, hot reload, and streaming policy; platform services supply
-I/O. Renderer realizes asset snapshots per device and retains GPU resources
-through completion. This plan creates no independent Assets project.
+Material emits evaluation WGSL and logical interface contributions. Renderer/
+FramePipeline combines them with pass templates and entry points into a complete
+`ShaderCompositionRequest`. Shader composes, validates, and reflects the logical
+program. RHI selects the device route and performs backend lowering and native
+compilation. Prepared programs/variants can be reused across frames; this
+compilation flow is not a mandatory per-frame call chain.
 
-## Delivery order
+## Delivery and first product milestone
 
-1. **Reuse and integration baseline.** Reuse the existing Bases asset core and
-   select exact stable RHI dependencies; identify migration gaps.
-2. **Renderer graph foundation.** Internalize Graph and prove direct RHI
-   execution, reusable plans, overlapping frames, and safe resource retirement.
-3. **Shader and Material core.** First prove minimal WGSL/Naga validation,
-   ShaderArtifact production, and real RHI shader/pipeline creation. Then define
-   material functions, parameter/uniform schemas, and composition IR for the
-   first material. Material generates evaluation WGSL and converts its IR into
-   Shader-owned `ShaderCompositionRequest`; Shader never consumes MaterialIr.
-   Add reflection, variant identity, and caching around this actual consumer.
-4. **Material and Renderer MVP.** Render a real textured 3D mesh through
-   Material, Shader, a minimal Forward pipeline, internal Graph, and RHI.
-   Explicit checkpoints establish scene/frame snapshots, the `FramePipeline`
-   SPI and phase policy, Rust plugin contracts, and the integrated Forward
-   path with batch updates and a minimal external Rust Feature. Verify that
-   external consumer and an external FramePipeline implementation. Stabilize
-   only the exercised extension subset.
-5. **Material and pipeline expansion.** Grow code nodes, PBR, Forward+, shadows,
-   PostFX, and selected Features. Prove Deferred over shared scene/material
-   contracts as a second pipeline.
-6. **Performance and resource strategy.** Measure representative workloads,
-   residency, memory stability, uploads, and frames in flight. Select streaming,
-   LOD, GPU culling, indirect work, and multi-queue optimization by actual need.
+| Work packages | Product outcome |
+| --- | --- |
+| S0 Foundation + S1 Graph | Pinned Bases/RHI integration, internal Graph execution, reusable plans, safe overlapping frames |
+| S2 Shader | Independent WGSL programs compile, reflect, and execute through real RHI routes |
+| S3 Material + S4 RenderScene | Minimal custom material composition and batch-oriented scene snapshots; independent tasks may overlap after S2 |
+| S5 Forward integration | Multiple meshes/materials render through the full path; early external consumers shape phase/Feature seams |
+| S6 Extension MVP | External Feature, external FramePipeline, and custom material cooperate in one frame; first product MVP closes |
+| S7 Rendering expansion | Code Nodes, selected advanced rendering, a second pipeline, materially different Features |
+| S8 Measured strategies | Workload-driven improvements with bounded memory and preserved lifecycle correctness |
 
-Items 1 and 2 form one foundation closure. After ownership and exact dependency
-selection, independent Bases-reuse and Graph/RHI work can proceed in parallel;
-their combined integration proof remains required before the next milestone.
-Graph fixtures can use direct RHI resources and small prepared shaders without
-waiting for the full Material/Shader system or an asset-loading framework.
+S0/S1 form one foundation closure. Direct RHI fixtures and prepared shaders make
+Graph execution possible before Shader/Material authoring. S3 needs only the
+functions, parameters, and call composition consumed by the first scene. Full
+MaterialGraph breadth and Code Node authoring experience do not block S6; Code
+Nodes remain planned S7 functionality. Feature interfaces start during S4/S5;
+S6 proves their joint use rather than adding a late plugin framework.
 
-The MVP proves pipeline replacement, typed batch-oriented RenderFeatures, and
-the controlled material/shader seams needed by the selected feature. Expansion
-consumes these verified contracts. Rust crate plugins are in scope; dynamic DLL
-loading and a stable plugin binary ABI are unscheduled.
-
-The renderer owns the FramePipeline module but exposes a public Rust extension
-trait and controlled context; external implementation does not expose Graph
-compiler internals. Cross-pass and shader-extension contracts wait for a second,
-materially different Feature consumer. Full authoring, Code Nodes, and PBR do not
-block the first textured output.
-
-Each early milestone delivers a runnable vertical slice. Advanced algorithms
-are not all prerequisites for the MVP. The separate Graph crate,
-fixed renderer recipes, and WASM capsule are migration inputs, not the target
-three-crate structure.
-
-## Undecided
-
-Capture/replay, Canvas 2D and basic text, declarative UI, a Blender plugin,
-and JavaScript wrappers are undecided. They have no delivery order or retained
-design in this plan.
+Measurements begin with runnable workloads. S8 does not postpone basic batching,
+safe lifetime handling, or bounded frame storage. Rust crate plugins are in scope;
+dynamic DLL loading and a stable plugin binary ABI are unscheduled.
 
 ## MVP acceptance
 
 ```text
 Bases snapshots + batched scene changes
-  -> RenderScene / RenderView + built-in Mesh + independent Rust Feature
-  -> visibility, phase sorting, batching, material/shader preparation
-  -> replaceable FramePipeline -> renderer-internal RenderGraph
-  -> stable RHI -> observed textured 3D output
-  -> completion-based reuse and retirement
+  -> RenderScene / RenderView + built-in Mesh + external Feature
+  -> custom Material + Shader preparation + external FramePipeline
+  -> visibility / phase ordering / batching -> internal Graph -> stable RHI
+  -> observed textured 3D output in the same frame
+  -> completion-governed reuse and retirement across overlapping frames
 ```
 
-The external Feature owns typed data, accepts batch updates, participates in a
-pipeline phase, and declares all frame GPU resource accesses to Graph. Adding it must
-not require a core object-type switch or independent Feature submissions. A small
-fixture suffices; complete terrain, water, particles, and skinning are later
-workloads. ECS-style and ordinary adapters share the batch boundary without an
-ECS dependency. Stabilize only the contracts covered by the external proof.
+An independent Rust consumer uses only the public facade. Adding its typed Feature
+cannot require a core object-type switch, private Graph internals, or independent
+GPU submission. Ordinary and ECS-style adapters share the batch boundary without
+an ECS dependency. Stabilize only the exercised extension subset; a second
+materially different Feature must exercise broader cross-pass/shading contracts
+before those stabilize.
 
-Graph declarations cover resources inside prepared material bindings, with
-reflection-derived usage and preparation-resolved concrete resource ranges.
-Residency transfers may use the renderer's upload coordinator outside Graph;
-their producer dependencies, states, and completion enter Graph/RHI before any
-consumer records. GPU skinning, simulation, culling, and other frame work remain
-Graph passes. Cached plans separate stable definitions from per-frame bindings;
-topology or incompatible usage changes trigger recompilation.
+Every bound material contributes its reflected, concrete resource-use manifest.
+Compatible resource-instance changes reuse a Graph plan after validation; changed
+hazards, dependencies, or access/layout constraints require recompilation or
+refusal. A changed texture identity alone does not imply new graph topology.
 
-Each milestone needs structured refusal cases, exact participating revisions
-and lock inputs, focused tests, and relevant real-target integration evidence.
-Stable RHI does not certify every optional operation or backend: its
-[open work](https://github.com/fluxel-project/fluxel-rhi/blob/main/TODO.md) and
-[verification limits](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/verification.md)
-remain explicit. One crate's green tests do not close an ecosystem milestone.
+Persistent residency covers textures, meshes, and streamed tiles. Frame Data Upload
+covers transforms, bone palettes, and other frame-owned inputs. They may share
+transfer machinery, with explicit producer dependencies, visibility/state
+transitions, and last-use retention. Conditional use of pending content differs
+from observed completion. GPU skinning, simulation, culling, and other frame GPU
+work remain Graph passes.
 
-## Future engine runtime direction
+Each closure retains exact revisions/locks, focused tests, structured refusals,
+and the affected real-target evidence. Partial/indeterminate execution retains
+affected resources without publishing guessed state. RHI stability does not
+certify every optional feature/backend; its [open work](https://github.com/fluxel-project/fluxel-rhi/blob/main/TODO.md)
+and [verification limits](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/verification.md)
+remain explicit.
 
-The active plan is a rendering ecosystem plan. A future Rust + TypeScript game
-engine needs separate ownership and planning for Game Scene, gameplay/script
-runtime, the game loop, Rust/TS bindings, and script hot reload. This is a
-long-term direction, not an approved implementation milestone or an MVP gate.
+## Undecided and future scope
 
-```text
-TypeScript Gameplay / Game Scene
-  -> Scene Adapter -> Batch ChangeSets -> Rust RenderScene
-  -> FramePipeline -> RenderGraph -> RHI
-```
+Capture/replay, Canvas 2D/basic text, declarative UI, Blender tooling, and JavaScript
+wrappers remain undecided, with no retained API design or delivery order. The old
+standalone Graph, fixed renderer, and WASM capsule are migration inputs.
 
-Adapters own external identity mappings and submit batches; RenderScene keeps
-generational RenderIds and frame snapshots. `fluxel-jsbridge` adapts browser and
-mini-game platform lifecycle; it does not own a future TypeScript gameplay VM.
-JavaScript wrapper scope remains undecided.
+A future Rust + TypeScript game engine needs separate planning for Game Scene,
+gameplay/script execution, the game loop, bindings, and hot reload. Adapters may
+map external identity to RenderIds and submit batches. `fluxel-jsbridge` adapts
+browser/mini-game lifecycle; it does not own a future gameplay VM. Those systems
+are not rendering MVP gates.

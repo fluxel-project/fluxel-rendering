@@ -21,22 +21,25 @@ target architecture and [the implementation plan](../../documents/version-plan.m
 for delivery order. This README also records the historical `0.15` examples and
 fixed execution evidence; they do not freeze the next public graph API.
 
-## Frame integration
+## Target frame integration
 
 ```text
 RenderScene -> FramePipeline -> RenderGraph
         -> Shader / Pipeline + Material Runtime -> RHI
 
 CompiledGraph + per-frame RHI bindings
-        -> RHI RecordedWork -> RHI SubmissionPlan
+        -> RHI SubmissionPlan + explicit transitions
+        -> deferred recording / immediate issue -> outcomes + completion
 ```
 
 Material and shader/pipeline requirements are resolved by `FramePipeline`
 before pass declaration. At execution, a pass selects the prepared
 shader/pipeline and binds material-runtime data through graph pass-local
 authority. Imports may be reusable logical slots, but each frame can bind
-them directly to RHI buffers, textures, pipelines, bindings, or a
-`FrameAttachment`. `FrameAttachment` is not a texture.
+them directly to the selected RHI's buffers, textures, pipelines, bindings,
+and acquired surface-image attachment API. The current independent RHI uses
+`SurfaceImage` and `AttachmentView`; its presentation lease is not an ordinary
+owned texture. Historical `FrameAttachment` names do not define that new API.
 
 `CompiledGraph` is associated with the current device and capability
 environment. On device loss or replacement, compile again. Do not build a
@@ -50,9 +53,9 @@ shows that the optimization is needed.
 - roots, dead-pass culling, deterministic scheduling, and diagnostics;
 - logical lifetimes and alias opportunities.
 
-RHI realizes physical allocation and lowers the graph's supplied native
-synchronization instructions. Dedicated transient allocation is valid baseline
-behavior; aliasing is optional.
+Graph supplies portable RHI transition, dependency, and allocation decisions.
+RHI realizes allocation and lowers native synchronization privately. Dedicated
+transient allocation is valid baseline behavior; aliasing is optional.
 
 ## Pass recording
 

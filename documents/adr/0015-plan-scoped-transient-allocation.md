@@ -1,22 +1,20 @@
-# ADR-0015: Freeze plan-scoped transient lifetimes with a dedicated fallback
+# ADR-0015: Keep transient lifetime planning separate from physical allocation
 
-**Status:** Accepted
-
-## Context
-
-Transient allocation affects resource lifetime and synchronization, so waiting
-for a later allocator design would leave an API hole. Native heap/aliasing
-mechanisms differ substantially.
+**Status:** Accepted.
 
 ## Decision
 
-`TransientLifetime` uses an acquire `PlanPoint` and release frontier;
-`SubmissionPlanBuilder` reserves batches and exposes a plan-scoped allocator.
-Every backend implements `Dedicated`. `Aliasing` is advertised only after
-physical placement, non-overlap proof, native barriers/dependencies, and
-completion-safe retirement are complete.
+RenderGraph derives logical transient lifetimes, compatible reuse, and alias
+eligibility from declared access and dependencies. It uses the selected portable
+RHI allocation and placement contract when a placement is required. Dedicated
+allocation remains the correctness fallback.
+
+RHI supplies allocation requirements and realizes placement; each backend owns
+its native heap, alias, barrier, and synchronization strategy. Physical aliasing
+is published only after measured need and complete lifetime, visibility,
+completion, loss, and target evidence.
 
 ## Consequences
 
-WebGPU and GL remain correct without aliasing. DX12, Vulkan, and Metal can add
-heap strategies later without changing public lifetime vocabulary.
+GL and WebGPU need no fabricated aliasing path. Graph does not expose native
+heap offsets or native synchronization instructions.

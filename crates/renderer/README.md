@@ -9,12 +9,12 @@
 > Do not treat
 > old graph/RHI spellings below as the new contract.
 >
-> **RHI API v1 boundary.** The fixed Stage-1 recipes and all
-> accepted-unknown/quarantine behavior below are retained as `0.15` historical
-> evidence, not as RHI API v1. Future implementation follows
-> [RHI architecture](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md): once work is accepted,
-> `Device::submit()` returns a `SubmissionReceipt`, and terminal
-> `CompletionState` / `PresentState` owns subsequent failure and retirement.
+> **RHI migration boundary.** Fixed recipes and the old accepted-unknown
+> protocol below describe the retained implementation only. New integration
+> follows the selected independent [RHI contract](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md),
+> including partial acceptance, partial immediate issue, and indeterminate
+> native effects. An error is not proof that no native work occurred. Retain
+> affected resources and outcome payloads until the contract permits retirement.
 
 `fluxel-renderer` defines the user-facing scene inputs `Camera`, `Geometry`,
 `Mesh`, `BasicMaterial`, and insertion-ordered `DrawList`. Its optional
@@ -67,9 +67,12 @@ fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", re
 fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0", features = ["gpu-residency"] }
 ```
 
-Residency is private renderer policy keyed exactly by
+In this legacy implementation, residency is private renderer policy keyed by
 `(AssetId, ContentGeneration, DeviceIdentity)`. It is neither an RHI or
-RenderGraph handle nor a public cache handle. A typical non-blocking loop is:
+RenderGraph handle nor a public cache handle. The target migration uses the
+selected RHI's device provenance and the readiness model in
+[Renderer design](../../documents/design-renderer.md#211-persistent-residency-frame-data-and-frame-work).
+The legacy non-blocking loop is:
 
 ```text
 prepare AssetSnapshot -> poll PendingUpload -> draw only Committed snapshot
@@ -224,13 +227,10 @@ cargo run -p fluxel-renderer --features gpu-upload --example 01_headless_frame -
 cargo run -p fluxel-renderer --features gpu-upload --example 01_headless_frame -- vulkan
 ```
 
-It is neither a window/swapchain demo nor GPU conformance evidence: it does not
-use `test-support`, read pixels back, or compare a CPU oracle. Run every ignored
-hardware fixture through the workspace's single release gate instead:
-
-```powershell
-./scripts/conformance.ps1
-```
+This example does not read pixels back or compare a CPU oracle, so it does not
+establish GPU conformance. The old top-level conformance harness was removed.
+Follow the [release requirements](../../RELEASING.md) and the planned S0
+integration artifact for renewed hardware claims.
 
 ## Performance and compatibility
 

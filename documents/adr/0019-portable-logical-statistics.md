@@ -1,20 +1,15 @@
-# ADR-0019: Define statistics as logical observation, not profiling
+# ADR-0019: Keep RHI statistics logical, not profiling
 
-**Status:** Accepted
-
-## Context
-
-Native counters have different availability, cost, and meaning. Treating them
-as portable statistics would silently add work or report incomparable values.
+**Status:** Accepted.
 
 ## Decision
 
-RHI statistics report logical object, command, submission, and lifecycle
-observations. They never insert GPU commands or claim native profiling facts.
-Native profiling remains an optional backend/tooling concern with its own
-capability and conversion closure.
+RHI statistics are inexpensive logical request and handoff observations. They
+do not add GPU work, imply residency/presentation status, or claim driver timing
+or hardware counters. Backend profiling and performance measurement have their
+own target-specific evidence.
 
 ## Consequences
 
-Statistics are predictable across backends and safe to query in diagnostics;
-their values do not imply timing, pipeline counters, or driver metrics.
+Renderer diagnostics may use these counters without treating them as a
+performance oracle. The exact current fields belong to the independent RHI.

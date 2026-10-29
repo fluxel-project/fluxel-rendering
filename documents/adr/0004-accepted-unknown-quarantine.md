@@ -1,54 +1,30 @@
-# ADR-0004: Quarantine accepted-unknown GPU work
+# ADR-0004: Historical submission-uncertainty quarantine
 
-**Status:** Superseded by the normative [RHI API v1 submission acceptance
-contract](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md)
-for 0.16.
+**Status:** Superseded. The historical quarantine protocol does not define the
+current RHI or renderer contract.
 
-**Supersession note.** This ADR preserves the evidence and safety concern from
-the pre-v1 implementation history, but it does not define the 0.16 public API.
-The accepted-unknown quarantine name and its generation-poisoning model are not
-part of the v1 contract.
+## Historical context
 
-## Current RHI API v1 replacement
+The pre-independent-RHI renderer used an `accepted-unknown` state after a
+submission error whose native effect could not be determined. It retained the
+objects that might still be referenced rather than treating every error as a
+clean rejection.
 
-`Device::submit()` returns `Err` only when it guarantees that **zero native
-work from the plan was accepted**. Once any native work has been accepted,
-`Device::submit()` returns `Ok(SubmissionReceipt)`; a later submit failure,
-device loss, presentation failure, or retirement outcome is reported through
-the receipt's terminal `CompletionState` and, where applicable,
-`PresentState`. Those terminal states exclusively own all post-acceptance
-failure and retirement reporting. Accepted work remains retained until that
-terminal lifecycle allows safe retirement.
+## Durable lesson
 
-## Context
+A successful return is not completion, and a failed call is not necessarily a
+proof that no work was issued. The current RHI distinguishes rejected,
+accepted, partially accepted, and indeterminate outcomes. Renderer and Graph
+must retain every resource possibly affected by the reported prefix or
+uncertainty and must not reuse its state until current RHI evidence or recovery
+makes it trustworthy.
 
-A native submit error may occur after work has been accepted. Treating it as a
-known rejection can release commands, staging memory, resources, or leases
-while the GPU may still reference them.
-
-## Historical decision
-
-Distinguish known pre-submit rejection from accepted-unknown work and terminal
-completion failure. Accepted-unknown work retains/quarantines all referenced
-objects until safe retirement; it never publishes guessed outgoing state or a
-ready snapshot.
-
-## Alternatives
-
-- Collapse all submit errors into one `Result` failure.
-- Use queue-idle or a blocking drop as cleanup.
-
-## Consequences
-
-Pending operations are owning, non-blocking state machines. Renderer snapshot
-reservations release before accepted work, but terminal failure or early drop
-after acceptance poisons an affected generation when its state is unknown.
+The old name, generation poisoning, and local state machine are removed. Exact
+submission, completion, and recovery behavior belongs to the current
+[RHI Core design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md).
 
 ## Evidence
 
-0.1.2 formalized structured completion and quarantine. 0.2.0 upload and
-0.2.1–0.2.7 snapshot fault fixtures exercised partial acceptance, failure,
-drop, and subsequent reuse behavior.
-
-See [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md) and [Renderer design](../design-renderer.md)
-for the current lifecycle contract.
+The old tests remain historical evidence that silent early retirement was
+unsafe. New consumers test current RHI outcomes rather than reproducing this
+protocol.

@@ -625,7 +625,7 @@ Future draw preparation answers:
 Preparation also turns shader reflection and a material variant's parameter,
 uniform, texture, buffer, and sampler schema into a concrete binding-use
 manifest. For every buffer or texture it names the RHI resource, relevant
-range, access, shader stage, device identity, and generation. The active
+range, access, shader stage, and RHI device provenance. The active
 pipeline declares that manifest to Graph before recording; binding a material
 object does not bypass graph resource declaration or dependency analysis.
 Samplers remain validated binding inputs but are not memory accesses.
@@ -668,7 +668,12 @@ is a renderer preparation service with the limited contract described in section
 independent submission path.
 
 The first extensibility gate is deliberately small: the renderer's built-in mesh
-feature plus one feature implemented in a separate Rust crate. It must exercise
+feature plus one feature implemented in a separate Rust crate. The public trait,
+context facade, handles, and errors used by that crate are the supported surface;
+graph compiler, scheduler, allocator, RHI submission, and backend objects are
+not. A small external compile/run prototype shapes that surface while the
+Forward path is built, before the final integration closure. The Feature must
+exercise
 batched incremental input, feature-owned storage, a declared phase, and graph
 resource/pass contribution. This proves only the exercised subset of the
 extension interface. Stabilizing cross-pass contribution or shader/material
@@ -820,9 +825,12 @@ passes, topology, logical resources, and declared resource uses. Compilation
 turns a definition into a device-specific plan. Per-frame instantiation binds
 the current imports, attachments, prepared material bindings, and dynamic
 values. The last step may refresh a binding only when it preserves the compiled
-layout and already-declared concrete resource-use manifest. A topology, binding
-layout, access, or resource-edge change makes a new definition and recompiles;
-it must not be hidden in a cached plan.
+layout and compatible concrete resource-use, alias, and dependency contracts.
+Resource-instance churn, including large read-only material sets, does not by
+itself make a new graph. Each concrete range and access is revalidated. A
+topology, binding-layout, incompatible access/range, alias relationship, or
+resource-edge change makes a new definition and recompiles or fails
+structurally; it must not be hidden in a cached plan.
 
 ---
 
@@ -941,17 +949,24 @@ own persistent asset lifetime
 It consumes already-resolved render/GPU resources through explicit graph
 imports/bindings.
 
-### 21.1 Residency upload and frame work
+### 21.1 Persistent residency, frame data, and frame work
 
-GPU residency upload is distinct from frame-graph work. The renderer's
-residency coordinator may upload CPU-prepared immutable or streaming content,
-including terrain tiles, bone-palette input data, and particle seed/input data,
-through RHI before graph recording. It owns the upload request, resource
-identity, accepted producer submission, completion evidence, and failure/loss
-outcome. It records each completed or pending upload as an imported resource
-state and producer dependency for the graph; a consuming graph pass cannot read
-the resource until the dependency is represented in the shared RHI submission
-and completion model.
+Persistent residency upload is distinct from frame-graph work. The renderer's
+residency coordinator realizes CPU-prepared immutable or streaming content,
+including meshes, textures, and terrain tiles, through RHI before graph
+recording. It owns the persistent realization's asset/content identity, accepted
+producer submission, completion evidence, and failure/loss outcome.
+
+Frame-data upload has a separate lifetime for current-frame transforms, bone
+palettes, and similar per-frame inputs. It may reuse the same low-level staging
+and transfer mechanism, but it is not a long-lived residency asset cache.
+Particle seed/input data follows the lifetime selected by its consumer rather
+than making the residency coordinator a general frame scheduler.
+
+Both paths record a completed or pending producer as an imported resource state
+and dependency for Graph. A consuming pass may use a pending producer only when
+the shared RHI plan has an enforceable dependency and matching visibility/state
+transition; it is not globally complete merely because CPU preparation ended.
 
 The coordinator also orders upload writes after any previous readers/writers of
 the destination range, or allocates a fresh realization while the old one is in
@@ -965,8 +980,8 @@ Per-frame GPU work belongs in RenderGraph: GPU skinning, particle simulation,
 culling, indirect-argument generation, and other dispatch/draw/copy work are
 ordinary graph passes with declared reads and writes. The coordinator is not a
 second frame scheduler and cannot create invisible resource accesses. A feature
-may request residency preparation, but cannot submit it; cross-device or stale
-generation resources, unsupported uses, failed uploads, and unavailable
+may request preparation, but cannot submit it; wrong-device resources,
+unsupported uses, failed uploads, and unavailable
 completion dependencies return structured preparation/graph/RHI errors before
 the consuming pass records.
 
@@ -976,8 +991,8 @@ cross-device reuse, conceptually including:
 ```text
 logical asset identity
 content generation
-DeviceIdentity
-DeviceGeneration
+the selected RHI DeviceId/provenance
+any private generation exposed by the selected RHI contract
 ```
 
 Exact cache ownership belongs to the renderer/resource preparation layer, not
@@ -989,7 +1004,14 @@ RenderGraph.
 
 Renderer preparation may retain device-local resources needed by a frame.
 
-However:
+However, RHI reports whether work was rejected, accepted, partially accepted,
+failed with an issued prefix, or indeterminate, as well as any completion or
+loss facts. The renderer preserves every resource that could be affected by a
+partial or indeterminate outcome and refuses reuse until terminal evidence or
+the selected recovery path makes its state trustworthy. The obsolete
+"accepted-unknown" protocol is not retained, but uncertainty is not erased.
+
+The authoritative facts include:
 
 ```text
 submission acceptance
@@ -997,8 +1019,8 @@ GPU completion
 device-loss outcome
 ```
 
-are reported authoritatively by RHI. Renderer/RenderGraph retain submitted
-resources and decide reuse or retirement only from those reported facts.
+Renderer/RenderGraph retain submitted resources and decide reuse or retirement
+only from these RHI facts.
 
 Renderer code must not guess that a resource is safe to recycle merely because:
 
@@ -1040,6 +1062,15 @@ pipeline requirements
 ```
 
 `FramePipeline` decides how those variants participate in passes.
+
+Material contributes evaluation WGSL and generic Shader-owned source/interface
+information. Before compilation, `FramePipeline` combines that contribution with
+the selected pass template, entry points, geometry interface, static choices,
+and target requirements to make a complete `ShaderCompositionRequest`. A Shader
+consumer that has no material uses the same request without a material
+contribution. Shader composes and validates the portable source/artifact;
+the opened RHI device chooses its supported shader route and keeps backend
+lowering, native compilation, and ABI details private.
 
 RenderGraph does not compile material graphs or compose shader source.
 
@@ -1323,8 +1354,9 @@ During migration:
 - retain tests/evidence where they still prove lower-level behavior;
 - migrate useful resource/preparation invariants into the new architecture;
 - remove fixed recipe assumptions from the future public API;
-- do not carry obsolete execution-plan, browser-token, or accepted-unknown
-  semantics into the new foundation.
+- do not carry obsolete execution-plan, browser-token, or the old
+  accepted-unknown protocol into the new foundation; preserve current RHI
+  partial/indeterminate outcome handling and retention requirements.
 
 ---
 

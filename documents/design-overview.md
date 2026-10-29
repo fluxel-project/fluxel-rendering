@@ -36,8 +36,9 @@ RenderScene
 ```text
 MaterialGraph
         -> Material IR
-        -> material evaluation WGSL + ShaderCompositionRequest
-        -> Shader System + renderer-selected pass template
+        -> material evaluation WGSL + generic source/interface contribution
+        -> FramePipeline adds pass template, entry points, geometry and target facts
+        -> ShaderCompositionRequest -> Shader System
         -> ShaderArtifact / Pipeline requirements
 ```
 
@@ -47,11 +48,15 @@ authoring graph is not walked by a pass.
 
 Material owns material function definitions/references, typed parameters,
 uniform schemas, resource requirements, and function-call composition. It
-generates material evaluation WGSL from its own IR. Shader owns the complete
-shader program/module, stage entry points, composition, validation, compilation,
-metadata, and reflection. `ShaderCompositionRequest` is a small Shader-owned
-source-and-interface contract; Shader never receives `MaterialIr` or depends on
-Material. Renderer supplies the selected pass template and pipeline requirements.
+generates evaluation WGSL and generic Shader-owned source/interface vocabulary
+from its own IR. `FramePipeline` combines that contribution with its pass
+template, entry points, geometry interface, static choices, and target
+requirements to make one `ShaderCompositionRequest`. Shader owns complete
+program composition, logical validation/reflection, source artifacts, and their
+cache identity; it never receives `MaterialIr` or depends on Material. The
+opened RHI device then selects `ShaderRoute`/`ShaderTarget` and performs any
+backend Naga or native lowering, compilation, and ABI validation. This is a
+conceptual compilation flow, not the per-frame call chain.
 
 A shader module may contain several entry points; a GPU pipeline selects the
 applicable stages and fixed-function state. A Graph pass is an execution node,
@@ -102,11 +107,11 @@ buffers, textures, pipelines, bindings, and frame attachments.
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| `fluxel-renderer` | RenderScene, views, Features, FramePipeline and reference pipelines, visibility, sorting, batching, residency, draw preparation, retirement, internal Graph | Gameplay/ECS, platform I/O, backend objects, host policy |
+| `fluxel-renderer` | RenderScene, views, Features, FramePipeline and reference pipelines, visibility, sorting, batching, residency, frame-data uploads, draw preparation, retirement, internal Graph | Gameplay/ECS, platform I/O, backend objects, host policy |
 | Renderer `graph` module | Logical resources/versions, dependencies, definedness, hazards, lifetimes, transitions, deterministic plans | Scene/material semantics, asset policy, backend allocation mechanisms |
-| `fluxel-material` | MaterialGraph, material functions/code nodes, typed composition IR, evaluation-code generation, parameter/uniform schemas, instances, material variants, Shader requests | Renderer dependency, graph passes, submission, executable shader IR |
-| `fluxel-shader` | Generic source/function interfaces, complete program composition, WGSL/Naga, entry points, reflection, binding ABI, artifacts, variants, compilation caches | MaterialGraph/MaterialIr semantics, scenes, rendering strategy |
-| `fluxel-rhi` | Portable GPU resources, capabilities, recording, submission, completion, presentation, device lifecycle | Renderer policy, graph declarations, gameplay/asset policy, native objects in its public API |
+| `fluxel-material` | MaterialGraph, material functions and later code nodes, typed composition IR, evaluation-code generation, parameter/uniform schemas, instances, material variants, generic Shader contributions | Renderer dependency, graph passes, submission, executable shader IR |
+| `fluxel-shader` | Generic source/function interfaces, complete program composition, logical WGSL/Naga validation/reflection, artifacts, variants, source-level compilation caches | MaterialGraph/MaterialIr semantics, scenes, rendering strategy, backend-private ABI or compiler ownership |
+| `fluxel-rhi` | Portable GPU resources, capabilities, device shader-route selection and target ABI, backend lowering/compilation, recording, submission, completion, presentation, device lifecycle | Renderer policy, graph declarations, gameplay/asset policy, native objects in its public API |
 
 `fluxel-assets` stays in `fluxel-bases` and owns durable `AssetId<K>`, immutable
 `ContentGeneration`, producer coordination, and CPU cache policy. Callers own
@@ -129,12 +134,15 @@ and strategy; Features contribute packets, shader/material requirements, and
 graph-visible GPU work. Object sorting differs from Graph dependency scheduling.
 GPU-generated indirect work need not become a final CPU DrawList. All frame
 rendering, simulation, and compute accesses stay under Graph authority.
-Renderer's residency upload coordinator may submit transfers through RHI before
-frame execution. Those transfers expose resource ranges, incoming states, and
-producer dependencies to Graph/RHI; consumers wait for the producer through
-the same submission/completion model. Features request preparation rather than
-submit independently. This is one resource-lifetime model, not another frame
-scheduler. See [the upload boundary](design-renderer.md#211-residency-upload-and-frame-work).
+Persistent residency uploads realize immutable meshes, textures, and streamed
+tiles per device. Per-frame transforms, bone palettes, and similar frame inputs
+use a separate frame-data upload lifetime, although both paths may share a
+low-level transfer implementation. Each path exposes resource ranges, incoming
+states, producer dependencies, visibility requirements, and retention evidence
+to Graph/RHI. A pending producer may feed a specific consumer only through an
+enforceable RHI dependency; it is not globally complete. Features request this
+preparation rather than submit independently. GPU skinning, simulation, culling,
+and indirect generation are Graph passes. See [the upload boundary](design-renderer.md#211-persistent-residency-frame-data-and-frame-work).
 
 Reflection describes shader binding usage; preparation resolves it to concrete
 resources, ranges, and access modes. Pass declarations must include the complete
@@ -146,13 +154,16 @@ Renderer owns the `FramePipeline` module and exposes the minimal public Rust
 trait/context facade needed for external implementations. Its graph compiler,
 scheduler, and allocator internals remain private.
 
-The MVP proves built-in Mesh plus a minimal Feature in an independent Rust
-crate to validate the exercised extension subset. It accepts batch updates,
-participates in a phase, and declares resources without a core object-type
-switch. Full terrain, water, particles, skinning, and area lights are later
-workloads. Cross-pass and shader-extension contracts require a second,
-materially different Feature consumer before stabilization. Rust crate plugins
-are supported; dynamic DLL loading is unscheduled.
+The MVP closes only when the built-in mesh path and an independent Rust crate
+use the same frame: a custom material, an external `RenderFeature`, and an
+external `FramePipeline`. The public trait, context facade, handles, and errors
+used by that crate are the supported extension surface; graph compiler,
+scheduler, allocator, RHI submission, and backend objects remain private.
+Feature/phase seams are shaped and compiled against a small external prototype
+during renderer work, rather than added after Forward is complete. Cross-pass
+and shader-extension contracts require a second materially different Feature
+consumer before stabilization. Rust crate plugins are supported; dynamic DLL
+loading is unscheduled.
 
 ## Migration and delivery
 
@@ -178,8 +189,9 @@ sequencing commitments. The
 FramePipeline
         -> RenderGraph definition / compile
 CompiledGraph + per-frame RHI bindings
-        -> RHI RecordedWork
-        -> RHI SubmissionPlan
+        -> RHI SubmissionPlan + explicit transitions
+        -> RHI execution: deferred recording or immediate issue
+        -> finish outcomes + completion evidence
 ```
 
 RenderGraph compiles against the current RHI device and its authoritative
@@ -189,21 +201,30 @@ profiling proves their value.
 
 A stable Graph definition describes topology and resource-use contracts;
 `CompiledGraph` caches a device-specific execution plan; per-frame bindings
-provide actual resources and dynamic values. Reuse requires compatible
-contracts. Topology, dependency, or incompatible resource-use changes require
-recompilation; frame-to-frame topology stability is not promised.
+provide actual resources and dynamic values. Replacing many material textures
+or buffers can reuse that plan when layouts, declared access modes/ranges,
+aliases, and dependency contracts remain compatible. Instantiation revalidates
+each concrete binding manifest. A topology, dependency edge, incompatible
+resource use/range, or binding-layout change recompiles or fails structurally;
+resource-instance churn alone does not. This makes no complexity promise and
+does not require frame topology to stay stable.
 
 Graph imports may be logical slots for reusable definitions, but they bind
-directly to portable RHI resources. RHI/graph validation checks device identity
-and generation, descriptor compatibility, allowed usage, known state,
-pipeline/binding compatibility, and presentation lifetime. `FrameAttachment`
-remains distinct from `Texture`.
+directly to portable RHI resources. RHI/graph validation checks the selected
+RHI device provenance, descriptor compatibility, allowed usage, known state,
+pipeline/binding compatibility, and presentation lifetime. A renderer cache
+may add a private generation only where the selected RHI exposes one; it must
+not invent a public `DeviceGeneration` contract. An acquired `SurfaceImage` is
+an exclusive presentation lease; `AttachmentView` distinguishes its surface
+variant from an ordinary texture view.
 
-RenderGraph owns logical lifetime, alias analysis, transition selection, and
-GPU dependency planning. RHI supplies allocation requirements, realizes the
-chosen allocation, and lowers the supplied native alias and synchronization
-instructions. Dedicated transient allocation is the correct fallback; aliasing
-is optional.
+RenderGraph owns logical lifetime, alias eligibility, portable transitions, and
+GPU dependency planning. It may choose a portable allocation placement only
+through the RHI allocation contract. RHI supplies allocation requirements and
+realizes the selected placement or dedicated fallback; each backend selects and
+lowers its native barriers, alias operations, heaps, and synchronization. A
+wait alone does not establish memory visibility. Dedicated transient allocation
+is the correct fallback; aliasing is optional.
 
 ## Validation and evidence
 
@@ -220,5 +241,5 @@ and conformance evidence before publication.
 
 See [renderer design](design-renderer.md),
 [RenderGraph design](design-rendergraph.md),
-[material design](design-material.md), and
+[material design](design-material.md), [Shader design](design-shader.md), and
 [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md) for layer-specific detail.

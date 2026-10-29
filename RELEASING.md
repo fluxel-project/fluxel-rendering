@@ -1,99 +1,78 @@
-# Releasing Fluxel Renderer
+# Releasing Fluxel Rendering
 
-Each rendering-workspace release uses one package version and one annotated tag. For
-example, package version `0.7.0` is released as `v0.7.0`; the tag points to the
-same commit consumed by the rendering workspace's Git dependencies. `fluxel-rhi`
-is released from its separate repository.
+A rendering release is identified by one workspace package version and an
+annotated tag, such as `v0.16.0`. The independent `fluxel-rhi` has its own releases;
+its version is not coupled to the rendering workspace version. Source consumers
+must pin tags or revisions.
 
-Before creating that tag, commit the release candidate and make sure the
-checkout is clean. On a Windows `x86_64-pc-windows-msvc` machine with both
-DX12 and Vulkan validation available, run:
+## Migration status
 
-```powershell
-./scripts/conformance.ps1
-```
+The old top-level platform examples and `scripts/` verification harnesses have
+been removed. Their old commands are not a current release procedure. Retained
+results in historical tags prove only their original revisions and targets.
 
-The script is deliberately fail-closed: it rejects a dirty checkout, a GNU or
-other non-Microsoft host/target, an invalid `HEAD`, and a conflicting
-`CARGO_BUILD_TARGET`. It runs all workspace ignored fixtures, stores the exact
-SHA and test command in `target/conformance/<sha>/manifest.json`, and keeps
-the combined Cargo log there even if a fixture fails.
+S0 of the [implementation plan](documents/version-plan.md) establishes the new
+integration artifact, target matrix, executable commands, lock inputs, and evidence
+location. Until its replacement verification path exists and passes, no new
+hardware support or release claim can be inferred from portable tests. This
+document specifies the gate; it does not claim the future harness is implemented.
 
-A green Cargo exit is not by itself a pass. The gate additionally requires that
-at least the expected number of ignored cases actually ran and that a GPU adapter
-was recorded, because libtest treats an `--ignored` filter that matched nothing
-as success — it prints `running 0 tests` and exits 0 — so a dropped or renamed
-`#[ignore]` would otherwise be recorded as a clean run, and a run with no adapter
-cannot be attributed to hardware at all. The manifest states both counts, the
-shortfalls when there are any, and the toolchain that ran; a previous manifest
-for the same SHA is kept beside it as `manifest.json.previous`, since the
-artifact directory is keyed by SHA and a later failing run would otherwise
-replace a passing verdict without a trace. Inspect the manifest and log before
-tagging. They stay out of the source commit so that the tested SHA does not
-change, and they stay local: they are this machine's record of the run, not
-something a release has to publish. Nothing is uploaded anywhere, and no release
-step depends on an artifact URL existing.
+## Candidate inputs
 
-A release that moves the workspace version also moves the version of every path
-dependency in it, and the three example projects under `examples/` are separate
-Cargo projects with separate lock files. Committing the bump without refreshing
-them leaves a candidate whose harnesses cannot build: Cargo refuses to resolve
-`fluxel-rhi` at the new version against a lock that still names the old one, so
-the first hardware gate fails rather than the workspace gate. Run
-`cargo update --workspace --offline` in each of those directories — or run
-`python scripts/check_lockfile_versions.py`, which names the lock and the
-manifest that disagree and is also a CI row.
+Before tagging, record:
 
-After the conformance gate and the required platform checks pass, create an
-annotated tag, push the branch and tag, then verify that `origin/main` and the
-remote tag resolve to the same release commit. **The push is the release.** There
-is no GitHub Release to create, no asset to attach, and no GitHub CLI in this
-process: the annotated tag is the release identity, and the evidence for it is
-the gate record above plus whatever the repository already retains. Do not create
-or push a release tag when the hardware gate has failed or could not run.
+- the exact Rendering candidate and participating Bases/RHI/Host/JSBridge commits;
+- package versions, selected Cargo features, toolchains, and relevant lock hashes;
+- the runnable integration artifact and independent public-API consumer;
+- supported and affected targets, backend/device/runtime identities, validation
+  settings, unsupported routes, and required missing evidence; and
+- commands, fixed workloads, expected outputs, and the evidence retention paths.
 
-When a release changes the browser executor, also build the release WASM for
-the exact candidate commit and run the named-browser evidence harness against
-the matching `fluxel-jsbridge` candidate. Keep its manifest, representative
-screenshots, and browser diagnostics with an explicit SHA-256 checksum, and
-record both repository SHAs. What has to survive is the reading, not the file: a
-representative capture belongs in `scripts/tests/data/` beside the other retained
-fixtures, and the rest is regenerable (§7 of the project rules). Browser evidence
-is additional to, never a replacement for, the native DX12/Vulkan gate above.
+Refresh every affected manifest and lockfile, including independent integration
+consumers. Build the actual producer artifact with those consumers. A dependency
+change must not be certified from separate green library tests.
 
-When a release changes the GL family, the same candidate also needs the
-GL-specific gates, in this order:
+The integration artifact owner maintains a machine-readable closure manifest.
+The planned rendering destination is
+`target/integration/<stage>/<rendering-sha>/manifest.json`; S0 makes the path and
+commands executable. Evidence records must remain retrievable and attributable
+to the tested commits after a release. Large generated artifacts need not enter
+Git, but deleting their only retained copy invalidates reproducibility claims.
 
-```powershell
-python scripts/check_gl_architecture.py
-python scripts/check_desktop_gl4_conformance.py --report scripts/tests/data/desktop_gl4_radeon_780m.json
-python scripts/check_gl4_raster_readback.py
-python scripts/check_gl_state_cache_screening.py --guard --draws 1
-```
+## Verification gate
 
-The draw count is part of the guard command and not a default: the guard is the
-frame that has *nothing to skip*, and the script refuses any round that skipped
-something rather than reporting a screening as its own guard. `--draws` defaults
-to the screening's 2000, so `--guard` alone is a run the gate rejects — which is
-the gate working, and why the arguments above are the ones to copy.
+Follow the ecosystem [evidence policy](https://github.com/fluxel-project/.github/blob/main/EVIDENCE_POLICY.md).
+Use focused checks during development and the complete affected target matrix
+for stage close or release; there is no fixed quota on full verification runs.
 
-The first is the three-layer import boundary and runs anywhere. The second
-re-adjudicates a durable conformance report on a machine with no GPU, so CI can
-hold a driver claim to its numbers; a report that no longer adjudicates green
-must be re-measured, not re-labelled. The third drives a real desktop GL context
-and requires the driver and GPU to be recorded with it, and the fourth does the
-same for the state cache's guard frame, where it must find no regression. Both
-hardware gates write the commit they ran under, what that checkout held beyond
-it, and which interpreter ran them, into their reports; a reading that cannot be
-attributed to a revision is not evidence for one.
+The release candidate must pass formatting, relevant Clippy/compile checks,
+focused contract/regression tests, and all required real-target runs. Check that
+the intended cases actually ran; zero matched tests do not establish a pass.
+Preserve diagnostics and partial artifacts when execution fails.
 
-The screening's exit status is part of its contract rather than a convenience: a
-`--guard` run that reports a regression exits non-zero, while a screening that
-finds the candidate did not beat the baseline exits 0, because that is an
-ordinary result of the experiment and not a failure of the run. Read the verdict
-from the report either way.
+For graphics behavior, inspect actual output. For continuous frames, resize,
+loss/recreation, or multi-frame reuse, retain sufficiently dense frame/readback
+or recording evidence to detect stale contents and intermittent failures. A clean
+validation log, surviving process, or successful present call is insufficient.
 
-A frame that comes from a GLES implementation reached through EGL, or from a
-browser, is evidence about that implementation and must say so rather than being
-filed as desktop GL evidence. Do not create or push a release tag when any of
-these has failed or could not run.
+Exercise the selected RHI's acceptance/completion outcomes, safe resource
+retirement, and the affected public extension consumer. Browser evidence requires
+the actual WASM artifact and matching JSBridge revision. A named browser does not
+certify another browser or a mini-game host; emulator evidence does not replace a
+required physical-device run. Missing required evidence leaves its support claim
+open. Unsupported cases must return the documented structured result.
+
+Performance claims additionally retain reproducible baseline/candidate workloads,
+raw metrics, measurement procedure, and declared thresholds. Do not substitute a
+counter of successful API calls for GPU timing or memory behavior.
+
+## Publication
+
+After all required checks pass, ensure the candidate source and dependency inputs
+are committed. Bind evidence to those exact commits, create an annotated tag, and
+push the branch and tag. Verify the remote branch/tag identities. Do not create a
+release tag for a failing or unverified required matrix.
+
+The annotated tag is the release identity; a GitHub Release object is not required.
+Ordinary documentation commits and stage-planning updates do not require a release
+tag and do not imply that the described implementation gates have closed.

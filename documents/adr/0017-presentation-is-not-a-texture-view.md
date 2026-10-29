@@ -1,22 +1,20 @@
-# ADR-0017: Keep presentation frames separate from textures and completion
+# ADR-0017: Keep acquired presentation images separate from textures
 
-**Status:** Accepted
-
-## Context
-
-Swapchain images, WebGPU current textures, CAMetalDrawables, and GL default
-framebuffers do not share normal texture ownership. Present timing also differs
-from GPU completion.
+**Status:** Accepted.
 
 ## Decision
 
-`FrameAttachment` is distinct from `Texture` and `TextureView`; an acquired
-frame is non-cloneable and has one lifecycle. Presentation is planned before
-submission, while acceptance, completion, and present outcome are separate.
-`abandon()` terminates ownership without promising a cheap native release.
+An acquired presentation image is an exclusive, configuration-bound RHI surface
+lease. In the current RHI it is represented by `SurfaceImage` and used through
+`AttachmentView`; it is not a general `Texture`. It can be presented or
+abandoned according to the surface contract exactly once.
+
+Submission acceptance, GPU completion, and presentation outcome are separate
+facts. A resize, browser callback, or successful present call does not prove
+completion.
 
 ## Consequences
 
-Backend lowering can normalize attachments privately without leaking a
-swapchain model. WebGPU waits for browser current-texture expiry after abandon
-before issuing a distinct frame identity.
+Graph models a presentation import without a second texture or presentation
+resource system. Host/platform adapters own lifecycle events while RHI owns
+surface configuration, acquisition, and native presentation behavior.

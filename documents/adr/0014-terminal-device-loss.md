@@ -1,22 +1,19 @@
-# ADR-0014: Treat device loss as a terminal device identity state
+# ADR-0014: Treat a lost device domain as terminal
 
-**Status:** Accepted
-
-## Context
-
-Native APIs cannot revive a removed device safely, and browser contexts have
-the same ownership problem. A mutable generation counter would permit stale
-objects to appear valid after recovery.
+**Status:** Accepted.
 
 ## Decision
 
-Loss is terminal for one `DeviceIdentity`. It wakes pending completion,
-readback, acquire, present, and idle futures; later operations return structured
-`DeviceLost`; `status()` and `loss_info()` remain synchronously queryable. A
-new request creates a distinct identity. There is no required `wait_lost()` API.
+After a terminal loss outcome, work and resources from that opened device domain
+are not revived. Recovery obtains a new RHI device and rebuilds device-scoped
+plans, pipelines, residency, and surface state from durable CPU inputs.
+
+The selected RHI's `DeviceId`, loss outcome, and surface lifecycle define the
+actual public facts. Renderer may keep private cache generations where needed,
+but must not invent a competing public device-generation contract.
 
 ## Consequences
 
-Callers recover by rebuilding device-scoped objects. Backends must route every
-native loss observation through the same terminal authority and never publish
-readback success after loss.
+Old resources remain retained or are discarded only through the current RHI
+terminal-outcome rules. Logical asset identity survives recovery; native objects
+do not cross it.
