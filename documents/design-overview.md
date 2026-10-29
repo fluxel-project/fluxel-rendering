@@ -1,7 +1,7 @@
 # Fluxel Rendering workspace architecture
 
 > Architecture status: post-foundation target. The active work order is [the
-> implementation plan](version-plan.md). [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md)
+> implementation plan](version-plan.md). [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md)
 > is the authoritative portable GPU contract; crate rustdoc and contract tests
 > define descriptor-level behavior.
 
@@ -47,14 +47,16 @@ authoring graph is not walked by a pass.
 ## Ownership DAG and portable contracts
 
 The architecture is an ownership DAG, not a single crate dependency chain.
-The concrete split between `material` and `shader` crates remains a later
-decision. The intended semantic ownership relationships are:
+The target has three principal crates: `fluxel-shader`, `fluxel-material`, and
+`fluxel-renderer`. RenderGraph and the `FramePipeline` SPI are internal renderer
+modules. The existing standalone graph crate and WASM capsule are migration
+inputs. The intended semantic ownership relationships are:
 
 ```text
-Material compiler -> Shader System
-Renderer -> Material Runtime
-Renderer -> Shader System
-Renderer -> RenderGraph
+fluxel-material -> fluxel-shader
+fluxel-renderer -> fluxel-material
+fluxel-renderer -> fluxel-shader
+fluxel-renderer contains RenderGraph + FramePipeline
 RHI -> private backends
 ```
 
@@ -84,14 +86,55 @@ buffers, textures, pipelines, bindings, and frame attachments.
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| `fluxel-renderer` | RenderScene, FramePipeline SPI, visibility, culling, sorting, asset-to-GPU residency, material/variant selection, draw preparation | Graph planning, RHI resource lifecycle, native backend objects, host/window policy |
-| `fluxel-rendergraph` | Logical resources and versions, declarations, dependencies, culling, logical lifetimes, deterministic graph plan | Scenes, editable material graphs, asset policy, physical allocation strategy, native backend details |
+| `fluxel-renderer` | RenderScene, views, Features, FramePipeline and reference pipelines, visibility, sorting, batching, residency, draw preparation, retirement, internal Graph | Gameplay/ECS, platform I/O, backend objects, host policy |
+| Renderer `graph` module | Logical resources/versions, dependencies, definedness, hazards, lifetimes, transitions, deterministic plans | Scene/material semantics, asset policy, backend allocation mechanisms |
+| `fluxel-material` | MaterialGraph, code nodes, typed IR, parameters, instances, material variants, Shader requests | Renderer dependency, graph passes, submission, executable shader IR |
+| `fluxel-shader` | Fragments, composition, WGSL/Naga, reflection, binding ABI, artifacts, variants, compilation caches | MaterialGraph semantics, scenes, rendering strategy |
 | `fluxel-rhi` | Portable GPU resources, capabilities, recording, submission, completion, presentation, device lifecycle | Renderer policy, graph declarations, gameplay/asset policy, native objects in its public API |
 
-`fluxel-assets` owns durable `AssetId<K>` and `ContentGeneration`. Renderer
+`fluxel-assets` stays in `fluxel-bases` and owns durable `AssetId<K>`, immutable
+`ContentGeneration`, producer coordination, and CPU cache policy. Callers own
+loading, decoding, hot reload, and streaming policy; Host/adapters supply I/O.
+It gains no GPU or platform dependency. Renderer
 GPU residency is per-device and private. Typed geometry or material references
 must ultimately refer to that identity; `MaterialInstance` may have a distinct
 renderer identity because an instance is not a material asset.
+
+## Data and extension boundaries
+
+RenderScene is a render-only data store, not another ECS. Adapters push batched
+incremental updates into typed dense storage using stable generational RenderIds.
+They own mappings from external entities/scene nodes. Frame snapshots separate
+updates from concurrent readers; dirty ranges bound uploads. Layout follows
+access patterns rather than requiring one universal SoA shape.
+
+Features operate on batches and own typed data. FramePipeline selects phases
+and strategy; Features contribute packets, shader/material requirements, and
+graph-visible GPU work. Object sorting differs from Graph dependency scheduling.
+GPU-generated indirect work need not become a final CPU DrawList. All GPU
+accesses and submission stay under Graph authority.
+
+The MVP proves built-in Mesh plus a minimal Feature in an independent Rust
+crate before extension interfaces stabilize. It accepts batch updates,
+participates in a phase, and declares resources without a core object-type
+switch. Full terrain, water, particles, skinning, and area lights are later
+workloads. Rust crate plugins are supported; dynamic DLL loading is unscheduled.
+
+## Migration and delivery
+
+The current workspace still has `fluxel-rendergraph`, `fluxel-renderer`, and
+`fluxel-rendering-wasm`, and pins an older RHI integration. Internalizing Graph,
+creating Material/Shader crates, and upgrading real pinned consumers are planned
+implementation work. Preserve code, tests, and evidence instead of maintaining
+parallel engines. RHI is stable; select exact releases/revisions and re-prove
+their composition rather than assuming old examples remain compatible.
+
+Reuse Bases, establish internal Graph/RHI execution, then prove Shader and the
+Material-driven Renderer MVP with its external Feature. Material/pipeline
+expansion and measured performance/resource strategies complete the active scope.
+The five undecided features are listed in the product plan without design or
+sequencing commitments. The
+[implementation plan](version-plan.md) supplies the evidence gates.
 
 ## Graph and RHI integration
 
@@ -114,10 +157,11 @@ and generation, descriptor compatibility, allowed usage, known state,
 pipeline/binding compatibility, and presentation lifetime. `FrameAttachment`
 remains distinct from `Texture`.
 
-RenderGraph owns logical lifetime and alias analysis. RHI owns allocation
-requirements, allocation realization, native alias barriers, heap placement,
-and backend-specific synchronization. Dedicated transient allocation is the
-correct fallback; aliasing is optional.
+RenderGraph owns logical lifetime, alias analysis, transition selection, and
+GPU dependency planning. RHI supplies allocation requirements, realizes the
+chosen allocation, and lowers the supplied native alias and synchronization
+instructions. Dedicated transient allocation is the correct fallback; aliasing
+is optional.
 
 ## Validation and evidence
 
@@ -135,4 +179,4 @@ and conformance evidence before publication.
 See [renderer design](design-renderer.md),
 [RenderGraph design](design-rendergraph.md),
 [material design](design-material.md), and
-[RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md) for layer-specific detail.
+[RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md) for layer-specific detail.

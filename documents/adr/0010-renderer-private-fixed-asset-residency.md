@@ -3,7 +3,7 @@
 **Status:** Accepted for renderer-private residency. The `0.14` browser-token
 implementation detail is historical. All RHI identity, submission, completion,
 presentation, retirement, and loss semantics are defined solely by
-[Fluxel RHI architecture](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md).
+[Fluxel RHI architecture](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md).
 
 ## Context
 

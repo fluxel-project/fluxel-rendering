@@ -1,78 +1,79 @@
 # Fluxel Rendering Product Plan
 
-> Status: active product direction. This document sequences product outcomes;
-> it does not freeze public API detail. Normative low-level contracts remain in
-> the RHI design, RenderGraph design, ADRs, and the
-> [implementation plan](version-plan.md).
+> Status: active target direction. The organization [roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
+> owns ecosystem order; [version-plan.md](version-plan.md) supplies implementation
+> gates. Target architecture is not a claim of completed implementation.
 
 ## Product direction
 
-Fluxel is a Rust rendering framework whose primary authoring experience is
-native Blender integration. Rust owns rendering semantics, shader assembly,
-material runtime, RenderGraph, and renderer execution. Blender is an authoring
-and diagnostic frontend, not a second rendering authority.
+Fluxel provides a complete, extensible, data-oriented real-time renderer without
+requiring an ECS, game scene model, host, or particular rendering strategy.
+Renderer owns views/camera data, visibility, draw preparation, sorting, batching,
+GPU residency coordination, and frame execution.
 
-The intended authoring loop is:
+The target workspace has three principal crates: `fluxel-shader`,
+`fluxel-material`, and `fluxel-renderer`. RenderGraph and the replaceable
+`FramePipeline` SPI are renderer modules. Shader provides reusable compilation
+infrastructure; Material owns material semantics and consumes Shader. Neither
+depends on Renderer. See [workspace architecture](design-overview.md).
 
-```text
-Blender-authored material -> Fluxel material/shader semantics
-    -> Fluxel renderer -> Blender preview and exported runtime
-```
-
-Preview and runtime consume the same Material IR, shader variant, parameters,
-textures, and renderer path. Fluxel does not aim to reproduce EEVEE or Cycles.
-
-Architecture and ownership are specified by the
-[workspace architecture](design-overview.md), [renderer](design-renderer.md),
-[RenderGraph](design-rendergraph.md), [material](design-material.md), and
-[RHI](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md) designs. This product plan only
-orders the outcomes that exercise those contracts.
+`fluxel-assets` remains in `fluxel-bases`, retaining logical identity, immutable
+content generations, producer coordination, and CPU cache policy. Callers own
+loading, decoding, hot reload, and streaming policy; platform services supply
+I/O. Renderer realizes asset snapshots per device and retains GPU resources
+through completion. This plan creates no independent Assets project.
 
 ## Delivery order
 
-The completed RHI baseline is the foundation. Future work proceeds through
-named plans rather than release-number promises:
+1. **Reuse and integration baseline.** Reuse the existing Bases asset core and
+   select exact stable RHI dependencies; identify migration gaps.
+2. **Renderer graph foundation.** Internalize Graph and prove direct RHI
+   execution, reusable plans, overlapping frames, and safe resource retirement.
+3. **Material semantics and Shader core.** Define material/fragment contracts
+   and build the independent Shader crate using WGSL/Naga, reflection,
+   artifacts, variant identity, and caching.
+4. **Material and Renderer MVP.** Render a real textured 3D mesh through
+   Material, Shader, a minimal Forward pipeline, internal Graph, and RHI.
+   Include batch incremental scene updates and a minimal external Rust Feature.
+5. **Material and pipeline expansion.** Grow code nodes, PBR, Forward+, shadows,
+   PostFX, and selected Features. Prove Deferred over shared scene/material
+   contracts as a second pipeline.
+6. **Performance and resource strategy.** Measure representative workloads,
+   residency, memory stability, uploads, and frames in flight. Select streaming,
+   LOD, GPU culling, indirect work, and multi-queue optimization by actual need.
 
-1. **Material and shader plan.** Define MaterialGraph, Material IR, runtime
-   instances, shader modules, composition, reflection, variants, and cache
-   identity; prove one Rust-only material-to-shader vertical slice.
-2. **Minimal scene and Forward plan.** Establish the smallest
-   RenderScene/RenderView/RenderObject vocabulary, the `FramePipeline` SPI,
-   direct RenderGraph/RHI integration, and one Forward implementation.
-3. **Scene preparation and Deferred plan.** Complete culling, deterministic
-   ordering, material selection, diagnostics, and Deferred as an independent
-   pipeline proof.
-4. **Blender authoring plan.** Translate supported Blender data, provide
-   diagnostics and viewport preview, and establish the initial export route.
-5. **Equivalence and export plan.** Prove preview/runtime equivalence with
-   retained fixtures and integration diagnostics.
-6. **Capture and replay plan.** Record and replay dependency-closed
-   RenderScene execution through the normal renderer, graph, and RHI path.
-7. **JavaScript plan.** Expose a narrow language-level integration surface over
-   established Rust contracts. A shared SDK core may be extracted once an
-   established Rust contract and a real adapter prove a stable language boundary;
-   later adapters must not force platform behavior into that core.
-8. **Canvas and text plan.** Add Canvas 2D and minimal text as consumers of the
-   same renderer and prepared-resource model.
-9. **Declarative UI plan.** Build declarative UI on Canvas and text. It may seek
-   Vue-inspired ergonomics, but it is neither Vue compatibility nor a DOM/CSS
-   runtime.
+Each early milestone delivers a runnable vertical slice. Advanced algorithms
+are not all prerequisites for the MVP. The separate Graph crate,
+fixed renderer recipes, and WASM capsule are migration inputs, not the target
+three-crate structure.
 
-Each plan closes only with an integrated, end-to-end evidence slice. A green
-test suite in one crate does not establish an ecosystem contract.
+## Undecided
 
-## Product milestone
+Capture/replay, Canvas 2D and basic text, declarative UI, a Blender plugin,
+and JavaScript wrappers are undecided. They have no delivery order or retained
+design in this plan.
+
+## MVP acceptance
 
 ```text
-Create a cube and material in Blender
-  -> import supported nodes
-  -> build Material IR and shader variant
-  -> preview through a Fluxel built-in pipeline
-  -> export Fluxel assets
-  -> render the same scene in a standalone Rust runtime
-  -> compare preview and runtime output
+Bases snapshots + batched scene changes
+  -> RenderScene / RenderView + built-in Mesh + independent Rust Feature
+  -> visibility, phase sorting, batching, material/shader preparation
+  -> replaceable FramePipeline -> renderer-internal RenderGraph
+  -> stable RHI -> observed textured 3D output
+  -> completion-based reuse and retirement
 ```
 
-After this works, expand node coverage, renderer features, and custom pipeline
-examples incrementally. Do not create a second shader implementation for
-Blender or for individual built-in renderers.
+The external Feature owns typed data, accepts batch updates, participates in a
+pipeline phase, and declares all GPU resource accesses to Graph. Adding it must
+not require a core object-type switch or separate GPU submissions. A small
+fixture suffices; complete terrain, water, particles, and skinning are later
+workloads. ECS-style and ordinary adapters share the batch boundary without an
+ECS dependency. Stabilize extension contracts only after the external proof.
+
+Each milestone needs structured refusal cases, exact participating revisions
+and lock inputs, focused tests, and relevant real-target integration evidence.
+Stable RHI does not certify every optional operation or backend: its
+[open work](https://github.com/fluxel-project/fluxel-rhi/blob/main/TODO.md) and
+[verification limits](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/verification.md)
+remain explicit. One crate's green tests do not close an ecosystem milestone.

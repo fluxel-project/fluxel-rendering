@@ -1,5 +1,10 @@
 # Fluxel RenderGraph design
 
+> Target ownership: the `graph` module inside `fluxel-renderer`, not an
+> independent target crate. The existing `fluxel-rendergraph` package is a
+> migration source whose implementation, tests, and diagnostics are retained.
+> Module ownership preserves graph/scene semantic separation.
+
 RenderGraph is Fluxel's GPU-work planner. It turns a frame pipeline's declared
 passes and logical resources into a deterministic plan, then records that plan
 directly with the portable `fluxel-rhi` API. It is not a second GPU API and it
@@ -8,7 +13,7 @@ is not a backend abstraction.
 The current implementation order is in [the implementation plan](version-plan.md).
 The portable GPU contract—devices, descriptors, resource uses, command
 recording, submission, completion, presentation, and capabilities—is defined
-only by [the RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md).
+only by [the RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md).
 
 ## Position in the frame path
 
@@ -62,6 +67,13 @@ abstraction benefit.
 
 ## Definition, compilation, and execution
 
+The foundation gate reuses a compiled plan across 2–3 overlapping frames,
+retains distinct completion points, and proves safe reuse/retirement without
+waiting for device idle each frame. Cover invalid device/generation binds,
+partial submission failure, and device loss. Features declare all GPU accesses
+through Graph and do not submit separately. The implementation plan defines
+the selected real-backend matrix and exact dependency evidence.
+
 The ordinary path is short:
 
 ```text
@@ -87,7 +99,7 @@ compatibility without copying that model into a bridge.
 
 `GraphInstantiation` or `GraphExecutionPlan` may exist only when they provide a
 real graph-only benefit, such as stable dynamic bindings, deterministic
-diagnostics, CPU-only compile testing, capture provenance, visualization, or
+diagnostics, CPU-only compile testing, visualization, or
 plan caching. They are not mandatory layers. `RecordedWork` and
 `SubmissionPlan` remain RHI objects.
 
@@ -126,9 +138,10 @@ need a second presentation-resource system.
 
 ## Transients and scheduling
 
-RenderGraph derives logical lifetimes, non-overlap, and alias opportunities.
-RHI supplies physical allocation requirements and realizes allocation,
-dedicated fallback, alias barriers, heap placement, and backend strategy.
+RenderGraph derives logical lifetimes, non-overlap, alias opportunities, and
+the required transition/dependency plan. RHI supplies physical allocation
+requirements, realizes the chosen allocation and dedicated fallback, and lowers
+the supplied alias barriers, heap placement, and native synchronization.
 Aliasing is an optional optimization, never a prerequisite for correctness.
 
 The baseline scheduling plan is deterministic and correct. Multi-queue work,

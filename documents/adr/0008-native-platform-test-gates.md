@@ -36,4 +36,4 @@ warnings under Linux all-features Clippy and added Windows workspace and
 no-backend gates. The no-backend gate verifies the structured
 `BackendDisabled` result for both native backend requests.
 
-See [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md) for the current platform policy.
+See [RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md) for the current platform policy.

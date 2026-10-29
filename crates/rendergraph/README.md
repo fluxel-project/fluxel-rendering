@@ -1,5 +1,10 @@
 # fluxel-rendergraph
 
+> Current package and migration guide. The target moves Graph into
+> `fluxel-renderer::graph` and retires this standalone package as real consumers
+> migrate. Preserve graph semantics and evidence; do not build a second engine.
+> This document does not claim the move has already happened.
+
 `fluxel-rendergraph` plans portable GPU work for Fluxel. A frame pipeline
 declares passes, logical resources, versions, and accesses; the graph derives
 dependencies, validates definedness, culls dead work, analyzes lifetimes, and
@@ -45,8 +50,9 @@ shows that the optimization is needed.
 - roots, dead-pass culling, deterministic scheduling, and diagnostics;
 - logical lifetimes and alias opportunities.
 
-RHI realizes physical allocation and native synchronization. Dedicated
-transient allocation is valid baseline behavior; aliasing is optional.
+RHI realizes physical allocation and lowers the graph's supplied native
+synchronization instructions. Dedicated transient allocation is valid baseline
+behavior; aliasing is optional.
 
 ## Pass recording
 

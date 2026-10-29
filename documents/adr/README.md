@@ -4,7 +4,7 @@ This directory preserves the small set of decisions that constrain future
 work. Plans and reviews record a release's investigation and evidence; an ADR
 records only a decision that remains relevant after that release.
 
-The compact [RHI architecture guide](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md)
+The compact [RHI architecture guide](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md)
 describes the current model and points to code. Each ADR records one durable
 boundary, why it was chosen, and its cost; it does not duplicate descriptor
 fields or backend implementation detail. An ADR may later be marked
@@ -12,10 +12,13 @@ fields or backend implementation detail. An ADR may later be marked
 
 ## Index
 
+- [ADR-0024: Integrate Graph into a data-oriented extensible Renderer](0024-data-oriented-renderer-workspace.md)
+- [ADR-0023: Keep host-to-RHI integration in runtime composition](0023-host-rhi-integration-boundary.md)
+
 - [ADR-0011: Build the GL family through three private layers](0011-gl-family-three-layer-boundary.md)
 - [ADR-0020: Admit optional feature families as complete portable contracts](0020-optional-feature-family-admission.md)
 - [ADR-0019: Define statistics as logical observation, not profiling](0019-portable-logical-statistics.md)
-- [ADR-0018: Preserve RHI observability without owning capture runtime](0018-capture-observability-without-capture-ownership.md)
+- [ADR-0018: Withdrawn capture/replay proposal](0018-capture-observability-without-capture-ownership.md)
 - [ADR-0017: Keep presentation frames separate from textures and completion](0017-presentation-is-not-a-texture-view.md)
 - [ADR-0016: Publish capabilities only with lowering closure](0016-capability-claims-require-lowering-closure.md)
 - [ADR-0015: Freeze plan-scoped transient lifetimes with dedicated fallback](0015-plan-scoped-transient-allocation.md)

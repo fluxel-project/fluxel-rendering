@@ -2,30 +2,35 @@
 
 > Status: **Post-foundation target architecture**
 >
-> Scope: `RenderScene`, renderer-side preparation services, custom `FramePipeline` SPI,
-> asset-to-render preparation boundaries, and RenderGraph authoring.
+> Scope: the data-oriented `RenderScene`, renderer-side preparation services,
+> built-in reference pipelines and feature extension seams, asset-to-render
+> preparation boundaries, and the renderer-internal RenderGraph.
 >
 > This document replaces the retained `0.15` fixed-renderer architecture as the
-> renderer design target built on the completed `0.16` RHI baseline.
+> renderer design target built on the stable independent RHI. The checked-out
+> renderer's older `0.16` integration still requires migration and evidence.
+> Portable RHI API and backend-SPI behavior are authoritative in the current
+> [RHI Core design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md);
+> this document does not freeze historical RHI example type names.
 >
 > Historical fixed recipes, `FixedFrameRenderer`, legacy snapshot gates, and old
 > execution-plan terminology are implementation history only and are not part of
 > the future renderer contract.
 >
-> Delivery order: the minimal scene milestone freezes only `RenderScene`,
-> `RenderObject`, `RenderView`, the `FramePipeline` SPI, and one Forward proof.
-> The complete scene-preparation milestone adds culling and proves the SPI again
-> with Deferred. The renderer authors RenderGraph work using RHI's portable
-> contract; it owns scene policy and ordinary integration glue, not a Graph/RHI
-> translation layer or a bypass around graph pass-local resource authority.
+> The stable RHI is the foundation. The first renderer work establishes its
+> internal RenderGraph and direct integration with that contract, then proves
+> material/shader semantics and a small Renderer MVP. The MVP includes the
+> built-in mesh path and one independent Rust-crate feature. It must prove
+> batch scene input, phase participation, and graph-resource declaration before
+> broader features or pipeline APIs are treated as stable.
 
 ---
 
 ## 1. Core Model
 
-Fluxel does not ship a mandatory rendering strategy.
-
-The renderer layer defines the data model and services needed to build one:
+The target provides a complete, extensible real-time renderer. Its built-in reference
+pipelines prove shared scene, material, shader, feature, RenderGraph, and RHI
+contracts; they do not make Forward or Deferred the only rendering strategy.
 
 ```text
 Game / Engine Scene
@@ -54,14 +59,12 @@ The central contract is:
 
 > A `FramePipeline` converts `RenderScene + RenderView` into a `RenderGraph`.
 
-The diagram is an execution path, not a rule that forces crate dependencies
-into a chain. Renderer consumes RenderGraph and material/shader services;
-RenderGraph, shader/pipeline code, and material runtime may each use RHI's
-portable contracts directly. Normal frame GPU work still enters through
-RenderGraph, whose pass-local authority controls graph resources.
-
-`fluxel-renderer` defines the language and common services for building a
-renderer. It does **not** define the renderer itself.
+`fluxel-renderer` is one of the three planned rendering crates, beside
+`fluxel-material` and `fluxel-shader`. `RenderGraph` and `FramePipeline` are
+internal renderer modules, not independent crates. Renderer consumes the
+material and shader crates and uses RHI portable contracts directly where their
+meaning requires it. Normal frame GPU work still enters through RenderGraph,
+whose pass-local authority controls graph resources.
 
 ---
 
@@ -112,18 +115,20 @@ It is not a gameplay scene graph.
 
 `FramePipeline` owns frame rendering policy.
 
-Possible external implementations include:
+Built-in reference implementations include Forward and, after the shared path
+is proved, Deferred. A Rust crate may provide another implementation through
+the stable extension boundary. The SPI remains an internal renderer module;
+it is not a separate Fluxel crate.
+
+Possible implementations include:
 
 ```text
 ForwardPipeline
 DeferredPipeline
 TilePipeline
 PathTracingPipeline
-2DPipeline
 project-specific pipelines
 ```
-
-Fluxel core does not require or provide one of these as the default.
 
 ### 2.4 RenderGraph
 
@@ -179,7 +184,7 @@ objects remain private to RHI/backend implementations.
 
 ## 3. Renderer Core Responsibility
 
-The future `fluxel-renderer` core owns only:
+`fluxel-renderer` owns:
 
 ```text
 RenderScene vocabulary
@@ -195,17 +200,18 @@ material-variant and shader/pipeline resolution service seams
 
 evidence-driven draw preparation service seams
 
-FramePipeline SPI
+FramePipeline SPI and built-in reference pipelines
 FramePipelineContext
 
-RenderGraph authoring and direct RHI integration
+its internal RenderGraph, graph authoring, and direct RHI integration
+
+feature registration, phase contribution, and typed feature-owned storage
 
 renderer-level errors and results
 ```
 
-It does not own a built-in rendering strategy.
-
-There must be no mandatory:
+It does not own gameplay world state, a mandatory ECS, or one fixed rendering
+strategy. There must be no mandatory:
 
 ```text
 Forward
@@ -215,8 +221,7 @@ Lambert
 Shadow
 Bloom
 TAA
-fixed FrameGraph
-fixed raster recipe
+fixed raster recipe for every consumer
 ```
 
 inside the renderer core.
@@ -229,33 +234,30 @@ inside the renderer core.
 
 `RenderScene` is a rendering-only scene representation.
 
-Conceptually:
-
-```rust
-pub struct RenderScene {
-    objects: Vec<RenderObject>,
-    lights: Vec<RenderLight>,
-}
-```
-
-The exact storage strategy is not frozen here.
+`RenderScene` is data-oriented: it stores typed render-domain data in dense
+storage and processes batches, rather than storing one dynamically dispatched
+object per draw. The exact Rust layout is profile-led, but the initial model is
+stable IDs with generation checks, a slot-to-dense map, and typed dense stores
+for mesh instances, lights, and each registered feature. Hot fields such as
+transforms, bounds, material references, and flags may use SoA or AoSoA; rare
+metadata stays separate.
 
 `RenderScene` should be:
 
 - backend-independent;
 - independent of RenderGraph resources;
 - independent of native GPU objects;
-- read-mostly during frame construction;
+- a read-mostly frame snapshot during frame construction;
 - suitable for multiple views;
 - independent of gameplay scene layout.
 
-### 4.2 RenderObject
+### 4.2 RenderObject and identity
 
 Conceptual shape:
 
 ```rust
-pub struct RenderObject {
-    id: RenderObjectId,
+pub struct MeshInstanceRecord {
+    id: RenderId,
 
     transform: RenderTransform,
     bounds: RenderBounds,
@@ -269,16 +271,20 @@ pub struct RenderObject {
 }
 ```
 
-This describes responsibility, not frozen Rust ABI.
+This describes responsibility, not frozen Rust ABI. It is a logical record, not
+a per-object trait object and not the required physical storage layout.
 
 ### 4.3 Identity
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RenderObjectId(u64);
+pub struct RenderId {
+    slot: u32,
+    generation: u32,
+}
 ```
 
-`RenderObjectId` is not required to equal:
+`RenderId` is not required to equal:
 
 ```text
 ECS Entity
@@ -288,7 +294,26 @@ RHI ObjectId
 GPU address
 ```
 
-The integration layer owns the mapping from game objects to render objects.
+The integration layer owns the mapping from game objects to render IDs. Dense
+storage may use swap removal only when it preserves this generation rule.
+
+### 4.3 Scene updates and adapters
+
+Renderer never queries an ECS or a scene graph. An adapter pushes typed,
+batched creates, updates, and removals into `RenderScene`; it can be backed by
+an ECS, a scene graph, or application-specific data without exposing any of
+those models to the renderer.
+
+```text
+external world -> adapter -> typed ChangeSets -> RenderScene snapshot
+```
+
+Updates should be split by field where that avoids needless work, for example
+transform, bounds, material, and visibility streams. Large producers may submit
+chunk or slice updates. A frame boundary snapshots accepted changes, so
+concurrent world mutation never races a renderer read. GPU uploads use dirty
+ranges and per-frame resource retention; they do not re-upload the full scene
+on every frame.
 
 ---
 
@@ -311,14 +336,14 @@ Systems such as:
 
 ```text
 scene hierarchy
-animation
-bones
+animation state and blend trees
 physics
 constraints
 ```
 
 must resolve their current rendering transform before or during `RenderScene`
-extraction/update.
+extraction/update. GPU skinning, bone-palette uploads, and skinning passes are
+renderer features; game animation state and its simulation remain outside.
 
 ---
 
@@ -505,7 +530,7 @@ pub struct CullingRequest {
 
 ```rust
 pub struct VisibleSet {
-    objects: Vec<RenderObjectId>,
+    objects: Vec<RenderId>,
 }
 ```
 
@@ -559,8 +584,11 @@ pub enum SortPolicy {
 }
 ```
 
-Batching and pipeline/material-aware sorting should be added only after the
-material/shader system provides a real key model.
+Batching and pipeline/material-aware sorting use a real shader/material key
+model. Object sorting and graph scheduling are different operations: an opaque
+phase may order packets by pipeline, material, and depth while transparent work
+orders primarily back-to-front; RenderGraph orders passes from resource
+dependencies. Neither order substitutes for the other.
 
 ---
 
@@ -595,11 +623,48 @@ Future draw preparation answers:
 > requirements does each draw use?
 
 This layer must not be invented prematurely before the material/shader contracts
-are ready.
+are ready. GPU-driven paths may instead produce candidate data for GPU culling,
+compaction, sorting, and indirect arguments; they are not forced to create a
+complete CPU `DrawList`.
 
 ---
 
-## 14. FramePipeline SPI
+## 14. RenderFeature extension model
+
+A feature extends renderer capability at batch granularity. It may own typed
+storage and contribute scene extraction, preparation, packets, material/shader
+requirements, and graph passes for one or more pipeline phases. Examples are
+static mesh, GPU skinning, terrain, water, particles, vegetation, decals, and
+area-light implementations.
+
+The exact traits are established by the MVP rather than frozen from this design,
+but their boundary is fixed:
+
+```text
+external scene data -> feature-owned typed storage -> batch prepare/queue
+    -> declared phase contribution and RenderGraph passes
+```
+
+Dynamic dispatch, if used, occurs once per feature stage, never once per render
+object or draw. Features may add object types and passes without a growing core
+`match` over object kinds. A feature that affects shading must use the
+material/shader extension contract; graph-only hooks are insufficient for, for
+example, area lights.
+
+Every feature GPU operation, resource access, and queue dependency is declared
+through the renderer's RenderGraph. A feature cannot submit work directly to
+RHI or hide a side graph. `FramePipeline` owns phase policy; features contribute
+content to the selected phases.
+
+The first extensibility gate is deliberately small: the renderer's built-in mesh
+feature plus one feature implemented in a separate Rust crate. It must exercise
+batched incremental input, feature-owned storage, a declared phase, and graph
+resource/pass contribution. Terrain, water, particles, and full skeletal
+animation remain later consumers of this boundary.
+
+---
+
+## 15. FramePipeline SPI
 
 The core SPI is intentionally small.
 
@@ -649,7 +714,7 @@ placeholder service is required before its contract exists.
 
 ---
 
-## 15. Policy vs Mechanism
+## 16. Policy vs Mechanism
 
 `FramePipeline` owns policy.
 
@@ -691,7 +756,7 @@ SortingService != pipeline policy
 
 ---
 
-## 16. RenderGraph Authoring
+## 17. RenderGraph Authoring
 
 `FramePipeline` builds GPU work through RenderGraph.
 
@@ -731,7 +796,7 @@ No hidden RHI submission path is allowed beside RenderGraph.
 
 ---
 
-## 17. FramePipeline Output
+## 18. FramePipeline Output
 
 The graph remains the main product.
 
@@ -746,19 +811,11 @@ pub struct FramePipelineOutput {
 }
 ```
 
-or later:
-
-```rust
-pub struct FramePipelineOutput {
-    pub exports: FrameExports,
-}
-```
-
 The public shape should remain narrow until concrete consumers require more.
 
 ---
 
-## 18. Multi-Pass Features
+## 19. Multi-Pass Features
 
 A frame pipeline may use reusable graph-authoring helpers:
 
@@ -787,7 +844,7 @@ The actual RenderGraph scheduling unit remains the pass.
 
 ---
 
-## 19. Relationship to slot-graph
+## 20. Relationship to slot-graph
 
 `slot-graph` remains a CPU-side dependency/composition utility.
 
@@ -819,7 +876,7 @@ No `slot-graph` node or subgraph identity needs to cross the renderer public API
 
 ---
 
-## 20. Asset and GPU Residency Boundary
+## 21. Asset and GPU Residency Boundary
 
 Persistent logical asset identity, loading, caching, hot reload, and eviction
 remain outside RenderGraph.
@@ -867,20 +924,20 @@ RenderGraph.
 
 ---
 
-## 21. Resource Lifetime Boundary
+## 22. Resource Lifetime Boundary
 
 Renderer preparation may retain device-local resources needed by a frame.
 
 However:
 
 ```text
+submission acceptance
 GPU completion
-submission lifetime
-retirement
-device loss
+device-loss outcome
 ```
 
-remain authoritative at RHI.
+are reported authoritatively by RHI. Renderer/RenderGraph retain submitted
+resources and decide reuse or retirement only from those reported facts.
 
 Renderer code must not guess that a resource is safe to recycle merely because:
 
@@ -891,12 +948,12 @@ the scene changed
 the asset was replaced
 ```
 
-Accepted GPU work remains alive until the corresponding RHI completion semantics
-prove retirement is safe.
+Accepted GPU work remains retained by the renderer/executor until the
+corresponding RHI completion evidence proves retirement is safe.
 
 ---
 
-## 22. Material and Shader Boundary
+## 23. Material and Shader Boundary
 
 The renderer core must not assume one material model.
 
@@ -929,9 +986,15 @@ RHI does not know materials.
 
 ---
 
-## 23. No Built-In Pipeline
+## 24. Built-in reference pipelines
 
-The renderer core must not contain a hidden mandatory graph such as:
+The renderer contains built-in reference pipelines that exercise the shared
+contracts. The first is Forward; Deferred follows only after the retained scene
+and feature paths prove it can consume the same materials, shaders, and graph
+model. These implementations are reference consumers, not a hidden mandatory
+graph for every application.
+
+The renderer must not silently impose a fixed graph such as:
 
 ```text
 Depth
@@ -951,9 +1014,9 @@ Mobile
 Path Tracing
 ```
 
-Those are external `FramePipeline` implementations.
-
-Possible ecosystem crates may later include:
+An application or an external Rust crate may provide another `FramePipeline`
+implementation through the proved feature boundary. Future ecosystem crates may
+include:
 
 ```text
 fluxel-renderer-forward
@@ -962,11 +1025,11 @@ fluxel-renderer-2d
 project-specific renderer crates
 ```
 
-This packaging is optional and does not affect the core SPI.
+This packaging is optional and does not turn `FramePipeline` into its own crate.
 
 ---
 
-## 24. Minimal Example
+## 25. Minimal Example
 
 Conceptually:
 
@@ -1020,7 +1083,7 @@ subsystem is designed.
 
 ---
 
-## 25. Error Model
+## 26. Error Model
 
 Renderer-level errors should distinguish at least:
 
@@ -1039,7 +1102,7 @@ failures and must not be flattened into strings.
 
 ---
 
-## 26. Suggested Crate Structure
+## 27. Target crate structure
 
 ```text
 crates/renderer/src/
@@ -1047,9 +1110,17 @@ crates/renderer/src/
 
     render_scene/
         mod.rs
-        object.rs
+        storage.rs
+        changes.rs
+        snapshot.rs
         view.rs
         bounds.rs
+
+    feature/
+        mod.rs
+        registry.rs
+        phase.rs
+        context.rs
 
     culling/
         mod.rs
@@ -1060,21 +1131,34 @@ crates/renderer/src/
     preparation/
         mod.rs
 
+    graph/
+        builder.rs
+        compiler.rs
+        scheduler.rs
+        allocator.rs
+        executor.rs
+
     pipeline/
         mod.rs
         context.rs
         output.rs
         error.rs
+        forward.rs
+        deferred.rs
 ```
 
-The core renderer crate should not contain:
+`graph/` and `pipeline/` are internal `fluxel-renderer` modules. During
+migration, the existing `fluxel-rendergraph` crate is an implementation
+boundary, not the target public architecture; its contracts and evidence move
+into the renderer without losing their validation coverage.
+
+The renderer should not contain:
 
 ```text
-fixed_frame/
-fixed_recipe/
-built_in_forward/
-built_in_deferred/
-default_frame_graph/
+gameplay_ecs/
+per_object_draw_trait/
+dynamic_dll_plugin_loader/
+one universal feature data layout/
 ```
 
 Historical fixed-renderer code may remain temporarily during migration, but it
@@ -1082,7 +1166,7 @@ must not define the post-foundation public architecture.
 
 ---
 
-## 27. Relationship to Unity SRP
+## 28. Relationship to Unity SRP
 
 Conceptually:
 
@@ -1113,7 +1197,7 @@ Fluxel keeps one additional hard boundary:
 
 ---
 
-## 28. Frame Flow
+## 29. Frame Flow
 
 The intended future frame path is:
 
@@ -1150,12 +1234,12 @@ Shader / Pipeline + Material Runtime binding
 RHI execution
         |
         v
-completion / present / exported result
+completion / present / frame result
 ```
 
 ---
 
-## 29. Historical 0.15 Renderer
+## 30. Historical 0.15 Renderer
 
 The previous `0.15` renderer provided:
 
@@ -1183,17 +1267,20 @@ During migration:
 
 ---
 
-## 30. Final Contract
+## 31. Final Contract
 
 ```text
 RenderScene
-    = rendering-only projection of the game/engine scene
+    = data-oriented, rendering-only snapshot fed by batched external adapters
 
 Culling / Sorting
     = reusable renderer mechanisms
 
+RenderFeature
+    = feature-owned typed storage and batch work that contributes to pipeline phases
+
 FramePipeline
-    = project-defined policy that converts
+    = internal renderer SPI and built-in/external policy that converts
       RenderScene + RenderView into RenderGraph
 
 RenderGraph
@@ -1208,5 +1295,6 @@ RHI
 
 The defining rule is:
 
-> `fluxel-renderer` provides the scene vocabulary, preparation services, and SPI
-> required to build a renderer; it does not provide a renderer strategy itself.
+> `fluxel-renderer` provides a complete extensible renderer: common scene and
+> preparation mechanisms, reference pipelines, feature extension seams, and
+> one internal graph/RHI execution path.

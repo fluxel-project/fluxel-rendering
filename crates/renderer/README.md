@@ -1,17 +1,18 @@
 # Fluxel Renderer
 
 > `0.15` historical usage guide and post-foundation renderer baseline. Renderer
-> work remains limited to required migration/evidence while the RHI and
-> material/shader foundations are established. Resume feature work only through
-> [the implementation plan](../../documents/version-plan.md). The minimal
-> scene milestone proves the scene/SPI boundary with Forward; the complete
-> scene-preparation milestone adds culling and proves it again with Deferred. Do not treat
+> target is a complete extensible data-oriented renderer. RHI is stable;
+> first reuse Bases and establish internal Graph integration, then independent
+> Shader/Material crates and a Forward MVP with built-in Mesh plus an external
+> Rust Feature. Expand pipelines/features and measure resource strategies.
+> Follow [the implementation plan](../../documents/version-plan.md).
+> Do not treat
 > old graph/RHI spellings below as the new contract.
 >
 > **RHI API v1 boundary.** The fixed Stage-1 recipes and all
 > accepted-unknown/quarantine behavior below are retained as `0.15` historical
 > evidence, not as RHI API v1. Future implementation follows
-> [RHI architecture](https://github.com/fluxel-project/fluxel-rhi/blob/main/documents/design-rhi.md): once work is accepted,
+> [RHI architecture](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md): once work is accepted,
 > `Device::submit()` returns a `SubmissionReceipt`, and terminal
 > `CompletionState` / `PresentState` owns subsequent failure and retirement.
 
