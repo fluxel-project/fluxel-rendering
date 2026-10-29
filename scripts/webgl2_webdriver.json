@@ -1,9 +1,0 @@
-{
-  "goog:chromeOptions": {
-    "args": [
-      "enable-unsafe-swiftshader",
-      "ignore-gpu-blocklist",
-      "use-angle=swiftshader"
-    ]
-  }
-}
