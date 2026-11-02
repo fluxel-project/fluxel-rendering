@@ -1,9 +1,13 @@
 # Fluxel RenderGraph design
 
 > Target ownership: the `graph` module inside `fluxel-renderer`, not an
-> independent target crate. The existing `fluxel-rendergraph` package is a
-> migration source whose implementation, tests, and diagnostics are retained.
-> Module ownership preserves graph/scene semantic separation.
+> independent target crate. The standalone package directory has been removed.
+> The current `graph` module implements initial buffer/texture definitions,
+> versions, compilation, shared access/state planning, and fixed
+> Copy/Raster/Compute/Surface lowering. This document specifies the broader
+> target semantics; general execution bindings, Surface failure recovery and
+> the full S1 matrix remain incomplete. Current verification is recorded in the
+> [review inventory](foundation-migration.md#focused-consistency-review-2026-10-30).
 
 RenderGraph is Fluxel's GPU-work planner. It turns a frame pipeline's declared
 passes and logical resources into a deterministic plan, then records that plan
@@ -18,12 +22,12 @@ only by [the RHI design](https://github.com/fluxel-project/fluxel-rhi/blob/main/
 ## Position in the frame path
 
 ```text
-RenderScene
-        -> FramePipeline
-        -> RenderGraph
-        -> Shader / Pipeline + Material Runtime
-        -> RHI portable API
-        -> private backends
+RenderScene / typed Feature data
+        -> FramePipeline policy + preparation
+           (resolved geometry / programs / bindings / phase needs)
+        -> complete pass and resource declarations
+        -> RenderGraph planning and pass-local recording
+        -> RHI portable API -> private backends
 ```
 
 This is the frame-execution path, not a universal crate dependency chain.
@@ -39,6 +43,17 @@ pass. Consequently it can declare the pass's reads, writes, attachments,
 pipeline, bindings, and draw or dispatch work accurately. RenderGraph then
 plans that work; it does not interpret material graphs, select a rendering
 strategy, load assets, or own presentation.
+
+External algorithm providers may produce CPU batches or declare GPU visibility,
+deformation and indirect-work products. Graph treats their GPU products as
+ordinary resources and producer/consumer dependencies. It does not require a
+CPU DrawList, know vertex semantics, or implement phase-wide object sorting.
+Plugins use the controlled Renderer facade; Graph compiler and submission state
+remain private. Prepared batches are not a second replay command language.
+Feature/Pipeline extension calls use static generic composition under
+[ADR-0026](adr/0026-static-extension-composition.md). Graph definitions and their
+runtime pass/resource collections remain data; static extension types do not
+require a compile-time GPU graph or an erased plugin execution registry.
 
 A pass is an execution node, not a material or a shader program. A raster pass
 may record many draws, switch among prepared graphics pipelines, and use a

@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fluxel Rendering S0/S1 integration evidence manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "stage",
+    "artifact",
+    "rendering_checkout",
+    "sibling_checkout_inventory",
+    "root_lock",
+    "support_decision",
+    "attempts",
+    "capability_snapshot",
+    "outputs",
+    "tests",
+    "measurements",
+    "unsupported_or_untested",
+    "known_limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "stage": {
+      "const": "S0/S1"
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "owner",
+        "path",
+        "independent"
+      ]
+    },
+    "rendering_checkout": {
+      "$ref": "#/$defs/checkout"
+    },
+    "sibling_checkout_inventory": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/checkout"
+      }
+    },
+    "root_lock": {
+      "$ref": "#/$defs/file_hash"
+    },
+    "support_decision": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256",
+        "review"
+      ]
+    },
+    "attempts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/attempt"
+      }
+    },
+    "capability_snapshot": {
+      "$ref": "#/$defs/evidence"
+    },
+    "outputs": {
+      "$ref": "#/$defs/evidence"
+    },
+    "tests": {
+      "$ref": "#/$defs/evidence"
+    },
+    "measurements": {
+      "$ref": "#/$defs/evidence"
+    },
+    "unsupported_or_untested": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "known_limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "checkout": {
+      "type": "object",
+      "required": [
+        "path",
+        "revision",
+        "dirty",
+        "role"
+      ]
+    },
+    "file_hash": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason"
+      ]
+    },
+    "source_consistency": {
+      "type": "object",
+      "required": [
+        "status",
+        "changed_inputs"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "stable",
+            "changed"
+          ]
+        },
+        "changed_inputs": {
+          "type": "array"
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "required": [
+        "id",
+        "timestamp_utc",
+        "backend",
+        "mode",
+        "feature",
+        "timeout_seconds",
+        "directory",
+        "toolchain",
+        "environment",
+        "validation",
+        "locks",
+        "resolved_git_packages",
+        "commands"
+      ],
+      "properties": {
+        "backend": {
+          "enum": [
+            "dx12",
+            "native-gl-wgl"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "build",
+            "run"
+          ]
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1
+        },
+        "runner_exit_status": {
+          "type": "integer"
+        },
+        "source_consistency_after_build": {
+          "$ref": "#/$defs/source_consistency"
+        },
+        "source_consistency_after_attempt": {
+          "$ref": "#/$defs/source_consistency"
+        },
+        "built_fluxel_packages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "package_id",
+              "manifest_path",
+              "features",
+              "target"
+            ]
+          }
+        },
+        "built_source_verification": {
+          "type": "object",
+          "required": [
+            "status",
+            "mismatches",
+            "missing_required_packages"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "verified",
+                "mismatch"
+              ]
+            }
+          }
+        },
+        "executable": {
+          "$ref": "#/$defs/file_hash"
+        },
+        "source_snapshot": {
+          "$ref": "#/$defs/source_snapshot"
+        }
+      }
+    },
+    "source_snapshot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "path",
+            "sha256",
+            "files",
+            "kind"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "files": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "kind": {
+              "const": "exact_worktree_inputs"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "failed"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

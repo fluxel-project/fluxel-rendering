@@ -12,17 +12,20 @@ contract instead of duplicating it for crate separation.
 ## Frame execution
 
 ```text
-RenderScene
-        -> FramePipeline
-        -> RenderGraph
-        -> Shader / Pipeline + Material Runtime
-        -> RHI
-        -> private DX12 / Vulkan / Metal / WebGPU / GL backends
+External adapters -> RenderScene snapshot + typed Feature data
+        -> FramePipeline policy + Feature-local preparation
+           (geometry / Material / Shader resolution)
+        -> prepared phase work + complete resource-access declarations
+        -> internal RenderGraph -> portable RHI recording / submission
+        -> private backend execution -> completion-driven retirement
 ```
 
 - `RenderScene` is render-domain scene data: no gameplay logic or GPU objects.
 - `FramePipeline` decides how this frame renders: Forward, Deferred, tile,
   path-tracing, or a custom strategy.
+- `RenderFeature` contributes batches and GPU work using locally selected
+  algorithms. Preparation resolves geometry/program interfaces, phase needs,
+  concrete bindings and accesses before Graph compilation.
 - `RenderGraph` plans GPU work: versions, dependencies, lifetimes, culling,
   scheduling, and graph diagnostics.
 - At execution, a pass selects its prepared shader/pipeline and binds its
@@ -70,8 +73,9 @@ value/function composition; RenderGraph describes GPU pass/resource dependencies
 The architecture is an ownership DAG, not a single crate dependency chain.
 The target has three principal crates: `fluxel-shader`, `fluxel-material`, and
 `fluxel-renderer`. RenderGraph and the `FramePipeline` SPI are internal renderer
-modules. The existing standalone graph crate and WASM capsule are migration
-inputs. The intended semantic ownership relationships are:
+modules. The standalone graph crate and old WASM capsule have been removed;
+their absence does not establish completion of the replacement. The intended
+semantic ownership relationships are:
 
 ```text
 fluxel-material -> fluxel-shader
@@ -107,7 +111,7 @@ buffers, textures, pipelines, bindings, and frame attachments.
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| `fluxel-renderer` | RenderScene, views, Features, FramePipeline and reference pipelines, visibility, sorting, batching, residency, frame-data uploads, draw preparation, retirement, internal Graph | Gameplay/ECS, platform I/O, backend objects, host policy |
+| `fluxel-renderer` | RenderScene, views, Feature/FramePipeline facade and reference consumers, preparation protocols and resolvers, residency, frame data, retirement, internal Graph | Mandatory visibility/sorting/geometry algorithms, gameplay/ECS, platform I/O, backend objects, host policy |
 | Renderer `graph` module | Logical resources/versions, dependencies, definedness, hazards, lifetimes, transitions, deterministic plans | Scene/material semantics, asset policy, backend allocation mechanisms |
 | `fluxel-material` | MaterialGraph, material functions and later code nodes, typed composition IR, evaluation-code generation, parameter/uniform schemas, instances, material variants, generic Shader contributions | Renderer dependency, graph passes, submission, executable shader IR |
 | `fluxel-shader` | Generic source/function interfaces, complete program composition, logical WGSL/Naga validation/reflection, artifacts, variants, source-level compilation caches | MaterialGraph/MaterialIr semantics, scenes, rendering strategy, backend-private ABI or compiler ownership |
@@ -129,6 +133,32 @@ They own mappings from external entities/scene nodes. Frame snapshots separate
 updates from concurrent readers; dirty ranges bound uploads. Layout follows
 access patterns rather than requiring one universal SoA shape.
 
+The core is trait-extensible at batch and policy boundaries. Applications compose
+Feature-local visibility, geometry, ordering, batching and deformation providers;
+there is no required global algorithm singleton or per-object virtual draw loop.
+Different Features can use BVH, quadtree and GPU visibility in the same frame.
+Typed Feature storage participates in the snapshot boundary without a universal
+Mesh record or an ECS dependency. SoA, AoS and AoSoA remain independent storage
+choices; the public exchange contract does not freeze those layouts.
+Extensibility uses static dispatch exclusively: generic concrete providers and
+typed Feature sets are assembled at compile time. No trait-object registry,
+`dyn Trait` or runtime type erasure is permitted. Runtime enablement uses state;
+implementation switching uses explicit enum branches over compiled types.
+Algorithm traits normally belong to Features or external crates; Core fixes
+only necessary cross-Feature protocols. See
+[ADR-0026](adr/0026-static-extension-composition.md). Runtime scene data and
+Graph topology remain data, not per-object type parameters.
+
+Geometry describes streams, attributes, indices and draw ranges. Preparation
+matches those inputs with Shader requirements, including interleaved, separate
+and mixed streams. External animation produces evaluated pose/transform data;
+deformation Features consume it through frame inputs and declared GPU work.
+Phase policy coordinates ordering across Features: separately sorted transparent
+lists cannot simply be concatenated. GPU products are consumed through Graph
+resources and dependencies, with no mandatory CPU visibility-list conversion.
+See [the Renderer design](design-renderer.md) and
+[ADR-0025](adr/0025-composable-rendering-policies.md) for these contracts.
+
 Features operate on batches and own typed data. FramePipeline selects phases
 and strategy; Features contribute packets, shader/material requirements, and
 graph-visible GPU work. Object sorting differs from Graph dependency scheduling.
@@ -142,7 +172,7 @@ states, producer dependencies, visibility requirements, and retention evidence
 to Graph/RHI. A pending producer may feed a specific consumer only through an
 enforceable RHI dependency; it is not globally complete. Features request this
 preparation rather than submit independently. GPU skinning, simulation, culling,
-and indirect generation are Graph passes. See [the upload boundary](design-renderer.md#211-persistent-residency-frame-data-and-frame-work).
+and indirect generation are Graph passes. See [the upload boundary](design-renderer.md#persistent-residency-frame-data-and-frame-work).
 
 Reflection describes shader binding usage; preparation resolves it to concrete
 resources, ranges, and access modes. Pass declarations must include the complete
@@ -150,8 +180,9 @@ binding resource-use manifest, not just a binding-object handle. Graph validates
 coverage before recording and includes those resources in dependency/lifetime
 analysis, including when dynamic bindings change.
 
-Renderer owns the `FramePipeline` module and exposes the minimal public Rust
-trait/context facade needed for external implementations. Its graph compiler,
+Renderer owns the `FramePipeline` module. During S4/S5, real consumers will
+establish the minimal public Rust trait/context facade needed for external
+implementations; the current module remains a shell. Its graph compiler,
 scheduler, and allocator internals remain private.
 
 The MVP closes only when the built-in mesh path and an independent Rust crate
@@ -162,17 +193,20 @@ scheduler, allocator, RHI submission, and backend objects remain private.
 Feature/phase seams are shaped and compiled against a small external prototype
 during renderer work, rather than added after Forward is complete. Cross-pass
 and shader-extension contracts require a second materially different Feature
-consumer before stabilization. Rust crate plugins are supported; dynamic DLL
-loading is unscheduled.
+consumer before stabilization. Plugins are concrete Rust crate implementations
+assembled at compile time; runtime loading of unknown Feature types is excluded.
 
 ## Migration and delivery
 
-The current workspace still has `fluxel-rendergraph`, `fluxel-renderer`, and
-`fluxel-rendering-wasm`, and pins an older RHI integration. Internalizing Graph,
-creating Material/Shader crates, and upgrading real pinned consumers are planned
-implementation work. Preserve code, tests, and evidence instead of maintaining
-parallel engines. RHI is stable; select exact releases/revisions and re-prove
-their composition rather than assuming old examples remain compatible.
+The workspace contains `fluxel-renderer`, `fluxel-shader`, and `fluxel-material`.
+Shader and Material remain scaffolds. Renderer now has initial Copy, offscreen
+and Surface Raster, supported Compute fixtures, a private buffer/texture Graph,
+bounded completion-owned submissions, and an independent consumer. Scene and
+extension surfaces remain unimplemented. Graph is private
+to Renderer; the standalone Graph and WASM capsule directories are removed.
+The reset inventory records current progress. Every support claim must prove
+the selected composition rather than treating removed commands or evidence as
+current.
 
 Reuse Bases, establish internal Graph/RHI execution, then prove a minimal
 WGSL/Naga-to-RHI shader compilation path before completing material authoring.

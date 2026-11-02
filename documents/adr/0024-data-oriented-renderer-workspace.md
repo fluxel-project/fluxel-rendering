@@ -1,6 +1,13 @@
 # ADR-0024: Integrate Graph into a data-oriented extensible Renderer
 
-**Status:** Accepted target; migration is pending.
+**Status:** Accepted target; replacement implementation remains incomplete.
+
+Follow-up constraints are recorded in
+[ADR-0025](0025-composable-rendering-policies.md) and
+[ADR-0026](0026-static-extension-composition.md). The historical migration inputs
+mentioned below have since been removed from this workspace. The
+[current inventory](../foundation-migration.md) governs implementation status;
+this record does not authorize recovering deleted source.
 
 ## Decision
 

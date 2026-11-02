@@ -1,10 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/rendergraph",
+    "crates/shader",
+    "crates/material",
     "crates/renderer",
-    "crates/rendering-wasm",
 ]
+exclude = ["examples/rendering-integration"]
 
 [workspace.package]
 version = "0.16.0"

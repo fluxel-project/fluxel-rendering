@@ -10,23 +10,61 @@ and explicit frame calls. Hosts and browser/mini-game adapters own platform I/O,
 windows/canvas lifecycle, input, and frame pacing. Renderer does not own a gameplay
 scene, mandatory ECS, event loop, or TypeScript gameplay runtime.
 
+The target exposes Rust Feature and FramePipeline contracts over typed batch data.
+Applications assemble concrete geometry, visibility, ordering and deformation
+providers through generics, traits and monomorphization at compile time. Different
+providers can coexist in one frame; no trait-object dispatch or runtime type
+erasure is used for extensibility. SoA/AoS layouts remain workload choices, and
+all frame GPU work uses the internal Graph. See the
+[Renderer design](documents/design-renderer.md) for the target contracts; these
+extension APIs are not yet implemented.
+
 ## Current implementation and target
 
-The checked-out `0.16` workspace remains a migration baseline:
+The checked-out `0.16` workspace contains the S0/S1 foundation implementation
+and scaffolds for later stages:
 
-| Existing crate | Current role |
+| Workspace crate | Current role |
 | --- | --- |
-| `fluxel-rendergraph` | Standalone logical graph, validation, execution contracts, tests, and examples to migrate into Renderer |
-| `fluxel-renderer` | Fixed scene/draw recipes and optional renderer-private GPU residency/upload integration |
-| `fluxel-rendering-wasm` | Non-published capsule for historical named-browser proofs using the old RHI integration |
+| `fluxel-renderer` | Initial Copy, offscreen and Surface Raster, and supported Compute fixtures with private Graph and completion-owned resources; scene and extension APIs remain to be built |
+| `fluxel-shader` | Minimal crate scaffold; composition and reflection APIs are not implemented yet |
+| `fluxel-material` | Minimal crate scaffold; material functions and lowering APIs are not implemented yet |
 
-Its RHI dependency is revision
-`97a003fb11e30bd97ec62efe82e031f7bcf26ab5`. That pin and the fixed recipes do not
-establish compatibility with the independent stable RHI or completion of the
-new renderer architecture. Old hardware/browser evidence remains scoped to its
-original revisions and targets. Legacy top-level platform examples and their
-verification scripts have been removed; a new integration artifact and its
-commands are planned in S0. Crate-local examples/tests remain where present.
+```text
+crates/
+  renderer/          # fluxel-renderer; includes the private graph module
+  shader/            # fluxel-shader
+  material/          # fluxel-material
+```
+
+The standalone `rendergraph` and historical `rendering-wasm` crate directories
+have been removed. RHI remains in its independent repository.
+
+All previous Renderer implementations and crate-local examples have been removed.
+The rebuilt Renderer exposes narrow foundation-fixture entry points for the S0/S1
+consumer, with pinned Bases/RHI dependencies and explicit DX12/WGL features.
+The remaining scene and extension boundaries are scaffolds, not a complete
+rendering API. The [foundation closure review](documents/s0-s1-closure.md) maps
+the current logical tests and retained DX12/WGL native artifacts separately.
+
+The previous integration sources have been removed. The newly implemented
+[independent consumer](examples/rendering-integration/README.md) checks three
+asset generations, Copy/Compute readback, offscreen Raster pixels, Surface
+present/resize, and structured refusals. Old logs and images are not
+compatibility or support evidence for the rebuilt path.
+
+## S0/S1 support matrix
+
+S0/S1 foundation acceptance is scoped to Windows DX12 and desktop OpenGL 4+
+through WGL. The closure review identifies the exact observed adapter/profile,
+source hashes, locks, native outputs and deterministic failure witnesses. It does
+not certify untested hardware, a general renderer API or later stages.
+
+Vulkan, browser WebGPU, and browser WebGL2 are deferred from this closure. The
+historical `fluxel-rendering-wasm` capsule has been removed. Browser restoration
+must supply a producer using the current RHI architecture. The
+route-by-route consumer status, owner, and restoration evidence are in the
+[S0/S1 support decision](documents/s0-s1-support-decision.md).
 
 The target has three principal crates:
 
@@ -36,7 +74,7 @@ The target has three principal crates:
 | `fluxel-material` | Material functions, parameter/resource schemas, minimal composition IR, evaluation WGSL, assets/instances/variants |
 | `fluxel-renderer` | Batch RenderScene/views, preparation, visibility, ordering/batching, GPU residency, frame data, and execution |
 | Renderer `graph` module | Pass/resource declarations, versions, hazards, DAG planning, lifetimes, and direct portable RHI execution |
-| Renderer `pipeline` / `feature` modules | Public Rust FramePipeline/RenderFeature facade with private implementation internals |
+| Renderer `pipeline` / `feature` modules | Private shells for the future S4/S5 Rust extension facade |
 
 Material and Shader do not depend on Renderer. Material emits generic WGSL and
 interface contributions; Renderer/FramePipeline assembles the complete
@@ -95,12 +133,14 @@ planning and is not a rendering milestone.
 - [Renderer design](documents/design-renderer.md)
 - [RenderGraph design](documents/design-rendergraph.md)
 - [Architecture decisions](documents/adr/README.md)
-- [Current graph package guide](crates/rendergraph/README.md)
+- [Migration inventory](documents/foundation-migration.md)
+- [Shader package scaffold](crates/shader/README.md)
+- [Material package scaffold](crates/material/README.md)
 - [Current renderer package guide](crates/renderer/README.md)
 - [Release and evidence requirements](RELEASING.md)
 
-Package guides describe the checked-out legacy implementation unless explicitly
-marked as target design. The selected independent RHI's [Core design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md),
+Package guides distinguish the current implemented subset from target design.
+The selected independent RHI's [Core design](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md),
 API documentation, and tests define portable execution contracts.
 
 ## Verification and source dependencies
@@ -109,7 +149,10 @@ Git consumers pin a revision or tag rather than following `main`. Migration must
 update affected manifests/locks and verify real producer/consumer combinations;
 matching version strings are not integration evidence.
 
-The current workspace uses Rust 1.87 and edition 2024. Its portable checks are:
+The current workspace uses Rust 1.87 and edition 2024. The following are full
+workspace regression commands for completed major refactors or complete goal
+implementation and closure. During implementation, validate coherent batches
+with only the necessary affected checks; do not run these for each small edit:
 
 ```sh
 cargo +1.87.0 test --workspace --all-targets --all-features --locked

@@ -1,270 +1,197 @@
 # Fluxel Renderer
 
-> `0.15` historical usage guide and post-foundation renderer baseline. Renderer
-> target is a complete extensible data-oriented renderer. RHI is stable;
-> first reuse Bases and establish internal Graph integration, then independent
-> Shader/Material crates and a Forward MVP with built-in Mesh plus an external
-> Rust Feature. Expand pipelines/features and measure resource strategies.
-> Follow [the implementation plan](../../documents/version-plan.md).
-> Do not treat
-> old graph/RHI spellings below as the new contract.
->
-> **RHI migration boundary.** Fixed recipes and the old accepted-unknown
-> protocol below describe the retained implementation only. New integration
-> follows the selected independent [RHI contract](https://github.com/fluxel-project/fluxel-rhi/blob/main/crates/core/DESIGN.md),
-> including partial acceptance, partial immediate issue, and indeterminate
-> native effects. An error is not proof that no native work occurred. Retain
-> affected resources and outcome payloads until the contract permits retirement.
-
-`fluxel-renderer` defines the user-facing scene inputs `Camera`, `Geometry`,
-`Mesh`, `BasicMaterial`, and insertion-ordered `DrawList`. Its optional
-`gpu-upload` feature also turns validated indexed geometry into an opaque,
-immutable GPU-ready snapshot without blocking the frame-building thread. A
-`FixedFrameRenderer` can lower a draw list and its matching ready indexed
-snapshots into an owned opaque `RenderPacket`, then non-blockingly submit its
-ordered legacy unlit draws as one compiled graph, raster pass, and native
-submission. The feature also supports deliberately closed single-draw
-`f32x3/u32` indexed, textured, vertex-color, and Lambert paths that return
-opaque offscreen image metadata. The Stage 1 visible path uses the same
-legacy-unlit camera/material recipe to draw one acquired DX12 or Vulkan
-presentable image and returns a non-blocking presentation submission. An ordered
-packet can carry the deterministic multi-object proof scene; multiple submissions may retain
-independent immutable snapshot read leases; a private proof scheduler, not the
-renderer API, bounds frames in flight.
-It can separately upload canonical unit normals and execute one closed,
-non-textured fixed-Lambert draw.
-
-It is intentionally not a complete GPU renderer: it does not compile general
-material shaders, expose configurable samplers/PBR or a general
-pipeline/bind-group API, or own windows and swapchains.
-
-## Optional GPU upload
-
-```toml
-[dependencies.fluxel-renderer]
-git = "https://github.com/fluxel-project/fluxel-rendering"
-tag = "v0.16.0"
-features = ["gpu-upload"]
-```
-
-`IndexedMeshUpload::begin` serializes positions as tightly packed
-little-endian `f32x3` and indices as little-endian `u32`. Polling is
-non-blocking. A cloneable `IndexedMeshSnapshot` appears only after both native
-submissions complete; failure and partial acceptance never expose a half-ready
-generation. Buffers, resource states, mapping, and native handles remain
-renderer-private.
-
-## Fixed GPU residency
-
-With `gpu-residency`, the renderer can retain fixed `MeshAsset`/`Geometry` and
-`ImageAsset`/linear `Rgba8Image` contents from `fluxel-assets`. The dependency
-is pinned to the exact `fluxel-bases` `v0.13.4` revision, not to a moving
-branch:
-
-```toml
-[dependencies]
-fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "22c4eb0e199575aa71b59f3abc6ec3f72d934b9a", version = "=0.13.4" }
-fluxel-renderer = { git = "https://github.com/fluxel-project/fluxel-rendering", tag = "v0.16.0", features = ["gpu-residency"] }
-```
-
-In this legacy implementation, residency is private renderer policy keyed by
-`(AssetId, ContentGeneration, DeviceIdentity)`. It is neither an RHI or
-RenderGraph handle nor a public cache handle. The target migration uses the
-selected RHI's device provenance and the readiness model in
-[Renderer design](../../documents/design-renderer.md#211-persistent-residency-frame-data-and-frame-work).
-The legacy non-blocking loop is:
+Renderer is being rebuilt following the organization architecture. Previous
+implementations and examples have been removed. Narrow Copy, offscreen and
+Surface Raster, and supported Compute fixtures now serve the S0/S1 consumer;
+scene and extension subsystems remain private scaffolds.
 
 ```text
-prepare AssetSnapshot -> poll PendingUpload -> draw only Committed snapshot
-    -> retire superseded entry after lease completion -> recreate/reupload on new device
+renderer/
+  Cargo.toml
+  README.md
+  LICENSE-APACHE
+  LICENSE-MIT
+  src/
+    lib.rs
+    renderer/mod.rs
+    renderer/cache.rs
+    renderer/copy.rs
+    renderer/raster.rs
+    renderer/compute.rs
+    renderer/read_set.rs
+    renderer/readback.rs
+    renderer/error.rs
+    renderer/submission.rs
+    renderer/validation.rs
+    renderer/shutdown.rs
+    render_scene/mod.rs
+    feature/mod.rs
+    pipeline/mod.rs
+    preparation/mod.rs
+    graph/mod.rs
+    graph/definition.rs
+    graph/compiler.rs
+    graph/binding.rs
+    graph/access.rs
+    graph/state.rs
+    graph/execution.rs
+    graph/copy.rs
+    graph/raster.rs
+    graph/compute.rs
+    graph/read_set_raster.rs
+    residency/mod.rs
+    residency/upload.rs
+    frame_data/mod.rs
+    tests/README.md
+    tests/graph/{access,binding,compiler,compute,copy,raster,state}.rs
+    tests/renderer/{contracts,lifecycle,raster,read_set_raster,surface,shutdown}.rs
+  examples/README.md
+  tests/README.md
 ```
 
-`prepare` resolves the immutable CPU snapshot and starts or finds its fixed
-upload before graph declaration. `poll` observes upload and submission progress
-without blocking; `draw` receives only a committed renderer-owned snapshot.
-No render pass receives an `AssetStore` or performs a lookup. `retire` removes
-an entry from future selection but retains its RHI leases through known terminal
-submission completion. On device recreation, retained CPU snapshots are
-uploaded again under the new `DeviceIdentity`; old native objects are never
-transplanted.
+| Private module | Responsibility |
+| --- | --- |
+| `renderer` | Entry facade, service ownership, and frame lifecycle coordination |
+| `render_scene` | Render-only storage, batched changes, views, bounds, snapshots |
+| `feature` | Prepared feature data and declared phase contributions |
+| `pipeline` | Frame policy, controlled context, phases and outputs |
+| `preparation` | Visibility, sorting, batching, draw preparation and concrete bindings |
+| `graph` | Resource versions, definedness, hazards, plans and direct RHI execution |
+| `residency` | Persistent asset realization and completion-safe GPU retention |
+| `frame_data` | Per-frame transient uploads with their own lifetime |
 
-Changed content has a new `ContentGeneration`, so a stale generation cannot be
-selected as the replacement merely because its `AssetId` matches. A failed or
-accepted-unknown upload/submission is sticky for that exact residency attempt:
-it is not silently retried or republished. Retrying follows one exact order:
-request retirement of the failed entry, then collect/poll until the retired
-entry can actually be removed, and only then prepare again to start a new
-attempt. Preparing immediately after the retirement request alone revives the
-original Failed/Quarantined entry instead of creating a new attempt. This
-preserves the existing accepted-unknown quarantine rule while keeping retry
-ownership visible to the caller.
+The fixture facade provides `submit_surface_raster` and `complete` for a
+caller-configured RHI Surface. It retains the exclusive image lease and native
+execution outcome until an accepted upload/raster/present sequence and covering
+completion evidence are observed. This narrow path does not introduce a public
+Graph, surface factory, or general frame API.
 
-The initial image registry establishes the same identity/lifetime rules, but
-the retained legacy-unlit browser path does not claim that it samples resident
-images. Residency adds neither general shader/material behavior nor configurable
-sampling.
+These are ownership boundaries, not a set of completed or stabilized subsystems.
+Only add further files and dependencies when an implemented consumer needs them.
+Future public exports must preserve Graph/compiler/scheduler privacy.
 
-`FixedFrameRenderer::draw` accepts a ready snapshot, `Camera`, `BasicMaterial`,
-and a nonzero extent. It serializes `projection * view` and the linear
-`base_color` into one immutable 80-byte uniform, starts its upload without
-blocking, then submits one fixed triangle-list Raster recipe only after that
-upload completes. Poll the returned `FixedFrameSubmission`: `Pending` covers
-either uniform upload or Raster completion, while retryable `Busy` retains the
-operation. `Submitted` reports that raster submission was accepted and the
-acquired image was consumed by the native presentation path, but does not claim
-present or GPU completion. `Complete` yields an opaque `FrameImage`; terminal
-or otherwise unproven accepted Raster work poisons that snapshot generation.
-Snapshot clones share one generation that permits concurrent immutable readers;
-each reader releases only after its own known completion, while any unknown
-accepted result poisons the generation monotonically. No native texture or
-buffer handle is exposed.
+The target uses batch-level Rust traits with generics and monomorphization for
+Feature and frame-policy composition. External crates supply concrete local
+visibility, geometry, ordering, batching and deformation providers. Applications
+assemble them through typed tuples or ordinary aggregates at compile time;
+trait-object dispatch, erased registries and runtime type erasure are excluded.
+Runtime enablement uses state, while explicit enum branches select known types.
+See [ADR-0026](../../documents/adr/0026-static-extension-composition.md). Several providers can coexist; core does not require a
+single global algorithm, fixed vertex struct, universal SoA layout or CPU DrawList.
+The phase owner coordinates ordering across Features. See
+[the Renderer design](../../documents/design-renderer.md) for the detailed target
+and [ADR-0025](../../documents/adr/0025-composable-rendering-policies.md) for the
+decision. This describes future contracts, not the fixture API's current ability.
 
-`FixedFrameRenderer::lower_draw_list` accepts an insertion-ordered `DrawList`
-and one ready `IndexedMeshSnapshot` for each draw at the same positional index.
-It checks exact CPU geometry metadata and copies the camera, material uniforms,
-per-draw model transform, and snapshot leases into a non-`Clone`, device-affine
-`RenderPacket`; building or dropping the packet does not reserve a snapshot.
-`DrawList::push_transformed` associates one finite affine `ModelTransform` with
-one draw, while `push` retains identity placement. A transform belongs to the
-draw/packet rather than `Mesh`, so one mesh can be placed independently by
-multiple ordered draws. For this legacy-unlit packet path, the renderer lowers
-the column-major transform as `projection * view * model` into the existing
-80-byte `mat4x4<f32> + vec4<f32>` uniform ABI; it does not add a new RHI binding
-layout. `submit_packet` reserves each unique snapshot generation once, uploads
-draw uniforms one at a time without blocking, and submits one legacy-unlit
-raster graph only after all uniforms complete. Raster completion releases
-reservations; an unproven accepted raster outcome poisons them. Multiple packet
-entries may reference one snapshot generation while retaining their own ordered
-draws and uniforms.
+## Frame flow and dependency rules
 
-Packet preparation uses private `slot-graph` only for the real CPU dependency
-shape: shared scene input fans out to per-object validation/uniform preparation
-and fans back in to insertion-ordered assembly. It neither exposes graph/node
-identities nor models GPU submission, completion, or synchronization.
-`async-runtime` is not a renderer dependency; native scheduling and shutdown
-belong to the host layer.
-
-`Rgba8Image` validates a nonzero two-dimensional tight RGBA8 payload.
-`BaseColorTextureUpload::begin` borrows it and starts a non-blocking immutable
-upload; only proven completion publishes `BaseColorTextureSnapshot`.
-`TexturedBasicMaterial` couples that snapshot to `BasicMaterial`, and
-`FixedFrameRenderer::draw_textured` uses a fixed mip-zero `textureLoad` mapping
-derived from model-space `position.xy`. `TexturedGeometry` and
-`TexturedIndexedMeshUpload` add an isolated three-stream position/index/UV
-generation; `draw_textured_uv` consumes its explicit finite `f32x2` coordinates
-through a closed second vertex slot. `draw_textured_uv_linear_clamp` adds a
-separate fixed `textureSampleLevel(..., 0.0)` path with private linear filtering
-and clamp-to-edge state. `Srgba8Image` and its separate upload/snapshot/material
-types retain encoded base-color bytes; `draw_textured_uv_linear_clamp_srgb`
-uses a true sRGB source view so decode occurs per texel before filtering, while
-the target stays linear `Rgba8Unorm`. These APIs expose no configurable sampler,
-color space, mip/LOD, or general binding contract. The textured paths accept
-only finite, positive-w triangles wholly inside the clip volume, and mesh/texture
-generations share one atomic draw reservation outcome.
-
-`NormalGeometry` couples indexed geometry to one canonical finite unit
-`f32x3` normal per position. `NormalIndexedMeshUpload` atomically publishes its
-position/index/normal generation, and `FixedFrameRenderer::draw_lambert` uses a
-fixed object-space `+Z` direction. The fragment shader perspective-interpolates
-and safely normalizes the normal, multiplies only linear RGB by Lambert, and
-preserves material alpha. Model transforms currently apply only to the
-legacy-unlit packet path: Lambert drawing has no transformed normals, normal
-matrix, light, normal-map, or PBR descriptor.
-
-`VertexColorGeometry` adds a separate linear `UNORM8x4` color stream to indexed
-geometry, and `VertexColorIndexedMeshUpload` publishes position, color, and
-index buffers only after all three uploads complete. `draw_vertex_color`
-combines the perspective-interpolated color with a finite linear RGBA tint from
-`VertexColorMaterial`. The closed ABI fixes position at slot 0, color at slot 1,
-and the camera/tint uniform at 80 bytes; it does not expose a general vertex
-layout, shader, material, or pipeline descriptor.
-
-## Use today
-
-Build a mesh and schedule it for a camera:
-
-```rust
-use fluxel_renderer::{BasicMaterial, Camera, DrawList, Geometry, Mesh, ModelTransform};
-
-let camera = Camera::default();
-let geometry = Geometry::from_positions(vec![
-    [-0.5, -0.5, 0.0],
-    [0.5, -0.5, 0.0],
-    [0.0, 0.5, 0.0],
-])
-.with_indices(vec![0, 1, 2])?;
-let mesh = Mesh::new(
-    geometry,
-    BasicMaterial::new([0.2, 0.7, 1.0, 1.0])?,
-);
-
-let mut draws = DrawList::new(&camera);
-draws.push(&mesh);
-let translated = ModelTransform::from_column_major([
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-    [0.25, 0.0, 0.0, 1.0],
-])?;
-draws.push_transformed(&mesh, translated);
-assert_eq!(draws.len(), 2);
-# Ok::<(), Box<dyn std::error::Error>>(())
+```text
+render_scene + feature
+    -> pipeline policy + preparation
+    -> graph declarations, planning, and RHI execution
+    -> completion evidence -> residency / frame_data retirement
 ```
 
-`Geometry::with_indices` checks indices when the geometry is constructed.
-`DrawList` preserves insertion order, which makes packet draw order explicit
-without adding sorting policy prematurely.
+`renderer` coordinates these boundaries; it does not implement another execution
+path. `pipeline` chooses passes and outputs. `feature` contributes data and work
+through that path. `graph` knows resource accesses and dependencies, not material
+models or rendering algorithms. `residency` owns persistent GPU realizations;
+`frame_data` owns transient frame inputs. Their retirement follows RHI evidence.
 
-## Headless frame example
+The following subdivisions describe where implementation will grow. They are
+not empty files to create in advance or public API commitments.
 
-On a configured Windows device, this example performs one full public lifecycle:
-immutable mesh upload, non-blocking polling, ready snapshot publication, one
-closed draw, further polling, and `FrameImage` completion. It prints structured
-errors and requires a nonzero target extent with native validation required.
+| Boundary | Add private submodules when exercised |
+| --- | --- |
+| `renderer` | Configuration, services, frame lifecycle, structured errors |
+| `render_scene` | Scene storage, changes, views, snapshots |
+| `feature` | Extraction, prepared contributions, phase participation |
+| `pipeline` | Controlled context, phases, frame outputs |
+| `preparation` | Visibility, sorting, batching, draw packets, binding manifests |
+| `graph` | Declarations, validation, dependencies, plans, recording, completion |
+| `residency` | Realization keys, uploads, last use, retirement |
+| `frame_data` | Frame allocation, uploads, completion-safe reuse |
 
-```powershell
-cargo run -p fluxel-renderer --features gpu-upload --example 01_headless_frame -- dx12
-cargo run -p fluxel-renderer --features gpu-upload --example 01_headless_frame -- vulkan
+## Material and Shader integration
+
+```text
+fluxel-material: MaterialGraph -> private IR -> generic source + interfaces
+pipeline / preparation: add pass template, entry points and geometry requirements
+fluxel-shader: complete composition request -> logical program + reflection
+preparation: resolve concrete bindings and resource access manifest
+graph: validate declared accesses and execute through RHI
 ```
 
-This example does not read pixels back or compare a CPU oracle, so it does not
-establish GPU conformance. The old top-level conformance harness was removed.
-Follow the [release requirements](../../RELEASING.md) and the planned S0
-integration artifact for renewed hardware claims.
+Material owns parameters, functions, evaluation code, and material semantics.
+Shader owns logical composition, reflection, variants, and program identity.
+Neither depends on Renderer. Shader does not receive Material IR. Renderer owns
+their integration and concrete resources; RHI owns native compilation and GPU
+pipeline objects. There is no Renderer-local `material/` or `shader/` subsystem.
+Material/Shader dependency edges will be added with real implementations rather
+than scaffolds. The current Copy path uses only Bases and RHI.
 
-## Performance and compatibility
+S0/S1 fixture entry points and fixed pass assembly are provisional consumers.
+Later preparation replaces those adapters while retaining Graph validation,
+device execution planning and completion-based ownership. Copy now builds a
+logical graph and concrete binding manifest for each frame's byte extent,
+checks compatibility with the cached topology, and records the current frame's
+ranges. This reuses one device submission plan across different buffer sizes;
+it does not reuse the frame's allocations or skip binding validation.
 
-With default features the crate has no dependencies, no `unsafe`, and no native
-API calls, and builds wherever Rust 1.87 supports the workspace. `gpu-upload`
-adds the safe `fluxel-rhi` boundary; native execution is currently implemented
-on Windows DX12/Vulkan. The `camera_material` fixtures compare the Camera/material
-uniform fixed offscreen draw byte-for-byte with CPU pixel oracles on both
-backends under Required native validation. The renderer crate itself contains
-no `unsafe`.
+## Examples and tests
 
-The `texture_load` fixtures compare this textured draw byte-for-byte with an
-independent CPU oracle on DX12 and Vulkan under Required validation.
-The `uv_texture_load` fixtures separately prove explicit UV perspective interpolation
-against position-derived and linear CPU counter-oracles on both backends.
-The `linear_clamp_sampling` fixtures additionally prove fixed linear filtering and independently
-observable U/V clamp behavior on DX12 and Vulkan.
-The `srgb_sampling` fixtures distinguish decode-before-filter from encoded-space
-filtering, nearest/repeat, and affine UV counter-oracles on both backends.
-The `normal_lambert` fixtures distinguish perspective normal interpolation and
-fragment renormalization from counter-oracles and exercise the exact-zero
-fallback on both backends.
-The `vertex_color` fixtures prove linear `UNORM8x4` transport, perspective color
-interpolation, tint application, three-stream binding, and full-readback parity
-against an independent CPU oracle on both backends.
+`examples/` is reserved for small runnable consumers of public Renderer APIs.
+Shared example helpers belong under `examples/common/` only after duplication
+appears. Complete Host/RHI lifecycle composition and retained backend evidence
+belong in the independent root `examples/rendering-integration/` consumer.
 
-The internal `shader` module is an ownership boundary for material shader
-modules. Shader compilation and reflection are deliberately future backend
-work.
+Crate-root `tests/` is reserved for integration tests of public contracts. Unit
+tests live under `src/tests/`, grouped by the production component they cover.
+Production modules reference those files with test-only module declarations so
+private access and logical test-module paths remain intact. No placeholder executable or test is
+included in the crate-local examples directory. The independent fixture consumer
+and private logic tests establish only their exercised subset.
 
-The [renderer design](https://github.com/fluxel-project/fluxel-rendering/blob/main/documents/design-renderer.md)
-explains the ownership split and the evidence gates for future GPU integration.
+Material owns material semantics and emits generic Shader contributions. Shader
+owns complete logical program composition and reflection. Renderer prepares
+concrete resources and frame work; RHI owns device routes, physical resources,
+recording, submission, completion and presentation. Host and JSBridge retain
+platform lifecycle responsibilities.
 
-## License
+The root integration consumer uses `Renderer::submit`, `submit_raster`,
+`submit_compute`, and `readback`. The Raster/Compute entry points deliberately
+accept a fixed fixture schema and already-created public RHI pipelines; they
+are not Material/Shader composition or a general frame extension API.
+It retains three immutable asset generations per workload and their
+original native outcomes until exact covering completion. Copy checks each candidate graph against a cached device plan; the other fixture
+caches still use byte length and, for Raster, target extent. These are provisional
+fixture caches, not persistent asset residency. All four submit paths share one outcome classification. Only an accepted
+execution without recording or execution errors returns a `Submission`.
+`RetainedExecution` reports the original status and both error channels while
+keeping the original native outcome and affected owners. Explicit no-effect
+rejections release their local owners; partial and unknown effects remain
+retained until a successful idle shutdown. Every observed `DeviceLost`, including
+allocation, upload mapping, begin, recording and finish, invalidates reusable
+plans and rejects new work on that Renderer. Begin is always paired with finish,
+including after a recording failure. Unproven pending work remains
+conservatively retained on Drop. Shutdown tests are wired into the crate and
+cover idle success, failure/cancellation and device loss. Completion-wait loss
+retains uncompleted owners and disables new work; a later readback/map failure
+does not undo a successfully observed completion. The current logical/native
+evidence and named target limits are mapped in the
+[foundation closure review](../../documents/s0-s1-closure.md).
+Follow [the implementation plan](../../documents/version-plan.md) and the
+[Renderer design](../../documents/design-renderer.md) as targets, not completion
+claims. The RHI interface has not been changed by this reset.
 
-Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
-your option.
+The fixed `submit_read_set_raster` consumer multiplies a 1-by-1 RGBA8 texture by
+one uniform tint and reads back an 8-by-8 target. Its 20-byte immutable payload
+contains four little-endian floats followed by one texel. The 256-byte destination
+window may change between frames. Each candidate Graph declares the actual
+16-byte physical uniform access at that window's offset; its owner retains the
+allocation descriptor, texture state and resource instance identities. The device
+submission topology is reused only after the candidate Graph's dependencies,
+layouts and access contracts remain compatible. Graph records the actual upload,
+uniform/texture reads, target write and readback. Padded upload storage satisfies
+the selected DX12 texture-copy alignment without changing the logical asset.
+These fixture inputs are not a public Material, Shader or frame-pipeline model.

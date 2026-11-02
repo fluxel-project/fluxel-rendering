@@ -12,6 +12,9 @@ an old API, implementation path, capability claim, or completion result.
 
 ## Current boundary records
 
+- [ADR-0026: Use static dispatch for Rendering extensibility](0026-static-extension-composition.md)
+
+- [ADR-0025: Compose rendering policies over batch data contracts](0025-composable-rendering-policies.md)
 - [ADR-0024: Integrate Graph into a data-oriented extensible Renderer](0024-data-oriented-renderer-workspace.md)
 - [ADR-0023: Keep host lifecycle separate from RHI surface integration](0023-host-rhi-integration-boundary.md)
 - [ADR-0020: Admit optional features only as complete portable contracts](0020-optional-feature-family-admission.md)

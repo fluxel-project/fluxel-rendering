@@ -1,7 +1,8 @@
 # Fluxel Rendering Implementation Plan
 
-> Status: active target plan; implementation migration is pending. Stage labels
-> are work packages, not release numbers or completion claims. The organization
+> Status: S0/S1 foundation implementation is present; its named native acceptance
+> evidence and limits are recorded in the [closure review](s0-s1-closure.md).
+> S2 and later implementations remain future work. Stage labels are work packages, not release numbers or completion claims. The organization
 > [roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md) owns
 > order and authorization; this document defines rendering scope and acceptance.
 
@@ -40,6 +41,52 @@ supported by those measurements; basic batching, bounded frame storage, and
 lifecycle correctness must not wait until S8. Later stages are refined around
 actual consumers rather than implemented as an exhaustive feature list.
 
+## Extension and data direction
+
+The renderer is data-oriented and extensible at batch boundaries. `RenderScene`
+is render-domain storage fed by ordinary or ECS-style adapters; it does not own
+gameplay ECS identity or impose one AoS, SoA, or GPU vertex layout. Features own
+their typed storage and may select local visibility, deformation, geometry, or
+batching algorithms. `FramePipeline` owns phase policy and composition; Graph
+remains the sole declaration, scheduling, and RHI execution route for frame GPU
+work. Renderer-controlled uploads follow the explicit preparation boundary below.
+
+Public extension traits and contexts are introduced only where an independent
+consumer proves a narrow contract. They replace a local algorithm or contribute
+batched products, never require per-object virtual draws, a global culling
+algorithm, a second frame scheduler, or generated RHI source code. CPU batches
+and supported GPU-produced buffers/indirect work are both valid preparation
+products, but each representation must be demonstrated before its public
+contract stabilizes.
+
+All extension and local strategy composition uses Rust generics, traits and
+monomorphization. No `dyn Trait`, trait-object registry or runtime type erasure
+is permitted in the extension architecture, including setup. External crates
+provide concrete implementations; the application assembles typed tuples or
+ordinary aggregates at compile time. Runtime enablement uses state; required
+implementation changes use explicit enum branches over known concrete types.
+Algorithm traits stay outside Core unless cross-Feature cooperation requires
+their protocol. Examples do not freeze signatures or authorize a generic
+framework. See [ADR-0026](adr/0026-static-extension-composition.md).
+
+## S0/S1 closure support decision
+
+The first rebuilt S0/S1 foundation closure is deliberately bounded to Windows DX12 and
+desktop OpenGL 4+ through WGL. Both routes must satisfy the same S0/S1 fixture,
+failure behavior, completion-safe retirement, and real-target evidence gates.
+This is a closure matrix decision, not a claim that every RHI backend is
+supported by the migrated Renderer. The full decision, migration inventory, and
+restoration evidence are recorded in [S0/S1 support decision](s0-s1-support-decision.md).
+
+Vulkan, browser WebGPU, and browser WebGL2 are deferred for this closure. They
+are not part of a runnable S0/S1 matrix and must not be implied by a default
+feature, host-only build, or a passing native route. The browser capsule is
+removed; a future producer must use the unified RHI path without old
+session/token-shaped resources.
+Each deferred route has a named owner and restoration evidence in the support
+decision. A later route closure must re-run affected DX12 and WGL evidence when
+it changes shared semantics.
+
 ## S0. Foundation and migration baseline
 
 **Owners:** Rendering integration; Bases and RHI own their contracts.
@@ -51,16 +98,19 @@ supply I/O. Do not build another asset core.
 
 Select an exact stable RHI revision and features, plus exact Bases and applicable
 Host/JSBridge revisions. Inventory affected manifests, locks, examples, WASM
-capsule, public consumers, and retained evidence. The current `0.16` dependency
-and fixed recipes are migration inputs. Migrate affected consumers together or
-record an explicit reviewed support decision; silently dropping an existing
-target is not a migration strategy. RHI maintenance stays in its independent repo.
+producer, public consumers, and evidence requirements from the current
+directory. A rebuilt path must record an explicit reviewed support decision;
+it cannot infer support from removed recipes or commands. RHI maintenance stays
+in its independent repo.
 
-Rendering owns the planned evolving artifact `examples/rendering-integration/`
-and its own `Cargo.lock`. It starts as the S0 producer/consumer fixture and grows
-through S6. The planned independent consumer `examples/external-renderer/` has
+Rendering owns the evolving artifact `examples/rendering-integration/`
+and its own `Cargo.lock`. Copy, offscreen Raster, supported Compute, and a
+fixed Renderer-to-Surface raster/present fixture with actual HWND resize are
+implemented; the artifact grows through S6. The planned independent consumer
+`examples/external-renderer/` has
 its own manifest/lock and imports only the public Rust facade. These paths are
-implementation destinations, not claims that examples exist. Reuse available
+implementation destinations; only `rendering-integration` currently exists.
+Reuse available
 provenance helpers; retain evidence at
 `target/integration/<stage>/<rendering-sha>/manifest.json`. Record participating
 revisions, lock hashes, commands, inputs, targets, outcomes, and artifact paths.
@@ -83,8 +133,9 @@ consumers migrate. This plan does not claim that migration is already complete.
 
 **Owner:** `fluxel-renderer::graph`.
 
-Move useful standalone Graph implementation, tests, and diagnostics into Renderer
-without maintaining two engines. Preserve typed pass-local access, resource
+Implement Graph from the current workspace and selected contracts inside Renderer,
+without restoring deleted source from Git history or maintaining two engines.
+Preserve typed pass-local access, resource
 versions, definedness, hazards, deterministic DAG ordering/culling, transient
 lifetimes, and diagnostics. Graph does not interpret scenes or materials.
 
@@ -97,9 +148,10 @@ backend-owned. Dedicated allocations and one ordered lane are valid baselines.
 
 **Acceptance:**
 
-- Run the fixture on DX12, Vulkan, and a named GL-family route, retaining inspected
-  output and validation evidence. Re-run affected browser consumers under S0's
-  matrix. One GL route does not certify another.
+- Run the fixture on Windows DX12 and desktop OpenGL 4+ through WGL, retaining
+  inspected output and validation evidence for each. One route does not certify
+  another. Vulkan and browser routes are deferred according to the reviewed
+  S0/S1 support decision and are not implicit acceptance requirements.
 - Reuse a compiled plan over 2–3 outstanding frames with distinct completion
   evidence and safe per-frame storage. Dropping caller handles or replacing assets
   cannot cause early reuse. Per-frame device-idle is not this proof.
@@ -143,12 +195,21 @@ interface caches from device pipelines; source dependencies, entry points, stati
 choices, composition options, and applicable target/ABI assumptions determine
 invalidation at the owning layer.
 
+Define a generic logical input interface in Shader vocabulary, including program
+input types and locations and validation of consumer-supplied semantic mappings.
+It describes program requirements without fixing a renderer vertex struct.
+Geometry stream packing, offsets, strides and step rates belong to geometry
+descriptors; Preparation resolves them into concrete RHI vertex layouts. Changing
+packing alone must not imply changing the logical shader interface.
+
 **Acceptance:** execute a textured raster fixture and supported compute fixture
 through S1. Retain output/readback, reflected resource interfaces, and compiler/
 runtime diagnostics. Cover generic source-unit composition, metadata/reflection
 mismatch, missing entry points, invalid bindings, unsupported routes, and cache
 invalidation. Record actual RHI routes, features, and compiler inputs; successful
-Naga validation alone is not GPU execution evidence.
+Naga validation alone is not GPU execution evidence. Reflect at least a
+Position-only and a Position-plus-custom-attribute program, and reject an
+incompatible declared geometry interface structurally.
 
 ## S3. Minimal Material Core
 
@@ -190,9 +251,12 @@ or general system scheduler.
 snapshot stability, empty batches, stale IDs, removal/reuse, conflicting changes,
 and capacity refusal. Establish deterministic update/error semantics and dirty
 ranges without copying the full world every frame. Retain ordinary and ECS-style
-adapters without an ECS dependency. Prototype external typed Feature input before
-freezing storage APIs. A runnable CPU consumer closes this data contract; GPU
-integration closes at S5/S6.
+adapters without an ECS dependency. Prototype external typed Feature storage and
+input before freezing storage APIs. Verify that independently typed Feature data
+can snapshot with scene data without forcing one universal AoS/SoA layout. A
+runnable CPU reference consumer closes this data contract; it does not claim that
+a GPU culling or indirect-work path has been proved. GPU integration closes at
+S5/S6.
 
 ## S5. FramePipeline and Forward integration
 
@@ -210,6 +274,22 @@ Develop minimal material-backed Forward and the external Feature phase prototype
 together. Check unavailable phases and incompatible shader requirements explicitly.
 Do not force GPU-generated work to become a final CPU DrawList. Implement only
 seams exercised by the selected consumers.
+
+The reference geometry path must prepare and render interleaved, separate-stream,
+and mixed-stream layouts, including Position-only and Position-plus-custom
+attributes. Preparation matches semantic requirements from the selected Shader
+variant to geometry data, chooses the concrete input layout/pipeline, and rejects
+missing or incompatible attributes before recording. One geometry must be usable
+by compatible material/shader variants without treating its vertex struct as a
+core type.
+
+The external prototype replaces one selected local preparation algorithm through
+the controlled facade without editing Renderer core. Its CPU reference result
+proves only that local replacement and composition; GPU products are not implied
+until a selected consumer declares and executes them through Graph.
+Build at least two concrete provider compositions through the same trait
+contract. Their frame calls must remain statically dispatched; an erased plugin
+registry is not a valid substitute for this extension proof.
 
 | Data/work | Owner and lifetime |
 | --- | --- |
@@ -247,6 +327,15 @@ successful demos do not establish their composition.
 - The Feature owns typed storage, accepts batches, joins a selected phase, and
   declares all accesses without a core object-type switch or independent submission.
   Its custom material uses normal composition; the external pipeline controls policy.
+- The same frame combines the built-in mesh path with the independent Feature and
+  at least one distinct local provider. Their phase contributions use the
+  pipeline's deterministic global merge/order rule; incompatible ordering or
+  representation combinations fail explicitly instead of appending separately
+  sorted lists.
+- The external pipeline and heterogeneous Feature set use concrete generic
+  composition without trait objects or runtime type erasure. Runtime enablement
+  preserves frame/resource ownership; selected enum variants remain compiled
+  concrete implementations.
 - Retain inspected multi-frame output, exact revisions/locks, real producer/consumer
   builds, and the affected target matrix. Exercise visibility, ordering/batching,
   compatible binding refresh, and safe retirement.
@@ -255,8 +344,9 @@ successful demos do not establish their composition.
   a pending upload with an enforceable dependency and frame data that cannot be
   recycled before its final consumer completes.
 - Stabilize only the demonstrated extension subset. Full terrain, water, particles,
-  skinning, general cross-pass extensions, dynamic DLL loading, and a stable binary
-  plugin ABI are not MVP gates.
+  skinning and general cross-pass extensions are not MVP gates. Runtime loading
+  of unknown Feature types and a stable plugin binary ABI are outside this
+  static extension architecture.
 
 ## S7. Material, pipeline, and Feature expansion
 
@@ -273,6 +363,13 @@ Lighting extensions must affect shading through the defined seams; graph-only
 hooks cannot establish that capability. Water, particles, vegetation, and area
 lights are candidate workloads, not an exhaustive stage-exit checklist.
 
+The selected consumer proves the relevant extension boundary: for example,
+skinning or morphing proves deformation inputs and any produced stream; terrain
+proves a distinct spatial provider; a GPU-driven path proves its producer,
+consumer, and cross-pass contracts. Keep those interfaces provisional until such
+a consumer succeeds. This stage does not require every animation, terrain, water,
+or particle implementation.
+
 **Acceptance:** shared scene/material inputs work under Forward and Deferred; the
 selected external Feature works without changing core object dispatch. Declare
 compatibility/refusal per pipeline/backend and rerun affected external consumers
@@ -287,6 +384,11 @@ indirect work, batching, aliasing, multi-queue execution, or parallel recording.
 Each needs its own evidence. Include a material-heavy workload (for example,
 10,000 draws over 1,000 textures) to measure manifest validation, binding refresh,
 plan reuse, preparation cost, and allocation/upload volume.
+
+S8 measures and selects optimization strategies; it does not postpone the
+extensibility boundaries already required by S2 through S7. Layout and provider
+choices remain replaceable unless a measured workload and an exercised consumer
+justify stabilizing them.
 
 **Acceptance:** record baseline/candidate inputs, CPU/GPU measurements where
 available, memory/upload/allocation counts, compiler/runtime identity, raw results,

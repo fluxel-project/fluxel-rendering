@@ -92,13 +92,14 @@ Shader System
 ### Frame execution
 
 ```text
-RenderScene
+RenderScene / typed Feature data
         ↓
-FramePipeline
+FramePipeline policy + Feature-local preparation
+(geometry / Material / Shader resolution)
         ↓
-RenderGraph
+Prepared phase work + complete binding/access manifests
         ↓
-Shader / Pipeline + Material Runtime
+RenderGraph planning and pass-local use of prepared products
         ↓
 RHI
 ```
@@ -692,9 +693,12 @@ Examples:
 normal map enabled
 alpha test enabled
 shading mode
-skinning enabled
 optional expensive branch
 ```
+
+A consuming deformation Feature may supply a skinning capability as a program
+composition input. That choice is not a Material-owned animation or deformation
+policy; Material consumes the explicitly agreed interface.
 
 Static changes may change:
 
@@ -1006,7 +1010,19 @@ FramePipeline
 RenderGraph pass declaration
 ```
 
-### 21.1 Preparation vs execution
+### 20.1 Preparation vs execution
+
+Preparation may use external Feature-local visibility, geometry, ordering and
+deformation providers. These choices do not enter Material IR. A material
+contribution describes its semantic and program requirements; the consuming
+Feature/pipeline resolves geometry inputs, phase participation and semantic
+resources such as scene color. Missing inputs or unsupported phase composition
+fail explicitly. Material does not own a global Mesh, animation, culling or
+sorting interface, and does not schedule a pass merely by naming a resource.
+Consumer extension hooks use the static composition rule in
+[ADR-0026](adr/0026-static-extension-composition.md); runtime material graphs,
+variants and parameter data do not require trait-object plugins or a generic
+Rust type per material.
 
 During graph construction:
 
@@ -1382,17 +1398,15 @@ selected RHI route -> backend-native lowering and compilation
 
 RUNTIME
 
-RenderScene
+RenderScene / typed Feature data
         ↓
-FramePipeline
+FramePipeline policy + Feature-local preparation
         ↓
-resolve MaterialInstance
+resolve MaterialInstance / compiled variant / geometry and Shader requirements
         ↓
-CompiledMaterialVariant
+prepared phase work, executable pipeline and concrete binding/access manifest
         ↓
-RenderGraph
-        ↓
-use Shader / Pipeline + Material Runtime bindings
+RenderGraph planning and pass-local recording with prepared products
         ↓
 RHI
         ↓

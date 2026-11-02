@@ -7,7 +7,10 @@
 `fluxel-shader` turns portable WGSL source contributions into a complete logical
 program. It is usable by materials, compute, post-processing, and custom
 pipelines. It does not own material semantics, graph construction, frame policy,
-or native backend compilation.
+or native backend compilation. Consumer extension hooks follow
+[ADR-0026](adr/0026-static-extension-composition.md): concrete generic composition,
+without trait-object registries. Source units and interface descriptors remain
+runtime data; they are not a Rust type per shader or vertex layout.
 
 ## Composition boundary
 
@@ -91,6 +94,16 @@ cross a lost or replaced device. Backend-native reflection may validate its own
 ABI but is not a second public material or Shader semantic interface.
 
 ## Binding and frame boundary
+
+Geometry semantics and shader locations are distinct. Renderer preparation
+matches the selected logical input interface against geometry stream descriptors
+and creates the corresponding vertex layout/pipeline. Shader does not impose a
+fixed Position/Normal/UV vertex struct. Interleaved, separate and mixed streams
+can share a logical program when their resolved input interface is compatible;
+their physical packing still participates in executable pipeline identity.
+Missing inputs require explicit refusal or an explicitly supported variant.
+Storage-based/procedural geometry and deformation follow their selected program
+interfaces and resource requirements, not an assumed conventional Mesh shape.
 
 Logical reflection describes binding slots, stages, and access classes. Renderer
 preparation resolves each slot to a concrete RHI resource, range, access, and

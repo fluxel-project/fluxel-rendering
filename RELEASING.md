@@ -7,15 +7,22 @@ must pin tags or revisions.
 
 ## Migration status
 
+Renderer was reset and its previous public paths were removed. Fixed Copy,
+Raster, supported Compute, Surface and read-set consumers use pinned Bases/RHI
+and a private Graph; Shader/Material remain scaffolds. The named DX12/WGL
+foundation acceptance and its source-specific evidence are described in the
+[S0/S1 closure record](documents/s0-s1-closure.md). This foundation acceptance
+does not constitute a release or certify deferred backends.
+
 The old top-level platform examples and `scripts/` verification harnesses have
 been removed. Their old commands are not a current release procedure. Retained
 results in historical tags prove only their original revisions and targets.
 
 S0 of the [implementation plan](documents/version-plan.md) establishes the new
 integration artifact, target matrix, executable commands, lock inputs, and evidence
-location. Until its replacement verification path exists and passes, no new
-hardware support or release claim can be inferred from portable tests. This
-document specifies the gate; it does not claim the future harness is implemented.
+location. The integration runner and named native foundation matrix have been
+reviewed; release candidates still require the applicable release verification
+gate below and cannot rely on portable tests alone.
 
 ## Candidate inputs
 
@@ -42,8 +49,11 @@ Git, but deleting their only retained copy invalidates reproducibility claims.
 ## Verification gate
 
 Follow the ecosystem [evidence policy](https://github.com/fluxel-project/.github/blob/main/EVIDENCE_POLICY.md).
-Use focused checks during development and the complete affected target matrix
-for stage close or release; there is no fixed quota on full verification runs.
+During development, group coherent changes and run only necessary affected
+checks after the batch is complete. Full regression is reserved for a completed
+major refactor or complete goal implementation and closure. A release review
+runs the complete affected target matrix after required implementation is
+finished; routine batches and individual edits do not justify full runs.
 
 The release candidate must pass formatting, relevant Clippy/compile checks,
 focused contract/regression tests, and all required real-target runs. Check that
@@ -56,7 +66,10 @@ or recording evidence to detect stale contents and intermittent failures. A clea
 validation log, surviving process, or successful present call is insufficient.
 
 Exercise the selected RHI's acceptance/completion outcomes, safe resource
-retirement, and the affected public extension consumer. Browser evidence requires
+retirement, and the affected public extension consumer. Once extension APIs are
+implemented, that consumer must use the current static generic Feature/Pipeline
+facade with no trait-object registry; foundation fixtures do not prove this
+later contract. Browser evidence requires
 the actual WASM artifact and matching JSBridge revision. A named browser does not
 certify another browser or a mini-game host; emulator evidence does not replace a
 required physical-device run. Missing required evidence leaves its support claim

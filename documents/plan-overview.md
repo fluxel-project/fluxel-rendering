@@ -8,8 +8,20 @@
 
 Fluxel provides an extensible, data-oriented real-time renderer without requiring
 an ECS, gameplay scene model, host, or fixed rendering strategy. Renderer owns
-views, visibility, preparation, sorting/batching, resource coordination, and frame
-execution. Logical assets remain in Bases; portable GPU execution remains in RHI.
+views, preparation protocols, phase composition, resource coordination, reference
+consumers and frame execution. Features and external crates supply local geometry,
+visibility, ordering, batching and deformation algorithms. Logical assets remain
+in Bases; portable GPU execution remains in RHI.
+
+The extensibility architecture uses Rust generics, traits and monomorphization
+exclusively. Applications assemble concrete pipelines and typed Feature sets at
+compile time; no trait-object dispatch, erased registry or runtime type erasure
+is permitted. Runtime state can enable features, and explicit enum branches can
+select known implementations. Core fixes necessary cross-Feature protocols;
+algorithm traits otherwise remain outside Core. Data layouts follow access
+patterns rather than requiring universal SoA or fixed vertex structures. See
+[Renderer design](design-renderer.md) and
+[ADR-0026](adr/0026-static-extension-composition.md).
 
 The target has three principal crates: `fluxel-shader`, `fluxel-material`, and
 `fluxel-renderer`. Graph and FramePipeline are renderer-owned modules, with a
@@ -44,16 +56,19 @@ Nodes remain planned S7 functionality. Feature interfaces start during S4/S5;
 S6 proves their joint use rather than adding a late plugin framework.
 
 Measurements begin with runnable workloads. S8 does not postpone basic batching,
-safe lifetime handling, or bounded frame storage. Rust crate plugins are in scope;
-dynamic DLL loading and a stable plugin binary ABI are unscheduled.
+safe lifetime handling, or bounded frame storage. Statically composed Rust crate
+plugins are in scope; runtime loading of unknown Feature types and a stable
+plugin binary ABI are outside this architecture.
 
 ## MVP acceptance
 
 ```text
 Bases snapshots + batched scene changes
   -> RenderScene / RenderView + built-in Mesh + external Feature
-  -> custom Material + Shader preparation + external FramePipeline
-  -> visibility / phase ordering / batching -> internal Graph -> stable RHI
+  -> external FramePipeline policy + Feature-local preparation
+     (geometry / custom Material / Shader resolution)
+  -> prepared CPU batches or supported GPU products + phase composition
+  -> complete resource-access declarations -> internal Graph -> stable RHI
   -> observed textured 3D output in the same frame
   -> completion-governed reuse and retirement across overlapping frames
 ```
@@ -63,7 +78,12 @@ cannot require a core object-type switch, private Graph internals, or independen
 GPU submission. Ordinary and ECS-style adapters share the batch boundary without
 an ECS dependency. Stabilize only the exercised extension subset; a second
 materially different Feature must exercise broader cross-pass/shading contracts
-before those stabilize.
+before those stabilize. Different Features may select different local providers
+in the same frame. A phase coordinates their final order or explicit compositing;
+concatenating locally sorted transparent lists is not a valid general policy.
+External animation evaluates poses; rendering deformation consumes evaluated
+inputs and contributes frame data or Graph work. The first CPU consumer does
+not establish GPU-driven extension support.
 
 Every bound material contributes its reflected, concrete resource-use manifest.
 Compatible resource-instance changes reuse a Graph plan after validation; changed
@@ -88,7 +108,8 @@ remain explicit.
 
 Capture/replay, Canvas 2D/basic text, declarative UI, Blender tooling, and JavaScript
 wrappers remain undecided, with no retained API design or delivery order. The old
-standalone Graph, fixed renderer, and WASM capsule are migration inputs.
+standalone Graph, fixed renderer, and WASM capsule have been removed. Their
+historical architecture does not authorize recovering deleted implementations.
 
 A future Rust + TypeScript game engine needs separate planning for Game Scene,
 gameplay/script execution, the game loop, bindings, and hot reload. Adapters may

@@ -1,0 +1,10 @@
+[package]
+name = "fluxel-material"
+version.workspace = true
+edition = "2024"
+rust-version = "1.87"
+license = "MIT OR Apache-2.0"
+description = "Material functions and typed composition for Fluxel"
+repository = "https://github.com/fluxel-project/fluxel-rendering"
+readme = "README.md"
+publish = false

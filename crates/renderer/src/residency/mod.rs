@@ -1,39 +1,9 @@
-//! Closed logical-asset to immutable GPU residency integration.
-//!
-//! The public types expose only typed logical markers, preparation progress,
-//! and opaque ready assets. The residency table, physical identities, upload
-//! operations, and RenderGraph imports remain renderer-private.
+//! GPU residency kept alive until RHI completion evidence proves retirement safe.
 
-#[cfg(all(target_arch = "wasm32", feature = "webgl2-residency"))]
-mod browser;
-mod cache;
-mod native;
+//! Per-submission GPU buffers retained through RHI completion.
 
-pub use native::{
-    AssetResidencyError, AssetResidencyFailure, ResidencyRecreation, ResidentAssetPair,
-    ResidentAssetStatus,
+mod upload;
+
+pub(crate) use upload::{
+    ComputeBuffers, RasterBuffers, ReadSetRasterBuffers, SurfaceRasterBuffers, UploadBuffers,
 };
-pub(crate) use native::{NativeResidency, new_native_residency};
-
-#[cfg(all(target_arch = "wasm32", feature = "webgl2-residency"))]
-pub use browser::{WebGl2AssetResidency, WebGl2ResidencyError};
-
-#[cfg(test)]
-mod tests {
-    mod cache;
-
-    #[cfg(windows)]
-    mod native;
-}
-
-/// Logical kind used by the fixed indexed-geometry residency path.
-#[derive(Debug)]
-pub struct MeshAsset;
-
-impl fluxel_assets::AssetKind for MeshAsset {}
-
-/// Logical kind used by the fixed linear-RGBA8 image residency path.
-#[derive(Debug)]
-pub struct ImageAsset;
-
-impl fluxel_assets::AssetKind for ImageAsset {}
