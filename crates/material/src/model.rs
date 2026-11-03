@@ -15,9 +15,14 @@ use fluxel_shader::{
     BindingDeclaration, BindingKind, BindingShape, CallableDeclaration, ScalarType, SourceUnit,
     ValueType,
 };
+use sha2::{Digest, Sha256};
 
 #[path = "compiler.rs"]
 mod compiler;
+#[path = "names.rs"]
+mod names;
+
+use names::wgsl_top_level_names;
 
 /// Marker for material assets stored through `fluxel-assets`.
 pub struct MaterialAsset;
@@ -302,7 +307,10 @@ pub struct MaterialParameterBinding {
 /// Generic source and interface data for a Shader composition request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterialShaderContribution {
-    /// Deterministic source-unit identifier.
+    /// Short deterministic source-unit identifier for diagnostics and source maps.
+    ///
+    /// This is not the material cache key: the complete canonical variant key and
+    /// complete shader composition request remain the collision-safe identities.
     pub source_id: String,
     /// WGSL declarations containing `evaluate_material`.
     pub source: String,
@@ -553,6 +561,13 @@ pub enum MaterialError {
         /// Dynamic parameter name.
         parameter: String,
     },
+    /// Two emitted top-level WGSL declarations used the same name.
+    TopLevelNameConflict {
+        /// Conflicting WGSL name.
+        name: String,
+    },
+    /// The top-level WGSL declaration scan could not complete safely.
+    TopLevelWgslUnparseable,
     /// Two resources claimed the same shader-visible location.
     BindingConflict {
         /// Conflicting location.
@@ -738,6 +753,12 @@ impl NormalizedMaterialIr {
                 });
             }
         }
+        validate_top_level_names(
+            &fragments,
+            &definition.resources,
+            &definition.parameters,
+            &definition.static_options,
+        )?;
         for fragment in &fragments {
             for call in &fragment.calls {
                 let callee = fragment_map.get(call.fragment.as_str()).ok_or_else(|| {
@@ -858,8 +879,9 @@ impl NormalizedMaterialIr {
             "fn evaluate_material() -> vec4<f32> {{\n    return {}();\n}}\n",
             self.root_fragment
         ));
+        let variant_key = self.variant_key();
         MaterialShaderContribution {
-            source_id: format!("material:{}", self.variant_key().as_str()),
+            source_id: source_unit_id(variant_key.as_str()),
             source,
             bindings: self
                 .resources
@@ -903,6 +925,44 @@ impl NormalizedMaterialIr {
             static_options: self.static_options.clone(),
         }
     }
+}
+
+fn validate_top_level_names(
+    fragments: &[MaterialFragment],
+    resources: &[MaterialResource],
+    parameters: &[MaterialParameter],
+    static_options: &BTreeMap<String, StaticValue>,
+) -> Result<(), MaterialError> {
+    let mut names = BTreeSet::from([String::from("evaluate_material")]);
+    let mut insert = |name: &str| {
+        if names.insert(name.to_owned()) {
+            Ok(())
+        } else {
+            Err(MaterialError::TopLevelNameConflict {
+                name: name.to_owned(),
+            })
+        }
+    };
+    for name in static_options.keys() {
+        insert(name)?;
+    }
+    for resource in resources {
+        let shader_name = parameters
+            .iter()
+            .find(|parameter| parameter.resource == resource.name)
+            .map_or(resource.name.as_str(), |parameter| parameter.name.as_str());
+        insert(shader_name)?;
+    }
+    for fragment in fragments {
+        for name in wgsl_top_level_names(&fragment.wgsl)? {
+            insert(&name)?;
+        }
+    }
+    Ok(())
+}
+
+fn source_unit_id(canonical: &str) -> String {
+    format!("material:{:x}", Sha256::digest(canonical.as_bytes()))
 }
 
 fn visit(

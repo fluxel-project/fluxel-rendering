@@ -24,7 +24,9 @@ This crate does not create device objects or decide whether an opened device can
 execute an artifact. A consumer queries the selected RHI route and capabilities,
 maps any expressible requirements, and creates the RHI shader/pipeline. The
 repository's DX12 and desktop WGL integration fixture exercises that consumer
-path for its selected shaders; it is not evidence for untested backends.
+path for its selected shaders in the reviewed named-Windows closure; it is not
+evidence for untested backends. Its cold-composition benchmark is a same-machine
+baseline, not an optimization or performance claim.
 
 The implemented subset is intentionally smaller than the target described in the
 [Shader design](../../documents/design-shader.md). Geometry packing, Renderer

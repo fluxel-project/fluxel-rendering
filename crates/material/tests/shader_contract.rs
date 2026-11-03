@@ -129,6 +129,88 @@ fn pass_template_can_precede_the_material_contribution() {
 }
 
 #[test]
+fn forced_source_id_collision_fails_closed_without_cache_aliasing() {
+    let source_id = MaterialCompiler::compile(&material_definition(
+        "fn custom_tint() -> vec4<f32> { return sample_texel() * dynamic_tint; }",
+    ))
+    .unwrap()
+    .contribution()
+    .source_id
+    .clone();
+    let first = SourceUnit::new(
+        source_id.clone(),
+        "@fragment fn collision_target() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
+    );
+    let second = SourceUnit::new(
+        source_id,
+        "@fragment fn collision_target() -> @location(0) vec4<f32> { return vec4<f32>(0.0); }",
+    );
+    let request = |unit: SourceUnit| {
+        ShaderCompositionRequest::new(vec![unit])
+            .with_entry_point(EntryPoint::new("collision_target", ShaderStage::Fragment))
+    };
+    let mut composer = ShaderComposer::new();
+    let first_artifact = composer.compose(&request(first.clone())).unwrap();
+    let second_artifact = composer.compose(&request(second.clone())).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first_artifact, &second_artifact));
+    assert_ne!(first_artifact.source(), second_artifact.source());
+
+    let duplicate = ShaderCompositionRequest::new(vec![first, second])
+        .with_entry_point(EntryPoint::new("collision_target", ShaderStage::Fragment));
+    assert!(matches!(
+        ShaderComposer::new().compose(&duplicate),
+        Err(ShaderError::DuplicateSource(_))
+    ));
+}
+
+#[test]
+fn commented_variable_address_space_is_naga_valid_and_still_name_checked() {
+    let root_wgsl = "var< /* comment contains > and < */ private > cache_value: f32;\nfn root() -> vec4<f32> { return vec4<f32>(cache_value); }";
+    let valid = MaterialDefinition::new(
+        vec![MaterialFragment {
+            name: "root".into(),
+            inputs: Vec::new(),
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            wgsl: root_wgsl.into(),
+        }],
+        "root",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    let variant = MaterialCompiler::compile(&valid).expect("scanner accepts the valid WGSL");
+    compose(variant.contribution()).expect("Naga accepts the commented address space");
+
+    let conflicting_resource = MaterialDefinition::new(
+        vec![MaterialFragment {
+            name: "root".into(),
+            inputs: Vec::new(),
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            wgsl: root_wgsl.into(),
+        }],
+        "root",
+        Vec::new(),
+        vec![MaterialResource {
+            name: "cache_value".into(),
+            kind: MaterialResourceKind::Texture2dF32,
+            location: BindingLocation {
+                group: 0,
+                binding: 0,
+            },
+        }],
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    assert!(matches!(
+        MaterialCompiler::compile(&conflicting_resource),
+        Err(MaterialError::TopLevelNameConflict { name }) if name == "cache_value"
+    ));
+}
+
+#[test]
 fn function_and_resource_contract_disagreements_fail_structurally() {
     let invalid_signature = MaterialCompiler::compile(&material_definition(
         "fn custom_tint() -> f32 { return 1.0; }",

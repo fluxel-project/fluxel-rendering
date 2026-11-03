@@ -16,12 +16,14 @@ runtime data does not require a Rust type per material or trait-object plugins.
 `CompiledMaterialVariant`. Parameters explicitly map to declared resources;
 instances retain asset identity and content generation while dynamic values reuse
 the compiled static variant. Invalid fragments, missing calls, cycles, type
-mismatches, duplicate bindings, unsupported outputs, and invalid instance values
-return structured errors.
+mismatches, duplicate bindings, unsupported outputs, invalid instance values, and
+emitted WGSL top-level namespace collisions return structured errors. The compact
+`source_id` is a SHA-256 digest of the full canonical variant key; the full key
+and complete Shader composition source remain collision-safe cache identities.
 
 Material emits source units and metadata in Shader vocabulary. It neither chooses
 a render pipeline nor creates RHI objects. The repository's S3 fixture combines a
 contribution with a pass template, validates reflected bindings against concrete
-resources, and executes it through the S2 and Graph paths on the observed DX12
-and desktop WGL routes. This limited fixture does not establish authoring graphs,
+resources, and executes it through the S2 and Graph paths on the reviewed DX12
+and desktop WGL fixture routes. This limited fixture does not establish authoring graphs,
 PBR, FramePipeline, or RenderScene APIs.

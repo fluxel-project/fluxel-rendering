@@ -8,8 +8,10 @@ Shader and S3 Material workloads prove their current composition path. None of
 these inputs establishes future Geometry, Feature, FramePipeline, or RenderScene
 contracts.
 
-Current native DX12/WGL attempts retain dynamic read-set execution, actual HWND
-client captures, device replacement, S2 shader routes, and S3 material results.
+The reviewed native DX12/WGL attempts retain dynamic read-set execution, actual
+HWND client captures, device replacement, S2 shader routes, and S3 material
+results under Bases `ee640d5`. Their dirty-source archive and narrow S2/S3 scope
+are recorded in [the S2/S3 named-Windows closure](../../documents/s2-s3-closure.md).
 The [foundation closure review](../../documents/s0-s1-closure.md) remains the
 S0/S1 record. Each attempt archive identifies its exact source snapshot and
 target observations; historical source snapshots do not certify later edits.
@@ -23,7 +25,7 @@ metadata before adding the new dependency edges.
 | --- | --- | --- |
 | Rendering | Current source snapshot; runner records revision and dirty state | Renderer facade, private Graph, S2 Shader and S3 Material consumers |
 | RHI | `0f7f785d4f0ccc62e125dd6cf560d91333ec85cf` | `fluxel-rhi =0.1.0`, defaults disabled; portable common execution, mapping, explicit copy transitions and readback |
-| Bases | `c5fdaa993c13feb6b55b23fc766c22c9733836f2` | `fluxel-assets =0.13.4`, immutable snapshots and content replacement |
+| Bases | `ee640d57a8d7c32d251252d0e8b32950636a770c` | `fluxel-assets =0.13.4`, immutable snapshots and content replacement |
 | Host | `33a6bbb3fa15500e928b4192ca8f280b735034d9` | `fluxel-host =0.1.0`; owns native windows and lifecycle events in this executable, not a Renderer dependency |
 
 The first workload uses three immutable source snapshots under the same logical

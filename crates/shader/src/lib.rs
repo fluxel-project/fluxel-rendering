@@ -1,8 +1,8 @@
 //! Portable WGSL composition, validation, and reflection.
 #![deny(missing_docs)]
 mod capabilities;
-pub use capabilities::NagaCapability;
 use capabilities::required_naga_capabilities;
+pub use capabilities::NagaCapability;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
@@ -540,24 +540,22 @@ fn build(
         }
     })?;
     let mut requirements = r.requirements.clone();
-    requirements.naga_capabilities.extend(
-        required_naga_capabilities(&m)
-            .map_err(|e| {
-                let (source, line, column) = locate(
-                    e.spans()
-                        .next()
-                        .and_then(|(span, _)| span.to_range())
-                        .map(|range| range.start),
-                );
-                ShaderError::Validate {
-                    source,
-                    line,
-                    column,
-                    message: e.to_string(),
-                }
-            })?
-            .into_iter(),
-    );
+    requirements
+        .naga_capabilities
+        .extend(required_naga_capabilities(&m).map_err(|e| {
+            let (source, line, column) = locate(
+                e.spans()
+                    .next()
+                    .and_then(|(span, _)| span.to_range())
+                    .map(|range| range.start),
+            );
+            ShaderError::Validate {
+                source,
+                line,
+                column,
+                message: e.to_string(),
+            }
+        })?);
     for (capability, feature) in [
         (NagaCapability::PrimitiveIndex, "primitive-index"),
         (NagaCapability::EarlyDepthTest, "shader-early-depth-test"),

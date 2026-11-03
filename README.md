@@ -63,10 +63,11 @@ and images are not compatibility or support evidence for the rebuilt path.
 ## Observed native evidence
 
 S0/S1 foundation acceptance is scoped to Windows DX12 and desktop OpenGL 4+
-through WGL. Current S2/S3 integration attempts likewise exercised only those
-two routes. They retained shader route/capability facts, readbacks, native
-diagnostics, and inspected Surface captures, but do not establish a general
-renderer API, an S4/S5 extension API, or support for untested targets.
+through WGL. The independently reviewed S2/S3 fixture closure uses those same
+two named routes with Bases `ee640d5`, archived dirty-source inputs, shader
+route/capability facts, readbacks, native diagnostics, and inspected Surface
+captures. It does not establish a general renderer API, S4/S5 GPU behavior, or
+support for untested targets; see the [S2/S3 named-Windows closure](documents/s2-s3-closure.md).
 
 The [S4 CPU closure record](documents/s4-cpu-closure.md) binds the independently
 reviewed external CPU reference to product `e4ec252`. It builds against the public RenderScene and
@@ -153,6 +154,7 @@ planning and is not a rendering milestone.
 - [Material design](documents/design-material.md)
 - [Renderer design](documents/design-renderer.md)
 - [S4 CPU closure record](documents/s4-cpu-closure.md)
+- [S2/S3 named-Windows closure](documents/s2-s3-closure.md)
 - [RenderGraph design](documents/design-rendergraph.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Migration inventory](documents/foundation-migration.md)

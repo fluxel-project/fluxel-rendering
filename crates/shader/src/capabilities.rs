@@ -208,7 +208,7 @@ fn naga_capability_bits() -> [(NagaCapability, naga::valid::Capabilities); 29] {
 }
 pub(crate) fn required_naga_capabilities(
     module: &naga::Module,
-) -> Result<BTreeSet<NagaCapability>, naga::WithSpan<naga::valid::ValidationError>> {
+) -> Result<BTreeSet<NagaCapability>, Box<naga::WithSpan<naga::valid::ValidationError>>> {
     use naga::valid::{Capabilities, ValidationFlags, Validator};
     let mut sufficient = Capabilities::all();
     for (_, capability) in naga_capability_bits() {
@@ -223,7 +223,9 @@ pub(crate) fn required_naga_capabilities(
     // The individual removals must not turn alternatives into an empty or
     // otherwise insufficient set. Keep this final validation as the invariant
     // that makes the returned demand set safe for consumer admission.
-    Validator::new(ValidationFlags::all(), sufficient).validate(module)?;
+    Validator::new(ValidationFlags::all(), sufficient)
+        .validate(module)
+        .map_err(Box::new)?;
     Ok(naga_capability_bits()
         .into_iter()
         .filter_map(|(capability, bit)| sufficient.contains(bit).then_some(capability))

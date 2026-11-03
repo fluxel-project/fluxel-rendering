@@ -360,6 +360,178 @@ fn rejects_invalid_calls_cycles_types_bindings_outputs_and_values() {
     ));
 }
 
+#[test]
+fn rejects_conflicting_emitted_top_level_wgsl_names() {
+    let wrapper_collision = MaterialDefinition::new(
+        vec![fragment(
+            "evaluate_material",
+            Vec::new(),
+            MaterialType::Vec4,
+            "fn evaluate_material() -> vec4<f32> { return vec4<f32>(1.0); }",
+        )],
+        "evaluate_material",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    assert!(matches!(
+        MaterialCompiler::compile(&wrapper_collision),
+        Err(MaterialError::TopLevelNameConflict { name }) if name == "evaluate_material"
+    ));
+
+    let resource_collision = MaterialDefinition::new(
+        vec![fragment(
+            "root",
+            Vec::new(),
+            MaterialType::Vec4,
+            "fn root() -> vec4<f32> { return vec4<f32>(1.0); }",
+        )],
+        "root",
+        Vec::new(),
+        vec![MaterialResource {
+            name: "root".into(),
+            kind: MaterialResourceKind::Texture2dF32,
+            location: BindingLocation {
+                group: 0,
+                binding: 0,
+            },
+        }],
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    assert!(matches!(
+        MaterialCompiler::compile(&resource_collision),
+        Err(MaterialError::TopLevelNameConflict { name }) if name == "root"
+    ));
+
+    let static_collision = MaterialDefinition::new(
+        vec![fragment(
+            "root",
+            Vec::new(),
+            MaterialType::Vec4,
+            "fn root() -> vec4<f32> { return vec4<f32>(1.0); }",
+        )],
+        "root",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::from([("root".into(), StaticValue::Bool(true))]),
+        SurfaceOutput::Color,
+    );
+    assert!(matches!(
+        MaterialCompiler::compile(&static_collision),
+        Err(MaterialError::TopLevelNameConflict { name }) if name == "root"
+    ));
+}
+
+#[test]
+fn rejects_real_top_level_wgsl_declaration_collisions_across_fragments() {
+    let material = MaterialDefinition::new(
+        vec![
+            fragment(
+                "root",
+                Vec::new(),
+                MaterialType::Vec4,
+                "struct Shared { value: vec4<f32>, }\nvar<private> cached: Shared;\nfn helper() -> vec4<f32> { return cached.value; }\nfn root() -> vec4<f32> { return helper(); }",
+            ),
+            fragment(
+                "other",
+                Vec::new(),
+                MaterialType::Vec4,
+                "/* nested /* comment */ keeps the scanner at top level */\noverride selection: u32 = 1u;\nconst accent: vec4<f32> = vec4<f32>(1.0);\nfn helper() -> vec4<f32> { return accent; }\nfn other() -> vec4<f32> { return helper(); }",
+            ),
+        ],
+        "root",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    assert!(matches!(
+        MaterialCompiler::compile(&material),
+        Err(MaterialError::TopLevelNameConflict { name }) if name == "helper"
+    ));
+}
+
+#[test]
+fn rejects_real_top_level_type_and_override_collisions() {
+    let type_collision = MaterialDefinition::new(
+        vec![
+            fragment(
+                "root",
+                Vec::new(),
+                MaterialType::Vec4,
+                "struct Shared { value: vec4<f32>, }\nfn root() -> vec4<f32> { return Shared().value; }",
+            ),
+            fragment(
+                "other",
+                Vec::new(),
+                MaterialType::Vec4,
+                "struct Shared { value: vec4<f32>, }\nfn other() -> vec4<f32> { return Shared().value; }",
+            ),
+        ],
+        "root",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    assert!(matches!(
+        MaterialCompiler::compile(&type_collision),
+        Err(MaterialError::TopLevelNameConflict { name }) if name == "Shared"
+    ));
+
+    let override_collision = MaterialDefinition::new(
+        vec![fragment(
+            "root",
+            Vec::new(),
+            MaterialType::Vec4,
+            "override MATERIAL_ENABLED: bool = true;\nvar<private> cached: vec4<f32>;\nfn root() -> vec4<f32> { return cached; }",
+        )],
+        "root",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::from([("MATERIAL_ENABLED".into(), StaticValue::Bool(true))]),
+        SurfaceOutput::Color,
+    );
+    assert!(matches!(
+        MaterialCompiler::compile(&override_collision),
+        Err(MaterialError::TopLevelNameConflict { name }) if name == "MATERIAL_ENABLED"
+    ));
+}
+
+#[test]
+fn source_id_is_compact_while_variant_key_retains_full_canonical_content() {
+    let first_body = format!(
+        "fn root() -> vec4<f32> {{ {} return vec4<f32>(1.0); }}",
+        "// material source\n".repeat(256)
+    );
+    let second_body = format!(
+        "fn root() -> vec4<f32> {{ {} return vec4<f32>(0.0); }}",
+        "// material source\n".repeat(256)
+    );
+    let make_definition = |wgsl| {
+        MaterialDefinition::new(
+            vec![fragment("root", Vec::new(), MaterialType::Vec4, wgsl)],
+            "root",
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+            SurfaceOutput::Color,
+        )
+    };
+    let first = MaterialCompiler::compile(&make_definition(&first_body)).unwrap();
+    let second = MaterialCompiler::compile(&make_definition(&second_body)).unwrap();
+
+    assert_eq!(first.contribution().source_id.len(), "material:".len() + 64);
+    assert_ne!(
+        first.contribution().source_id,
+        second.contribution().source_id
+    );
+    assert_ne!(first.key(), second.key());
+    assert!(first.key().as_str().len() > first.contribution().source_id.len());
+}
+
 fn material_reference() -> MaterialAssetRef {
     MaterialAssetRef::from_snapshot(&other_store_snapshot())
 }

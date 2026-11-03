@@ -18,5 +18,5 @@ dx12 = ["fluxel-rhi/dx12"]
 native-gl-wgl = ["fluxel-rhi/native-gl-wgl"]
 
 [dependencies]
-fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "c5fdaa993c13feb6b55b23fc766c22c9733836f2", version = "=0.13.4" }
+fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "ee640d57a8d7c32d251252d0e8b32950636a770c", version = "=0.13.4" }
 fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "0f7f785d4f0ccc62e125dd6cf560d91333ec85cf", version = "=0.1.0", default-features = false }

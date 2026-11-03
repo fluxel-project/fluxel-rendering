@@ -102,7 +102,7 @@ fn vertex_reflection_keeps_typed_locations_and_excludes_builtins() {
     assert_eq!(inputs[0].location, 2);
     assert_eq!(inputs[0].ty, VertexType::Vec2(ScalarType::F32));
 
-    let declared = VertexInputDeclaration::new("position", 2, inputs[0].ty.clone());
+    let declared = VertexInputDeclaration::new("position", 2, inputs[0].ty);
     composer
         .compose(
             &request(VERTEX_REFLECTION)

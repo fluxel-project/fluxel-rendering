@@ -11,3 +11,7 @@ publish = false
 
 [dependencies]
 naga = { version = "27.0.3", features = ["wgsl-in"] }
+
+[[bench]]
+name = "cold_compile"
+harness = false
