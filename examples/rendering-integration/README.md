@@ -1,16 +1,18 @@
-# Initial S0/S1 integration
+# S0-S3 integration fixture
 
 This independent consumer was rebuilt from the current workspace. Its
 previous sources targeted removed APIs and are retired. No source is recovered
 from repository history, and previous execution results are not current evidence.
-The fixed Copy/Raster/Compute/Surface inputs are S0/S1 fixtures, not future
-Geometry, Feature, FramePipeline or Material contracts.
+The Copy/Raster/Compute/Surface inputs remain bounded fixtures, while direct S2
+Shader and S3 Material workloads prove their current composition path. None of
+these inputs establishes future Geometry, Feature, FramePipeline, or RenderScene
+contracts.
 
-Current logical regression and native DX12/WGL attempts, including dynamic
-read-set execution, actual HWND client captures and device replacement, are
-mapped in the [foundation closure review](../../documents/s0-s1-closure.md).
-Only those exact frozen inputs and named target observations are current proof;
-the historical source snapshots below do not certify later edits.
+Current native DX12/WGL attempts retain dynamic read-set execution, actual HWND
+client captures, device replacement, S2 shader routes, and S3 material results.
+The [foundation closure review](../../documents/s0-s1-closure.md) remains the
+S0/S1 record. Each attempt archive identifies its exact source snapshot and
+target observations; historical source snapshots do not certify later edits.
 
 ## Selected current inputs
 
@@ -19,7 +21,7 @@ metadata before adding the new dependency edges.
 
 | Repository | Revision | Contract and role |
 | --- | --- | --- |
-| Rendering | Current source snapshot; runner records revision and dirty state | Rebuilt Renderer facade and private Graph; no implementation closure yet |
+| Rendering | Current source snapshot; runner records revision and dirty state | Renderer facade, private Graph, S2 Shader and S3 Material consumers |
 | RHI | `0f7f785d4f0ccc62e125dd6cf560d91333ec85cf` | `fluxel-rhi =0.1.0`, defaults disabled; portable common execution, mapping, explicit copy transitions and readback |
 | Bases | `c5fdaa993c13feb6b55b23fc766c22c9733836f2` | `fluxel-assets =0.13.4`, immutable snapshots and content replacement |
 | Host | `33a6bbb3fa15500e928b4192ca8f280b735034d9` | `fluxel-host =0.1.0`; owns native windows and lifecycle events in this executable, not a Renderer dependency |
@@ -78,12 +80,32 @@ COPY_WRITE to COPY_READ transition. Only a checkpoint covering the concrete
 readback step permits mapping and retirement. Partial or uncertain effects retain
 their original payloads and owners; a whole graph is never replayed implicitly.
 
+## S2 Shader and S3 Material workloads
+
+The S2 workload composes a direct Shader artifact, validates its logical
+interface, maps reflected vertex requirements to the concrete fixture layout,
+checks device capabilities and limits, and uses the exact `ShaderDesc` for both
+route selection and native creation. Its device-local executable cache proves a
+same-device hit and replacement-device isolation without treating a backend name
+as a capability decision.
+
+The S3 workload compiles several Material fragments and typed resources into a
+generic Shader contribution. It executes both original and replacement material
+generations through the existing read-set Raster path. Dynamic uniform values
+share a static variant; a changed source generation changes the variant and
+logical shader artifact. Binding preflight rejects incompatible reflection and
+resource tokens before RHI work.
+
+The runner retains source, independent expected values, raw readbacks, route and
+capability evidence, diagnostics, and workload metadata before evaluating an
+oracle. These runs demonstrate only their named DX12 and WGL configurations.
+
 ## Artifact and evidence boundary
 
 This directory owns its own Cargo workspace and lock. The parent workspace
 excludes it. `tools/integration/smoke.py` is the Rendering-owned runner, and
 `documents/integration-manifest.schema.json` describes retained evidence under
-`target/integration/s0-s1/<rendering-revision>/manifest.json`.
+`target/integration/s0-s3/<rendering-revision>/manifest.json`.
 
 The first active target is Windows DX12 (`dx12`). Desktop OpenGL 4+ through WGL
 (`native-gl-wgl`) follows with the same semantic oracle and Host-owned context.

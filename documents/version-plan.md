@@ -2,7 +2,12 @@
 
 > Status: S0/S1 foundation implementation is present; its named native acceptance
 > evidence and limits are recorded in the [closure review](s0-s1-closure.md).
-> S2 and later implementations remain future work. Stage labels are work packages, not release numbers or completion claims. The organization
+> S2 Shader and minimal S3 Material are implemented, with focused tests and named
+> Windows DX12/WGL integration evidence. S4 has a bounded CPU-only RenderScene
+> and public typed-feature facade with an independent external reference;
+> FramePipeline and GPU APIs remain unimplemented. Full regression remains
+> pending until the planned S-stage sequence is tested. Stage labels are work
+> packages, not release numbers or completion claims. The organization
 > [roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md) owns
 > order and authorization; this document defines rendering scope and acceptance.
 
@@ -17,7 +22,7 @@ cases. A crate, trait, or independently green library test is not stage closure.
 | S1 RenderGraph | `fluxel-renderer::graph`; passes, versions, definedness, DAG, hazards, compiled plans, frame bindings | Fixed-shader multi-pass execution, compatible plan reuse, safe retirement across 2–3 overlapping frames |
 | S2 Shader Core | New `fluxel-shader`; composition request, WGSL/Naga validation, reflection, logical source artifacts, cache identity | Material-independent raster and supported compute programs execute through Graph and selected RHI shader routes |
 | S3 Material Core | New `fluxel-material`; functions/fragments, parameters/resources, minimal composition IR, evaluation WGSL, instances/variants | Several functions and parameters compose into an executable material through the same Shader path |
-| S4 RenderScene | Renderer scene storage, generational RenderIds, views, transforms/bounds, batch changes, snapshots | Incremental multi-object/view data and stable frame snapshots work without an ECS dependency |
+| S4 RenderScene | Renderer scene storage, generational RenderIds, views, transforms/bounds, batch changes, snapshots | Implemented CPU-only record/view updates, stable snapshots, and a bounded typed-feature facade; FramePipeline and GPU scene integration remain pending |
 | S5 Forward integration | Renderer pipeline/preparation/culling/sorting; public FramePipeline facade, phases, resolvers, residency and frame data | Multiple meshes/materials render through Scene -> FramePipeline -> Graph -> RHI; an early external consumer exercises extension seams |
 | S6 Extension MVP | Renderer feature registration/storage/phase contribution; independent Rust Feature and FramePipeline | External Feature, external FramePipeline, and custom material cooperate in the same frame; first product MVP closes |
 | S7 Rendering expansion | Material/Shader/Renderer and selected Features; Code Nodes, PBR, Forward+/Deferred, shadows/PostFX | A second pipeline shares scene/material contracts; materially different Features validate broader extension seams |
@@ -241,22 +246,50 @@ remains undecided. A small validated call graph suffices for S3.
 
 **Owner:** Renderer `render_scene` and initial typed Feature storage seams.
 
-Implement generational RenderIds, dense render-only records, views/cameras,
-resolved transforms/bounds, logical geometry/material references, typed batch
-changes, and a frame snapshot boundary. Adapters own external identity mappings.
-Do not introduce a gameplay hierarchy, ECS query language, universal object layout,
-or general system scheduler.
-
-**Acceptance:** run multi-object/view batch fixtures; verify incremental updates,
+**S4 requirement:** implement generational RenderIds, dense render-only records,
+views/cameras, resolved transforms/bounds, logical geometry/material references,
+typed batch changes, and a frame snapshot boundary. Verify incremental updates,
 snapshot stability, empty batches, stale IDs, removal/reuse, conflicting changes,
-and capacity refusal. Establish deterministic update/error semantics and dirty
-ranges without copying the full world every frame. Retain ordinary and ECS-style
-adapters without an ECS dependency. Prototype external typed Feature storage and
-input before freezing storage APIs. Verify that independently typed Feature data
-can snapshot with scene data without forcing one universal AoS/SoA layout. A
-runnable CPU reference consumer closes this data contract; it does not claim that
-a GPU culling or indirect-work path has been proved. GPU integration closes at
-S5/S6.
+capacity refusal and dirty ranges without copying the full world every frame.
+An independent CPU reference must exercise ordinary and ECS-style adapters and
+independently typed Feature data without imposing a universal layout. GPU culling
+and indirect work require later real-target evidence.
+
+Implemented subset: `RenderScene<R>` provides generational record and view
+identities, finite transforms/bounds, consumer-chosen cloneable record resources,
+transactional batch changes, exact dirty ranges, and immutable snapshots.
+`RenderResources<G, M>` is a convenience geometry/material reference bundle, not
+a per-scene type limit. This is not universal or heterogeneous Feature storage.
+Mutable records are dense; removals compact the store while stable generational
+IDs and precise dirty slot ranges preserve the public observation contract.
+Adapters own external identity mappings. The implementation does not introduce a
+gameplay hierarchy, ECS query language, universal object layout, or general system
+scheduler.
+
+Focused CPU evidence covers multi-record/view batches, incremental updates,
+snapshot stability and concurrent reads, empty batches, stale/foreign IDs,
+removal/reuse, conflicting batches, capacity refusal, finite-value validation,
+and changed-chunk sharing. The independent `examples/external-renderer/` workspace
+compares ordinary and ECS-shaped adapters, retains source/expected/actual/error
+records before its oracle, and ties two differently shaped application-owned
+typed feature payloads to scene versions. It implements the Renderer-exported,
+statically dispatched `CpuFeature` facade: `FeatureIssuer` issues opaque
+handles and contexts, `TypedFeatureStorage` retains issuer-bound typed snapshots,
+and `CpuPhaseContributions` accepts only matching scene/issuer/version/phase
+contributions without replay. Cross-scene, cross-issuer, storage, version,
+handle, and contribution mismatches are structured errors. This facade is
+provisional and CPU-only. It does not create a GPU device, Graph work, culling,
+indirect work, `RenderFeature`, or `FramePipeline`. Its compile-fail negative
+verifies that the external dependency cannot name Renderer-private Graph state.
+
+The formal S4 acceptance remains open. The current implementation and external
+reference cover renderer-owned typed storage, a bounded public CPU facade,
+controlled context, opaque handles, phase contribution, structured errors, and
+Graph privacy. Closure still requires the full S4 acceptance assessment against
+the demonstrated snapshot/identity/lifecycle semantics and focused evidence;
+these are S4 requirements, not work deferred to S5. S5 consumes a closed S4
+boundary for Forward and GPU integration; it does not close an incomplete S4
+contract.
 
 ## S5. FramePipeline and Forward integration
 

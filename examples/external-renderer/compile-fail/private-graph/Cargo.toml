@@ -1,0 +1,11 @@
+[package]
+name = "external-renderer-private-graph-negative"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+fluxel-renderer = { path = "../../../../crates/renderer" }

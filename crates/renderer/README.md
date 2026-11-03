@@ -1,9 +1,10 @@
 # Fluxel Renderer
 
-Renderer is being rebuilt following the organization architecture. Previous
-implementations and examples have been removed. Narrow Copy, offscreen and
-Surface Raster, and supported Compute fixtures now serve the S0/S1 consumer;
-scene and extension subsystems remain private scaffolds.
+Renderer is being rebuilt following the organization architecture. Narrow Copy,
+offscreen and Surface Raster, and supported Compute fixtures serve the S0/S1
+consumer. The public S4 subset adds CPU-only RenderScene changes, immutable
+snapshots, and a bounded CPU feature facade. FramePipeline, preparation, and GPU
+scene execution remain private scaffolds.
 
 ```text
 renderer/
@@ -52,7 +53,7 @@ renderer/
 | Private module | Responsibility |
 | --- | --- |
 | `renderer` | Entry facade, service ownership, and frame lifecycle coordination |
-| `render_scene` | Render-only storage, batched changes, views, bounds, snapshots |
+| `render_scene` | Public render-only storage, batched changes, views, bounds, and immutable snapshots |
 | `feature` | Prepared feature data and declared phase contributions |
 | `pipeline` | Frame policy, controlled context, phases and outputs |
 | `preparation` | Visibility, sorting, batching, draw preparation and concrete bindings |
@@ -69,6 +70,37 @@ Graph, surface factory, or general frame API.
 These are ownership boundaries, not a set of completed or stabilized subsystems.
 Only add further files and dependencies when an implemented consumer needs them.
 Future public exports must preserve Graph/compiler/scheduler privacy.
+
+## Current RenderScene subset
+
+`RenderScene<R>` is a CPU-only render-domain store whose record resource bundle
+is chosen by the consumer. `RenderRecord<R>` keeps that bundle alongside a finite
+transform and bounds; `R` must be cloneable so immutable snapshots can retain it.
+`RenderResources<G, M>` is a convenience bundle for one geometry and one material
+asset reference, not a per-scene restriction or a heterogeneous Feature registry.
+Views are separate generational identities.
+
+`RenderChangeSet` applies inserts, updates, and removals transactionally. Mutable
+records live in dense storage; removal compacts that storage while generational
+identities remain stable and affected slot ranges are reported. It rejects foreign
+or stale identities, conflicting writes in one batch, invalid
+transforms/bounds/views, capacity overflow, and identity/version exhaustion.
+Successful changes publish an immutable `FrameSnapshot` with exact dirty ranges.
+Snapshots retain their prior values through later updates and can be read while
+the mutable scene advances. This API performs no preparation, Graph declaration,
+RHI call, GPU residency, submission, or completion management.
+
+`examples/external-renderer/` is the independent CPU reference consumer. Its
+ordinary object-map and ECS-shaped adapters produce equivalent public snapshots;
+their typed color and label data are application-owned and explicitly tied to
+snapshot versions. It implements the public static `CpuFeature` trait using
+renderer-issued opaque handles, issuer-bound `TypedFeatureStorage`, controlled
+`FeatureContext`, and the reference `CpuPhase` collector. The facade rejects
+foreign scenes/issuers, handles, versions, mixed/replayed contributions, and
+invalid prepared data with structured errors. It is provisional and CPU-only:
+it does not implement `RenderFeature` or `FramePipeline`, declare Graph work,
+or provide GPU evidence. Its compile-fail negative verifies that the external
+consumer cannot name Renderer-private Graph state.
 
 The target uses batch-level Rust traits with generics and monomorphization for
 Feature and frame-policy composition. External crates supply concrete local

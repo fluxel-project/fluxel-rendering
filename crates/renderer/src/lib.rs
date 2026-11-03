@@ -16,4 +16,14 @@ mod render_scene;
 mod renderer;
 mod residency;
 
+pub use feature::{
+    CpuFeature, CpuPhase, CpuPhaseContribution, CpuPhaseContributions, FeatureContext,
+    FeatureError, FeatureHandle, FeatureIssuer, TypedFeatureSnapshot, TypedFeatureStorage,
+    validate_context,
+};
+pub use render_scene::{
+    ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,
+    RenderId, RenderRecord, RenderResources, RenderScene, RenderTransform, RenderView,
+    RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError,
+};
 pub use renderer::{Renderer, RendererError, ShutdownReport, Submission};

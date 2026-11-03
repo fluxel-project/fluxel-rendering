@@ -1,8 +1,10 @@
 # Fluxel Renderer Design
 
-> Status: target architecture, not a claim of implemented extension APIs.
-> The current S0/S1 consumer uses fixed fixtures. Scene, preparation, Feature,
-> and FramePipeline interfaces remain unimplemented. The organization roadmap
+> Status: target architecture with a bounded implemented S4 CPU scene and
+> feature subset. The current S0/S1 consumer uses fixed fixtures. `RenderScene`
+> changes, immutable snapshots, and the provisional CPU-only `CpuFeature` facade
+> are implemented; preparation and FramePipeline interfaces remain unimplemented.
+> The organization roadmap
 > owns delivery order; [the implementation plan](version-plan.md) owns local
 > scope and acceptance. This design does not authorize implementing later-stage
 > APIs before their consumer gates.
@@ -170,6 +172,16 @@ objects. The reference mesh path may use a record containing a render ID,
 transform, bounds, logical geometry/material references, visibility and ordering
 hints. Other Features need not use that record or own conventional geometry.
 
+The current public S4 subset is deliberately narrower: `RenderScene<R>` stores
+consumer-chosen cloneable resource bundles beside records. `RenderResources<G, M>`
+is a convenience bundle for pinned geometry/material asset references, rather
+than a per-scene type restriction. The scene exposes generational record/view
+identities, transactional `RenderChangeSet` updates, finite transforms/bounds,
+exact dirty ranges, and immutable `FrameSnapshot` values. Its mutable records
+are dense and removals compact them while the stable generational IDs and dirty
+slot ranges remain meaningful. This does not claim that heterogeneous Feature
+storage has stabilized.
+
 Adapters push typed creates, updates and removals. They own the mapping from
 external entities or scene nodes to generational renderer IDs. Renderer does not
 query an ECS, require entity/component traits, walk gameplay hierarchies, or own
@@ -190,6 +202,19 @@ and identity mapping before public APIs stabilize. Incremental updates should no
 require cloning or re-uploading the entire world. Parallel preparation, when
 introduced, must have explicit read/write ownership; external ECS scheduling
 must not leak into the rendering contract.
+
+The independent `examples/external-renderer/` consumer currently proves this
+subset on CPU: ordinary object-map and ECS-shaped adapters produce the same
+public scene observations, an old snapshot remains stable through an update, and
+two differently shaped application-owned feature snapshots are associated with
+the corresponding scene versions. It implements the Renderer-exported static
+`CpuFeature` trait with renderer-issued opaque handles, issuer-bound typed
+storage, controlled `FeatureContext`, and `CpuPhase::Reference` contributions.
+The facade checks scene, issuer, feature-handle, snapshot-version, collector
+binding, and replay identity through structured refusal. It has no device,
+Graph, submission, culling, indirect-work, `RenderFeature`, or `FramePipeline`
+claim. Its compile-fail negative also checks that the external dependency cannot
+name Renderer-private Graph state.
 
 ## Data-oriented layout
 
@@ -345,15 +370,27 @@ still enter the single RenderGraph.
 
 ## RenderFeature and FramePipeline authority
 
-`RenderFeature` is a batch contributor with typed state. `FramePipeline` owns
-frame policy and composition. They use narrow contexts for scene views,
-preparation services, typed phase/resource requirements and graph authoring.
-Exact method signatures are established by the S4-S6 external consumers.
+`RenderFeature` is the future batch contributor with typed state. `FramePipeline`
+will own frame policy and composition. Their eventual contexts require scene
+views, preparation services, typed phase/resource requirements, and graph
+authoring; exact signatures remain gated by S4-S6 consumers.
 
-The public facade permits logical resource declarations, imports, raster/compute/
-copy work, access declarations, roots and semantic frame outputs. It hides graph
-compiler state, allocator internals, scheduler mutation, backend objects and
-independent submission. A raw mutable Graph implementation is not the SPI.
+S4 currently exports a narrower, provisional CPU-only facade: `CpuFeature<R>`,
+`FeatureIssuer`, opaque `FeatureHandle`, `FeatureContext`,
+`TypedFeatureStorage<T>`, `TypedFeatureSnapshot<T>`, `CpuPhase`, and controlled
+`CpuPhaseContributions`. A scene issues handles and contexts; storage retains a
+typed payload only for its issuing scene and issuer, and validation requires the
+matching snapshot version and handle. This establishes the exercised ownership
+and structured-error boundary without exposing Graph, RHI, backend objects,
+submission, or a mutable scheduler. It is not a `RenderFeature` or FramePipeline
+contract and does not supply GPU work authority.
+
+The future FramePipeline/Graph-facing facade may permit logical resource
+declarations, imports, raster/compute/copy work, access declarations, roots and
+semantic frame outputs. That authority is not part of the current CPU facade.
+When introduced, it must hide graph compiler state, allocator internals,
+scheduler mutation, backend objects, and independent submission; a raw mutable
+Graph implementation is not the SPI.
 
 During recording, a pass uses scoped access to already declared resources and
 portable RHI recording operations. Resource/binding validation must precede the
@@ -497,13 +534,13 @@ normal delivery, not retrofitted after a closed Forward renderer:
 | --- | --- |
 | S0/S1 | Resource/access/plan/completion foundation; provisional fixtures can be replaced without a second Graph engine |
 | S2/S3 | Generic Shader interfaces and Material contributions; preparation can consume their requirements |
-| S4 | Typed batch/snapshot adapters and heterogeneous Feature storage without ECS dependence |
+| S4 | Dense RenderScene batches, immutable snapshots, and a public CPU-only typed feature facade verified by an external reference; the formal S4 acceptance, including its bounded public/privacy and consumer evidence requirements, remains in S4 until fully closed |
 | S5 | Reference Forward plus external prototype; geometry layouts and a local policy can change without core edits |
 | S6 | External Feature, FramePipeline and custom material run with the reference mesh in one frame |
 | S7 | A materially different consumer proves broader deformation, cross-pass or GPU-product seams before stabilization |
 | S8 | Profile-led layout, streaming, batching and execution optimizations |
 
-S0/S1 remains incomplete. Its current fixed Copy/Raster/Compute entry points and
+S0/S1 has a separately bounded foundation closure. Its current fixed Copy/Raster/Compute entry points and
 fixed vertex formats are fixtures, not the future public renderer model. Retain
 the validated ownership/access algorithms and replace the adapters as real
 consumers arrive; do not promise that implementation details will never change.

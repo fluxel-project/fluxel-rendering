@@ -1,0 +1,14 @@
+[package]
+name = "external-renderer"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.87"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+fluxel-renderer = { path = "../../crates/renderer" }
+fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "c5fdaa993c13feb6b55b23fc766c22c9733836f2", version = "=0.13.4" }
+fluxel-material = { path = "../../crates/material" }

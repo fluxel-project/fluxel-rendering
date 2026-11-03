@@ -10,25 +10,28 @@ and explicit frame calls. Hosts and browser/mini-game adapters own platform I/O,
 windows/canvas lifecycle, input, and frame pacing. Renderer does not own a gameplay
 scene, mandatory ECS, event loop, or TypeScript gameplay runtime.
 
-The target exposes Rust Feature and FramePipeline contracts over typed batch data.
+The target will expose Rust Feature and FramePipeline contracts over typed batch data.
 Applications assemble concrete geometry, visibility, ordering and deformation
 providers through generics, traits and monomorphization at compile time. Different
 providers can coexist in one frame; no trait-object dispatch or runtime type
 erasure is used for extensibility. SoA/AoS layouts remain workload choices, and
-all frame GPU work uses the internal Graph. See the
-[Renderer design](documents/design-renderer.md) for the target contracts; these
-extension APIs are not yet implemented.
+all frame GPU work uses the internal Graph. The current public S4 subset is
+RenderScene storage, immutable frame snapshots, and a bounded CPU-only feature
+facade; FramePipeline and GPU extension APIs are not implemented. See the
+[Renderer design](documents/design-renderer.md) for the target contracts.
 
 ## Current implementation and target
 
-The checked-out `0.16` workspace contains the S0/S1 foundation implementation
-and scaffolds for later stages:
+The checked-out `0.16` workspace contains the S0/S1 foundation plus the first
+implemented S2 Shader, S3 Material, and S4 CPU scene/feature subsets. The
+public S4 facade is deliberately CPU-only; FramePipeline and GPU scene
+integration remain future work:
 
 | Workspace crate | Current role |
 | --- | --- |
-| `fluxel-renderer` | Initial Copy, offscreen and Surface Raster, and supported Compute fixtures with private Graph and completion-owned resources; scene and extension APIs remain to be built |
-| `fluxel-shader` | Minimal crate scaffold; composition and reflection APIs are not implemented yet |
-| `fluxel-material` | Minimal crate scaffold; material functions and lowering APIs are not implemented yet |
+| `fluxel-renderer` | Copy, Raster, supported Compute, private Graph, completion-owned resources, RenderScene snapshots, and a bounded CPU feature facade; FramePipeline remains to be built |
+| `fluxel-shader` | WGSL composition, Naga validation/reflection, source provenance, interface checks, requirement inference, and logical artifact caching |
+| `fluxel-material` | Rust-defined fragments, typed parameters/resources, validated call graphs, static variants, instances, and generic WGSL contributions |
 
 ```text
 crates/
@@ -41,24 +44,40 @@ The standalone `rendergraph` and historical `rendering-wasm` crate directories
 have been removed. RHI remains in its independent repository.
 
 All previous Renderer implementations and crate-local examples have been removed.
-The rebuilt Renderer exposes narrow foundation-fixture entry points for the S0/S1
-consumer, with pinned Bases/RHI dependencies and explicit DX12/WGL features.
-The remaining scene and extension boundaries are scaffolds, not a complete
-rendering API. The [foundation closure review](documents/s0-s1-closure.md) maps
-the current logical tests and retained DX12/WGL native artifacts separately.
+The rebuilt Renderer exposes narrow fixture entry points with pinned Bases/RHI
+dependencies and explicit DX12/WGL features. The S2/S3 consumers compose
+validated logical shaders, query the selected device route and capabilities, and
+then use the existing Graph path. RenderScene now exposes its bounded CPU update
+and snapshot API. It also exports the provisional CPU-only `CpuFeature` facade;
+FramePipeline remains unimplemented. The
+[foundation closure review](documents/s0-s1-closure.md) maps the S0/S1 logical
+tests and retained DX12/WGL native artifacts separately.
 
-The previous integration sources have been removed. The newly implemented
-[independent consumer](examples/rendering-integration/README.md) checks three
+The previous integration sources have been removed. The
+[independent consumer](examples/rendering-integration/README.md) covers three
 asset generations, Copy/Compute readback, offscreen Raster pixels, Surface
-present/resize, and structured refusals. Old logs and images are not
-compatibility or support evidence for the rebuilt path.
+present/resize, direct S2 shader execution, and S3 material contribution and
+replacement. It records structured refusals as well as accepted routes. Old logs
+and images are not compatibility or support evidence for the rebuilt path.
 
-## S0/S1 support matrix
+## Observed native evidence
 
 S0/S1 foundation acceptance is scoped to Windows DX12 and desktop OpenGL 4+
-through WGL. The closure review identifies the exact observed adapter/profile,
-source hashes, locks, native outputs and deterministic failure witnesses. It does
-not certify untested hardware, a general renderer API or later stages.
+through WGL. Current S2/S3 integration attempts likewise exercised only those
+two routes. They retained shader route/capability facts, readbacks, native
+diagnostics, and inspected Surface captures, but do not establish a general
+renderer API, an S4/S5 extension API, or support for untested targets.
+
+The S4 external CPU reference builds against the public RenderScene and
+CPU-feature APIs with its own manifest and lock. It compares ordinary and
+ECS-shaped adapters, preserves an old snapshot across an update, and uses
+renderer-issued opaque handles, issuer-bound typed storage, and a controlled
+CPU phase collector. The static `CpuFeature` trait validates snapshot version,
+scene, issuer, handle, and contribution identity through structured errors. This
+is a bounded provisional CPU facade, not a FramePipeline or GPU API: it creates
+no device, Graph work, submission, culling, indirect work, or backend support
+claim. Its compile-fail negative confirms that the external dependency cannot
+name Renderer-private Graph state.
 
 Vulkan, browser WebGPU, and browser WebGL2 are deferred from this closure. The
 historical `fluxel-rendering-wasm` capsule has been removed. Browser restoration
@@ -74,7 +93,8 @@ The target has three principal crates:
 | `fluxel-material` | Material functions, parameter/resource schemas, minimal composition IR, evaluation WGSL, assets/instances/variants |
 | `fluxel-renderer` | Batch RenderScene/views, preparation, visibility, ordering/batching, GPU residency, frame data, and execution |
 | Renderer `graph` module | Pass/resource declarations, versions, hazards, DAG planning, lifetimes, and direct portable RHI execution |
-| Renderer `pipeline` / `feature` modules | Private shells for the future S4/S5 Rust extension facade |
+| Renderer `feature` module | Public bounded CPU feature facade; Graph/RHI authority remains private |
+| Renderer `pipeline` module | Private shell for a future FramePipeline facade |
 
 Material and Shader do not depend on Renderer. Material emits generic WGSL and
 interface contributions; Renderer/FramePipeline assembles the complete
@@ -134,8 +154,8 @@ planning and is not a rendering milestone.
 - [RenderGraph design](documents/design-rendergraph.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Migration inventory](documents/foundation-migration.md)
-- [Shader package scaffold](crates/shader/README.md)
-- [Material package scaffold](crates/material/README.md)
+- [Shader package guide](crates/shader/README.md)
+- [Material package guide](crates/material/README.md)
 - [Current renderer package guide](crates/renderer/README.md)
 - [Release and evidence requirements](RELEASING.md)
 
