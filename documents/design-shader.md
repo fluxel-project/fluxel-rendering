@@ -126,6 +126,48 @@ simulation, culling, and indirect work are RenderGraph passes.
 
 ## Delivery gates
 
+## Current implementation status
+
+The current S2 implementation provides a logical WGSL-only boundary in
+`fluxel-shader`. A caller supplies named source units, selected entry points,
+optional binding and vertex-input declarations, callable declarations, static
+options, and portable requirements. The composer concatenates the source units,
+retains source spans, parses and validates the resulting WGSL with Naga, and
+returns a portable `ShaderArtifact` containing the composed source and logical
+reflection.
+
+Logical validation records a sufficient set of Naga capabilities for the full
+module. Primitive index, early depth test, and ray query requirements are also
+merged with caller-supplied portable RHI feature names. The consumer must check
+all recorded capability requirements against the selected device and its
+actual pipeline before creating backend objects; requirements it cannot
+express or check must be reported explicitly. This is not a claim that any
+particular device or backend lacks those capabilities. Capability validation
+currently covers the whole module, so an unselected entry can conservatively
+cause an additional requirement.
+
+Reflection is limited to the requested entry points. Binding visibility and
+read, write, query, and atomic use are derived from Naga's per-entry-point
+analysis rather than from caller metadata. Declared bindings and reflected
+reachable bindings are checked in both directions. Vertex locations are
+reflected only from selected vertex entry-point arguments (including struct
+members); built-ins and fragment inputs are not vertex attributes. The current
+request accepts at most one vertex entry because its vertex-input declaration
+is shared; multiple compute entry points remain supported. The current public
+vertex type vocabulary is scalar or two-, three-, and four-component
+F16, F32, I32, or U32 values.
+
+The logical cache is keyed by the complete structural composition request, so
+source, declarations, selected entries, static options, and requirements remain
+distinct. This is a logical artifact cache only; it does not cache RHI shader or
+pipeline objects and does not establish device-local reuse.
+
+This status is not an S2 execution acceptance claim. The implementation has not
+yet established the required Renderer/Graph/RHI path, selected-device route and
+capability evidence, DX12/WGL texture raster evidence, or supported Compute
+execution evidence. Those checks remain owned by the consuming integration and
+must not be inferred from logical Naga validation.
+
 After the S0/S1 foundation closure, S2 creates `fluxel-shader` and proves an
 independent complete WGSL raster program and, where supported, a compute program
 through composition, reflection, selected RHI creation, and real Graph/RHI

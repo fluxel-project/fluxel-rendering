@@ -1,12 +1,17 @@
-# Initial foundation integration tooling
+# S0-S3 integration evidence tooling
 
 The independent `rendering-integration` executable has been rewritten for the
-Copy, offscreen Raster, supported Compute, and fixed Surface presentation
-fixtures. Their fixed input schemas do not define the future Geometry,
-Feature, FramePipeline or Material model. Current native artifacts and logical
-regression results are linked by the
-[foundation closure review](../../documents/s0-s1-closure.md), with source snapshots
-kept distinct from historical attempts.
+Copy, offscreen Raster, supported Compute, fixed Surface presentation, direct
+Shader, and Material fixtures. The S2 direct-Shader raster and texture paths
+retain their own source, reflection, route, expected pixels, and readbacks. The
+S3 Material path separately exercises the original and replacement static
+contributions, including a visible channel reordering, with independent
+expected pixels and readbacks. Fixed S0/S1 fixture schemas still do not define
+the future Geometry, Feature, or FramePipeline model.
+
+The historical [S0/S1 support decision](../../documents/s0-s1-support-decision.md)
+is retained and hashed only as a historical reference. It cannot approve S2/S3
+support, native output, or any current stage decision.
 
 Copy, Raster, and Compute submit three immutable generations before
 their first completion wait. The executable checks all readback bytes and structured
@@ -14,7 +19,9 @@ empty/capacity/foreign/stale refusals, Raster image pixels, all transformed
 Compute words, and a presented Surface frame after verified HWND resize/restore.
 Original inputs, WGSL and readbacks are retained before oracles. The read-set
 fixture adds uniform-window changes and non-white sampled texels over the same
-Graph/cache/completion path; device replacement exercises both native routes.
+Graph/cache/completion path. S2 texture and S3 Material workloads retain
+separate inputs, expected output, and readback evidence; device replacement
+exercises both native routes.
 
 Run one selected backend from the repository root:
 
@@ -26,7 +33,7 @@ python tools/integration/smoke.py --backend native-gl-wgl
 Use `RUSTUP_TOOLCHAIN=1.87.0` in the process environment for MSRV runs. Each
 attempt builds with the independent lock and explicit features, checks Cargo's
 actual source identities, hashes source inputs and the executable, and retains
-raw output under `target/integration/s0-s1/<revision>/attempts/`. The index links
+raw output under `target/integration/s0-s3/<revision>/attempts/`. The index links
 all attempts, including a missing consumer manifest before any build starts.
 Concurrent source edits invalidate an attempt. Diagnostic classification records
 the hash of this current policy; the historical ledger cannot grant waivers.
@@ -35,6 +42,25 @@ including new files and both locks. The archive manifest and every member hash
 are checked independently by the reviewer. A capture-time edit is retained as a
 failed attempt rather than attributed to the binary. The archive identifies a
 source snapshot; a dirty Git revision alone is not a frozen input.
+The source closure includes package build scripts and the applicable workspace
+and consumer `.cargo/config` or `config.toml` files, while excluding `target`,
+Git metadata, local `draft` and `AGENTS.md` material, and all credentials files.
+Build-affecting Rust/Cargo override variables are recorded only as safe hashes;
+an override, configured explicit `CARGO_HOME`, or configured default Cargo home
+is rejected rather than silently attributed to the archived source. Probable
+secret files are never archived and instead fail the attempt without exposing
+their paths or contents.
+This runner does not claim a complete process-environment sandbox for Cargo
+build scripts: any selected `build.rs`, dynamic `include_*` expression, or
+root-escaping link/include is retained as a refusal rather than attributed to a
+source snapshot. Transitive locked Cargo dependencies may also contain build
+scripts; this local runner does not presently prove their complete environment
+closure, so its source archive is not a reproducibility claim for those scripts.
+Build and focused-test children receive a Windows/MSVC/Rust/Cargo toolchain
+allowlist, not the parent environment; recorded values are hashes only. Runtime
+children add only runner-owned diagnostics/evidence variables. For attended
+capture, request the hold explicitly with `--frame-hold-ms`; inherited
+`FLUXEL_*` variables are discarded.
 The executed binary is copied into its own attempt directory and checked before
 and after execution. A later backend build cannot overwrite that retained native
 artifact; Cargo's original output path is recorded separately.
@@ -49,18 +75,34 @@ driver diagnostic still fails the attempt. WGL replacement-context observers
 are checked recursively; a clean original-context log cannot cover another
 context. Actual Cargo Git checkout revisions and cleanliness are verified in
 addition to package-ID strings (only Cargo's `.cargo-ok` marker is ignored). Neither an empty diagnostic log nor
-a successful workload oracle closes S0/S1.
+a successful workload oracle closes any stage. The report is integration
+evidence only; stage-support and closure decisions require their own current
+review.
 Presented-window inspection, Graph binding checks and fault evidence must be
-linked explicitly in the closure review. Physical device-removal recovery and a
+linked explicitly in the integration-evidence review. Physical device-removal recovery and a
 general public Graph/Material API are not implied by these fixtures.
+External review JSON is fail-closed: visual review must pair every retained
+surface-frame BMP with its capture/verdict metadata and a passing human verdict;
+test review must link a nonempty retained log to its exact command, nonzero
+execution count, and zero exit status. Supply those runner-owned test records
+with repeatable `--test-command-json '["python","-m","unittest",...]'` arguments;
+the external review only names the recorded command index and log, never a
+self-reported command result. Fault and read-set review must each link
+the fixed mandatory raw scenario artifacts for every selected attempt. A file
+that merely says `reviewed` or hashes unrelated artifacts cannot approve evidence.
+These local hashes detect accidental edits and mismatched records. They are not a
+signature, WORM store, or protection against an actor able to rewrite both the
+attempt directory and its manifest.
 
-For an attended presented-window capture, set
-`FLUXEL_INTEGRATION_FRAME_HOLD_MS` to a bounded timeout. After each completed
-Surface frame the executable writes `surface-frame-<n>.ready.json`, continues
-to pump Host events, and waits for the named `.release` file. Capture the HWND
-while it is stable, then create that release file to advance through the
-initial, resized, and restored frames. These capture files are review inputs;
-they do not replace the raw Surface lifecycle or diagnostic evidence.
+For an attended presented-window capture, pass a bounded hold explicitly, for
+example `--frame-hold-ms 30000`, to the smoke runner. It supplies
+`FLUXEL_INTEGRATION_FRAME_HOLD_MS` only to the runtime child; arbitrary parent
+`FLUXEL_*` variables are not inherited. After each completed Surface frame the
+executable writes `surface-frame-<n>.ready.json`, continues to pump Host
+events, and waits for the named `.release` file. Capture the HWND while it is
+stable, then create that release file to advance through the initial, resized,
+and restored frames. These capture files are review inputs; they do not replace
+the raw Surface lifecycle or diagnostic evidence.
 
 Development validation follows the local batch policy: finish a coherent
 implementation batch, then select only the necessary affected crate/test checks.

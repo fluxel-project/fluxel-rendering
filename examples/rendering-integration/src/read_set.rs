@@ -3,7 +3,9 @@
 //! The fixture binds one dynamic uniform range and one sampled texture. It is
 //! deliberately private integration evidence, not a Material or Shader API.
 
-use std::{error::Error, fs, ops::Range, path::Path, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap, error::Error, fmt, fs, ops::Range, path::Path, sync::Arc, time::Instant,
+};
 
 use fluxel_assets::{Acquire, AssetKind, AssetSnapshot, AssetStore, Production, ResidentBytes};
 use fluxel_renderer::Renderer;
@@ -22,6 +24,7 @@ use fluxel_rhi::{
 };
 
 use crate::block_on;
+use fluxel_shader::{BindingKind, ReflectedBinding, ShaderStage as LogicalShaderStage};
 
 const EXTENT: [u32; 2] = [8, 8];
 const UNIFORM_BYTES: u64 = 16;
@@ -30,6 +33,69 @@ const WGSL: &[u8] = include_bytes!("../assets/read-set.wgsl");
 
 struct ReadSetBytes;
 impl AssetKind for ReadSetBytes {}
+
+/// A structured mismatch between Shader reflection, a material resource token, and the fixed read-set protocol.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MaterialBindingPreflightError {
+    /// Reflection omitted a required fixed binding or described it incompatibly.
+    Reflection { binding: u32 },
+    /// A material instance did not resolve a required resource to this consumer's actual token.
+    Token {
+        binding: u32,
+        expected: &'static str,
+        actual: Option<String>,
+    },
+}
+
+impl fmt::Display for MaterialBindingPreflightError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+impl Error for MaterialBindingPreflightError {}
+
+/// Checks reflection and material resource tokens against the concrete read-set binding contract before RHI layout creation.
+pub(crate) fn preflight_material_bindings(
+    reflected: &[ReflectedBinding],
+    resources: &BTreeMap<String, String>,
+) -> Result<(), MaterialBindingPreflightError> {
+    for (binding, kind, token) in [
+        (0, BindingKind::Uniform, "read-set-uniform"),
+        (1, BindingKind::Texture, "read-set-texture"),
+    ] {
+        let reflection_matches = reflected.iter().any(|value| {
+            value.group == 0
+                && value.binding == binding
+                && value.kind == kind
+                && value.visibility.len() == 1
+                && value.visibility.contains(&LogicalShaderStage::Fragment)
+                && value.read
+                && !value.write
+                && !value.query
+                && !value.atomic
+        });
+        if !reflection_matches {
+            return Err(MaterialBindingPreflightError::Reflection { binding });
+        }
+        let name = if binding == 0 {
+            "material_tint"
+        } else {
+            "material_texture"
+        };
+        let actual = resources.get(name).cloned();
+        if actual.as_deref() != Some(token) {
+            return Err(MaterialBindingPreflightError::Token {
+                binding,
+                expected: token,
+                actual,
+            });
+        }
+    }
+    if reflected.len() != 2 {
+        return Err(MaterialBindingPreflightError::Reflection { binding: 2 });
+    }
+    Ok(())
+}
 
 /// Executes three source generations through the fixed Graph read-set path.
 pub(crate) fn run<B>(device: Device<B>, output: &Path) -> Result<(), Box<dyn Error>>
@@ -42,32 +108,59 @@ where
         + PipelineBackend
         + ShaderBackend,
 {
-    fs::create_dir_all(output)?;
-    fs::write(output.join("read-set.wgsl"), WGSL)?;
-    let (pipeline, layout) = make_pipeline(&device)?;
+    run_with_shader(
+        device,
+        output,
+        "s1-private-read-set-raster-three-generations",
+        ShaderDesc {
+            label: Some("fluxel integration read-set WGSL".into()),
+            format: ShaderFormat::Wgsl,
+            bytes: Arc::from(WGSL),
+            entries: vec![
+                ShaderEntryPoint {
+                    name: "vs_main".into(),
+                    stage: ShaderStage::Vertex,
+                    workgroup_size: None,
+                },
+                ShaderEntryPoint {
+                    name: "fs_main".into(),
+                    stage: ShaderStage::Fragment,
+                    workgroup_size: None,
+                },
+            ],
+            required_features: Vec::new(),
+        },
+        [
+            [1.0, 1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0, 1.0],
+            [1.0, 0.0, 1.0, 1.0],
+        ],
+        [[17, 129, 0, 255], [0, 33, 125, 255], [67, 0, 211, 255]],
+    )
+}
 
-    let tints = [
-        [1.0, 1.0, 0.0, 1.0],
-        [0.0, 1.0, 1.0, 1.0],
-        [1.0, 0.0, 1.0, 1.0],
-    ];
-    let texels = [
-        [17, 129, 241, 255],
-        [231, 33, 125, 255],
-        [67, 199, 211, 255],
-    ];
-    let expected = [[17, 129, 0, 255], [0, 33, 125, 255], [67, 0, 211, 255]];
-    let inputs = std::array::from_fn::<_, 3, _>(|index| input(tints[index], texels[index]));
-    for index in 0..inputs.len() {
-        fs::write(
-            output.join(format!("read-set-input-{index}.bin")),
-            &inputs[index],
-        )?;
-        fs::write(
-            output.join(format!("read-set-expected-{index}.rgba")),
-            expected_image(expected[index]),
-        )?;
-    }
+/// Executes the fixed read-set Graph workload with the routed shader descriptor.
+pub(crate) fn run_with_shader<B>(
+    device: Device<B>,
+    output: &Path,
+    workload: &str,
+    descriptor: ShaderDesc,
+    tints: [[f32; 4]; 3],
+    expected: [[u8; 4]; 3],
+) -> Result<(), Box<dyn Error>>
+where
+    B: ExecutionBackend
+        + ResourceBackend
+        + MappingBackend
+        + ReadbackBackend
+        + RasterBackend
+        + PipelineBackend
+        + ShaderBackend,
+{
+    fs::create_dir_all(output)?;
+    fs::write(output.join("read-set.wgsl"), &descriptor.bytes)?;
+    let inputs = save_reference_inputs(output, tints, expected)?;
+    let (pipeline, layout) = make_pipeline(&device, descriptor)?;
 
     let store = AssetStore::<ReadSetBytes, Vec<u8>, String>::new();
     let handle = store.create()?;
@@ -207,7 +300,7 @@ where
             concat!(
                 "{{\n",
                 "  \"schemaVersion\": 1,\n",
-                "  \"workload\": \"s1-private-read-set-raster-three-generations\",\n",
+                "  \"workload\": {},\n",
                 "  \"extent\": [{}, {}],\n",
                 "  \"assetGenerations\": [{}, {}, {}],\n",
                 "  \"uniformDestinationRanges\": [[{}, {}], [{}, {}], [{}, {}]],\n",
@@ -219,6 +312,7 @@ where
                 "  \"timingsNanoseconds\": {{\"submitThree\": {}, \"readbackThree\": {}}}\n",
                 "}}\n"
             ),
+            crate::json_string(workload),
             EXTENT[0],
             EXTENT[1],
             generations[0],
@@ -242,30 +336,40 @@ where
     Ok(())
 }
 
+/// Retains independent source inputs and expectations before shader/backend work.
+pub(crate) fn save_reference_inputs(
+    output: &Path,
+    tints: [[f32; 4]; 3],
+    expected: [[u8; 4]; 3],
+) -> Result<[Vec<u8>; 3], Box<dyn Error>> {
+    fs::create_dir_all(output)?;
+    let texels = [
+        [17, 129, 241, 255],
+        [231, 33, 125, 255],
+        [67, 199, 211, 255],
+    ];
+    let inputs = std::array::from_fn(|index| input(tints[index], texels[index]));
+    for index in 0..inputs.len() {
+        fs::write(
+            output.join(format!("read-set-input-{index}.bin")),
+            &inputs[index],
+        )?;
+        fs::write(
+            output.join(format!("read-set-expected-{index}.rgba")),
+            expected_image(expected[index]),
+        )?;
+    }
+    Ok(inputs)
+}
+
 fn make_pipeline<B>(
     device: &Device<B>,
+    descriptor: ShaderDesc,
 ) -> Result<(RasterPipeline<B>, BindGroupLayout<B>), Box<dyn Error>>
 where
     B: ResourceBackend + PipelineBackend + ShaderBackend,
 {
-    let module = block_on(device.shader(ShaderDesc {
-        label: Some("fluxel integration read-set WGSL".into()),
-        format: ShaderFormat::Wgsl,
-        bytes: Arc::from(WGSL),
-        entries: vec![
-            ShaderEntryPoint {
-                name: "vs_main".into(),
-                stage: ShaderStage::Vertex,
-                workgroup_size: None,
-            },
-            ShaderEntryPoint {
-                name: "fs_main".into(),
-                stage: ShaderStage::Fragment,
-                workgroup_size: None,
-            },
-        ],
-        required_features: vec![],
-    }))?;
+    let module = block_on(device.shader(descriptor))?;
     let layout = device.create_bind_group_layout(&BindGroupLayoutDesc {
         label: Some("fluxel integration read-set bindings".into()),
         entries: vec![

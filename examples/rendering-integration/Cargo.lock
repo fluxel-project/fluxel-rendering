@@ -99,6 +99,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fluxel-material"
+version = "0.16.0"
+dependencies = [
+ "fluxel-assets",
+ "fluxel-shader",
+]
+
+[[package]]
 name = "fluxel-naga"
 version = "0.1.0"
 source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=0f7f785d4f0ccc62e125dd6cf560d91333ec85cf#0f7f785d4f0ccc62e125dd6cf560d91333ec85cf"
@@ -174,6 +182,13 @@ dependencies = [
  "glutin_wgl_sys",
  "naga",
  "raw-window-handle",
+]
+
+[[package]]
+name = "fluxel-shader"
+version = "0.16.0"
+dependencies = [
+ "naga",
 ]
 
 [[package]]
@@ -453,8 +468,10 @@ version = "0.0.0"
 dependencies = [
  "fluxel-assets",
  "fluxel-host",
+ "fluxel-material",
  "fluxel-renderer",
  "fluxel-rhi",
+ "fluxel-shader",
  "glow",
  "raw-window-handle",
  "windows",

@@ -43,6 +43,94 @@ struct ResizeFact {
     event: &'static str,
 }
 
+#[cfg(windows)]
+struct ResizeWaitState {
+    observed_events: Vec<String>,
+    selected_event: Option<&'static str>,
+    last_extent: [u32; 2],
+}
+
+#[cfg(windows)]
+enum ResizeWaitOutcome {
+    Confirmed {
+        fact: ResizeFact,
+        state: ResizeWaitState,
+    },
+    TimedOut(ResizeWaitState),
+}
+
+const RESIZE_EVENT_TIMEOUT: Duration = Duration::from_secs(1);
+const RESIZE_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[cfg(windows)]
+fn requested_resize_event(
+    events: &[fluxel_host::WindowEvent],
+    target: [u32; 2],
+) -> Option<&'static str> {
+    events.iter().find_map(|event| match event {
+        fluxel_host::WindowEvent::Resized { width, height } if [*width, *height] == target => {
+            Some("resized")
+        }
+        fluxel_host::WindowEvent::Restored { width, height } if [*width, *height] == target => {
+            Some("restored")
+        }
+        _ => None,
+    })
+}
+
+#[cfg(windows)]
+fn resize_is_confirmed(
+    event: Option<&'static str>,
+    client_extent: [u32; 2],
+    target: [u32; 2],
+) -> bool {
+    event.is_some() && client_extent == target
+}
+
+#[cfg(windows)]
+fn await_resize_confirmation<Observe, Expired, Pause>(
+    target: [u32; 2],
+    mut observe: Observe,
+    mut expired: Expired,
+    mut pause: Pause,
+) -> Result<ResizeWaitOutcome, Box<dyn Error>>
+where
+    Observe: FnMut() -> Result<(Vec<fluxel_host::WindowEvent>, [u32; 2]), Box<dyn Error>>,
+    Expired: FnMut() -> bool,
+    Pause: FnMut(),
+{
+    let mut observed_events = Vec::new();
+    let mut selected_event = None;
+    loop {
+        let (events, observed_extent) = observe()?;
+        observed_events.extend(events.iter().map(|event| format!("{event:?}")));
+        if selected_event.is_none() {
+            selected_event = requested_resize_event(&events, target);
+        }
+        if resize_is_confirmed(selected_event, observed_extent, target) {
+            return Ok(ResizeWaitOutcome::Confirmed {
+                fact: ResizeFact {
+                    extent: observed_extent,
+                    event: selected_event.expect("resize confirmation requires an event"),
+                },
+                state: ResizeWaitState {
+                    observed_events,
+                    selected_event,
+                    last_extent: observed_extent,
+                },
+            });
+        }
+        if expired() {
+            return Ok(ResizeWaitOutcome::TimedOut(ResizeWaitState {
+                observed_events,
+                selected_event,
+                last_extent: observed_extent,
+            }));
+        }
+        pause();
+    }
+}
+
 fn json_string(value: &str) -> String {
     let mut escaped = String::from("\"");
     for character in value.chars() {
@@ -309,47 +397,60 @@ fn resize_window(
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         )?;
     }
-    let events = window.poll_events()?;
-    let observed_events = events
-        .iter()
-        .map(|event| format!("{event:?}"))
-        .collect::<Vec<_>>();
-    let mut observed = RECT::default();
-    // Query the actual client extent even when the Host event is absent. The
-    // resulting log must remain useful to diagnose an oracle refusal.
-    // SAFETY: the same live HWND and local RECT remain valid for this query.
-    unsafe {
-        GetClientRect(hwnd, &mut observed)?;
-    }
-    let extent = [
-        u32::try_from(observed.right - observed.left)?,
-        u32::try_from(observed.bottom - observed.top)?,
-    ];
-    let event = events.iter().find_map(|event| match event {
-        fluxel_host::WindowEvent::Resized { width, height } if [*width, *height] == target => {
-            Some("resized")
-        }
-        fluxel_host::WindowEvent::Restored { width, height } if [*width, *height] == target => {
-            Some("restored")
-        }
-        _ => None,
-    });
-    let Some(event) = event else {
-        append_resize_observation(output, phase, target, &observed_events, None, Some(extent))?;
-        return Err(format!("host did not report requested resize {target:?}: {events:?}").into());
-    };
-    append_resize_observation(
-        output,
-        phase,
+    // SetWindowPos posts Win32 messages asynchronously. Pump the actual Host
+    // queue for a bounded period, retaining every observed event and the last
+    // queried client extent. A matching extent alone is not confirmation: the
+    // Host must also report the matching lifecycle transition.
+    let deadline = Instant::now() + RESIZE_EVENT_TIMEOUT;
+    match await_resize_confirmation(
         target,
-        &observed_events,
-        Some(event),
-        Some(extent),
-    )?;
-    if extent != target {
-        return Err(format!("host resize produced {extent:?}, requested {target:?}").into());
+        || -> Result<_, Box<dyn Error>> {
+            let events = window.poll_events()?;
+            let mut observed = RECT::default();
+            // Query the actual client extent after each real event pump. The
+            // resulting log remains useful if the Host never reports the resize.
+            // SAFETY: the same live HWND and local RECT remain valid for this query.
+            unsafe {
+                GetClientRect(hwnd, &mut observed)?;
+            }
+            Ok((
+                events,
+                [
+                    u32::try_from(observed.right - observed.left)?,
+                    u32::try_from(observed.bottom - observed.top)?,
+                ],
+            ))
+        },
+        || Instant::now() >= deadline,
+        || std::thread::sleep(RESIZE_EVENT_POLL_INTERVAL),
+    )? {
+        ResizeWaitOutcome::Confirmed { fact, state } => {
+            append_resize_observation(
+                output,
+                phase,
+                target,
+                &state.observed_events,
+                state.selected_event,
+                Some(state.last_extent),
+            )?;
+            Ok(fact)
+        }
+        ResizeWaitOutcome::TimedOut(state) => {
+            append_resize_observation(
+                output,
+                phase,
+                target,
+                &state.observed_events,
+                state.selected_event,
+                Some(state.last_extent),
+            )?;
+            return Err(format!(
+                "timed out waiting for host resize {target:?}; matching event: {:?}; last client extent: {:?}; observed events: {:?}",
+                state.selected_event, state.last_extent, state.observed_events,
+            )
+            .into());
+        }
     }
-    Ok(ResizeFact { extent, event })
 }
 
 fn run_frames<B, Resize, Pump, Capture>(
@@ -364,7 +465,7 @@ fn run_frames<B, Resize, Pump, Capture>(
 where
     Resize: Fn([u32; 2], &str) -> Result<ResizeFact, Box<dyn Error>>,
     Pump: Fn() -> Result<(), Box<dyn Error>>,
-    Capture: Fn(usize, [u32; 2]) -> Result<(), Box<dyn Error>>,
+    Capture: Fn(usize, [u32; 2], [u8; 4]) -> Result<(), Box<dyn Error>>,
     B: ExecutionBackend
         + ResourceBackend
         + MappingBackend
@@ -400,7 +501,7 @@ where
         fs::write(
             output.join(format!("surface-expected-{index}.json")),
             format!(
-                "{{\"rgba\":[{},{},{},{}],\"extent\":[{},{}]}}\n",
+                "{{\"rgba\":[{},{},{},{}],\"extent\":[{},{}],\"triangleNdc\":[[-0.75,-0.65],[0.55,-0.50],[-0.20,0.75]],\"backgroundRgb\":[0,0,0],\"stableInteriorSample\":[0.40,0.57]}}\n",
                 colors[index][0],
                 colors[index][1],
                 colors[index][2],
@@ -435,7 +536,7 @@ where
     if renderer.pending() != 0 {
         return Err("surface submission survived its completion".into());
     }
-    capture(0, initial_extent)?;
+    capture(0, initial_extent, colors[0])?;
     await_visual_release(output, 0, initial_extent, pump)?;
 
     let resized = resize([256, 144], "resize")?;
@@ -458,7 +559,7 @@ where
     if renderer.pending() != 0 {
         return Err("resized surface submission survived completion".into());
     }
-    capture(1, resized.extent)?;
+    capture(1, resized.extent, colors[1])?;
     await_visual_release(output, 1, resized.extent, pump)?;
 
     let restored = resize(initial_extent, "restore")?;
@@ -478,7 +579,7 @@ where
     if renderer.pending() != 0 {
         return Err("restored surface submission survived completion".into());
     }
-    capture(2, restored.extent)?;
+    capture(2, restored.extent, colors[2])?;
     await_visual_release(output, 2, restored.extent, pump)?;
 
     fs::write(
@@ -589,7 +690,9 @@ pub(crate) fn run_dx12(
             window.poll_events()?;
             Ok(())
         },
-        &|frame, extent| crate::capture::capture_client(&window, output, frame, extent),
+        &|frame, extent, color| {
+            crate::capture::capture_client(&window, output, frame, extent, color)
+        },
     )
 }
 
@@ -610,6 +713,12 @@ pub(crate) fn run_wgl(
             window.poll_events()?;
             Ok(())
         },
-        &|frame, extent| crate::capture::capture_client(window, output, frame, extent),
+        &|frame, extent, color| {
+            crate::capture::capture_client(window, output, frame, extent, color)
+        },
     )
 }
+
+#[cfg(all(test, windows, any(feature = "dx12", feature = "native-gl-wgl")))]
+#[path = "tests/surface.rs"]
+mod tests;

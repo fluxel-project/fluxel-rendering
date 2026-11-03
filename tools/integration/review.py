@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Review two explicit, current-source S0/S1 native integration attempts.
+"""Review two explicit, current-source S0-S3 native integration attempts.
 
-This is intentionally a bounded closure review, not an evidence framework.  It
-does not amend the smoke manifest and it never treats a screenshot, an enabled
-environment variable, or an exit code as a visual or diagnostic approval.
+This is intentionally a bounded integration-evidence review, not a stage
+closure or support decision. It does not amend the smoke manifest, consult
+historical decisions as approval, or treat a screenshot, an enabled environment
+variable, or an exit code as a visual or diagnostic approval.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -22,6 +24,10 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKENDS = ("dx12", "native-gl-wgl")
+_SMOKE_SPEC = importlib.util.spec_from_file_location("integration_smoke", Path(__file__).with_name("smoke.py"))
+assert _SMOKE_SPEC and _SMOKE_SPEC.loader
+_SMOKE = importlib.util.module_from_spec(_SMOKE_SPEC)
+_SMOKE_SPEC.loader.exec_module(_SMOKE)
 
 
 def sha256(path: Path) -> str | None:
@@ -73,6 +79,7 @@ def hash_records(records: list[dict[str, Any]], directory: Path) -> list[str]:
 
 def current_source_failures(attempt: dict[str, Any], root: Path) -> list[str]:
     failures: list[str] = []
+    resolved_root = root.resolve()
     recorded: set[Path] = set()
     scan_roots: set[tuple[Path, str]] = set()
     for source in attempt.get("source_inputs", []):
@@ -83,7 +90,7 @@ def current_source_failures(attempt: dict[str, Any], root: Path) -> list[str]:
         path = Path(item)
         if path.is_absolute():
             try:
-                path = path.resolve().relative_to(root.resolve())
+                path = path.resolve().relative_to(resolved_root)
             except ValueError:
                 failures.append(f"source input is outside current root: {item}")
                 continue
@@ -93,11 +100,14 @@ def current_source_failures(attempt: dict[str, Any], root: Path) -> list[str]:
         actual = sha256(root / path)
         if actual != source.get("sha256"):
             failures.append(f"current source differs: {path}")
+    candidates = {path.relative_to(resolved_root) for path in _SMOKE.source_input_paths(root)}
     for directory, suffix in scan_roots:
         for path in (root / directory).rglob("*" + suffix):
-            relative = path.relative_to(root)
-            if relative not in recorded:
-                failures.append(f"current source was added after attempt: {relative}")
+            if _SMOKE.source_path_is_safe(path, root):
+                candidates.add(path.resolve().relative_to(resolved_root))
+    for relative in candidates:
+        if relative not in recorded:
+            failures.append(f"current source was added after attempt: {relative}")
     return failures
 
 
@@ -249,13 +259,17 @@ def raster_failures(run: Path, value: Any) -> list[str]:
     return reasons
 
 
-def read_set_failures(run: Path) -> list[str]:
-    path = run / "read-set" / "read-set-workload.json"
+def read_set_failures(run: Path, directory: str = "read-set",
+                      workload: str = "s1-private-read-set-raster-three-generations",
+                      explicit_expected: list[list[int]] | None = None,
+                      texture_permutation: tuple[int, int, int, int] = (0, 1, 2, 3)) -> list[str]:
+    root = run / directory
+    path = root / "read-set-workload.json"
     value, error = read_json(path)
     if error or not isinstance(value, dict):
         return ["missing or invalid read-set workload"]
     reasons: list[str] = []
-    if (value.get("workload") != "s1-private-read-set-raster-three-generations"
+    if (value.get("workload") != workload
             or value.get("extent") != [8, 8] or not strictly_increasing(value.get("assetGenerations"))
             or value.get("uniformDestinationRanges") != [[0, 256], [256, 512], [512, 768]]
             or value.get("sourceByteLengths") != [20, 20, 20]
@@ -264,9 +278,9 @@ def read_set_failures(run: Path) -> list[str]:
             or value.get("perFrameRetirementVerified") is not True):
         reasons.append("read-set workload metadata does not match the three-generation contract")
     for index in range(3):
-        source = run / "read-set" / f"read-set-input-{index}.bin"
-        expected = run / "read-set" / f"read-set-expected-{index}.rgba"
-        readback = run / "read-set" / f"read-set-readback-{index}.rgba"
+        source = root / f"read-set-input-{index}.bin"
+        expected = root / f"read-set-expected-{index}.rgba"
+        readback = root / f"read-set-readback-{index}.rgba"
         if not source.is_file() or not expected.is_file() or not readback.is_file():
             reasons.append(f"missing read-set raw artifact for generation {index}")
             continue
@@ -278,12 +292,454 @@ def read_set_failures(run: Path) -> list[str]:
         if not all(math.isfinite(component) and 0.0 <= component <= 1.0 for component in tint):
             reasons.append(f"read-set input {index} has invalid tint floats")
             continue
-        color = bytes(round(component * texel) for component, texel in zip(tint, data[16:]))
-        image = color * 64
+        texel = bytes(data[16 + component] for component in texture_permutation)
+        color = bytes(round(component * channel) for component, channel in zip(tint, texel))
+        if explicit_expected is not None:
+            if index >= len(explicit_expected) or explicit_expected[index] != list(color):
+                reasons.append(f"read-set explicit expected color {index} disagrees with its raw material input")
+                continue
+            image = bytes(explicit_expected[index]) * 64
+        else:
+            image = color * 64
         if expected.read_bytes() != image:
             reasons.append(f"read-set expected image {index} is not derived from its raw input")
         if readback.read_bytes() != image:
             reasons.append(f"read-set readback {index} is not derived from its raw input")
+    return reasons
+
+
+def stable_raster_mask_failures(mask: bytes, pixels: bytes, color: list[int], label: str) -> list[str]:
+    """Validate the retained edge-independent mask before trusting its selected pixels."""
+    reasons: list[str] = []
+    if len(mask) != 128 * 128:
+        return [f"{label} oracle mask is not 128x128"]
+    if len(pixels) != 128 * 128 * 4:
+        return [f"{label} RGBA image is not 128x128"]
+    vertices = [(16.0, 105.6), (99.2, 96.0), (51.2, 16.0)]
+    checked = 0
+    for y in range(128):
+        for x in range(128):
+            point = (x + 0.5, y + 0.5)
+            signs: list[float] = []
+            stable = True
+            for edge in range(3):
+                a, b = vertices[edge], vertices[(edge + 1) % 3]
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                sign = dx * (point[1] - a[1]) - dy * (point[0] - a[0])
+                signs.append(sign)
+                if abs(sign) / math.sqrt(dx * dx + dy * dy) <= 2.0:
+                    stable = False
+            included = mask[y * 128 + x]
+            if included not in (0, 1) or bool(included) != stable:
+                reasons.append(f"{label} oracle mask disagrees with the fixed edge-distance rule at ({x}, {y})")
+                return reasons
+            if not stable:
+                continue
+            expected = bytes(color if (all(sign > 0.0 for sign in signs) or all(sign < 0.0 for sign in signs)) else [0, 0, 0, 0])
+            offset = (y * 128 + x) * 4
+            if pixels[offset:offset + 4] != expected:
+                reasons.append(f"{label} differs at masked stable pixel ({x}, {y})")
+                return reasons
+            checked += 1
+    if checked < 1000:
+        reasons.append(f"{label} oracle mask has too few stable pixels")
+    return reasons
+
+
+def shader_route_failures(root: Path, prefix: str) -> list[str]:
+    value, error = read_json(root / f"{prefix}-route.json")
+    if error or not isinstance(value, dict):
+        return [f"{prefix} route evidence is missing or malformed"]
+    if value.get("route") not in ("direct", "naga"):
+        return [f"{prefix} did not retain a supported RHI shader route"]
+    if not all(isinstance(value.get(field), str) and value[field] for field in ("format", "environment", "abiKey")):
+        return [f"{prefix} route lacks format, environment, or ABI evidence"]
+    return []
+
+
+ADMISSION_CAPABILITY_FIELDS = {
+    "multiview": "multiview",
+    "pushConstants": "push_constants",
+    "bindingArrays": "binding_arrays",
+    "runtimeSizedBindingArrays": "runtime_sized_binding_arrays",
+    "storageBuffers": "storage_buffers",
+    "storageTextures": "storage_textures",
+    "nonuniformUniformBufferIndexing": "nonuniform_uniform_buffer_indexing",
+    "nonuniformStorageBufferIndexing": "nonuniform_storage_buffer_indexing",
+    "nonuniformSampledTextureIndexing": "nonuniform_sampled_texture_indexing",
+    "nonuniformStorageTextureIndexing": "nonuniform_storage_texture_indexing",
+    "nonuniformSamplerIndexing": "nonuniform_sampler_indexing",
+}
+ADMISSION_LIMIT_FIELDS = {
+    "maxMultiviewViews": "max_multiview_views",
+    "maxPushConstantBytes": "max_push_constant_bytes",
+}
+ADMISSION_NONUNIFORM_FIELDS = {
+    "uniformBuffers", "storageBuffers", "sampledTextures", "storageTextures",
+    "samplers", "bindingArrays", "runtimeSizedBindingArrays",
+}
+# These logical Naga requirements deliberately bypass generic device-capability
+# admission.  The producer puts their corresponding concrete RHI feature name
+# in ShaderDesc.required_features, where Device::shader_route owns admission.
+# Keep this mapping in lockstep with shader::requirements_from_validation.
+ROUTE_OWNED_DEMAND_FEATURES = {
+    "primitive-index": "primitive-index",
+    "early-depth-test": "shader-early-depth-test",
+    "ray-query": "ray-query",
+}
+ROUTE_OWNED_DEMAND_CAPABILITIES = {
+    "primitive-index": "shader_primitive_index",
+    "early-depth-test": "shader_early_depth_test",
+    "ray-query": "ray_query",
+}
+ROUTE_OWNED_FRAGMENT_DEMANDS = {"primitive-index", "early-depth-test"}
+TARGET_ENTRY_STAGES = {
+    "vertex", "fragment", "compute", "task", "mesh", "ray-generation",
+    "any-hit", "closest-hit", "miss", "intersection", "callable",
+}
+
+
+def admission_result(status: str, demand: str | None = None, kind: str | None = None) -> dict[str, Any]:
+    if status == "accepted":
+        return {"status": "accepted"}
+    return {"status": "refused", "error": {"kind": kind, "demand": demand}}
+
+
+def admission_demand_result(demand: str, capabilities: dict[str, Any], facts: dict[str, Any]) -> dict[str, Any]:
+    """Recompute the public consumer admission contract without route inference."""
+    nonuniform = facts["nonuniform"]
+    if demand in ROUTE_OWNED_DEMAND_FEATURES:
+        return admission_result("accepted")
+    if demand == "multiview":
+        views = facts["multiviewViews"]
+        if views is None:
+            return admission_result("refused", demand, "invalid-pipeline-facts")
+        if not capabilities["multiview"] or views == 0 or views > capabilities["limits"]["maxMultiviewViews"]:
+            return admission_result("refused", demand, "unsupported")
+        return admission_result("accepted")
+    if demand == "push-constant":
+        size = facts["pushConstantBytes"]
+        if size == 0:
+            return admission_result("refused", demand, "invalid-pipeline-facts")
+        if not capabilities["pushConstants"] or size > capabilities["limits"]["maxPushConstantBytes"]:
+            return admission_result("refused", demand, "unsupported")
+        return admission_result("accepted")
+    if demand == "multisampled-shading":
+        return (admission_result("refused", demand, "invalid-pipeline-facts")
+                if facts["multisampleCount"] < 2
+                else admission_result("refused", demand, "unrepresentable"))
+
+    def nonuniform_result(supported: bool, resource_supported: bool, concrete: bool) -> dict[str, Any]:
+        if not concrete or not nonuniform["bindingArrays"]:
+            return admission_result("refused", demand, "invalid-pipeline-facts")
+        if (not capabilities["bindingArrays"] or not resource_supported or not supported
+                or (nonuniform["runtimeSizedBindingArrays"]
+                    and not capabilities["runtimeSizedBindingArrays"])):
+            return admission_result("refused", demand, "unsupported")
+        return admission_result("accepted")
+
+    if demand == "uniform-buffer-array-non-uniform-indexing":
+        return nonuniform_result(capabilities["nonuniformUniformBufferIndexing"], True,
+                                 nonuniform["uniformBuffers"])
+    if demand == "storage-texture-array-non-uniform-indexing":
+        return nonuniform_result(capabilities["nonuniformStorageTextureIndexing"],
+                                 capabilities["storageTextures"], nonuniform["storageTextures"])
+    if demand == "sampler-non-uniform-indexing":
+        return nonuniform_result(capabilities["nonuniformSamplerIndexing"], True,
+                                 nonuniform["samplers"])
+    if demand == "sampled-texture-and-storage-buffer-array-non-uniform-indexing":
+        if not nonuniform["sampledTextures"] and not nonuniform["storageBuffers"]:
+            return admission_result("refused", demand, "invalid-pipeline-facts")
+        if nonuniform["sampledTextures"]:
+            result = nonuniform_result(capabilities["nonuniformSampledTextureIndexing"], True, True)
+            if result["status"] == "refused":
+                return result
+        if nonuniform["storageBuffers"]:
+            return nonuniform_result(capabilities["nonuniformStorageBufferIndexing"],
+                                     capabilities["storageBuffers"], True)
+        return admission_result("accepted")
+    return admission_result("refused", demand, "unrepresentable")
+
+
+def route_owned_stage_failures(target_entries: list[dict[str, Any]], demands: list[str], label: str) -> list[str]:
+    """Check the public fragment-entry precondition enforced by Device::shader_route.
+
+    `targetEntries` is recorded directly from the ShaderDesc passed to
+    shader_route.  Composed WGSL alone would not prove the selected target.
+    """
+    if not any(demand in ROUTE_OWNED_FRAGMENT_DEMANDS for demand in demands):
+        return []
+    if not any(entry["stage"] == "fragment" for entry in target_entries):
+        return [f"{label} route-owned fragment demand lacks a Fragment target entry"]
+    return []
+
+
+def shader_admission_failures(run: Path, root: Path, label: str, must_be_accepted: bool,
+                              capability_root: Path | None = None) -> list[str]:
+    value, error = read_json(root / "shader-admission.json")
+    if error or not isinstance(value, dict):
+        return [f"{label} shader admission evidence is missing or malformed"]
+    reasons: list[str] = []
+    demands, features = value.get("nagaCapabilityDemands"), value.get("rhiFeatureNames")
+    if (value.get("schemaVersion") != 1 or not isinstance(demands, list)
+            or not isinstance(features, list)
+            or any(not isinstance(item, str) or not item for item in demands + features)
+            or len(set(demands)) != len(demands) or len(set(features)) != len(features)):
+        return [f"{label} shader admission demand lists are invalid"]
+    feature_names = set(features)
+    for demand, required_feature in ROUTE_OWNED_DEMAND_FEATURES.items():
+        if demand in demands and required_feature not in feature_names:
+            reasons.append(
+                f"{label} shader admission demand {demand} is not passed to the RHI route as {required_feature}"
+            )
+    capabilities, facts = value.get("deviceCapabilities"), value.get("pipelineFacts")
+    if not isinstance(capabilities, dict) or set(capabilities) != set(ADMISSION_CAPABILITY_FIELDS) | {"limits"}:
+        return [f"{label} shader admission capability facts are incomplete"]
+    if (any(type(capabilities[name]) is not bool for name in ADMISSION_CAPABILITY_FIELDS)
+            or not isinstance(capabilities["limits"], dict)
+            or set(capabilities["limits"]) != set(ADMISSION_LIMIT_FIELDS)
+            or any(type(capabilities["limits"][name]) is not int or capabilities["limits"][name] < 0
+                   for name in ADMISSION_LIMIT_FIELDS)):
+        return [f"{label} shader admission capability facts have invalid types"]
+    if not isinstance(facts, dict) or set(facts) != {"multiviewViews", "pushConstantBytes", "multisampleCount", "nonuniform"}:
+        return [f"{label} shader admission pipeline facts are incomplete"]
+    if (facts["multiviewViews"] is not None
+            and (type(facts["multiviewViews"]) is not int or facts["multiviewViews"] < 0)
+            or type(facts["pushConstantBytes"]) is not int or facts["pushConstantBytes"] < 0
+            or type(facts["multisampleCount"]) is not int or facts["multisampleCount"] < 1
+            or not isinstance(facts["nonuniform"], dict)
+            or set(facts["nonuniform"]) != ADMISSION_NONUNIFORM_FIELDS
+            or any(type(facts["nonuniform"][name]) is not bool for name in ADMISSION_NONUNIFORM_FIELDS)):
+        return [f"{label} shader admission pipeline facts have invalid types"]
+    target_entries = value.get("targetEntries")
+    if not isinstance(target_entries, list) or not target_entries:
+        return [f"{label} shader admission target entries are missing or malformed"]
+    for entry in target_entries:
+        if (not isinstance(entry, dict) or set(entry) != {"name", "stage", "workgroupSize"}
+                or not isinstance(entry["name"], str) or not entry["name"]
+                or entry["stage"] not in TARGET_ENTRY_STAGES):
+            return [f"{label} shader admission target entries are missing or malformed"]
+        workgroup_size = entry["workgroupSize"]
+        if (workgroup_size is not None
+                and (not isinstance(workgroup_size, list) or len(workgroup_size) != 3
+                     or any(type(size) is not int or size < 0 for size in workgroup_size))):
+            return [f"{label} shader admission target entries are missing or malformed"]
+
+    snapshot, snapshot_error = read_json((capability_root or run) / "capabilities.json")
+    actual = snapshot.get("deviceCapabilities") if isinstance(snapshot, dict) else None
+    if snapshot_error or not isinstance(actual, dict):
+        return [f"{label} shader admission cannot be tied to the run capability snapshot"]
+    for demand, capability_name in ROUTE_OWNED_DEMAND_CAPABILITIES.items():
+        if demand in demands and actual.get(capability_name) is not True:
+            reasons.append(
+                f"{label} shader admission route-owned demand {demand} lacks true {capability_name} in the run snapshot"
+            )
+    reasons.extend(route_owned_stage_failures(target_entries, demands, label))
+    for recorded, actual_name in ADMISSION_CAPABILITY_FIELDS.items():
+        if actual.get(actual_name) is not capabilities[recorded]:
+            reasons.append(f"{label} shader admission capability {recorded} disagrees with the run snapshot")
+    actual_limits = actual.get("limits")
+    if not isinstance(actual_limits, dict):
+        reasons.append(f"{label} run capability snapshot lacks limits for shader admission")
+    else:
+        for recorded, actual_name in ADMISSION_LIMIT_FIELDS.items():
+            if actual_limits.get(actual_name) != capabilities["limits"][recorded]:
+                reasons.append(f"{label} shader admission limit {recorded} disagrees with the run snapshot")
+
+    per_demand = value.get("perDemand")
+    if not isinstance(per_demand, list) or len(per_demand) != len(demands):
+        return reasons + [f"{label} shader admission per-demand evidence is incomplete"]
+    seen: list[str] = []
+    expected_results: list[dict[str, Any]] = []
+    for item in per_demand:
+        if not isinstance(item, dict) or set(item) != {"demand", "outcome"} or not isinstance(item["demand"], str):
+            reasons.append(f"{label} shader admission has malformed per-demand evidence")
+            continue
+        demand = item["demand"]
+        seen.append(demand)
+        expected = admission_demand_result(demand, capabilities, facts)
+        expected_results.append(expected)
+        if item["outcome"] != expected:
+            reasons.append(f"{label} shader admission outcome for {demand} is not derived from its facts")
+    if seen != demands or len(set(seen)) != len(seen):
+        reasons.append(f"{label} shader admission per-demand evidence does not exactly match its demands")
+    expected_admission = next((item for item in expected_results if item["status"] == "refused"), admission_result("accepted"))
+    if value.get("admission") != expected_admission:
+        reasons.append(f"{label} shader admission aggregate outcome does not match its per-demand facts")
+    if must_be_accepted and value.get("admission") != admission_result("accepted"):
+        reasons.append(f"{label} executed workload has a refused shader admission")
+    return reasons
+
+
+def pipeline_cache_hit_failures(value: Any, label: str) -> list[str]:
+    if not isinstance(value, dict) or value.get("pipelineCacheHitVerified") is not True:
+        return [f"{label} did not retain verified pipeline-cache hit evidence"]
+    return []
+
+
+def s2_shader_invocation_failures(run: Path, root: Path, label: str,
+                                  capability_root: Path) -> tuple[list[str], dict[str, Any] | None]:
+    value, error = read_json(root / "s2-shader-workload.json")
+    if error or not isinstance(value, dict) or value.get("workload") != "s2-direct-shader-raster-three-generations":
+        return [f"missing or invalid {label} workload"], None
+    reasons = shader_route_failures(root, "s2-shader")
+    reasons.extend(shader_admission_failures(run, root, label, value.get("status") == "executed", capability_root))
+    if value.get("status") != "executed" or not strictly_increasing(value.get("assetGenerations")) or value.get("planCompilations") != 1:
+        reasons.append(f"{label} did not execute three retained generations")
+    layout = value.get("vertexLayout")
+    if layout != {"stride": 24, "attributes": [{"semantic": "POSITION", "location": 0}, {"semantic": "COLOR_0", "location": 1}]}:
+        reasons.append(f"{label} lacks the reflected position/color vertex layout")
+    source = root / "s2-shader-artifact.wgsl"
+    interface = root / "s2-shader-interface.txt"
+    if (not source.is_file() or not interface.is_file()
+            or not all(token in source.read_text(encoding="utf-8", errors="replace")
+                       for token in ("vs_main", "fs_main", "@location(0)", "@location(1)"))):
+        reasons.append(f"{label} artifact or vertex interface evidence is incomplete")
+    mask = root / "s2-shader-oracle-mask.bin"
+    if not mask.is_file():
+        reasons.append(f"{label} oracle mask is missing")
+        mask_bytes = None
+    else:
+        mask_bytes = mask.read_bytes()
+    for index in range(3):
+        raw, expected, readback = (root / f"s2-shader-{kind}-{index}.{suffix}" for kind, suffix in (("input", "bin"), ("expected", "rgba"), ("readback", "rgba")))
+        if not raw.is_file() or not expected.is_file() or not readback.is_file():
+            reasons.append(f"missing {label} raw input, expected, or readback for generation {index}")
+            continue
+        color, failures = fixed_raster_oracle(raw.read_bytes())
+        reasons.extend(f"S2 generation {index}: {failure}" for failure in failures)
+        if color is not None and mask_bytes is not None:
+            reasons.extend(stable_raster_mask_failures(mask_bytes, expected.read_bytes(), color, f"S2 expected {index}"))
+            reasons.extend(stable_raster_mask_failures(mask_bytes, readback.read_bytes(), color, f"S2 readback {index}"))
+    return reasons, value
+
+
+def s2_shader_failures(run: Path) -> list[str]:
+    first_root = run / "s2-shader"
+    same_root = run / "s2-shader-same-device-cache-hit"
+    replacement_root = run / "s2-shader-replacement-device"
+    first_reasons, first = s2_shader_invocation_failures(run, first_root, "S2 initial Shader invocation", run)
+    same_reasons, same = s2_shader_invocation_failures(run, same_root, "S2 same-device cache invocation", run)
+    replacement_reasons, replacement = s2_shader_invocation_failures(
+        run, replacement_root, "S2 replacement-device invocation", replacement_root)
+    reasons = first_reasons + same_reasons + replacement_reasons
+    invocations = ((first, False, 0, 1, 1), (same, True, 1, 0, 1),
+                   (replacement, False, 1, 1, 2))
+    for value, expected_hit, before, built, after in invocations:
+        if not isinstance(value, dict):
+            continue
+        if (value.get("consumerInvocationCacheHit") is not expected_hit
+                or value.get("consumerInvocationExpectedCacheHit") is not expected_hit
+                or value.get("consumerPipelineBuildSuccessesBefore") != before
+                or value.get("consumerPipelineBuildSuccessesThisInvocation") != built
+                or value.get("consumerPipelineBuildSuccessesAfter") != after):
+            reasons.append("S2 consumer cache hit/miss or pipeline-build-success counters are inconsistent")
+    if all(isinstance(value, dict) for value in (first, same, replacement)):
+        if not isinstance(first.get("deviceId"), str) or not isinstance(same.get("deviceId"), str) or not isinstance(replacement.get("deviceId"), str):
+            reasons.append("S2 invocation evidence lacks a concrete DeviceId")
+        elif first["deviceId"] != same["deviceId"]:
+            reasons.append("S2 same-device cache invocation changed DeviceId")
+        elif first["deviceId"] == replacement["deviceId"]:
+            reasons.append("S2 replacement-device invocation did not use a new DeviceId")
+        transition, error = read_json(run / "s2-cache-device-transition.json")
+        if (error or not isinstance(transition, dict)
+                or transition.get("oldDeviceId") != first.get("deviceId")
+                or transition.get("replacementDeviceId") != replacement.get("deviceId")
+                or any(transition.get(field) is not True for field in (
+                    "bothProductsPresentBeforeRetirement", "oldProductRetiredAfterCompletion",
+                    "replacementProductRetained",
+                ))):
+            reasons.append("S2 cache device-transition evidence does not match the three invocation devices")
+    return reasons
+
+
+def s2_texture_failures(run: Path) -> list[str]:
+    root = run / "s2-texture"
+    value, error = read_json(root / "read-set-workload.json")
+    if error or not isinstance(value, dict) or value.get("workload") != "s2-direct-shader-texture-read-set-three-generations":
+        return ["missing or invalid S2 texture Shader workload"]
+    reasons = shader_route_failures(root, "s2-texture")
+    reasons.extend(shader_admission_failures(run, root, "S2 texture Shader workload", True))
+    source, artifact, interface = root / "s2-texture-input.wgsl", root / "s2-texture-artifact.wgsl", root / "s2-texture-interface.txt"
+    if not all(path.is_file() for path in (source, artifact, interface)):
+        reasons.append("S2 texture Shader source, artifact, or reflection evidence is missing")
+    else:
+        input_source = source.read_text(encoding="utf-8", errors="replace")
+        composed = artifact.read_text(encoding="utf-8", errors="replace")
+        reflected = interface.read_text(encoding="utf-8", errors="replace")
+        if (input_source not in composed
+                or not all(token in input_source for token in ("s2_tint", "s2_texture", "textureLoad", "vs_main", "fs_main"))):
+            reasons.append("S2 texture Shader artifact does not contain its direct texture program")
+        if not all(token in reflected for token in ("group: 0", "binding: 0", "binding: 1", "Uniform", "Texture")):
+            reasons.append("S2 texture Shader reflection does not prove both read-set bindings")
+    reasons.extend(read_set_failures(
+        run, "s2-texture", "s2-direct-shader-texture-read-set-three-generations",
+        [[17, 0, 241, 255], [0, 33, 125, 255], [67, 199, 0, 255]],
+    ))
+    return reasons
+
+
+def s3_material_failures(run: Path) -> list[str]:
+    root = run / "s3-material"
+    reasons = material_shader_failures(root, "s3-material", False)
+    reasons.extend(read_set_failures(run, "s3-material", "s3-material-read-set-raster-three-generations",
+                                     [[17, 0, 0, 255], [0, 33, 0, 255], [0, 0, 211, 255]]))
+    replacement = root / "replacement"
+    reasons.extend(material_shader_failures(replacement, "s3-material", True))
+    reasons.extend(read_set_failures(run, "s3-material/replacement",
+                                     "s3-material-replacement-read-set-raster-three-generations",
+                                     [[241, 0, 0, 255], [0, 231, 0, 255], [0, 0, 199, 255]],
+                                     (2, 0, 1, 3)))
+    preflight, preflight_error = read_json(root / "s3-material-binding-preflight.json")
+    if (preflight_error or not isinstance(preflight, dict) or preflight.get("schemaVersion") != 1
+            or any(preflight.get(field) is not True for field in (
+                "actualReadSetLayoutChecked", "fragmentReadOnlyAccessChecked",
+                "incompatibleReflectionRejectedBeforeBackend", "foreignTokenRejectedBeforeBackend",
+            ))):
+        reasons.append("S3 Material binding preflight evidence is missing or incomplete")
+    generations, error = read_json(root / "s3-material-generations.json")
+    if (error or not isinstance(generations, dict) or generations.get("sameAsset") is not True
+            or generations.get("variantChanged") is not True
+            or type(generations.get("original")) is not int
+            or type(generations.get("replacement")) is not int
+            or generations["original"] >= generations["replacement"]):
+        reasons.append("S3 Material replacement generation evidence is missing or inconsistent")
+    return reasons
+
+
+def material_shader_failures(root: Path, prefix: str, replacement: bool) -> list[str]:
+    label = "S3 replacement Material" if replacement else "S3 Material"
+    reasons = shader_route_failures(root, prefix)
+    reasons.extend(shader_admission_failures(root.parents[1] if replacement else root.parent, root, label, True))
+    contribution, artifact = root / f"{prefix}-contribution.wgsl", root / f"{prefix}-artifact.wgsl"
+    variant, definition = root / f"{prefix}-variant.txt", root / f"{prefix}-definition.txt"
+    interface = root / f"{prefix}-interface.txt"
+    if not all(path.is_file() for path in (contribution, artifact, variant, definition, interface)):
+        return reasons + [f"{label} contribution, artifact, variant, definition, or reflection evidence is missing"]
+    source, composed = contribution.read_text(encoding="utf-8", errors="replace"), artifact.read_text(encoding="utf-8", errors="replace")
+    if (not variant.read_text(encoding="utf-8", errors="replace").strip()
+            or source not in composed
+            or not all(token in source for token in ("var<uniform> tint", "material_texture", "sample_color", "custom_tint", "evaluate_material"))):
+        reasons.append(f"{label} contribution is incomplete or was not the composed artifact input")
+    if replacement and not all(token in source for token in ("c.b", "c.r", "c.g")):
+        reasons.append("S3 replacement Material did not retain its channel-reordering static function")
+    reasons.extend(material_interface_failures(interface, label))
+    return reasons
+
+
+def material_interface_failures(path: Path, label: str) -> list[str]:
+    """Validate both read-set resources from retained ShaderInterface Debug evidence."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    blocks = text.split("ReflectedBinding {")[1:]
+    requirements = (
+        (0, ("group: 0", "binding: 0", "kind: Uniform", "shape: Some(", "Uniform(", "Fragment", "BindingAccess", "read: true", "write: false", "query: false", "atomic: false")),
+        (1, ("group: 0", "binding: 1", "kind: Texture", "shape: Some(", "Texture2dF32", "Fragment", "BindingAccess", "read: true", "write: false", "query: false", "atomic: false")),
+    )
+    reasons: list[str] = []
+    for binding, required in requirements:
+        block = next((item for item in blocks if f"binding: {binding}" in item), None)
+        if block is None or not all(token in block for token in required):
+            reasons.append(f"{label} reflection does not prove the group 0 binding {binding} kind, shape, Fragment read access")
     return reasons
 
 
@@ -318,6 +774,21 @@ def compute_failures(run: Path, backend: str) -> list[str]:
     value, error = read_json(run / "compute" / "compute-workload.json")
     if error or not isinstance(value, dict) or value.get("workload") != "s1-fixed-compute-three-generations":
         return ["missing or invalid compute workload"]
+    reasons: list[str] = []
+    reasons.extend(shader_admission_failures(
+        run, run / "compute", "compute Shader workload",
+        value.get("status") != "unsupported-before-submission",
+    ))
+    composed, interface = run / "compute" / "compute-composed.wgsl", run / "compute" / "compute-interface.txt"
+    route, route_error = read_json(run / "compute" / "compute-route.json")
+    if (not composed.is_file() or not interface.is_file()
+            or not all(token in composed.read_text(encoding="utf-8", errors="replace")
+                       for token in ("cs_main", "@compute", "@group(0)", "@binding(0)"))):
+        reasons.append("compute Shader artifact or reflection evidence is incomplete")
+    if (route_error or not isinstance(route, dict) or route.get("route") not in ("direct", "naga", "unsupported")
+            or (route.get("route") != "unsupported" and not all(isinstance(route.get(field), str) and route[field]
+                                                                    for field in ("format", "environment", "abiKey")))):
+        reasons.append("compute Shader route evidence is missing or malformed")
     capability, capability_error = read_json(run / "capabilities.json")
     expected_checks = compute_requirement_checks(capability)
     admission, admission_error = read_json(run / "compute" / "compute-requirements.json")
@@ -325,16 +796,26 @@ def compute_failures(run: Path, backend: str) -> list[str]:
             or admission.get("checks") != expected_checks
             or any(not isinstance(part, bool) for part in admission.get("checks", {}).values())
             or admission.get("supported") is not all(expected_checks.values())):
-        return ["compute admission checks are missing or disagree with actual capability requirements"]
+        return reasons + ["compute admission checks are missing or disagree with actual capability requirements"]
     supported = all(expected_checks.values())
     if value.get("status") == "unsupported-before-submission":
         if supported:
-            return ["unsupported compute conflicts with satisfied runtime fixture requirements"]
+            return reasons + ["unsupported compute conflicts with satisfied runtime fixture requirements"]
         if (run / "compute-refusal.json").exists():
-            return ["compute evidence must use compute-workload status, not compute-refusal.json"]
-        stale = list((run / "compute").glob("compute-*-*.bin"))
-        return ["unsupported compute retained submission artifacts" ] if stale else []
-    reasons: list[str] = []
+            return reasons + ["compute evidence must use compute-workload status, not compute-refusal.json"]
+        root = run / "compute"
+        allowed = {f"compute-{kind}-{index}.bin" for kind in ("input", "expected") for index in range(3)}
+        for index in range(3):
+            source, expected_file = root / f"compute-input-{index}.bin", root / f"compute-expected-{index}.bin"
+            if not source.is_file() or not expected_file.is_file():
+                reasons.append(f"unsupported compute lacks retained input or expected artifact {index}")
+                continue
+            before = source.read_bytes()
+            expected = b"".join(((int.from_bytes(before[offset:offset + 4], "little") * 3 + 7) & 0xffffffff).to_bytes(4, "little") for offset in range(0, len(before), 4)) if len(before) == 384 else b""
+            if expected_file.read_bytes() != expected:
+                reasons.append(f"unsupported compute expected artifact {index} does not match its raw input")
+        stale = [path.name for path in root.glob("compute-*.bin") if path.name not in allowed]
+        return reasons + (["unsupported compute retained native submission artifacts"] if stale else [])
     if not supported:
         reasons.append("compute workload ran without its runtime fixture requirements")
     if (value.get("elements") != 96 or value.get("workgroupSize") != 64
@@ -433,6 +914,9 @@ def workload_check(run: Path, backend: str) -> dict[str, Any]:
             reasons.append("surface event log is not valid raw JSONL")
     reasons.extend(raster_failures(run, loaded.get("raster")))
     reasons.extend(read_set_failures(run))
+    reasons.extend(s2_shader_failures(run))
+    reasons.extend(s2_texture_failures(run))
+    reasons.extend(s3_material_failures(run))
     reasons.extend(compute_failures(run, backend))
     reasons.extend(replacement_failures(run))
     reasons.extend(surface_configuration_failures(run))
@@ -489,6 +973,8 @@ def attempt_review(attempt: dict[str, Any], closure: Path, root: Path) -> list[d
         reasons.append("source changed during build")
     if attempt.get("source_consistency_after_attempt", {}).get("status") != "stable":
         reasons.append("source changed during run")
+    if attempt.get("build_environment", {}).get("status") != "auditable":
+        reasons.append("build environment was not retained as an auditable, non-secret closure")
     if attempt.get("built_source_verification", {}).get("status") != "verified":
         reasons.append("Cargo built-source verification is not verified")
     checkout_verification = attempt.get("built_git_checkout_verification")
@@ -723,24 +1209,55 @@ def capability_snapshot_failures(value: dict[str, Any], source: str) -> list[str
 def capability_review(attempt: dict[str, Any], closure: Path) -> dict[str, Any]:
     directory = closure / str(attempt.get("directory", "")) / "run"
     paths = sorted(directory.rglob("*capabilit*.json"))
+    expected = (
+        ("primary", directory / "capabilities.json", directory / "s2-shader" / "s2-shader-workload.json",
+         "oldDeviceId"),
+        ("replacement", directory / "s2-shader-replacement-device" / "capabilities.json",
+         directory / "s2-shader-replacement-device" / "s2-shader-workload.json", "replacementDeviceId"),
+    )
     reasons: list[str] = []
-    if len(paths) != 1:
-        reasons.append("selected attempt requires exactly one raw capability snapshot")
+    if set(paths) != {snapshot for _, snapshot, _, _ in expected}:
+        reasons.append("selected attempt has missing or unexpected raw capability snapshots")
+    replacement, replacement_error = read_json(directory / "device-replacement.json")
+    workload, workload_error = read_json(directory / "workload.json")
+    if replacement_error or not isinstance(replacement, dict):
+        reasons.append("capability snapshots lack device replacement identity evidence")
+    if workload_error or not isinstance(workload, dict) or not isinstance(workload.get("adapter"), str) or not workload["adapter"]:
+        reasons.append("capability snapshots lack the selected adapter identity evidence")
+    roots = [Path(item["path"]) for item in attempt.get("built_git_checkout_verification", {}).get("checkouts", [])
+             if isinstance(item, dict) and isinstance(item.get("path"), str)
+             and (Path(item["path"]) / "crates/core/src/api/foundation.rs").is_file()]
+    declaration = None
+    if len(roots) != 1:
+        reasons.append("complete capability review lacks the unique built RHI declaration")
     else:
-        value, error = read_json(paths[0])
-        if error or not isinstance(value, dict) or not value.get("adapter"):
-            reasons.append("capability snapshot lacks an adapter identity")
-        elif not isinstance(value.get("compute"), bool):
-            reasons.append("capability snapshot must explicitly report a boolean compute capability")
+        declaration = (roots[0] / "crates/core/src/api/foundation.rs").read_text(encoding="utf-8")
+    device_ids: list[Any] = []
+    for label, snapshot_path, shader_workload_path, replacement_field in expected:
+        value, error = read_json(snapshot_path)
+        shader_workload, shader_workload_error = read_json(shader_workload_path)
+        if (error or not isinstance(value, dict) or not isinstance(value.get("adapter"), str)
+                or not value["adapter"]):
+            reasons.append(f"{label} capability snapshot lacks an adapter identity")
+            continue
+        if value.get("backend") != attempt.get("backend"):
+            reasons.append(f"{label} capability snapshot backend does not match the selected attempt")
+        if not workload_error and isinstance(workload, dict) and value.get("adapter") != workload.get("adapter"):
+            reasons.append(f"{label} capability snapshot adapter does not match the selected adapter")
+        expected_device = replacement.get(replacement_field) if isinstance(replacement, dict) else None
+        if not isinstance(expected_device, str) or value.get("deviceId") != expected_device:
+            reasons.append(f"{label} capability snapshot DeviceId does not match device replacement evidence")
         else:
-            roots = [Path(item["path"]) for item in attempt.get("built_git_checkout_verification", {}).get("checkouts", [])
-                     if isinstance(item, dict) and isinstance(item.get("path"), str)
-                     and (Path(item["path"]) / "crates/core/src/api/foundation.rs").is_file()]
-            if len(roots) != 1:
-                reasons.append("complete capability review lacks the unique built RHI declaration")
-            else:
-                declaration = roots[0] / "crates/core/src/api/foundation.rs"
-                reasons.extend(capability_snapshot_failures(value, declaration.read_text(encoding="utf-8")))
+            device_ids.append(expected_device)
+        if (shader_workload_error or not isinstance(shader_workload, dict)
+                or value.get("deviceId") != shader_workload.get("deviceId")):
+            reasons.append(f"{label} capability snapshot DeviceId does not match its shader workload")
+        if not isinstance(value.get("compute"), bool):
+            reasons.append(f"{label} capability snapshot must explicitly report a boolean compute capability")
+        elif declaration is not None:
+            reasons.extend(f"{label}: {reason}" for reason in capability_snapshot_failures(value, declaration))
+    if len(device_ids) == 2 and device_ids[0] == device_ids[1]:
+        reasons.append("primary and replacement capability snapshots must identify distinct devices")
     return result(f"{attempt.get('backend')} raw capability snapshot", not reasons, reasons,
                   attempt=attempt.get("id"), files=[str(path) for path in paths])
 
@@ -755,7 +1272,115 @@ def measurement_review(attempt: dict[str, Any], closure: Path) -> dict[str, Any]
                   attempt=attempt.get("id"))
 
 
-def external_review(path: Path | None, attempts: set[str], kind: str) -> dict[str, Any]:
+def retained_attempt_artifacts(selected: dict[str, dict[str, Any]], closure: Path) -> dict[str, set[tuple[Path, str]]]:
+    """Only raw artifacts retained by the selected attempt may support review."""
+    retained: dict[str, set[tuple[Path, str]]] = {}
+    for attempt in selected.values():
+        identifier = attempt.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            continue
+        directory = closure / str(attempt.get("directory", ""))
+        records = []
+        for command in attempt.get("commands", []):
+            if isinstance(command, dict) and isinstance(command.get("result"), dict):
+                records.extend(command["result"].get("raw_logs", []))
+                records.extend(command["result"].get("retained_files", []))
+        entries: set[tuple[Path, str]] = set()
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+                continue
+            candidate = under(directory, record["path"])
+            if candidate is not None and isinstance(record.get("sha256"), str):
+                entries.add((candidate.resolve(), record["sha256"]))
+        retained[identifier] = entries
+    return retained
+
+
+def linked_raw_record(value: Any, identifier: str, retained: dict[str, set[tuple[Path, str]]],
+                      base: Path) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("path"), str) or not isinstance(value.get("sha256"), str):
+        return False
+    path = Path(value["path"])
+    path = path if path.is_absolute() else base / path
+    return (path.resolve(), value["sha256"]) in retained.get(identifier, set()) and sha256(path) == value["sha256"]
+
+
+def attempt_raw_record(path: Path, identifier: str, retained: dict[str, set[tuple[Path, str]]]) -> dict[str, str] | None:
+    digest = sha256(path)
+    if digest is None or (path.resolve(), digest) not in retained.get(identifier, set()):
+        return None
+    return {"path": str(path), "sha256": digest}
+
+
+def required_review_records(identifier: str, retained: dict[str, set[tuple[Path, str]]],
+                            root: Path, relative_paths: list[str]) -> list[dict[str, str]] | None:
+    records = [attempt_raw_record(root / relative, identifier, retained) for relative in relative_paths]
+    return records if all(record is not None for record in records) else None
+
+
+def visual_entry_failures(entry: dict[str, Any], identifier: str,
+                          retained: dict[str, set[tuple[Path, str]]], root: Path, base: Path) -> list[str]:
+    surface = root / "run" / "surface"
+    screenshots = [surface / f"surface-client-frame-{frame}.bmp" for frame in range(3)]
+    frames = entry.get("frames")
+    unexpected = [path.name for path in surface.glob("surface-client-frame-*.bmp")
+                  if path.name not in {screenshot.name for screenshot in screenshots}]
+    if unexpected:
+        return [f"visual evidence has unsupported extra surface screenshot(s) for {identifier}: {unexpected}"]
+    if (not all(screenshot.is_file() for screenshot in screenshots)
+            or not isinstance(frames, list) or len(frames) != len(screenshots)):
+        return [f"visual evidence does not cover every retained surface screenshot for {identifier}"]
+    reasons: list[str] = []
+    expected = {item.name for item in screenshots}
+    seen: set[str] = set()
+    for frame in frames:
+        if not isinstance(frame, dict) or frame.get("human_verdict") != "passed":
+            reasons.append(f"visual evidence has no passing human verdict for {identifier}")
+            continue
+        screenshot, capture, verdict = frame.get("screenshot"), frame.get("capture"), frame.get("verdict")
+        if not all(linked_raw_record(item, identifier, retained, base) for item in (screenshot, capture, verdict)):
+            reasons.append(f"visual evidence is not retained raw evidence for {identifier}")
+            continue
+        screenshot_path = Path(str(screenshot["path"])); screenshot_path = screenshot_path if screenshot_path.is_absolute() else base / screenshot_path
+        if screenshot_path.name not in expected or screenshot_path.name in seen:
+            reasons.append(f"visual evidence has an unknown or duplicate screenshot for {identifier}")
+            continue
+        capture_value, capture_error = read_json(Path(str(capture["path"])) if Path(str(capture["path"])).is_absolute() else base / str(capture["path"]))
+        verdict_value, verdict_error = read_json(Path(str(verdict["path"])) if Path(str(verdict["path"])).is_absolute() else base / str(verdict["path"]))
+        if (capture_error or verdict_error or not isinstance(capture_value, dict) or not isinstance(verdict_value, dict)
+                or capture_value.get("image") != screenshot_path.name or capture_value.get("automaticVisualPass") is not False
+                or verdict_value.get("image") != screenshot_path.name or verdict_value.get("status") != "passed"):
+            reasons.append(f"visual evidence does not match the retained capture scenario for {identifier}")
+        seen.add(screenshot_path.name)
+    if seen != expected:
+        reasons.append(f"visual evidence omitted a retained surface screenshot for {identifier}")
+    return reasons
+
+
+def scenario_entry_failures(entry: dict[str, Any], identifier: str,
+                            retained: dict[str, set[tuple[Path, str]]], root: Path,
+                            base: Path, scenario: str, paths: list[str]) -> list[str]:
+    if entry.get("scenario") != scenario:
+        return [f"{scenario} review has the wrong scenario label for {identifier}"]
+    if entry.get("verdict") != "passed":
+        return [f"{scenario} review has no explicit passing verdict for {identifier}"]
+    required = required_review_records(identifier, retained, root, paths)
+    raw = entry.get("raw_evidence")
+    if required is None or not isinstance(raw, list):
+        return [f"{scenario} review lacks retained mandatory raw evidence for {identifier}"]
+    required_pairs = {(Path(item["path"]).resolve(), item["sha256"]) for item in required}
+    supplied_pairs = set()
+    for item in raw:
+        if not isinstance(item, dict) or not linked_raw_record(item, identifier, retained, base):
+            continue
+        candidate = Path(item["path"])
+        supplied_pairs.add(((candidate if candidate.is_absolute() else base / candidate).resolve(), item["sha256"]))
+    return [] if required_pairs <= supplied_pairs else [f"{scenario} review substitutes or omits mandatory raw evidence for {identifier}"]
+
+
+def external_review(path: Path | None, attempts: set[str], kind: str,
+                    selected: dict[str, dict[str, Any]] | None = None,
+                    closure: Path | None = None) -> dict[str, Any]:
     if path is None:
         return result(kind, False, ["explicit review file was not supplied"])
     value, error = read_json(path)
@@ -766,17 +1391,66 @@ def external_review(path: Path | None, attempts: set[str], kind: str) -> dict[st
         reasons.append("review status is not 'reviewed'")
     if set(value.get("attempt_ids", [])) != attempts:
         reasons.append("review does not name exactly the selected attempts")
-    artifacts = value.get("artifacts", [])
-    if not artifacts:
-        reasons.append("review has no hashed artifacts")
-    else:
-        for artifact in artifacts:
-            artifact_path = Path(str(artifact.get("path", "")))
-            if not artifact_path.is_absolute():
-                artifact_path = path.parent / artifact_path
-            if sha256(artifact_path) != artifact.get("sha256"):
-                reasons.append(f"review artifact is missing or changed: {artifact_path}")
-    return result(kind, not reasons, reasons, path=str(path), artifacts=len(artifacts))
+    if selected is None or closure is None:
+        reasons.append("review was not linked to selected attempt records")
+        return result(kind, False, reasons, path=str(path))
+    selected_by_id = {attempt.get("id"): attempt for attempt in selected.values()
+                      if isinstance(attempt, dict) and isinstance(attempt.get("id"), str)}
+    retained = retained_attempt_artifacts(selected_by_id, closure)
+    entries = value.get("evidence")
+    if not isinstance(entries, list) or {item.get("attempt_id") for item in entries if isinstance(item, dict)} != attempts:
+        reasons.append("review lacks one typed evidence entry for each selected attempt")
+        entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            reasons.append("review evidence entry is malformed")
+            continue
+        identifier = entry.get("attempt_id")
+        if not isinstance(identifier, str):
+            reasons.append("review evidence has no attempt identifier")
+            continue
+        attempt = selected_by_id.get(identifier)
+        if not isinstance(attempt, dict):
+            reasons.append("review evidence refers to an unselected attempt")
+            continue
+        attempt_root = closure / str(attempt.get("directory", ""))
+        if kind == "reviewed visual output":
+            reasons.extend(visual_entry_failures(entry, identifier, retained, attempt_root, path.parent))
+        elif kind == "linked focused test evidence":
+            log = entry.get("log")
+            command_index = entry.get("command_index")
+            commands = attempt.get("commands")
+            command = (commands[command_index] if isinstance(commands, list) and type(command_index) is int
+                       and 0 <= command_index < len(commands) else None)
+            command_result = command.get("result") if isinstance(command, dict) else None
+            test_logs = command_result.get("raw_logs") if isinstance(command_result, dict) else None
+            if (not isinstance(command, dict) or command.get("kind") != "test"
+                    or not isinstance(command.get("command"), list) or not command["command"]
+                    or not isinstance(command_result, dict) or command_result.get("exit_status") != 0
+                    or command_result.get("test_command_recognized") is not True
+                    or type(command_result.get("executed")) is not int or command_result["executed"] <= 0
+                    or not isinstance(test_logs, list) or log not in test_logs
+                    or not linked_raw_record(log, identifier, retained, path.parent)):
+                reasons.append(f"test evidence lacks a retained command, execution count, or log for {identifier}")
+            else:
+                log_path = Path(log["path"]); log_path = log_path if log_path.is_absolute() else path.parent / log_path
+                if not log_path.read_text(encoding="utf-8", errors="replace").strip():
+                    reasons.append(f"test evidence has an empty retained log for {identifier}")
+        elif kind == "reviewed native failure, loss, and device-replacement evidence":
+            reasons.extend(scenario_entry_failures(
+                entry, identifier, retained, attempt_root, path.parent, "device-replacement",
+                ["run/device-replacement.json", "run/device-replacement-input.bin",
+                 "run/device-replacement-expected.json", "run/device-replacement-readback.rgba"]))
+        else:
+            paths = []
+            for directory in ("read-set", "s2-texture", "s3-material", "s3-material/replacement"):
+                paths.append(f"run/{directory}/read-set-workload.json")
+                for index in range(3):
+                    paths.extend(f"run/{directory}/read-set-{kind}-{index}.{suffix}"
+                                 for kind, suffix in (("input", "bin"), ("expected", "rgba"), ("readback", "rgba")))
+            reasons.extend(scenario_entry_failures(entry, identifier, retained, attempt_root, path.parent,
+                                                   "read-set", paths))
+    return result(kind, not reasons, reasons, path=str(path), entries=len(entries))
 
 
 def main() -> int:
@@ -809,22 +1483,24 @@ def main() -> int:
         checks.append(diagnostics_review(attempt, args.closure))
         checks.append(capability_review(attempt, args.closure))
         checks.append(measurement_review(attempt, args.closure))
-    checks.append(external_review(args.visual_review, set(selected_identifier for selected_identifier in (args.dx12_attempt, args.wgl_attempt)), "reviewed visual output"))
-    test_reviews = [external_review(path, set((args.dx12_attempt, args.wgl_attempt)), "linked focused test evidence") for path in args.test_evidence]
+    checks.append(external_review(args.visual_review, set(selected_identifier for selected_identifier in (args.dx12_attempt, args.wgl_attempt)), "reviewed visual output", selected, args.closure))
+    test_reviews = [external_review(path, set((args.dx12_attempt, args.wgl_attempt)), "linked focused test evidence", selected, args.closure) for path in args.test_evidence]
     if not test_reviews:
         checks.append(result("linked focused test evidence", False, ["no test evidence links supplied"], count=0))
     else:
         checks.extend(test_reviews)
     identifiers = {args.dx12_attempt, args.wgl_attempt}
     checks.append(external_review(args.fault_review, identifiers,
-                                  "reviewed native failure, loss, and device-replacement evidence"))
+                                  "reviewed native failure, loss, and device-replacement evidence", selected, args.closure))
     checks.append(external_review(args.readset_review, identifiers,
-                                  "reviewed read-set, alias, import, and plan-reuse evidence"))
+                                  "reviewed read-set, alias, import, and plan-reuse evidence", selected, args.closure))
     evidence_complete = bool(checks) and all(item["status"] == "passed" for item in checks)
-    report = {"schema_version": 1, "scope": "S0/S1 bounded closure review",
+    report = {"schema_version": 1, "scope": "S0-S3 bounded integration evidence review",
               "selected_attempts": {key: value.get("id") for key, value in selected.items()},
               "checks": checks,
               "evidence_status": "all_required_evidence_present" if evidence_complete else "open",
+              "historical_foundation_support_decision": "not_consulted_for_current_evidence",
+              "stage_support_decision": "not_made_by_this_tool",
               "stage_closure_decision": "not_made_by_this_tool"}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

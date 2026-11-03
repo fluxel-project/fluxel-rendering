@@ -92,6 +92,10 @@ source = "git+https://github.com/fluxel-project/fluxel-bases.git?rev=c5fdaa993c1
 [[package]]
 name = "fluxel-material"
 version = "0.16.0"
+dependencies = [
+ "fluxel-assets",
+ "fluxel-shader",
+]
 
 [[package]]
 name = "fluxel-naga"
@@ -174,6 +178,9 @@ dependencies = [
 [[package]]
 name = "fluxel-shader"
 version = "0.16.0"
+dependencies = [
+ "naga",
+]
 
 [[package]]
 name = "foldhash"

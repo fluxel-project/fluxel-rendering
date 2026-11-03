@@ -8,3 +8,6 @@ description = "Logical shader composition and interfaces for Fluxel"
 repository = "https://github.com/fluxel-project/fluxel-rendering"
 readme = "README.md"
 publish = false
+
+[dependencies]
+naga = { version = "27.0.3", features = ["wgsl-in"] }

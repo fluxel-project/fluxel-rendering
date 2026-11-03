@@ -8,3 +8,7 @@ description = "Material functions and typed composition for Fluxel"
 repository = "https://github.com/fluxel-project/fluxel-rendering"
 readme = "README.md"
 publish = false
+
+[dependencies]
+fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "c5fdaa993c13feb6b55b23fc766c22c9733836f2", version = "=0.13.4" }
+fluxel-shader = { path = "../shader" }

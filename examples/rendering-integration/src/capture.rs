@@ -13,6 +13,7 @@ pub(crate) fn capture_client(
     output: &Path,
     frame: usize,
     expected_extent: [u32; 2],
+    expected_rgba: [u8; 4],
 ) -> Result<(), Box<dyn Error>> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
@@ -200,8 +201,79 @@ pub(crate) fn capture_client(
             frame, actual_extent[0], actual_extent[1], bmp_name, square_corners,
         ),
     )?;
+    let verdict = validate_capture_pixels(&pixels, actual_extent, expected_rgba);
+    let verdict_path = output.join(format!("surface-client-frame-{frame}.verdict.json"));
+    fs::write(
+        &verdict_path,
+        format!(
+            "{{\"schemaVersion\":1,\"frame\":{},\"image\":{},\"oracle\":\"desktop-capture-corners-and-stable-triangle-interior\",\"status\":{}}}\n",
+            frame,
+            crate::json_string(&bmp_name),
+            if verdict.is_ok() {
+                "\"passed\""
+            } else {
+                "\"failed\""
+            },
+        ),
+    )?;
+    if let Err(reason) = verdict {
+        return Err(format!(
+            "native client capture visual oracle failed; retained {bmp_name}: {reason}"
+        )
+        .into());
+    }
     Ok(())
 }
+
+/// Validates a desktop capture without using RHI readback data.
+fn validate_capture_pixels(
+    pixels: &[u8],
+    extent: [u32; 2],
+    expected_rgba: [u8; 4],
+) -> Result<(), String> {
+    let width = usize::try_from(extent[0]).map_err(|error| error.to_string())?;
+    let height = usize::try_from(extent[1]).map_err(|error| error.to_string())?;
+    if width == 0 || height == 0 {
+        return Err("capture extent must be nonzero".into());
+    }
+    if pixels.len() != width.saturating_mul(height).saturating_mul(4) {
+        return Err("capture byte length does not match its client extent".into());
+    }
+    let rgb_at = |x: usize, y: usize| -> [u8; 3] {
+        let offset = (y * width + x) * 4;
+        [pixels[offset + 2], pixels[offset + 1], pixels[offset]]
+    };
+    for (x, y) in [
+        (0, 0),
+        (width - 1, 0),
+        (0, height - 1),
+        (width - 1, height - 1),
+    ] {
+        if rgb_at(x, y) != [0, 0, 0] {
+            return Err(format!(
+                "background corner ({x},{y}) was {:?}, expected black",
+                rgb_at(x, y)
+            ));
+        }
+    }
+    // The fixture triangle uses NDC points (-.75,-.65), (.55,-.50), and
+    // (-.20,.75). Their centroid stays well clear of every raster edge at all
+    // three surface extents, so it is a robust native-display sample.
+    let x = (width * 8) / 20;
+    let y = (height * 57) / 100;
+    let expected = [expected_rgba[0], expected_rgba[1], expected_rgba[2]];
+    if rgb_at(x, y) != expected {
+        return Err(format!(
+            "triangle interior ({x},{y}) was {:?}, expected {expected:?}",
+            rgb_at(x, y)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "tests/capture.rs"]
+mod tests;
 
 /// Restore the fixture's ordinary stacking order even if capture fails.
 struct RaisedWindow(windows::Win32::Foundation::HWND);

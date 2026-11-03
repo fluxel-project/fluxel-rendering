@@ -1,6 +1,7 @@
-"""Stdlib regression checks for immutable smoke-runner attempt evidence."""
+"""Stdlib regression checks for immutable S0-S3 smoke-runner attempt evidence."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,102 @@ SPEC.loader.exec_module(smoke)
 
 
 class SmokeRunnerTests(unittest.TestCase):
+    def test_build_mode_records_recognized_focused_test_counts(self) -> None:
+        """The real CLI path must retain tests without replacing the manifest path."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifact = root / "examples" / "rendering-integration"
+            artifact.mkdir(parents=True)
+            (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            (root / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+            (artifact / "Cargo.toml").write_text(
+                '[package]\nname = "rendering-integration"\nversion = "0.0.0"\nedition = "2021"\n',
+                encoding="utf-8",
+            )
+            (artifact / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+
+            def successful_command(command, _cwd, _timeout, directory, _environment=None):
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / "stdout.log").write_text(
+                    "Ran 3 tests in 0.001s\nOK\n"
+                    if command[:3] == [sys.executable, "-m", "unittest"] else "",
+                    encoding="utf-8",
+                )
+                (directory / "stderr.log").write_text("", encoding="utf-8")
+                return smoke.log_result(directory, 0, False, "parent_exited")
+
+            checkout = {"path": str(root), "revision": "fixture", "dirty": False,
+                        "role": "local_checkout_inventory"}
+            with (mock.patch.object(smoke, "ROOT", root),
+                  mock.patch.object(smoke, "ARTIFACT", artifact),
+                  mock.patch.object(smoke, "checkout_inventory", return_value=checkout),
+                  mock.patch.object(smoke, "build_environment", return_value={"status": "auditable"}),
+                  mock.patch.object(smoke, "command_output", return_value="fixture"),
+                  mock.patch.object(smoke, "built_fluxel_packages", return_value=[]),
+                  mock.patch.object(smoke, "verify_built_sources", return_value={"status": "verified"}),
+                  mock.patch.object(smoke, "verify_git_checkouts", return_value={"status": "verified"}),
+                  mock.patch.object(smoke, "source_consistency", return_value={"status": "stable", "changed_inputs": []}),
+                  mock.patch.object(smoke, "run_command", side_effect=successful_command),
+                  mock.patch.object(sys, "argv", [
+                      "smoke.py", "--backend", "dx12", "--mode", "build",
+                      "--test-command-json", json.dumps([sys.executable, "-m", "unittest"]),
+                  ])):
+                self.assertEqual(smoke.main(), 0)
+
+            manifest = root / "target/integration/s0-s3/fixture/manifest.json"
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+            focused = [entry for entry in recorded["attempts"][-1]["commands"] if entry["kind"] == "test"]
+            self.assertEqual(len(focused), 1)
+            self.assertTrue(focused[0]["result"]["test_command_recognized"])
+            self.assertEqual(focused[0]["result"]["executed"], 3)
+
+    def test_build_mode_rejects_focused_test_command_that_runs_zero_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifact = root / "examples" / "rendering-integration"
+            artifact.mkdir(parents=True)
+            (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            (root / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+            (artifact / "Cargo.toml").write_text(
+                '[package]\nname = "rendering-integration"\nversion = "0.0.0"\nedition = "2021"\n',
+                encoding="utf-8",
+            )
+            (artifact / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+
+            def zero_test_command(command, _cwd, _timeout, directory, _environment=None):
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / "stdout.log").write_text(
+                    "Ran 0 tests in 0.001s\nOK\n"
+                    if command[:3] == [sys.executable, "-m", "unittest"] else "",
+                    encoding="utf-8",
+                )
+                (directory / "stderr.log").write_text("", encoding="utf-8")
+                return smoke.log_result(directory, 0, False, "parent_exited")
+
+            checkout = {"path": str(root), "revision": "fixture", "dirty": False,
+                        "role": "local_checkout_inventory"}
+            with (mock.patch.object(smoke, "ROOT", root),
+                  mock.patch.object(smoke, "ARTIFACT", artifact),
+                  mock.patch.object(smoke, "checkout_inventory", return_value=checkout),
+                  mock.patch.object(smoke, "build_environment", return_value={"status": "auditable"}),
+                  mock.patch.object(smoke, "command_output", return_value="fixture"),
+                  mock.patch.object(smoke, "built_fluxel_packages", return_value=[]),
+                  mock.patch.object(smoke, "verify_built_sources", return_value={"status": "verified"}),
+                  mock.patch.object(smoke, "verify_git_checkouts", return_value={"status": "verified"}),
+                  mock.patch.object(smoke, "source_consistency", return_value={"status": "stable", "changed_inputs": []}),
+                  mock.patch.object(smoke, "run_command", side_effect=zero_test_command),
+                  mock.patch.object(sys, "argv", [
+                      "smoke.py", "--backend", "dx12", "--mode", "build",
+                      "--test-command-json", json.dumps([sys.executable, "-m", "unittest"]),
+                  ])):
+                self.assertEqual(smoke.main(), 1)
+
+            manifest = root / "target/integration/s0-s3/fixture/manifest.json"
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+            focused = [entry for entry in recorded["attempts"][-1]["commands"] if entry["kind"] == "test"]
+            self.assertEqual(focused[0]["result"]["executed"], 0)
+            self.assertTrue(focused[0]["result"]["test_command_recognized"])
+
     def test_attempt_binary_survives_the_next_backend_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -86,8 +183,17 @@ class SmokeRunnerTests(unittest.TestCase):
                   mock.patch.object(sys, "argv", ["smoke.py", "--backend", "dx12"])):
                 self.assertEqual(smoke.main(), 2)
                 run.assert_not_called()
-            manifest = root / "target/integration/s0-s1/review/manifest.json"
-            attempt = json.loads(manifest.read_text(encoding="utf-8"))["attempts"][0]
+            manifest = root / "target/integration/s0-s3/review/manifest.json"
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(recorded["schema_version"], 3)
+            self.assertEqual(recorded["stage"], "S0-S3 integration evidence")
+            historical = recorded["historical_foundation_support_decision"]
+            self.assertEqual(historical["status"], "historical_reference_only")
+            self.assertTrue(historical["cannot_approve_current_support"])
+            self.assertNotIn("support_decision", recorded)
+            self.assertIn("s2-texture", recorded["attempts"][0]["workload"]["selection"])
+            self.assertIn("s3-material-replacement", recorded["attempts"][0]["workload"]["selection"])
+            attempt = recorded["attempts"][0]
             self.assertEqual(attempt["runner_exit_status"], 2)
             result = attempt["commands"][0]["result"]
             self.assertEqual(result["child_process_lifecycle"], "not_started")
@@ -115,6 +221,10 @@ class SmokeRunnerTests(unittest.TestCase):
         locked = [{"name": name, "source": source + "#abc"} for name in names]
         inventory = [{"name": name, "package_id": source + "#" + name + "@0.1.0"} for name in names]
         inventory.append({"name": "fluxel-renderer", "package_id": "path+file:///renderer", "manifest_path": str(smoke.ROOT / "crates/renderer/Cargo.toml")})
+        inventory.extend([
+            {"name": "fluxel-shader", "package_id": "path+file:///shader", "manifest_path": str(smoke.ROOT / "crates/shader/Cargo.toml")},
+            {"name": "fluxel-material", "package_id": "path+file:///material", "manifest_path": str(smoke.ROOT / "crates/material/Cargo.toml")},
+        ])
         self.assertEqual(smoke.verify_built_sources(inventory, locked)["status"], "verified")
         inventory[1]["package_id"] = "path+file:///override#fluxel-rhi@0.1.0"
         report = smoke.verify_built_sources(inventory, locked)
@@ -139,6 +249,160 @@ class SmokeRunnerTests(unittest.TestCase):
             self.assertEqual(report["status"], "changed")
             self.assertIsNone(report["changed_inputs"][0]["after_sha256"])
 
+    def test_build_scripts_and_cargo_config_are_closed_without_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative, content in {
+                "Cargo.toml": "[workspace]\n",
+                "crates/shader/Cargo.toml": "[package]\nname='shader'\n",
+                "crates/shader/build.rs": "fn main() {}\n",
+                "examples/rendering-integration/Cargo.toml": "[package]\nname='consumer'\n",
+                ".cargo/config.toml": "[build]\n",
+                ".cargo/credentials.toml": "token = 'secret'\n",
+                "crates/shader/draft/private.rs": "secret\n",
+                "crates/shader/AGENTS.md": "local\n",
+            }.items():
+                path = root / relative; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            resolved_root = root.resolve()
+            paths = {path.relative_to(resolved_root).as_posix() for path in smoke.source_input_paths(root)}
+            self.assertIn("crates/shader/build.rs", paths)
+            self.assertIn(".cargo/config.toml", paths)
+            self.assertNotIn(".cargo/credentials.toml", paths)
+            self.assertNotIn("crates/shader/draft/private.rs", paths)
+            self.assertNotIn("crates/shader/AGENTS.md", paths)
+            inputs = [{"path": name, "sha256": smoke.sha256(root / name)} for name in sorted(paths)]
+            self.assertEqual(smoke.source_consistency(inputs, root)["status"], "stable")
+            (root / "crates/shader/build.rs").write_text("changed\n", encoding="utf-8")
+            self.assertEqual(smoke.source_consistency(inputs, root)["status"], "changed")
+            (root / "crates/shader/build.rs").write_text("fn main() {}\n", encoding="utf-8")
+            (root / ".cargo/config.toml").unlink()
+            without_config = [{"path": name, "sha256": smoke.sha256(root / name)}
+                              for name in sorted(paths - {".cargo/config.toml"})]
+            (root / ".cargo/config.toml").write_text("[target]\n", encoding="utf-8")
+            self.assertEqual(smoke.source_consistency(without_config, root)["status"], "changed")
+
+    def test_build_environment_never_records_override_values(self) -> None:
+        with mock.patch.dict(smoke.os.environ, {"RUSTFLAGS": "--cfg secret_value"}, clear=False):
+            evidence = smoke.build_environment()
+        self.assertEqual(evidence["status"], "rejected")
+        self.assertNotIn("--cfg secret_value", json.dumps(evidence))
+        self.assertIn("sha256", evidence["overrides"]["RUSTFLAGS"])
+
+    def test_probable_secret_or_default_cargo_home_config_rejects_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); secret = root / "crates/shader/local.key"
+            secret.parent.mkdir(parents=True); secret.write_text("not archived", encoding="utf-8")
+            self.assertEqual(smoke.sensitive_build_inputs(root), 1)
+            self.assertEqual(smoke.build_environment(root)["status"], "rejected")
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary); (home / ".cargo").mkdir()
+            (home / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+            with mock.patch.object(smoke.Path, "home", return_value=home):
+                self.assertEqual(smoke.build_environment(Path(temporary) / "workspace")["status"], "rejected")
+
+    def test_parent_cargo_config_and_target_rustflags_are_rejected_without_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary); root = parent / "workspace"
+            (root / "examples/rendering-integration").mkdir(parents=True)
+            config = parent / ".cargo/config.toml"; config.parent.mkdir()
+            config.write_text("[build]\n", encoding="utf-8")
+            with mock.patch.dict(smoke.os.environ, {"CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS": "-C link-arg=secret"}, clear=False):
+                evidence = smoke.build_environment(root)
+            self.assertEqual(evidence["status"], "rejected")
+            self.assertNotIn("-C link-arg=secret", json.dumps(evidence))
+            self.assertTrue(any("outside" in reason for reason in evidence["reasons"]))
+
+    def test_cargo_config_with_auth_assignment_is_rejected_and_not_archived(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); config = root / ".cargo/config.toml"
+            config.parent.mkdir(); config.write_text("token = 'private'\n", encoding="utf-8")
+            paths = {path.relative_to(root.resolve()).as_posix() for path in smoke.source_input_paths(root)}
+            self.assertNotIn(".cargo/config.toml", paths)
+            evidence = smoke.build_environment(root)
+            self.assertEqual(evidence["status"], "rejected")
+            self.assertNotIn("private", json.dumps(evidence))
+
+    def test_external_link_and_dynamic_rust_include_are_rejected_without_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); source = root / "crates/shader/src/lib.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('const DATA: &str = include_str!(concat!("../", "outside.txt"));\n', encoding="utf-8")
+            self.assertGreater(smoke.closure_escape_count(root), 0)
+            evidence = smoke.build_environment(root)
+            self.assertEqual(evidence["status"], "rejected")
+            self.assertNotIn("outside.txt", json.dumps(evidence))
+
+    def test_build_script_is_snapshotted_but_rejected_without_a_closed_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); build = root / "crates/shader/build.rs"
+            build.parent.mkdir(parents=True); build.write_text("fn main() {}\n", encoding="utf-8")
+            self.assertEqual(smoke.uncontrolled_build_script_count(root), 1)
+            self.assertEqual(smoke.build_environment(root)["status"], "rejected")
+
+    def test_target_escape_link_is_ignored_before_link_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); target = root / "crates/shader/target/outside"
+            target.parent.mkdir(parents=True)
+            outside = root.parent / "outside-rust-include.txt"; outside.write_text("outside", encoding="utf-8")
+            try:
+                os.symlink(outside, target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            self.assertEqual(smoke.closure_escape_count(root), 0)
+
+    @unittest.skipUnless(os.name == "nt", "junctions are Windows-only")
+    def test_external_junction_is_rejected_but_target_junction_is_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "workspace"; root.mkdir()
+            outside = Path(temporary) / "outside"; outside.mkdir()
+            external = root / "crates/shader/external-junction"; external.parent.mkdir(parents=True)
+            ignored = root / "crates/shader/target/ignored-junction"; ignored.parent.mkdir(parents=True)
+            def junction(link: Path) -> None:
+                command = (f"$link = '{str(link).replace("'", "''")}'; "
+                           f"$target = '{str(outside).replace("'", "''")}'; "
+                           "New-Item -ItemType Junction -Path $link -Target $target -ErrorAction Stop | Out-Null")
+                result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                                        capture_output=True, text=True)
+                if result.returncode != 0:
+                    self.skipTest("junction creation is unavailable on this platform or account")
+            def remove_junction(link: Path) -> None:
+                command = f"Remove-Item -LiteralPath '{str(link).replace("'", "''")}' -Force -ErrorAction Stop"
+                subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                               capture_output=True, text=True, check=True)
+            try:
+                junction(external)
+                self.assertGreater(smoke.closure_escape_count(root), 0)
+                remove_junction(external)
+                junction(ignored)
+                self.assertEqual(smoke.closure_escape_count(root), 0)
+            finally:
+                for link in (external, ignored):
+                    if link.exists() or getattr(link, "is_junction", lambda: False)():
+                        remove_junction(link)
+
+    def test_actual_test_count_rejects_zero_or_non_test_and_counts_runner_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); log = root / "stdout.log"; err = root / "stderr.log"
+            err.write_text("", encoding="utf-8")
+            result = {"raw_logs": [{"path": str(log)}, {"path": str(err)}]}
+            log.write_text("Ran 0 tests in 0.000s\nOK\n", encoding="utf-8")
+            self.assertEqual(smoke.actual_test_count([sys.executable, "-m", "unittest"], result), 0)
+            log.write_text("Ran 3 tests in 0.010s\nOK\n", encoding="utf-8")
+            self.assertEqual(smoke.actual_test_count([sys.executable, "-m", "unittest"], result), 3)
+            log.write_text("test result: ok. 2 passed; 0 failed;\ntest result: ok. 4 passed; 0 failed;\n", encoding="utf-8")
+            self.assertEqual(smoke.actual_test_count(["cargo", "test"], result), 6)
+            self.assertIsNone(smoke.actual_test_count(["echo", "Ran 9 tests"], result))
+
+    def test_controlled_child_environment_excludes_arbitrary_fluxel_and_secret_values(self) -> None:
+        with mock.patch.dict(smoke.os.environ, {"PATH": "toolchain", "API_KEY": "secret",
+                                                "FLUXEL_UNTRUSTED": "leak"}, clear=True):
+            environment, evidence = smoke.controlled_child_environment({"FLUXEL_DX12_DEBUG": "1"})
+        self.assertEqual(environment, {"PATH": "toolchain", "FLUXEL_DX12_DEBUG": "1"})
+        self.assertNotIn("API_KEY", evidence)
+        self.assertNotIn("FLUXEL_UNTRUSTED", evidence)
+        self.assertNotIn("toolchain", json.dumps(evidence))
+
     def test_both_surface_backends_require_host_to_be_compiled(self) -> None:
         source = "git+https://example.test/pinned?rev=abc"
         names = ["fluxel-assets", "fluxel-rhi", "fluxel-host"]
@@ -146,6 +410,10 @@ class SmokeRunnerTests(unittest.TestCase):
         inventory = [{"name": name, "package_id": source + "#" + name + "@0.1.0"} for name in names]
         inventory.append({"name": "fluxel-renderer", "package_id": "path+file:///renderer",
                           "manifest_path": str(smoke.ROOT / "crates/renderer/Cargo.toml")})
+        inventory.extend([
+            {"name": "fluxel-shader", "package_id": "path+file:///shader", "manifest_path": str(smoke.ROOT / "crates/shader/Cargo.toml")},
+            {"name": "fluxel-material", "package_id": "path+file:///material", "manifest_path": str(smoke.ROOT / "crates/material/Cargo.toml")},
+        ])
         for backend in smoke.BACKENDS:
             required = smoke.required_built_packages(backend)
             self.assertIn("fluxel-host", required)

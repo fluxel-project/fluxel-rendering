@@ -1,4 +1,4 @@
-"""Regression tests for the bounded S0/S1 closure reviewer."""
+"""Regression tests for the bounded S0-S3 integration evidence reviewer."""
 import importlib.util
 import copy
 import json
@@ -60,14 +60,14 @@ pub enum CooperativeMatrixScope {
 """
 
 
-def capability_fixture(compute: object = True) -> dict:
-    return {"adapter": "actual adapter", "deviceId": "DeviceId(1)", "compute": compute,
+def capability_fixture(compute: object = True, device_id: str = "DeviceId(1)") -> dict:
+    return {"backend": "native-gl-wgl", "adapter": "actual adapter", "deviceId": device_id, "compute": compute,
             "storageBuffers": True, "storageTextures": False, "nativeInterop": True,
             "debugMarkers": True, "multiQueue": False, "lanes": 1,
             "limits": {"maxBufferBytes": 4096, "maxVertexBuffers": 4, "maxVertexAttributes": 8, "maxColorAttachments": 4},
             "deviceCapabilities": {"compute": compute, "storage_buffers": True, "storage_textures": False,
                 "native_interop": True, "debug_markers": True, "multi_queue": False,
-                "lanes": [{"id": {"device": "DeviceId(1)", "ordinal": 0}, "class": "graphics", "routes": []}],
+                "lanes": [{"id": {"device": device_id, "ordinal": 0}, "class": "graphics", "routes": []}],
                 "cooperative_matrix_configurations": [{"m": 16, "n": 16, "k": 16, "a_type": "float16", "b_type": "bfloat16",
                     "c_type": "float16", "result_type": "float16", "saturating_accumulation": False, "scope": "queue_family"}],
                 "limits": {"max_buffer_bytes": 4096, "max_vertex_buffers": 4, "max_vertex_attributes": 8,
@@ -75,6 +75,19 @@ def capability_fixture(compute: object = True) -> dict:
 
 
 class ReviewTests(unittest.TestCase):
+    def write_capability_review_evidence(self, run: Path, primary: dict, replacement: dict) -> None:
+        (run / "s2-shader").mkdir(exist_ok=True)
+        (run / "s2-shader-replacement-device").mkdir(exist_ok=True)
+        (run / "capabilities.json").write_text(json.dumps(primary), encoding="utf-8")
+        (run / "s2-shader-replacement-device/capabilities.json").write_text(json.dumps(replacement), encoding="utf-8")
+        (run / "workload.json").write_text(json.dumps({"adapter": "actual adapter"}), encoding="utf-8")
+        (run / "device-replacement.json").write_text(json.dumps({
+            "oldDeviceId": "DeviceId(1)", "replacementDeviceId": "DeviceId(2)"}), encoding="utf-8")
+        (run / "s2-shader/s2-shader-workload.json").write_text(
+            json.dumps({"deviceId": "DeviceId(1)"}), encoding="utf-8")
+        (run / "s2-shader-replacement-device/s2-shader-workload.json").write_text(
+            json.dumps({"deviceId": "DeviceId(2)"}), encoding="utf-8")
+
     def test_compute_capability_accepts_actual_support_and_requires_boolean(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             closure = Path(temporary)
@@ -87,9 +100,50 @@ class ReviewTests(unittest.TestCase):
                        "built_git_checkout_verification": {"checkouts": [{"path": str(closure / "rhi")}]}}
             for capability in (True, False, None, "false", 0):
                 with self.subTest(capability=capability):
-                    (run / "capabilities.json").write_text(json.dumps(capability_fixture(capability)), encoding="utf-8")
+                    self.write_capability_review_evidence(
+                        run, capability_fixture(capability), capability_fixture(True, "DeviceId(2)"))
                     report = review.capability_review(attempt, closure)
                     self.assertEqual(report["status"], "passed" if isinstance(capability, bool) else "open")
+
+    def test_capability_review_rejects_missing_extra_and_misattributed_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            closure = Path(temporary)
+            run = closure / "run"
+            run.mkdir()
+            declaration = closure / "rhi/crates/core/src/api/foundation.rs"
+            declaration.parent.mkdir(parents=True)
+            declaration.write_text(CAPABILITY_DECLARATION, encoding="utf-8")
+            attempt = {"id": "wgl", "backend": "native-gl-wgl", "directory": ".",
+                       "built_git_checkout_verification": {"checkouts": [{"path": str(closure / "rhi")} ]}}
+            self.write_capability_review_evidence(run, capability_fixture(), capability_fixture(True, "DeviceId(2)"))
+            self.assertEqual(review.capability_review(attempt, closure)["status"], "passed")
+            for mutation in ("missing_primary", "missing_replacement", "extra", "primary_wrong_device",
+                             "replacement_wrong_device", "primary_wrong_adapter", "replacement_wrong_adapter"):
+                with self.subTest(mutation=mutation):
+                    self.write_capability_review_evidence(run, capability_fixture(), capability_fixture(True, "DeviceId(2)"))
+                    if mutation == "missing_primary":
+                        (run / "capabilities.json").unlink()
+                    elif mutation == "missing_replacement":
+                        (run / "s2-shader-replacement-device/capabilities.json").unlink()
+                    elif mutation == "extra":
+                        (run / "spoofed-capabilities.json").write_text(json.dumps(capability_fixture()), encoding="utf-8")
+                    elif mutation == "primary_wrong_device":
+                        (run / "capabilities.json").write_text(
+                            json.dumps(capability_fixture(True, "DeviceId(2)")), encoding="utf-8")
+                    elif mutation == "replacement_wrong_device":
+                        (run / "s2-shader-replacement-device/capabilities.json").write_text(
+                            json.dumps(capability_fixture(True, "DeviceId(1)")), encoding="utf-8")
+                    else:
+                        path = run / ("capabilities.json" if mutation == "primary_wrong_adapter"
+                                      else "s2-shader-replacement-device/capabilities.json")
+                        value = capability_fixture(True, "DeviceId(1)" if mutation == "primary_wrong_adapter" else "DeviceId(2)")
+                        value["adapter"] = "spoofed adapter"
+                        path.write_text(json.dumps(value), encoding="utf-8")
+                    self.assertEqual(review.capability_review(attempt, closure)["status"], "open")
+                    for path in (run / "capabilities.json", run / "s2-shader-replacement-device/capabilities.json",
+                                 run / "spoofed-capabilities.json"):
+                        if path.exists():
+                            path.unlink()
 
     def test_complete_capabilities_reject_omissions_schema_changes_and_foreign_lanes(self) -> None:
         original = capability_fixture()
@@ -155,7 +209,7 @@ class ReviewTests(unittest.TestCase):
             for path in (run / f"input-{index}.bin", run / f"expected-{index}.bin", run / f"readback-{index}.bin", run / "raster" / f"raster-input-{index}.bin", run / "raster" / f"raster-readback-{index}.rgba", run / "compute" / f"compute-input-{index}.bin", run / "compute" / f"compute-readback-{index}.bin"):
                 path.write_bytes(b"x")
         (run / "surface" / "surface-events.jsonl").write_text("{}\n", encoding="utf-8")
-        log = directory / "stdout.log"; log.write_text("ok\n", encoding="utf-8")
+        log = directory / "stdout.log"; log.write_text("Ran 1 test\nOK\n", encoding="utf-8")
         return {"id": identifier, "backend": backend, "mode": "run", "runner_exit_status": 0,
                 "directory": str(directory.relative_to(closure)), "locks": [], "source_inputs": [],
                 "source_consistency_after_build": {"status": "stable"}, "source_consistency_after_attempt": {"status": "stable"},
@@ -187,6 +241,88 @@ class ReviewTests(unittest.TestCase):
             directory = Path(temporary); review_file = directory / "visual.json"
             review_file.write_text(json.dumps({"status": "reviewed", "attempt_ids": ["dx", "wgl"]}), encoding="utf-8")
             self.assertEqual(review.external_review(review_file, {"dx", "wgl"}, "visual")["status"], "open")
+
+    def test_typed_external_review_rejects_unretained_claims_and_accepts_raw_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            closure = Path(temporary)
+            attempt = self.make_attempt(closure, "dx", "dx12")
+            log = closure / attempt["directory"] / "stdout.log"
+            attempt["commands"].append({"kind": "test", "command": ["python", "-m", "unittest"],
+                "result": {"exit_status": 0, "executed": 1, "test_command_recognized": True, "raw_logs": [record(log)]}})
+            review_file = closure / "tests.json"
+            forged = closure / "forged.log"; forged.write_text("forged\n", encoding="utf-8")
+            base = {"status": "reviewed", "attempt_ids": ["dx"], "evidence": [{
+                "attempt_id": "dx", "command_index": 1,
+                "log": record(forged),
+            }]}
+            review_file.write_text(json.dumps(base), encoding="utf-8")
+            selected = {"dx12": attempt}
+            self.assertEqual(review.external_review(review_file, {"dx"}, "linked focused test evidence", selected, closure)["status"], "open")
+            base["evidence"][0]["log"] = record(log)
+            review_file.write_text(json.dumps(base), encoding="utf-8")
+            self.assertEqual(review.external_review(review_file, {"dx"}, "linked focused test evidence", selected, closure)["status"], "passed")
+            base["evidence"][0]["attempt_id"] = "wrong-id"
+            base["attempt_ids"] = ["wrong-id"]
+            review_file.write_text(json.dumps(base), encoding="utf-8")
+            self.assertEqual(review.external_review(review_file, {"wrong-id"}, "linked focused test evidence", selected, closure)["status"], "open")
+            base["evidence"][0]["attempt_id"] = "dx"
+            base["attempt_ids"] = ["dx"]
+            attempt["commands"][1]["result"]["exit_status"] = 1
+            review_file.write_text(json.dumps(base), encoding="utf-8")
+            self.assertEqual(review.external_review(review_file, {"dx"}, "linked focused test evidence", selected, closure)["status"], "open")
+
+    def test_visual_review_rejects_failed_human_verdict_even_with_real_capture_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            closure = Path(temporary); attempt = self.make_attempt(closure, "dx", "dx12")
+            surface = closure / attempt["directory"] / "run" / "surface"
+            bmp = surface / "surface-client-frame-0.bmp"; bmp.write_bytes(b"BM")
+            capture = surface / "surface-client-frame-0.capture.json"
+            capture.write_text(json.dumps({"image": bmp.name, "automaticVisualPass": False}), encoding="utf-8")
+            verdict = surface / "surface-client-frame-0.verdict.json"
+            verdict.write_text(json.dumps({"image": bmp.name, "status": "passed"}), encoding="utf-8")
+            attempt["commands"][0]["result"]["retained_files"].extend([record(bmp), record(capture), record(verdict)])
+            review_file = closure / "visual.json"
+            review_file.write_text(json.dumps({"status": "reviewed", "attempt_ids": ["dx"], "evidence": [{
+                "attempt_id": "dx", "frames": [{"screenshot": record(bmp), "capture": record(capture),
+                "verdict": record(verdict), "human_verdict": "failed"}],
+            }]}), encoding="utf-8")
+            self.assertEqual(review.external_review(review_file, {"dx"}, "reviewed visual output", {"dx": attempt}, closure)["status"], "open")
+
+    def test_visual_review_rejects_retained_extra_surface_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            closure = Path(temporary); attempt = self.make_attempt(closure, "dx", "dx12")
+            surface = closure / attempt["directory"] / "run" / "surface"
+            frames = []
+            retained = attempt["commands"][0]["result"]["retained_files"]
+            for index in range(4):
+                bmp = surface / f"surface-client-frame-{index}.bmp"; bmp.write_bytes(b"BM")
+                capture = surface / f"surface-client-frame-{index}.capture.json"
+                capture.write_text(json.dumps({"image": bmp.name, "automaticVisualPass": False}), encoding="utf-8")
+                verdict = surface / f"surface-client-frame-{index}.verdict.json"
+                verdict.write_text(json.dumps({"image": bmp.name, "status": "passed"}), encoding="utf-8")
+                retained.extend([record(bmp), record(capture), record(verdict)])
+                if index < 3:
+                    frames.append({"screenshot": record(bmp), "capture": record(capture),
+                                   "verdict": record(verdict), "human_verdict": "passed"})
+            review_file = closure / "visual.json"
+            review_file.write_text(json.dumps({"status": "reviewed", "attempt_ids": ["dx"], "evidence": [{
+                "attempt_id": "dx", "frames": frames,
+            }]}), encoding="utf-8")
+            self.assertEqual(review.external_review(
+                review_file, {"dx"}, "reviewed visual output", {"dx": attempt}, closure
+            )["status"], "open")
+
+    def test_fault_review_rejects_an_unrelated_retained_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            closure = Path(temporary); attempt = self.make_attempt(closure, "dx", "dx12")
+            log = closure / attempt["directory"] / "stdout.log"
+            review_file = closure / "fault.json"
+            review_file.write_text(json.dumps({"status": "reviewed", "attempt_ids": ["dx"], "evidence": [{
+                "attempt_id": "dx", "scenario": "device-replacement", "raw_evidence": [record(log)],
+            }]}), encoding="utf-8")
+            self.assertEqual(review.external_review(
+                review_file, {"dx"}, "reviewed native failure, loss, and device-replacement evidence",
+                {"dx": attempt}, closure)["status"], "open")
 
     def test_empty_provenance_cannot_pass_attempt_review(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -280,11 +416,263 @@ class ReviewTests(unittest.TestCase):
             (directory / "read-set-expected-1.rgba").write_bytes(b"tampered")
             self.assertTrue(any("expected image 1" in reason for reason in review.read_set_failures(run)))
 
+    def test_s3_read_set_requires_its_explicit_rgb_expectations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary); directory = run / "s3-material"; directory.mkdir()
+            (directory / "read-set-workload.json").write_text(json.dumps({
+                "workload": "s3-material-read-set-raster-three-generations", "extent": [8, 8],
+                "assetGenerations": [1, 2, 3], "uniformDestinationRanges": [[0, 256], [256, 512], [512, 768]],
+                "sourceByteLengths": [20, 20, 20], "planReuseVerified": True,
+                "snapshotRetentionVerified": True, "perFrameRetirementVerified": True}), encoding="utf-8")
+            tints = ([1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0])
+            texels = ([17, 129, 241, 255], [231, 33, 125, 255], [67, 199, 211, 255])
+            colors = ([17, 0, 0, 255], [0, 33, 0, 255], [0, 0, 211, 255])
+            for index, (tint, texel, color) in enumerate(zip(tints, texels, colors)):
+                (directory / f"read-set-input-{index}.bin").write_bytes(struct.pack("<4f", *tint) + bytes(texel))
+                image = bytes(color) * 64
+                (directory / f"read-set-expected-{index}.rgba").write_bytes(image)
+                (directory / f"read-set-readback-{index}.rgba").write_bytes(image)
+            self.assertEqual(review.read_set_failures(
+                run, "s3-material", "s3-material-read-set-raster-three-generations", [list(color) for color in colors]), [])
+            self.assertTrue(any("explicit expected color 1" in reason for reason in review.read_set_failures(
+                run, "s3-material", "s3-material-read-set-raster-three-generations",
+                [[17, 0, 0, 255], [0, 0, 33, 255], [0, 0, 211, 255]])))
+
+    def test_s3_replacement_swizzle_oracle_accepts_valid_and_rejects_tampering(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary); directory = run / "s3-material" / "replacement"; directory.mkdir(parents=True)
+            (directory / "read-set-workload.json").write_text(json.dumps({
+                "workload": "s3-material-replacement-read-set-raster-three-generations", "extent": [8, 8],
+                "assetGenerations": [4, 5, 6], "uniformDestinationRanges": [[0, 256], [256, 512], [512, 768]],
+                "sourceByteLengths": [20, 20, 20], "planReuseVerified": True,
+                "snapshotRetentionVerified": True, "perFrameRetirementVerified": True}), encoding="utf-8")
+            tints = ([1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0])
+            texels = ([17, 129, 241, 255], [231, 33, 125, 255], [67, 199, 211, 255])
+            colors = ([241, 0, 0, 255], [0, 231, 0, 255], [0, 0, 199, 255])
+            for index, (tint, texel, color) in enumerate(zip(tints, texels, colors)):
+                (directory / f"read-set-input-{index}.bin").write_bytes(struct.pack("<4f", *tint) + bytes(texel))
+                image = bytes(color) * 64
+                (directory / f"read-set-expected-{index}.rgba").write_bytes(image)
+                (directory / f"read-set-readback-{index}.rgba").write_bytes(image)
+            arguments = (run, "s3-material/replacement", "s3-material-replacement-read-set-raster-three-generations",
+                         [list(color) for color in colors], (2, 0, 1, 3))
+            self.assertEqual(review.read_set_failures(*arguments), [])
+            damaged_input = bytearray((directory / "read-set-input-0.bin").read_bytes())
+            damaged_input[18] = 1
+            (directory / "read-set-input-0.bin").write_bytes(damaged_input)
+            self.assertTrue(any("explicit expected color 0" in reason for reason in review.read_set_failures(*arguments)))
+            (directory / "read-set-input-0.bin").write_bytes(struct.pack("<4f", *tints[0]) + bytes(texels[0]))
+            (directory / "read-set-readback-2.rgba").write_bytes(b"damaged")
+            self.assertTrue(any("readback 2" in reason for reason in review.read_set_failures(*arguments)))
+
+    def test_s2_mask_cannot_hide_an_arbitrary_edge_region(self) -> None:
+        pixels = bytes(128 * 128 * 4)
+        self.assertTrue(any("mask disagrees" in reason for reason in review.stable_raster_mask_failures(
+            bytes(128 * 128), pixels, [0, 0, 0, 0], "S2 test")))
+
+    def test_shader_admission_route_owned_demands_require_their_rhi_feature_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            root = run / "s2-shader"
+            root.mkdir()
+            capability_fields = {
+                "multiview": False, "push_constants": False, "binding_arrays": False,
+                "runtime_sized_binding_arrays": False, "storage_buffers": False,
+                "storage_textures": False, "nonuniform_uniform_buffer_indexing": False,
+                "nonuniform_storage_buffer_indexing": False,
+                "nonuniform_sampled_texture_indexing": False,
+                "nonuniform_storage_texture_indexing": False,
+                "nonuniform_sampler_indexing": False,
+                "shader_primitive_index": True, "shader_early_depth_test": True,
+                "ray_query": True,
+                "limits": {"max_multiview_views": 0, "max_push_constant_bytes": 0},
+            }
+            (run / "capabilities.json").write_text(
+                json.dumps({"deviceCapabilities": capability_fields}), encoding="utf-8")
+            evidence = {
+                "schemaVersion": 1,
+                "nagaCapabilityDemands": ["primitive-index", "early-depth-test", "ray-query"],
+                "rhiFeatureNames": ["primitive-index", "shader-early-depth-test", "ray-query"],
+                "deviceCapabilities": {
+                    "multiview": False, "pushConstants": False, "bindingArrays": False,
+                    "runtimeSizedBindingArrays": False, "storageBuffers": False,
+                    "storageTextures": False, "nonuniformUniformBufferIndexing": False,
+                    "nonuniformStorageBufferIndexing": False,
+                    "nonuniformSampledTextureIndexing": False,
+                    "nonuniformStorageTextureIndexing": False,
+                    "nonuniformSamplerIndexing": False,
+                    "limits": {"maxMultiviewViews": 0, "maxPushConstantBytes": 0},
+                },
+                "pipelineFacts": {
+                    "multiviewViews": None, "pushConstantBytes": 0, "multisampleCount": 1,
+                    "nonuniform": {"uniformBuffers": False, "storageBuffers": False,
+                                   "sampledTextures": False, "storageTextures": False,
+                                   "samplers": False, "bindingArrays": False,
+                                   "runtimeSizedBindingArrays": False},
+                },
+                "targetEntries": [
+                    {"name": "vs_main", "stage": "vertex", "workgroupSize": None},
+                    {"name": "fs_main", "stage": "fragment", "workgroupSize": None},
+                ],
+                "perDemand": [
+                    {"demand": "primitive-index", "outcome": {"status": "accepted"}},
+                    {"demand": "early-depth-test", "outcome": {"status": "accepted"}},
+                    {"demand": "ray-query", "outcome": {"status": "accepted"}},
+                ],
+                "admission": {"status": "accepted"},
+            }
+            path = root / "shader-admission.json"
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertEqual(review.shader_admission_failures(run, root, "test", True), [])
+
+            evidence["targetEntries"][1]["stage"] = "vertex"
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertTrue(any("Fragment target entry" in reason
+                                for reason in review.shader_admission_failures(run, root, "test", True)))
+            evidence["targetEntries"][1]["stage"] = "fragment"
+
+            evidence["rhiFeatureNames"].remove("shader-early-depth-test")
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertTrue(any("early-depth-test" in reason
+                                for reason in review.shader_admission_failures(run, root, "test", True)))
+
+            evidence["rhiFeatureNames"].append("shader-early-depth-test")
+            evidence["perDemand"][0]["outcome"] = {
+                "status": "refused",
+                "error": {"kind": "unrepresentable", "demand": "primitive-index"},
+            }
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertTrue(any("outcome for primitive-index" in reason
+                                for reason in review.shader_admission_failures(run, root, "test", True)))
+
+            evidence["perDemand"][0]["outcome"] = {"status": "accepted"}
+            capability_fields["shader_primitive_index"] = False
+            (run / "capabilities.json").write_text(
+                json.dumps({"deviceCapabilities": capability_fields}), encoding="utf-8")
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertTrue(any("shader_primitive_index" in reason
+                                for reason in review.shader_admission_failures(run, root, "test", True)))
+
+    def test_s3_replacement_is_a_required_recursive_workload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary); (run / "s3-material").mkdir()
+            reasons = review.s3_material_failures(run)
+            self.assertTrue(any("replacement" in reason.lower() for reason in reasons))
+
+    def test_s3_reflection_requires_both_bindings_shapes_and_fragment_read_access(self) -> None:
+        valid = """
+ShaderInterface {
+    bindings: [
+        ReflectedBinding {
+            group: 0,
+            binding: 1,
+            kind: Texture,
+            shape: Some(
+                Texture2dF32,
+            ),
+            visibility: {
+                Fragment,
+            },
+            entry_access: {
+                EntryPoint { name: "fs_main", stage: Fragment }: BindingAccess {
+                    read: true,
+                    write: false,
+                    query: false,
+                    atomic: false,
+                },
+            },
+        },
+        ReflectedBinding {
+            group: 0,
+            binding: 0,
+            kind: Uniform,
+            shape: Some(
+                Uniform(
+                    Vec4(
+                        F32,
+                    ),
+                ),
+            ),
+            visibility: {
+                Fragment,
+            },
+            entry_access: {
+                EntryPoint { name: "fs_main", stage: Fragment }: BindingAccess {
+                    read: true,
+                    write: false,
+                    query: false,
+                    atomic: false,
+                },
+            },
+        },
+    ],
+}
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "s3-material-interface.txt"
+            path.write_text(valid, encoding="utf-8")
+            self.assertEqual(review.material_interface_failures(path, "S3 Material"), [])
+            path.write_text(valid.replace("shape: Some(\n                Texture2dF32,\n            )", "shape: None"), encoding="utf-8")
+            self.assertTrue(any("binding 1" in reason for reason in review.material_interface_failures(path, "S3 Material")))
+            path.write_text(valid.replace("write: false", "write: true", 1), encoding="utf-8")
+            self.assertTrue(any("binding 1" in reason for reason in review.material_interface_failures(path, "S3 Material")))
+
+    def test_s2_texture_is_a_required_independent_workload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary); run.mkdir(exist_ok=True)
+            self.assertTrue(any("S2 texture" in reason for reason in review.s2_texture_failures(run)))
+
+    def test_s2_pipeline_cache_hit_is_required_and_must_be_true(self) -> None:
+        label = "S2 direct Shader workload"
+        self.assertTrue(review.pipeline_cache_hit_failures({}, label))
+        self.assertTrue(review.pipeline_cache_hit_failures({"pipelineCacheHitVerified": False}, label))
+        self.assertEqual(review.pipeline_cache_hit_failures({"pipelineCacheHitVerified": True}, label), [])
+
     def test_compute_refusal_uses_actual_requirements_on_each_backend(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary); (run / "compute").mkdir()
+            def write_shader_admission(snapshot: dict) -> None:
+                actual = snapshot["deviceCapabilities"]
+                for actual_name in review.ADMISSION_CAPABILITY_FIELDS.values():
+                    actual.setdefault(actual_name, False)
+                actual["limits"].setdefault("max_multiview_views", 0)
+                actual["limits"].setdefault("max_push_constant_bytes", 0)
+                capabilities = {
+                    recorded: actual[actual_name]
+                    for recorded, actual_name in review.ADMISSION_CAPABILITY_FIELDS.items()
+                }
+                capabilities["limits"] = {
+                    recorded: actual["limits"][actual_name]
+                    for recorded, actual_name in review.ADMISSION_LIMIT_FIELDS.items()
+                }
+                (run / "compute" / "shader-admission.json").write_text(json.dumps({
+                    "schemaVersion": 1, "nagaCapabilityDemands": [], "rhiFeatureNames": [],
+                    "deviceCapabilities": capabilities,
+                    "pipelineFacts": {
+                        "multiviewViews": None, "pushConstantBytes": 0, "multisampleCount": 1,
+                        "nonuniform": {"uniformBuffers": False, "storageBuffers": False,
+                                       "sampledTextures": False, "storageTextures": False,
+                                       "samplers": False, "bindingArrays": False,
+                                       "runtimeSizedBindingArrays": False},
+                    },
+                    "targetEntries": [
+                        {"name": "cs_main", "stage": "compute", "workgroupSize": [64, 1, 1]},
+                    ],
+                    "perDemand": [], "admission": {"status": "accepted"},
+                }), encoding="utf-8")
+            (run / "compute" / "compute-composed.wgsl").write_text(
+                "@group(0) @binding(0) var<storage, read_write> values: array<u32>;\n@compute @workgroup_size(64) fn cs_main() {}\n",
+                encoding="utf-8")
+            (run / "compute" / "compute-interface.txt").write_text("compute interface\n", encoding="utf-8")
+            (run / "compute" / "compute-route.json").write_text(
+                json.dumps({"route": "naga", "format": "Wgsl", "environment": "test", "abiKey": "test-abi"}),
+                encoding="utf-8")
             (run / "compute" / "compute-workload.json").write_text(json.dumps({
                 "workload": "s1-fixed-compute-three-generations", "status": "unsupported-before-submission"}), encoding="utf-8")
+            for index in range(3):
+                source = bytes(384)
+                (run / "compute" / f"compute-input-{index}.bin").write_bytes(source)
+                (run / "compute" / f"compute-expected-{index}.bin").write_bytes((7).to_bytes(4, "little") * 96)
             for backend in ("native-gl-wgl", "dx12"):
                 value = capability_fixture(True)
                 limits = value["deviceCapabilities"]["limits"]
@@ -293,10 +681,12 @@ class ReviewTests(unittest.TestCase):
                     candidate = copy.deepcopy(value)
                     if missing == "workgroup_size": candidate["deviceCapabilities"]["limits"]["max_compute_workgroup_size"][0] = 63
                     else: candidate["deviceCapabilities"][missing] = False
+                    write_shader_admission(candidate)
                     (run / "capabilities.json").write_text(json.dumps(candidate), encoding="utf-8")
                     checks = review.compute_requirement_checks(candidate)
                     (run / "compute" / "compute-requirements.json").write_text(json.dumps({"checks": checks, "supported": False}), encoding="utf-8")
                     self.assertEqual(review.compute_failures(run, backend), [], (backend, missing))
+                write_shader_admission(value)
                 (run / "capabilities.json").write_text(json.dumps(value), encoding="utf-8")
                 checks = review.compute_requirement_checks(value)
                 (run / "compute" / "compute-requirements.json").write_text(json.dumps({"checks": checks, "supported": True}), encoding="utf-8")

@@ -1,7 +1,12 @@
-//! Material functions, typed composition, parameter schemas, and evaluation code.
+//! Typed material composition and generic WGSL contributions.
 //!
-//! This crate currently establishes the workspace boundary only. Material will
-//! lower its private composition IR into generic Shader contributions; the
-//! consuming pipeline supplies pass templates and complete program entry points.
+//! Material owns authoring validation, static variants, instance values, and a
+//! private normalized representation. It emits only generic WGSL source and
+//! interface declarations; a Shader consumer supplies pass templates and entry
+//! points before composing a complete program.
 
 #![deny(missing_docs)]
+
+mod model;
+
+pub use model::*;

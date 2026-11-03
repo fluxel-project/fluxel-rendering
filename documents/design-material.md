@@ -768,6 +768,28 @@ native binding handles
 
 ## 15. Shader Composition
 
+### Current S3 handoff status
+
+The current Material-to-Shader boundary uses Shader-owned generic source units,
+binding declarations, callable declarations, and static options. Material may
+generate WGSL contributions and attach metadata, but it does not select a pass
+template, entry points, geometry layout, device route, or native shader target.
+The final consumer assembles the complete `ShaderCompositionRequest`.
+
+The current dynamic parameter contract explicitly links each parameter to a
+material uniform resource. The contribution exposes that association and uses
+the parameter name in WGSL; the consumer resolves the resource to its actual
+owner and uploads the instance value. The initial binding supports `Vec4` on a
+`UniformVec4` resource; other parameter/resource combinations are rejected.
+
+Shader validates callable signatures, reachable binding contracts, and selected
+vertex interfaces against the composed WGSL/Naga module. This is a logical
+contract check only. It neither resolves concrete material resources nor creates
+RHI bindings, Graph accesses, native shaders, or pipelines. In particular,
+successful material/shader logical validation is not evidence of GPU output or
+of support on a particular backend; those remain separate S2/S3 execution and
+acceptance work.
+
 `fluxel-shader` owns a deliberately neutral `ShaderCompositionRequest`. It
 contains generic WGSL source units, declared callable and resource interfaces,
 requested entry points/stages, a pass template, geometry interfaces, target

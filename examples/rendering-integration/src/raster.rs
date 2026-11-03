@@ -299,31 +299,49 @@ pub(crate) fn make_pipeline<B>(
 where
     B: ResourceBackend + PipelineBackend + ShaderBackend,
 {
-    let module = block_on(device.shader(ShaderDesc {
-        label: Some("fluxel integration raster WGSL".into()),
-        format: ShaderFormat::Wgsl,
-        bytes: Arc::from(WGSL),
-        entries: vec![
-            ShaderEntryPoint {
-                name: "vs_main".into(),
-                stage: ShaderStage::Vertex,
-                workgroup_size: None,
-            },
-            ShaderEntryPoint {
-                name: "fs_main".into(),
-                stage: ShaderStage::Fragment,
-                workgroup_size: None,
-            },
-        ],
-        required_features: vec![],
-    }))?;
+    make_pipeline_with_wgsl(
+        device,
+        target_format,
+        ShaderDesc {
+            label: Some("fluxel integration raster WGSL".into()),
+            format: ShaderFormat::Wgsl,
+            bytes: Arc::from(WGSL),
+            entries: vec![
+                ShaderEntryPoint {
+                    name: "vs_main".into(),
+                    stage: ShaderStage::Vertex,
+                    workgroup_size: None,
+                },
+                ShaderEntryPoint {
+                    name: "fs_main".into(),
+                    stage: ShaderStage::Fragment,
+                    workgroup_size: None,
+                },
+            ],
+            required_features: Vec::new(),
+        },
+        "fluxel integration raster pipeline",
+    )
+}
+
+/// Builds the fixed vertex-layout raster pipeline from the routed shader descriptor.
+pub(crate) fn make_pipeline_with_wgsl<B>(
+    device: &Device<B>,
+    target_format: TextureFormat,
+    descriptor: ShaderDesc,
+    pipeline_label: &str,
+) -> Result<RasterPipeline<B>, Box<dyn Error>>
+where
+    B: ResourceBackend + PipelineBackend + ShaderBackend,
+{
+    let module = block_on(device.shader(descriptor))?;
     let layout = device.create_pipeline_layout(&PipelineLayoutDesc {
         label: Some("fluxel integration raster layout"),
         groups: &[],
         push_constants: &[],
     })?;
     Ok(block_on(device.raster_pipeline(RasterPipelineDesc {
-        label: Some("fluxel integration raster pipeline".into()),
+        label: Some(pipeline_label.into()),
         layout,
         vertex: PipelineStage {
             module: module.clone(),
@@ -335,22 +353,7 @@ where
             entry: "fs_main".into(),
             constants: vec![],
         }),
-        vertex_buffers: vec![VertexBufferLayout {
-            stride: VERTEX_STRIDE as u64,
-            step_mode: VertexStepMode::Vertex,
-            attributes: vec![
-                VertexAttribute {
-                    location: 0,
-                    offset: 0,
-                    format: VertexFormat::Float32(2),
-                },
-                VertexAttribute {
-                    location: 1,
-                    offset: 8,
-                    format: VertexFormat::Float32(4),
-                },
-            ],
-        }],
+        vertex_buffers: vertex_buffer_layouts(),
         color_targets: vec![Some(ColorTargetState {
             format: target_format,
             blend: None,
@@ -374,6 +377,30 @@ where
         multiview: None,
         cache: None,
     }))?)
+}
+
+/// The concrete vertex layout owned by the fixed raster consumer.
+///
+/// S2 preflight reads this descriptor before native shader or pipeline work;
+/// the pipeline consumes this same helper instead of reconstructing a layout
+/// from a shader declaration.
+pub(crate) fn vertex_buffer_layouts() -> Vec<VertexBufferLayout> {
+    vec![VertexBufferLayout {
+        stride: VERTEX_STRIDE as u64,
+        step_mode: VertexStepMode::Vertex,
+        attributes: vec![
+            VertexAttribute {
+                location: 0,
+                offset: 0,
+                format: VertexFormat::Float32(2),
+            },
+            VertexAttribute {
+                location: 1,
+                offset: 8,
+                format: VertexFormat::Float32(4),
+            },
+        ],
+    }]
 }
 
 fn produce(
@@ -412,7 +439,7 @@ pub(crate) fn vertices(color: [u8; 4]) -> Vec<u8> {
     bytes
 }
 
-fn verify_image(bytes: &[u8], color: [u8; 4]) -> Result<(), Box<dyn Error>> {
+pub(crate) fn verify_image(bytes: &[u8], color: [u8; 4]) -> Result<(), Box<dyn Error>> {
     let expected_len = usize::try_from(EXTENT[0])? * usize::try_from(EXTENT[1])? * 4;
     if bytes.len() != expected_len {
         return Err(format!(
@@ -452,7 +479,7 @@ fn verify_image(bytes: &[u8], color: [u8; 4]) -> Result<(), Box<dyn Error>> {
 }
 
 /// Returns `None` for a two-pixel edge band where rasterization tie rules vary.
-fn stable_interior(x: u32, y: u32) -> Option<bool> {
+pub(crate) fn stable_interior(x: u32, y: u32) -> Option<bool> {
     let vertices = [[16.0_f32, 105.6], [99.2, 96.0], [51.2, 16.0]];
     let point = [x as f32 + 0.5, y as f32 + 0.5];
     let mut signs = [0.0_f32; 3];

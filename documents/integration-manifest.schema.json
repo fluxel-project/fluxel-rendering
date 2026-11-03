@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Fluxel Rendering S0/S1 integration evidence manifest",
+  "title": "Fluxel Rendering S0-S3 integration evidence manifest",
   "type": "object",
   "required": [
     "schema_version",
@@ -9,7 +9,6 @@
     "rendering_checkout",
     "sibling_checkout_inventory",
     "root_lock",
-    "support_decision",
     "attempts",
     "capability_snapshot",
     "outputs",
@@ -20,10 +19,10 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 2
+      "enum": [2, 3]
     },
     "stage": {
-      "const": "S0/S1"
+      "enum": ["S0/S1", "S0-S3 integration evidence"]
     },
     "artifact": {
       "type": "object",
@@ -52,6 +51,23 @@
         "sha256",
         "review"
       ]
+    },
+    "historical_foundation_support_decision": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256",
+        "status",
+        "scope",
+        "cannot_approve_current_support"
+      ],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": ["string", "null"] },
+        "status": { "const": "historical_reference_only" },
+        "scope": { "const": "S0/S1" },
+        "cannot_approve_current_support": { "const": true }
+      }
     },
     "attempts": {
       "type": "array",
@@ -85,6 +101,28 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 2 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["support_decision"],
+        "properties": { "stage": { "const": "S0/S1" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 3 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["historical_foundation_support_decision"],
+        "properties": { "stage": { "const": "S0-S3 integration evidence" } }
+      }
+    }
+  ],
   "$defs": {
     "checkout": {
       "type": "object",

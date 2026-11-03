@@ -11,8 +11,13 @@ mod capabilities;
 mod capture;
 mod compute;
 mod diagnostics;
+mod executable_cache;
 mod raster;
 mod read_set;
+mod s2_shader;
+mod s2_texture;
+mod s3_material;
+mod shader_admission;
 mod surface;
 
 use std::{
@@ -33,21 +38,30 @@ use fluxel_rhi::{
     backend::{ExecutionBackend, MappingBackend, ReadbackBackend, ResourceBackend},
 };
 
-fn json_string(value: &str) -> String {
-    let mut escaped = String::from("\"");
-    for character in value.chars() {
-        match character {
-            '\"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            value if value.is_control() => escaped.push_str(&format!("\\u{:04x}", value as u32)),
-            value => escaped.push(value),
-        }
+use shader_admission::json_string;
+
+fn verify_s2_cache_replacement<B: fluxel_rhi::backend::Backend>(
+    consumer: &mut s2_shader::S2ShaderConsumer<B>,
+    old: fluxel_rhi::api::DeviceId,
+    replacement: fluxel_rhi::api::DeviceId,
+    output: &Path,
+) -> Result<(), Box<dyn Error>> {
+    if old == replacement || !consumer.has_device(old) || !consumer.has_device(replacement) {
+        return Err("S2 cache did not retain separate products for both devices".into());
     }
-    escaped.push('\"');
-    escaped
+    consumer.retire_device(old);
+    if consumer.has_device(old) || !consumer.has_device(replacement) {
+        return Err("S2 cache replacement retirement did not isolate device products".into());
+    }
+    fs::write(
+        output.join("s2-cache-device-transition.json"),
+        format!(
+            "{{\"oldDeviceId\":{},\"replacementDeviceId\":{},\"bothProductsPresentBeforeRetirement\":true,\"oldProductRetiredAfterCompletion\":true,\"replacementProductRetained\":true}}\n",
+            json_string(&format!("{old:?}")),
+            json_string(&format!("{replacement:?}"))
+        ),
+    )?;
+    Ok(())
 }
 
 fn write_capabilities<B>(
@@ -89,9 +103,11 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-fn output_directory() -> Result<PathBuf, Box<dyn Error>> {
+fn output_directory() -> Result<(PathBuf, bool, bool), Box<dyn Error>> {
     let mut args = std::env::args_os().skip(1);
     let mut output = None;
+    let mut s3_only = false;
+    let mut s2_cache_only = false;
     while let Some(argument) = args.next() {
         if argument == "--output" {
             output = Some(
@@ -99,11 +115,22 @@ fn output_directory() -> Result<PathBuf, Box<dyn Error>> {
                     .ok_or("--output requires a directory argument")?
                     .into(),
             );
+        } else if argument == "--s3-only" {
+            s3_only = true;
+        } else if argument == "--s2-cache-only" {
+            s2_cache_only = true;
         } else {
             return Err(format!("unsupported argument: {}", argument.to_string_lossy()).into());
         }
     }
-    Ok(output.unwrap_or_else(|| PathBuf::from("target/integration-copy")))
+    if s3_only && s2_cache_only {
+        return Err("--s3-only and --s2-cache-only cannot be combined".into());
+    }
+    Ok((
+        output.unwrap_or_else(|| PathBuf::from("target/integration-copy")),
+        s3_only,
+        s2_cache_only,
+    ))
 }
 
 fn producer(
@@ -361,7 +388,7 @@ where
 }
 
 #[cfg(all(windows, feature = "dx12"))]
-fn run_dx12(output: &Path) -> Result<(), Box<dyn Error>> {
+fn run_dx12(output: &Path, s3_only: bool, s2_cache_only: bool) -> Result<(), Box<dyn Error>> {
     use fluxel_rhi::{api::DeviceRequest, dx12::Dx12Instance};
 
     let native = Dx12Instance::new()?;
@@ -378,27 +405,92 @@ fn run_dx12(output: &Path) -> Result<(), Box<dyn Error>> {
     }))?;
     diagnostics::record_dx12_device_open(output)?;
     write_capabilities(&device, "dx12", &adapter_name, output)?;
+    if s3_only {
+        return s3_material::run(device, &output.join("s3-material"));
+    }
+    if s2_cache_only {
+        let first_output = output.join("s2-shader");
+        fs::create_dir_all(&first_output)?;
+        write_capabilities(&device, "dx12", &adapter_name, &first_output)?;
+        let mut s2_consumer = s2_shader::S2ShaderConsumer::new();
+        s2_shader::run(&mut s2_consumer, device.clone(), &first_output, false)?;
+
+        let same_device_output = output.join("s2-shader-same-device-cache-hit");
+        fs::create_dir_all(&same_device_output)?;
+        write_capabilities(&device, "dx12", &adapter_name, &same_device_output)?;
+        s2_shader::run(&mut s2_consumer, device.clone(), &same_device_output, true)?;
+
+        let replacement = block_on(instance.open(DeviceRequest {
+            adapter: adapter.id,
+            required_features: Vec::new(),
+        }))?;
+        if replacement.id() == device.id() {
+            return Err("DX12 replacement unexpectedly retained the original DeviceId".into());
+        }
+        let replacement_output = output.join("s2-shader-replacement-device");
+        fs::create_dir_all(&replacement_output)?;
+        write_capabilities(&replacement, "dx12", &adapter_name, &replacement_output)?;
+        s2_shader::run(
+            &mut s2_consumer,
+            replacement.clone(),
+            &replacement_output,
+            false,
+        )?;
+        verify_s2_cache_replacement(&mut s2_consumer, device.id(), replacement.id(), output)?;
+        return Ok(());
+    }
     let old_submission = run_copy(device.clone(), &adapter_name, output)?;
     raster::run(device.clone(), &output.join("raster"))?;
     compute::run(device.clone(), &output.join("compute"))?;
     read_set::run(device.clone(), &output.join("read-set"))?;
+    let mut s2_consumer = s2_shader::S2ShaderConsumer::new();
+    s2_shader::run(
+        &mut s2_consumer,
+        device.clone(),
+        &output.join("s2-shader"),
+        false,
+    )?;
+    s2_shader::run(
+        &mut s2_consumer,
+        device.clone(),
+        &output.join("s2-shader-same-device-cache-hit"),
+        true,
+    )?;
+    s2_texture::run(device.clone(), &output.join("s2-texture"))?;
+    s3_material::run(device.clone(), &output.join("s3-material"))?;
     surface::run_dx12(device.clone(), &output.join("surface"))?;
     let old_pipeline = raster::make_pipeline(&device, fluxel_rhi::api::TextureFormat::Rgba8Unorm)?;
     let replacement = block_on(instance.open(DeviceRequest {
         adapter: adapter.id,
         required_features: Vec::new(),
     }))?;
+    if replacement.id() == device.id() {
+        return Err("DX12 replacement unexpectedly retained the original DeviceId".into());
+    }
+    let replacement_s2_output = output.join("s2-shader-replacement-device");
+    fs::create_dir_all(&replacement_s2_output)?;
+    write_capabilities(&replacement, "dx12", &adapter_name, &replacement_s2_output)?;
+    s2_shader::run(
+        &mut s2_consumer,
+        replacement.clone(),
+        &replacement_s2_output,
+        false,
+    )?;
+    verify_s2_cache_replacement(&mut s2_consumer, device.id(), replacement.id(), output)?;
     raster::replacement_rejects_old_pipeline(old_pipeline, replacement, &old_submission, output)
 }
 
 #[cfg(all(windows, feature = "native-gl-wgl"))]
-fn run_wgl(output: &Path) -> Result<(), Box<dyn Error>> {
+fn run_wgl(output: &Path, s3_only: bool, s2_cache_only: bool) -> Result<(), Box<dyn Error>> {
     use fluxel_host::{Window, WindowConfig};
     use fluxel_rhi::{
         api::{AdapterId, DeviceRequest, Instance, InstanceId},
         gl::{Gl, GlInstance},
     };
 
+    if s2_cache_only {
+        return Err("--s2-cache-only is currently supported only with the dx12 feature".into());
+    }
     let window = Window::new(WindowConfig::new("Fluxel S1 Surface", 320, 180)?)?;
     // SAFETY: the window remains alive for the instance, device, and all work
     // in `run_copy`, and this function remains on its context owner thread.
@@ -421,15 +513,46 @@ fn run_wgl(output: &Path) -> Result<(), Box<dyn Error>> {
     }))?;
     write_capabilities(&device, "native-gl-wgl", &adapter_name, output)?;
     let mut observer = diagnostics::WglObserver::install(&device)?;
+    if s3_only {
+        let result = s3_material::run(device.clone(), &output.join("s3-material"));
+        let diagnostic_result = observer.write(&device, output);
+        if result.is_err() || diagnostic_result.is_err() {
+            std::mem::forget(window);
+        }
+        return result.and(diagnostic_result);
+    }
     let mut old_submission = None;
+    let mut s2_consumer = s2_shader::S2ShaderConsumer::new();
     let result = run_copy(device.clone(), &adapter_name, output)
         .map(|submission| old_submission = Some(submission))
         .and_then(|()| raster::run(device.clone(), &output.join("raster")))
         .and_then(|()| compute::run(device.clone(), &output.join("compute")))
         .and_then(|()| read_set::run(device.clone(), &output.join("read-set")))
+        .and_then(|()| {
+            s2_shader::run(
+                &mut s2_consumer,
+                device.clone(),
+                &output.join("s2-shader"),
+                false,
+            )
+        })
+        .and_then(|()| {
+            s2_shader::run(
+                &mut s2_consumer,
+                device.clone(),
+                &output.join("s2-shader-same-device-cache-hit"),
+                true,
+            )
+        })
+        .and_then(|()| s2_texture::run(device.clone(), &output.join("s2-texture")))
+        .and_then(|()| s3_material::run(device.clone(), &output.join("s3-material")))
         .and_then(|()| surface::run_wgl(device.clone(), &window, &output.join("surface")));
     let diagnostic_result = observer.write(&device, output);
     if result.is_err() || diagnostic_result.is_err() {
+        // Dispose cache-held reusable products while the original WGL host
+        // root still owns their context. The invoked Renderer already owns
+        // any submitted products until its own completion/error path ends.
+        drop(s2_consumer);
         // An error can leave an indeterminate native owner retained by the
         // Renderer. The window is its WGL context's external lifetime root;
         // preserve it even if draining native diagnostics itself failed.
@@ -454,6 +577,7 @@ fn run_wgl(output: &Path) -> Result<(), Box<dyn Error>> {
         .into_iter()
         .next()
         .ok_or("no WGL replacement adapter was enumerated")?;
+    let replacement_adapter_name = replacement_adapter.name.clone();
     let replacement = block_on(replacement_instance.open(DeviceRequest {
         adapter: AdapterId {
             instance: replacement_id,
@@ -461,22 +585,48 @@ fn run_wgl(output: &Path) -> Result<(), Box<dyn Error>> {
         },
         required_features: Vec::new(),
     }))?;
+    if replacement.id() == device.id() {
+        return Err("WGL replacement unexpectedly retained the original DeviceId".into());
+    }
+    let replacement_s2_output = output.join("s2-shader-replacement-device");
+    fs::create_dir_all(&replacement_s2_output)?;
+    write_capabilities(
+        &replacement,
+        "native-gl-wgl",
+        &replacement_adapter_name,
+        &replacement_s2_output,
+    )?;
     let replacement_diagnostics = output.join("replacement-diagnostics");
     fs::create_dir_all(&replacement_diagnostics)?;
     let mut replacement_observer = diagnostics::WglObserver::install(&replacement)?;
-    let replacement_result = raster::replacement_rejects_old_pipeline(
-        old_pipeline,
+    let replacement_result = s2_shader::run(
+        &mut s2_consumer,
         replacement.clone(),
-        old_submission
-            .as_ref()
-            .ok_or("old copy submission is missing")?,
-        output,
-    );
+        &replacement_s2_output,
+        false,
+    )
+    .and_then(|()| {
+        verify_s2_cache_replacement(&mut s2_consumer, device.id(), replacement.id(), output)
+    })
+    .and_then(|()| {
+        raster::replacement_rejects_old_pipeline(
+            old_pipeline,
+            replacement.clone(),
+            old_submission
+                .as_ref()
+                .ok_or("old copy submission is missing")?,
+            output,
+        )
+    });
     let replacement_diagnostic_result =
         replacement_observer.write(&replacement, &replacement_diagnostics);
     // Include old-context pipeline creation and product destruction used by
     // the provenance refusal, without discarding the earlier queue drain.
     let old_diagnostic_result = observer.write(&device, output);
+    // Both WGL host roots are still live. Release only reusable cache entries
+    // before either context can be destroyed; submitted owners were retained
+    // by the local Renderers through readback completion.
+    drop(s2_consumer);
     if replacement_result.is_err() || replacement_diagnostic_result.is_err() {
         // The replacement context is independently owned. Preserve this Host
         // root on a failed replacement submission rather than dropping it
@@ -501,13 +651,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)?;
     }
-    let output = output_directory()?;
+    let (output, s3_only, s2_cache_only) = output_directory()?;
+    fs::create_dir_all(&output)?;
     #[cfg(all(windows, feature = "dx12", feature = "native-gl-wgl"))]
     return Err("select exactly one rendering integration backend feature".into());
     #[cfg(all(windows, feature = "dx12", not(feature = "native-gl-wgl")))]
-    return run_dx12(&output);
+    return run_dx12(&output, s3_only, s2_cache_only);
     #[cfg(all(windows, feature = "native-gl-wgl", not(feature = "dx12")))]
-    return run_wgl(&output);
+    return run_wgl(&output, s3_only, s2_cache_only);
     #[cfg(not(all(
         windows,
         any(feature = "dx12", feature = "native-gl-wgl"),

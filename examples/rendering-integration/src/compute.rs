@@ -8,15 +8,23 @@ use fluxel_rhi::{
     api::{
         BindGroupLayout, BindGroupLayoutDesc, BindGroupLayoutEntry, BindingCount, BindingType,
         ComputePipeline, ComputePipelineDesc, Device, DeviceCapabilities, PipelineLayoutDesc,
-        PipelineStage, ShaderDesc, ShaderEntryPoint, ShaderFormat, ShaderStage, StorageAccess,
+        PipelineStage, ShaderDesc, ShaderEntryPoint, ShaderFormat, ShaderRoute, ShaderStage,
+        StorageAccess,
     },
     backend::{
         CommandBackend, ExecutionBackend, MappingBackend, PipelineBackend, ReadbackBackend,
         ResourceBackend, ShaderBackend,
     },
 };
+use fluxel_shader::{
+    BindingDeclaration, BindingKind, EntryPoint, ShaderComposer, ShaderCompositionRequest,
+    ShaderStage as LogicalShaderStage, SourceUnit,
+};
 
-use crate::block_on;
+use crate::{
+    block_on,
+    shader_admission::{self, PipelineCapabilityFacts},
+};
 
 const ELEMENTS: usize = 96;
 const WORKGROUP_SIZE: usize = 64;
@@ -74,7 +82,68 @@ where
 {
     fs::create_dir_all(output)?;
     fs::write(output.join("compute.wgsl"), WGSL)?;
-    let checks = requirements(device.capabilities(), device.compute().is_some());
+    let original = [input(0), input(1), input(2)];
+    for (index, values) in original.iter().enumerate() {
+        fs::write(
+            output.join(format!("compute-input-{index}.bin")),
+            encode(values),
+        )?;
+        fs::write(
+            output.join(format!("compute-expected-{index}.bin")),
+            encode(&expected(values)),
+        )?;
+    }
+    let request = ShaderCompositionRequest::new(vec![SourceUnit::new(
+        "s1-compute",
+        String::from_utf8_lossy(WGSL),
+    )])
+    .with_entry_point(EntryPoint::new("cs_main", LogicalShaderStage::Compute))
+    .with_binding(BindingDeclaration::new(0, 0, BindingKind::StorageReadWrite));
+    let mut composer = ShaderComposer::new();
+    let artifact = composer.compose(&request)?;
+    fs::write(output.join("compute-composed.wgsl"), artifact.source())?;
+    fs::write(
+        output.join("compute-interface.txt"),
+        format!("{:#?}\n", artifact.interface()),
+    )?;
+    let naga_demands = artifact
+        .requirements()
+        .naga_capabilities
+        .iter()
+        .map(|capability| capability.name().to_owned())
+        .collect::<Vec<_>>();
+    let rhi_feature_names = artifact
+        .requirements()
+        .names
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let pipeline_facts = PipelineCapabilityFacts {
+        multiview_views: None,
+        push_constant_bytes: 0,
+        // Compute has no raster multisampling; `1` is the concrete
+        // non-multisampled execution fact used by the admission layer.
+        multisample_count: 1,
+        nonuniform: Default::default(),
+    };
+    let descriptor = shader_descriptor(artifact.source(), rhi_feature_names);
+    let admission = shader_admission::admit(&naga_demands, device.capabilities(), pipeline_facts);
+    shader_admission::write_evidence(
+        &output.join("shader-admission.json"),
+        &naga_demands,
+        &descriptor.required_features,
+        &descriptor.entries,
+        device.capabilities(),
+        pipeline_facts,
+        &admission,
+    )?;
+    admission?;
+    let route = device.shader_route(&descriptor);
+    fs::write(output.join("compute-route.json"), route_json(&route))?;
+    let checks = requirements(
+        device.capabilities(),
+        device.compute().is_some() && !matches!(route, ShaderRoute::Unsupported),
+    );
     let supported = checks.iter().all(|(_, passed)| *passed);
     let fields = checks
         .iter()
@@ -98,19 +167,7 @@ where
         )?;
         return Ok(());
     }
-    let (pipeline, layout) = make_pipeline(&device)?;
-    let original = [input(0), input(1), input(2)];
-    for (index, values) in original.iter().enumerate() {
-        fs::write(
-            output.join(format!("compute-input-{index}.bin")),
-            encode(values),
-        )?;
-        fs::write(
-            output.join(format!("compute-expected-{index}.bin")),
-            encode(&expected(values)),
-        )?;
-    }
-
+    let (pipeline, layout) = make_pipeline(&device, descriptor)?;
     let store = AssetStore::<ComputeBytes, Vec<u8>, String>::new();
     let handle = store.create()?;
     let first = produce(&store, &handle, encode(&original[0]))?;
@@ -213,21 +270,12 @@ where
 
 fn make_pipeline<B>(
     device: &Device<B>,
+    descriptor: ShaderDesc,
 ) -> Result<(ComputePipeline<B>, BindGroupLayout<B>), Box<dyn Error>>
 where
     B: ResourceBackend + PipelineBackend + ShaderBackend,
 {
-    let module = block_on(device.shader(ShaderDesc {
-        label: Some("fluxel integration compute WGSL".into()),
-        format: ShaderFormat::Wgsl,
-        bytes: Arc::from(WGSL),
-        entries: vec![ShaderEntryPoint {
-            name: "cs_main".into(),
-            stage: ShaderStage::Compute,
-            workgroup_size: Some([WORKGROUP_SIZE as u32, 1, 1]),
-        }],
-        required_features: vec![],
-    }))?;
+    let module = block_on(device.shader(descriptor))?;
     let layout = device.create_bind_group_layout(&BindGroupLayoutDesc {
         label: Some("fluxel integration compute storage".into()),
         entries: vec![BindGroupLayoutEntry {
@@ -327,4 +375,36 @@ fn verify(bytes: &[u8], original: &[u32; ELEMENTS]) -> Result<(), Box<dyn Error>
         }
     }
     Ok(())
+}
+
+fn shader_descriptor(source: &str, required_features: Vec<String>) -> ShaderDesc {
+    ShaderDesc {
+        label: Some("fluxel integration composed compute WGSL".into()),
+        format: ShaderFormat::Wgsl,
+        bytes: Arc::from(source.as_bytes()),
+        entries: vec![ShaderEntryPoint {
+            name: "cs_main".into(),
+            stage: ShaderStage::Compute,
+            workgroup_size: Some([WORKGROUP_SIZE as u32, 1, 1]),
+        }],
+        required_features,
+    }
+}
+
+fn route_json(route: &ShaderRoute) -> String {
+    match route {
+        ShaderRoute::Direct(target) => format!(
+            "{{\"route\":\"direct\",\"format\":{},\"environment\":{},\"abiKey\":{}}}\n",
+            crate::json_string(&format!("{:?}", target.format)),
+            crate::json_string(&target.environment),
+            crate::json_string(&target.abi_key)
+        ),
+        ShaderRoute::Naga(target) => format!(
+            "{{\"route\":\"naga\",\"format\":{},\"environment\":{},\"abiKey\":{}}}\n",
+            crate::json_string(&format!("{:?}", target.format)),
+            crate::json_string(&target.environment),
+            crate::json_string(&target.abi_key)
+        ),
+        ShaderRoute::Unsupported => "{\"route\":\"unsupported\"}\n".into(),
+    }
 }
