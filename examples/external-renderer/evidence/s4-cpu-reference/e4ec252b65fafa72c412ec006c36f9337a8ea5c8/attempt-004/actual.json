@@ -1,0 +1,29 @@
+[
+  {
+    "name": "test",
+    "command": [
+      "cargo",
+      "+1.87.0",
+      "test",
+      "--locked"
+    ],
+    "cwd": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\examples\\external-renderer",
+    "exit_code": 0,
+    "stdout": "test.stdout.log",
+    "stderr": "test.stderr.log",
+    "discovered_tests": 2
+  },
+  {
+    "name": "run",
+    "command": [
+      "cargo",
+      "+1.87.0",
+      "run",
+      "--locked"
+    ],
+    "cwd": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\examples\\external-renderer",
+    "exit_code": 0,
+    "stdout": "run.stdout.log",
+    "stderr": "run.stderr.log"
+  }
+]

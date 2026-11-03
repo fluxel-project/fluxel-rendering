@@ -31,10 +31,11 @@ The `compile-fail/private-graph` fixture is an independent crate. It confirms
 that the public `RenderScene` import is usable but that attempting to import
 Renderer's private `graph` module fails with Rust privacy error E0603.
 
-The executable is an S4 CPU reference artifact. It validates data ownership,
-identity, atomic changes, and later snapshot/typed-feature contracts. It does not
-render, submit GPU work, create a FramePipeline, or claim culling, indirect work,
-or a supported graphics backend.
+The executable is the retained S4 CPU reference artifact described by the
+[S4 CPU closure record](../../documents/s4-cpu-closure.md). It validates data
+ownership, identity, atomic changes, and later snapshot/typed-feature contracts.
+It does not render, submit GPU work, create a FramePipeline, or claim culling,
+indirect work, or a supported graphics backend.
 
 Before either adapter starts scene construction, each executable attempt saves
 its source input, independently specified expected facts, an initially unavailable
@@ -54,4 +55,5 @@ Run from this directory:
 ```powershell
 cargo +1.87.0 test --locked
 cargo +1.87.0 run --locked
+python scripts/capture_s4_evidence.py --attempt attempt-002
 ```

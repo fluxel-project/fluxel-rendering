@@ -1,0 +1,14 @@
+[
+  {
+    "path": "error.json",
+    "sha256": "00fb6476244afbbe7e44df5eda2626986f097f7fe59f42c7d0327592acc7083a"
+  },
+  {
+    "path": "expected.json",
+    "sha256": "a8382093e3fd227990a17006964189c814fffb70a3f35b0bcdee4bc36996491b"
+  },
+  {
+    "path": "input.json",
+    "sha256": "7a2ac781ebc79f92c54971a032f7859723b01b8cfdb64e2b134e11c22bf52d33"
+  }
+]

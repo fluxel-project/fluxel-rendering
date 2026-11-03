@@ -1,9 +1,10 @@
 # Fluxel Renderer Design
 
-> Status: target architecture with a bounded implemented S4 CPU scene and
-> feature subset. The current S0/S1 consumer uses fixed fixtures. `RenderScene`
+> Status: target architecture with a closed bounded S4 CPU scene and feature
+> data boundary. The current S0/S1 consumer uses fixed fixtures. `RenderScene`
 > changes, immutable snapshots, and the provisional CPU-only `CpuFeature` facade
-> are implemented; preparation and FramePipeline interfaces remain unimplemented.
+> are independently evidenced; preparation and FramePipeline interfaces remain
+> unimplemented.
 > The organization roadmap
 > owns delivery order; [the implementation plan](version-plan.md) owns local
 > scope and acceptance. This design does not authorize implementing later-stage
@@ -534,7 +535,7 @@ normal delivery, not retrofitted after a closed Forward renderer:
 | --- | --- |
 | S0/S1 | Resource/access/plan/completion foundation; provisional fixtures can be replaced without a second Graph engine |
 | S2/S3 | Generic Shader interfaces and Material contributions; preparation can consume their requirements |
-| S4 | Dense RenderScene batches, immutable snapshots, and a public CPU-only typed feature facade verified by an external reference; the formal S4 acceptance, including its bounded public/privacy and consumer evidence requirements, remains in S4 until fully closed |
+| S4 | Dense RenderScene batches, immutable snapshots, and a public CPU-only typed feature facade; the bounded data/privacy/consumer acceptance is closed by the independently reviewed [S4 CPU closure record](s4-cpu-closure.md), without GPU or FramePipeline scope |
 | S5 | Reference Forward plus external prototype; geometry layouts and a local policy can change without core edits |
 | S6 | External Feature, FramePipeline and custom material run with the reference mesh in one frame |
 | S7 | A materially different consumer proves broader deformation, cross-pass or GPU-product seams before stabilization |

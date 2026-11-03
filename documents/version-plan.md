@@ -3,8 +3,8 @@
 > Status: S0/S1 foundation implementation is present; its named native acceptance
 > evidence and limits are recorded in the [closure review](s0-s1-closure.md).
 > S2 Shader and minimal S3 Material are implemented, with focused tests and named
-> Windows DX12/WGL integration evidence. S4 has a bounded CPU-only RenderScene
-> and public typed-feature facade with an independent external reference;
+> Windows DX12/WGL integration evidence. S4 CPU data/facade closure is recorded
+> with independently reviewed external evidence at product `e4ec252`; its
 > FramePipeline and GPU APIs remain unimplemented. Full regression remains
 > pending until the planned S-stage sequence is tested. Stage labels are work
 > packages, not release numbers or completion claims. The organization
@@ -22,7 +22,7 @@ cases. A crate, trait, or independently green library test is not stage closure.
 | S1 RenderGraph | `fluxel-renderer::graph`; passes, versions, definedness, DAG, hazards, compiled plans, frame bindings | Fixed-shader multi-pass execution, compatible plan reuse, safe retirement across 2–3 overlapping frames |
 | S2 Shader Core | New `fluxel-shader`; composition request, WGSL/Naga validation, reflection, logical source artifacts, cache identity | Material-independent raster and supported compute programs execute through Graph and selected RHI shader routes |
 | S3 Material Core | New `fluxel-material`; functions/fragments, parameters/resources, minimal composition IR, evaluation WGSL, instances/variants | Several functions and parameters compose into an executable material through the same Shader path |
-| S4 RenderScene | Renderer scene storage, generational RenderIds, views, transforms/bounds, batch changes, snapshots | Implemented CPU-only record/view updates, stable snapshots, and a bounded typed-feature facade; FramePipeline and GPU scene integration remain pending |
+| S4 RenderScene | Renderer scene storage, generational RenderIds, views, transforms/bounds, batch changes, snapshots | Closed CPU-only data/facade boundary with retained external evidence; FramePipeline and GPU scene integration remain pending |
 | S5 Forward integration | Renderer pipeline/preparation/culling/sorting; public FramePipeline facade, phases, resolvers, residency and frame data | Multiple meshes/materials render through Scene -> FramePipeline -> Graph -> RHI; an early external consumer exercises extension seams |
 | S6 Extension MVP | Renderer feature registration/storage/phase contribution; independent Rust Feature and FramePipeline | External Feature, external FramePipeline, and custom material cooperate in the same frame; first product MVP closes |
 | S7 Rendering expansion | Material/Shader/Renderer and selected Features; Code Nodes, PBR, Forward+/Deferred, shadows/PostFX | A second pipeline shares scene/material contracts; materially different Features validate broader extension seams |
@@ -282,14 +282,13 @@ provisional and CPU-only. It does not create a GPU device, Graph work, culling,
 indirect work, `RenderFeature`, or `FramePipeline`. Its compile-fail negative
 verifies that the external dependency cannot name Renderer-private Graph state.
 
-The formal S4 acceptance remains open. The current implementation and external
-reference cover renderer-owned typed storage, a bounded public CPU facade,
-controlled context, opaque handles, phase contribution, structured errors, and
-Graph privacy. Closure still requires the full S4 acceptance assessment against
-the demonstrated snapshot/identity/lifecycle semantics and focused evidence;
-these are S4 requirements, not work deferred to S5. S5 consumes a closed S4
-boundary for Forward and GPU integration; it does not close an incomplete S4
-contract.
+The S4 CPU data/facade acceptance is closed at the boundary documented in the
+[S4 CPU closure record](s4-cpu-closure.md): renderer-owned typed storage, a
+bounded public CPU facade, controlled context, opaque handles, phase
+contribution, structured errors, Graph privacy, and an independently reviewed
+external consumer. These are S4 requirements, not work deferred to S5. S5
+consumes this closed CPU boundary for Forward and GPU integration; it does not
+retroactively expand the S4 closure into a GPU or FramePipeline claim.
 
 ## S5. FramePipeline and Forward integration
 

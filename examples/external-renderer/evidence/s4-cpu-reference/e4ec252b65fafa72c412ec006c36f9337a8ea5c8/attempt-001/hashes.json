@@ -1,0 +1,34 @@
+[
+  {
+    "path": "actual.json",
+    "sha256": "9ff8bed94ef547283ff19e8cbde3b2785332d5df493818fc4d961e4639cc7507"
+  },
+  {
+    "path": "error.txt",
+    "sha256": "376405b4bc6de35979fc4ba53a4a5a9d20d68b40979546dae8ed8722aec4193e"
+  },
+  {
+    "path": "expected.json",
+    "sha256": "ed798c048d6e54d968ca2d4d75a8ea534ef48640b806e853ab871948c06f1b4a"
+  },
+  {
+    "path": "input.json",
+    "sha256": "556a64890846af118fdff2e7306d399a8f8ae537ecded6eba4a100683785d7cb"
+  },
+  {
+    "path": "run.stderr.log",
+    "sha256": "f28866c0b07a54110940ffb3803ca8e0effa2929adb4cb54075caa14d54b8c38"
+  },
+  {
+    "path": "run.stdout.log",
+    "sha256": "e706fe13e44fa32ec6114f0c89bdd1bbdaa0d3548640f3600cec5281cfebdc95"
+  },
+  {
+    "path": "test.stderr.log",
+    "sha256": "fc5c0340624d97f6b2be7f9256ac3004e1d91934b033b682069d9a4bcd586b57"
+  },
+  {
+    "path": "test.stdout.log",
+    "sha256": "abd9cf71b807c92564cda31bde267d046ba1ba97789826fe2c4453492d096fef"
+  }
+]

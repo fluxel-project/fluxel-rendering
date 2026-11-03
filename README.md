@@ -23,9 +23,9 @@ facade; FramePipeline and GPU extension APIs are not implemented. See the
 ## Current implementation and target
 
 The checked-out `0.16` workspace contains the S0/S1 foundation plus the first
-implemented S2 Shader, S3 Material, and S4 CPU scene/feature subsets. The
-public S4 facade is deliberately CPU-only; FramePipeline and GPU scene
-integration remain future work:
+implemented S2 Shader, S3 Material, and the closed S4 CPU scene/feature data
+boundary. The public S4 facade is deliberately CPU-only; FramePipeline and GPU
+scene integration remain future work:
 
 | Workspace crate | Current role |
 | --- | --- |
@@ -68,7 +68,8 @@ two routes. They retained shader route/capability facts, readbacks, native
 diagnostics, and inspected Surface captures, but do not establish a general
 renderer API, an S4/S5 extension API, or support for untested targets.
 
-The S4 external CPU reference builds against the public RenderScene and
+The [S4 CPU closure record](documents/s4-cpu-closure.md) binds the independently
+reviewed external CPU reference to product `e4ec252`. It builds against the public RenderScene and
 CPU-feature APIs with its own manifest and lock. It compares ordinary and
 ECS-shaped adapters, preserves an old snapshot across an update, and uses
 renderer-issued opaque handles, issuer-bound typed storage, and a controlled
@@ -151,6 +152,7 @@ planning and is not a rendering milestone.
 - [Shader design](documents/design-shader.md)
 - [Material design](documents/design-material.md)
 - [Renderer design](documents/design-renderer.md)
+- [S4 CPU closure record](documents/s4-cpu-closure.md)
 - [RenderGraph design](documents/design-rendergraph.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Migration inventory](documents/foundation-migration.md)

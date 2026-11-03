@@ -1,0 +1,66 @@
+[
+  {
+    "path": "actual.json",
+    "sha256": "46401a9b44854207ceb85f9a52448fea33def5bdddefc9d7be6831a01dcf2027"
+  },
+  {
+    "path": "error.txt",
+    "sha256": "376405b4bc6de35979fc4ba53a4a5a9d20d68b40979546dae8ed8722aec4193e"
+  },
+  {
+    "path": "expected.json",
+    "sha256": "af0cf68dbe178a9528d7028f8979c94b03a69e9151b1c231ec2f2d998c26b9c2"
+  },
+  {
+    "path": "input.json",
+    "sha256": "403e11b5e5927abf27da4d3152c1161f20cf5506a751e8853bb4cee66a612c28"
+  },
+  {
+    "path": "raw-evidence\\ecs-adapter\\actual.txt",
+    "sha256": "bb542c84b77bf59b8979dcd8cf5c3827f5bca04babb3877e4476c7d73e8af942"
+  },
+  {
+    "path": "raw-evidence\\ecs-adapter\\error.txt",
+    "sha256": "c6cc0cabce18f402cde4c075ca77b490bfa994206b12df409a0d2eb0e8a83546"
+  },
+  {
+    "path": "raw-evidence\\ecs-adapter\\expected.txt",
+    "sha256": "bb542c84b77bf59b8979dcd8cf5c3827f5bca04babb3877e4476c7d73e8af942"
+  },
+  {
+    "path": "raw-evidence\\ecs-adapter\\input.txt",
+    "sha256": "c495ca52204ea54f1eb9699a20e89dbc635769e4951f7ab8a2e1d6ee6a390e49"
+  },
+  {
+    "path": "raw-evidence\\object-adapter\\actual.txt",
+    "sha256": "bb542c84b77bf59b8979dcd8cf5c3827f5bca04babb3877e4476c7d73e8af942"
+  },
+  {
+    "path": "raw-evidence\\object-adapter\\error.txt",
+    "sha256": "c6cc0cabce18f402cde4c075ca77b490bfa994206b12df409a0d2eb0e8a83546"
+  },
+  {
+    "path": "raw-evidence\\object-adapter\\expected.txt",
+    "sha256": "bb542c84b77bf59b8979dcd8cf5c3827f5bca04babb3877e4476c7d73e8af942"
+  },
+  {
+    "path": "raw-evidence\\object-adapter\\input.txt",
+    "sha256": "e6f46c837a183bafff9f9adc82a41d8385ff6773301b674cfa2cb09e1842805c"
+  },
+  {
+    "path": "run.stderr.log",
+    "sha256": "047a10e1992c134ec279fbb8033cc8c0550346e2874e670ce9449e0123bbb894"
+  },
+  {
+    "path": "run.stdout.log",
+    "sha256": "e706fe13e44fa32ec6114f0c89bdd1bbdaa0d3548640f3600cec5281cfebdc95"
+  },
+  {
+    "path": "test.stderr.log",
+    "sha256": "1b8f9d66fce0ca1a0f531506b023bace161d63b770965200f4c2c6e9c24e6b7b"
+  },
+  {
+    "path": "test.stdout.log",
+    "sha256": "198ddb2344f717893e050dbf1db3ac5bb5c243905b984fad57bbf4f391ed2248"
+  }
+]

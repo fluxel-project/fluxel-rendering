@@ -4,7 +4,8 @@ Renderer is being rebuilt following the organization architecture. Narrow Copy,
 offscreen and Surface Raster, and supported Compute fixtures serve the S0/S1
 consumer. The public S4 subset adds CPU-only RenderScene changes, immutable
 snapshots, and a bounded CPU feature facade. FramePipeline, preparation, and GPU
-scene execution remain private scaffolds.
+scene execution remain private scaffolds. The bounded S4 CPU closure is recorded
+in [the S4 CPU closure record](../../documents/s4-cpu-closure.md).
 
 ```text
 renderer/

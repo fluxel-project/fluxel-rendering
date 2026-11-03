@@ -1,0 +1,18 @@
+{
+  "commit": "e4ec252b65fafa72c412ec006c36f9337a8ea5c8",
+  "commands": [
+    [
+      "cargo",
+      "+1.87.0",
+      "test",
+      "--locked"
+    ],
+    [
+      "cargo",
+      "+1.87.0",
+      "run",
+      "--locked"
+    ]
+  ],
+  "expected": "Both commands exit zero; test includes the public-facade consumer and independent private-Graph compile-fail fixture."
+}

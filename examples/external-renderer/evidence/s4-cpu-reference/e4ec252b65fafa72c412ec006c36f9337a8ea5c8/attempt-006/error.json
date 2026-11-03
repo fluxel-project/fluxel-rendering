@@ -1,0 +1,22 @@
+[
+  {
+    "name": "test",
+    "command": [
+      "cargo",
+      "+1.87.0",
+      "test",
+      "--locked",
+      "--package",
+      "external-renderer-does-not-exist"
+    ],
+    "cwd": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\examples\\external-renderer",
+    "exit_code": 101,
+    "stdout": "test.stdout.log",
+    "stderr": "test.stderr.log",
+    "discovered_tests": 0
+  },
+  {
+    "name": "test-discovery",
+    "detail": "runner observed zero tests"
+  }
+]

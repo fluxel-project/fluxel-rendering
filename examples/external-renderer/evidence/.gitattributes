@@ -1,0 +1,2 @@
+# Preserve retained artifact bytes so SHA-256 remains valid after checkout.
+** -text -diff

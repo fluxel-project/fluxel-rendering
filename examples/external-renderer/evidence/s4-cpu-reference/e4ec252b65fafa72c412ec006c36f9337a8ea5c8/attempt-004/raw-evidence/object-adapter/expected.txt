@@ -1,0 +1,64 @@
+EvidenceFacts {
+    initial_version: 1,
+    updated_version: 2,
+    retained_version: 1,
+    initial_material_generations: [
+        1,
+        1,
+    ],
+    updated_material_generations: [
+        2,
+        1,
+    ],
+    updated_extent: [
+        [
+            800,
+            450,
+        ],
+    ],
+    updated_color: [
+        0,
+        0,
+        255,
+        255,
+    ],
+    updated_label: "resized-main",
+    feature_initial_version: 1,
+    feature_updated_version: 2,
+    version_mismatch: SnapshotVersionMismatch {
+        feature: "dense-colors",
+        scene_version: 2,
+        feature_version: 1,
+    },
+    handle_mismatch: FeatureHandleMismatch {
+        expected: "view-labels",
+        actual: "dense-colors",
+    },
+    cross_scene_mismatch: ForeignScene,
+    foreign_issuer_mismatch: FeatureHandleMismatch {
+        expected: "scene-issued feature",
+        actual: "dense-colors",
+    },
+    cross_issuer_mismatch: FeatureHandleMismatch {
+        expected: "scene-issued feature",
+        actual: "dense-colors",
+    },
+    storage_issuer_mismatch: FeatureHandleMismatch {
+        expected: "storage issuer",
+        actual: "dense-colors",
+    },
+    consumed_contributions: 2,
+    rejected_contribution: FeatureHandleMismatch {
+        expected: "view-labels",
+        actual: "dense-colors",
+    },
+    storage_context_mismatch: ForeignIssuer,
+    mixed_version_contribution: FeatureHandleMismatch {
+        expected: "view-labels",
+        actual: "view-labels",
+    },
+    replayed_contribution: FeatureHandleMismatch {
+        expected: "dense-colors",
+        actual: "dense-colors",
+    },
+}
