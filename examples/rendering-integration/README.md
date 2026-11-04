@@ -11,6 +11,28 @@ the bounded public FramePipeline contribution path, device isolation and Surface
 resize. Their [S5 closure record](../../documents/s5-forward-closure.md) retains
 current evidence independently of the older fixture closures.
 
+The `--s6-only` selector runs `src/s6_composed.rs` on DX12 or WGL. Its composed
+path combines built-in mesh draws with an external typed `QuadFeature`, external
+pipeline, and custom material in one Graph submission; selected cases also
+disable or cull either source. The accepted offscreen
+workload contains eleven submissions across cache/order, enablement,
+independent-provider, and three pending-replacement cases. It persists actual
+inputs and independent expected images before submission, raw readback before
+the pixel oracle, callback/cache observations, and completion ownership. A local
+observer wraps the external Feature without changing its public API.
+
+The paired `--s6-surface-only` selector accepts the same typed composition on a
+native Surface at 320x180 then 256x144, retaining Host resize/configuration,
+client captures, and same-snapshot companion readbacks. The named DX12/WGL
+matrix, its private phase/scope and invalid-material/texture refusal coverage,
+and retained evidence are described by the
+[S6 typed Forward closure record](../../documents/s6-typed-forward-closure.md)
+and [evidence index](../../documents/evidence/s6-typed-forward-candidate/index.json).
+The [S6 measurement baseline](../../documents/s6-measurement-baseline.md)
+records its separate release-sampling boundary. This acceptance remains limited
+to the demonstrated opaque Forward subset; it neither generalizes GPU products
+or cross-pass Features nor adds browser, Metal, or full-regression support.
+
 The reviewed native DX12/WGL attempts retain dynamic read-set execution, actual
 HWND client captures, device replacement, S2 shader routes, and S3 material
 results under Bases `ee640d5`. Their dirty-source archive and narrow S2/S3 scope

@@ -148,6 +148,8 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
     pub(super) transform_layout: BindGroupLayout<B>,
 }
 
+mod composed;
+mod entry;
 mod execute;
 mod prepare;
 mod program;

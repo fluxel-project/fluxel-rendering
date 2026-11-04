@@ -5,8 +5,9 @@
 > changes, immutable snapshots, and the provisional CPU-only `CpuFeature` facade
 > are independently evidenced. S5 closes bounded Forward preparation, residency,
 > frame data and a public FramePipeline facade for the named Windows DX12/WGL
-> matrix; see the [S5 closure record](s5-forward-closure.md). General typed GPU
-> Feature composition remains an S6 consumer gate.
+> matrix; see the [S5 closure record](s5-forward-closure.md). S6 closes the
+> demonstrated typed opaque-Forward Feature composition subset; general GPU
+> products and cross-pass Features remain consumer-gated.
 > The organization roadmap
 > owns delivery order; [the implementation plan](version-plan.md) owns local
 > scope and acceptance. This design does not authorize implementing later-stage
@@ -384,17 +385,53 @@ still enter the single RenderGraph.
 
 ## RenderFeature and FramePipeline authority
 
-`RenderFeature` is the future batch contributor with typed state. `FramePipeline`
-owns frame policy and composition where the bounded S5 facade is used. Its
-current Forward consumer has passed the bounded S5 acceptance. Broader Feature
-and Pipeline signatures remain gated by the S6 same-frame consumers.
+`FramePipeline` owns frame policy and composition. The bounded S5 Forward
+consumer has passed its acceptance; S6 adds one independently built typed
+`RenderFeature` consumer for an external Forward draw batch alongside built-in
+meshes. The retained DX12/WGL matrix covers eleven offscreen submissions and a
+two-frame native Surface resize workload, including pending replacement and
+named refusal boundaries; see the [S6 closure record](s6-typed-forward-closure.md),
+[measurement baseline](s6-measurement-baseline.md), and
+[evidence index](evidence/s6-typed-forward-candidate/index.json). This closes
+only that opaque composition subset. It does not establish general GPU products
+or cross-pass Feature support.
+
+`FeatureBinding` borrows a concrete Feature, its issuer and typed input.
+Submission checks scene/issuer/handle/version before calling Feature preparation.
+The Feature emits logical `ForwardDrawRequest`s with its own local identities,
+asset generations, transforms and layer values, rather than synthetic scene
+record IDs. Both sources use the same material/geometry validation and resource
+realization. The pipeline orders the combined `ForwardDrawOrder` sequence; the
+renderer checks that the result is an exact permutation before allocating its
+GPU products. Adjacent compatible draws may then share a raster program without
+changing that final sequence.
+
+`ForwardCompositionContext` invokes the pipeline on the real opaque Graph pass.
+The pipeline owns the common upload dependency and output write. Mesh and
+Feature callbacks receive separate `ForwardFeaturePass` read scopes derived
+from their actual resolved draws. Both callbacks must declare vertex, uniform
+and texture reads, including empty batches. Scope completion and full draw
+coverage are required before upload mapping, recording and submission. This
+declaration runs again before plan selection on every frame, including cache
+hits; no separate preflight graph or declaration replay is involved.
+
+CPU Feature input and prepared values need to remain borrowed only through
+preparation and declaration. Resolved asset snapshots, copied transforms/tints
+and frame-owned upload bytes carry the data needed by GPU work. Those actual
+owners use the existing pending/completion lifecycle; the Feature's CPU types
+need no artificial `Send + Sync + 'static` requirement. The current composed
+entry supports opaque Forward only and rejects an incompatible topology before
+Feature preparation or GPU resource realization.
 
 S4 currently exports a narrower, provisional CPU-only facade: `CpuFeature<R>`,
 `FeatureIssuer`, opaque `FeatureHandle`, `FeatureContext`,
 `TypedFeatureStorage<T>`, `TypedFeatureSnapshot<T>`, `CpuPhase`, and controlled
 `CpuPhaseContributions`. A scene issues handles and contexts; storage retains a
-typed payload only for its issuing scene and issuer, and validation requires the
-matching snapshot version and handle. This establishes the exercised ownership
+typed payload for its issuing scene, issuer and snapshot version. The active
+context/binding separately validates the consuming Feature handle. Same-typed
+immutable payloads may be intentionally reused by Features of that issuer at
+the same scene version; reuse does not transfer contribution or submission
+authority. This establishes the exercised ownership
 and structured-error boundary without exposing Graph, RHI, backend objects,
 submission, or a mutable scheduler. It is not a `RenderFeature` or FramePipeline
 contract and does not supply GPU work authority.
@@ -560,7 +597,7 @@ normal delivery, not retrofitted after a closed Forward renderer:
 | S2/S3 | Generic Shader interfaces and Material contributions; preparation can consume their requirements |
 | S4 | Dense RenderScene batches, immutable snapshots, and a public CPU-only typed feature facade; the bounded data/privacy/consumer acceptance is closed by the independently reviewed [S4 CPU closure record](s4-cpu-closure.md), without GPU or FramePipeline scope |
 | S5 | Reference Forward plus external prototype; geometry layouts and a local policy can change without core edits |
-| S6 | External Feature, FramePipeline and custom material run with the reference mesh in one frame |
+| S6 | Bounded external typed opaque-Forward Feature, FramePipeline and custom material run with the reference mesh in one Graph pass; broader GPU products remain consumer-gated |
 | S7 | A materially different consumer proves broader deformation, cross-pass or GPU-product seams before stabilization |
 | S8 | Profile-led layout, streaming, batching and execution optimizations |
 

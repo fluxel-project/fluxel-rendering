@@ -1,0 +1,1566 @@
+{
+  "schema_version": 1,
+  "scope": "S6 selected DX12/WGL typed Forward offscreen and Surface evidence",
+  "selected_attempts": [
+    [
+      "dx12",
+      "s6-composed",
+      "dx12-20261104T140459760842Z-1896"
+    ],
+    [
+      "dx12",
+      "s6-surface",
+      "dx12-20261104T140907035547Z-9408"
+    ],
+    [
+      "native-gl-wgl",
+      "s6-composed",
+      "native-gl-wgl-20261104T140748170004Z-13340"
+    ],
+    [
+      "native-gl-wgl",
+      "s6-surface",
+      "native-gl-wgl-20261104T141059455126Z-18696"
+    ]
+  ],
+  "source_identity": "All four selected native attempts have identical exact source-input lists.",
+  "source_input_count": 412,
+  "selection_boundary": "Ledger manifests retain their original bytes; only the four selected attempt directories are archived here.",
+  "archive": {
+    "path": "native-evidence.zip",
+    "bytes": 23231202,
+    "sha256": "3ff2ec6b9b96abfb5b98aa65d86b948685928781c757e4bb8ca03216eba354c0"
+  },
+  "members": [
+    {
+      "member": "review/review-command.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-development\\visual-review-b\\review-command.json",
+      "bytes": 1329,
+      "sha256": "0b99caacc84a7ef2dd9f5306cb3b2a4d0308d2f92cdbe548e2ad10f1c1f3217c"
+    },
+    {
+      "member": "review/review.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-development\\visual-review-b\\review.json",
+      "bytes": 1551,
+      "sha256": "055913c0551eae189c12e28ff707da8e22535c6843625f9e4af08d998d15dc5e"
+    },
+    {
+      "member": "review/s6-offscreen.png",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-development\\visual-review-b\\s6-offscreen.png",
+      "bytes": 17708,
+      "sha256": "f0db9ceccbdd5fab8625c13f0d04aa1d9bd3ff4426b535f61697650731002828"
+    },
+    {
+      "member": "review/s6-surface.png",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-development\\visual-review-b\\s6-surface.png",
+      "bytes": 12770,
+      "sha256": "cf91e0681179e0df2cf7d68bd73fde5385e54583cc9caabd6ce889d96618a28f"
+    },
+    {
+      "member": "review/visual-review.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-development\\visual-review-b\\visual-review.json",
+      "bytes": 27218,
+      "sha256": "4051934bb261129f0a84e5171e7af9a25a2f26294a0eb19d8a0a6b8acefda759"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\consumer.exe",
+      "bytes": 20320256,
+      "sha256": "9341430dad6cd5b9948a8b08173c13a5e9c1f9cecd62ca898dffb3f714c2ebfb"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/0/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\0\\stderr.log",
+      "bytes": 209,
+      "sha256": "e8b0cf495074dc081cdd8d17e9e3cc27c5cc9b71a2f68d39d218836bbf0c139b"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/0/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\0\\stdout.log",
+      "bytes": 8806,
+      "sha256": "04e69dfae9daa6d3a9a421135862d3631c276a5c9ef8e8a4b7de66b7204b992c"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/1/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\1\\stderr.log",
+      "bytes": 238,
+      "sha256": "e01fcf2e9999dba1b303ef54cf73c4509ffac472e54abb2035dda27063c4173f"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/1/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\1\\stdout.log",
+      "bytes": 434,
+      "sha256": "09850bf788ada9ab39ad15cec0b103df197bffb476ea27d20ff70efd38cd82c7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/2/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\2\\stderr.log",
+      "bytes": 239,
+      "sha256": "58ad1d456b42049fcda6271078201f5433a499074027a6761a9a4060cfea2b48"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/2/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\2\\stdout.log",
+      "bytes": 194,
+      "sha256": "485cd1051b4ef1ff8da301b3a69bf0844fccf2f8fe85c2e8c712c2a68ab8001c"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/3/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\3\\stderr.log",
+      "bytes": 291,
+      "sha256": "ca5a319b066e44654b70e05df4cb5c840332ed5e2037fd5cdccd21f4231b0e77"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/3/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\3\\stdout.log",
+      "bytes": 296,
+      "sha256": "026866d63d3ec2128131d3344538f1204f28a539ed5f4fb6d58fc69161b68f2e"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/4/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\4\\stderr.log",
+      "bytes": 120,
+      "sha256": "17a73e4d0608fb7d5fd6b84c10b181f87c23b237bd2d08b5ed20b9c0459320c0"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/focused-tests/4/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\focused-tests\\4\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\capabilities.json",
+      "bytes": 4552,
+      "sha256": "6a506c4003460c91c543090a668b2b52b2f66648c6df82a62967d6ef7aecf87e"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/dx12-debug-request.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\dx12-debug-request.json",
+      "bytes": 326,
+      "sha256": "61845053b2c6185e7f057e9d7cf4dfb0191f53ada63f80d07a6124438f74d970"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-composed-cache.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-composed-cache.json",
+      "bytes": 295,
+      "sha256": "e36b4a7498c00a69cdcc38515bda2b7b1608cd0c5a5c09d68aace42535503c7f"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-composed-measurements.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-composed-measurements.json",
+      "bytes": 500,
+      "sha256": "636a3ee2b29186490e27d81cd90cb4fe1c5f3a9db6fee26545f48233d792703f"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-composed-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-composed-workload.json",
+      "bytes": 2534,
+      "sha256": "7616932296bb56196025a5f188b10f225feb46506882e14e7ff497bd015bf2bf"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-0-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-0-actual.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-0-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-0-actual.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-0-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-0-expected.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-0-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-0-expected.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-0-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-0-input.json",
+      "bytes": 819,
+      "sha256": "1af351a2eb9b678260f1cae9b79b7d3faea1a9444611490fe611dd20d9ac41d0"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-1-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-1-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-1-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-1-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-1-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-1-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-1-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-1-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-1-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-1-input.json",
+      "bytes": 818,
+      "sha256": "fa444b8871055bcbc1ac20c56064704daec77040bc6b2841a58be7a787eba5e5"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-2-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-2-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-2-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-2-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-2-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-2-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-2-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-2-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-frame-2-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-frame-2-input.json",
+      "bytes": 818,
+      "sha256": "11d7005722c17603421bea7905de148eb7c5da99f32265135e70dc130350d85e"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-mesh-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-mesh-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "06e9c963404e73a9fd1ed7c2980ad1bf8777cc592745b45b89b4ef796b73102c"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-mesh-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-mesh-geometry.txt",
+      "bytes": 2718,
+      "sha256": "0f87c7c784981ee1809395840c6ded8d48f58367931d3878984e8314a1626281"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-mesh-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-mesh-material.txt",
+      "bytes": 977,
+      "sha256": "cfb45e4b4e73cd68a824e761abc2ffa7d5966fb9bb2d28ec2ae754666e6da146"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-mesh-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-mesh-texture.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-quad-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-quad-geometry-stream-0.bin",
+      "bytes": 216,
+      "sha256": "ade60effc1c9b827c7609ab2128726a3a585ea134f56d4e0ee3fede8503f2af1"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-quad-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-quad-geometry.txt",
+      "bytes": 4396,
+      "sha256": "1d559932369ed09e605e66b1b4ffbad069dd8740ef22087aebd2a912454a9811"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-quad-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-quad-material.txt",
+      "bytes": 1069,
+      "sha256": "1c8e74eb9e22c7f47fc0a7bcc99f06cf87c06be036bde3f55115e7216024819f"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-initial-quad-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-initial-quad-texture.rgba",
+      "bytes": 4,
+      "sha256": "ad95131bc0b799c0b1af477fb14fcf26a6a9f76079e48bf090acb7e8367bfd0e"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-assets.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-assets.json",
+      "bytes": 226,
+      "sha256": "741e3cc2fa2697889e8ef9596cfbc1105cf916becfeaeeae4c05db2e25181505"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-lifecycle.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-lifecycle.json",
+      "bytes": 257,
+      "sha256": "a0c2625e5b2485ab04e3505688fab2fb3177fcd9a4816e1c8a228f6d51b37f95"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-actual.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-expected.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-input.json",
+      "bytes": 822,
+      "sha256": "99205b17a2178f6065cd032085b8e33b137df389f8abd85c1bedbe936a0ff772"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-quad-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-quad-geometry-stream-0.bin",
+      "bytes": 216,
+      "sha256": "09929c1cd2c9718aefd7b44d35114e235d1927174f16eadd9ca7a830bd8f4dbb"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-quad-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-quad-geometry.txt",
+      "bytes": 4372,
+      "sha256": "958bff7df8982e1dade1cd1d8602e4203e15cc4ff26ddc92e9a0bc4771fda638"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-quad-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-quad-material.txt",
+      "bytes": 1046,
+      "sha256": "09c98aee3c2f642524abc05de26645e635f6e347a834c54d821bfb49b073dd34"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-quad-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-quad-texture.rgba",
+      "bytes": 4,
+      "sha256": "5fc1f3b5dfc3af9f4a3c54c77f448216c82908ce3953813f1e12695bb71271c8"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-warm-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-warm-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-warm-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-warm-actual.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-warm-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-warm-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-warm-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-warm-expected.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-new-warm-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-new-warm-input.json",
+      "bytes": 827,
+      "sha256": "71f1c3f504516584bfe8c98b2998d5cc26369d89e8a3997181d997b947e2be61"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-old-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-old-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-old-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-old-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-old-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-old-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-old-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-old-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-pending-old-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-pending-old-input.json",
+      "bytes": 822,
+      "sha256": "5099c3d1dbb0c4be90ffc10cdff907ab088e928aa28aa269b639f4d0a97f7783"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-marker-only-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-marker-only-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-marker-only-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-marker-only-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-marker-only-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-marker-only-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-marker-only-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-marker-only-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-marker-only-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-marker-only-input.json",
+      "bytes": 830,
+      "sha256": "c5d49056d48d33ed7afa5f1c01afc9ab90ba9af6a9219cd8a98b750126655a4a"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-mesh-only-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-mesh-only-actual.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-mesh-only-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-mesh-only-actual.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-mesh-only-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-mesh-only-expected.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-mesh-only-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-mesh-only-expected.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-provider-mesh-only-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-provider-mesh-only-input.json",
+      "bytes": 830,
+      "sha256": "7fccd97c167d7bd01a6744b28ee75822d7b262fe29cb373e6d1be2d66f2061d5"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-stable-mask.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-stable-mask.bin",
+      "bytes": 9216,
+      "sha256": "e1615f1541aa3b5d8d0c72e7b47b0ade367322c1719a05d42966b2fb5814c1dc"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-disabled-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-disabled-actual.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-disabled-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-disabled-actual.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-disabled-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-disabled-expected.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-disabled-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-disabled-expected.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-disabled-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-disabled-input.json",
+      "bytes": 828,
+      "sha256": "248e043386e46764396fd0129fdaa7b83d095d1448c5b7320d290341f2df463a"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-enabled-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-enabled-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-enabled-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-enabled-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-enabled-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-enabled-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-enabled-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-enabled-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-enabled-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-enabled-input.json",
+      "bytes": 825,
+      "sha256": "91d6eb92c3a272ddfa60fdab5648919d611523079bc0209035586e09e26f6646"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-reenabled-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-reenabled-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-reenabled-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-reenabled-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-reenabled-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-reenabled-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-reenabled-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-reenabled-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/s6-composed/s6-toggle-reenabled-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\s6-composed\\s6-toggle-reenabled-input.json",
+      "bytes": 827,
+      "sha256": "e82be4f0032d9a8a45b3cdebb469a4dcb5a847c2db36baed8cca9923dbb7df07"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\source-inputs.zip",
+      "bytes": 707456,
+      "sha256": "508d2024493ae57e1fe71baa010f1a8ffa482b81f5fb6576b3748c00d8c53c02"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\stderr.log",
+      "bytes": 192,
+      "sha256": "411afa2dc52e46ec92f80d37f32d6d68381985e265b39386dc4a5cec22495ad0"
+    },
+    {
+      "member": "s6-composed/attempts/dx12-20261104T140459760842Z-1896/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140459760842Z-1896\\stdout.log",
+      "bytes": 72387,
+      "sha256": "a86a5477956dab25cc1779790a5cb307dc4fba845295356fc100eb873ce3cbdb"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\consumer.exe",
+      "bytes": 19814400,
+      "sha256": "6819a8e081e7520cd8c0d81619fcb8a74fac1fa23ddec49a0c3a04f0d0972528"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\capabilities.json",
+      "bytes": 4307,
+      "sha256": "afa40e7d50a62495ea11704b3bc826510011d75626f7d0af7ad4cea113082e72"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-composed-cache.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-composed-cache.json",
+      "bytes": 295,
+      "sha256": "e36b4a7498c00a69cdcc38515bda2b7b1608cd0c5a5c09d68aace42535503c7f"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-composed-measurements.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-composed-measurements.json",
+      "bytes": 500,
+      "sha256": "7de8dc83996fc3fed1255a087544841da684d8c833619aafd1fe2c08ad25028b"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-composed-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-composed-workload.json",
+      "bytes": 2534,
+      "sha256": "7616932296bb56196025a5f188b10f225feb46506882e14e7ff497bd015bf2bf"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-0-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-0-actual.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-0-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-0-actual.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-0-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-0-expected.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-0-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-0-expected.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-0-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-0-input.json",
+      "bytes": 819,
+      "sha256": "1af351a2eb9b678260f1cae9b79b7d3faea1a9444611490fe611dd20d9ac41d0"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-1-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-1-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-1-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-1-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-1-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-1-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-1-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-1-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-1-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-1-input.json",
+      "bytes": 818,
+      "sha256": "fa444b8871055bcbc1ac20c56064704daec77040bc6b2841a58be7a787eba5e5"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-2-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-2-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-2-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-2-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-2-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-2-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-2-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-2-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-frame-2-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-frame-2-input.json",
+      "bytes": 818,
+      "sha256": "11d7005722c17603421bea7905de148eb7c5da99f32265135e70dc130350d85e"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-mesh-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-mesh-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "06e9c963404e73a9fd1ed7c2980ad1bf8777cc592745b45b89b4ef796b73102c"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-mesh-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-mesh-geometry.txt",
+      "bytes": 2718,
+      "sha256": "0f87c7c784981ee1809395840c6ded8d48f58367931d3878984e8314a1626281"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-mesh-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-mesh-material.txt",
+      "bytes": 977,
+      "sha256": "cfb45e4b4e73cd68a824e761abc2ffa7d5966fb9bb2d28ec2ae754666e6da146"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-mesh-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-mesh-texture.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-quad-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-quad-geometry-stream-0.bin",
+      "bytes": 216,
+      "sha256": "ade60effc1c9b827c7609ab2128726a3a585ea134f56d4e0ee3fede8503f2af1"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-quad-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-quad-geometry.txt",
+      "bytes": 4396,
+      "sha256": "1d559932369ed09e605e66b1b4ffbad069dd8740ef22087aebd2a912454a9811"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-quad-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-quad-material.txt",
+      "bytes": 1069,
+      "sha256": "1c8e74eb9e22c7f47fc0a7bcc99f06cf87c06be036bde3f55115e7216024819f"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-initial-quad-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-initial-quad-texture.rgba",
+      "bytes": 4,
+      "sha256": "ad95131bc0b799c0b1af477fb14fcf26a6a9f76079e48bf090acb7e8367bfd0e"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-assets.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-assets.json",
+      "bytes": 226,
+      "sha256": "741e3cc2fa2697889e8ef9596cfbc1105cf916becfeaeeae4c05db2e25181505"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-lifecycle.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-lifecycle.json",
+      "bytes": 257,
+      "sha256": "a0c2625e5b2485ab04e3505688fab2fb3177fcd9a4816e1c8a228f6d51b37f95"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-actual.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-expected.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-input.json",
+      "bytes": 822,
+      "sha256": "99205b17a2178f6065cd032085b8e33b137df389f8abd85c1bedbe936a0ff772"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-quad-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-quad-geometry-stream-0.bin",
+      "bytes": 216,
+      "sha256": "09929c1cd2c9718aefd7b44d35114e235d1927174f16eadd9ca7a830bd8f4dbb"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-quad-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-quad-geometry.txt",
+      "bytes": 4372,
+      "sha256": "958bff7df8982e1dade1cd1d8602e4203e15cc4ff26ddc92e9a0bc4771fda638"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-quad-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-quad-material.txt",
+      "bytes": 1046,
+      "sha256": "09c98aee3c2f642524abc05de26645e635f6e347a834c54d821bfb49b073dd34"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-quad-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-quad-texture.rgba",
+      "bytes": 4,
+      "sha256": "5fc1f3b5dfc3af9f4a3c54c77f448216c82908ce3953813f1e12695bb71271c8"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-warm-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-warm-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-warm-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-warm-actual.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-warm-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-warm-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ec2e05427867a496779e6d3874c7591e2a06b25e77d8c99f199180f49caf12e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-warm-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-warm-expected.rgba",
+      "bytes": 36864,
+      "sha256": "4c646d1b896cc6b9ea2a8d384a292c2b34f93cff7d165e4ed363e459179c2525"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-new-warm-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-new-warm-input.json",
+      "bytes": 827,
+      "sha256": "71f1c3f504516584bfe8c98b2998d5cc26369d89e8a3997181d997b947e2be61"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-old-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-old-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-old-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-old-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-old-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-old-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-old-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-old-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-pending-old-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-pending-old-input.json",
+      "bytes": 822,
+      "sha256": "5099c3d1dbb0c4be90ffc10cdff907ab088e928aa28aa269b639f4d0a97f7783"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-marker-only-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-marker-only-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-marker-only-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-marker-only-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-marker-only-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-marker-only-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-marker-only-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-marker-only-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-marker-only-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-marker-only-input.json",
+      "bytes": 830,
+      "sha256": "c5d49056d48d33ed7afa5f1c01afc9ab90ba9af6a9219cd8a98b750126655a4a"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-mesh-only-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-mesh-only-actual.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-mesh-only-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-mesh-only-actual.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-mesh-only-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-mesh-only-expected.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-mesh-only-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-mesh-only-expected.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-provider-mesh-only-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-provider-mesh-only-input.json",
+      "bytes": 830,
+      "sha256": "7fccd97c167d7bd01a6744b28ee75822d7b262fe29cb373e6d1be2d66f2061d5"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-stable-mask.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-stable-mask.bin",
+      "bytes": 9216,
+      "sha256": "e1615f1541aa3b5d8d0c72e7b47b0ade367322c1719a05d42966b2fb5814c1dc"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-disabled-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-disabled-actual.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-disabled-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-disabled-actual.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-disabled-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-disabled-expected.ppm",
+      "bytes": 27661,
+      "sha256": "8cbb94c31b0650bb210962581f24f8ecb626c21fe94af6d51e1644260673dc48"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-disabled-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-disabled-expected.rgba",
+      "bytes": 36864,
+      "sha256": "ae8af169cc73b287a5cc1e89b9fbb3c1abd9e7b3ddc5de146ce423b9d41ec9e7"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-disabled-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-disabled-input.json",
+      "bytes": 828,
+      "sha256": "248e043386e46764396fd0129fdaa7b83d095d1448c5b7320d290341f2df463a"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-enabled-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-enabled-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-enabled-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-enabled-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-enabled-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-enabled-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-enabled-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-enabled-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-enabled-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-enabled-input.json",
+      "bytes": 825,
+      "sha256": "91d6eb92c3a272ddfa60fdab5648919d611523079bc0209035586e09e26f6646"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-reenabled-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-reenabled-actual.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-reenabled-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-reenabled-actual.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-reenabled-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-reenabled-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-reenabled-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-reenabled-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/s6-composed/s6-toggle-reenabled-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\s6-composed\\s6-toggle-reenabled-input.json",
+      "bytes": 827,
+      "sha256": "e82be4f0032d9a8a45b3cdebb469a4dcb5a847c2db36baed8cca9923dbb7df07"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/run/wgl-debug-observer.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\run\\wgl-debug-observer.json",
+      "bytes": 790,
+      "sha256": "8c2870f74210e37dd4c62f497312db98f513c11e11a73e88593d382a51477e8c"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\source-inputs.zip",
+      "bytes": 707456,
+      "sha256": "5ed41da7ce9c87467fe6b78f163355d6586e1b63f58e3d42bcdf70d2cebf31ac"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\stderr.log",
+      "bytes": 192,
+      "sha256": "096e55b9609c9049fba84e1a6390dc718841a3a3fc6ac9f7fe0a831e1730685b"
+    },
+    {
+      "member": "s6-composed/attempts/native-gl-wgl-20261104T140748170004Z-13340/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T140748170004Z-13340\\stdout.log",
+      "bytes": 78039,
+      "sha256": "f8fa4b59806b0eb63de165403eba148b92eb4ff0451a7df79cc82b42bb6f9eeb"
+    },
+    {
+      "member": "s6-composed/manifest.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-composed\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\manifest.json",
+      "bytes": 539172,
+      "sha256": "9fb4f5fb61807ae89ab910a9e2b6723b5084ab52273a15820205f22ab3bd1b6c"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\consumer.exe",
+      "bytes": 20320256,
+      "sha256": "d22681dd9d842af7257c9bb70c90782c953a5f847d4c64b8f6aa19f40f10501f"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\capabilities.json",
+      "bytes": 4552,
+      "sha256": "6a506c4003460c91c543090a668b2b52b2f66648c6df82a62967d6ef7aecf87e"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/dx12-debug-request.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\dx12-debug-request.json",
+      "bytes": 326,
+      "sha256": "61845053b2c6185e7f057e9d7cf4dfb0191f53ada63f80d07a6124438f74d970"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-mesh-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-mesh-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "06e9c963404e73a9fd1ed7c2980ad1bf8777cc592745b45b89b4ef796b73102c"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-mesh-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-mesh-geometry.txt",
+      "bytes": 2718,
+      "sha256": "0f87c7c784981ee1809395840c6ded8d48f58367931d3878984e8314a1626281"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-mesh-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-mesh-material.txt",
+      "bytes": 977,
+      "sha256": "cfb45e4b4e73cd68a824e761abc2ffa7d5966fb9bb2d28ec2ae754666e6da146"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-mesh-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-mesh-texture.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-quad-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-quad-geometry-stream-0.bin",
+      "bytes": 216,
+      "sha256": "ade60effc1c9b827c7609ab2128726a3a585ea134f56d4e0ee3fede8503f2af1"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-quad-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-quad-geometry.txt",
+      "bytes": 4396,
+      "sha256": "1d559932369ed09e605e66b1b4ffbad069dd8740ef22087aebd2a912454a9811"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-quad-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-quad-material.txt",
+      "bytes": 1069,
+      "sha256": "1c8e74eb9e22c7f47fc0a7bcc99f06cf87c06be036bde3f55115e7216024819f"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-initial-quad-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-initial-quad-texture.rgba",
+      "bytes": 4,
+      "sha256": "ad95131bc0b799c0b1af477fb14fcf26a6a9f76079e48bf090acb7e8367bfd0e"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-0-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-0-expected.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-0-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-0-expected.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-0-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-0-input.json",
+      "bytes": 873,
+      "sha256": "8261e8eabffdbe9d1a6972ebd5bcc4ab165873dd2a2c2067dc27bc18b743fb1e"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-0-readback.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-0-readback.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-0-readback.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-0-readback.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-1-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-1-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-1-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-1-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-1-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-1-input.json",
+      "bytes": 874,
+      "sha256": "b933bed5f2c1e981eee54834de80ab977230066501fa3822e657400af37748ac"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-1-readback.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-1-readback.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-frame-1-readback.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-frame-1-readback.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-lifecycle.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-lifecycle.jsonl",
+      "bytes": 448,
+      "sha256": "9be8585566572dce3321c5025d38fb1180d7c59def1d6665642de8fc74eac99a"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-reconfigure-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-reconfigure-input.json",
+      "bytes": 108,
+      "sha256": "2bc0bfbea226a68c8f691a84361b6f1ac5b28d1763565fb7589bc6198e6a951e"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-stable-mask.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-stable-mask.bin",
+      "bytes": 9216,
+      "sha256": "e1615f1541aa3b5d8d0c72e7b47b0ade367322c1719a05d42966b2fb5814c1dc"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/s6-surface-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\s6-surface-workload.json",
+      "bytes": 1400,
+      "sha256": "49ceab66dbaec07270d687b0396a7af09c08c8370b58a5c31114f0831037a835"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-client-frame-0.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-client-frame-0.bmp",
+      "bytes": 230454,
+      "sha256": "c96c8cc1b20492b5ab67639a0413b5e109b294e3e5f779be2e0699fc909c36e7"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-client-frame-0.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-client-frame-0.capture.json",
+      "bytes": 295,
+      "sha256": "0439e6fa22e84f0f848399c04598a271837c4f35976f9effec7aca447f60d7d9"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-client-frame-0.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-client-frame-0.verdict.json",
+      "bytes": 149,
+      "sha256": "713bf9c253a442bae5cafbd2e4d79ab898bc3eeb820efaa83b25f6af76b0812d"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-client-frame-1.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-client-frame-1.bmp",
+      "bytes": 147510,
+      "sha256": "c9aa14c425c7b5d68b036685566505cfe6e3e898e7cff28d170380dbc61bbdfa"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-client-frame-1.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-client-frame-1.capture.json",
+      "bytes": 295,
+      "sha256": "8bd280a9d818a8026cf7b867c2a9a84d43e691353b884503bb55579b7a3e8391"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-client-frame-1.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-client-frame-1.verdict.json",
+      "bytes": 149,
+      "sha256": "fe1b475ccad60f15db3d2a49dccfa756d7d18aaebccc4e41d61c6ef2a3afdab2"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-configuration.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-configuration.jsonl",
+      "bytes": 958,
+      "sha256": "a3069229fe5a9f0001e65d5e145d8bb63c79bbaa207360baf308a962e548f987"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/s6-surface/surface-events.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\s6-surface\\surface-events.jsonl",
+      "bytes": 225,
+      "sha256": "de03d57e5db643eeb8eedcfe80363c51ad8a331d8d2b584af73e256b374770ff"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\source-inputs.zip",
+      "bytes": 707456,
+      "sha256": "b73f64df3697d45aaa18e41f69f4c44091be874f8279ec57fb6296b3086453ca"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\stderr.log",
+      "bytes": 192,
+      "sha256": "70ba8f338a46fc17b5b5675be181bdc554fbaab1763c179d72408dd4eb4e2006"
+    },
+    {
+      "member": "s6-surface/attempts/dx12-20261104T140907035547Z-9408/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\dx12-20261104T140907035547Z-9408\\stdout.log",
+      "bytes": 72387,
+      "sha256": "62f5c039e33d4fe62fd742a355c1572f0af02fb55f1c456980362f3069904464"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\consumer.exe",
+      "bytes": 19814400,
+      "sha256": "3d4218418c45857b53f757338f73c88a79a8dd2bfe443c8d1b6bc3852938c2f5"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\capabilities.json",
+      "bytes": 4307,
+      "sha256": "afa40e7d50a62495ea11704b3bc826510011d75626f7d0af7ad4cea113082e72"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-mesh-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-mesh-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "06e9c963404e73a9fd1ed7c2980ad1bf8777cc592745b45b89b4ef796b73102c"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-mesh-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-mesh-geometry.txt",
+      "bytes": 2718,
+      "sha256": "0f87c7c784981ee1809395840c6ded8d48f58367931d3878984e8314a1626281"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-mesh-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-mesh-material.txt",
+      "bytes": 977,
+      "sha256": "cfb45e4b4e73cd68a824e761abc2ffa7d5966fb9bb2d28ec2ae754666e6da146"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-mesh-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-mesh-texture.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-quad-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-quad-geometry-stream-0.bin",
+      "bytes": 216,
+      "sha256": "ade60effc1c9b827c7609ab2128726a3a585ea134f56d4e0ee3fede8503f2af1"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-quad-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-quad-geometry.txt",
+      "bytes": 4396,
+      "sha256": "1d559932369ed09e605e66b1b4ffbad069dd8740ef22087aebd2a912454a9811"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-quad-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-quad-material.txt",
+      "bytes": 1069,
+      "sha256": "1c8e74eb9e22c7f47fc0a7bcc99f06cf87c06be036bde3f55115e7216024819f"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-initial-quad-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-initial-quad-texture.rgba",
+      "bytes": 4,
+      "sha256": "ad95131bc0b799c0b1af477fb14fcf26a6a9f76079e48bf090acb7e8367bfd0e"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-0-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-0-expected.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-0-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-0-expected.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-0-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-0-input.json",
+      "bytes": 873,
+      "sha256": "8261e8eabffdbe9d1a6972ebd5bcc4ab165873dd2a2c2067dc27bc18b743fb1e"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-0-readback.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-0-readback.ppm",
+      "bytes": 27661,
+      "sha256": "a9dd36bb5e7e9d238c919031724dcb26bd6376d3b89f0905f3a3fcd16fc5dc15"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-0-readback.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-0-readback.rgba",
+      "bytes": 36864,
+      "sha256": "b798ad735e8a206f5ec3d6c704689420119df0aead923725957d9d3af2ae16d2"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-1-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-1-expected.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-1-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-1-expected.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-1-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-1-input.json",
+      "bytes": 874,
+      "sha256": "b933bed5f2c1e981eee54834de80ab977230066501fa3822e657400af37748ac"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-1-readback.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-1-readback.ppm",
+      "bytes": 27661,
+      "sha256": "ed49ed3450fa1672eba6facf1e1dd0878b6af9a2f2bde9d8d3376b1ec3a242ca"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-frame-1-readback.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-frame-1-readback.rgba",
+      "bytes": 36864,
+      "sha256": "dd1c751a16462dac12714d0a492a95ab5da3202abe826a04b1cd7938987c7314"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-lifecycle.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-lifecycle.jsonl",
+      "bytes": 448,
+      "sha256": "9be8585566572dce3321c5025d38fb1180d7c59def1d6665642de8fc74eac99a"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-reconfigure-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-reconfigure-input.json",
+      "bytes": 108,
+      "sha256": "2bc0bfbea226a68c8f691a84361b6f1ac5b28d1763565fb7589bc6198e6a951e"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-stable-mask.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-stable-mask.bin",
+      "bytes": 9216,
+      "sha256": "e1615f1541aa3b5d8d0c72e7b47b0ade367322c1719a05d42966b2fb5814c1dc"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/s6-surface-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\s6-surface-workload.json",
+      "bytes": 1400,
+      "sha256": "49ceab66dbaec07270d687b0396a7af09c08c8370b58a5c31114f0831037a835"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-client-frame-0.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-client-frame-0.bmp",
+      "bytes": 230454,
+      "sha256": "c96c8cc1b20492b5ab67639a0413b5e109b294e3e5f779be2e0699fc909c36e7"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-client-frame-0.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-client-frame-0.capture.json",
+      "bytes": 295,
+      "sha256": "0439e6fa22e84f0f848399c04598a271837c4f35976f9effec7aca447f60d7d9"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-client-frame-0.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-client-frame-0.verdict.json",
+      "bytes": 149,
+      "sha256": "713bf9c253a442bae5cafbd2e4d79ab898bc3eeb820efaa83b25f6af76b0812d"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-client-frame-1.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-client-frame-1.bmp",
+      "bytes": 147510,
+      "sha256": "c9aa14c425c7b5d68b036685566505cfe6e3e898e7cff28d170380dbc61bbdfa"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-client-frame-1.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-client-frame-1.capture.json",
+      "bytes": 295,
+      "sha256": "8bd280a9d818a8026cf7b867c2a9a84d43e691353b884503bb55579b7a3e8391"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-client-frame-1.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-client-frame-1.verdict.json",
+      "bytes": 149,
+      "sha256": "fe1b475ccad60f15db3d2a49dccfa756d7d18aaebccc4e41d61c6ef2a3afdab2"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-configuration.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-configuration.jsonl",
+      "bytes": 870,
+      "sha256": "a5a5686bd8081f1be9882313eaf296edabaa9e6e43d5c97a03ab479d1bcac742"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/s6-surface/surface-events.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\s6-surface\\surface-events.jsonl",
+      "bytes": 225,
+      "sha256": "de03d57e5db643eeb8eedcfe80363c51ad8a331d8d2b584af73e256b374770ff"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/run/wgl-debug-observer.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\run\\wgl-debug-observer.json",
+      "bytes": 790,
+      "sha256": "8c2870f74210e37dd4c62f497312db98f513c11e11a73e88593d382a51477e8c"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\source-inputs.zip",
+      "bytes": 707456,
+      "sha256": "25b3a0c53dd10e00dd5220155c88bf2cb16068177b95f16fac646c97fc05408e"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\stderr.log",
+      "bytes": 192,
+      "sha256": "3eef2f1b81cf044928e12b4ff94a2b1d9e7162369bddcd37b0d4db82f369dd5f"
+    },
+    {
+      "member": "s6-surface/attempts/native-gl-wgl-20261104T141059455126Z-18696/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\attempts\\native-gl-wgl-20261104T141059455126Z-18696\\stdout.log",
+      "bytes": 78039,
+      "sha256": "5807aff3c5810a577b3bd9c8a00c0bb6a04955f749a013e88e5c7ac66a656b3e"
+    },
+    {
+      "member": "s6-surface/manifest.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s6-surface\\6e160488d0e3e4d6663f7a866e2b445235b1cbd8\\manifest.json",
+      "bytes": 284612,
+      "sha256": "33a91df79ad21de59e613c1c172448238faed1857169ff04b18c9a0de068a4ae"
+    }
+  ]
+}

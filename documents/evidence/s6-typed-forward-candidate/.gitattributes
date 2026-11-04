@@ -1,0 +1,4 @@
+*.json -text
+*.zip -text
+*.log -text
+*.png -text

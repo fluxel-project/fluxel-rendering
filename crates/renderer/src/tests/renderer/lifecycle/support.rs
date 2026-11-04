@@ -180,6 +180,8 @@ impl Renderer<WitnessBackend> {
 }
 #[path = "../forward/cache.rs"]
 mod forward_cache_tests;
+#[path = "../forward/composed.rs"]
+mod forward_composed_tests;
 #[path = "../forward/contribution.rs"]
 mod forward_contribution_tests;
 #[path = "../forward/lifecycle.rs"]

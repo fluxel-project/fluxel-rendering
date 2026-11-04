@@ -8,33 +8,34 @@ use fluxel_shader::{
     SourceUnit, VertexInputDeclaration, VertexType,
 };
 
-use crate::{RenderId, RenderTransform, SceneAssetRef};
+use crate::{RenderTransform, SceneAssetRef};
 
 use super::{
-    ColorTextureData, ForwardPreparationError, GeometryData, GeometryLayout, PreparedMaterial,
+    ColorTextureData, ForwardDrawSource, ForwardPreparationError, GeometryData, GeometryLayout,
+    PreparedMaterial,
 };
 
 pub(super) fn resolve_asset<K: AssetKind, V>(
     snapshots: &[AssetSnapshot<K, V>],
     reference: SceneAssetRef<K>,
     asset: &'static str,
-    record: RenderId,
+    source: ForwardDrawSource,
 ) -> Result<AssetSnapshot<K, V>, ForwardPreparationError> {
     let mut matches = snapshots.iter().filter(|snapshot| {
         snapshot.id() == reference.id() && snapshot.generation() == reference.generation()
     });
     let Some(snapshot) = matches.next() else {
-        return Err(ForwardPreparationError::MissingAsset { asset, record });
+        return Err(ForwardPreparationError::MissingAsset { asset, source });
     };
     if matches.next().is_some() {
-        return Err(ForwardPreparationError::DuplicateAsset { asset, record });
+        return Err(ForwardPreparationError::DuplicateAsset { asset, source });
     }
     Ok(snapshot.clone())
 }
 
 pub(super) fn validate_texture(
     texture: &ColorTextureData,
-    record: RenderId,
+    source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     let [width, height] = texture.extent;
     let Some(bytes) = u64::from(width)
@@ -42,10 +43,10 @@ pub(super) fn validate_texture(
         .and_then(|texels| texels.checked_mul(4))
         .and_then(|bytes| usize::try_from(bytes).ok())
     else {
-        return Err(ForwardPreparationError::InvalidTexture { record });
+        return Err(ForwardPreparationError::InvalidTexture { source });
     };
     if width == 0 || height == 0 || texture.rgba8.len() != bytes {
-        return Err(ForwardPreparationError::InvalidTexture { record });
+        return Err(ForwardPreparationError::InvalidTexture { source });
     }
     Ok(())
 }
@@ -53,14 +54,14 @@ pub(super) fn validate_texture(
 pub(super) fn validate_cpu_geometry(
     geometry: &GeometryData,
     prepared: &crate::PreparedGeometry,
-    record: RenderId,
+    source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     if geometry.vertices.start > geometry.vertices.end {
-        return Err(ForwardPreparationError::InvalidVertexRange { record });
+        return Err(ForwardPreparationError::InvalidVertexRange { source });
     }
     if geometry.streams.len() != prepared.streams.len() {
         return Err(ForwardPreparationError::GeometryStreamCount {
-            record,
+            source,
             expected: prepared.streams.len(),
             actual: geometry.streams.len(),
         });
@@ -73,7 +74,7 @@ pub(super) fn validate_cpu_geometry(
     {
         if !matches!(layout.step_mode, VertexStepMode::Vertex) {
             return Err(ForwardPreparationError::InstanceStreamUnsupported {
-                record,
+                source,
                 stream: stream_index,
             });
         }
@@ -94,12 +95,12 @@ pub(super) fn validate_cpu_geometry(
             .and_then(|offset| offset.checked_add(attribute_end))
             .and_then(|end| usize::try_from(end).ok())
             .ok_or(ForwardPreparationError::GeometryPayloadTooShort {
-                record,
+                source,
                 stream: stream_index,
             })?;
         if required_end > bytes.len() {
             return Err(ForwardPreparationError::GeometryPayloadTooShort {
-                record,
+                source,
                 stream: stream_index,
             });
         }
@@ -109,7 +110,7 @@ pub(super) fn validate_cpu_geometry(
 
 pub(super) fn validate_material_schema(
     prepared: &PreparedMaterial,
-    record: RenderId,
+    source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     let bindings = &prepared.material().contribution().bindings;
     let tint = bindings.iter().filter(|binding| {
@@ -123,7 +124,7 @@ pub(super) fn validate_material_schema(
             && binding.kind == MaterialResourceKind::Texture2dF32
     });
     if bindings.len() != 2 || tint.count() != 1 || texture.count() != 1 {
-        return Err(ForwardPreparationError::MaterialBindingSchema { record });
+        return Err(ForwardPreparationError::MaterialBindingSchema { source });
     }
     Ok(())
 }
@@ -185,7 +186,7 @@ impl ForwardTemplate {
 
 pub(super) fn forward_template(
     layout: &GeometryLayout,
-    record: RenderId,
+    source: ForwardDrawSource,
 ) -> Result<ForwardTemplate, ForwardPreparationError> {
     let position = layout
         .streams
@@ -203,12 +204,12 @@ pub(super) fn forward_template(
         .flat_map(|stream| &stream.attributes)
         .any(|attribute| attribute.semantic == "COLOR");
     if !position {
-        return Err(ForwardPreparationError::MissingPosition { record });
+        return Err(ForwardPreparationError::MissingPosition { source });
     }
     match (uv, color) {
         (false, false) => Ok(ForwardTemplate::Position),
         (true, true) => Ok(ForwardTemplate::PositionUvColor),
-        _ => Err(ForwardPreparationError::IncompleteOptionalAttributes { record }),
+        _ => Err(ForwardPreparationError::IncompleteOptionalAttributes { source }),
     }
 }
 

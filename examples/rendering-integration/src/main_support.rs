@@ -64,15 +64,29 @@ pub(super) fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-pub(super) fn output_directory() -> Result<(PathBuf, bool, bool, bool, bool, bool), Box<dyn Error>>
-{
-    let mut args = std::env::args_os().skip(1);
+/// Exactly one named native workload is selected for an executable attempt.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum Workload {
+    #[default]
+    Foundation,
+    S3Material,
+    S2Cache,
+    S5Forward,
+    S5Surface,
+    S5DeviceIsolation,
+    S6Composed,
+    S6Surface,
+}
+
+pub(super) fn output_directory() -> Result<(PathBuf, Workload), Box<dyn Error>> {
+    parse_arguments(std::env::args_os().skip(1))
+}
+
+fn parse_arguments(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(PathBuf, Workload), Box<dyn Error>> {
     let mut output = None;
-    let mut s3_only = false;
-    let mut s5_only = false;
-    let mut s5_surface_only = false;
-    let mut s5_device_only = false;
-    let mut s2_cache_only = false;
+    let mut selected = None;
     while let Some(argument) = args.next() {
         if argument == "--output" {
             output = Some(
@@ -80,38 +94,34 @@ pub(super) fn output_directory() -> Result<(PathBuf, bool, bool, bool, bool, boo
                     .ok_or("--output requires a directory argument")?
                     .into(),
             );
-        } else if argument == "--s5-only" {
-            s5_only = true;
-        } else if argument == "--s5-surface-only" {
-            s5_surface_only = true;
-        } else if argument == "--s5-device-only" {
-            s5_device_only = true;
-        } else if argument == "--s3-only" {
-            s3_only = true;
-        } else if argument == "--s2-cache-only" {
-            s2_cache_only = true;
-        } else {
-            return Err(format!("unsupported argument: {}", argument.to_string_lossy()).into());
+            continue;
         }
-    }
-    if u8::from(s3_only)
-        + u8::from(s2_cache_only)
-        + u8::from(s5_only)
-        + u8::from(s5_surface_only)
-        + u8::from(s5_device_only)
-        > 1
-    {
-        return Err("workload selectors cannot be combined".into());
+        let workload = match argument.to_str() {
+            Some("--s3-only") => Workload::S3Material,
+            Some("--s2-cache-only") => Workload::S2Cache,
+            Some("--s5-only") => Workload::S5Forward,
+            Some("--s5-surface-only") => Workload::S5Surface,
+            Some("--s5-device-only") => Workload::S5DeviceIsolation,
+            Some("--s6-only") => Workload::S6Composed,
+            Some("--s6-surface-only") => Workload::S6Surface,
+            _ => {
+                return Err(format!("unsupported argument: {}", argument.to_string_lossy()).into());
+            }
+        };
+        if selected.is_some_and(|previous| previous != workload) {
+            return Err("workload selectors cannot be combined".into());
+        }
+        selected = Some(workload);
     }
     Ok((
         output.unwrap_or_else(|| PathBuf::from("target/integration-copy")),
-        s3_only,
-        s2_cache_only,
-        s5_only,
-        s5_surface_only,
-        s5_device_only,
+        selected.unwrap_or_default(),
     ))
 }
+
+#[cfg(test)]
+#[path = "tests/cli.rs"]
+mod cli_tests;
 
 pub(super) fn producer(
     store: &AssetStore<Bytes, Vec<u8>, String>,

@@ -3,9 +3,12 @@
 Renderer is being rebuilt following the organization architecture. Narrow Copy,
 offscreen and Surface Raster, and supported Compute fixtures serve the S0/S1
 consumer. The public S4 subset adds CPU-only RenderScene changes, immutable
-snapshots, and a bounded CPU feature facade. FramePipeline, preparation, and GPU
-scene execution remain private scaffolds. The bounded S4 CPU closure is recorded
-in [the S4 CPU closure record](../../documents/s4-cpu-closure.md).
+snapshots, and a bounded CPU feature facade. S5 exposes the bounded Forward
+FramePipeline facade; Graph internals and GPU resource realization remain private.
+The bounded S4 CPU closure is recorded
+in [the S4 CPU closure record](../../documents/s4-cpu-closure.md). S6 adds a
+separately evidenced typed opaque-Forward Feature composition subset without
+making the Graph, scheduler, RHI objects, or general GPU-product model public.
 
 ```text
 renderer/
@@ -102,6 +105,31 @@ invalid prepared data with structured errors. It is provisional and CPU-only:
 it does not implement `RenderFeature` or `FramePipeline`, declare Graph work,
 or provide GPU evidence. Its compile-fail negative verifies that the external
 consumer cannot name Renderer-private Graph state.
+
+## Bounded S6 typed Forward subset
+
+An independently built external consumer also exercises `RenderFeature`,
+`FeatureBinding`, and `ForwardCompositionContext` for one typed quad batch. Its
+concrete `QuadFeature`, normal composed material, and external Forward pipeline
+combine with built-in mesh draws in one opaque Graph pass. The Feature emits
+logical draw requests and receives only its resolved read scope; it neither owns
+a device nor gains a Graph/scheduler/submission escape.
+
+The retained DX12 and desktop OpenGL/WGL matrix covers eleven offscreen
+submissions per backend, global mesh/Feature ordering, enablement, independent
+local providers, three pending geometry/material/texture replacements, and a
+two-frame native Surface resize workload. It also exercises private phase/scope
+compile-fail boundaries, invalid material/texture rejection before backend work,
+and completion-held pending ownership. See the
+[S6 typed Forward closure record](../../documents/s6-typed-forward-closure.md),
+[measurement baseline](../../documents/s6-measurement-baseline.md), and
+[evidence index](../../documents/evidence/s6-typed-forward-candidate/index.json).
+
+This is not a general Feature or GPU-product API. Cross-pass products,
+transparent composition, arbitrary runtime Feature loading, plugin ABIs, and
+backend support beyond the named Windows DX12/WGL matrix remain outside the
+accepted subset. Browser, Metal, S7/S8 work, and the final full-workspace
+regression are not claimed here.
 
 The target uses batch-level Rust traits with generics and monomorphization for
 Feature and frame-policy composition. External crates supply concrete local

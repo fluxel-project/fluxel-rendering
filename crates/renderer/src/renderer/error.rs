@@ -44,6 +44,8 @@ pub enum RendererError {
     ShaderAdmission(super::ShaderAdmissionError),
     /// CPU Scene selection failed before Forward device preparation.
     ForwardPipeline(crate::PipelineError),
+    /// Typed feature input did not belong to this frame or failed preparation.
+    ForwardFeature(crate::FeatureError),
     /// Logical Forward assets did not satisfy the selected consumer.
     ForwardPreparation(crate::ForwardPreparationError),
     /// A Forward device operation failed; the original RHI error is preserved.
@@ -92,6 +94,7 @@ impl fmt::Display for RendererError {
             Self::Rhi(error) => error.fmt(formatter),
             Self::ShaderAdmission(error) => error.fmt(formatter),
             Self::ForwardPipeline(error) => error.fmt(formatter),
+            Self::ForwardFeature(error) => error.fmt(formatter),
             Self::ForwardPreparation(error) => error.fmt(formatter),
             Self::ForwardOperation { operation, error } => {
                 write!(formatter, "Forward {operation}: {error}")

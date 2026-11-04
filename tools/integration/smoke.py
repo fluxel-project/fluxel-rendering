@@ -23,8 +23,9 @@ from typing import Any
 # their v3 contract so a schema validator does not accept them as S5 evidence.
 S0_S3_SCHEMA_VERSION = 3
 S5_SCHEMA_VERSION = 4
+S6_SCHEMA_VERSION = 5
 BACKENDS = ("dx12", "native-gl-wgl")
-WORKLOADS = ("s0-s3", "s5-forward", "s5-surface", "s5-device-isolation")
+WORKLOADS = ("s0-s3", "s5-forward", "s5-surface", "s5-device-isolation", "s6-composed", "s6-surface")
 RHI_REVISION = "b5d569feace548a6ed498901deaf31a5efcaca61"
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT = ROOT / "examples" / "rendering-integration"
@@ -37,11 +38,15 @@ RUST_INCLUDE = re.compile(r"include_(?:str|bytes)!\s*\(\s*([^)]*?)\s*\)")
 
 def schema_version_for_workload(workload: str) -> int:
     """Keep historical and S5 manifest schemas disjoint."""
+    if workload.startswith("s6-"):
+        return S6_SCHEMA_VERSION
     return S5_SCHEMA_VERSION if workload.startswith("s5-") else S0_S3_SCHEMA_VERSION
 
 
 def stage_for_workload(workload: str) -> str:
     """Label every S5 contract as S5 evidence in the outer manifest."""
+    if workload.startswith("s6-"):
+        return "S6 typed Forward integration evidence"
     return "S5 Forward integration evidence" if workload.startswith("s5-") else "S0-S3 integration evidence"
 
 if __package__:
@@ -64,6 +69,7 @@ if __package__:
         source_consistency, source_input_paths, source_path_is_safe,
         uncontrolled_build_script_count,
     )
+    from .smoke_s6 import s6_nested_workload_evidence, s6_workload_contract
 else:
     from smoke_attempt import (
         actual_test_count, attempt_name, load_attempts, log_result, retained_files, run_command,
@@ -84,6 +90,7 @@ else:
         source_consistency, source_input_paths, source_path_is_safe,
         uncontrolled_build_script_count,
     )
+    from smoke_s6 import s6_nested_workload_evidence, s6_workload_contract
 
 
 def verify_git_checkouts(inventory: list[dict[str, Any]], locked: list[dict[str, str]]) -> dict[str, Any]:
@@ -142,7 +149,8 @@ def main() -> int:
         "backend": args.backend,
         "mode": args.mode,
         "feature": args.backend,
-        "workload": (s5_workload_contract(args.workload) if args.workload.startswith("s5-") else {
+        "workload": (s6_workload_contract(args.workload) if args.workload.startswith("s6-") else
+                     s5_workload_contract(args.workload) if args.workload.startswith("s5-") else {
             "selection": "copy+raster+compute+read-set+s2-shader+s2-texture+s3-material+s3-material-replacement+surface+device-replacement",
             "submissions_before_wait": 3,
             "copy_source_byte_lengths": [23, 37, 22],
@@ -256,14 +264,20 @@ def main() -> int:
                 child_environment, run_child_evidence = controlled_child_environment(run_extras)
                 attempt["child_environment"]["run"] = run_child_evidence
                 executable_command = [executable, "--output", str(run_directory.resolve())]
-                if args.workload.startswith("s5-"):
+                if args.workload.startswith("s6-"):
+                    executable_command.append(s6_workload_contract(args.workload)["entry_argument"])
+                elif args.workload.startswith("s5-"):
                     executable_command.append(s5_workload_contract(args.workload)["entry_argument"])
                 result = run_command(
                     executable_command, ARTIFACT,
                     args.timeout_seconds, run_directory, child_environment
                 )
                 result["retained_files"] = retained_files(run_directory)
-                result["nested_workloads"] = nested_workload_evidence(run_directory, args.workload)
+                result["nested_workloads"] = (
+                    s6_nested_workload_evidence(run_directory, args.workload)
+                    if args.workload.startswith("s6-")
+                    else nested_workload_evidence(run_directory, args.workload)
+                )
                 attempt["validation"] = validation_evidence(args.backend, run_directory, args.validation)
                 if args.backend == "dx12":
                     attempt["validation"]["diagnostics"] = classify_dx12_diagnostics(run_directory / "stderr.log")

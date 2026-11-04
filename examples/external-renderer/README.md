@@ -32,6 +32,37 @@ fixtures are independent crates. They confirm that external code cannot import
 Renderer's private `graph` module or construct the renderer-owned phase context
 needed to declare and submit work.
 
+## Bounded S6 typed Forward feature
+
+The library also exports `QuadFeature`, `QuadInput`, `PreparedQuads`, and
+`ExternalComposedPipeline`. A quad marker owns its local identity, center, size,
+tint, asset references and layer; it is not a selected mesh `RenderId`.
+Feature-local quad visibility and the pipeline's mesh visibility operate on
+their own data. The pipeline orders all resulting draws by a common layer and
+namespace-aware identity before adjacent program batching.
+
+Create the feature with the scene's `FeatureIssuer`, publish `QuadInput` into
+issuer-bound `TypedFeatureStorage`, then pass `FeatureBinding::new` to
+`Renderer::submit_forward_with_feature`. The integration consumer demonstrates
+the complete call in `../rendering-integration/src/s6_composed.rs`; it owns the
+device and submissions. The Feature receives only its prepared draw read scope
+inside the actual Graph pass. Its normal material reads the selected texture
+and remaps tint channels through Material/Shader composition.
+
+This is a bounded accepted opaque-Forward subset: one external typed Feature and
+built-in meshes share the existing residency and completion path in one Graph
+pass. The native DX12/WGL matrix covers eleven offscreen submissions per backend
+across cache/order, enablement, independent-provider, and pending replacement
+cases, plus a two-frame native Surface resize workload. It also covers private
+phase/scope access, invalid material/texture refusal before backend work, and
+completion-held pending ownership. See the
+[S6 typed Forward closure record](../../documents/s6-typed-forward-closure.md),
+[measurement baseline](../../documents/s6-measurement-baseline.md), and
+[evidence index](../../documents/evidence/s6-typed-forward-candidate/index.json).
+This does not establish general GPU products, cross-pass Features, transparent
+composition, runtime Feature loading, or a plugin ABI. The S4 executable below
+remains a CPU consumer.
+
 ## Bounded S5 FramePipeline policy
 
 The crate also implements two statically dispatched public `FramePipeline`
@@ -79,9 +110,8 @@ python scripts/capture_s4_evidence.py --attempt attempt-002
 A fixed three-record scene has two independently expected visible records; the
 external provider deliberately traverses candidates in reverse order to check
 deterministic normalization. This local preparation check alone does not close S5 and
-does not establish S6: external GPU resource contributions, heterogeneous
-Feature composition, and an external pipeline plus Feature in the same frame
-remain pending.
+does not establish S6. The typed Forward implementation above has a separate
+native consumer; a successful CPU reference run cannot close its GPU gates.
 
 The [S5 closure record](../../documents/s5-forward-closure.md) combines this
 independent consumer with the native integration matrix and measurement baseline.

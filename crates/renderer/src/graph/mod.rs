@@ -16,8 +16,8 @@ mod forward;
 pub(crate) use forward::{
     BufferGraphFact, ClearForwardPass, ForwardDrawShape, ForwardGraphDraw, ForwardGraphSpec,
     ForwardGraphTextureUpload, ForwardGraphUniformUpload, ForwardGraphVertexUpload,
-    ForwardPhaseDriver, ForwardPlan, ForwardPlanBuildError, ForwardShape, OpaqueForwardPass,
-    SurfaceForwardPlan, TextureGraphFact,
+    ForwardPhaseDriver, ForwardPlan, ForwardPlanBuildError, ForwardReadScope, ForwardShape,
+    OpaqueForwardPass, SurfaceForwardPlan, TextureGraphFact,
 };
 mod raster;
 pub(crate) mod read_set_raster;

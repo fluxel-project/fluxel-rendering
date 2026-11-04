@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "result": "verified",
+  "native_attempts_with_identical_input_lists": 4,
+  "native_input_count": 412,
+  "baseline_input_count": 416,
+  "baseline_additional_inputs": [
+    "tools/bench/s5_baseline.py",
+    "tools/bench/s6_baseline.py",
+    "tools/bench/test_s5_baseline.py",
+    "tools/bench/test_s6_baseline.py"
+  ],
+  "all_shared_native_and_baseline_inputs_identical": true,
+  "current_worktree_differences": [
+    {
+      "path": "crates/renderer/README.md",
+      "archived_sha256": "f45092eb2762954bc45ed3a9d08fd2fd42633868978c76f37006063e1f81dec3",
+      "current_sha256": "07d40c301f2f8e635eeb746c27ba2f3ceb70106b04c0ce218b8377ea99ecd709",
+      "classification": "Reviewed documentation-only scope/status/procedure update"
+    },
+    {
+      "path": "examples/external-renderer/README.md",
+      "archived_sha256": "c5bd19d0b874ad48fbe3a4bddfd1781c2898b0878b0921223b9a60e2df350083",
+      "current_sha256": "809baec8b8f67485889d7cf82e5854beec792b6c43c849e82afa0e93d68b83d4",
+      "classification": "Reviewed documentation-only scope/status/procedure update"
+    },
+    {
+      "path": "examples/rendering-integration/README.md",
+      "archived_sha256": "0e984be8caf96893575c3a74a19663d553e08fc2d6a051c1ab4a6fa9386b8971",
+      "current_sha256": "7d7a873a545434b1046877600c44997794bdd021c580c87ed09c668e455dcb37",
+      "classification": "Reviewed documentation-only scope/status/procedure update"
+    },
+    {
+      "path": "tools/integration/README.md",
+      "archived_sha256": "eacf8e4c7bd0ec6ad016f2c82bb62866026b6ffddff6ddf132ff5a52b1783513",
+      "current_sha256": "7dd0496a7016caebf8f6211119be8acbc00dca352720d61cfb11def8da9e4d75",
+      "classification": "Reviewed documentation-only scope/status/procedure update"
+    }
+  ],
+  "archive_members_verified": 1055,
+  "policy": "No code, dependency or lock changes allowed after capture. Original bytes retained; documentation deltas are explicit."
+}

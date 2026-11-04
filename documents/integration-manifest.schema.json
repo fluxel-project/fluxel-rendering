@@ -19,10 +19,10 @@
   ],
   "properties": {
     "schema_version": {
-      "enum": [2, 3, 4]
+      "enum": [2, 3, 4, 5]
     },
     "stage": {
-      "enum": ["S0/S1", "S0-S3 integration evidence", "S5 Forward integration evidence"]
+      "enum": ["S0/S1", "S0-S3 integration evidence", "S5 Forward integration evidence", "S6 typed Forward integration evidence"]
     },
     "artifact": {
       "type": "object",
@@ -133,6 +133,21 @@
           "stage": { "const": "S5 Forward integration evidence" },
           "attempts": {
             "items": { "$ref": "#/$defs/s5_attempt" }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 5 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["historical_foundation_support_decision"],
+        "properties": {
+          "stage": { "const": "S6 typed Forward integration evidence" },
+          "attempts": {
+            "items": { "$ref": "#/$defs/s6_attempt" }
           }
         }
       }
@@ -307,6 +322,52 @@
                     "selection": { "const": "s5-forward-surface-resize" },
                     "entry_argument": { "const": "--s5-surface-only" },
                     "required_nested_workload": { "const": "s5-forward-surface/s5-forward-surface-workload.json" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "s6_attempt": {
+      "allOf": [
+        { "$ref": "#/$defs/attempt" },
+        {
+          "required": ["workload"],
+          "properties": {
+            "workload": {
+              "type": "object",
+              "required": ["selection", "entry_argument", "required_nested_workload", "expected_cases", "manifest_contract"],
+              "properties": {
+                "expected_cases": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string" }
+                },
+                "manifest_contract": {
+                  "const": "schemaVersion=1; exact named cases; every raw artifact enumerated by one case"
+                }
+              },
+              "oneOf": [
+                {
+                  "properties": {
+                    "selection": { "const": "s6-composed-offscreen-typed-quad" },
+                    "entry_argument": { "const": "--s6-only" },
+                    "required_nested_workload": { "const": "s6-composed/s6-composed-workload.json" },
+                    "expected_cases": {
+                      "const": ["original-three-frame-cache", "enabled-disabled-enabled", "independent-providers", "three-pending-replacements"]
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "selection": { "const": "s6-composed-surface-resize" },
+                    "entry_argument": { "const": "--s6-surface-only" },
+                    "required_nested_workload": { "const": "s6-surface/s6-surface-workload.json" },
+                    "expected_cases": {
+                      "const": ["mesh-after-quad-initial", "quad-after-mesh-resized"]
+                    }
                   }
                 }
               ]

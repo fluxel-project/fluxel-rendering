@@ -55,8 +55,9 @@ actual consumers rather than implemented as an exhaustive feature list.
 The renderer is data-oriented and extensible at batch boundaries. `RenderScene`
 is render-domain storage fed by ordinary or ECS-style adapters; it does not own
 gameplay ECS identity or impose one AoS, SoA, or GPU vertex layout. Features own
-their typed storage and may select local visibility, deformation, geometry, or
-batching algorithms. `FramePipeline` owns phase policy and composition; Graph
+their payload types, use scene/issuer-bound typed storage, and may select local
+visibility, deformation, geometry, or batching algorithms. `FramePipeline` owns
+phase policy and composition; Graph
 remains the sole declaration, scheduling, and RHI execution route for frame GPU
 work. Renderer-controlled uploads follow the explicit preparation boundary below.
 
@@ -352,6 +353,17 @@ the public pipeline/Feature prototype; the combined runtime proof is required at
 
 **Owner:** Rendering integration and an independently built Rust consumer.
 
+**Implementation status:** bounded closure. `RenderFeature` / `FeatureBinding`
+compose an external typed quad batch and built-in meshes through one opaque
+Forward Graph submission. The independently built consumer passed the retained
+DX12/WGL matrix: eleven offscreen submissions per backend across ordering/cache,
+enablement, independent providers, and pending geometry/material/texture
+replacement, plus a two-frame native Surface resize workload. The
+[S6 closure record](s6-typed-forward-closure.md),
+[measurement baseline](s6-measurement-baseline.md), and
+[evidence index](evidence/s6-typed-forward-candidate/index.json) retain the
+exact scope, revision/lock inputs, observations, and release samples.
+
 Use `examples/external-renderer/` with its own manifest/lock, normal public
 dependencies, and no workspace-private hooks. It supplies an external FramePipeline,
 typed RenderFeature, and custom material contribution. The integration artifact
@@ -360,7 +372,8 @@ successful demos do not establish their composition.
 
 **Acceptance:**
 
-- The Feature owns typed storage, accepts batches, joins a selected phase, and
+- The Feature consumes its batch through scene/issuer-bound typed storage,
+  joins a selected phase, and
   declares all accesses without a core object-type switch or independent submission.
   Its custom material uses normal composition; the external pipeline controls policy.
 - The same frame combines the built-in mesh path with the independent Feature and
@@ -374,7 +387,9 @@ successful demos do not establish their composition.
   concrete implementations.
 - Retain inspected multi-frame output, exact revisions/locks, real producer/consumer
   builds, and the affected target matrix. Exercise visibility, ordering/batching,
-  compatible binding refresh, and safe retirement.
+  compatible binding refresh, safe retirement, private phase/scope boundaries,
+  invalid material/texture refusal before backend work, and backpressure that
+  cannot invoke Feature callbacks.
 - Reject unavailable phases, incompatible shader/layout/range/access requirements,
   missing declarations, foreign/stale resources, and preparation failure. Demonstrate
   a pending upload with an enforceable dependency and frame data that cannot be
@@ -383,6 +398,9 @@ successful demos do not establish their composition.
   skinning and general cross-pass extensions are not MVP gates. Runtime loading
   of unknown Feature types and a stable plugin binary ABI are outside this
   static extension architecture.
+
+The bounded closure does not add browser or Metal evidence and does not replace
+the final full-workspace regression. S7 and S8 remain uncompleted stages.
 
 ## S7. Material, pipeline, and Feature expansion
 

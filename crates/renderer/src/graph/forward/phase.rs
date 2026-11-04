@@ -20,25 +20,22 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) output: Option<(GraphPass, Option<crate::graph::definition::TextureHandle>)>,
 }
 
-const UPLOAD_DEPENDENCY: u8 = 1;
-const VERTEX_READS: u8 = 2;
-const UNIFORM_READS: u8 = 4;
-const TEXTURE_READS: u8 = 8;
-const COLOR_WRITE: u8 = 16;
+pub(super) const UPLOAD_DEPENDENCY: u8 = 1;
+pub(super) const VERTEX_READS: u8 = 2;
+pub(super) const UNIFORM_READS: u8 = 4;
+pub(super) const TEXTURE_READS: u8 = 8;
+pub(super) const COLOR_WRITE: u8 = 16;
 
 /// Graph-private opaque pass capability, exposed only through the public
 /// policy wrapper for the duration of a real `GraphBuilder::add_pass` call.
 pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend> {
-    pass: &'pass mut crate::graph::definition::PassBuilder<'builder>,
-    upload: GraphPass,
-    streams: &'pass [crate::graph::definition::BufferHandle],
-    uniform: crate::graph::definition::BufferHandle,
-    textures: &'pass [crate::graph::definition::TextureHandle],
-    target: Option<crate::graph::definition::TextureHandle>,
-    surface_target: bool,
-    draws: &'pass [ForwardGraphDraw],
-    declared: u8,
-    marker: PhantomData<&'frame ForwardFrame<B>>,
+    pub(super) pass: &'pass mut crate::graph::definition::PassBuilder<'builder>,
+    pub(super) upload: GraphPass,
+    pub(super) target: Option<crate::graph::definition::TextureHandle>,
+    pub(super) surface_target: bool,
+    pub(super) declared: u8,
+    pub(super) reads: ForwardReadState,
+    pub(super) marker: PhantomData<&'frame ForwardFrame<B>>,
 }
 
 impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
@@ -58,53 +55,23 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
 
     pub(crate) fn read_vertex_streams(&mut self) -> std::result::Result<(), ()> {
         self.mark(VERTEX_READS)?;
-        for draw in self.draws {
-            validate_graph_draw(draw, self.streams.len()).map_err(|_| ())?;
-            for (index, range) in draw.vertex_streams.iter().zip(&draw.accesses) {
-                if let Some(range) = range {
-                    self.pass
-                        .read_with_use(
-                            *self.streams.get(*index).ok_or(())?,
-                            range.clone(),
-                            vertex_read_uses().uses,
-                            BufferUsage::VERTEX,
-                        )
-                        .map_err(|_| ())?;
-                }
-            }
-        }
-        Ok(())
+        self.reads.begin_global_reads()?;
+        let indices: Vec<_> = (0..self.reads.draws.len()).collect();
+        self.reads.read_vertex_streams_for(self.pass, &indices)
     }
 
     pub(crate) fn read_frame_uniforms(&mut self) -> std::result::Result<(), ()> {
         self.mark(UNIFORM_READS)?;
-        for range in self.draws.iter().flat_map(|draw| &draw.uniform_ranges) {
-            self.pass
-                .read_with_use(
-                    self.uniform,
-                    range.clone(),
-                    shader_read_uses().uses,
-                    BufferUsage::UNIFORM,
-                )
-                .map_err(|_| ())?;
-        }
-        Ok(())
+        self.reads.begin_global_reads()?;
+        let indices: Vec<_> = (0..self.reads.draws.len()).collect();
+        self.reads.read_frame_uniforms_for(self.pass, &indices)
     }
 
     pub(crate) fn read_sampled_textures(&mut self) -> std::result::Result<(), ()> {
         self.mark(TEXTURE_READS)?;
-        for draw in self.draws {
-            self.pass
-                .read_texture_with_use(
-                    *self.textures.get(draw.texture).ok_or(())?,
-                    whole(),
-                    texture_read_uses().uses,
-                    ImageLayout::ShaderReadOnly,
-                    TextureUsage::TEXTURE_BINDING,
-                )
-                .map_err(|_| ())?;
-        }
-        Ok(())
+        self.reads.begin_global_reads()?;
+        let indices: Vec<_> = (0..self.reads.draws.len()).collect();
+        self.reads.read_sampled_textures_for(self.pass, &indices)
     }
 
     pub(crate) fn write_main_color(&mut self) -> std::result::Result<(), ()> {
@@ -130,9 +97,7 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
     fn finish(
         &mut self,
     ) -> std::result::Result<Option<crate::graph::definition::TextureHandle>, ()> {
-        if self.declared
-            != UPLOAD_DEPENDENCY | VERTEX_READS | UNIFORM_READS | TEXTURE_READS | COLOR_WRITE
-        {
+        if !opaque_requirements_met(self.declared, &self.reads) {
             return Err(());
         }
         if self.target.is_none() && !self.surface_target {
@@ -141,6 +106,17 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
         self.pass.side_effect();
         Ok(self.target)
     }
+}
+
+pub(super) fn opaque_requirements_met(declared: u8, reads: &ForwardReadState) -> bool {
+    declared & (UPLOAD_DEPENDENCY | COLOR_WRITE) == UPLOAD_DEPENDENCY | COLOR_WRITE
+        && reads.complete()
+        && if reads.scopes_started() {
+            declared & (VERTEX_READS | UNIFORM_READS | TEXTURE_READS) == 0
+        } else {
+            declared & (VERTEX_READS | UNIFORM_READS | TEXTURE_READS)
+                == VERTEX_READS | UNIFORM_READS | TEXTURE_READS
+        }
 }
 
 pub(crate) struct ClearForwardPass<'pass, 'builder, 'frame, B: ResourceBackend> {
@@ -240,13 +216,10 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                 let mut opaque = OpaqueForwardPass {
                     pass,
                     upload,
-                    streams: &streams,
-                    uniform,
-                    textures: &textures,
                     target,
                     surface_target: self.surface_target,
-                    draws: &draws,
                     declared: 0,
+                    reads: ForwardReadState::new(streams, uniform, textures, draws),
                     marker: PhantomData,
                 };
                 declare(&mut opaque)

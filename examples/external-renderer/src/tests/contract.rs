@@ -175,10 +175,27 @@ fn external_code_cannot_access_renderer_private_graph_state() {
 
 #[test]
 fn external_code_cannot_construct_a_phase_context_or_submit_work() {
-    assert_compile_fails("private-phase-context", "E0624", "associated function `new` is private");
+    assert_compile_fails_all(
+        "private-phase-context",
+        &[
+            ("E0624", "associated function `new` is private"),
+            (
+                "E0616",
+                "field `scope` of struct `ForwardFeaturePass` is private",
+            ),
+            (
+                "E0616",
+                "field `phase` of struct `ForwardCompositionContext` is private",
+            ),
+        ],
+    );
 }
 
 fn assert_compile_fails(case: &str, code: &str, message: &str) {
+    assert_compile_fails_all(case, &[(code, message)]);
+}
+
+fn assert_compile_fails_all(case: &str, expected: &[(&str, &str)]) {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("compile-fail")
         .join(case)
@@ -201,8 +218,10 @@ fn assert_compile_fails(case: &str, code: &str, message: &str) {
         .expect("compile-fail fixture must launch cargo");
     assert!(!output.status.success(), "private module fixture compiled");
     let diagnostics = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        diagnostics.contains(code) && diagnostics.contains(message),
-        "fixture failed for an unrelated reason:\n{diagnostics}"
-    );
+    for (code, message) in expected {
+        assert!(
+            diagnostics.contains(code) && diagnostics.contains(message),
+            "fixture failed without {code} / {message}:\n{diagnostics}"
+        );
+    }
 }

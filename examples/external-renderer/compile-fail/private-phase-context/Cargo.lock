@@ -127,6 +127,7 @@ name = "external-renderer-private-phase-context-negative"
 version = "0.0.0"
 dependencies = [
  "fluxel-renderer",
+ "fluxel-rhi",
 ]
 
 [[package]]

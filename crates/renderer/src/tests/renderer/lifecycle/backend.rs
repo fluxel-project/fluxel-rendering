@@ -5,11 +5,11 @@
 //! consumer's responsibility.
 
 use std::{
-    future::{Future, Ready, ready},
+    future::{ready, Future, Ready},
     ops::Range,
     sync::{
-        Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, Weak,
     },
 };
 
@@ -212,6 +212,47 @@ impl ResourceBackend for WitnessBackend {
     }
     fn create_pipeline_layout(_: &Arc<Native>, _: &PipelineLayoutDesc<'_, Self>) -> Result<()> {
         Err(Error::Unsupported("pipeline layout"))
+    }
+}
+
+impl ShaderBackend for WitnessBackend {
+    type DirectFuture<'a> = Ready<Result<()>>;
+    type NagaFuture<'a> = Ready<Result<()>>;
+
+    fn shader_route(_: &Arc<Native>, _: &ShaderDesc) -> ShaderRoute {
+        ShaderRoute::Direct(ShaderTarget {
+            format: ShaderFormat::Wgsl,
+            environment: "witness".into(),
+            abi_key: "witness".into(),
+        })
+    }
+
+    fn compile_direct<'a>(
+        _: &'a Arc<Native>,
+        _: &'a ShaderDesc,
+        _: &'a ShaderTarget,
+    ) -> Self::DirectFuture<'a> {
+        ready(Ok(()))
+    }
+
+    fn compile_naga<'a>(
+        _: &'a Arc<Native>,
+        _: &'a ShaderDesc,
+        _: &'a ShaderTarget,
+    ) -> Self::NagaFuture<'a> {
+        ready(Ok(()))
+    }
+}
+
+impl PipelineBackend for WitnessBackend {
+    type RasterPipelineFuture<'a> = Ready<Result<()>>;
+
+    fn create_raster_pipeline<'a>(
+        _: &'a Arc<Native>,
+        _: &'a RasterPipelineDesc<Self>,
+        _: Option<DynamicDepthBias>,
+    ) -> Self::RasterPipelineFuture<'a> {
+        ready(Ok(()))
     }
 }
 

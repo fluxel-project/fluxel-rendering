@@ -6,18 +6,21 @@ mod offscreen_declaration;
 mod offscreen_plan;
 mod offscreen_record;
 mod phase;
+mod read_scope;
 mod spec;
 mod surface_plan;
 mod surface_record;
 mod validation;
 use access_contracts::*;
 pub(crate) use phase::{ClearForwardPass, ForwardPhaseDriver, OpaqueForwardPass};
+pub(crate) use read_scope::ForwardReadScope;
+use read_scope::ForwardReadState;
+use spec::{forward_shape, surface_forward_shape, SurfaceForwardShape};
 pub(crate) use spec::{
     BufferGraphFact, ForwardDrawShape, ForwardGraphDraw, ForwardGraphSpec,
     ForwardGraphTextureUpload, ForwardGraphUniformUpload, ForwardGraphVertexUpload, ForwardShape,
     TextureGraphFact,
 };
-use spec::{SurfaceForwardShape, forward_shape, surface_forward_shape};
 use validation::*;
 
 use fluxel_rhi::{
@@ -38,9 +41,9 @@ use std::{marker::PhantomData, ops::Range, sync::Arc};
 
 use crate::residency::{ForwardFrame, SurfaceForwardFrame};
 use crate::{
-    FrameTopology,
     pipeline::{ForwardPhaseContext, PipelineError},
     preparation::{GeometryBufferOwner, GeometryDraw, GeometryStreamBinding, PreparedGeometry},
+    FrameTopology,
 };
 
 use super::{
@@ -49,10 +52,10 @@ use super::{
         AccessKind, BufferAccessContract, GraphBuilder, GraphPass, TextureAccessContract,
         TextureRange,
     },
-    execution::{BoundBuffer, BoundTexture, CompiledExecution, FrameBindings, binding_error},
+    execution::{binding_error, BoundBuffer, BoundTexture, CompiledExecution, FrameBindings},
 };
-use declaration::{SurfaceForwardDeclaration, declare_surface_with};
-use offscreen_declaration::{OffscreenForwardDeclaration, declare_offscreen_with};
+use declaration::{declare_surface_with, SurfaceForwardDeclaration};
+use offscreen_declaration::{declare_offscreen_with, OffscreenForwardDeclaration};
 
 type Outcome<B> = <<B as ExecutionBackend>::Mode as ExecutionMode<B>>::Outcome;
 

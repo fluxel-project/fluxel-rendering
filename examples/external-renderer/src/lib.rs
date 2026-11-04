@@ -8,6 +8,12 @@ use fluxel_renderer::{
     PipelineError, RenderBounds, RenderId, VisibilityProvider,
 };
 
+pub mod quad;
+pub use quad::{
+    ExternalComposedPipeline, PreparedQuads, QuadAssets, QuadFeature, QuadInput, QuadMarker,
+    quad_geometry_data, quad_marker_material_definition,
+};
+
 /// A concrete external opaque policy using interval-separation visibility.
 #[derive(Clone, Debug, Default)]
 pub struct ExternalOpaquePipeline(ForwardCpuPipeline<IntervalVisibility>);
@@ -118,3 +124,7 @@ impl<R> VisibilityProvider<R> for IntervalVisibility {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/quad.rs"]
+mod quad_tests;

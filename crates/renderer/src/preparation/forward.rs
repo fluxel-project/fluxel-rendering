@@ -11,8 +11,9 @@ use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_material::{MaterialAsset, MaterialDefinition};
 use fluxel_shader::ShaderComposer;
 
-use crate::{PreparedFrame, RenderId, RenderTransform, RenderView, SceneAssetRef};
+use crate::{FeatureHandle, PreparedFrame, RenderId, RenderTransform, RenderView, SceneAssetRef};
 
+use super::ForwardDrawSource;
 use super::{
     GeometryLayout, MaterialPreparationError, PreparedMaterial, VertexLayoutKey, prepare_material,
     vertex_layout_key,
@@ -68,6 +69,19 @@ pub struct ForwardResources {
     pub tint: [f32; 4],
 }
 
+/// A Forward draw supplied directly by one typed render feature.
+#[derive(Clone, Debug)]
+pub struct ForwardDrawRequest {
+    /// Identity unique within the requesting feature for this frame.
+    pub local_id: u64,
+    /// Explicit cross-source ordering value.
+    pub order: i64,
+    /// Exact immutable assets and dynamic tint for the draw.
+    pub resources: ForwardResources,
+    /// World-from-local transform for the draw.
+    pub transform: RenderTransform,
+}
+
 /// Asset snapshots visible to the Forward preparation consumer.
 ///
 /// The caller retains normal asset-store ownership; this structure only supplies
@@ -85,7 +99,8 @@ pub struct ForwardAssets {
 /// One fully resolved, still CPU-only Forward draw input.
 #[derive(Clone)]
 pub struct ForwardDrawInput {
-    record: RenderId,
+    source: ForwardDrawSource,
+    order: i64,
     geometry: AssetSnapshot<GeometryAsset, GeometryData>,
     material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
     texture: AssetSnapshot<ColorTextureAsset, ColorTextureData>,
@@ -172,9 +187,25 @@ pub(crate) struct ForwardBatchStats {
 }
 
 impl ForwardDrawInput {
-    /// Returns the scene record that requested this draw.
-    pub fn record(&self) -> RenderId {
-        self.record
+    /// Returns the source that requested this draw.
+    pub const fn source(&self) -> ForwardDrawSource {
+        self.source
+    }
+
+    /// Returns this draw's explicit cross-source ordering value.
+    pub const fn order(&self) -> i64 {
+        self.order
+    }
+
+    /// Returns the scene record that requested this draw, when it has one.
+    ///
+    /// Feature-owned draws have no manufactured scene identity and return
+    /// `None`.
+    pub fn record(&self) -> Option<RenderId> {
+        match self.source {
+            ForwardDrawSource::Scene(record) => Some(record),
+            ForwardDrawSource::Feature { .. } => None,
+        }
     }
 
     /// Returns the retained immutable geometry generation.
@@ -229,36 +260,43 @@ impl ForwardDrawInput {
 /// A structured refusal while preparing one built-in Forward draw.
 #[derive(Debug)]
 pub enum ForwardPreparationError {
+    /// A feature submitted the same local draw identity more than once.
+    DuplicateFeatureLocalId {
+        /// Feature whose request list was invalid.
+        feature: FeatureHandle,
+        /// Duplicate identity within that feature's request list.
+        local_id: u64,
+    },
     /// An exact asset generation referenced by a scene record was unavailable.
     MissingAsset {
         /// Asset category.
         asset: &'static str,
-        /// Record requesting the asset.
-        record: RenderId,
+        /// Draw requesting the asset.
+        source: ForwardDrawSource,
     },
     /// The supplied asset list contained one exact identity more than once.
     DuplicateAsset {
         /// Asset category.
         asset: &'static str,
-        /// Record requesting the asset.
-        record: RenderId,
+        /// Draw requesting the asset.
+        source: ForwardDrawSource,
     },
     /// The per-record tint has a non-finite component.
     InvalidTint {
-        /// Record requesting the tint.
-        record: RenderId,
+        /// Draw requesting the tint.
+        source: ForwardDrawSource,
     },
     /// A record transform has a non-finite component.
     InvalidTransform {
-        /// Record requesting the transform.
-        record: RenderId,
+        /// Draw requesting the transform.
+        source: ForwardDrawSource,
     },
     /// A retained view has a non-finite component or empty extent.
     InvalidView,
     /// Geometry stream count differs from its declared runtime layout.
     GeometryStreamCount {
-        /// Record requesting the geometry.
-        record: RenderId,
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
         /// Declared stream count.
         expected: usize,
         /// Actual CPU stream count.
@@ -266,44 +304,44 @@ pub enum ForwardPreparationError {
     },
     /// Geometry declared an inverted vertex range.
     InvalidVertexRange {
-        /// Record requesting the geometry.
-        record: RenderId,
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
     },
     /// The initial Forward path does not yet consume instanced streams.
     InstanceStreamUnsupported {
-        /// Record requesting the geometry.
-        record: RenderId,
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
         /// Stream index.
         stream: usize,
     },
     /// A CPU stream cannot satisfy its selected draw's physical attribute footprint.
     GeometryPayloadTooShort {
-        /// Record requesting the geometry.
-        record: RenderId,
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
         /// Stream index.
         stream: usize,
     },
     /// Geometry does not provide the required `POSITION` semantic.
     MissingPosition {
-        /// Record requesting the geometry.
-        record: RenderId,
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
     },
     /// `UV` and `COLOR` must occur together for the first optional-attribute template.
     IncompleteOptionalAttributes {
-        /// Record requesting the geometry.
-        record: RenderId,
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
     },
     /// A Material contribution is outside the initial Forward binding schema.
     MaterialBindingSchema {
-        /// Record requesting the Material.
-        record: RenderId,
+        /// Draw requesting the Material.
+        source: ForwardDrawSource,
     },
     /// Material, Shader, or geometry logical validation failed.
     Material(MaterialPreparationError),
     /// Texture dimensions or payload length are invalid.
     InvalidTexture {
-        /// Record requesting the texture.
-        record: RenderId,
+        /// Draw requesting the texture.
+        source: ForwardDrawSource,
     },
 }
 
@@ -332,65 +370,119 @@ pub fn prepare_forward(
     }
     let mut inputs = Vec::with_capacity(frame.candidates().len());
     for &record_id in frame.candidates() {
-        let record = frame
-            .record(record_id)
-            .map_err(|_| ForwardPreparationError::InvalidTransform { record: record_id })?;
-        if !finite_transform(record.transform) {
-            return Err(ForwardPreparationError::InvalidTransform { record: record_id });
-        }
-        if !record.resources.tint.iter().all(|value| value.is_finite()) {
-            return Err(ForwardPreparationError::InvalidTint { record: record_id });
-        }
-        let geometry = resolve_asset(
-            &assets.geometry,
-            record.resources.geometry,
-            "geometry",
-            record_id,
-        )?;
-        let material = resolve_asset(
-            &assets.materials,
-            record.resources.material,
-            "material",
-            record_id,
-        )?;
-        let texture = resolve_asset(
-            &assets.textures,
-            record.resources.texture,
-            "texture",
-            record_id,
-        )?;
-        validate_texture(texture.value(), record_id)?;
-        let template = forward_template(&geometry.value().layout, record_id)?;
-        let prepared = prepare_material(
-            &material,
-            &geometry.value().layout,
+        let record =
+            frame
+                .record(record_id)
+                .map_err(|_| ForwardPreparationError::InvalidTransform {
+                    source: ForwardDrawSource::Scene(record_id),
+                })?;
+        inputs.push(prepare_draw(
+            view,
+            ForwardDrawSource::Scene(record_id),
+            0,
+            &record.resources,
+            record.transform,
+            assets,
             composer,
-            template.request(),
-        )
-        .map_err(ForwardPreparationError::Material)?;
-        validate_material_schema(&prepared, record_id)?;
-        validate_cpu_geometry(geometry.value(), prepared.geometry(), record_id)?;
-        let clip_from_local = multiply_columns(view.transform, record.transform);
-        if !clip_from_local
-            .iter()
-            .flatten()
-            .all(|value| value.is_finite())
-        {
-            return Err(ForwardPreparationError::InvalidTransform { record: record_id });
-        }
-        inputs.push(ForwardDrawInput {
-            record: record_id,
-            geometry,
-            material,
-            texture,
-            prepared,
-            tint: record.resources.tint,
-            transform: record.transform,
-            view: view.clone(),
-            clip_from_local,
-        });
+        )?);
     }
     Ok(inputs)
+}
+
+/// Resolves feature-owned Forward requests against the selected frame view.
+///
+/// The requests retain exact asset generations and are validated through the
+/// same path as scene-owned records. Their local identities are checked before
+/// any asset lookup or shader work so invalid feature payloads have no GPU-side
+/// effect.
+pub(crate) fn prepare_feature_draws(
+    frame: &PreparedFrame<'_, ForwardResources>,
+    feature: FeatureHandle,
+    requests: &[ForwardDrawRequest],
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
+    let view = frame.view_record();
+    if view.extent.contains(&0) || !finite_transform(view.transform) {
+        return Err(ForwardPreparationError::InvalidView);
+    }
+    let mut local_ids = std::collections::HashSet::with_capacity(requests.len());
+    for request in requests {
+        if !local_ids.insert(request.local_id) {
+            return Err(ForwardPreparationError::DuplicateFeatureLocalId {
+                feature,
+                local_id: request.local_id,
+            });
+        }
+    }
+    requests
+        .iter()
+        .map(|request| {
+            prepare_draw(
+                view,
+                ForwardDrawSource::Feature {
+                    feature,
+                    local_id: request.local_id,
+                },
+                request.order,
+                &request.resources,
+                request.transform,
+                assets,
+                composer,
+            )
+        })
+        .collect()
+}
+
+fn prepare_draw(
+    view: &RenderView,
+    source: ForwardDrawSource,
+    order: i64,
+    resources: &ForwardResources,
+    transform: RenderTransform,
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+) -> Result<ForwardDrawInput, ForwardPreparationError> {
+    if !finite_transform(transform) {
+        return Err(ForwardPreparationError::InvalidTransform { source });
+    }
+    if !resources.tint.iter().all(|value| value.is_finite()) {
+        return Err(ForwardPreparationError::InvalidTint { source });
+    }
+    let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
+    let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
+    let texture = resolve_asset(&assets.textures, resources.texture, "texture", source)?;
+    validate_texture(texture.value(), source)?;
+    let template = forward_template(&geometry.value().layout, source)?;
+    let prepared = prepare_material(
+        &material,
+        &geometry.value().layout,
+        composer,
+        template.request(),
+    )
+    .map_err(ForwardPreparationError::Material)?;
+    validate_material_schema(&prepared, source)?;
+    validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
+    let clip_from_local = multiply_columns(view.transform, transform);
+    if !clip_from_local
+        .iter()
+        .flatten()
+        .all(|value| value.is_finite())
+    {
+        return Err(ForwardPreparationError::InvalidTransform { source });
+    }
+    Ok(ForwardDrawInput {
+        source,
+        order,
+        geometry,
+        material,
+        texture,
+        prepared,
+        tint: resources.tint,
+        transform,
+        view: view.clone(),
+        clip_from_local,
+    })
 }
 
 /// Orders opaque Forward draws into contiguous raster-program batches.
@@ -434,4 +526,8 @@ where
 
 #[cfg(test)]
 #[path = "../tests/preparation/forward_batches.rs"]
-mod tests;
+mod forward_batches;
+
+#[cfg(test)]
+#[path = "../tests/preparation/feature_draws.rs"]
+mod feature_draws;

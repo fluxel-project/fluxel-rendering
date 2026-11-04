@@ -30,6 +30,29 @@ its verdict, plus the actual Host resize event and both Surface configurations.
 The runner rejects a successful process unless the two captured frames cover
 the initial and resized client extents and both visual verdicts passed.
 
+S6 uses two separately named closures. `--workload s6-composed` invokes
+`--s6-only` and writes the offscreen typed-quad cases under `s6-composed/`:
+`original-three-frame-cache`, `enabled-disabled-enabled`,
+`independent-providers`, and `three-pending-replacements`.
+`--workload s6-surface` invokes `--s6-surface-only` and writes the native
+typed-composition resize cases under `s6-surface/`:
+`mesh-after-quad-initial` and `quad-after-mesh-resized`. Each S6 workload
+manifest enumerates every raw output by exactly one named case; the runner
+rejects omitted, aliased, escaping, or unlisted files. S6 manifests use schema
+v5 and `S6 typed Forward integration evidence`; v5 does not accept S5
+contracts, and v4 does not accept S6 contracts.
+
+The S6 review combines `s6_review_parts.offscreen.review` with the separate
+surface review and common source, command, and diagnostic checks. The selected
+DX12/WGL matrix is retained in the
+[S6 evidence index](../../documents/evidence/s6-typed-forward-candidate/index.json)
+and supports the bounded decision in the
+[S6 typed Forward closure record](../../documents/s6-typed-forward-closure.md).
+It is not a general backend-support or Feature-support decision: the record is
+limited to the demonstrated opaque Forward composition and its named failures.
+Release timing is documented separately in the
+[S6 measurement baseline](../../documents/s6-measurement-baseline.md).
+
 `s5_review.py` reviews exactly six selected attempts: Forward, device isolation
 and Surface for each backend. Pass `--attempt CLOSURE ID BACKEND WORKLOAD` once
 per selection, `--human-review VISUAL_REVIEW_JSON` and `--output REVIEW_JSON`.
@@ -69,13 +92,18 @@ python tools/integration/smoke.py --backend dx12 --workload s5-surface
 python tools/integration/smoke.py --backend native-gl-wgl --workload s5-surface
 python tools/integration/smoke.py --backend dx12 --workload s5-device-isolation
 python tools/integration/smoke.py --backend native-gl-wgl --workload s5-device-isolation
+python tools/integration/smoke.py --backend dx12 --workload s6-composed
+python tools/integration/smoke.py --backend native-gl-wgl --workload s6-composed
+python tools/integration/smoke.py --backend dx12 --workload s6-surface
+python tools/integration/smoke.py --backend native-gl-wgl --workload s6-surface
 ```
 
 Use `RUSTUP_TOOLCHAIN=1.87.0` in the process environment for MSRV runs. Each
 attempt builds with the independent lock and explicit features, checks Cargo's
 actual source identities, hashes source inputs and the executable, and retains
 raw output under `target/integration/<workload>/<revision>/attempts/`, where
-`<workload>` is `s0-s3`, `s5-forward`, `s5-surface`, or `s5-device-isolation`. The index links all attempts,
+`<workload>` is `s0-s3`, `s5-forward`, `s5-surface`, `s5-device-isolation`,
+`s6-composed`, or `s6-surface`. The index links all attempts,
 including a missing consumer manifest before any build starts.
 Concurrent source edits invalidate an attempt. Diagnostic classification records
 the hash of this current policy; the historical ledger cannot grant waivers.

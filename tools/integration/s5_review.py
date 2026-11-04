@@ -87,16 +87,19 @@ def retained_failures(attempt: dict[str, Any], directory: Path, files: list[Path
     return failures
 
 
-def common_failures(attempt: dict[str, Any], closure: Path, backend: str, workload: str) -> list[str]:
+def common_failures(attempt: dict[str, Any], closure: Path, backend: str, workload: str,
+                    *, contract: dict[str, Any] | None = None,
+                    require_tests: bool = True) -> list[str]:
     failures = _REVIEW.frozen_source_failures(attempt, closure)
     failures += _REVIEW.current_source_failures(attempt, ROOT)
-    contract = _SMOKE.s5_workload_contract(workload)
+    if contract is None:
+        contract = _SMOKE.s5_workload_contract(workload)
     if attempt.get("mode") != "run" or attempt.get("backend") != backend or attempt.get("runner_exit_status") != 0:
         failures.append("selected attempt is not a successful run for its requested backend")
     # Schema version belongs to the smoke manifest; each attempt retains its
     # contract directly in `workload` (not a workload-name string).
     if attempt.get("workload") != contract:
-        failures.append("attempt does not retain the exact S5 workload contract")
+        failures.append("attempt does not retain the exact workload contract")
     if attempt.get("built_source_verification", {}).get("status") != "verified" or attempt.get("built_git_checkout_verification", {}).get("status") != "verified":
         failures.append("built package/source provenance is not verified")
     if attempt.get("source_consistency_after_attempt", {}).get("status") != "stable":
@@ -129,15 +132,19 @@ def common_failures(attempt: dict[str, Any], closure: Path, backend: str, worklo
     if len(direct) != 1 or not all(item.get("result", {}).get("exit_status") == 0 and item.get("result", {}).get("nested_workloads", {}).get("status") == "verified" for item in direct):
         failures.append("attempt lacks a successful direct runner and verified nested workload evidence")
     if direct and contract["entry_argument"] not in direct[0].get("command", []):
-        failures.append("direct command does not select the declared S5 workload")
-    nested = _SMOKE.nested_workload_evidence(directory / "run", workload)
+        failures.append("direct command does not select the declared workload")
+    nested = (
+        _SMOKE.s6_nested_workload_evidence(directory / "run", workload)
+        if workload.startswith("s6-")
+        else _SMOKE.nested_workload_evidence(directory / "run", workload)
+    )
     failures += nested.get("failures", [])
     if attempt.get("validation", {}).get("status") != "observed":
         failures.append("native validation evidence is not observed")
     diagnostic = _REVIEW.diagnostics_review(attempt, closure)
     if diagnostic.get("status") != "passed": failures.append("native diagnostics review remains open")
     tests = [command for command in attempt.get("commands", []) if isinstance(command, dict) and command.get("kind") == "test"]
-    if not any(command.get("result", {}).get("exit_status") == 0 and command.get("result", {}).get("test_command_recognized") and int(command.get("result", {}).get("executed", 0)) > 0 for command in tests):
+    if require_tests and not any(command.get("result", {}).get("exit_status") == 0 and command.get("result", {}).get("test_command_recognized") and int(command.get("result", {}).get("executed", 0)) > 0 for command in tests):
         failures.append("attempt lacks a successful non-zero targeted test record")
     for command in tests:
         count = _SMOKE.actual_test_count(command.get("command", []), command.get("result", {}))

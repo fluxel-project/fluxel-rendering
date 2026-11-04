@@ -19,6 +19,7 @@ mod s2_texture;
 mod s3_material;
 mod s5_forward;
 mod s5_forward_surface;
+mod s6_composed;
 mod shader_admission;
 mod surface;
 
@@ -62,36 +63,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)?;
     }
-    let (output, s3_only, s2_cache_only, s5_only, s5_surface_only, s5_device_only) =
-        output_directory()?;
+    let (output, workload) = output_directory()?;
     fs::create_dir_all(&output)?;
     #[cfg(all(windows, feature = "dx12", feature = "native-gl-wgl"))]
     return Err("select exactly one rendering integration backend feature".into());
     #[cfg(all(windows, feature = "dx12", not(feature = "native-gl-wgl")))]
-    return run_dx12(
-        &output,
-        s3_only,
-        s2_cache_only,
-        s5_only,
-        s5_surface_only,
-        s5_device_only,
-    );
+    return run_dx12(&output, workload);
     #[cfg(all(windows, feature = "native-gl-wgl", not(feature = "dx12")))]
-    return run_wgl(
-        &output,
-        s3_only,
-        s2_cache_only,
-        s5_only,
-        s5_surface_only,
-        s5_device_only,
-    );
+    return run_wgl(&output, workload);
     #[cfg(not(all(
         windows,
         any(feature = "dx12", feature = "native-gl-wgl"),
         not(all(feature = "dx12", feature = "native-gl-wgl"))
     )))]
     {
-        let _ = output;
+        let _ = (output, workload);
         Err("select --features dx12 or --features native-gl-wgl on Windows".into())
     }
 }

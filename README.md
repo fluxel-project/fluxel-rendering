@@ -16,19 +16,21 @@ providers through generics, traits and monomorphization at compile time. Differe
 providers can coexist in one frame; no trait-object dispatch or runtime type
 erasure is used for extensibility. SoA/AoS layouts remain workload choices, and
 all frame GPU work uses the internal Graph. The public subset includes
-RenderScene storage, immutable snapshots, a bounded CPU feature facade, and
-S5 Forward's controlled `FramePipeline` preparation and pass/access declarations.
-General typed GPU Feature composition remains an S6 acceptance gate. See the
+RenderScene storage, immutable snapshots, a bounded CPU feature facade, S5
+Forward's controlled `FramePipeline` preparation and pass/access declarations,
+and the demonstrated S6 typed opaque-Forward composition subset. That subset is
+not a general GPU-product or cross-pass Feature contract. See the
 [Renderer design](documents/design-renderer.md) for the target contracts.
 
 ## Current implementation and target
 
 The checked-out `0.16` workspace contains the S0/S1 foundation plus the first
 implemented S2 Shader, S3 Material, closed S4 CPU scene/feature data boundary,
-and S5 Forward integration. S5 renders multiple meshes, layouts, materials and
-textures through Scene -> FramePipeline -> Graph -> RHI. The independent
-external pipeline/provider prototype is exercised by that native path; it does
-not yet prove S6's heterogeneous Feature composition in one frame:
+S5 Forward integration, and a bounded S6 external typed-Feature composition.
+S5 renders multiple meshes, layouts, materials and textures through Scene ->
+FramePipeline -> Graph -> RHI. S6 adds one independently built typed quad
+Feature, custom material, and external composed pipeline alongside those meshes
+in the same opaque Forward Graph pass; it does not claim general GPU products.
 
 | Workspace crate | Current role |
 | --- | --- |
@@ -91,8 +93,15 @@ DX12/WGL Forward, device-isolation and Surface attempts. Exact source archives,
 locks, raw artifacts and the independent reviewer report are retained in the
 [S5 evidence index](documents/evidence/s5-forward-candidate/index.json).
 The [measurement baseline](documents/s5-measurement-baseline.md) records the
-separate release measurement procedure and its limits. S6 product composition
-and the final full regression remain separate gates.
+separate release measurement procedure and its limits. The
+[S6 typed Forward record](documents/s6-typed-forward-closure.md) records the
+separate bounded external composition acceptance: eleven offscreen submissions
+per backend, pending replacement/refusal coverage, and a two-frame native
+Surface resize matrix on DX12 and WGL. Its retained inputs and outputs are in
+the [S6 evidence index](documents/evidence/s6-typed-forward-candidate/index.json),
+and its release baseline is recorded separately in
+[the S6 measurement baseline](documents/s6-measurement-baseline.md). S7/S8 and
+the final full-workspace regression remain uncompleted.
 
 Vulkan, browser WebGPU, and browser WebGL2 are deferred from this closure. The
 historical `fluxel-rendering-wasm` capsule has been removed. Browser restoration
@@ -108,8 +117,8 @@ The target has three principal crates:
 | `fluxel-material` | Material functions, parameter/resource schemas, minimal composition IR, evaluation WGSL, assets/instances/variants |
 | `fluxel-renderer` | Batch RenderScene/views, preparation, visibility, ordering/batching, GPU residency, frame data, and execution |
 | Renderer `graph` module | Pass/resource declarations, versions, hazards, DAG planning, lifetimes, and direct portable RHI execution |
-| Renderer `feature` module | Public bounded CPU feature facade; Graph/RHI authority remains private |
-| Renderer `pipeline` module | Public bounded Forward pipeline and controlled phase/access facade; Graph internals remain private |
+| Renderer `feature` module | Public bounded CPU facade and demonstrated typed opaque-Forward Feature seam; Graph/RHI authority remains private |
+| Renderer `pipeline` module | Public bounded Forward pipeline/composition and controlled phase/access facade; Graph internals remain private |
 
 Material and Shader do not depend on Renderer. Material emits generic WGSL and
 interface contributions; Renderer/FramePipeline assembles the complete
@@ -149,10 +158,11 @@ S0 Foundation + S1 Graph -> S2 Shader -> S3 Material + S4 RenderScene
 ```
 
 S0/S1 share one foundation closure. S3/S4 may overlap after S2. Feature and phase
-seams are exercised early in S4/S5; S6 closes only when an external Rust Feature,
-external FramePipeline, and custom material cooperate in the same real frame.
-Code Nodes are planned S7 functionality; complete authoring breadth does not block
-the MVP. Optimization follows measurements retained from the earlier stages.
+seams are exercised early in S4/S5; S6 closes its demonstrated subset through an
+external Rust Feature, external FramePipeline, and custom material cooperating in
+the same real frame. Code Nodes are planned S7 functionality; complete authoring
+breadth does not block the MVP. Optimization follows measurements retained from
+the earlier stages.
 
 Capture/replay, Canvas 2D/basic text, declarative UI, Blender tooling, and JavaScript
 wrappers remain undecided. A future game scene/script runtime needs separate
@@ -168,6 +178,8 @@ planning and is not a rendering milestone.
 - [Renderer design](documents/design-renderer.md)
 - [S4 CPU closure record](documents/s4-cpu-closure.md)
 - [S2/S3 named-Windows closure](documents/s2-s3-closure.md)
+- [S6 typed Forward closure record](documents/s6-typed-forward-closure.md)
+- [S6 measurement baseline](documents/s6-measurement-baseline.md)
 - [RenderGraph design](documents/design-rendergraph.md)
 - [Architecture decisions](documents/adr/README.md)
 - [Migration inventory](documents/foundation-migration.md)

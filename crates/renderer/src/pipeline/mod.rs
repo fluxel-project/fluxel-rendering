@@ -1,5 +1,8 @@
 //! Frame policy and preparation for the first Forward consumer.
 
+mod composition;
+pub use composition::{ForwardCompositionContext, ForwardCompositionPass, ForwardFeaturePass};
+
 use std::{collections::HashSet, fmt};
 
 use crate::{FrameSnapshot, RenderBounds, RenderId, RenderRecord, RenderViewId, SceneError};
@@ -157,6 +160,38 @@ pub enum FrameTopology {
 /// one concrete GPU product.  They cannot obtain Graph state, command encoders,
 /// allocators, or submission authority.
 pub trait FramePipeline<R> {
+    /// Defines the final order across built-in and feature-owned opaque draws.
+    ///
+    /// The renderer checks that this is a permutation of the supplied draws.
+    /// The default orders explicit layer keys, then stable source identities;
+    /// compatible batching runs only after this global ordering decision.
+    fn order_forward(
+        &self,
+        _frame: &PreparedFrame<'_, R>,
+        draws: &mut [crate::ForwardDrawOrder],
+    ) -> Result<(), PipelineError> {
+        draws.sort_by_key(|draw| draw.sort_key());
+        Ok(())
+    }
+
+    /// Declares one shared opaque pass for mesh and typed-feature products.
+    fn contribute_composed<B: ResourceBackend, F: crate::RenderFeature>(
+        &self,
+        _frame: &PreparedFrame<'_, R>,
+        context: &mut ForwardCompositionContext<'_, '_, '_, B, F>,
+    ) -> Result<(), PipelineError> {
+        context.opaque(|pass| {
+            pass.depends_on_uploads()?;
+            pass.meshes(|meshes| {
+                meshes.read_vertex_streams()?;
+                meshes.read_frame_uniforms()?;
+                meshes.read_sampled_textures()
+            })?;
+            pass.feature()?;
+            pass.write_main_color()
+        })
+    }
+
     /// Prepares the records visible to an existing scene view.
     fn prepare<'a>(
         &self,
@@ -325,6 +360,10 @@ impl<'a, R> PreparedFrame<'a, R> {
 /// A structured refusal while preparing a CPU frame.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PipelineError {
+    /// The bounded typed-feature product requires an opaque Forward phase.
+    FeatureRequiresOpaque,
+    /// The final ordering was not a permutation of this frame's exact draws.
+    InvalidDrawOrder,
     /// A pipeline returned preparation for a different scene, version, or view.
     PreparedFrameMismatch,
     /// The contribution did not match the requested topology or phase order.
@@ -350,6 +389,12 @@ pub enum PipelineError {
 impl fmt::Display for PipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FeatureRequiresOpaque => {
+                formatter.write_str("typed Forward features require the opaque phase")
+            }
+            Self::InvalidDrawOrder => {
+                formatter.write_str("pipeline ordering changed or duplicated a prepared draw")
+            }
             Self::PreparedFrameMismatch => formatter
                 .write_str("pipeline returned a different scene, snapshot version, or view"),
             Self::InvalidPhaseContribution => {

@@ -17,20 +17,22 @@ mod renderer;
 mod residency;
 
 pub use feature::{
-    CpuFeature, CpuPhase, CpuPhaseContribution, CpuPhaseContributions, FeatureContext,
-    FeatureError, FeatureHandle, FeatureIssuer, TypedFeatureSnapshot, TypedFeatureStorage,
-    validate_context,
+    CpuFeature, CpuPhase, CpuPhaseContribution, CpuPhaseContributions, FeatureBinding,
+    FeatureContext, FeatureError, FeatureHandle, FeatureIssuer, RenderFeature,
+    TypedFeatureSnapshot, TypedFeatureStorage, validate_context,
 };
 pub use pipeline::{
-    BoundsVisibility, ClearForwardPass, ForwardCpuPipeline, ForwardPhaseContext, FramePipeline,
-    FrameTopology, OpaqueForwardPass, PipelineError, PreparedFrame, VisibilityProvider,
+    BoundsVisibility, ClearForwardPass, ForwardCompositionContext, ForwardCompositionPass,
+    ForwardCpuPipeline, ForwardFeaturePass, ForwardPhaseContext, FramePipeline, FrameTopology,
+    OpaqueForwardPass, PipelineError, PreparedFrame, VisibilityProvider,
 };
 pub use preparation::{
-    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, ForwardPreparationError,
-    ForwardResources, GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData,
-    GeometryDraw, GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding,
-    MaterialPreparationError, PreparedGeometry, PreparedGeometryBindings, PreparedMaterial,
-    prepare_forward, prepare_material,
+    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, ForwardDrawOrder,
+    ForwardDrawRequest, ForwardDrawSource, ForwardPreparationError, ForwardResources,
+    GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData, GeometryDraw,
+    GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding, MaterialPreparationError,
+    PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, prepare_forward,
+    prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,

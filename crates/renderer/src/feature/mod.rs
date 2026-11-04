@@ -1,4 +1,7 @@
-//! CPU-only provisional extension points for render-scene snapshots.
+//! Typed feature identity, immutable inputs, and controlled preparation.
+
+mod forward;
+pub use forward::{FeatureBinding, RenderFeature};
 
 use std::sync::{
     Arc,
@@ -10,7 +13,7 @@ use crate::FrameSnapshot;
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 /// An opaque handle naming one statically selected CPU feature.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct FeatureHandle {
     scene: u64,
     issuer: u64,
@@ -19,6 +22,10 @@ pub struct FeatureHandle {
 }
 
 impl FeatureHandle {
+    pub(crate) const fn order_key(self) -> u64 {
+        self.identity
+    }
+
     /// Returns the diagnostic feature name.
     pub const fn name(self) -> &'static str {
         self.name

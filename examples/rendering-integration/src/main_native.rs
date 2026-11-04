@@ -4,14 +4,7 @@ use super::main_support::*;
 use super::*;
 
 #[cfg(all(windows, feature = "dx12"))]
-pub(super) fn run_dx12(
-    output: &Path,
-    s3_only: bool,
-    s2_cache_only: bool,
-    s5_only: bool,
-    s5_surface_only: bool,
-    s5_device_only: bool,
-) -> Result<(), Box<dyn Error>> {
+pub(super) fn run_dx12(output: &Path, workload: Workload) -> Result<(), Box<dyn Error>> {
     use fluxel_rhi::{api::DeviceRequest, dx12::Dx12Instance};
 
     let native = Dx12Instance::new()?;
@@ -28,13 +21,19 @@ pub(super) fn run_dx12(
     }))?;
     diagnostics::record_dx12_device_open(output)?;
     write_capabilities(&device, "dx12", &adapter_name, output)?;
-    if s5_only {
+    if workload == Workload::S6Composed {
+        return s6_composed::run(device, &output.join("s6-composed"));
+    }
+    if workload == Workload::S6Surface {
+        return s6_composed::run_surface_dx12(device, &output.join("s6-surface"));
+    }
+    if workload == Workload::S5Forward {
         return s5_forward::run(device, &output.join("s5-forward"));
     }
-    if s5_surface_only {
+    if workload == Workload::S5Surface {
         return s5_forward_surface::run_dx12(device, &output.join("s5-forward-surface"));
     }
-    if s5_device_only {
+    if workload == Workload::S5DeviceIsolation {
         let replacement = block_on(instance.open(DeviceRequest {
             adapter: adapter.id,
             required_features: Vec::new(),
@@ -45,10 +44,10 @@ pub(super) fn run_dx12(
             &output.join("s5-forward-device-isolation"),
         );
     }
-    if s3_only {
+    if workload == Workload::S3Material {
         return s3_material::run(device, &output.join("s3-material"));
     }
-    if s2_cache_only {
+    if workload == Workload::S2Cache {
         let first_output = output.join("s2-shader");
         fs::create_dir_all(&first_output)?;
         write_capabilities(&device, "dx12", &adapter_name, &first_output)?;
@@ -122,21 +121,14 @@ pub(super) fn run_dx12(
 }
 
 #[cfg(all(windows, feature = "native-gl-wgl"))]
-pub(super) fn run_wgl(
-    output: &Path,
-    s3_only: bool,
-    s2_cache_only: bool,
-    s5_only: bool,
-    s5_surface_only: bool,
-    s5_device_only: bool,
-) -> Result<(), Box<dyn Error>> {
+pub(super) fn run_wgl(output: &Path, workload: Workload) -> Result<(), Box<dyn Error>> {
     use fluxel_host::{Window, WindowConfig};
     use fluxel_rhi::{
         api::{AdapterId, DeviceRequest, Instance, InstanceId},
         gl::{Gl, GlInstance},
     };
 
-    if s2_cache_only {
+    if workload == Workload::S2Cache {
         return Err("--s2-cache-only is currently supported only with the dx12 feature".into());
     }
     let window = Window::new(WindowConfig::new("Fluxel S1 Surface", 320, 180)?)?;
@@ -161,7 +153,24 @@ pub(super) fn run_wgl(
     }))?;
     write_capabilities(&device, "native-gl-wgl", &adapter_name, output)?;
     let mut observer = diagnostics::WglObserver::install(&device)?;
-    if s5_only {
+    if workload == Workload::S6Composed {
+        let result = s6_composed::run(device.clone(), &output.join("s6-composed"));
+        let diagnostic_result = observer.write(&device, output);
+        if result.is_err() || diagnostic_result.is_err() {
+            std::mem::forget(window);
+        }
+        return result.and(diagnostic_result);
+    }
+    if workload == Workload::S6Surface {
+        let result =
+            s6_composed::run_surface_wgl(device.clone(), &window, &output.join("s6-surface"));
+        let diagnostic_result = observer.write(&device, output);
+        if result.is_err() || diagnostic_result.is_err() {
+            std::mem::forget(window);
+        }
+        return result.and(diagnostic_result);
+    }
+    if workload == Workload::S5Forward {
         let result = s5_forward::run(device.clone(), &output.join("s5-forward"));
         let diagnostic_result = observer.write(&device, output);
         if result.is_err() || diagnostic_result.is_err() {
@@ -169,7 +178,7 @@ pub(super) fn run_wgl(
         }
         return result.and(diagnostic_result);
     }
-    if s5_surface_only {
+    if workload == Workload::S5Surface {
         let result = s5_forward_surface::run_wgl(
             device.clone(),
             &window,
@@ -181,7 +190,7 @@ pub(super) fn run_wgl(
         }
         return result.and(diagnostic_result);
     }
-    if s5_device_only {
+    if workload == Workload::S5DeviceIsolation {
         // A separate WGL device requires its own HWND and native context. Keep
         // both roots alive while the old Renderer retains completed resident
         // products and the replacement Renderer consumes the same snapshots.
@@ -236,7 +245,7 @@ pub(super) fn run_wgl(
             .and(replacement_diagnostic_result)
             .and(old_diagnostic_result);
     }
-    if s3_only {
+    if workload == Workload::S3Material {
         let result = s3_material::run(device.clone(), &output.join("s3-material"));
         let diagnostic_result = observer.write(&device, output);
         if result.is_err() || diagnostic_result.is_err() {
