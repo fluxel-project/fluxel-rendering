@@ -1,0 +1,117 @@
+warning: associated function `compile_with` is never used
+  --> E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer\src\graph\forward\offscreen_plan.rs:95:19
+   |
+4  | impl<B: ResourceBackend> ForwardPlan<B> {
+   | --------------------------------------- associated function in this implementation
+...
+95 |     pub(crate) fn compile_with<F>(
+   |                   ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: associated function `compile_with` is never used
+  --> E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer\src\graph\forward\surface_plan.rs:98:19
+   |
+4  | impl<B: ResourceBackend> SurfaceForwardPlan<B> {
+   | ---------------------------------------------- associated function in this implementation
+...
+98 |     pub(crate) fn compile_with<F>(
+   |                   ^^^^^^^^^^^^
+
+warning: methods `opaque_forward` and `clear_only` are never used
+   --> E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer\src\pipeline\mod.rs:129:19
+    |
+86  | / impl<'context, 'graph, 'frame, B: ResourceBackend>
+87  | |     ForwardPhaseContext<'context, 'graph, 'frame, B>
+    | |____________________________________________________- methods in this implementation
+...
+129 |       pub(crate) fn opaque_forward(&mut self) -> Result<(), PipelineError> {
+    |                     ^^^^^^^^^^^^^^
+...
+140 |       pub(crate) fn clear_only(&mut self) -> Result<(), PipelineError> {
+    |                     ^^^^^^^^^^
+
+warning: associated function `allocate` is never used
+   --> E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer\src\residency\forward.rs:316:19
+    |
+314 | impl<B: ResourceBackend> ForwardResidentBuffers<B> {
+    | -------------------------------------------------- associated function in this implementation
+315 |     /// Allocates static device resources and returns exact staging copy facts.
+316 |     pub(crate) fn allocate(
+    |                   ^^^^^^^^
+
+warning: associated function `allocate` is never used
+   --> E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer\src\residency\forward.rs:389:19
+    |
+387 | impl<B: ResourceBackend> ForwardFrameBuffers<B> {
+    | ----------------------------------------------- associated function in this implementation
+388 |     /// Allocates per-frame owners; `uniform_bytes` are copied into `uniform_range`.
+389 |     pub(crate) fn allocate(
+    |                   ^^^^^^^^
+
+warning: associated function `allocate` is never used
+   --> E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer\src\residency\forward.rs:524:19
+    |
+523 | impl<B: ResourceBackend> SurfaceForwardFrameBuffers<B> {
+    | ------------------------------------------------------ associated function in this implementation
+524 |     pub(crate) fn allocate(
+    |                   ^^^^^^^^
+
+warning: `fluxel-renderer` (lib) generated 6 warnings
+   Compiling external-renderer v0.0.0 (E:\moyy\program\rust\fluxel\fluxel-rendering\examples\external-renderer)
+warning: unused imports: `CpuPhaseContributions`, `DirtyRange`, `FeatureContext`, `FeatureHandle`, `FrameSnapshot`, `RenderChangeSet`, `RenderChange`, `RenderRecord`, `RenderScene`, `RenderView`, `TypedFeatureSnapshot`, and `validate_context`
+  --> src\adapters\support.rs:11:27
+   |
+11 |     CpuFeature, CpuPhase, CpuPhaseContributions, DirtyRange, FeatureContext, FeatureError,
+   |                           ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^
+12 |     FeatureHandle, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet, RenderRecord,
+   |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^^                ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^
+13 |     RenderScene, RenderTransform, RenderView, SceneAssetRef, SceneDirty, SceneError,
+   |     ^^^^^^^^^^^                   ^^^^^^^^^^
+14 |     TypedFeatureSnapshot, validate_context,
+   |     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `RenderBounds`, `SceneDirty`, and `SceneError`
+  --> src\adapters\types.rs:13:35
+   |
+13 |     FeatureHandle, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet, RenderRecord,
+   |                                   ^^^^^^^^^^^^
+14 |     RenderScene, RenderTransform, RenderView, SceneAssetRef, SceneDirty, SceneError,
+   |                                                              ^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `EvidenceAttempt`, `FeatureObservation`, and `SceneObservation`
+ --> src\adapters.rs:5:22
+  |
+5 |     EcsStyleAdapter, EvidenceAttempt, EvidenceFacts, FeatureObservation, ObjectAdapter,
+  |                      ^^^^^^^^^^^^^^^                 ^^^^^^^^^^^^^^^^^^
+6 |     ReferenceAdapter, ReferenceResult, SceneObservation,
+  |                                        ^^^^^^^^^^^^^^^^
+
+warning: `external-renderer` (bin "external-renderer" test) generated 3 warnings (run `cargo fix --bin "external-renderer" --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.98s
+     Running unittests src\lib.rs (examples\external-renderer\target\debug\deps\external_renderer-50c5bc12e4052665.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (examples\external-renderer\target\debug\deps\external_renderer-01337ab654abc906.exe)
+
+running 6 tests
+test tests::opaque_groups_preserve_layout_material_and_binding_compatibility ... ok
+test tests::external_preparation_matches_independent_candidates ... ok
+test tests::material_geometry_preparation_uses_real_compilers ... ok
+test tests::ordinary_and_ecs_style_adapters_produce_the_same_public_scene_result ... ok
+test tests::external_code_cannot_access_renderer_private_graph_state ... ok
+test tests::external_code_cannot_construct_a_phase_context_or_submit_work ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.19s
+
+   Doc-tests external_renderer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

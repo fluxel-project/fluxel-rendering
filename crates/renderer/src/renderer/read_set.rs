@@ -134,7 +134,7 @@ pub(super) fn validate(
         return Err(Error::WrongDevice);
     };
     if input.len() != INPUT_BYTES
-        || range.start % ALIGNMENT != 0
+        || !range.start.is_multiple_of(ALIGNMENT)
         || range.end.checked_sub(range.start) != Some(ALIGNMENT)
         || range.end < UNIFORM_BYTES
     {

@@ -58,7 +58,7 @@ impl<B: Backend> ComputePlan<B> {
         if device.compute().is_none() {
             return Err(Error::Unsupported("compute"));
         }
-        if len == 0 || len % ELEMENT_BYTES != 0 {
+        if len == 0 || !len.is_multiple_of(ELEMENT_BYTES) {
             return Err(Error::InvalidRange);
         }
         if id.device != device.id() {
@@ -363,7 +363,7 @@ impl<B: ExecutionBackend> ComputePlan<B> {
 fn dispatch_groups(count: u32) -> Result<u32> {
     let groups = count / WORKGROUP_SIZE;
     groups
-        .checked_add(u32::from(count % WORKGROUP_SIZE != 0))
+        .checked_add(u32::from(!count.is_multiple_of(WORKGROUP_SIZE)))
         .ok_or(Error::InvalidRange)
 }
 fn empty_use() -> BufferUses {

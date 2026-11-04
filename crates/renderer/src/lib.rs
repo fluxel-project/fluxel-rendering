@@ -21,9 +21,22 @@ pub use feature::{
     FeatureError, FeatureHandle, FeatureIssuer, TypedFeatureSnapshot, TypedFeatureStorage,
     validate_context,
 };
+pub use pipeline::{
+    BoundsVisibility, ClearForwardPass, ForwardCpuPipeline, ForwardPhaseContext, FramePipeline,
+    FrameTopology, OpaqueForwardPass, PipelineError, PreparedFrame, VisibilityProvider,
+};
+pub use preparation::{
+    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, ForwardPreparationError,
+    ForwardResources, GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData,
+    GeometryDraw, GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding,
+    MaterialPreparationError, PreparedGeometry, PreparedGeometryBindings, PreparedMaterial,
+    prepare_forward, prepare_material,
+};
 pub use render_scene::{
     ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,
     RenderId, RenderRecord, RenderResources, RenderScene, RenderTransform, RenderView,
     RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError,
 };
-pub use renderer::{Renderer, RendererError, ShutdownReport, Submission};
+pub use renderer::{
+    ForwardCacheStats, Renderer, RendererError, ShaderAdmissionError, ShutdownReport, Submission,
+};

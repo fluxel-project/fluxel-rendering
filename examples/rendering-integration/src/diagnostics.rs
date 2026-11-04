@@ -16,7 +16,7 @@ pub(crate) fn record_dx12_device_open(output: &Path) -> Result<(), Box<dyn Error
                 "  \"schemaVersion\": 1,\n",
                 "  \"requested\": {},\n",
                 "  \"deviceOpenCompleted\": true,\n",
-                "  \"activationContract\": \"fluxel-rhi 0f7f785d4f0ccc62e125dd6cf560d91333ec85cf crates/dx12/src/backend/device/mod.rs: InstanceBackend::open calls D3D12GetDebugInterface and EnableDebugLayer before D3D12CreateDevice when FLUXEL_DX12_DEBUG is present\"\n",
+                "  \"activationContract\": \"fluxel-rhi b5d569feace548a6ed498901deaf31a5efcaca61 crates/dx12/src/backend/device/mod.rs: InstanceBackend::open calls D3D12GetDebugInterface and EnableDebugLayer before D3D12CreateDevice when FLUXEL_DX12_DEBUG is present\"\n",
                 "}}\n"
             ),
             enabled,

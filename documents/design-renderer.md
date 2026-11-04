@@ -3,8 +3,10 @@
 > Status: target architecture with a closed bounded S4 CPU scene and feature
 > data boundary. The current S0/S1 consumer uses fixed fixtures. `RenderScene`
 > changes, immutable snapshots, and the provisional CPU-only `CpuFeature` facade
-> are independently evidenced; preparation and FramePipeline interfaces remain
-> unimplemented.
+> are independently evidenced. S5 closes bounded Forward preparation, residency,
+> frame data and a public FramePipeline facade for the named Windows DX12/WGL
+> matrix; see the [S5 closure record](s5-forward-closure.md). General typed GPU
+> Feature composition remains an S6 consumer gate.
 > The organization roadmap
 > owns delivery order; [the implementation plan](version-plan.md) owns local
 > scope and acceptance. This design does not authorize implementing later-stage
@@ -364,6 +366,17 @@ later in this construction, but nothing may add hidden work after compilation.
 Do not introduce unbounded mutual callbacks or implicit iterative negotiation
 between material selection and pipeline topology.
 
+The following are hard boundaries rather than a prescribed implementation order:
+each submission contributes to the actual Graph transaction exactly once,
+including a compatible compiled-plan cache hit; declarations and the actual
+owner/binding facts are validated before the upload, recording, or submission
+operation they protect; and Graph remains the sole authority for GPU accesses,
+dependencies, planning, and execution. A coordinator may prepare or allocate
+resources before Graph declaration when CPU facts have been validated. It is not
+required to build the whole Graph before every allocation. Private descriptors,
+cache organization, callback signatures, and the exact preparation order remain
+implementation choices until exercised consumers establish a public contract.
+
 CPU preparation need not have a general graph scheduler. Callers can use ordinary
 batch calls or their own CPU task orchestration. No `slot-graph` node identity or
 ECS scheduling concept crosses the public renderer boundary. All GPU products
@@ -372,9 +385,9 @@ still enter the single RenderGraph.
 ## RenderFeature and FramePipeline authority
 
 `RenderFeature` is the future batch contributor with typed state. `FramePipeline`
-will own frame policy and composition. Their eventual contexts require scene
-views, preparation services, typed phase/resource requirements, and graph
-authoring; exact signatures remain gated by S4-S6 consumers.
+owns frame policy and composition where the bounded S5 facade is used. Its
+current Forward consumer has passed the bounded S5 acceptance. Broader Feature
+and Pipeline signatures remain gated by the S6 same-frame consumers.
 
 S4 currently exports a narrower, provisional CPU-only facade: `CpuFeature<R>`,
 `FeatureIssuer`, opaque `FeatureHandle`, `FeatureContext`,
@@ -386,12 +399,12 @@ and structured-error boundary without exposing Graph, RHI, backend objects,
 submission, or a mutable scheduler. It is not a `RenderFeature` or FramePipeline
 contract and does not supply GPU work authority.
 
-The future FramePipeline/Graph-facing facade may permit logical resource
-declarations, imports, raster/compute/copy work, access declarations, roots and
-semantic frame outputs. That authority is not part of the current CPU facade.
-When introduced, it must hide graph compiler state, allocator internals,
-scheduler mutation, backend objects, and independent submission; a raw mutable
-Graph implementation is not the SPI.
+The S5 FramePipeline facade permits its bounded Forward phase/access declarations
+on the real Graph transaction. It hides graph compiler state, allocator
+internals, scheduler mutation, backend objects, and independent submission; a
+raw mutable Graph implementation is not the SPI. General imports,
+raster/compute/copy work, roots, semantic outputs, and broader Feature authority
+remain consumer-gated rather than implied by this facade.
 
 During recording, a pass uses scoped access to already declared resources and
 portable RHI recording operations. Resource/binding validation must precede the
@@ -405,6 +418,9 @@ crates. Feature contributions may expand to several ordinary passes; they do not
 create hidden runtime subgraphs. Contexts grant only the authority needed for
 the current stage. A missing phase, incompatible product or failed preparation
 returns a structured owner-specific error before affected recording begins.
+The coordinator must not substitute a validation-only callback or replay a
+guessed internal topology on a cache hit: the caller's declaration itself is the
+evidence being validated.
 
 ## Material and Shader integration
 
@@ -460,6 +476,13 @@ contracts. Resource-instance churn alone does not force recompilation. Compatibl
 dynamic ranges can reuse a plan only when access/dependency semantics remain
 valid. Structural, alias or incompatible layout/access changes recompile or fail;
 they cannot be hidden behind a stale cached plan.
+
+The validation source is the resource owner captured at actual allocation:
+descriptor, incoming state, device provenance, and physical accessed range.
+Graph declarations express requirements but cannot be copied back as those facts.
+This validation happens before each protected upload map, recording, or
+submission operation; allocation by itself is not submitted GPU work and creates
+no completion ownership.
 
 Pass-local authority restricts recording to declared resources and access ranges.
 Graph uses the selected RHI's portable resource, capability, use and submission

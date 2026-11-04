@@ -15,21 +15,24 @@ Applications assemble concrete geometry, visibility, ordering and deformation
 providers through generics, traits and monomorphization at compile time. Different
 providers can coexist in one frame; no trait-object dispatch or runtime type
 erasure is used for extensibility. SoA/AoS layouts remain workload choices, and
-all frame GPU work uses the internal Graph. The current public S4 subset is
-RenderScene storage, immutable frame snapshots, and a bounded CPU-only feature
-facade; FramePipeline and GPU extension APIs are not implemented. See the
+all frame GPU work uses the internal Graph. The public subset includes
+RenderScene storage, immutable snapshots, a bounded CPU feature facade, and
+S5 Forward's controlled `FramePipeline` preparation and pass/access declarations.
+General typed GPU Feature composition remains an S6 acceptance gate. See the
 [Renderer design](documents/design-renderer.md) for the target contracts.
 
 ## Current implementation and target
 
 The checked-out `0.16` workspace contains the S0/S1 foundation plus the first
-implemented S2 Shader, S3 Material, and the closed S4 CPU scene/feature data
-boundary. The public S4 facade is deliberately CPU-only; FramePipeline and GPU
-scene integration remain future work:
+implemented S2 Shader, S3 Material, closed S4 CPU scene/feature data boundary,
+and S5 Forward integration. S5 renders multiple meshes, layouts, materials and
+textures through Scene -> FramePipeline -> Graph -> RHI. The independent
+external pipeline/provider prototype is exercised by that native path; it does
+not yet prove S6's heterogeneous Feature composition in one frame:
 
 | Workspace crate | Current role |
 | --- | --- |
-| `fluxel-renderer` | Copy, Raster, supported Compute, private Graph, completion-owned resources, RenderScene snapshots, and a bounded CPU feature facade; FramePipeline remains to be built |
+| `fluxel-renderer` | Private Graph, Copy/Raster/supported Compute, RenderScene snapshots, bounded CPU feature and Forward pipeline facades, per-device residency, frame data and completion-owned resources |
 | `fluxel-shader` | WGSL composition, Naga validation/reflection, source provenance, interface checks, requirement inference, and logical artifact caching |
 | `fluxel-material` | Rust-defined fragments, typed parameters/resources, validated call graphs, static variants, instances, and generic WGSL contributions |
 
@@ -49,7 +52,7 @@ dependencies and explicit DX12/WGL features. The S2/S3 consumers compose
 validated logical shaders, query the selected device route and capabilities, and
 then use the existing Graph path. RenderScene now exposes its bounded CPU update
 and snapshot API. It also exports the provisional CPU-only `CpuFeature` facade;
-FramePipeline remains unimplemented. The
+S5 adds the bounded Forward `FramePipeline` path. The
 [foundation closure review](documents/s0-s1-closure.md) maps the S0/S1 logical
 tests and retained DX12/WGL native artifacts separately.
 
@@ -57,7 +60,8 @@ The previous integration sources have been removed. The
 [independent consumer](examples/rendering-integration/README.md) covers three
 asset generations, Copy/Compute readback, offscreen Raster pixels, Surface
 present/resize, direct S2 shader execution, and S3 material contribution and
-replacement. It records structured refusals as well as accepted routes. Old logs
+replacement, plus S5 multi-layout Forward, device isolation and Surface resize.
+It records structured refusals as well as accepted routes. Old logs
 and images are not compatibility or support evidence for the rebuilt path.
 
 ## Observed native evidence
@@ -81,6 +85,15 @@ no device, Graph work, submission, culling, indirect work, or backend support
 claim. Its compile-fail negative confirms that the external dependency cannot
 name Renderer-private Graph state.
 
+The [S5 Forward record](documents/s5-forward-closure.md) maps the bounded
+pipeline/preparation/residency contract to focused checks and six inspected
+DX12/WGL Forward, device-isolation and Surface attempts. Exact source archives,
+locks, raw artifacts and the independent reviewer report are retained in the
+[S5 evidence index](documents/evidence/s5-forward-candidate/index.json).
+The [measurement baseline](documents/s5-measurement-baseline.md) records the
+separate release measurement procedure and its limits. S6 product composition
+and the final full regression remain separate gates.
+
 Vulkan, browser WebGPU, and browser WebGL2 are deferred from this closure. The
 historical `fluxel-rendering-wasm` capsule has been removed. Browser restoration
 must supply a producer using the current RHI architecture. The
@@ -96,7 +109,7 @@ The target has three principal crates:
 | `fluxel-renderer` | Batch RenderScene/views, preparation, visibility, ordering/batching, GPU residency, frame data, and execution |
 | Renderer `graph` module | Pass/resource declarations, versions, hazards, DAG planning, lifetimes, and direct portable RHI execution |
 | Renderer `feature` module | Public bounded CPU feature facade; Graph/RHI authority remains private |
-| Renderer `pipeline` module | Private shell for a future FramePipeline facade |
+| Renderer `pipeline` module | Public bounded Forward pipeline and controlled phase/access facade; Graph internals remain private |
 
 Material and Shader do not depend on Renderer. Material emits generic WGSL and
 interface contributions; Renderer/FramePipeline assembles the complete

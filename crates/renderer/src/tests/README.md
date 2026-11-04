@@ -10,11 +10,12 @@ Unit test implementations live here, grouped by the component they exercise:
 - `feature/`: renderer-issued feature handles and contexts, issuer-bound typed
   storage, snapshot/version validation, CPU phase collection, and structured
   cross-scene, cross-issuer, and replay refusal.
+- `pipeline/`: provisional CPU frame preparation and candidate provenance.
+- `preparation/`: geometry stream and logical Shader interface validation.
 
 Production modules load their test files with `#[cfg(test)]` and `#[path]`
 declarations. The tests remain logical children of their owning module, preserving
 private access without widening the library's visibility. Public API integration
 tests belong in the crate-root `tests/` directory. These tests are logic evidence;
-they do not exercise Graph execution or GPU behavior, and do not establish the
-bounded public CPU facade is logic evidence only: it does not exercise Graph
-execution, GPU behavior, or a future FramePipeline contract.
+they do not establish real GPU execution. CPU preparation tests do not close the
+S5 Forward path or the S6 integrated extension milestone.

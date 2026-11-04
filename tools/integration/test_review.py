@@ -1,170 +1,17 @@
 """Regression tests for the bounded S0-S3 integration evidence reviewer."""
-import importlib.util
-import copy
-import json
-from pathlib import Path
-import struct
+from __future__ import annotations
+
 import sys
-import tempfile
-import unittest
-import zipfile
+from pathlib import Path
 
+_TEST_DIR = Path(__file__).resolve().parent
+if str(_TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(_TEST_DIR))
 
-SPEC = importlib.util.spec_from_file_location("review", Path(__file__).with_name("review.py"))
-assert SPEC and SPEC.loader
-review = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(review)
-
-
-def record(path: Path) -> dict[str, str]:
-    return {"path": str(path), "sha256": review.sha256(path) or ""}
-
-
-CAPABILITY_DECLARATION = """pub struct DeviceCapabilities {
-    pub compute: bool,
-    pub storage_buffers: bool,
-    pub storage_textures: bool,
-    pub native_interop: bool,
-    pub debug_markers: bool,
-    pub multi_queue: bool,
-    pub lanes: Arc<[LaneInfo]>,
-    pub cooperative_matrix_configurations: Vec<CooperativeMatrixConfiguration>,
-    pub limits: DeviceLimits,
-}
-pub struct DeviceLimits {
-    pub max_buffer_bytes: u64,
-    pub max_vertex_buffers: u32,
-    pub max_vertex_attributes: u32,
-    pub max_color_attachments: u32,
-    pub max_compute_workgroups: [u32; 3],
-}
-pub struct CooperativeMatrixConfiguration {
-    pub m: u32,
-    pub n: u32,
-    pub k: u32,
-    pub a_type: CooperativeMatrixComponentType,
-    pub b_type: CooperativeMatrixComponentType,
-    pub c_type: CooperativeMatrixComponentType,
-    pub result_type: CooperativeMatrixComponentType,
-    pub saturating_accumulation: bool,
-    pub scope: CooperativeMatrixScope,
-}
-pub enum CooperativeMatrixComponentType {
-    Float16,
-    BFloat16,
-}
-pub enum CooperativeMatrixScope {
-    Subgroup,
-    QueueFamily,
-}
-"""
-
-
-def capability_fixture(compute: object = True, device_id: str = "DeviceId(1)") -> dict:
-    return {"backend": "native-gl-wgl", "adapter": "actual adapter", "deviceId": device_id, "compute": compute,
-            "storageBuffers": True, "storageTextures": False, "nativeInterop": True,
-            "debugMarkers": True, "multiQueue": False, "lanes": 1,
-            "limits": {"maxBufferBytes": 4096, "maxVertexBuffers": 4, "maxVertexAttributes": 8, "maxColorAttachments": 4},
-            "deviceCapabilities": {"compute": compute, "storage_buffers": True, "storage_textures": False,
-                "native_interop": True, "debug_markers": True, "multi_queue": False,
-                "lanes": [{"id": {"device": device_id, "ordinal": 0}, "class": "graphics", "routes": []}],
-                "cooperative_matrix_configurations": [{"m": 16, "n": 16, "k": 16, "a_type": "float16", "b_type": "bfloat16",
-                    "c_type": "float16", "result_type": "float16", "saturating_accumulation": False, "scope": "queue_family"}],
-                "limits": {"max_buffer_bytes": 4096, "max_vertex_buffers": 4, "max_vertex_attributes": 8,
-                           "max_color_attachments": 4, "max_compute_workgroups": [64, 64, 64]}}}
+from review_tests.support import *
 
 
 class ReviewTests(unittest.TestCase):
-    def write_capability_review_evidence(self, run: Path, primary: dict, replacement: dict) -> None:
-        (run / "s2-shader").mkdir(exist_ok=True)
-        (run / "s2-shader-replacement-device").mkdir(exist_ok=True)
-        (run / "capabilities.json").write_text(json.dumps(primary), encoding="utf-8")
-        (run / "s2-shader-replacement-device/capabilities.json").write_text(json.dumps(replacement), encoding="utf-8")
-        (run / "workload.json").write_text(json.dumps({"adapter": "actual adapter"}), encoding="utf-8")
-        (run / "device-replacement.json").write_text(json.dumps({
-            "oldDeviceId": "DeviceId(1)", "replacementDeviceId": "DeviceId(2)"}), encoding="utf-8")
-        (run / "s2-shader/s2-shader-workload.json").write_text(
-            json.dumps({"deviceId": "DeviceId(1)"}), encoding="utf-8")
-        (run / "s2-shader-replacement-device/s2-shader-workload.json").write_text(
-            json.dumps({"deviceId": "DeviceId(2)"}), encoding="utf-8")
-
-    def test_compute_capability_accepts_actual_support_and_requires_boolean(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            closure = Path(temporary)
-            run = closure / "run"
-            run.mkdir()
-            declaration = closure / "rhi/crates/core/src/api/foundation.rs"
-            declaration.parent.mkdir(parents=True)
-            declaration.write_text(CAPABILITY_DECLARATION, encoding="utf-8")
-            attempt = {"id": "wgl", "backend": "native-gl-wgl", "directory": ".",
-                       "built_git_checkout_verification": {"checkouts": [{"path": str(closure / "rhi")}]}}
-            for capability in (True, False, None, "false", 0):
-                with self.subTest(capability=capability):
-                    self.write_capability_review_evidence(
-                        run, capability_fixture(capability), capability_fixture(True, "DeviceId(2)"))
-                    report = review.capability_review(attempt, closure)
-                    self.assertEqual(report["status"], "passed" if isinstance(capability, bool) else "open")
-
-    def test_capability_review_rejects_missing_extra_and_misattributed_snapshots(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            closure = Path(temporary)
-            run = closure / "run"
-            run.mkdir()
-            declaration = closure / "rhi/crates/core/src/api/foundation.rs"
-            declaration.parent.mkdir(parents=True)
-            declaration.write_text(CAPABILITY_DECLARATION, encoding="utf-8")
-            attempt = {"id": "wgl", "backend": "native-gl-wgl", "directory": ".",
-                       "built_git_checkout_verification": {"checkouts": [{"path": str(closure / "rhi")} ]}}
-            self.write_capability_review_evidence(run, capability_fixture(), capability_fixture(True, "DeviceId(2)"))
-            self.assertEqual(review.capability_review(attempt, closure)["status"], "passed")
-            for mutation in ("missing_primary", "missing_replacement", "extra", "primary_wrong_device",
-                             "replacement_wrong_device", "primary_wrong_adapter", "replacement_wrong_adapter"):
-                with self.subTest(mutation=mutation):
-                    self.write_capability_review_evidence(run, capability_fixture(), capability_fixture(True, "DeviceId(2)"))
-                    if mutation == "missing_primary":
-                        (run / "capabilities.json").unlink()
-                    elif mutation == "missing_replacement":
-                        (run / "s2-shader-replacement-device/capabilities.json").unlink()
-                    elif mutation == "extra":
-                        (run / "spoofed-capabilities.json").write_text(json.dumps(capability_fixture()), encoding="utf-8")
-                    elif mutation == "primary_wrong_device":
-                        (run / "capabilities.json").write_text(
-                            json.dumps(capability_fixture(True, "DeviceId(2)")), encoding="utf-8")
-                    elif mutation == "replacement_wrong_device":
-                        (run / "s2-shader-replacement-device/capabilities.json").write_text(
-                            json.dumps(capability_fixture(True, "DeviceId(1)")), encoding="utf-8")
-                    else:
-                        path = run / ("capabilities.json" if mutation == "primary_wrong_adapter"
-                                      else "s2-shader-replacement-device/capabilities.json")
-                        value = capability_fixture(True, "DeviceId(1)" if mutation == "primary_wrong_adapter" else "DeviceId(2)")
-                        value["adapter"] = "spoofed adapter"
-                        path.write_text(json.dumps(value), encoding="utf-8")
-                    self.assertEqual(review.capability_review(attempt, closure)["status"], "open")
-                    for path in (run / "capabilities.json", run / "s2-shader-replacement-device/capabilities.json",
-                                 run / "spoofed-capabilities.json"):
-                        if path.exists():
-                            path.unlink()
-
-    def test_complete_capabilities_reject_omissions_schema_changes_and_foreign_lanes(self) -> None:
-        original = capability_fixture()
-        self.assertEqual(review.capability_snapshot_failures(original, CAPABILITY_DECLARATION), [])
-        for mutation in ("missing_feature", "missing_limit", "numeric_bool", "foreign_lane", "invalid_route", "wrong_alias", "oversized_limit", "matrix_enum", "matrix_omission"):
-            value = copy.deepcopy(original)
-            facts = value["deviceCapabilities"]
-            if mutation == "missing_feature": del facts["storage_textures"]
-            if mutation == "missing_limit": del facts["limits"]["max_buffer_bytes"]
-            if mutation == "numeric_bool": facts["storage_buffers"] = 1
-            if mutation == "foreign_lane": facts["lanes"][0]["id"]["device"] = "DeviceId(2)"
-            if mutation == "invalid_route": facts["lanes"][0]["routes"] = [{"target": {"device": "DeviceId(1)", "ordinal": 9}, "route": "same_queue"}]
-            if mutation == "wrong_alias": value["storageBuffers"] = False
-            if mutation == "oversized_limit": facts["limits"]["max_compute_workgroups"] = [2**32, 1, 1]
-            if mutation == "matrix_enum": facts["cooperative_matrix_configurations"][0]["scope"] = "unknown_scope"
-            if mutation == "matrix_omission": del facts["cooperative_matrix_configurations"][0]["saturating_accumulation"]
-            with self.subTest(mutation=mutation):
-                self.assertTrue(review.capability_snapshot_failures(value, CAPABILITY_DECLARATION))
-        changed_source = CAPABILITY_DECLARATION.replace("    pub compute: bool,", "    pub compute: bool,\n    pub new_feature: bool,")
-        self.assertTrue(review.capability_snapshot_failures(original, changed_source))
-
     def test_replacement_expected_contract_is_json_not_rgba_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
@@ -707,6 +554,14 @@ ShaderInterface {
             failures = review.frozen_source_failures(attempt, closure)
             self.assertTrue(any("membership" in reason for reason in failures))
             self.assertTrue(any("hash differs" in reason for reason in failures))
+
+
+def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: str | None) -> unittest.TestSuite:
+    from review_tests.capability import CapabilityReviewTests
+
+    suite = loader.loadTestsFromTestCase(ReviewTests)
+    suite.addTests(loader.loadTestsFromTestCase(CapabilityReviewTests))
+    return suite
 
 
 if __name__ == "__main__":

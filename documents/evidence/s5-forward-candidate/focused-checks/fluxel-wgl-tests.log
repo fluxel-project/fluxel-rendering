@@ -1,0 +1,82 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling fluxel-shader v0.16.0 (E:\moyy\program\rust\fluxel\fluxel-rendering\crates\shader)
+   Compiling fluxel-rhi-gl v0.1.0 (https://github.com/fluxel-project/fluxel-rhi?rev=b5d569feace548a6ed498901deaf31a5efcaca61#b5d569fe)
+   Compiling fluxel-material v0.16.0 (E:\moyy\program\rust\fluxel\fluxel-rendering\crates\material)
+   Compiling fluxel-rhi v0.1.0 (https://github.com/fluxel-project/fluxel-rhi?rev=b5d569feace548a6ed498901deaf31a5efcaca61#b5d569fe)
+   Compiling fluxel-renderer v0.16.0 (E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer)
+   Compiling external-renderer v0.0.0 (E:\moyy\program\rust\fluxel\fluxel-rendering\examples\external-renderer)
+   Compiling rendering-integration v0.0.0 (E:\moyy\program\rust\fluxel\fluxel-rendering\examples\rendering-integration)
+warning: method `contains_device` is never used
+   --> tests\..\src\executable_cache.rs:189:19
+    |
+137 | / impl<Logical, Capabilities, Pipeline, Value> ExecutableCache<Logical, Capabilities, Pipeline, Value>
+138 | | where
+139 | |     Logical: Eq + Hash,
+140 | |     Capabilities: Eq + Hash,
+141 | |     Pipeline: Eq + Hash,
+    | |________________________- method in this implementation
+...
+189 |       pub(crate) fn contains_device(&self, device: DeviceId) -> bool {
+    |                     ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+
+warning: `rendering-integration` (test "executable_cache") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.49s
+     Running unittests src\main.rs (examples\rendering-integration\target\debug\deps\rendering_integration-69abaa0b7a6cdcdd.exe)
+
+running 14 tests
+test surface::surface_lifecycle::tests::resize_confirmation_requires_a_matching_host_event_and_client_extent ... ok
+test capture::tests::accepts_a_fixture_colored_stable_interior_and_rejects_zero_extent ... ok
+test diagnostics::tests::core_debug_output_version_check_is_numeric_not_a_fixed_prefix_list ... ok
+test capture::tests::rejects_desktop_pixels_that_are_not_the_fixture_triangle ... ok
+test diagnostics::tests::only_decoded_application_notifications_are_instrumentation ... ok
+test diagnostics::tests::activation_proof_requires_exact_metadata_and_message_not_substring ... ok
+test s5_forward::tests::input_mutation_is_rejected_against_the_frozen_visual_oracle ... ok
+test compute::tests::fixed_compute_checks_each_required_capability_before_pipeline_creation ... ok
+test surface::surface_lifecycle::tests::resize_wait_timeout_retains_last_actual_state ... ok
+test surface::surface_lifecycle::tests::resize_waits_through_empty_polls_until_host_and_client_agree ... ok
+test surface::surface_lifecycle::tests::client_extent_without_a_matching_event_does_not_confirm_resize ... ok
+test surface::surface_lifecycle::tests::restored_event_can_confirm_the_requested_extent ... ok
+test s5_forward::tests::stable_interior_and_background_readback_tampering_are_refused ... ok
+test s5_forward::tests::frozen_expected_image_passes_the_complete_stable_pixel_oracle ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\executable_cache.rs (examples\rendering-integration\target\debug\deps\executable_cache-4fb414d1ab5e9bec.exe)
+
+running 4 tests
+test device_loss_evicts_and_permanently_rejects_that_device_domain ... ok
+test replacement_retirement_evicts_without_quarantining_a_live_device ... ok
+test executable_key_isolates_device_route_capabilities_and_pipeline_facts ... ok
+test unsupported_route_never_creates_a_cache_fingerprint ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\shader_admission.rs (examples\rendering-integration\target\debug\deps\shader_admission-79fe339bf0bf66c4.exe)
+
+running 11 tests
+test nonuniform_checks_are_descriptor_kind_specific ... ok
+test multisample_and_unknown_demands_are_unrepresentable_not_backend_guesses ... ok
+test multiview_and_push_constants_check_the_real_requested_limits ... ok
+test compute_without_multisample_demand_does_not_require_a_sample_count ... ok
+test admits_only_when_public_capabilities_and_actual_pipeline_facts_agree ... ok
+test nonuniform_requires_the_device_base_array_and_resource_capabilities ... ok
+test collector_route_capability_names_are_not_rejected_by_consumer_admission ... ok
+test admission_errors_are_propagatable_std_errors ... ok
+test reflected_f16_is_unrepresentable_to_this_rhi_admission_layer ... ok
+test reflected_multiview_is_admitted_only_by_actual_capability_and_view_limit ... ok
+test write_evidence_persists_escaped_success_and_refusal_before_route_work ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\shader_feature_contract.rs (examples\rendering-integration\target\debug\deps\shader_feature_contract-c6ecd77ca6a72c37.exe)
+
+running 2 tests
+test early_depth_test_inference_uses_the_selected_rhi_feature_name_and_keeps_caller_requirement ... ok
+test primitive_index_inference_uses_the_selected_rhi_feature_name_and_keeps_caller_requirement ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

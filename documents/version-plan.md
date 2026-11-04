@@ -5,7 +5,11 @@
 > S2 Shader and minimal S3 Material are closed for their named Windows DX12/WGL
 > fixture matrix with focused tests and reviewed archived evidence. S4 CPU data/facade closure is recorded
 > with independently reviewed external evidence at product `e4ec252`; its
-> FramePipeline and GPU APIs remain unimplemented. Full regression remains
+> CPU-only scope is unchanged. S5 now implements bounded Forward preparation,
+> FramePipeline contributions, residency and frame data, with a reviewed six-run
+> DX12/WGL matrix and retained release measurements; the bounded
+> [S5 acceptance is closed](s5-forward-closure.md). S6 same-frame Feature composition remains
+> pending. Full regression remains
 > pending until the planned S-stage sequence is tested. Stage labels are work
 > packages, not release numbers or completion claims. The organization
 > [roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md) owns
@@ -22,8 +26,8 @@ cases. A crate, trait, or independently green library test is not stage closure.
 | S1 RenderGraph | `fluxel-renderer::graph`; passes, versions, definedness, DAG, hazards, compiled plans, frame bindings | Fixed-shader multi-pass execution, compatible plan reuse, safe retirement across 2–3 overlapping frames |
 | S2 Shader Core | New `fluxel-shader`; composition request, WGSL/Naga validation, reflection, logical source artifacts, cache identity | Closed for the reviewed DX12/WGL fixture matrix; no untested-backend claim |
 | S3 Material Core | New `fluxel-material`; functions/fragments, parameters/resources, minimal composition IR, evaluation WGSL, instances/variants | Closed for the reviewed DX12/WGL fixture matrix, including replacement; no authoring/PBR/FramePipeline claim |
-| S4 RenderScene | Renderer scene storage, generational RenderIds, views, transforms/bounds, batch changes, snapshots | Closed CPU-only data/facade boundary with retained external evidence; FramePipeline and GPU scene integration remain pending |
-| S5 Forward integration | Renderer pipeline/preparation/culling/sorting; public FramePipeline facade, phases, resolvers, residency and frame data | Multiple meshes/materials render through Scene -> FramePipeline -> Graph -> RHI; an early external consumer exercises extension seams |
+| S4 RenderScene | Renderer scene storage, generational RenderIds, views, transforms/bounds, batch changes, snapshots | Closed CPU-only data/facade boundary with retained external evidence; S5 consumes it for Forward integration |
+| S5 Forward integration | Renderer pipeline/preparation/culling/sorting; public FramePipeline facade, phases, resolvers, residency and frame data | Closed for the named DX12/WGL Forward, device-isolation and Surface matrix, with external pipeline/provider prototype and retained baseline; S6 composition remains open |
 | S6 Extension MVP | Renderer feature registration/storage/phase contribution; independent Rust Feature and FramePipeline | External Feature, external FramePipeline, and custom material cooperate in the same frame; first product MVP closes |
 | S7 Rendering expansion | Material/Shader/Renderer and selected Features; Code Nodes, PBR, Forward+/Deferred, shadows/PostFX | A second pipeline shares scene/material contracts; materially different Features validate broader extension seams |
 | S8 Measured strategies | Renderer resource/execution optimization; selected LOD, streaming, GPU culling, indirect work, batching/aliasing | Representative workloads demonstrate improvement with bounded memory and preserved lifecycle correctness |
@@ -111,11 +115,11 @@ in its independent repo.
 Rendering owns the evolving artifact `examples/rendering-integration/`
 and its own `Cargo.lock`. Copy, offscreen Raster, supported Compute, and a
 fixed Renderer-to-Surface raster/present fixture with actual HWND resize are
-implemented; the artifact grows through S6. The planned independent consumer
-`examples/external-renderer/` has
-its own manifest/lock and imports only the public Rust facade. These paths are
-implementation destinations; only `rendering-integration` currently exists.
-Reuse available
+implemented; S5 adds multi-layout scene Forward, device isolation, and Forward
+Surface presentation. The artifact grows through S6. The independent consumer
+`examples/external-renderer/` has its own manifest/lock, imports only the public
+Rust facade, and supplies the S4 CPU reference plus S5 concrete pipeline and
+visibility-provider prototypes. Reuse available
 provenance helpers; retain evidence at
 `target/integration/<stage>/<rendering-sha>/manifest.json`. Record participating
 revisions, lock hashes, commands, inputs, targets, outcomes, and artifact paths.

@@ -1,4 +1,4 @@
-use crate::{NagaCapability, capabilities::required_naga_capabilities};
+use crate::{capabilities::required_naga_capabilities, NagaCapability};
 
 const UNUSED_RESULT_INT64_ATOMIC_MIN: &str = r#"
 @group(0) @binding(0)
@@ -34,8 +34,8 @@ fn unused_storage_int64_atomic_min_prefers_min_max_over_all_ops() {
 
 #[test]
 fn storage_int64_atomic_add_requires_all_ops() {
-    let module = naga::front::wgsl::parse_str(INT64_ATOMIC_ADD)
-        .expect("fixture must be parseable WGSL");
+    let module =
+        naga::front::wgsl::parse_str(INT64_ATOMIC_ADD).expect("fixture must be parseable WGSL");
     let requirements = required_naga_capabilities(&module)
         .expect("the all-operations capability must validate the fixture");
 

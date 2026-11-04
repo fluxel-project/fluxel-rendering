@@ -4,10 +4,12 @@
 //! or general rendering API. It retains each submission until exact RHI
 //! completion evidence permits retirement.
 
+mod admission;
 mod cache;
 mod compute;
 mod copy;
 mod error;
+mod forward;
 mod raster;
 mod read_set;
 mod readback;
@@ -22,7 +24,6 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_rhi::{
     api::{ComputePipeline, Device, Error, RasterPipeline, ReadbackTicket},
     backend::{
@@ -41,7 +42,9 @@ use crate::{
     },
 };
 
+pub use admission::AdmissionError as ShaderAdmissionError;
 pub use error::RendererError;
+pub use forward::ForwardCacheStats;
 pub use shutdown::ShutdownReport;
 pub use submission::Submission;
 
@@ -73,6 +76,13 @@ where
     device: Device<B>,
     owner: Arc<()>,
     plans: HashMap<cache::PlanKey, cache::CachedPlan<B>>,
+    forward_programs: HashMap<forward::ForwardProgramKey, Arc<forward::ForwardPipelineObjects<B>>>,
+    forward_plans: Vec<Arc<crate::graph::ForwardPlan<B>>>,
+    forward_surface_plans: Vec<Arc<crate::graph::SurfaceForwardPlan<B>>>,
+    forward_plan_compilations: usize,
+    forward_residency: crate::residency::ForwardResidentCache<B>,
+    forward_stats: forward::ForwardCacheStats,
+    forward_frames: [Option<crate::residency::ForwardFrameBuffers<B>>; SLOT_COUNT],
     slots: [Option<Pending<B>>; SLOT_COUNT],
     next_serial: u64,
     binding_refreshes: usize,
@@ -97,6 +107,18 @@ pub(super) enum PendingWork<B>
 where
     B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend,
 {
+    Forward {
+        _frame: Box<crate::residency::ForwardFrame<B>>,
+        publication: forward::ForwardPublication,
+        plan: Arc<crate::graph::ForwardPlan<B>>,
+        extent: [u32; 2],
+        row_pitch: u32,
+    },
+    ForwardSurface {
+        _frame: Box<crate::residency::SurfaceForwardFrame<B>>,
+        publication: forward::ForwardPublication,
+        plan: Arc<crate::graph::SurfaceForwardPlan<B>>,
+    },
     Copy {
         _buffers: UploadBuffers<B>,
         _frame: CopyFrame,
@@ -141,6 +163,13 @@ where
             device,
             owner: Arc::new(()),
             plans: HashMap::new(),
+            forward_programs: HashMap::new(),
+            forward_plans: Vec::new(),
+            forward_surface_plans: Vec::new(),
+            forward_plan_compilations: 0,
+            forward_residency: Default::default(),
+            forward_stats: Default::default(),
+            forward_frames: std::array::from_fn(|_| None),
             slots: std::array::from_fn(|_| None),
             next_serial: 1,
             binding_refreshes: 0,
@@ -155,16 +184,20 @@ where
 
     /// Returns the plan identity only when exactly one private topology was compiled.
     pub fn plan_id(&self) -> Option<fluxel_rhi::api::PlanId> {
-        if self.plans.len() != 1 {
+        if self.plans.len() + self.forward_plan_compilations != 1 {
             None
         } else {
-            self.plans.values().next().map(cache::CachedPlan::id)
+            self.plans
+                .values()
+                .next()
+                .map(cache::CachedPlan::id)
+                .or_else(|| self.forward_plans.first().map(|plan| plan.id()))
         }
     }
 
     /// Returns the number of cached fixture topologies.
     pub fn compilations(&self) -> usize {
-        self.plans.len()
+        self.plans.len() + self.forward_plan_compilations
     }
 
     /// Returns the number of frame binding sets that passed resource preflight.
@@ -229,11 +262,11 @@ where
     /// Records the ownership result after `finish` has supplied authoritative
     /// execution facts. All fixture paths use this to keep their result and
     /// retention semantics identical.
-    pub(super) fn settle_submission<K: AssetKind>(
+    pub(super) fn settle_submission<T: Send + Sync + 'static>(
         &mut self,
         slot: usize,
         serial: u64,
-        snapshot: AssetSnapshot<K, Vec<u8>>,
+        snapshot: T,
         ticket: Option<ReadbackTicket<B>>,
         execution: (Outcome<B>, Result<(), Error>),
         workload: PendingWork<B>,

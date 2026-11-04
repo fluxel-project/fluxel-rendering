@@ -146,7 +146,8 @@ fn print_result(role: &str, mut values: Vec<u128>) {
     let maximum_ns = values[values.len() - 1];
     println!(
         "{{\"schema\":1,\"role\":\"{role}\",\"samples\":{},\"warmup_samples\":{WARMUP_SAMPLES},\"minimum_ns\":{minimum_ns},\"median_ns\":{median_ns},\"maximum_ns\":{maximum_ns},\"raw_ns\":{:?}}}",
-        values.len(), values
+        values.len(),
+        values
     );
 }
 

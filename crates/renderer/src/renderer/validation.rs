@@ -95,7 +95,7 @@ pub(super) fn validate_read_set_requirements<B: Backend>(
     readback_bytes: u64,
 ) -> Result<(), RendererError> {
     let alignment = device.capabilities().limits.uniform_offset_alignment;
-    if alignment == 0 || uniform_offset % alignment != 0 {
+    if alignment == 0 || !uniform_offset.is_multiple_of(alignment) {
         return Err(RendererError::Rhi(Error::InvalidRange));
     }
     require_buffers(device, &[upload_bytes, uniform_end, readback_bytes])?;
@@ -141,7 +141,7 @@ pub(super) fn validate_compute_input<B: Backend>(
     Ok(len)
 }
 pub(super) fn validate_compute_bytes(bytes: &[u8]) -> Result<u32, RendererError> {
-    if bytes.is_empty() || bytes.len() % COMPUTE_ELEMENT_BYTES != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(COMPUTE_ELEMENT_BYTES) {
         return Err(RendererError::InvalidComputeInput);
     }
     u32::try_from(bytes.len() / COMPUTE_ELEMENT_BYTES)
@@ -166,11 +166,14 @@ pub(super) fn validate_raster_input(
     u64::try_from(bytes.len()).map_err(|_| RendererError::InvalidRasterInput)
 }
 pub(super) fn validate_raster_bytes(bytes: &[u8], extent: [u32; 2]) -> Result<(), RendererError> {
-    if extent.contains(&0) || bytes.is_empty() || bytes.len() % VERTEX_STRIDE as usize != 0 {
+    if extent.contains(&0)
+        || bytes.is_empty()
+        || !bytes.len().is_multiple_of(VERTEX_STRIDE as usize)
+    {
         return Err(RendererError::InvalidRasterInput);
     }
     let count = bytes.len() / VERTEX_STRIDE as usize;
-    if count % 3 != 0 || count > u32::MAX as usize {
+    if !count.is_multiple_of(3) || count > u32::MAX as usize {
         return Err(RendererError::InvalidRasterInput);
     }
     for scalar in bytes.chunks_exact(4) {

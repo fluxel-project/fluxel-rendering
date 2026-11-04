@@ -58,14 +58,25 @@ where
         if let Err(error) = self.device.wait_idle().await {
             if matches!(error, Error::DeviceLost) {
                 self.plans.clear();
+                self.forward_programs.clear();
+                self.forward_residency.clear();
+                self.forward_plans.clear();
+                self.forward_surface_plans.clear();
+                self.forward_frames = std::array::from_fn(|_| None);
                 self.lifecycle = Lifecycle::Unavailable(error.clone());
             }
             return Err(RendererError::Rhi(error));
         }
 
         let retired_submissions = self.slots.iter_mut().filter_map(Option::take).count();
-        let released_cached_plans = self.plans.len();
+        let released_cached_plans =
+            self.plans.len() + self.forward_plans.len() + self.forward_surface_plans.len();
         self.plans.clear();
+        self.forward_programs.clear();
+        self.forward_residency.clear();
+        self.forward_plans.clear();
+        self.forward_surface_plans.clear();
+        self.forward_frames = std::array::from_fn(|_| None);
         self.lifecycle = Lifecycle::Closed;
         Ok(ShutdownReport {
             retired_submissions,
@@ -87,6 +98,11 @@ where
     pub(super) fn note_device_loss(&mut self, error: &Error) {
         if matches!(error, Error::DeviceLost) {
             self.plans.clear();
+            self.forward_programs.clear();
+            self.forward_residency.remove_device(self.device.id());
+            self.forward_plans.clear();
+            self.forward_surface_plans.clear();
+            self.forward_frames = std::array::from_fn(|_| None);
             self.lifecycle = Lifecycle::Unavailable(error.clone());
         }
     }

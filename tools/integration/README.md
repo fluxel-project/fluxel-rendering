@@ -1,4 +1,4 @@
-# S0-S3 integration evidence tooling
+# Native integration evidence tooling
 
 The independent `rendering-integration` executable has been rewritten for the
 Copy, offscreen Raster, supported Compute, fixed Surface presentation, direct
@@ -8,6 +8,41 @@ S3 Material path separately exercises the original and replacement static
 contributions, including a visible channel reordering, with independent
 expected pixels and readbacks. Fixed S0/S1 fixture schemas still do not define
 the future Geometry, Feature, or FramePipeline model.
+
+The `--workload s5-forward` route invokes the executable with `--s5-only` and
+writes a separate S5 closure. It hashes the root and consumer locks, freezes
+the complete source-input set, records every nested `*workload.json` beneath
+the run directory, and rejects a successful process that omitted required S5
+input, expected-pixel, readback, cache, or replacement artifacts. Failed
+attempts retain the same source snapshot, command logs and recursive artifact
+inventory for diagnosis.
+
+The `--workload s5-device-isolation` route invokes `--s5-device-only`. It
+requires two simultaneously live devices to consume the same logical asset
+snapshots, retains both device readbacks plus an old-device cache-reuse readback,
+and rejects an attempt unless the new device records fresh static uploads and
+zero completed-product hits. It has its own closure and never shares an attempt
+directory with the four-layout scene workload.
+
+The `--workload s5-surface` route invokes `--s5-surface-only`. It retains the
+independent triangle expectation and inputs, each native client capture and
+its verdict, plus the actual Host resize event and both Surface configurations.
+The runner rejects a successful process unless the two captured frames cover
+the initial and resized client extents and both visual verdicts passed.
+
+`s5_review.py` reviews exactly six selected attempts: Forward, device isolation
+and Surface for each backend. Pass `--attempt CLOSURE ID BACKEND WORKLOAD` once
+per selection, `--human-review VISUAL_REVIEW_JSON` and `--output REVIEW_JSON`.
+It checks frozen/current source, commands and nonzero focused tests, diagnostics,
+raw inputs/readbacks, the independent pixel oracle, cache/device facts, measurement
+facts and hash-bound visual review. The retained command is included in the
+[S5 archive](../../documents/evidence/s5-forward-candidate/index.json).
+`--human-review` and `human_verdict` are legacy schema names; the review record
+must identify the actual reviewer. The selected S5 record explicitly identifies
+Codex assistant image inspection and does not claim human approval.
+The report verifies evidence; the [S5 closure record](../../documents/s5-forward-closure.md)
+makes the bounded stage decision. Release timing uses the separate
+[baseline tool](../../documents/s5-measurement-baseline.md).
 
 The historical [S0/S1 support decision](../../documents/s0-s1-support-decision.md)
 is retained and hashed only as a historical reference. It cannot approve S2/S3
@@ -28,13 +63,20 @@ Run one selected backend from the repository root:
 ```powershell
 python tools/integration/smoke.py --backend dx12
 python tools/integration/smoke.py --backend native-gl-wgl
+python tools/integration/smoke.py --backend dx12 --workload s5-forward
+python tools/integration/smoke.py --backend native-gl-wgl --workload s5-forward
+python tools/integration/smoke.py --backend dx12 --workload s5-surface
+python tools/integration/smoke.py --backend native-gl-wgl --workload s5-surface
+python tools/integration/smoke.py --backend dx12 --workload s5-device-isolation
+python tools/integration/smoke.py --backend native-gl-wgl --workload s5-device-isolation
 ```
 
 Use `RUSTUP_TOOLCHAIN=1.87.0` in the process environment for MSRV runs. Each
 attempt builds with the independent lock and explicit features, checks Cargo's
 actual source identities, hashes source inputs and the executable, and retains
-raw output under `target/integration/s0-s3/<revision>/attempts/`. The index links
-all attempts, including a missing consumer manifest before any build starts.
+raw output under `target/integration/<workload>/<revision>/attempts/`, where
+`<workload>` is `s0-s3`, `s5-forward`, `s5-surface`, or `s5-device-isolation`. The index links all attempts,
+including a missing consumer manifest before any build starts.
 Concurrent source edits invalidate an attempt. Diagnostic classification records
 the hash of this current policy; the historical ledger cannot grant waivers.
 Each new attempt also freezes its exact worktree inputs in `source-inputs.zip`,
@@ -82,7 +124,7 @@ Presented-window inspection, Graph binding checks and fault evidence must be
 linked explicitly in the integration-evidence review. Physical device-removal recovery and a
 general public Graph/Material API are not implied by these fixtures.
 External review JSON is fail-closed: visual review must pair every retained
-surface-frame BMP with its capture/verdict metadata and a passing human verdict;
+surface-frame BMP with its capture/verdict metadata and an explicit visual verdict;
 test review must link a nonempty retained log to its exact command, nonzero
 execution count, and zero exit status. Supply those runner-owned test records
 with repeatable `--test-command-json '["python","-m","unittest",...]'` arguments;

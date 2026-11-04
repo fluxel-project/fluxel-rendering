@@ -213,6 +213,10 @@ impl CpuPhaseContributions {
     pub fn len(&self) -> usize {
         self.contributions.len()
     }
+    /// Returns whether no CPU contribution has been accepted.
+    pub fn is_empty(&self) -> bool {
+        self.contributions.is_empty()
+    }
 }
 
 impl<'a, R> FeatureContext<'a, R> {

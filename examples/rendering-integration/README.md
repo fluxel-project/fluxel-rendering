@@ -1,12 +1,15 @@
-# S0-S3 integration fixture
+# Rendering integration fixtures
 
 This independent consumer was rebuilt from the current workspace. Its
 previous sources targeted removed APIs and are retired. No source is recovered
 from repository history, and previous execution results are not current evidence.
 The Copy/Raster/Compute/Surface inputs remain bounded fixtures, while direct S2
 Shader and S3 Material workloads prove their current composition path. None of
-these inputs establishes future Geometry, Feature, FramePipeline, or RenderScene
-contracts.
+these older inputs establishes Geometry, Feature, FramePipeline, or RenderScene
+contracts. The separate S5 workloads now exercise multi-layout scene Forward,
+the bounded public FramePipeline contribution path, device isolation and Surface
+resize. Their [S5 closure record](../../documents/s5-forward-closure.md) retains
+current evidence independently of the older fixture closures.
 
 The reviewed native DX12/WGL attempts retain dynamic read-set execution, actual
 HWND client captures, device replacement, S2 shader routes, and S3 material
@@ -23,8 +26,8 @@ metadata before adding the new dependency edges.
 
 | Repository | Revision | Contract and role |
 | --- | --- | --- |
-| Rendering | Current source snapshot; runner records revision and dirty state | Renderer facade, private Graph, S2 Shader and S3 Material consumers |
-| RHI | `0f7f785d4f0ccc62e125dd6cf560d91333ec85cf` | `fluxel-rhi =0.1.0`, defaults disabled; portable common execution, mapping, explicit copy transitions and readback |
+| Rendering | Current source snapshot; runner records revision and dirty state | Renderer facade, private Graph, Shader/Material and S5 Scene/Forward consumers |
+| RHI | `b5d569feace548a6ed498901deaf31a5efcaca61` | `fluxel-rhi =0.1.0`, defaults disabled; portable common execution, mapping, explicit copy transitions, readback, and configured Surface lease facts |
 | Bases | `ee640d57a8d7c32d251252d0e8b32950636a770c` | `fluxel-assets =0.13.4`, immutable snapshots and content replacement |
 | Host | `33a6bbb3fa15500e928b4192ca8f280b735034d9` | `fluxel-host =0.1.0`; owns native windows and lifecycle events in this executable, not a Renderer dependency |
 

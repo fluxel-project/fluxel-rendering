@@ -1,0 +1,1779 @@
+{
+  "schema_version": 1,
+  "scope": "S5 selected DX12/WGL Forward, two-device isolation and Surface evidence",
+  "head_baseline_only": "36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210",
+  "selected_attempts": [
+    [
+      "dx12",
+      "s5-forward",
+      "dx12-20261104T114305300070Z-16472"
+    ],
+    [
+      "dx12",
+      "s5-device-isolation",
+      "dx12-20261104T114443846572Z-4176"
+    ],
+    [
+      "dx12",
+      "s5-surface",
+      "dx12-20261104T114551726433Z-15564"
+    ],
+    [
+      "native-gl-wgl",
+      "s5-forward",
+      "native-gl-wgl-20261104T114652422233Z-19916"
+    ],
+    [
+      "native-gl-wgl",
+      "s5-device-isolation",
+      "native-gl-wgl-20261104T114758621513Z-5244"
+    ],
+    [
+      "native-gl-wgl",
+      "s5-surface",
+      "native-gl-wgl-20261104T114907805020Z-3480"
+    ]
+  ],
+  "source_identity": "Exact worktree inputs in each attempt source-inputs.zip; all six source_inputs lists are identical.",
+  "archive": {
+    "path": "native-evidence.zip",
+    "bytes": 33277996,
+    "sha256": "b1f009b2ca236749f9c37f383a5d67baf9914e3eff92a656c4d813b89a8e2d92"
+  },
+  "members": [
+    {
+      "member": "review/review-command.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-review\\review-command.json",
+      "bytes": 1763,
+      "sha256": "cd03c255ed40894143bee67c89418fbd6c5571b234541620935f5690c5df4896"
+    },
+    {
+      "member": "review/review.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-review\\review.json",
+      "bytes": 1652,
+      "sha256": "1778f2906ee72c3f8550a0c5892502b831e8086399a025235ae14dfbb93d57b3"
+    },
+    {
+      "member": "review/review.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-review\\review.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "review/selected-attempts.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-review\\selected-attempts.json",
+      "bytes": 578,
+      "sha256": "b1da819b49a034e73072441ec89be2fb560850de415d28db7d43a3d17d011f7a"
+    },
+    {
+      "member": "review/visual-review.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-review\\visual-review.json",
+      "bytes": 6216,
+      "sha256": "15ef9b8a3b71f59eee050e9fff72bd762e47612950d7ab29addf89a48d2793b2"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\consumer.exe",
+      "bytes": 19740672,
+      "sha256": "3e93a86784e083d1df1169b13002f6ee09e27f978f040dcf726c2ebcb6a7fb28"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/focused-tests/0/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\focused-tests\\0\\stderr.log",
+      "bytes": 935,
+      "sha256": "2ee44ece8e635c461a87c6266ce40c5544c9adc1f0ea9da3931bb1eaf125ec5f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/focused-tests/0/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\focused-tests\\0\\stdout.log",
+      "bytes": 409,
+      "sha256": "affbd20dc79ff038724f1389ddf09a06683813060965359fcff3c351dea71959"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\capabilities.json",
+      "bytes": 4552,
+      "sha256": "6a506c4003460c91c543090a668b2b52b2f66648c6df82a62967d6ef7aecf87e"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/dx12-debug-request.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\dx12-debug-request.json",
+      "bytes": 326,
+      "sha256": "61845053b2c6185e7f057e9d7cf4dfb0191f53ada63f80d07a6124438f74d970"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-new-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-new-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-new-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-new-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-old-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-old-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-old-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-old-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-old-reuse-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-old-reuse-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-old-reuse-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-old-reuse-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-shared-assets.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-shared-assets.json",
+      "bytes": 679,
+      "sha256": "36f7c12c7025c102447d2a0a537eb054a1e2434c902a3dd1d065f44ea0625463"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation-workload.json",
+      "bytes": 359,
+      "sha256": "e263b6aa1d71d1df25d4173ab4efdfc2342e813135aa9eb09536a21bdd7462db"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-device-isolation.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-device-isolation.json",
+      "bytes": 336,
+      "sha256": "f75a3075ad0b1021ff481f5a81487e440e814388f80e461b51b8cab7c3f34a0b"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-0-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-0-stream-0.bin",
+      "bytes": 108,
+      "sha256": "ce59c88f2887ebfd02900dd45194ee5b44857ecde81ac5df5c2e4df8b3f21eab"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-0.txt",
+      "bytes": 811,
+      "sha256": "371abada908076ee75c9a48fae7a8f5addbac7c6df50cd7d0c26d0dd619202c5"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-1-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-1-stream-0.bin",
+      "bytes": 36,
+      "sha256": "d300ff7b77dc3898ca363a4af1c51bc6c1d2d169f5ad73284c71b6518ba63633"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-1-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-1-stream-1.bin",
+      "bytes": 24,
+      "sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-1-stream-2.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-1-stream-2.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-1.txt",
+      "bytes": 1072,
+      "sha256": "d121c2d0d538fe867ec640a371dbfd4f6d925f699e2b3f68532e4e3fb3ec0b57"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-2-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-2-stream-0.bin",
+      "bytes": 60,
+      "sha256": "289264bba65ccd677b436426bf27bad22a7442a2de15c66ff7e569b7f6197622"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-2-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-2-stream-1.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-2.txt",
+      "bytes": 942,
+      "sha256": "4295533ec6ea9d81ea6d818316d2f1118d04b50bc52f09e38548fd9673a96af9"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-3-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-3-stream-0.bin",
+      "bytes": 36,
+      "sha256": "09d2cc7604681dce6692e9b9e7c333ed1cbb940c7f35e5a6d7f17bad2a1b1987"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-geometry-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-geometry-3.txt",
+      "bytes": 388,
+      "sha256": "53caf4ff5adb6bd0be2a84a76246f3cc82e6d2f18e9feecd9a7ffb1a26344cb0"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-material-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-material-0.txt",
+      "bytes": 1070,
+      "sha256": "12230a9dc81334dfb02502a187dfd1793050d29bb11de63c77591fa99511db7a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-material-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-material-1.txt",
+      "bytes": 1139,
+      "sha256": "0ee68e4f5a098ef821575ed2b90cd80d21cb41a2893d7e3d01ee786376c3cea0"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-material-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-material-2.txt",
+      "bytes": 1088,
+      "sha256": "e8a57ae98141eb330b0df0f96f3a157f322bf14150439333fc795a1c671f40aa"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-material-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-material-3.txt",
+      "bytes": 1085,
+      "sha256": "84a2c6b8a0a701b4b982c8659f0708f42e3d1a4c390eb349f635becb94e1ba09"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-texture-0.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-texture-0.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-texture-1.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-texture-1.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-texture-2.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-texture-2.rgba",
+      "bytes": 4,
+      "sha256": "b7d1b3a1104cc86b1cea310793cf777002db0517281d135a02de079b0ea87c23"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/s5-forward-device-isolation/s5-forward-texture-3.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\s5-forward-device-isolation\\s5-forward-texture-3.rgba",
+      "bytes": 4,
+      "sha256": "5fc1f3b5dfc3af9f4a3c54c77f448216c82908ce3953813f1e12695bb71271c8"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\source-inputs.zip",
+      "bytes": 631603,
+      "sha256": "21803ef611faa10effe9964d87076bb107416c983e3288ab8b074b23270a22e3"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\stderr.log",
+      "bytes": 72,
+      "sha256": "45f75b19e5718ce74d75d27dc949e2b0cc21908a1e53dca4d31c24e03ebe8e09"
+    },
+    {
+      "member": "s5-device-isolation/attempts/dx12-20261104T114443846572Z-4176/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114443846572Z-4176\\stdout.log",
+      "bytes": 72386,
+      "sha256": "286df7ad0429daf2378241a48512860582e9557c12729ea80ad070ad766c079e"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\consumer.exe",
+      "bytes": 19231232,
+      "sha256": "e73bb06f483b4bb0f96f7fdd8eb704866203ff3e7f02d4977601c933796e5894"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/focused-tests/0/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\focused-tests\\0\\stderr.log",
+      "bytes": 935,
+      "sha256": "12843fda1d29303165727d02069c4f7ed618eb053079e37211629f6460eabf32"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/focused-tests/0/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\focused-tests\\0\\stdout.log",
+      "bytes": 409,
+      "sha256": "53f7ecfce62fe8d492269d46275f118836bdf4d49251f12e4a01983b331d1e85"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\capabilities.json",
+      "bytes": 4307,
+      "sha256": "afa40e7d50a62495ea11704b3bc826510011d75626f7d0af7ad4cea113082e72"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation-replacement-diagnostics/wgl-debug-observer.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation-replacement-diagnostics\\wgl-debug-observer.json",
+      "bytes": 790,
+      "sha256": "8c2870f74210e37dd4c62f497312db98f513c11e11a73e88593d382a51477e8c"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-new-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-new-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-new-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-new-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-old-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-old-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-old-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-old-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-old-reuse-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-old-reuse-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-old-reuse-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-old-reuse-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-shared-assets.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-shared-assets.json",
+      "bytes": 679,
+      "sha256": "36f7c12c7025c102447d2a0a537eb054a1e2434c902a3dd1d065f44ea0625463"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation-workload.json",
+      "bytes": 359,
+      "sha256": "e263b6aa1d71d1df25d4173ab4efdfc2342e813135aa9eb09536a21bdd7462db"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-device-isolation.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-device-isolation.json",
+      "bytes": 336,
+      "sha256": "f75a3075ad0b1021ff481f5a81487e440e814388f80e461b51b8cab7c3f34a0b"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-0-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-0-stream-0.bin",
+      "bytes": 108,
+      "sha256": "ce59c88f2887ebfd02900dd45194ee5b44857ecde81ac5df5c2e4df8b3f21eab"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-0.txt",
+      "bytes": 811,
+      "sha256": "371abada908076ee75c9a48fae7a8f5addbac7c6df50cd7d0c26d0dd619202c5"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-1-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-1-stream-0.bin",
+      "bytes": 36,
+      "sha256": "d300ff7b77dc3898ca363a4af1c51bc6c1d2d169f5ad73284c71b6518ba63633"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-1-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-1-stream-1.bin",
+      "bytes": 24,
+      "sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-1-stream-2.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-1-stream-2.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-1.txt",
+      "bytes": 1072,
+      "sha256": "d121c2d0d538fe867ec640a371dbfd4f6d925f699e2b3f68532e4e3fb3ec0b57"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-2-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-2-stream-0.bin",
+      "bytes": 60,
+      "sha256": "289264bba65ccd677b436426bf27bad22a7442a2de15c66ff7e569b7f6197622"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-2-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-2-stream-1.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-2.txt",
+      "bytes": 942,
+      "sha256": "4295533ec6ea9d81ea6d818316d2f1118d04b50bc52f09e38548fd9673a96af9"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-3-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-3-stream-0.bin",
+      "bytes": 36,
+      "sha256": "09d2cc7604681dce6692e9b9e7c333ed1cbb940c7f35e5a6d7f17bad2a1b1987"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-geometry-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-geometry-3.txt",
+      "bytes": 388,
+      "sha256": "53caf4ff5adb6bd0be2a84a76246f3cc82e6d2f18e9feecd9a7ffb1a26344cb0"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-material-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-material-0.txt",
+      "bytes": 1070,
+      "sha256": "12230a9dc81334dfb02502a187dfd1793050d29bb11de63c77591fa99511db7a"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-material-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-material-1.txt",
+      "bytes": 1139,
+      "sha256": "0ee68e4f5a098ef821575ed2b90cd80d21cb41a2893d7e3d01ee786376c3cea0"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-material-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-material-2.txt",
+      "bytes": 1088,
+      "sha256": "e8a57ae98141eb330b0df0f96f3a157f322bf14150439333fc795a1c671f40aa"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-material-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-material-3.txt",
+      "bytes": 1085,
+      "sha256": "84a2c6b8a0a701b4b982c8659f0708f42e3d1a4c390eb349f635becb94e1ba09"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-texture-0.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-texture-0.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-texture-1.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-texture-1.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-texture-2.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-texture-2.rgba",
+      "bytes": 4,
+      "sha256": "b7d1b3a1104cc86b1cea310793cf777002db0517281d135a02de079b0ea87c23"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/s5-forward-device-isolation/s5-forward-texture-3.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\s5-forward-device-isolation\\s5-forward-texture-3.rgba",
+      "bytes": 4,
+      "sha256": "5fc1f3b5dfc3af9f4a3c54c77f448216c82908ce3953813f1e12695bb71271c8"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/run/wgl-debug-observer.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\run\\wgl-debug-observer.json",
+      "bytes": 790,
+      "sha256": "8c2870f74210e37dd4c62f497312db98f513c11e11a73e88593d382a51477e8c"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\source-inputs.zip",
+      "bytes": 631603,
+      "sha256": "93b164506e2a9966922d69e0b371c4fd0e4eb86e70cbf47594000eb9cb76f214"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\stderr.log",
+      "bytes": 72,
+      "sha256": "92bec25ad54c650450560360480d5f94d3d8ad203f81a2c724e0c641b330bbfb"
+    },
+    {
+      "member": "s5-device-isolation/attempts/native-gl-wgl-20261104T114758621513Z-5244/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114758621513Z-5244\\stdout.log",
+      "bytes": 78038,
+      "sha256": "bed9e5a112624d5162585f2e5e743fbab0b99e36ce8565742d5ec4c18f8ca404"
+    },
+    {
+      "member": "s5-device-isolation/manifest.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-device-isolation\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\manifest.json",
+      "bytes": 599794,
+      "sha256": "265327486852f5b587a9e140dacf6b6ac0fbaea12122c456fba707c8bce68345"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\consumer.exe",
+      "bytes": 19740672,
+      "sha256": "3e93a86784e083d1df1169b13002f6ee09e27f978f040dcf726c2ebcb6a7fb28"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/focused-tests/0/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\focused-tests\\0\\stderr.log",
+      "bytes": 291,
+      "sha256": "6d1e48bc9e3e81424cc9b4783f0811b51ed4f87966a3cf58d936a2ba5b0e392d"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/focused-tests/0/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\focused-tests\\0\\stdout.log",
+      "bytes": 390,
+      "sha256": "c11f435442e39800bcec1629bd4870f66de194f8d272c30f2ffa1d502d2728a0"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\capabilities.json",
+      "bytes": 4552,
+      "sha256": "6a506c4003460c91c543090a668b2b52b2f66648c6df82a62967d6ef7aecf87e"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/dx12-debug-request.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\dx12-debug-request.json",
+      "bytes": 326,
+      "sha256": "61845053b2c6185e7f057e9d7cf4dfb0191f53ada63f80d07a6124438f74d970"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-cache-facts.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-cache-facts.json",
+      "bytes": 242,
+      "sha256": "b3faa392c0144b3d1bcf5fe345e42896ccb46df77265585d3b595fa06ce1664a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-empty-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-empty-actual.ppm",
+      "bytes": 27661,
+      "sha256": "437eebcb322f1ee0a4bd066df6ed993a0848e4cc42ad6a28ce61e2dcfab421f2"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-empty-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-empty-actual.rgba",
+      "bytes": 36864,
+      "sha256": "1c0273095382988333e2f2b5ae487cea460737ed9be65cbad9c5de537f95bf75"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-empty-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-empty-expected.ppm",
+      "bytes": 27661,
+      "sha256": "437eebcb322f1ee0a4bd066df6ed993a0848e4cc42ad6a28ce61e2dcfab421f2"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-empty-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-empty-expected.rgba",
+      "bytes": 36864,
+      "sha256": "1c0273095382988333e2f2b5ae487cea460737ed9be65cbad9c5de537f95bf75"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-external-clear-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-external-clear-actual.ppm",
+      "bytes": 27661,
+      "sha256": "437eebcb322f1ee0a4bd066df6ed993a0848e4cc42ad6a28ce61e2dcfab421f2"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-external-clear-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-external-clear-actual.rgba",
+      "bytes": 36864,
+      "sha256": "1c0273095382988333e2f2b5ae487cea460737ed9be65cbad9c5de537f95bf75"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-0-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-0-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-0-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-0-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-0-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-0-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-0-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-0-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-0-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-0-input.json",
+      "bytes": 92,
+      "sha256": "749bc703fca327f14cf06ada0da93c7586483396727e357eab2a6a36d6d9e295"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-1-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-1-actual.ppm",
+      "bytes": 27661,
+      "sha256": "17cd4f0926d9c8dbb5b84461b26e2c3a5af8051c7bf0ce04fb134bca1fb234ca"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-1-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-1-actual.rgba",
+      "bytes": 36864,
+      "sha256": "98159dcd691e68456de97a8c2f01c610476809a69a4a45d00c51363219712d08"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-1-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-1-expected.ppm",
+      "bytes": 27661,
+      "sha256": "17cd4f0926d9c8dbb5b84461b26e2c3a5af8051c7bf0ce04fb134bca1fb234ca"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-1-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-1-expected.rgba",
+      "bytes": 36864,
+      "sha256": "98159dcd691e68456de97a8c2f01c610476809a69a4a45d00c51363219712d08"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-1-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-1-input.json",
+      "bytes": 92,
+      "sha256": "2c0a5d9190e8f30584db527d782a369ffff7a8092ea690f424ed0d848801fb0d"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-2-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-2-actual.ppm",
+      "bytes": 27661,
+      "sha256": "1c2e457851882c9da192a3f951649ed11a911377f7eb0a5fe5dca0c9fb036ea7"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-2-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-2-actual.rgba",
+      "bytes": 36864,
+      "sha256": "9f81ed1e0d8b6115eca94ebaaf46ca5391f2ad2c71042fbcdde3db232161f56f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-2-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-2-expected.ppm",
+      "bytes": 27661,
+      "sha256": "1c2e457851882c9da192a3f951649ed11a911377f7eb0a5fe5dca0c9fb036ea7"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-2-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-2-expected.rgba",
+      "bytes": 36864,
+      "sha256": "9f81ed1e0d8b6115eca94ebaaf46ca5391f2ad2c71042fbcdde3db232161f56f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-frame-2-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-frame-2-input.json",
+      "bytes": 92,
+      "sha256": "28d6f1f85eeb40ee714ad1427877aac59f60ec6343259e324577d891078b0453"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-0-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-0-stream-0.bin",
+      "bytes": 108,
+      "sha256": "ce59c88f2887ebfd02900dd45194ee5b44857ecde81ac5df5c2e4df8b3f21eab"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-0.txt",
+      "bytes": 811,
+      "sha256": "371abada908076ee75c9a48fae7a8f5addbac7c6df50cd7d0c26d0dd619202c5"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-1-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-1-stream-0.bin",
+      "bytes": 36,
+      "sha256": "d300ff7b77dc3898ca363a4af1c51bc6c1d2d169f5ad73284c71b6518ba63633"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-1-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-1-stream-1.bin",
+      "bytes": 24,
+      "sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-1-stream-2.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-1-stream-2.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-1.txt",
+      "bytes": 1072,
+      "sha256": "d121c2d0d538fe867ec640a371dbfd4f6d925f699e2b3f68532e4e3fb3ec0b57"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-2-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-2-stream-0.bin",
+      "bytes": 60,
+      "sha256": "289264bba65ccd677b436426bf27bad22a7442a2de15c66ff7e569b7f6197622"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-2-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-2-stream-1.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-2.txt",
+      "bytes": 942,
+      "sha256": "4295533ec6ea9d81ea6d818316d2f1118d04b50bc52f09e38548fd9673a96af9"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-3-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-3-stream-0.bin",
+      "bytes": 36,
+      "sha256": "09d2cc7604681dce6692e9b9e7c333ed1cbb940c7f35e5a6d7f17bad2a1b1987"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-geometry-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-geometry-3.txt",
+      "bytes": 388,
+      "sha256": "53caf4ff5adb6bd0be2a84a76246f3cc82e6d2f18e9feecd9a7ffb1a26344cb0"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-material-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-material-0.txt",
+      "bytes": 1070,
+      "sha256": "12230a9dc81334dfb02502a187dfd1793050d29bb11de63c77591fa99511db7a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-material-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-material-1.txt",
+      "bytes": 1139,
+      "sha256": "0ee68e4f5a098ef821575ed2b90cd80d21cb41a2893d7e3d01ee786376c3cea0"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-material-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-material-2.txt",
+      "bytes": 1088,
+      "sha256": "e8a57ae98141eb330b0df0f96f3a157f322bf14150439333fc795a1c671f40aa"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-material-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-material-3.txt",
+      "bytes": 1085,
+      "sha256": "84a2c6b8a0a701b4b982c8659f0708f42e3d1a4c390eb349f635becb94e1ba09"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-measurements.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-measurements.json",
+      "bytes": 559,
+      "sha256": "47b452422920155ba7346e3fc0488d9bc36d001f2439298f541ffdc9b084fe90"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-oracle.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-oracle.json",
+      "bytes": 203,
+      "sha256": "b7322a36c11b175585768be14aa9b53ff3fdd5c7204ea5ae4d420f64df1d5635"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-readback.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-readback.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-readback.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-readback.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-actual.ppm",
+      "bytes": 27661,
+      "sha256": "60d7bb52488cb8fca5dc32cc8781a6ee027bad307308bf258f5deb0e18d8ed67"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-actual.rgba",
+      "bytes": 36864,
+      "sha256": "052cae82485139ddb87260741aeb1ee78e588796effd973df3ddc2db2b4c60cc"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-expected.ppm",
+      "bytes": 27661,
+      "sha256": "60d7bb52488cb8fca5dc32cc8781a6ee027bad307308bf258f5deb0e18d8ed67"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-expected.rgba",
+      "bytes": 36864,
+      "sha256": "052cae82485139ddb87260741aeb1ee78e588796effd973df3ddc2db2b4c60cc"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "86e228134d238f330351c4aa0ef1fe911ddda8f522319cd5f9011429871252c0"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-geometry.txt",
+      "bytes": 2721,
+      "sha256": "231065ecb768d672e8542207133d80653c3b2a25759ba6c961f60c3817bb616a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-input.json",
+      "bytes": 155,
+      "sha256": "bc78d020f8c4319576cca2319844edcda0696c83df06c8a340b2f0b637031bd4"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-material.txt",
+      "bytes": 1139,
+      "sha256": "0ee68e4f5a098ef821575ed2b90cd80d21cb41a2893d7e3d01ee786376c3cea0"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-new-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-new-texture.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "ce59c88f2887ebfd02900dd45194ee5b44857ecde81ac5df5c2e4df8b3f21eab"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-geometry.txt",
+      "bytes": 2718,
+      "sha256": "b6011dba9ad9fc8f5605646f9964f261d1341b3b5bed5d6cd9efa8650987c4f5"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-input.json",
+      "bytes": 155,
+      "sha256": "ea610563fda165f9f1d75849f1ae303f4562b4be08f8c30c8c53c0e8270cfc23"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-material.txt",
+      "bytes": 1088,
+      "sha256": "e8a57ae98141eb330b0df0f96f3a157f322bf14150439333fc795a1c671f40aa"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-replacement-old-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-replacement-old-texture.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-stable-mask.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-stable-mask.bin",
+      "bytes": 9216,
+      "sha256": "ac20f65030af70ca45d331fba6548c0eadac4b0bc21ff227c0e3551657340aa1"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-texture-0.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-texture-0.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-texture-1.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-texture-1.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-texture-2.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-texture-2.rgba",
+      "bytes": 4,
+      "sha256": "b7d1b3a1104cc86b1cea310793cf777002db0517281d135a02de079b0ea87c23"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-texture-3.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-texture-3.rgba",
+      "bytes": 4,
+      "sha256": "5fc1f3b5dfc3af9f4a3c54c77f448216c82908ce3953813f1e12695bb71271c8"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/s5-forward/s5-forward-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\s5-forward\\s5-forward-workload.json",
+      "bytes": 549,
+      "sha256": "5569f4839be6ce4c09e42b7f3334303a4765933c36419adfff0c80de39f02e45"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\source-inputs.zip",
+      "bytes": 631603,
+      "sha256": "cc3d2e5659725fccf8974263e615fdb49662eaf57fe4b52d5e309609bd6162b6"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\stderr.log",
+      "bytes": 404,
+      "sha256": "5cca964a0a16e638fa1d5dda840eeb77e356868d4697748099d30f6f37504320"
+    },
+    {
+      "member": "s5-forward/attempts/dx12-20261104T114305300070Z-16472/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114305300070Z-16472\\stdout.log",
+      "bytes": 72389,
+      "sha256": "38702ea76ef59dd8c89386670b1d7d459878e9c52e6a6b2650ea9fb247389dbd"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\consumer.exe",
+      "bytes": 19231232,
+      "sha256": "e73bb06f483b4bb0f96f7fdd8eb704866203ff3e7f02d4977601c933796e5894"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/focused-tests/0/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\focused-tests\\0\\stderr.log",
+      "bytes": 291,
+      "sha256": "4af259e99c8ec3e9409c1c4a8abe4cc16d583f352bdb9174db0c0d5f100e9c07"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/focused-tests/0/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\focused-tests\\0\\stdout.log",
+      "bytes": 391,
+      "sha256": "b7fd02c8e440f2457999138f8df8ebaaf23b1a81653ad6f6be89598b1abfd442"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\capabilities.json",
+      "bytes": 4307,
+      "sha256": "afa40e7d50a62495ea11704b3bc826510011d75626f7d0af7ad4cea113082e72"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-cache-facts.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-cache-facts.json",
+      "bytes": 242,
+      "sha256": "b3faa392c0144b3d1bcf5fe345e42896ccb46df77265585d3b595fa06ce1664a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-empty-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-empty-actual.ppm",
+      "bytes": 27661,
+      "sha256": "437eebcb322f1ee0a4bd066df6ed993a0848e4cc42ad6a28ce61e2dcfab421f2"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-empty-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-empty-actual.rgba",
+      "bytes": 36864,
+      "sha256": "1c0273095382988333e2f2b5ae487cea460737ed9be65cbad9c5de537f95bf75"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-empty-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-empty-expected.ppm",
+      "bytes": 27661,
+      "sha256": "437eebcb322f1ee0a4bd066df6ed993a0848e4cc42ad6a28ce61e2dcfab421f2"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-empty-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-empty-expected.rgba",
+      "bytes": 36864,
+      "sha256": "1c0273095382988333e2f2b5ae487cea460737ed9be65cbad9c5de537f95bf75"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-external-clear-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-external-clear-actual.ppm",
+      "bytes": 27661,
+      "sha256": "437eebcb322f1ee0a4bd066df6ed993a0848e4cc42ad6a28ce61e2dcfab421f2"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-external-clear-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-external-clear-actual.rgba",
+      "bytes": 36864,
+      "sha256": "1c0273095382988333e2f2b5ae487cea460737ed9be65cbad9c5de537f95bf75"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-0-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-0-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-0-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-0-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-0-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-0-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-0-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-0-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-0-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-0-input.json",
+      "bytes": 92,
+      "sha256": "749bc703fca327f14cf06ada0da93c7586483396727e357eab2a6a36d6d9e295"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-1-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-1-actual.ppm",
+      "bytes": 27661,
+      "sha256": "17cd4f0926d9c8dbb5b84461b26e2c3a5af8051c7bf0ce04fb134bca1fb234ca"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-1-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-1-actual.rgba",
+      "bytes": 36864,
+      "sha256": "98159dcd691e68456de97a8c2f01c610476809a69a4a45d00c51363219712d08"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-1-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-1-expected.ppm",
+      "bytes": 27661,
+      "sha256": "17cd4f0926d9c8dbb5b84461b26e2c3a5af8051c7bf0ce04fb134bca1fb234ca"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-1-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-1-expected.rgba",
+      "bytes": 36864,
+      "sha256": "98159dcd691e68456de97a8c2f01c610476809a69a4a45d00c51363219712d08"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-1-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-1-input.json",
+      "bytes": 92,
+      "sha256": "2c0a5d9190e8f30584db527d782a369ffff7a8092ea690f424ed0d848801fb0d"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-2-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-2-actual.ppm",
+      "bytes": 27661,
+      "sha256": "1c2e457851882c9da192a3f951649ed11a911377f7eb0a5fe5dca0c9fb036ea7"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-2-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-2-actual.rgba",
+      "bytes": 36864,
+      "sha256": "9f81ed1e0d8b6115eca94ebaaf46ca5391f2ad2c71042fbcdde3db232161f56f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-2-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-2-expected.ppm",
+      "bytes": 27661,
+      "sha256": "1c2e457851882c9da192a3f951649ed11a911377f7eb0a5fe5dca0c9fb036ea7"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-2-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-2-expected.rgba",
+      "bytes": 36864,
+      "sha256": "9f81ed1e0d8b6115eca94ebaaf46ca5391f2ad2c71042fbcdde3db232161f56f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-frame-2-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-frame-2-input.json",
+      "bytes": 92,
+      "sha256": "28d6f1f85eeb40ee714ad1427877aac59f60ec6343259e324577d891078b0453"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-0-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-0-stream-0.bin",
+      "bytes": 108,
+      "sha256": "ce59c88f2887ebfd02900dd45194ee5b44857ecde81ac5df5c2e4df8b3f21eab"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-0.txt",
+      "bytes": 811,
+      "sha256": "371abada908076ee75c9a48fae7a8f5addbac7c6df50cd7d0c26d0dd619202c5"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-1-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-1-stream-0.bin",
+      "bytes": 36,
+      "sha256": "d300ff7b77dc3898ca363a4af1c51bc6c1d2d169f5ad73284c71b6518ba63633"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-1-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-1-stream-1.bin",
+      "bytes": 24,
+      "sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-1-stream-2.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-1-stream-2.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-1.txt",
+      "bytes": 1072,
+      "sha256": "d121c2d0d538fe867ec640a371dbfd4f6d925f699e2b3f68532e4e3fb3ec0b57"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-2-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-2-stream-0.bin",
+      "bytes": 60,
+      "sha256": "289264bba65ccd677b436426bf27bad22a7442a2de15c66ff7e569b7f6197622"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-2-stream-1.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-2-stream-1.bin",
+      "bytes": 48,
+      "sha256": "6ea78411bee8a810b9a18819c5a4ac7c827e71678cc4d1db9a0ab8c8d8a9b2e2"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-2.txt",
+      "bytes": 942,
+      "sha256": "4295533ec6ea9d81ea6d818316d2f1118d04b50bc52f09e38548fd9673a96af9"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-3-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-3-stream-0.bin",
+      "bytes": 36,
+      "sha256": "09d2cc7604681dce6692e9b9e7c333ed1cbb940c7f35e5a6d7f17bad2a1b1987"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-geometry-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-geometry-3.txt",
+      "bytes": 388,
+      "sha256": "53caf4ff5adb6bd0be2a84a76246f3cc82e6d2f18e9feecd9a7ffb1a26344cb0"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-material-0.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-material-0.txt",
+      "bytes": 1070,
+      "sha256": "12230a9dc81334dfb02502a187dfd1793050d29bb11de63c77591fa99511db7a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-material-1.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-material-1.txt",
+      "bytes": 1139,
+      "sha256": "0ee68e4f5a098ef821575ed2b90cd80d21cb41a2893d7e3d01ee786376c3cea0"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-material-2.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-material-2.txt",
+      "bytes": 1088,
+      "sha256": "e8a57ae98141eb330b0df0f96f3a157f322bf14150439333fc795a1c671f40aa"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-material-3.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-material-3.txt",
+      "bytes": 1085,
+      "sha256": "84a2c6b8a0a701b4b982c8659f0708f42e3d1a4c390eb349f635becb94e1ba09"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-measurements.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-measurements.json",
+      "bytes": 558,
+      "sha256": "11762b0b243c7a39a17ed381033c8c496804df9e9e6ab7dc16e922c666034b45"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-oracle.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-oracle.json",
+      "bytes": 203,
+      "sha256": "b7322a36c11b175585768be14aa9b53ff3fdd5c7204ea5ae4d420f64df1d5635"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-readback.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-readback.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-readback.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-readback.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-actual.ppm",
+      "bytes": 27661,
+      "sha256": "60d7bb52488cb8fca5dc32cc8781a6ee027bad307308bf258f5deb0e18d8ed67"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-actual.rgba",
+      "bytes": 36864,
+      "sha256": "052cae82485139ddb87260741aeb1ee78e588796effd973df3ddc2db2b4c60cc"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-expected.ppm",
+      "bytes": 27661,
+      "sha256": "60d7bb52488cb8fca5dc32cc8781a6ee027bad307308bf258f5deb0e18d8ed67"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-expected.rgba",
+      "bytes": 36864,
+      "sha256": "052cae82485139ddb87260741aeb1ee78e588796effd973df3ddc2db2b4c60cc"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "86e228134d238f330351c4aa0ef1fe911ddda8f522319cd5f9011429871252c0"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-geometry.txt",
+      "bytes": 2721,
+      "sha256": "231065ecb768d672e8542207133d80653c3b2a25759ba6c961f60c3817bb616a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-input.json",
+      "bytes": 155,
+      "sha256": "bc78d020f8c4319576cca2319844edcda0696c83df06c8a340b2f0b637031bd4"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-material.txt",
+      "bytes": 1139,
+      "sha256": "0ee68e4f5a098ef821575ed2b90cd80d21cb41a2893d7e3d01ee786376c3cea0"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-new-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-new-texture.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-actual.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-actual.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-actual.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-actual.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-expected.ppm",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-expected.ppm",
+      "bytes": 27661,
+      "sha256": "2505452f8dc0c59dbc6edb8274577a1d1d71b5ef2ab4db748b014d761eda2b9a"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-expected.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-expected.rgba",
+      "bytes": 36864,
+      "sha256": "e3eb7be70f58c489780c15b78eb967b3cc79b254845bd4be6a52fa89f2d0be0f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-geometry-stream-0.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-geometry-stream-0.bin",
+      "bytes": 108,
+      "sha256": "ce59c88f2887ebfd02900dd45194ee5b44857ecde81ac5df5c2e4df8b3f21eab"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-geometry.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-geometry.txt",
+      "bytes": 2718,
+      "sha256": "b6011dba9ad9fc8f5605646f9964f261d1341b3b5bed5d6cd9efa8650987c4f5"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-input.json",
+      "bytes": 155,
+      "sha256": "ea610563fda165f9f1d75849f1ae303f4562b4be08f8c30c8c53c0e8270cfc23"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-material.txt",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-material.txt",
+      "bytes": 1088,
+      "sha256": "e8a57ae98141eb330b0df0f96f3a157f322bf14150439333fc795a1c671f40aa"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-replacement-old-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-replacement-old-texture.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-stable-mask.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-stable-mask.bin",
+      "bytes": 9216,
+      "sha256": "ac20f65030af70ca45d331fba6548c0eadac4b0bc21ff227c0e3551657340aa1"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-texture-0.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-texture-0.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-texture-1.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-texture-1.rgba",
+      "bytes": 4,
+      "sha256": "7a7bf454c5f3cb1b9d9a20f81417f98d976fe3b3dd52c1b9968f02e89e7e8a2f"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-texture-2.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-texture-2.rgba",
+      "bytes": 4,
+      "sha256": "b7d1b3a1104cc86b1cea310793cf777002db0517281d135a02de079b0ea87c23"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-texture-3.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-texture-3.rgba",
+      "bytes": 4,
+      "sha256": "5fc1f3b5dfc3af9f4a3c54c77f448216c82908ce3953813f1e12695bb71271c8"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/s5-forward/s5-forward-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\s5-forward\\s5-forward-workload.json",
+      "bytes": 549,
+      "sha256": "5569f4839be6ce4c09e42b7f3334303a4765933c36419adfff0c80de39f02e45"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/run/wgl-debug-observer.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\run\\wgl-debug-observer.json",
+      "bytes": 790,
+      "sha256": "8c2870f74210e37dd4c62f497312db98f513c11e11a73e88593d382a51477e8c"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\source-inputs.zip",
+      "bytes": 631603,
+      "sha256": "07897a151c9d333fcbf3407ff4ff715c61ff3191f71126a043cdcdca6b4c22e9"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\stderr.log",
+      "bytes": 404,
+      "sha256": "347634a76fb2fcc0f64a03d8563c277c5827cd8cf1c374d9e686a0f9d95cedad"
+    },
+    {
+      "member": "s5-forward/attempts/native-gl-wgl-20261104T114652422233Z-19916/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114652422233Z-19916\\stdout.log",
+      "bytes": 78041,
+      "sha256": "ab0860068f8c520e37415efa437e3b32c7c41c838f8b890ac562a69bcce21e8b"
+    },
+    {
+      "member": "s5-forward/manifest.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-forward\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\manifest.json",
+      "bytes": 336605,
+      "sha256": "0f971bc1ab150aa84c012d0a677572913e533a247b03a2be95b90a3f7f920df0"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\consumer.exe",
+      "bytes": 19740672,
+      "sha256": "3e93a86784e083d1df1169b13002f6ee09e27f978f040dcf726c2ebcb6a7fb28"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/focused-tests/0/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\focused-tests\\0\\stderr.log",
+      "bytes": 171,
+      "sha256": "2a1f99863508d8af8ba25b4b2ac36f058e1358c2afe90b6279c9e2007452b867"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/focused-tests/0/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\focused-tests\\0\\stdout.log",
+      "bytes": 635,
+      "sha256": "c4b5a0ce4aa3bdf5a628629a47c1ce0703770b78b5d00c99aa85df75dcd28ed4"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\capabilities.json",
+      "bytes": 4552,
+      "sha256": "6a506c4003460c91c543090a668b2b52b2f66648c6df82a62967d6ef7aecf87e"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/dx12-debug-request.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\dx12-debug-request.json",
+      "bytes": 326,
+      "sha256": "61845053b2c6185e7f057e9d7cf4dfb0191f53ada63f80d07a6124438f74d970"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/forward-surface-expected.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\forward-surface-expected.json",
+      "bytes": 76,
+      "sha256": "0d7f97ba97cb07e3d7a12034b152a85b4817e850fce102652d5bd93a43488588"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/forward-surface-geometry.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\forward-surface-geometry.bin",
+      "bytes": 36,
+      "sha256": "d5b23862ece02619a3dc94d5dc656bc2cfd989d95406a2a9d19ab4cec64a667f"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/forward-surface-reconfigure-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\forward-surface-reconfigure-input.json",
+      "bytes": 108,
+      "sha256": "2bc0bfbea226a68c8f691a84361b6f1ac5b28d1763565fb7589bc6198e6a951e"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/forward-surface-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\forward-surface-texture.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/s5-forward-surface-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\s5-forward-surface-workload.json",
+      "bytes": 250,
+      "sha256": "31bc135cd3840791c2ab510bb750887ab15ae98a2eb4027f94a4e7ff51876cbf"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-client-frame-0.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-client-frame-0.bmp",
+      "bytes": 230454,
+      "sha256": "01ae79dce0b9ae303c0ec31b04b1eb4078bc25dba9fc4686bfd91dfd88b043fa"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-client-frame-0.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-client-frame-0.capture.json",
+      "bytes": 295,
+      "sha256": "0439e6fa22e84f0f848399c04598a271837c4f35976f9effec7aca447f60d7d9"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-client-frame-0.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-client-frame-0.verdict.json",
+      "bytes": 149,
+      "sha256": "713bf9c253a442bae5cafbd2e4d79ab898bc3eeb820efaa83b25f6af76b0812d"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-client-frame-1.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-client-frame-1.bmp",
+      "bytes": 147510,
+      "sha256": "b488c867668b3d02ab720aad75f612e646ef98feb3881d7f8b098c4c1c80005c"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-client-frame-1.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-client-frame-1.capture.json",
+      "bytes": 295,
+      "sha256": "8bd280a9d818a8026cf7b867c2a9a84d43e691353b884503bb55579b7a3e8391"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-client-frame-1.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-client-frame-1.verdict.json",
+      "bytes": 149,
+      "sha256": "fe1b475ccad60f15db3d2a49dccfa756d7d18aaebccc4e41d61c6ef2a3afdab2"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-configuration.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-configuration.jsonl",
+      "bytes": 958,
+      "sha256": "a3069229fe5a9f0001e65d5e145d8bb63c79bbaa207360baf308a962e548f987"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/s5-forward-surface/surface-events.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\s5-forward-surface\\surface-events.jsonl",
+      "bytes": 221,
+      "sha256": "f67aa4e8eda6aff16cef737e122aa6ebdbd5d7925c995025a16f25c5336d5796"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\source-inputs.zip",
+      "bytes": 631603,
+      "sha256": "b8d8a12a7d898e9c9695dcc37c42fc8882d78eef45bde95d182d6e38eadcb9f5"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\stderr.log",
+      "bytes": 72,
+      "sha256": "92bec25ad54c650450560360480d5f94d3d8ad203f81a2c724e0c641b330bbfb"
+    },
+    {
+      "member": "s5-surface/attempts/dx12-20261104T114551726433Z-15564/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\dx12-20261104T114551726433Z-15564\\stdout.log",
+      "bytes": 72386,
+      "sha256": "6447e91ff6fd8038bed1dc06475218987553c3544221e135e384649acb7c2c39"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/consumer.exe",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\consumer.exe",
+      "bytes": 19231232,
+      "sha256": "e73bb06f483b4bb0f96f7fdd8eb704866203ff3e7f02d4977601c933796e5894"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/focused-tests/0/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\focused-tests\\0\\stderr.log",
+      "bytes": 171,
+      "sha256": "570053ff561524a3b26e71558f5bf04e506c8c9905dc776348007a56d3cf3369"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/focused-tests/0/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\focused-tests\\0\\stdout.log",
+      "bytes": 635,
+      "sha256": "1ed90e001453a9d09843748c7cf2d2558e800852295d817c398cd2ec7e54dae0"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/capabilities.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\capabilities.json",
+      "bytes": 4307,
+      "sha256": "afa40e7d50a62495ea11704b3bc826510011d75626f7d0af7ad4cea113082e72"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/forward-surface-expected.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\forward-surface-expected.json",
+      "bytes": 76,
+      "sha256": "0d7f97ba97cb07e3d7a12034b152a85b4817e850fce102652d5bd93a43488588"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/forward-surface-geometry.bin",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\forward-surface-geometry.bin",
+      "bytes": 36,
+      "sha256": "d5b23862ece02619a3dc94d5dc656bc2cfd989d95406a2a9d19ab4cec64a667f"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/forward-surface-reconfigure-input.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\forward-surface-reconfigure-input.json",
+      "bytes": 108,
+      "sha256": "2bc0bfbea226a68c8f691a84361b6f1ac5b28d1763565fb7589bc6198e6a951e"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/forward-surface-texture.rgba",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\forward-surface-texture.rgba",
+      "bytes": 4,
+      "sha256": "34aaa746c25a0f105c4316bbb1f009aa359f49582656ee97d73c58132d563423"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/s5-forward-surface-workload.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\s5-forward-surface-workload.json",
+      "bytes": 250,
+      "sha256": "31bc135cd3840791c2ab510bb750887ab15ae98a2eb4027f94a4e7ff51876cbf"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-client-frame-0.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-client-frame-0.bmp",
+      "bytes": 230454,
+      "sha256": "01ae79dce0b9ae303c0ec31b04b1eb4078bc25dba9fc4686bfd91dfd88b043fa"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-client-frame-0.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-client-frame-0.capture.json",
+      "bytes": 295,
+      "sha256": "0439e6fa22e84f0f848399c04598a271837c4f35976f9effec7aca447f60d7d9"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-client-frame-0.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-client-frame-0.verdict.json",
+      "bytes": 149,
+      "sha256": "713bf9c253a442bae5cafbd2e4d79ab898bc3eeb820efaa83b25f6af76b0812d"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-client-frame-1.bmp",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-client-frame-1.bmp",
+      "bytes": 147510,
+      "sha256": "b488c867668b3d02ab720aad75f612e646ef98feb3881d7f8b098c4c1c80005c"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-client-frame-1.capture.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-client-frame-1.capture.json",
+      "bytes": 295,
+      "sha256": "8bd280a9d818a8026cf7b867c2a9a84d43e691353b884503bb55579b7a3e8391"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-client-frame-1.verdict.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-client-frame-1.verdict.json",
+      "bytes": 149,
+      "sha256": "fe1b475ccad60f15db3d2a49dccfa756d7d18aaebccc4e41d61c6ef2a3afdab2"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-configuration.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-configuration.jsonl",
+      "bytes": 870,
+      "sha256": "a5a5686bd8081f1be9882313eaf296edabaa9e6e43d5c97a03ab479d1bcac742"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/s5-forward-surface/surface-events.jsonl",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\s5-forward-surface\\surface-events.jsonl",
+      "bytes": 221,
+      "sha256": "f67aa4e8eda6aff16cef737e122aa6ebdbd5d7925c995025a16f25c5336d5796"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/run/wgl-debug-observer.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\run\\wgl-debug-observer.json",
+      "bytes": 790,
+      "sha256": "8c2870f74210e37dd4c62f497312db98f513c11e11a73e88593d382a51477e8c"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/source-inputs.zip",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\source-inputs.zip",
+      "bytes": 631603,
+      "sha256": "c9eb4271d5d7379d6caf1609142263f5bcfe16eeb5d39915b42871481488b1b1"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/stderr.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\stderr.log",
+      "bytes": 72,
+      "sha256": "29162d76fb109d9c6005d8544d63a4a438d15235d4f9b8e73d51adc9ba6e95d7"
+    },
+    {
+      "member": "s5-surface/attempts/native-gl-wgl-20261104T114907805020Z-3480/stdout.log",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\attempts\\native-gl-wgl-20261104T114907805020Z-3480\\stdout.log",
+      "bytes": 78038,
+      "sha256": "e5ff909a1499c6a26feede86489e83dd9e4c6d09aad44d33fb7ae1ef2fb2424a"
+    },
+    {
+      "member": "s5-surface/manifest.json",
+      "original_path": "E:\\moyy\\program\\rust\\fluxel\\fluxel-rendering\\target\\integration\\s5-surface\\36dcbbb1da0fed7ef43b3f8cc842bf1f4900c210\\manifest.json",
+      "bytes": 253761,
+      "sha256": "fc7d3c079b4f3a7ef6e8eb7e743e376ce5a3e20b9ab3f5e4362d83014bea6362"
+    }
+  ]
+}

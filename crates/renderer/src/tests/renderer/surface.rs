@@ -21,6 +21,16 @@ fn surface_image(
             },
         )
     };
+    let config = SurfaceConfig {
+        extent: [4, 4],
+        format: TextureFormat::Rgba8Unorm,
+        present_mode: PresentMode::Fifo,
+        alpha_mode: CompositeAlphaMode::Opaque,
+        color_space: ColorSpace::Srgb,
+        usage: SurfaceUsage::RENDER_ATTACHMENT,
+        maximum_frame_latency: 2,
+    };
+    block_on(surface.configure(&config)).expect("configure witness surface");
     let image = block_on(surface.acquire()).expect("witness surface image");
     (surface, image)
 }

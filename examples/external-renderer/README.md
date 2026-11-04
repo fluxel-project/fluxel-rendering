@@ -1,4 +1,4 @@
-# External Renderer CPU Reference
+# External Renderer Reference
 
 This independent consumer exercises the public RenderScene batch boundary without
 an ECS, GPU device, Host window, or access to Renderer-internal Graph state. It
@@ -27,15 +27,33 @@ issuer-bound storage mismatch, mixed-version/replayed collector contributions,
 and rejected cross-feature contributions are structured errors. The facade
 exposes neither Graph nor GPU authority.
 
-The `compile-fail/private-graph` fixture is an independent crate. It confirms
-that the public `RenderScene` import is usable but that attempting to import
-Renderer's private `graph` module fails with Rust privacy error E0603.
+The `compile-fail/private-graph` and `compile-fail/private-phase-context`
+fixtures are independent crates. They confirm that external code cannot import
+Renderer's private `graph` module or construct the renderer-owned phase context
+needed to declare and submit work.
 
-The executable is the retained S4 CPU reference artifact described by the
+## Bounded S5 FramePipeline policy
+
+The crate also implements two statically dispatched public `FramePipeline`
+policies: `ExternalOpaquePipeline` and `ExternalClearPipeline`. They reuse an
+external interval-based visibility provider, prepare an immutable scene snapshot,
+and select one of the two renderer-owned Forward products. The integration
+workload invokes these policies on the actual Scene-to-Forward path.
+
+The policy declares its bounded opaque or clear pass and the required
+vertex/uniform/texture/color accesses through the controlled phase context on
+the actual Graph transaction, including on cache hits. It cannot create arbitrary
+Graph resources, record commands, submit work, or declare arbitrary GPU accesses.
+It is evidence for the bounded S5 API only; it is not a
+general external GPU Feature, custom GPU product, or same-frame composition
+claim.
+
+The executable retains the S4 CPU reference artifact described by the
 [S4 CPU closure record](../../documents/s4-cpu-closure.md). It validates data
 ownership, identity, atomic changes, and later snapshot/typed-feature contracts.
-It does not render, submit GPU work, create a FramePipeline, or claim culling,
-indirect work, or a supported graphics backend.
+It also checks the bounded S5 policies and two concrete visibility-provider
+compositions. It does not itself own a GPU device, render or submit GPU work, or
+claim a general Feature system, indirect work, or a supported graphics backend.
 
 Before either adapter starts scene construction, each executable attempt saves
 its source input, independently specified expected facts, an initially unavailable
@@ -57,3 +75,13 @@ cargo +1.87.0 test --locked
 cargo +1.87.0 run --locked
 python scripts/capture_s4_evidence.py --attempt attempt-002
 ```
+
+A fixed three-record scene has two independently expected visible records; the
+external provider deliberately traverses candidates in reverse order to check
+deterministic normalization. This local preparation check alone does not close S5 and
+does not establish S6: external GPU resource contributions, heterogeneous
+Feature composition, and an external pipeline plus Feature in the same frame
+remain pending.
+
+The [S5 closure record](../../documents/s5-forward-closure.md) combines this
+independent consumer with the native integration matrix and measurement baseline.

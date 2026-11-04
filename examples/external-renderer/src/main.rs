@@ -1,11 +1,16 @@
 //! Independent CPU reference for the public RenderScene batch boundary.
 
 mod adapters;
+mod material_preparation;
+mod opaque;
+mod preparation;
 
 use adapters::{EcsStyleAdapter, ObjectAdapter, ReferenceAdapter};
 use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    preparation::run()?;
+    material_preparation::run()?;
     let (direct, _) = run(
         Path::new("target/external-renderer-evidence"),
         ReferenceAdapter::expected_evidence(),

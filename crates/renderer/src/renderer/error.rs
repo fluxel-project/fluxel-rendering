@@ -40,6 +40,19 @@ pub enum RendererError {
     },
     /// A typed RHI failure, preserved without string flattening.
     Rhi(Error),
+    /// Logical Shader requirements could not be admitted for this device and pipeline.
+    ShaderAdmission(super::ShaderAdmissionError),
+    /// CPU Scene selection failed before Forward device preparation.
+    ForwardPipeline(crate::PipelineError),
+    /// Logical Forward assets did not satisfy the selected consumer.
+    ForwardPreparation(crate::ForwardPreparationError),
+    /// A Forward device operation failed; the original RHI error is preserved.
+    ForwardOperation {
+        /// The device operation being performed.
+        operation: &'static str,
+        /// The unmodified RHI failure.
+        error: Error,
+    },
 }
 
 impl fmt::Display for RendererError {
@@ -77,6 +90,12 @@ impl fmt::Display for RendererError {
                 Ok(())
             }
             Self::Rhi(error) => error.fmt(formatter),
+            Self::ShaderAdmission(error) => error.fmt(formatter),
+            Self::ForwardPipeline(error) => error.fmt(formatter),
+            Self::ForwardPreparation(error) => error.fmt(formatter),
+            Self::ForwardOperation { operation, error } => {
+                write!(formatter, "Forward {operation}: {error}")
+            }
         }
     }
 }

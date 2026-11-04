@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "scope": "Retained focused validation logs; native source identity and direct workload commands are independently retained in native-evidence.zip. These logs are not a full workspace regression.",
+  "files": [
+    {
+      "file": "fluxel-affected-tests.log",
+      "bytes": 22614,
+      "sha256": "495219281571cb6142a17b5d69400eb36fe16d7f68b9b10d2d9a88098b17b12d"
+    },
+    {
+      "file": "fluxel-forward-final.log",
+      "bytes": 5930,
+      "sha256": "7f204227e1695dc1b74bbfda71618b2fdbe1481db360832007036a7a34542a9b"
+    },
+    {
+      "file": "fluxel-material-shader-integration-tests.log",
+      "bytes": 4113,
+      "sha256": "b5d86e4dd643d0c94337f8a2220d993bbbbf9cfdc684ea2faeb806caa86c4589"
+    },
+    {
+      "file": "fluxel-external-tests-final.log",
+      "bytes": 6200,
+      "sha256": "cbf7f51fafb1392d077b0393a2771a1c50a661eb1079fad896d78ac53c770cff"
+    },
+    {
+      "file": "fluxel-integration-tests.log",
+      "bytes": 7442,
+      "sha256": "650f237b7438ac448b1ae64d3021ec09ba4e40db4d422ee7f06d3c40327ed554"
+    },
+    {
+      "file": "fluxel-wgl-tests.log",
+      "bytes": 5439,
+      "sha256": "12ca8b8c6499bae1e75eeb9492e6239e4ddfea0b06e746bc1a9b47429cad157e"
+    },
+    {
+      "file": "fluxel-clippy.log",
+      "bytes": 174,
+      "sha256": "0f43420859ebc0cb98a5a5a4a3fadcf060a4db673bc5a4c9e62cc3cc91860af4"
+    },
+    {
+      "file": "fluxel-tool-tests-final.log",
+      "bytes": 896,
+      "sha256": "8fa6bb46adac5dcd79ddba0530c102a3f2b50958f415d2c56bd405da56b31801"
+    },
+    {
+      "file": "runner-bootstrap-failure.log",
+      "bytes": 1402,
+      "sha256": "cd777ccf5c678fecd6d5749403301b6a76bcd2713b90cf6a02c3fc4300bd5ee6",
+      "outcome": "bootstrap failed before GPU; retained as failure, not acceptance"
+    }
+  ]
+}

@@ -3,6 +3,51 @@ use fluxel_renderer::{DirtyRange, FeatureError};
 use std::{fs, path::PathBuf, process::Command};
 
 #[test]
+fn external_preparation_matches_independent_candidates() {
+    super::preparation::run().expect("external preparation consumer");
+}
+
+#[test]
+fn material_geometry_preparation_uses_real_compilers() {
+    super::material_preparation::run().expect("material-backed geometry preparation");
+}
+
+#[test]
+fn opaque_groups_preserve_layout_material_and_binding_compatibility() {
+    use fluxel_renderer::{RenderBounds, RenderChange, RenderRecord, RenderScene, RenderTransform};
+    let mut scene = RenderScene::new().unwrap();
+    let changes = (0..5u8)
+        .map(|value| {
+            RenderChange::Insert(RenderRecord {
+                resources: value,
+                transform: RenderTransform::identity(),
+                bounds: RenderBounds::new([0.0; 3], [1.0; 3]).unwrap(),
+            })
+        })
+        .collect();
+    let receipt = scene.apply(&changes).unwrap();
+    let ids = receipt.inserted();
+    // Only records zero and four have the same layout, material and binding.
+    let batches = super::opaque::group([
+        ((0, 0, 0), ids[4]),
+        ((1, 0, 0), ids[1]),
+        ((0, 1, 0), ids[2]),
+        ((0, 0, 1), ids[3]),
+        ((0, 0, 0), ids[0]),
+    ]);
+    assert_eq!(
+        batches,
+        vec![
+            ((0, 0, 0), vec![ids[0], ids[4]]),
+            ((0, 0, 1), vec![ids[3]]),
+            ((0, 1, 0), vec![ids[2]]),
+            ((1, 0, 0), vec![ids[1]]),
+        ]
+    );
+    assert!(super::opaque::group::<(u8, u8, u8)>([]).is_empty());
+}
+
+#[test]
 fn ordinary_and_ecs_style_adapters_produce_the_same_public_scene_result() {
     let evidence = test_evidence_root();
     let (direct, ecs) = super::run(&evidence, ReferenceAdapter::expected_evidence())
@@ -125,8 +170,19 @@ fn test_evidence_root() -> PathBuf {
 
 #[test]
 fn external_code_cannot_access_renderer_private_graph_state() {
-    let manifest =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("compile-fail/private-graph/Cargo.toml");
+    assert_compile_fails("private-graph", "E0603", "module `graph` is private");
+}
+
+#[test]
+fn external_code_cannot_construct_a_phase_context_or_submit_work() {
+    assert_compile_fails("private-phase-context", "E0624", "associated function `new` is private");
+}
+
+fn assert_compile_fails(case: &str, code: &str, message: &str) {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("compile-fail")
+        .join(case)
+        .join("Cargo.toml");
     let target = std::env::temp_dir().join(format!(
         "external-renderer-private-graph-{}",
         std::process::id()
@@ -146,7 +202,7 @@ fn external_code_cannot_access_renderer_private_graph_state() {
     assert!(!output.status.success(), "private module fixture compiled");
     let diagnostics = String::from_utf8_lossy(&output.stderr);
     assert!(
-        diagnostics.contains("E0603") && diagnostics.contains("module `graph` is private"),
+        diagnostics.contains(code) && diagnostics.contains(message),
         "fixture failed for an unrelated reason:\n{diagnostics}"
     );
 }

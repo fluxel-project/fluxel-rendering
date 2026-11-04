@@ -9,6 +9,8 @@ publish = false
 resolver = "2"
 
 [dependencies]
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "b5d569feace548a6ed498901deaf31a5efcaca61", version = "=0.1.0", default-features = false }
+fluxel-shader = { path = "../../crates/shader" }
 fluxel-renderer = { path = "../../crates/renderer" }
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "ee640d57a8d7c32d251252d0e8b32950636a770c", version = "=0.13.4" }
 fluxel-material = { path = "../../crates/material" }

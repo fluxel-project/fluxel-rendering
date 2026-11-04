@@ -180,10 +180,13 @@ binding resource-use manifest, not just a binding-object handle. Graph validates
 coverage before recording and includes those resources in dependency/lifetime
 analysis, including when dynamic bindings change.
 
-Renderer owns the `FramePipeline` module. During S4/S5, real consumers will
-establish the minimal public Rust trait/context facade needed for external
-implementations; the current module remains a shell. Its graph compiler,
-scheduler, and allocator internals remain private.
+Renderer owns the `FramePipeline` module. S5 supplies a bounded public Rust
+trait/context facade, exercised by built-in Forward and independent concrete
+pipeline/provider implementations. Contributions declare accesses on the real
+Graph on every frame, including cache hits; compatible plans may be reused only
+after the current declarations and actual bindings are validated. Graph compiler,
+scheduler, allocator and submission internals remain private. This bounded seam
+does not yet establish S6's heterogeneous GPU Feature composition.
 
 The MVP closes only when the built-in mesh path and an independent Rust crate
 use the same frame: a custom material, an external `RenderFeature`, and an

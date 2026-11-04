@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retain bounded S0-S3 integration attempts without asserting support."""
+"""Retain bounded native integration attempts without asserting stage support."""
 
 from __future__ import annotations
 
@@ -19,9 +19,13 @@ import zipfile
 from typing import Any
 
 
-SCHEMA_VERSION = 3
+# Schema v4 adds S5-specific nested workload evidence. S0-S3 manifests keep
+# their v3 contract so a schema validator does not accept them as S5 evidence.
+S0_S3_SCHEMA_VERSION = 3
+S5_SCHEMA_VERSION = 4
 BACKENDS = ("dx12", "native-gl-wgl")
-RHI_REVISION = "0f7f785d4f0ccc62e125dd6cf560d91333ec85cf"
+WORKLOADS = ("s0-s3", "s5-forward", "s5-surface", "s5-device-isolation")
+RHI_REVISION = "b5d569feace548a6ed498901deaf31a5efcaca61"
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT = ROOT / "examples" / "rendering-integration"
 EXCLUDED_SOURCE_PARTS = {".git", "target", "draft"}
@@ -29,578 +33,68 @@ SENSITIVE_SOURCE_NAMES = {".env", ".env.local", ".envrc"}
 SENSITIVE_SOURCE_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".token"}
 SENSITIVE_CONFIG_ASSIGNMENT = re.compile(r"(?im)^\s*(?:token|password|secret|api[-_]?key)\s*=")
 RUST_INCLUDE = re.compile(r"include_(?:str|bytes)!\s*\(\s*([^)]*?)\s*\)")
-CHILD_ENV_ALLOWLIST = (
-    "APPDATA", "COMSPEC", "CommonProgramFiles", "CommonProgramFiles(x86)",
-    "INCLUDE", "LIB", "LIBPATH", "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "OS",
-    "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "ProgramData",
-    "ProgramFiles", "ProgramFiles(x86)", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "SystemRoot",
-    "TEMP", "TMP", "UCRTVersion", "UniversalCRTSdkDir", "USERPROFILE", "VCINSTALLDIR",
-    "VCToolsInstallDir", "VSINSTALLDIR", "WindowsSdkDir", "WindowsSDKVersion", "WINDIR",
-    "CARGO_HOME",
-)
 
 
-def cargo_config_has_secret(path: Path) -> bool:
-    try:
-        return bool(SENSITIVE_CONFIG_ASSIGNMENT.search(path.read_text(encoding="utf-8", errors="replace")))
-    except OSError:
-        return True
-
-
-def source_path_is_safe(path: Path, root: Path) -> bool:
-    """Keep snapshots to reviewable build inputs, never local credentials."""
-    try:
-        relative = path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return (path.is_file() and not any(part in EXCLUDED_SOURCE_PARTS for part in relative.parts)
-            and path.name != "AGENTS.md" and path.name not in SENSITIVE_SOURCE_NAMES
-            and not path.name.startswith("credentials") and path.suffix.lower() not in SENSITIVE_SOURCE_SUFFIXES)
-
-
-def sensitive_build_inputs(root: Path) -> int:
-    """Fail closed rather than archive an unreviewable probable secret."""
-    artifact = root / "examples" / "rendering-integration"
-    count = 0
-    for directory in (root / "crates/renderer", root / "crates/shader", root / "crates/material", artifact,
-                      root / ".cargo", root / "examples/.cargo", artifact / ".cargo"):
-        if not directory.is_dir():
-            continue
-        for path in directory.rglob("*"):
-            try:
-                relative = path.resolve().relative_to(root.resolve())
-            except ValueError:
-                continue
-            config_secret = path.name in {"config", "config.toml"} and cargo_config_has_secret(path)
-            if (path.is_file() and not any(part in EXCLUDED_SOURCE_PARTS for part in relative.parts)
-                    and (path.name in SENSITIVE_SOURCE_NAMES or path.name.startswith("credentials")
-                         or path.suffix.lower() in SENSITIVE_SOURCE_SUFFIXES or config_secret)):
-                count += 1
-    return count
-
-
-def closure_escape_count(root: Path) -> int:
-    """Reject links and include macros whose exact input cannot be archived."""
-    artifact = root / "examples" / "rendering-integration"
-    directories = (root / "crates/renderer", root / "crates/shader", root / "crates/material", artifact)
-    failures = 0
-    for directory in directories:
-        if not directory.is_dir():
-            continue
-        for path in directory.rglob("*"):
-            try:
-                relative = path.relative_to(root)
-            except ValueError:
-                continue
-            if any(part in EXCLUDED_SOURCE_PARTS for part in relative.parts):
-                continue
-            is_junction = getattr(path, "is_junction", lambda: False)()
-            if (path.is_symlink() or is_junction) and not source_path_is_safe(path, root):
-                failures += 1
-                continue
-            if (".cargo" in relative.parts or path.name == "AGENTS.md"
-                    or not source_path_is_safe(path, root)):
-                continue
-            if path.suffix != ".rs" or not path.is_file():
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except OSError:
-                failures += 1
-                continue
-            for expression in RUST_INCLUDE.findall(text):
-                literal = expression.strip()
-                if not ((literal.startswith('"') and literal.endswith('"'))
-                        or (literal.startswith('r"') and literal.endswith('"'))):
-                    failures += 1
-                    continue
-                target = path.parent / literal[literal.find('"') + 1:-1]
-                if not source_path_is_safe(target, root):
-                    failures += 1
-    return failures
-
-
-def uncontrolled_build_script_count(root: Path) -> int:
-    """A build script can read arbitrary process state; no full env closure exists here."""
-    artifact = root / "examples" / "rendering-integration"
-    return sum((directory / "build.rs").is_file() for directory in (
-        root, root / "crates/renderer", root / "crates/shader", root / "crates/material", artifact))
-
-
-def source_tree_paths(directory: Path, root: Path) -> list[Path]:
-    if not directory.is_dir():
-        return []
-    return [path for path in directory.rglob("*") if source_path_is_safe(path, root)
-            and ".cargo" not in path.relative_to(root).parts]
-
-
-def cargo_config_paths(directory: Path, root: Path) -> list[Path]:
-    """Cargo reads only config/config.toml here; credentials are never evidence."""
-    config = directory / ".cargo"
-    return [path for name in ("config", "config.toml")
-            if source_path_is_safe(path := config / name, root) and not cargo_config_has_secret(path)]
-
-
-def external_cargo_config_count(root: Path) -> int:
-    """Cargo searches from the consumer cwd to the filesystem root."""
-    boundary = root.resolve()
-    directory = boundary.parent
-    count = 0
-    while True:
-        count += sum((directory / ".cargo" / name).is_file() for name in ("config", "config.toml"))
-        if directory.parent == directory:
-            return count
-        directory = directory.parent
-
-
-def source_input_paths(root: Path = ROOT) -> list[Path]:
-    """The complete, non-secret build-input closure for this bounded consumer."""
-    artifact = root / "examples" / "rendering-integration"
-    paths: list[Path] = [
-        root / "Cargo.toml", root / "Cargo.lock", root / "build.rs",
-        root / "tools/integration/README.md",
-        root / "documents/s0-s1-support-decision.md",
-        root / "documents/integration-known-diagnostics.md",
-        root / "documents/integration-manifest.schema.json",
-    ]
-    for package in (root / "crates/renderer", root / "crates/shader",
-                    root / "crates/material", artifact):
-        paths.extend(source_tree_paths(package, root))
-    tools = root / "tools/integration"
-    paths.extend(path for path in tools.glob("*.py") if source_path_is_safe(path, root))
-    # Cargo is invoked from the consumer. Config in each ancestor on that route
-    # can alter the build; only Cargo's two configuration filenames are inputs.
-    for directory in (root, root / "examples", artifact):
-        paths.extend(cargo_config_paths(directory, root))
-    resolved_root = root.resolve()
-    return sorted({path.resolve() for path in paths if source_path_is_safe(path, root)},
-                  key=lambda path: path.relative_to(resolved_root).as_posix())
-
-
-def build_environment(root: Path = ROOT) -> dict[str, Any]:
-    """Record override presence safely and reject config that cannot be archived."""
-    build_override_names = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER",
-                            "RUSTC_WORKSPACE_WRAPPER", "RUSTC", "CARGO_BUILD_TARGET",
-                            "CARGO_BUILD_RUSTFLAGS", "CC", "CFLAGS", "CXX", "CXXFLAGS")
-    names = (*build_override_names, "CARGO_HOME",
-             *sorted(name for name in os.environ if name.startswith("CARGO_TARGET_") and name.endswith("_RUSTFLAGS")))
-    overrides = {}
-    for name in names:
-        value = os.environ.get(name)
-        if value is not None:
-            overrides[name] = {"present": True, "bytes": len(value.encode("utf-8")),
-                               "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest()}
-    reasons = [f"unarchived build override is set: {name}"
-               for name in names if name != "CARGO_HOME" and name in overrides]
-    cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
-    for name in ("config", "config.toml"):
-        if (cargo_home / name).is_file():
-            reasons.append("effective Cargo home configuration is outside the archived source closure")
-            break
-    sensitive = sensitive_build_inputs(root)
-    if sensitive:
-        reasons.append(f"{sensitive} probable secret build input(s) cannot be archived safely")
-    escapes = closure_escape_count(root)
-    if escapes:
-        reasons.append(f"{escapes} linked or included build input(s) cannot be proven safe for the archive")
-    build_scripts = uncontrolled_build_script_count(root)
-    if build_scripts:
-        reasons.append(f"{build_scripts} build script(s) can read unclosed process state")
-    external_configs = external_cargo_config_count(root)
-    if external_configs:
-        reasons.append(f"{external_configs} Cargo configuration file(s) outside the archived source closure")
-    return {"overrides": overrides, "status": "rejected" if reasons else "auditable",
-            "reasons": reasons}
-
-
-def controlled_child_environment(extra: dict[str, str] | None = None) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
-    """Pass only toolchain essentials; never inherit arbitrary process secrets."""
-    environment = {name: os.environ[name] for name in CHILD_ENV_ALLOWLIST if name in os.environ}
-    if extra:
-        environment.update(extra)
-    evidence = {name: {"bytes": len(value.encode("utf-8")),
-                       "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest()}
-                for name, value in sorted(environment.items())}
-    return environment, evidence
-
-
-def classify_dx12_diagnostics(stderr: Path) -> dict[str, Any]:
-    """Retain every native diagnostic; the rebuilt copy workload has no waivers."""
-    lines = stderr.read_text(encoding="utf-8", errors="replace").splitlines()
-    native = [line for line in lines if line.startswith("D3D12 [")]
-    return {
-        "native_callback_observed": bool(native),
-        "unreviewed_native_diagnostics": native,
-        "policy": "tools/integration/README.md",
-        "policy_sha256": sha256(ROOT / "tools/integration/README.md"),
-    }
-
-
-def sha256(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def git_value(directory: Path, *args: str) -> str | None:
-    try:
-        return subprocess.check_output(
-            ["git", "-C", str(directory), *args], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
-def source_consistency(inputs: list[dict[str, Any]], root: Path = ROOT) -> dict[str, Any]:
-    """Detect edits during an attempt instead of attributing a mixed build."""
-    before = {str(Path(item["path"])): item["sha256"] for item in inputs}
-    resolved_root = root.resolve()
-    candidates = {str(path.relative_to(resolved_root)) for path in source_input_paths(root)} | set(before)
-    source_directories = {
-        (Path(name).parent, Path(name).suffix)
-        for name in before if Path(name).suffix in {".rs", ".wgsl", ".py"}
-    }
-    for directory, suffix in source_directories:
-        candidates.update(str(path.resolve().relative_to(resolved_root)) for path in (root / directory).rglob("*" + suffix)
-                          if source_path_is_safe(path, root))
-    changed = []
-    for name in sorted(candidates):
-        after = sha256(root / name)
-        if after != before.get(name):
-            changed.append({"path": name, "before_sha256": before.get(name), "after_sha256": after})
-    return {"status": "changed" if changed else "stable", "changed_inputs": changed}
-
-
-def checkout_inventory(directory: Path) -> dict[str, Any]:
-    status = git_value(directory, "status", "--porcelain")
-    return {
-        "path": str(directory),
-        "revision": git_value(directory, "rev-parse", "HEAD"),
-        "dirty": None if status is None else bool(status),
-        "role": "local_checkout_inventory",
-    }
-
-
-def write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def load_attempts(path: Path) -> list[dict[str, Any]]:
-    try:
-        attempts = json.loads(path.read_text(encoding="utf-8")).get("attempts", [])
-        return attempts if isinstance(attempts, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def attempt_name(backend: str) -> str:
-    timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"{backend}-{timestamp}-{os.getpid()}"
-
-
-def log_result(log_directory: Path, exit_status: int | None, timed_out: bool,
-               lifecycle: str, error: str | None = None) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "exit_status": exit_status,
-        "timed_out": timed_out,
-        "child_process_lifecycle": lifecycle,
-        "raw_logs": [
-            {"path": str(log_directory / "stdout.log"), "sha256": sha256(log_directory / "stdout.log")},
-            {"path": str(log_directory / "stderr.log"), "sha256": sha256(log_directory / "stderr.log")},
-        ],
-    }
-    if error is not None:
-        result["runner_error"] = error
-    return result
-
-
-def run_command(command: list[str], cwd: Path, timeout: float,
-                log_directory: Path, environment: dict[str, str] | None = None) -> dict[str, Any]:
-    """Write straight to files; a timeout leaves descendants explicitly unknown."""
-    log_directory.mkdir(parents=True, exist_ok=True)
-    stdout_path = log_directory / "stdout.log"
-    stderr_path = log_directory / "stderr.log"
-    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=cwd,
-                text=True,
-                stdout=stdout,
-                stderr=stderr,
-                creationflags=creation_flags,
-                env=environment,
-            )
-        except OSError as error:
-            stderr.write(f"runner error: {error}\n")
-            stderr.flush()
-            return log_result(log_directory, None, False, "not_started", str(error))
-        try:
-            exit_status = process.wait(timeout=timeout)
-            return log_result(log_directory, exit_status, False, "parent_exited")
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            stderr.write(
-                "runner timeout: parent termination was requested; descendant process "
-                "lifecycle is unverified.\n"
-            )
-            stderr.flush()
-            return log_result(log_directory, None, True, "unverified_after_parent_termination")
-
-
-def actual_test_count(command: list[str], result: dict[str, Any]) -> int | None:
-    """Accept only runner-executed test commands with an explicit nonzero count."""
-    executable = Path(command[0]).name.lower() if command else ""
-    cargo = executable in {"cargo", "cargo.exe"} and "test" in command[1:]
-    unittest = executable.startswith("python") and len(command) >= 3 and command[1:3] == ["-m", "unittest"]
-    if not cargo and not unittest:
-        return None
-    logs = result.get("raw_logs")
-    if not isinstance(logs, list):
-        return None
-    text = "\n".join((Path(item.get("path", "")).read_text(encoding="utf-8", errors="replace")
-                      for item in logs if isinstance(item, dict) and isinstance(item.get("path"), str)))
-    counts = (re.findall(r"(?m)^test result: .*?\b(\d+) passed;", text) if cargo
-              else re.findall(r"(?m)^Ran (\d+) tests?", text))
-    return sum(int(count) for count in counts) if counts else None
-
-
-def retained_files(directory: Path) -> list[dict[str, str]]:
-    """List immutable attempt artifacts without interpreting their contents."""
-    return [
-        {"path": str(path), "sha256": sha256(path) or ""}
-        for path in sorted(directory.rglob("*"))
-        if path.is_file()
-    ]
-
-
-def freeze_source_inputs(inputs: list[dict[str, Any]], destination: Path,
-                         root: Path = ROOT) -> dict[str, Any]:
-    """Retain the exact dirty-worktree inputs, refusing a capture-time edit."""
-    with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED) as archive:
-        for item in inputs:
-            relative = Path(item["path"])
-            if relative.is_absolute() or ".." in relative.parts:
-                raise ValueError(f"source snapshot path is outside root: {relative}")
-            data = (root / relative).read_bytes()
-            if hashlib.sha256(data).hexdigest() != item["sha256"]:
-                raise ValueError(f"source changed while freezing: {relative}")
-            archive.writestr(relative.as_posix(), data)
-        archive.writestr("snapshot-inputs.json", json.dumps(inputs, sort_keys=True, indent=2))
-    return {"path": str(destination), "sha256": sha256(destination),
-            "files": len(inputs), "kind": "exact_worktree_inputs"}
-
-
-def validation_evidence(backend: str, run_directory: Path, requested: str) -> dict[str, Any]:
-    """Classify only concrete diagnostics artifacts from this attempt."""
-    if requested != "enabled":
-        return {"requested": requested, "status": "disabled", "reason": "runner disabled validation"}
-    if backend == "dx12":
-        marker = run_directory / "dx12-debug-request.json"
-        if not marker.is_file():
-            return {"requested": requested, "status": "unverified", "reason": "DX12 device-open diagnostic marker is absent"}
-        try:
-            record = json.loads(marker.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {"requested": requested, "status": "unverified", "reason": "DX12 diagnostic marker is malformed"}
-        contract = record.get("activationContract")
-        if (record.get("requested") is True and record.get("deviceOpenCompleted") is True
-                and isinstance(contract, str) and RHI_REVISION in contract
-                and "EnableDebugLayer" in contract):
-            return {"requested": requested, "status": "observed", "reason": "the selected DX12 device opened after the pinned RHI debug-layer activation branch", "artifact": {"path": str(marker), "sha256": sha256(marker)}, "activation_contract": record.get("activationContract")}
-        return {"requested": requested, "status": "unverified", "reason": "DX12 device-open marker did not record a debug request"}
-    markers = sorted(run_directory.rglob("wgl-debug-observer.json"))
-    primary = run_directory / "wgl-debug-observer.json"
-    if primary not in markers:
-        return {"requested": requested, "status": "unverified", "reason": "WGL KHR_debug observer artifact is absent"}
-    diagnostic_count = 0
-    for marker in markers:
-        try:
-            record = json.loads(marker.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {"requested": requested, "status": "unverified", "reason": f"WGL observer artifact is malformed: {marker}"}
-        messages = record.get("activationMessages", [])
-        marker_returned = isinstance(messages, list) and any(
-            isinstance(message, str) and "fluxel-rendering WGL diagnostic observer active" in message
-            for message in messages
-        )
-        if not (record.get("installed") is True and record.get("activationMarkerObserved") is True
-                and marker_returned and record.get("logSaturated") is False
-                and isinstance(record.get("nativeDiagnostics"), list)):
-            return {"requested": requested, "status": "unverified", "reason": f"WGL observer did not activate: {marker}"}
-        diagnostic_count += len(record["nativeDiagnostics"])
-    return {"requested": requested, "status": "observed", "reason": "the exact WGL contexts returned their observer application markers",
-            "artifact": {"path": str(primary), "sha256": sha256(primary)},
-            "additional_artifacts": [{"path": str(marker), "sha256": sha256(marker)} for marker in markers if marker != primary],
-            "native_diagnostic_count": diagnostic_count}
-
-
-def command_output(command: list[str]) -> str | None:
-    try:
-        return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
-def resolved_git_packages(lock: Path) -> list[dict[str, str]]:
-    """Cargo.lock, rather than a neighbouring checkout, identifies Git sources."""
-    if not lock.is_file():
-        return []
-    result = []
-    for package in tomllib.loads(lock.read_text(encoding="utf-8")).get("package", []):
-        source = package.get("source")
-        if isinstance(source, str) and source.startswith("git+"):
-            result.append({"name": package["name"], "version": package["version"], "source": source})
-    return result
-
-
-def find_built_executable(build_stdout: Path, manifest: Path) -> str | None:
-    """Extract Cargo's actual binary path, including CARGO_TARGET_DIR overrides."""
-    package_name = tomllib.loads(manifest.read_text(encoding="utf-8"))["package"]["name"]
-    executable = None
-    for line in build_stdout.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if message.get("reason") != "compiler-artifact":
-            continue
-        reported_manifest = message.get("manifest_path")
-        if (
-            message.get("executable")
-            and reported_manifest
-            and Path(reported_manifest).resolve() == manifest.resolve()
-            and message.get("target", {}).get("name") == package_name
-            and "bin" in message.get("target", {}).get("kind", [])
-        ):
-            executable = message["executable"]
-    return executable
-
-
-def retain_executable(source: Path, attempt_directory: Path) -> dict[str, Any]:
-    """Keep the executed binary after another backend overwrites Cargo's output."""
-    digest = sha256(source)
-    if digest is None:
-        raise ValueError(f"Cargo executable is missing: {source}")
-    destination = attempt_directory / ("consumer" + source.suffix)
-    shutil.copy2(source, destination)
-    if sha256(destination) != digest or sha256(source) != digest:
-        raise ValueError("Cargo executable changed while retaining the attempt binary")
-    return {"path": str(destination), "sha256": digest, "cargo_reported_path": str(source)}
-
-
-def built_fluxel_packages(build_stdout: Path) -> list[dict[str, Any]]:
-    """Retain Cargo's actual compiled package identities and active features."""
-    result = []
-    for line in build_stdout.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        package_id = message.get("package_id", "")
-        target = message.get("target", {})
-        target_name = target.get("name", "")
-        if message.get("reason") != "compiler-artifact" or not (
-            target_name.startswith("fluxel_") or "github.com/fluxel-project/" in package_id
-        ):
-            continue
-        fragment = package_id.partition("#")[2]
-        name = fragment.rpartition("@")[0] if "@" in fragment else target_name.replace("_", "-")
-        result.append({
-            "name": name, "package_id": package_id,
-            "manifest_path": message.get("manifest_path"),
-            "target": target_name, "target_kind": target.get("kind", []),
-            "features": sorted(message.get("features", [])),
-            "fresh": message.get("fresh"), "filenames": message.get("filenames", []),
-        })
-    return result
-
-
-def verify_built_sources(inventory: list[dict[str, Any]], locked: list[dict[str, str]],
-                         required: set[str] | None = None) -> dict[str, Any]:
-    """Reject path overrides of the selected Git dependencies in actual builds."""
-    expected: dict[str, set[str]] = {}
-    for package in locked:
-        expected.setdefault(package["name"], set()).add(package["source"].partition("#")[0])
-    mismatches = []
-    present = set()
-    for package in inventory:
-        name = package["name"]
-        present.add(name)
-        if name in expected and package["package_id"].partition("#")[0] not in expected[name]:
-            mismatches.append({"name": name, "actual": package["package_id"], "expected": sorted(expected[name])})
-        local_manifests = {
-            "fluxel-renderer": ROOT / "crates/renderer/Cargo.toml",
-            "fluxel-shader": ROOT / "crates/shader/Cargo.toml",
-            "fluxel-material": ROOT / "crates/material/Cargo.toml",
-        }
-        if name in local_manifests and (
-            not package.get("manifest_path")
-            or Path(package["manifest_path"]).resolve() != local_manifests[name].resolve()
-        ):
-            mismatches.append({"name": name, "actual_manifest": package.get("manifest_path"),
-                               "reason": f"{name} is outside this source snapshot"})
-    if required is None:
-        required = {"fluxel-assets", "fluxel-rhi", "fluxel-renderer", "fluxel-shader", "fluxel-material", "fluxel-host"}
-    missing = sorted(required - present)
-    return {"status": "verified" if not mismatches and not missing else "mismatch",
-            "mismatches": mismatches, "missing_required_packages": missing}
-
-
-def verify_git_checkouts(inventory: list[dict[str, Any]],
-                         locked: list[dict[str, str]]) -> dict[str, Any]:
-    """Verify the actual Cargo Git trees, not just their package-ID strings."""
-    revisions: dict[str, set[str]] = {}
-    for package in locked:
-        revisions.setdefault(package["name"], set()).add(package["source"].partition("#")[2])
-    trees: dict[str, dict[str, Any]] = {}
-    mismatches = []
-    for package in inventory:
-        if package["name"] not in revisions:
-            continue
-        manifest = package.get("manifest_path")
-        root = git_value(Path(manifest).parent, "rev-parse", "--show-toplevel") if manifest else None
-        if root is None:
-            mismatches.append({"name": package["name"], "reason": "built Git checkout is unavailable"})
-            continue
-        if root not in trees:
-            status = git_value(Path(root), "status", "--porcelain", "--untracked-files=all")
-            # Cargo writes this exact marker after checking out a Git source.
-            changes = None if status is None else [line for line in status.splitlines()
-                                                    if line != "?? .cargo-ok"]
-            trees[root] = {"path": root, "revision": git_value(Path(root), "rev-parse", "HEAD"),
-                           "changes": changes}
-        tree = trees[root]
-        if tree["revision"] not in revisions[package["name"]] or tree["changes"] != []:
-            mismatches.append({"name": package["name"], "checkout": root,
-                               "expected_revisions": sorted(revisions[package["name"]])})
-    if not trees:
-        mismatches.append({"reason": "no built Git checkout was inspected"})
-    return {"status": "verified" if not mismatches else "mismatch",
-            "checkouts": list(trees.values()), "mismatches": mismatches}
-
-
-def required_built_packages(backend: str) -> set[str]:
-    """Every selected S0-S3 route creates a Host-owned native window Surface."""
-    if backend not in BACKENDS:
-        raise ValueError(f"unsupported integration backend: {backend}")
-    return {"fluxel-assets", "fluxel-rhi", "fluxel-renderer", "fluxel-shader", "fluxel-material", "fluxel-host"}
-
+def schema_version_for_workload(workload: str) -> int:
+    """Keep historical and S5 manifest schemas disjoint."""
+    return S5_SCHEMA_VERSION if workload.startswith("s5-") else S0_S3_SCHEMA_VERSION
+
+
+def stage_for_workload(workload: str) -> str:
+    """Label every S5 contract as S5 evidence in the outer manifest."""
+    return "S5 Forward integration evidence" if workload.startswith("s5-") else "S0-S3 integration evidence"
+
+if __package__:
+    from .smoke_attempt import (
+        actual_test_count, attempt_name, load_attempts, log_result, retained_files, run_command,
+        write_json,
+    )
+    from .smoke_evidence import (
+        built_fluxel_packages, command_output, find_built_executable, freeze_source_inputs,
+        nested_workload_evidence, required_built_packages, resolved_git_packages,
+        retain_executable, s5_device_isolation_required_raw_artifacts,
+        s5_required_raw_artifacts, s5_static_asset_raw_artifacts,
+        s5_surface_required_raw_artifacts, s5_workload_contract, validation_evidence,
+        verify_built_sources, verify_git_checkouts as _verify_git_checkouts,
+    )
+    from .smoke_inputs import (
+        build_environment, checkout_inventory, classify_dx12_diagnostics,
+        closure_escape_count, controlled_child_environment, cargo_config_has_secret,
+        external_cargo_config_count, git_value, sensitive_build_inputs, sha256,
+        source_consistency, source_input_paths, source_path_is_safe,
+        uncontrolled_build_script_count,
+    )
+else:
+    from smoke_attempt import (
+        actual_test_count, attempt_name, load_attempts, log_result, retained_files, run_command,
+        write_json,
+    )
+    from smoke_evidence import (
+        built_fluxel_packages, command_output, find_built_executable, freeze_source_inputs,
+        nested_workload_evidence, required_built_packages, resolved_git_packages,
+        retain_executable, s5_device_isolation_required_raw_artifacts,
+        s5_required_raw_artifacts, s5_static_asset_raw_artifacts,
+        s5_surface_required_raw_artifacts, s5_workload_contract, validation_evidence,
+        verify_built_sources, verify_git_checkouts as _verify_git_checkouts,
+    )
+    from smoke_inputs import (
+        build_environment, checkout_inventory, classify_dx12_diagnostics,
+        closure_escape_count, controlled_child_environment, cargo_config_has_secret,
+        external_cargo_config_count, git_value, sensitive_build_inputs, sha256,
+        source_consistency, source_input_paths, source_path_is_safe,
+        uncontrolled_build_script_count,
+    )
+
+
+def verify_git_checkouts(inventory: list[dict[str, Any]], locked: list[dict[str, str]]) -> dict[str, Any]:
+    """Keep the orchestration seam patchable while checkout parsing stays isolated."""
+    return _verify_git_checkouts(inventory, locked, git_lookup=git_value)
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=BACKENDS, required=True)
+    parser.add_argument("--workload", choices=WORKLOADS, default="s0-s3",
+                        help="bounded executable workload; each choice owns a separate evidence closure")
     parser.add_argument("--mode", choices=("build", "run"), default="run")
     parser.add_argument("--timeout-seconds", type=float, default=120.0)
     parser.add_argument("--cargo", default="cargo")
@@ -635,7 +129,7 @@ def main() -> int:
     build_environment_evidence = build_environment(ROOT)
     build_child_environment, build_child_evidence = controlled_child_environment()
     revision = rendering["revision"] or "unknown-rendering-revision"
-    closure = ROOT / "target" / "integration" / "s0-s3" / revision
+    closure = ROOT / "target" / "integration" / args.workload / revision
     index = closure / "manifest.json"
     attempt_dir = closure / "attempts" / attempt_name(args.backend)
     attempt_dir.mkdir(parents=True, exist_ok=False)
@@ -648,7 +142,7 @@ def main() -> int:
         "backend": args.backend,
         "mode": args.mode,
         "feature": args.backend,
-        "workload": {
+        "workload": (s5_workload_contract(args.workload) if args.workload.startswith("s5-") else {
             "selection": "copy+raster+compute+read-set+s2-shader+s2-texture+s3-material+s3-material-replacement+surface+device-replacement",
             "submissions_before_wait": 3,
             "copy_source_byte_lengths": [23, 37, 22],
@@ -657,7 +151,7 @@ def main() -> int:
             "copy_nonzero_source_offsets": "required",
             "copy_dynamic_range_plan_reuse": "required",
             "copy_binding_refreshes": 3,
-        },
+        }),
         "timeout_seconds": args.timeout_seconds,
         "directory": str(attempt_dir.relative_to(closure)),
         "rendering_checkout": rendering,
@@ -678,7 +172,13 @@ def main() -> int:
         "validation": {"requested": args.validation,
                        "route": "FLUXEL_DX12_DEBUG" if args.backend == "dx12" else "KHR_debug message-log query via scoped WGL native interop",
                        "status": "unverified", "reason": "Inspect native diagnostics; a request alone does not prove activation."},
-        "locks": [{"path": str(artifact_lock), "sha256": sha256(artifact_lock)}],
+        # The consumer lock controls Cargo resolution; the workspace lock is
+        # also archived as a source input and recorded per attempt so a review
+        # can distinguish the exact source closure from dependency resolution.
+        "locks": [
+            {"path": str(artifact_lock), "sha256": sha256(artifact_lock)},
+            {"path": str(ROOT / "Cargo.lock"), "sha256": sha256(ROOT / "Cargo.lock")},
+        ],
         "resolved_git_packages": resolved_git_packages(artifact_lock),
     }
 
@@ -755,16 +255,22 @@ def main() -> int:
                     run_extras["FLUXEL_INTEGRATION_FRAME_HOLD_MS"] = str(args.frame_hold_ms)
                 child_environment, run_child_evidence = controlled_child_environment(run_extras)
                 attempt["child_environment"]["run"] = run_child_evidence
+                executable_command = [executable, "--output", str(run_directory.resolve())]
+                if args.workload.startswith("s5-"):
+                    executable_command.append(s5_workload_contract(args.workload)["entry_argument"])
                 result = run_command(
-                    [executable, "--output", str(run_directory.resolve())], ARTIFACT,
+                    executable_command, ARTIFACT,
                     args.timeout_seconds, run_directory, child_environment
                 )
                 result["retained_files"] = retained_files(run_directory)
+                result["nested_workloads"] = nested_workload_evidence(run_directory, args.workload)
                 attempt["validation"] = validation_evidence(args.backend, run_directory, args.validation)
                 if args.backend == "dx12":
                     attempt["validation"]["diagnostics"] = classify_dx12_diagnostics(run_directory / "stderr.log")
-                attempt["commands"].append({"kind": "direct_executable", "command": [executable, "--output", str(run_directory.resolve())], "result": result})
+                attempt["commands"].append({"kind": "direct_executable", "command": executable_command, "result": result})
                 exit_code = 0 if result["exit_status"] == 0 else 1
+                if result["nested_workloads"]["status"] != "verified":
+                    exit_code = 1
                 if args.validation == "enabled" and attempt["validation"].get("status") != "observed":
                     exit_code = 1
                 after_hash = sha256(Path(executable))
@@ -793,11 +299,15 @@ def main() -> int:
     if attempt["source_consistency_after_attempt"]["status"] != "stable":
         exit_code = 1
     attempt["runner_exit_status"] = exit_code
+    # Failed attempts are evidence too. Record every file produced by the
+    # runner, including the frozen source closure and failure logs, instead of
+    # relying only on the successful executable-run subdirectory.
+    attempt["retained_attempt_files"] = retained_files(attempt_dir)
     parent = ROOT.parent
     decision = ROOT / "documents" / "s0-s1-support-decision.md"
     manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "stage": "S0-S3 integration evidence",
+        "schema_version": schema_version_for_workload(args.workload),
+        "stage": stage_for_workload(args.workload),
         "artifact": {"owner": "fluxel-rendering", "path": str(ARTIFACT), "independent": True},
         "rendering_checkout": rendering,
         "sibling_checkout_inventory": {name: checkout_inventory(parent / name) for name in ("fluxel-rhi", "fluxel-bases", "fluxel-host", "fluxel-jsbridge")},

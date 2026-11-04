@@ -1,0 +1,247 @@
+   Compiling fluxel-renderer v0.16.0 (E:\moyy\program\rust\fluxel\fluxel-rendering\crates\renderer)
+warning: type `types::SnapshotTree<types::RenderRecord<R>>` is more private than the item `types::FrameSnapshot::records`
+   --> crates\renderer\src\render_scene\types.rs:398:5
+    |
+398 |     pub(super) records: SnapshotRoot<RenderRecord<R>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `types::FrameSnapshot::records` is reachable at visibility `pub(render_scene)`
+    |
+note: but type `types::SnapshotTree<types::RenderRecord<R>>` is only usable at visibility `pub(self)`
+   --> crates\renderer\src\render_scene\types.rs:385:1
+    |
+385 | enum SnapshotTree<T> {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `types::SnapshotTree<types::RenderView>` is more private than the item `types::FrameSnapshot::views`
+   --> crates\renderer\src\render_scene\types.rs:399:5
+    |
+399 |     pub(super) views: SnapshotRoot<RenderView>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `types::FrameSnapshot::views` is reachable at visibility `pub(render_scene)`
+    |
+note: but type `types::SnapshotTree<types::RenderView>` is only usable at visibility `pub(self)`
+   --> crates\renderer\src\render_scene\types.rs:385:1
+    |
+385 | enum SnapshotTree<T> {
+    | ^^^^^^^^^^^^^^^^^^^^
+
+warning: type `types::SnapshotEntry<T>` is more private than the item `types::RenderId::from_entry`
+   --> crates\renderer\src\render_scene\types.rs:454:5
+    |
+454 |     pub(super) fn from_entry<T>(scene: u64, entry: &SnapshotEntry<T>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function `types::RenderId::from_entry` is reachable at visibility `pub(render_scene)`
+    |
+note: but type `types::SnapshotEntry<T>` is only usable at visibility `pub(self)`
+   --> crates\renderer\src\render_scene\types.rs:376:1
+    |
+376 | struct SnapshotEntry<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `types::SnapshotEntry<T>` is more private than the item `types::RenderViewId::from_entry`
+   --> crates\renderer\src\render_scene\types.rs:464:5
+    |
+464 |     pub(super) fn from_entry<T>(scene: u64, entry: &SnapshotEntry<T>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function `types::RenderViewId::from_entry` is reachable at visibility `pub(render_scene)`
+    |
+note: but type `types::SnapshotEntry<T>` is only usable at visibility `pub(self)`
+   --> crates\renderer\src\render_scene\types.rs:376:1
+    |
+376 | struct SnapshotEntry<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `replacement` is never used
+  --> crates\renderer\src\render_scene\..\tests\render_scene\snapshot.rs:56:4
+   |
+56 | fn replacement<K: fluxel_assets::AssetKind>(
+   |    ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `fluxel-renderer` (lib test) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.54s
+     Running unittests src\lib.rs (target\debug\deps\fluxel_material-f649c53bda20f4c5.exe)
+
+running 7 tests
+test model::tests::material_core::rejects_real_top_level_wgsl_declaration_collisions_across_fragments ... ok
+test model::tests::material_core::rejects_real_top_level_type_and_override_collisions ... ok
+test model::tests::material_core::rejects_conflicting_emitted_top_level_wgsl_names ... ok
+test model::tests::material_core::rejects_invalid_calls_cycles_types_bindings_outputs_and_values ... ok
+test model::tests::material_core::multi_fragment_material_emits_deterministic_custom_wgsl ... ok
+test model::tests::material_core::static_choice_and_asset_generation_invalidate_but_dynamic_values_share ... ok
+test model::tests::material_core::source_id_is_compact_while_variant_key_retains_full_canonical_content ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\fluxel_renderer-7b8bc31ffa7650b3.exe)
+
+running 160 tests
+test frame_data::forward::tests::empty_input_and_capacity_failures_remain_bounded ... ok
+test frame_data::forward::tests::transform_and_tint_have_distinct_aligned_physical_ranges ... ok
+test feature::tests::issuers_storage_and_contributions_reject_foreign_contexts ... ok
+test graph::access::tests::rejects_slot_from_a_different_graph ... ok
+test graph::access::tests::rejects_resource_not_declared_by_this_pass ... ok
+test graph::access::tests::rejects_buffer_range_escaping_its_declaration ... ok
+test graph::access::tests::permits_adjacent_compatible_buffer_declarations ... ok
+test graph::access::tests::requires_declared_texture_subresources_and_layout ... ok
+test graph::compiler::tests::adjacent_partial_writes_merge_definedness_but_holes_remain_rejected ... ok
+test graph::compiler::tests::culls_unobserved_work_but_keeps_side_effects ... ok
+test graph::compiler::tests::failed_authoring_restores_the_prior_definition ... ok
+test graph::compiler::tests::changed_texture_subresources_require_recompilation ... ok
+test graph::compiler::tests::compatible_buffer_range_changes_reuse_the_same_logical_plan ... ok
+test graph::compiler::tests::changed_dependency_edges_require_recompilation ... ok
+test graph::compiler::tests::changed_buffer_use_contract_requires_recompilation ... ok
+test graph::binding::tests::rejects_new_alias_between_live_graph_resources ... ok
+test graph::binding::tests::refuses_live_resources_without_explicit_rhi_use_contracts ... ok
+test graph::binding::tests::accepts_complete_compatible_frame_bindings ... ok
+test graph::binding::tests::rejects_new_alias_even_when_lifetimes_do_not_overlap_without_alias_plan ... ok
+test graph::binding::tests::texture_manifest_checks_description_ranges_device_and_incoming_layout ... ok
+test graph::binding::tests::imported_texture_requires_and_validates_declared_incoming_state ... ok
+test graph::binding::tests::rejects_missing_extra_duplicate_foreign_and_mismatched_bindings ... ok
+test graph::compiler::tests::failed_transaction_handles_and_passes_never_alias_later_work ... ok
+test graph::compiler::tests::imported_texture_is_defined_without_erasing_subresource_bounds ... ok
+test graph::compiler::tests::one_pass_can_read_then_write_the_same_logical_version ... ok
+test graph::compiler::tests::partial_writes_do_not_define_the_rest_of_a_version ... ok
+test graph::compiler::tests::rejects_export_of_an_undefined_version ... ok
+test graph::compiler::tests::rejects_foreign_graph_handles_and_passes ... ok
+test graph::compiler::tests::rejects_old_versions_after_a_successor_write ... ok
+test graph::compiler::tests::rejects_self_dependencies_and_detects_private_cycle_corruption ... ok
+test graph::compiler::tests::rejects_undefined_reads_and_invalid_ranges ... ok
+test graph::compiler::tests::texture_authoring_is_transactional_and_rejects_foreign_or_stale_handles ... ok
+test graph::compiler::tests::texture_definedness_unions_adjacent_written_layers ... ok
+test graph::compiler::tests::texture_subresources_track_definedness_hazards_and_lifetimes ... ok
+test graph::compiler::tests::tracks_raw_war_waw_and_lifetimes_in_author_order ... ok
+test graph::compute::tests::dispatch_is_ceiling_division_for_fixed_workgroups ... ok
+test graph::copy::tests::resized_copy_frames_require_explicit_dynamic_extent_compatibility ... ok
+test graph::definition::declaration_tests::forward_declaration_equivalence_ignores_graph_provenance_and_debug_labels ... ok
+test graph::definition::declaration_tests::forward_declaration_rejects_changed_access_dependencies_and_outputs ... ok
+test graph::definition::declaration_tests::forward_declaration_rejects_changed_resource_facts ... ok
+test graph::forward::tests::clear_only_offscreen_rejects_draw_or_batch_facts ... ok
+test graph::definition::declaration_tests::forward_declaration_rejects_foreign_or_stale_handles_before_normalization ... ok
+test graph::forward::tests::clear_only_surface_rejects_draw_or_batch_facts ... ok
+test graph::state::tests::different_ranges_in_one_pass_produce_one_whole_buffer_state ... ok
+test graph::read_set_raster::tests::dynamic_uniform_contract_describes_physical_bytes_not_binding_base ... ok
+test graph::state::tests::fixed_memory_classes_reject_illegal_graph_contracts ... ok
+test graph::state::tests::overlapping_texture_uses_with_different_layouts_are_rejected_before_the_pass ... ok
+test graph::state::tests::readback_accepts_only_copy_write_destinations ... ok
+test graph::state::tests::same_pass_compute_read_write_merges_the_declared_uses ... ok
+test graph::state::tests::same_state_overlapping_buffer_writes_keep_the_hazard ... ok
+test graph::state::tests::same_state_raw_and_war_accesses_are_not_lost ... ok
+test graph::state::tests::same_texture_state_orders_raw_once_without_repeating_the_write_history ... ok
+test graph::state::tests::texture_state_is_independent_per_mip_and_preserves_untouched_incoming_state ... ok
+test pipeline::tests::bounds_provider_selects_intersections_in_deterministic_identity_order ... ok
+test pipeline::tests::empty_scene_and_multiple_views_preserve_explicit_preparation_scope ... ok
+test pipeline::tests::execution_boundary_refuses_a_different_pipeline_scene_version_or_view ... ok
+test pipeline::tests::foreign_view_is_rejected_before_the_provider_runs ... ok
+test pipeline::tests::frame_pipeline_contributes_only_a_fixed_renderer_product ... ok
+test pipeline::tests::pipeline_normalizes_provider_order ... ok
+test pipeline::tests::pipeline_rejects_duplicate_provider_output ... ok
+test pipeline::tests::pipeline_rejects_foreign_and_stale_provider_records ... ok
+test pipeline::tests::prepared_frame_retains_its_snapshot_and_refuses_unprepared_foreign_records ... ok
+test preparation::forward::tests::opaque_batches_merge_only_adjacent_compatible_programs ... ok
+test preparation::forward::tests::opaque_batches_preserve_overlapping_draw_order ... ok
+test preparation::geometry::tests::binding_rejects_publicly_malformed_prepared_layouts ... ok
+test preparation::geometry::tests::bindings_reject_foreign_or_incompatible_owner_facts ... ok
+test preparation::geometry::tests::bindings_use_owner_facts_and_validate_nonzero_base_footprints ... ok
+test preparation::geometry::tests::preparation_rejects_duplicate_semantics ... ok
+test preparation::geometry::tests::preparation_rejects_missing_mismatched_and_invalid_attributes ... ok
+test preparation::geometry::tests::preparation_resolves_interleaved_separate_and_mixed_streams ... ok
+test render_scene::types::scene::snapshot_tests::persistent_snapshot_directory_copies_only_the_changed_path ... ok
+test render_scene::types::scene::tests::capacities_reject_a_whole_batch ... ok
+test render_scene::types::scene::tests::batch_adds_multiple_records_and_views ... ok
+test render_scene::types::scene::tests::dense_remove_of_tail_marks_only_the_deleted_slot ... ok
+test render_scene::types::scene::tests::empty_batch_is_a_noop ... ok
+test render_scene::types::scene::tests::dense_remove_then_update_of_moved_record_is_atomic_and_marks_both_slots ... ok
+test render_scene::types::scene::tests::generation_exhaustion_does_not_wrap ... ok
+test render_scene::types::scene::tests::foreign_or_conflicting_batch_is_atomic ... ok
+test render_scene::types::scene::tests::invalid_adapter_values_are_refused ... ok
+test render_scene::types::scene::tests::removing_a_record_compacts_dense_storage_without_changing_stable_ids ... ok
+test render_scene::types::scene::tests::cross_chunk_compaction_marks_deleted_and_moved_slots_without_mutating_old_snapshot ... ok
+test render_scene::types::scene::tests::resources_pin_logical_asset_identity_and_content_generation ... ok
+test render_scene::types::scene::tests::snapshot_version_exhaustion_rejects_the_whole_batch ... ok
+test render_scene::types::scene::tests::snapshot_retains_old_values_and_publishes_precise_dirty_ranges ... ok
+test render_scene::types::scene::tests::stale_identity_cannot_address_a_reused_slot ... ok
+test render_scene::types::scene::tests::view_conflicts_are_order_independent_and_do_not_change_snapshots ... ok
+test renderer::lifecycle_tests::support::forward_cache_tests::forward_frame_pool_compatibility_uses_actual_owner_facts ... ok
+test renderer::lifecycle_tests::support::forward_cache_tests::completed_forward_cache_keys_exact_assets_and_device_owners ... ok
+test render_scene::types::scene::snapshot_tests::snapshot_reuses_unaffected_chunks ... ok
+test renderer::lifecycle_tests::support::forward_cache_tests::coexisting_renderers_never_adopt_completed_forward_products_from_another_device ... ok
+test render_scene::types::scene::snapshot_tests::retained_snapshot_is_concurrently_readable_while_scene_changes ... ok
+test renderer::lifecycle_tests::support::forward_contribution_tests::invalid_phase_contribution_is_rejected_by_the_real_graph_before_mapping_or_execution ... ok
+test renderer::lifecycle_tests::support::forward_contribution_tests::repeated_phase_contribution_is_rejected_by_the_real_graph_before_mapping_or_execution ... ok
+test renderer::lifecycle_tests::support::forward_cache_tests::forward_frame_pool_waits_for_readback_then_reuses_same_owner_instances ... ok
+test renderer::lifecycle_tests::support::forward_cache_tests::device_loss_clears_completed_frame_pool_before_backend_reentry ... ok
+test renderer::lifecycle_tests::support::forward_contribution_tests::cached_forward_plan_rejects_the_current_illegal_contribution_before_mapping_or_execution ... ok
+test renderer::lifecycle_tests::support::forward_contribution_tests::cached_forward_plan_declares_the_current_contribution_once_before_reuse ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::cached_surface_plan_rejects_an_illegal_current_contribution_before_mapping_or_execution ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_completion_loss_keeps_owner_and_quarantines_renderer ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_malformed_uniform_upload_refuses_before_execution_begins ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_clean_rejection_releases_real_owners_without_pending_slot ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_finish_loss_quarantines_and_preserves_uncertain_owner ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_executor_retires_blank_frame_after_confirmed_completion ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::stale_surface_forward_image_is_rejected_before_execution ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_readback_loss_after_completion_releases_owner_but_quarantines_renderer ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_recording_failure_retains_owner_until_successful_idle ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::surface_forward_plan_rejects_a_different_access_shape ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::forward_partial_or_indeterminate_execution_retains_real_frame_and_snapshot ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::surface_forward_rejects_a_lease_with_a_different_extent_during_raster_recording ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::surface_forward_cache_keeps_topologies_separate ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::surface_forward_rejects_a_lease_with_a_different_pipeline_format_during_raster_recording ... ok
+test renderer::lifecycle_tests::support::forward_lifecycle_tests::surface_forward_requires_present_frontier_before_retiring_owner ... ok
+test renderer::lifecycle_tests::support::forward_surface_contribution_tests::legal_surface_contribution_runs_once_per_frame_while_reusing_the_compiled_plan ... ok
+test renderer::lifecycle_tests::support::forward_pending_tests::forward_upload_map_or_flush_failure_drops_unsubmitted_owners_and_leaves_no_pending_slot ... ok
+test renderer::lifecycle_tests::support::forward_pending_tests::forward_three_pending_slots_isolate_real_owners_and_recycle_only_completed_slot ... ok
+test renderer::lifecycle_tests::support::raster_tests::raster_accepted_outcome_owns_and_retires_the_full_fixture ... ok
+test renderer::lifecycle_tests::support::raster_tests::raster_clean_rejection_releases_without_retaining_a_submission ... ok
+test renderer::lifecycle_tests::support::raster_tests::raster_recording_loss_finishes_then_preserves_both_diagnostics_and_owner ... ok
+test renderer::lifecycle_tests::support::raster_tests::raster_requirements_refuse_every_owned_resource_limit_before_cache_or_allocation ... ok
+test renderer::lifecycle_tests::support::read_set_raster_tests::read_set_bad_payload_range_and_foreign_pipeline_never_allocate_or_record ... ok
+test renderer::lifecycle_tests::support::read_set_raster_tests::read_set_actual_plan_preflight_refuses_owner_descriptor_import_alias_and_device ... ok
+test renderer::lifecycle_tests::support::forward_contribution_tests::opaque_contribution_refusals_hold_for_first_and_cached_plan_paths ... ok
+test renderer::lifecycle_tests::support::forward_surface_contribution_tests::opaque_surface_access_refusals_hold_for_first_and_cached_plan_paths ... ok
+test renderer::lifecycle_tests::support::raster_tests::raster_nonaccepted_outcomes_retain_the_actual_fixture_until_idle ... ok
+test renderer::lifecycle_tests::support::read_set_raster_tests::read_set_changed_candidate_topology_cannot_reuse_the_cached_device_plan ... ok
+test renderer::lifecycle_tests::support::forward_surface_contribution_tests::surface_contribution_refusals_hold_for_first_and_cached_plan_paths ... ok
+test renderer::lifecycle_tests::support::read_set_raster_tests::read_set_checks_actual_dynamic_uniform_alignment_before_cache_or_allocation ... ok
+test renderer::lifecycle_tests::support::shutdown_tests::cancelled_idle_wait_keeps_owners_and_refuses_new_work ... ok
+test renderer::lifecycle_tests::support::shutdown_tests::device_loss_during_idle_quarantines_owners_and_blocks_old_readback ... ok
+test renderer::lifecycle_tests::support::shutdown_tests::device_loss_during_readback_releases_completed_frame_and_quarantines_other_frames ... ok
+test renderer::lifecycle_tests::support::shutdown_tests::device_loss_while_waiting_readback_quarantines_pending_owner ... ok
+test renderer::lifecycle_tests::support::shutdown_tests::failed_idle_keeps_owners_and_refuses_new_work ... ok
+test renderer::lifecycle_tests::support::read_set_raster_tests::read_set_submits_current_ranges_reuses_plan_and_retires_exact_owners ... ok
+test renderer::lifecycle_tests::support::shutdown_tests::successful_shutdown_waits_idle_then_releases_pending_owners_and_plans ... ok
+test renderer::lifecycle_tests::support::submission_tests::accepted_exact_completion_retires_actual_owners_after_readback ... ok
+test renderer::lifecycle_tests::support::submission_tests::compute_storage_capability_is_rejected_before_fixture_resources_exist ... ok
+test renderer::lifecycle_tests::support::submission_tests::cancelled_wait_future_does_not_retire_pending_owners ... ok
+test renderer::lifecycle_tests::support::submission_tests::clean_rejection_finishes_and_releases_actual_owners ... ok
+test renderer::lifecycle_tests::support::read_set_raster_tests::read_set_nonaccepted_and_loss_outcomes_follow_shared_retention_rules ... ok
+test renderer::lifecycle_tests::support::submission_tests::contradictory_accepted_outcome_with_error_is_observable_and_retained ... ok
+test renderer::lifecycle_tests::support::submission_tests::copy_limit_refusal_happens_before_plan_allocation_mapping_or_recording ... ok
+test renderer::lifecycle_tests::support::submission_tests::dynamic_copy_lengths_refresh_bindings_and_record_current_frame_ranges ... ok
+test renderer::lifecycle_tests::support::submission_tests::nonaccepted_outcomes_without_recording_error_retain_until_successful_idle ... ok
+test renderer::lifecycle_tests::support::submission_tests::submissions_are_bounded_and_foreign_or_stale_handles_never_wait ... ok
+test renderer::lifecycle_tests::support::submission_tests::wrong_completion_frontier_refuses_before_wait_or_retirement ... ok
+test renderer::lifecycle_tests::support::surface_tests::accepted_surface_frame_retires_only_after_its_completion ... ok
+test renderer::lifecycle_tests::support::submission_tests::unsafe_outcomes_retain_actual_snapshot_native_buffers_and_original_outcome ... ok
+test renderer::lifecycle_tests::support::surface_tests::incomplete_or_failed_surface_completion_never_retires_the_frame ... ok
+test renderer::lifecycle_tests::support::surface_tests::replacement_pipeline_is_rejected_before_old_device_execution ... ok
+test renderer::lifecycle_tests::support::surface_tests::stale_surface_lease_is_rejected_before_execution ... ok
+test renderer::tests::compute_fixture_reports_unsupported_before_resource_work ... ok
+test renderer::lifecycle_tests::support::surface_tests::replacement_device_does_not_adopt_old_surface_submission_or_snapshot ... ok
+test renderer::lifecycle_tests::support::surface_tests::nonaccepted_surface_outcomes_keep_the_handed_off_owner_until_successful_idle ... ok
+test renderer::tests::explicit_clean_rejection_can_release_its_owners ... ok
+test renderer::tests::fixed_compute_fixture_refuses_empty_or_unaligned_u32_payloads ... ok
+test renderer::lifecycle_tests::support::submission_tests::submit_stage_loss_quarantines_previous_owners_and_blocks_backend_reentry ... ok
+test renderer::tests::fixed_raster_fixture_refuses_invalid_extent_vertex_count_and_non_finite_values ... ok
+test renderer::lifecycle_tests::support::surface_tests::surface_present_rejection_has_no_effect_and_present_loss_quarantines_owner ... ok
+test renderer::tests::only_explicit_no_effect_failure_facts_release_owners ... ok
+test renderer::tests::raster_readback_strips_alignment_padding_without_accepting_short_rows ... ok
+
+test result: ok. 160 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src\lib.rs (target\debug\deps\fluxel_shader-1e48ad029110dcd5.exe)
+
+running 2 tests
+test tests::capabilities::unused_storage_int64_atomic_min_prefers_min_max_over_all_ops ... ok
+test tests::capabilities::storage_int64_atomic_add_requires_all_ops ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

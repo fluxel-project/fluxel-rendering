@@ -129,6 +129,8 @@ dependencies = [
  "fluxel-assets",
  "fluxel-material",
  "fluxel-renderer",
+ "fluxel-rhi",
+ "fluxel-shader",
 ]
 
 [[package]]
@@ -151,13 +153,15 @@ name = "fluxel-renderer"
 version = "0.16.0"
 dependencies = [
  "fluxel-assets",
+ "fluxel-material",
  "fluxel-rhi",
+ "fluxel-shader",
 ]
 
 [[package]]
 name = "fluxel-rhi"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=0f7f785d4f0ccc62e125dd6cf560d91333ec85cf#0f7f785d4f0ccc62e125dd6cf560d91333ec85cf"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=b5d569feace548a6ed498901deaf31a5efcaca61#b5d569feace548a6ed498901deaf31a5efcaca61"
 dependencies = [
  "fluxel-rhi-core",
  "objc2",
@@ -172,7 +176,7 @@ dependencies = [
 [[package]]
 name = "fluxel-rhi-core"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=0f7f785d4f0ccc62e125dd6cf560d91333ec85cf#0f7f785d4f0ccc62e125dd6cf560d91333ec85cf"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=b5d569feace548a6ed498901deaf31a5efcaca61#b5d569feace548a6ed498901deaf31a5efcaca61"
 
 [[package]]
 name = "fluxel-shader"

@@ -13,6 +13,8 @@ where
 {
     fn completion(&self) -> Result<fluxel_rhi::api::CompletionPoint<B>, Error> {
         match &self.workload {
+            PendingWork::Forward { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::ForwardSurface { plan, .. } => plan.completion(&self.outcome),
             PendingWork::Copy { plan, .. } => plan.completion(&self.outcome),
             PendingWork::Raster { plan, .. } => plan.completion(&self.outcome),
             PendingWork::SurfaceRaster { plan, .. } => plan.completion(&self.outcome),
@@ -22,6 +24,9 @@ where
     }
     fn tight_readback(&self, bytes: Vec<u8>) -> Result<Vec<u8>, RendererError> {
         match &self.workload {
+            PendingWork::Forward {
+                extent, row_pitch, ..
+            } => super::strip_raster_padding(bytes, *extent, *row_pitch),
             PendingWork::Copy { .. } | PendingWork::Compute { .. } => Ok(bytes),
             PendingWork::Raster {
                 extent, row_pitch, ..
@@ -29,11 +34,13 @@ where
             PendingWork::ReadSetRaster {
                 extent, row_pitch, ..
             } => super::strip_raster_padding(bytes, *extent, *row_pitch),
-            PendingWork::SurfaceRaster { .. } => Err(RendererError::RetainedExecution {
-                status: self.outcome.facts().status,
-                recording_error: self.recording_error.clone(),
-                execution_error: self.execution_error.clone(),
-            }),
+            PendingWork::SurfaceRaster { .. } | PendingWork::ForwardSurface { .. } => {
+                Err(RendererError::RetainedExecution {
+                    status: self.outcome.facts().status,
+                    recording_error: self.recording_error.clone(),
+                    execution_error: self.execution_error.clone(),
+                })
+            }
         }
     }
 }
@@ -79,6 +86,9 @@ where
             .filter(|v| v.serial == submission.serial)
             .ok_or(RendererError::StaleSubmission)?;
         let status = pending.outcome.facts().status;
+        // Terminal GPU completion is established even if the subsequent CPU
+        // read/map fails. Only completed products enter the reusable cache.
+        self.publish_forward_completion(&pending.workload);
         let ticket = match pending.ticket.take() {
             Some(v) => v,
             None => {
@@ -99,7 +109,9 @@ where
                 return Err(error.into());
             }
         };
-        pending.tight_readback(data.bytes)
+        let result = pending.tight_readback(data.bytes);
+        self.recycle_forward_readback(pending.workload, submission.slot);
+        result
     }
 
     /// Waits for the exact completion evidence of a submitted surface frame.
@@ -113,7 +125,10 @@ where
         self.ensure_device_available()?;
         let completion = {
             let pending = self.pending_for(submission)?;
-            if !matches!(pending.workload, PendingWork::SurfaceRaster { .. }) {
+            if !matches!(
+                pending.workload,
+                PendingWork::SurfaceRaster { .. } | PendingWork::ForwardSurface { .. }
+            ) {
                 return Err(RendererError::StaleSubmission);
             }
             match pending.completion() {
@@ -138,10 +153,16 @@ where
             .take()
             .filter(|value| value.serial == submission.serial)
             .ok_or(RendererError::StaleSubmission)?;
-        if !matches!(pending.workload, PendingWork::SurfaceRaster { .. }) {
+        if !matches!(
+            pending.workload,
+            PendingWork::SurfaceRaster { .. } | PendingWork::ForwardSurface { .. }
+        ) {
             self.slots[submission.slot] = Some(pending);
             return Err(RendererError::StaleSubmission);
         }
+        self.publish_forward_completion(&pending.workload);
+        let slot = submission.slot;
+        self.recycle_forward_surface(pending.workload, slot);
         Ok(())
     }
 }
