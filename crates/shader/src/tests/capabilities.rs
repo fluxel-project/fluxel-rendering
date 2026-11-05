@@ -1,4 +1,4 @@
-use crate::{capabilities::required_naga_capabilities, NagaCapability};
+use crate::{NagaCapability, capabilities::required_naga_capabilities};
 
 const UNUSED_RESULT_INT64_ATOMIC_MIN: &str = r#"
 @group(0) @binding(0)

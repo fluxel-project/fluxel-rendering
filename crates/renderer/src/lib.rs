@@ -44,6 +44,6 @@ pub use render_scene::{
     RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError,
 };
 pub use renderer::{
-    DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, Renderer, RendererError, ShaderAdmissionError,
-    ShutdownReport, Submission,
+    DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, Renderer, RendererError,
+    ShaderAdmissionError, ShutdownReport, Submission,
 };

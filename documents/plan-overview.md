@@ -6,6 +6,10 @@
 
 ## Product direction
 
+The [S0–S8 maintenance review](s0-s8-review-follow-up.md) retains the existing
+bounded architecture. A future cross-pass Feature needs a real producer and
+consumer before new public protocols are designed; it is not added scope here.
+
 Fluxel provides an extensible, data-oriented real-time renderer without requiring
 an ECS, gameplay scene model, host, or fixed rendering strategy. Renderer owns
 views, preparation protocols, phase composition, resource coordination, reference

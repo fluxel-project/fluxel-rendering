@@ -362,8 +362,12 @@ fn texture_ranges_cover<'a>(
         let mut boundaries = vec![requested.mips.start, requested.mips.end];
         for range in &ranges {
             if range.aspects.0 & aspect != 0 {
-                boundaries.push(range.mips.start.max(requested.mips.start));
-                boundaries.push(range.mips.end.min(requested.mips.end));
+                let start = range.mips.start.max(requested.mips.start);
+                let end = range.mips.end.min(requested.mips.end);
+                if start < end {
+                    boundaries.push(start);
+                    boundaries.push(end);
+                }
             }
         }
         boundaries.sort_unstable();

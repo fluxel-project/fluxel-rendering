@@ -1,8 +1,8 @@
 //! Portable WGSL composition, validation, and reflection.
 #![deny(missing_docs)]
 mod capabilities;
-use capabilities::required_naga_capabilities;
 pub use capabilities::NagaCapability;
+use capabilities::required_naga_capabilities;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,

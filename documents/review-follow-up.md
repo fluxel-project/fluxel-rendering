@@ -1,5 +1,10 @@
 # Rendering Review Follow-up Disposition
 
+This is the historical S2/S3 follow-up. Its pending-stage statements describe
+that source baseline. See the [S0–S8 maintenance review](s0-s8-review-follow-up.md)
+for the current review and [implementation plan](version-plan.md) for current
+bounded stage status.
+
 > Status: follow-up implementation, focused CPU checks, and fresh named-route
 > evidence are reviewed. The resulting bounded closure is recorded in
 > [S2/S3 named-Windows closure](s2-s3-closure.md). It is not a GPU-general,

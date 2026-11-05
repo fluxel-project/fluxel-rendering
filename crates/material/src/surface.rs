@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{validation::FunctionSignature, MaterialError, MaterialType, SurfaceOutput};
+use super::{MaterialError, MaterialType, SurfaceOutput, validation::FunctionSignature};
 
 /// Validates the root callables required by one selected surface domain.
 pub(super) fn validate(

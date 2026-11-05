@@ -51,10 +51,10 @@ fn imported_texture(graph: &mut GraphBuilder) -> crate::graph::definition::Textu
             TextureDesc {
                 label: None,
                 dimension: TextureDimension::D2,
-                extent: [4, 4, 1],
+                extent: [8, 8, 1],
                 array_layers: 2,
                 format: TextureFormat::Rgba8Unorm,
-                mip_levels: 2,
+                mip_levels: 4,
                 samples: 1,
                 usage: TextureUsage::TEXTURE_BINDING,
                 view_formats: Vec::new(),
@@ -459,6 +459,74 @@ fn preserves_texture_mip_layer_and_aspect_union_coverage() {
         access.require_texture(
             TextureSlot::from(color),
             TextureRange::new(TextureAspects::COLOR, 0..2, 0..3),
+            AccessKind::Read,
+            texture_contract(),
+        ),
+        Err(AccessError::TextureRangeOutsideDeclaration)
+    );
+}
+
+#[test]
+fn permits_a_declared_mip_when_another_declaration_is_disjoint() {
+    let mut graph = GraphBuilder::default();
+    let texture = imported_texture(&mut graph);
+    let (pass, ()) = graph
+        .add_pass("disjoint-mips", |pass| {
+            for mips in [0..1, 3..4] {
+                pass.read_texture_with_use(
+                    texture,
+                    TextureRange::new(TextureAspects::COLOR, mips, 0..1),
+                    texture_contract().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )?;
+            }
+            pass.side_effect();
+            Ok(())
+        })
+        .unwrap();
+    let plan = AccessPlan::compile(&graph, &[pass]).unwrap();
+
+    let access = plan.pass(pass).unwrap();
+    for mips in [0..1, 3..4] {
+        assert!(
+            access
+                .require_texture(
+                    TextureSlot::from(texture),
+                    TextureRange::new(TextureAspects::COLOR, mips, 0..1),
+                    AccessKind::Read,
+                    texture_contract(),
+                )
+                .is_ok()
+        );
+    }
+}
+
+#[test]
+fn rejects_a_requested_mip_span_with_a_declared_gap() {
+    let mut graph = GraphBuilder::default();
+    let texture = imported_texture(&mut graph);
+    let (pass, ()) = graph
+        .add_pass("gapped-mips", |pass| {
+            for mips in [0..1, 3..4] {
+                pass.read_texture_with_use(
+                    texture,
+                    TextureRange::new(TextureAspects::COLOR, mips, 0..1),
+                    texture_contract().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )?;
+            }
+            pass.side_effect();
+            Ok(())
+        })
+        .unwrap();
+    let plan = AccessPlan::compile(&graph, &[pass]).unwrap();
+
+    assert_eq!(
+        plan.pass(pass).unwrap().require_texture(
+            TextureSlot::from(texture),
+            TextureRange::new(TextureAspects::COLOR, 0..4, 0..1),
             AccessKind::Read,
             texture_contract(),
         ),

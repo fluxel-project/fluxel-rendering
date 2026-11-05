@@ -1,7 +1,7 @@
 //! Material composition and instance validation failures.
 
 use super::{
-    fmt, BindingLocation, MaterialAssetRef, MaterialResourceKind, MaterialType, SurfaceOutput,
+    BindingLocation, MaterialAssetRef, MaterialResourceKind, MaterialType, SurfaceOutput, fmt,
 };
 
 /// Material composition and instance validation failures.

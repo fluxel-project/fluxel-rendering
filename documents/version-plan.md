@@ -13,7 +13,9 @@
 > closed](s7-deferred-closure.md). S8 and the affected final regression are closed
 > for the selected private validation-index strategy; its exact evidence boundary is
 > in the [S8 measured closure](s8-measured-closure.md). Cross-repository
-> documentation reconciliation, commit, and push remain separate publication work.
+> documentation reconciliation and publication of that S7/S8 baseline are complete.
+> The [maintenance review](s0-s8-review-follow-up.md) records subsequent fixes
+> and CPU gates without expanding those historical native acceptance claims.
 > Stage labels are work
 > packages, not release numbers or completion claims. The organization
 > [roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md) owns
@@ -414,7 +416,7 @@ separate from the later S7 acceptance.
 **Status:** accepted for the selected Windows DX12 and desktop OpenGL/WGL
 subset in the [S7 acceptance record](s7-deferred-closure.md). S8 and the
 affected final regression are separately closed for their selected strategy;
-cross-repository reconciliation and publication remain separate work.
+cross-repository reconciliation and publication of that baseline are complete.
 
 The selected work establishes a second pipeline and a materially different
 external Feature through the existing scene/material and static extension seams:

@@ -1,8 +1,8 @@
 //! Forward scoped-read state-machine tests using a real Graph transaction.
 
 use super::super::phase::{
-    opaque_requirements_met, COLOR_WRITE, TEXTURE_READS, UNIFORM_READS, UPLOAD_DEPENDENCY,
-    VERTEX_READS,
+    COLOR_WRITE, TEXTURE_READS, UNIFORM_READS, UPLOAD_DEPENDENCY, VERTEX_READS,
+    opaque_requirements_met,
 };
 use super::*;
 use crate::graph::definition::GraphBuilder;

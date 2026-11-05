@@ -19,10 +19,10 @@ use crate::graph::ResourceInstanceId;
 
 #[path = "forward_support.rs"]
 mod forward_support;
+pub(crate) use forward_support::{ForwardFramePlan, SurfaceForwardFramePlan};
 use forward_support::{
     empty_buffer_uses, empty_texture_uses, pad_to, require_buffer, require_texture,
 };
-pub(crate) use forward_support::{ForwardFramePlan, SurfaceForwardFramePlan};
 
 /// Source bytes and declared layout for one complete vertex stream.
 pub(crate) struct ForwardStreamInput {

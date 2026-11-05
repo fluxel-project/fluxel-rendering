@@ -82,9 +82,11 @@ fn metallic_roughness_emits_and_composes_both_evaluation_wrappers() {
         SurfaceOutput::MetallicRoughness { .. }
     ));
     let units = variant.contribution().source_units();
-    assert!(units[0]
-        .source
-        .contains("fn evaluate_metallic_roughness() -> vec2<f32>"));
+    assert!(
+        units[0]
+            .source
+            .contains("fn evaluate_metallic_roughness() -> vec2<f32>")
+    );
     assert_eq!(units[1].id.0, "author:surface-properties");
     assert_eq!(
         units[1].source,
@@ -248,8 +250,10 @@ fn surface_domain_and_property_callable_affect_only_pbr_variant_identity() {
     let second = MaterialCompiler::compile(&second).unwrap();
     assert_ne!(color.key(), first.key());
     assert_ne!(first.key(), second.key());
-    assert!(!color
-        .key()
-        .as_str()
-        .contains("surface-output:metallic-roughness"));
+    assert!(
+        !color
+            .key()
+            .as_str()
+            .contains("surface-output:metallic-roughness")
+    );
 }

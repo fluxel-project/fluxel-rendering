@@ -125,7 +125,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 [[package]]
 name = "fluxel-assets"
 version = "0.13.4"
-source = "git+https://github.com/fluxel-project/fluxel-bases.git?rev=ee640d57a8d7c32d251252d0e8b32950636a770c#ee640d57a8d7c32d251252d0e8b32950636a770c"
+source = "git+https://github.com/fluxel-project/fluxel-bases.git?rev=124e825f82e5cd0eb485c95fe1281b11c8dbc844#124e825f82e5cd0eb485c95fe1281b11c8dbc844"
 
 [[package]]
 name = "fluxel-material"

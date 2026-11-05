@@ -103,7 +103,7 @@ fn preparation_rejects_missing_mismatched_and_invalid_attributes() {
     let position = requirement("POSITION", 0, VertexType::Vec3(ScalarType::F32));
     assert_eq!(
         GeometryLayout::default()
-            .prepare(&[position.clone()])
+            .prepare(std::slice::from_ref(&position))
             .unwrap_err(),
         GeometryError::MissingStreams
     );
@@ -114,7 +114,9 @@ fn preparation_rejects_missing_mismatched_and_invalid_attributes() {
         )],
     };
     assert_eq!(
-        mismatch.prepare(&[position.clone()]).unwrap_err(),
+        mismatch
+            .prepare(std::slice::from_ref(&position))
+            .unwrap_err(),
         GeometryError::TypeMismatch {
             semantic: "POSITION".into(),
             location: 0

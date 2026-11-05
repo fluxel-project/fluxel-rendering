@@ -145,22 +145,19 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     ) {
         return Err("unmapped reflected vertex input was accepted".into());
     }
-    println!(
-        "S5 preparation: Scene candidates resolved three layouts and three opaque batches"
-    );
+    println!("S5 preparation: Scene candidates resolved three layouts and three opaque batches");
     Ok(())
 }
 
+type PreparedScene = (
+    RenderScene<SceneInput>,
+    fluxel_renderer::RenderViewId,
+    Vec<fluxel_renderer::RenderId>,
+);
+
 fn scene(
     material: &SceneAssetRef<MaterialAsset>,
-) -> Result<
-    (
-        RenderScene<SceneInput>,
-        fluxel_renderer::RenderViewId,
-        Vec<fluxel_renderer::RenderId>,
-    ),
-    Box<dyn std::error::Error>,
-> {
+) -> Result<PreparedScene, Box<dyn std::error::Error>> {
     let mut scene = RenderScene::new()?;
     let mut changes = RenderChangeSet::new();
     for (layout, binding) in [

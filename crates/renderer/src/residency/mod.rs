@@ -6,7 +6,9 @@ mod deferred;
 mod deformation;
 pub(crate) use deformation::{DeferredDeformation, DeformationAllocationPlan};
 mod forward;
-pub(crate) use deferred::{DeferredDraw, DeferredFrame, DeferredSurfaceFrame, plan_deferred_gbuffer};
+pub(crate) use deferred::{
+    DeferredDraw, DeferredFrame, DeferredSurfaceFrame, plan_deferred_gbuffer,
+};
 mod forward_cache;
 pub(crate) use forward_cache::{
     ForwardGeometryCacheKey, ForwardResidentCache, ForwardTextureCacheKey,

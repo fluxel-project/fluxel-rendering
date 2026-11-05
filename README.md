@@ -26,6 +26,10 @@ cross-pass Feature contract. See the
 
 ## Current implementation and target
 
+The [S0–S8 maintenance review](documents/s0-s8-review-follow-up.md) records the
+texture subresource correction, submission-level CPU CI gates, and the boundary
+between retained historical native evidence and current maintenance checks.
+
 The checked-out `0.16` workspace contains the S0/S1 foundation plus the first
 implemented S2 Shader, S3 Material, closed S4 CPU scene/feature data boundary,
 S5 Forward integration, a bounded S6 external typed-Feature composition, and a

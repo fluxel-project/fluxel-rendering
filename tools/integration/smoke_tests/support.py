@@ -2,4 +2,10 @@
 
 from __future__ import annotations
 
-from .. import smoke
+if __package__ and "." in __package__:
+    # Package execution keeps the integration parent in the module path.
+    from .. import smoke
+else:
+    # ``unittest discover -s tools/integration`` imports ``smoke_tests`` as a
+    # top-level package, so there is no parent package to traverse.
+    import smoke
