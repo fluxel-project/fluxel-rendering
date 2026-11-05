@@ -2,6 +2,7 @@
 """Process, log, and immutable-attempt helpers for smoke evidence."""
 from __future__ import annotations
 import datetime as dt
+import itertools
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,13 @@ if __package__:
     from .smoke_inputs import sha256
 else:
     from smoke_inputs import sha256
+
+
+# Clock resolution is not an ownership boundary: runners can allocate more than
+# one attempt during the same observed microsecond.  Keep a process-local nonce
+# so every artifact directory remains distinct and a later failure cannot
+# overwrite an earlier attempt's raw logs.
+_ATTEMPT_SEQUENCE = itertools.count()
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -27,7 +35,7 @@ def load_attempts(path: Path) -> list[dict[str, Any]]:
 
 def attempt_name(backend: str) -> str:
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"{backend}-{timestamp}-{os.getpid()}"
+    return f"{backend}-{timestamp}-{os.getpid()}-{next(_ATTEMPT_SEQUENCE):x}"
 
 
 def log_result(log_directory: Path, exit_status: int | None, timed_out: bool,

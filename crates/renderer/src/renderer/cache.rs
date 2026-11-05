@@ -7,7 +7,7 @@ use fluxel_rhi::{
     api::PlanId,
     backend::{ExecutionBackend, MappingBackend, ReadbackBackend, ResourceBackend},
 };
-use std::{sync::Arc, sync::atomic::Ordering};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum PlanKey {
@@ -41,9 +41,7 @@ where
     B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend,
 {
     fn ordinal(&self) -> Result<u64, RendererError> {
-        NEXT_PLAN_ORDINAL
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
-            .map_err(|_| RendererError::IdentityExhausted)
+        crate::atomic::claim_next(&NEXT_PLAN_ORDINAL).ok_or(RendererError::IdentityExhausted)
     }
     pub(super) fn copy_plan_for(
         &mut self,

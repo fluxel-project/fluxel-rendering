@@ -376,6 +376,19 @@ class SmokeRunnerTests(unittest.TestCase):
             self.assertEqual(smoke.sha256(first / "stdout.log"), initial_hash)
             self.assertIn("first failure", (first / "stdout.log").read_text())
 
+    def test_attempt_names_remain_distinct_when_the_clock_does_not_advance(self) -> None:
+        fixed = smoke.dt.datetime(2026, 11, 5, 11, 31, 33, 534252, tzinfo=smoke.dt.timezone.utc)
+        class FrozenDateTime:
+            @staticmethod
+            def now(_timezone: object) -> object:
+                return fixed
+
+        with mock.patch.object(smoke.dt, "datetime", FrozenDateTime):
+            first = smoke.attempt_name("dx12")
+            second = smoke.attempt_name("dx12")
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("dx12-20261105T113133534252Z-"))
+
 
     def test_timeout_preserves_logs_and_marks_child_lifecycle_unverified(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

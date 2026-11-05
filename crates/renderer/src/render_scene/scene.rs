@@ -6,7 +6,7 @@ use super::*;
 use std::{
     collections::{BTreeSet, HashSet},
     ops::Bound::{Excluded, Unbounded},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::AtomicU64,
 };
 
 static NEXT_SCENE: AtomicU64 = AtomicU64::new(1);
@@ -50,10 +50,8 @@ pub struct RenderScene<R: Clone> {
 impl<R: Clone> RenderScene<R> {
     /// Returns the controlled issuer for CPU-only feature handles.
     pub fn feature_issuer(&self) -> Result<crate::FeatureIssuer, SceneError> {
-        let issuer = self
-            .next_feature_issuer
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| SceneError::FeatureIssuerExhausted)?;
+        let issuer = crate::atomic::claim_next(&self.next_feature_issuer)
+            .ok_or(SceneError::FeatureIssuerExhausted)?;
         Ok(crate::FeatureIssuer::new(self.scene, issuer))
     }
     /// Creates a scene with no practical capacity limit.
@@ -62,9 +60,8 @@ impl<R: Clone> RenderScene<R> {
     }
     /// Creates a scene with explicit capacity limits.
     pub fn with_capacity(capacity: SceneCapacity) -> Result<Self, SceneError> {
-        let scene = NEXT_SCENE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| SceneError::SceneIdentityExhausted)?;
+        let scene =
+            crate::atomic::claim_next(&NEXT_SCENE).ok_or(SceneError::SceneIdentityExhausted)?;
         Ok(Self {
             scene,
             next_feature_issuer: AtomicU64::new(1),

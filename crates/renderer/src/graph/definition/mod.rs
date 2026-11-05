@@ -1,9 +1,6 @@
 //! Private logical graph authoring with typed buffer versions.
 
-use std::{
-    ops::Range,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{ops::Range, sync::atomic::AtomicU64};
 
 use fluxel_rhi::api::{
     BufferDesc, BufferUsage, BufferUses, ImageLayout, MemoryClass, TextureAspects, TextureDesc,
@@ -183,8 +180,7 @@ impl Default for GraphBuilder {
     fn default() -> Self {
         Self {
             graph: GraphId(
-                NEXT_GRAPH
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                crate::atomic::claim_next(&NEXT_GRAPH)
                     .expect("private graph identity space exhausted"),
             ),
             buffers: Vec::new(),

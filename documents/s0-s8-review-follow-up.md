@@ -56,9 +56,19 @@ support module now selects its import mode explicitly, preserving package
 execution and making the aggregate command itself usable. Historical S8 logs
 remain unchanged, including their originally recorded aggregate failure.
 
+The first workflow run also exposed nine corresponding deprecated atomic
+updates in Rendering itself, plus a clock-resolution collision in attempt
+names. Rendering now uses one private MSRV-compatible relaxed CAS helper at
+all nine identity/plan allocation sites, retaining each caller's exhaustion
+error or panic. Concurrent uniqueness and unchanged-counter overflow tests
+cover the helper. Attempt names include a process-local sequence in addition
+to backend, UTC timestamp and PID; a frozen-clock regression verifies that
+separate attempts cannot share a directory. Directory creation still refuses
+an existing path, and failed raw output remains independently retained.
+
 ## Current maintenance validation
 
-Local Rust 1.87 validation on the updated pins passes 310 workspace behavior
+Local Rust 1.87 validation on the updated pins passes 312 workspace behavior
 tests (one diagnostic remains intentionally ignored), 45 DX12 integration CPU
 tests and 48 WGL integration CPU tests. Stable Clippy passes for all workspace
 targets and the independent consumer; workspace formatting passes. Stable's
@@ -69,7 +79,7 @@ discovery passes 25 tests. CI repeats the defined matrix on the pushed source;
 its status must be read from the commit's workflow rather than inferred from
 these local results.
 
-The repaired aggregate integration command discovers 117 tests: 116 pass and
+The repaired aggregate integration command discovers 118 tests: 117 pass and
 one Windows symlink-privilege case is skipped. Its successful aggregate run
 replaces the need to combine separate package logs for this maintenance check.
 

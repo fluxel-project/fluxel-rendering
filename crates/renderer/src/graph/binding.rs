@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::AtomicU64,
 };
 
 use fluxel_rhi::api::{
@@ -28,10 +28,9 @@ pub(crate) struct ResourceInstanceId(u64);
 impl ResourceInstanceId {
     /// Issues a distinct identity for a newly allocated concrete resource.
     pub(crate) fn fresh() -> Result<Self, BindingError> {
-        NEXT_RESOURCE_INSTANCE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        crate::atomic::claim_next(&NEXT_RESOURCE_INSTANCE)
             .map(Self)
-            .map_err(|_| BindingError::IdentityExhausted)
+            .ok_or(BindingError::IdentityExhausted)
     }
 }
 

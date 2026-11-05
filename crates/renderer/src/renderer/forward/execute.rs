@@ -295,13 +295,8 @@ where
     }
 
     fn next_forward_plan_id(&self) -> std::result::Result<PlanId, RendererError> {
-        let ordinal = super::NEXT_PLAN_ORDINAL
-            .fetch_update(
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-                |value| value.checked_add(1),
-            )
-            .map_err(|_| RendererError::IdentityExhausted)?;
+        let ordinal = crate::atomic::claim_next(&super::NEXT_PLAN_ORDINAL)
+            .ok_or(RendererError::IdentityExhausted)?;
         Ok(PlanId {
             device: self.device.id(),
             ordinal,

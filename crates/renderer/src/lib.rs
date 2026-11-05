@@ -7,6 +7,7 @@
 
 #![deny(missing_docs)]
 
+mod atomic;
 mod feature;
 mod frame_data;
 mod graph;

@@ -5,10 +5,7 @@ pub use forward::{FeatureBinding, RenderFeature};
 mod deformation;
 pub use deformation::{DeferredPositionDeformer, DeformationBinding, PositionDeformation};
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, atomic::AtomicU64};
 
 use crate::FrameSnapshot;
 
@@ -45,9 +42,8 @@ impl FeatureIssuer {
     }
     /// Issues an opaque handle for one static feature.
     pub fn issue(&self, name: &'static str) -> Result<FeatureHandle, FeatureError> {
-        let identity = NEXT_HANDLE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| FeatureError::HandleExhausted)?;
+        let identity =
+            crate::atomic::claim_next(&NEXT_HANDLE).ok_or(FeatureError::HandleExhausted)?;
         Ok(FeatureHandle {
             scene: self.scene,
             issuer: self.issuer,

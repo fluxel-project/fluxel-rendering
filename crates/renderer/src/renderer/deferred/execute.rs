@@ -6,7 +6,7 @@ use crate::{
     residency::{DeferredFrame, DeferredSurfaceFrame},
 };
 use fluxel_rhi::api::{Buffer, CompletionRequest, MapMode, PresentBinding, SurfaceImage};
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 impl<B> Renderer<B>
 where
@@ -41,11 +41,8 @@ where
             self.deferred_stats.graph_hits = self.deferred_stats.graph_hits.saturating_add(1);
             Arc::clone(cached)
         } else {
-            let ordinal = super::super::NEXT_PLAN_ORDINAL
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                    value.checked_add(1)
-                })
-                .map_err(|_| RendererError::IdentityExhausted)?;
+            let ordinal = crate::atomic::claim_next(&super::super::NEXT_PLAN_ORDINAL)
+                .ok_or(RendererError::IdentityExhausted)?;
             let id = PlanId {
                 device: self.device.id(),
                 ordinal,
@@ -195,11 +192,8 @@ where
             self.deferred_stats.graph_hits = self.deferred_stats.graph_hits.saturating_add(1);
             Arc::clone(cached)
         } else {
-            let ordinal = super::super::NEXT_PLAN_ORDINAL
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                    value.checked_add(1)
-                })
-                .map_err(|_| RendererError::IdentityExhausted)?;
+            let ordinal = crate::atomic::claim_next(&super::super::NEXT_PLAN_ORDINAL)
+                .ok_or(RendererError::IdentityExhausted)?;
             let id = PlanId {
                 device: self.device.id(),
                 ordinal,
