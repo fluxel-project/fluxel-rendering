@@ -2,6 +2,11 @@
 
 mod composition;
 pub use composition::{ForwardCompositionContext, ForwardCompositionPass, ForwardFeaturePass};
+mod deferred;
+pub use deferred::{
+    DeferredCpuPipeline, DeferredDeformationPass, DeferredGeometryPass, DeferredLightingPass,
+    DeferredPhaseContext,
+};
 
 use std::{collections::HashSet, fmt};
 
@@ -152,6 +157,8 @@ pub enum FrameTopology {
     OpaqueForward,
     /// Clear and read the target without resolving scene assets or recording draws.
     ClearOnly,
+    /// Produce albedo/normal/depth, shade them, then read the offscreen target.
+    Deferred,
 }
 
 /// The minimal public frame-policy seam exercised by the first Forward consumer.
@@ -160,6 +167,32 @@ pub enum FrameTopology {
 /// one concrete GPU product.  They cannot obtain Graph state, command encoders,
 /// allocators, or submission authority.
 pub trait FramePipeline<R> {
+    /// Declares a typed GPU producer before the Deferred geometry consumer.
+    ///
+    /// Both callbacks operate on the same actual Graph. The Feature can declare
+    /// only its source/parameter reads and vertex-product write.
+    fn contribute_deformed<F: crate::DeferredPositionDeformer>(
+        &self,
+        frame: &PreparedFrame<'_, R>,
+        feature: &F,
+        context: &mut DeferredPhaseContext<'_, '_>,
+    ) -> Result<(), PipelineError> {
+        context.deformation(|pass| feature.contribute(pass))?;
+        self.contribute_deferred(frame, context)
+    }
+
+    /// Declares the bounded Deferred geometry and lighting passes on the real Graph.
+    ///
+    /// Forward policies refuse this route by default. Selecting Deferred topology
+    /// does not implicitly authorize any access; its contribution must declare it.
+    fn contribute_deferred(
+        &self,
+        _frame: &PreparedFrame<'_, R>,
+        _context: &mut DeferredPhaseContext<'_, '_>,
+    ) -> Result<(), PipelineError> {
+        Err(PipelineError::InvalidPhaseContribution)
+    }
+
     /// Defines the final order across built-in and feature-owned opaque draws.
     ///
     /// The renderer checks that this is a permutation of the supplied draws.
@@ -398,7 +431,7 @@ impl fmt::Display for PipelineError {
             Self::PreparedFrameMismatch => formatter
                 .write_str("pipeline returned a different scene, snapshot version, or view"),
             Self::InvalidPhaseContribution => {
-                formatter.write_str("pipeline made an invalid Forward phase contribution")
+                formatter.write_str("pipeline made an invalid phase contribution")
             }
             Self::Scene(error) => error.fmt(formatter),
             Self::DuplicateCandidate { slot, generation } => {

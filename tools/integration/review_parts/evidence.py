@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from .common import *
+try:
+    from .. import capture_contract
+except ImportError:
+    import capture_contract
 
 def retained_attempt_artifacts(selected: dict[str, dict[str, Any]], closure: Path) -> dict[str, set[tuple[Path, str]]]:
     """Only raw artifacts retained by the selected attempt may support review."""
@@ -77,9 +81,14 @@ def visual_entry_failures(entry: dict[str, Any], identifier: str,
             continue
         capture_value, capture_error = read_json(Path(str(capture["path"])) if Path(str(capture["path"])).is_absolute() else base / str(capture["path"]))
         verdict_value, verdict_error = read_json(Path(str(verdict["path"])) if Path(str(verdict["path"])).is_absolute() else base / str(verdict["path"]))
-        if (capture_error or verdict_error or not isinstance(capture_value, dict) or not isinstance(verdict_value, dict)
-                or capture_value.get("image") != screenshot_path.name or capture_value.get("automaticVisualPass") is not False
-                or verdict_value.get("image") != screenshot_path.name or verdict_value.get("status") != "passed"):
+        extent = capture_value.get("clientExtent") if isinstance(capture_value, dict) else None
+        capture_reasons = capture_contract.capture_failures(
+            capture_value, capture_value.get("frame") if isinstance(capture_value, dict) else -1,
+            extent if isinstance(extent, list) else [], screenshot_path.name)
+        verdict_reasons = capture_contract.verdict_failures(
+            verdict_value, capture_value.get("frame") if isinstance(capture_value, dict) else -1,
+            screenshot_path.name, capture_value.get("schemaVersion") if isinstance(capture_value, dict) else None)
+        if capture_error or verdict_error or capture_reasons or verdict_reasons:
             reasons.append(f"visual evidence does not match the retained capture scenario for {identifier}")
         seen.add(screenshot_path.name)
     if seen != expected:

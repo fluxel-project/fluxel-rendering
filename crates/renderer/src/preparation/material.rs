@@ -112,7 +112,7 @@ pub fn prepare_material(
             request.static_options.insert(name, value);
         }
     }
-    request.source_units.push(contribution.source_unit());
+    request.source_units.extend(contribution.source_units());
     request.bindings.extend(contribution.binding_declarations());
     request
         .callables

@@ -1,8 +1,10 @@
 # Fluxel Shader System Design
 
-> Status: post-foundation target architecture. This document defines the
-> `fluxel-shader` boundary; the selected stable RHI revision remains the
-> authority for device routes, portable shader creation, and backend lowering.
+> Status: target architecture with an accepted bounded DX12/WGL consumer subset.
+> This document defines the `fluxel-shader` boundary; the selected stable RHI
+> revision remains the authority for device routes, portable shader creation,
+> and backend lowering. The accepted subset does not stabilize every future
+> consumer or target.
 
 `fluxel-shader` turns portable WGSL source contributions into a complete logical
 program. It is usable by materials, compute, post-processing, and custom
@@ -41,7 +43,9 @@ portable requirements. It contains neither `MaterialIr` nor material-domain
 meaning.
 
 Material lowering produces a generic contribution: its source units, generated
-`evaluate_material` function, and interface metadata. It cannot assemble a
+evaluation functions, and interface metadata. Every surface contribution has
+`evaluate_material`; the bounded metallic-roughness surface output also has
+`evaluate_metallic_roughness`. It cannot assemble a
 complete request because it does not know whether a Forward, Deferred, shadow,
 compute, or project pass will consume the function. The active `FramePipeline`
 or another Shader consumer combines that contribution with pass-specific inputs
@@ -162,11 +166,11 @@ source, declarations, selected entries, static options, and requirements remain
 distinct. This is a logical artifact cache only; it does not cache RHI shader or
 pipeline objects and does not establish device-local reuse.
 
-This status is not an S2 execution acceptance claim. The implementation has not
-yet established the required Renderer/Graph/RHI path, selected-device route and
-capability evidence, DX12/WGL texture raster evidence, or supported Compute
-execution evidence. Those checks remain owned by the consuming integration and
-must not be inferred from logical Naga validation.
+Logical validation is not sufficient execution evidence by itself. The named
+S2/S3 and later DX12/WGL consumer records establish their respective selected
+routes, but each new Shader consumer still must check requirements against the
+selected device and retain its own Graph/RHI evidence. No unsupported backend or
+future Shader feature is inferred from those bounded results.
 
 After the S0/S1 foundation closure, S2 creates `fluxel-shader` and proves an
 independent complete WGSL raster program and, where supported, a compute program
@@ -181,3 +185,19 @@ contract. S5 proves the material-backed Forward path. S6 closes the renderer MVP
 only when an external Rust Feature, an external FramePipeline, and a custom
 material contribution run together through the normal Graph/RHI path. Code Nodes
 and broader authoring experience are selected S7 consumers, not an MVP gate.
+The first C1 consumer is now implemented: Material supplies ordered immutable
+source units, including each `MaterialCodeNode` author's exact `SourceUnit`, to
+the same `ShaderCompositionRequest`; the composer preserves source spans and
+checks the node's declared callable against actual WGSL. The legacy aggregate
+source is derived only for compatibility, so it cannot replace author-attributed
+units.
+
+The current C2 extension adds a bounded `MetallicRoughness` surface domain to
+that same contribution path. Material structurally validates its zero-argument
+`Vec4` base root and zero-argument `Vec2` metallic/perceptual-roughness root,
+then Shader composes pass templates that consume both generated evaluators.
+This validates source attribution, callable signatures, and complete logical
+WGSL before GPU work. It is not GPU PBR evidence, a complete MaterialGraph, or
+general material-domain support; the selected private renderer consumer and its
+separate bounded DX12/WGL GPU validation are described in
+[the Renderer design](design-renderer.md) and [version-plan.md](version-plan.md).

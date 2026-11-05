@@ -4,6 +4,7 @@ use std::ops::Range;
 
 pub(crate) struct ForwardUniformInput {
     pub(crate) transform: [[f32; 4]; 4],
+    pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) tint: [f32; 4],
 }
 
@@ -28,7 +29,12 @@ pub(crate) fn pack_forward_uniforms(
             .map(|value| value / alignment * alignment)
             .ok_or(Error::InvalidRange)
     };
-    let tint_offset = align(64)?;
+    let transform_bytes = if inputs.iter().any(|input| input.normal_from_local.is_some()) {
+        128
+    } else {
+        64
+    };
+    let tint_offset = align(transform_bytes)?;
     let stride = align(tint_offset.checked_add(16).ok_or(Error::InvalidRange)?)?;
     let count = u64::try_from(inputs.len()).map_err(|_| Error::InvalidRange)?;
     let total = stride
@@ -43,6 +49,12 @@ pub(crate) fn pack_forward_uniforms(
             .transform
             .iter()
             .flatten()
+            .chain(
+                input
+                    .normal_from_local
+                    .iter()
+                    .flat_map(|matrix| matrix.iter().flatten()),
+            )
             .chain(input.tint.iter())
             .any(|value| !value.is_finite())
     }) {
@@ -68,11 +80,23 @@ pub(crate) fn pack_forward_uniforms(
             let offset = start as usize + component * 4;
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
+        if let Some(normal) = input.normal_from_local {
+            for (component, value) in normal.iter().flatten().enumerate() {
+                let offset = start as usize + 64 + component * 4;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
         for (component, value) in input.tint.iter().enumerate() {
             let offset = tint as usize + component * 4;
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
-        transforms.push(start..start + 64);
+        let transform_end = start
+            + if input.normal_from_local.is_some() {
+                128
+            } else {
+                64
+            };
+        transforms.push(start..transform_end);
         tints.push(tint..tint + 16);
     }
     Ok(ForwardUniformData {

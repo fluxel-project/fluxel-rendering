@@ -298,6 +298,54 @@ Fluxel does not translate the function body into a parallel `MaterialInstruction
 
 ## 6. Code Nodes Are First-Class
 
+The current bounded implementation accepts `MaterialCodeNode` through
+`MaterialDefinition::with_code_node`. Each node carries typed callable metadata,
+call edges, resources, and a named Shader `SourceUnit`. Nodes and Rust-defined
+fragments normalize through the same private function graph. Exact shared
+resources merge; conflicting declarations fail authoring validation. Actual WGSL
+signatures and program bindings are checked by Shader composition, not inferred
+from the author's metadata alone.
+
+The contribution retains ordered source units as its single source authority.
+Consumers use `source_units()` to retain the exact node text and diagnostic
+identity. Aggregate `source()` and `source_unit()` remain available for legacy
+one-unit consumers, with correspondingly aggregate diagnostic attribution.
+Node source identity and text participate in deterministic static variant identity;
+dynamic instance values remain outside that identity. Nodes with arguments are
+called by material functions that supply them.
+
+### 6.1 Current bounded surface outputs
+
+The implemented C2 surface subset has two outputs:
+
+```rust
+SurfaceOutput::Color
+SurfaceOutput::MetallicRoughness { properties: String }
+```
+
+Both domains retain a zero-argument `Vec4` base-color root and generate
+`evaluate_material()`. `MetallicRoughness` additionally requires a named,
+zero-argument `Vec2` callable whose components are metallic then perceptual
+roughness, and generates `evaluate_metallic_roughness()`. The two generated
+names are reserved, and missing, wrongly typed, or argument-taking property
+roots fail structural Material validation before Shader composition. The output
+domain and property-root name participate in static identity only for
+`MetallicRoughness`; `Color` retains its prior canonical form.
+
+These functions use the same normalized fragment/Code Node/resource graph and
+the same author-attributed source-unit handoff as C1. C2 Material tests exercise
+the two-wrapper Shader composition and local Code Node diagnostics, but do not
+prove a GPU PBR result. The selected Renderer consumer policy is a private PBR
+module with inverse-transpose world normals, fixed world-space light
+`L = (0.6, 0.0, 0.8)`, `V = (0, 0, 1)`, GGX/Smith/Schlick evaluation, and
+RGBA8 G-buffer targets plus depth; see [the Renderer design](design-renderer.md).
+That policy remains renderer-owned. Separate DX12/WGL development attempts now
+prove its bounded Forward/Deferred outputs against independent numeric oracles;
+the evidence identity and remaining work are recorded in [version-plan.md](version-plan.md).
+
+This subset does not establish a general visual editor graph, complete PBR, or
+arbitrary surface domains.
+
 Custom code is a core material capability, not an optional escape hatch.
 
 A material system with custom rendering pipelines must allow user-defined shader logic without requiring Fluxel to add a built-in node for every operation.
@@ -768,7 +816,7 @@ native binding handles
 
 ## 15. Shader Composition
 
-### Current S3 handoff status
+### Current Material-to-Shader handoff status
 
 The current Material-to-Shader boundary uses Shader-owned generic source units,
 binding declarations, callable declarations, and static options. Material may
@@ -799,8 +847,9 @@ facts, and static specialization values. It has no `MaterialIr`,
 Material lowers its private `MaterialIr` into a Shader-owned generic source and
 interface contribution. That contribution selects and names WGSL fragment
 functions, emits the material parameter/uniform and resource declarations, and
-generates `evaluate_material`. It deliberately omits the pass template, entry
-points, geometry interface, and final target choices. The active
+generates `evaluate_material` plus the PBR-only
+`evaluate_metallic_roughness` wrapper when selected. It deliberately omits the
+pass template, entry points, geometry interface, and final target choices. The active
 `FramePipeline` gathers those pass-specific inputs, combines them with the
 material contribution, and creates the complete `ShaderCompositionRequest`.
 Shader then owns complete-program assembly. Thus `fluxel-material` may depend

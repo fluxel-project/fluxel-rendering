@@ -78,7 +78,7 @@ fn multi_fragment_material_emits_deterministic_custom_wgsl() {
     let first = MaterialCompiler::compile(&definition(true)).unwrap();
     let second = MaterialCompiler::compile(&definition(true)).unwrap();
     assert_eq!(first, second);
-    let source = &first.contribution().source;
+    let source = first.contribution().source();
     assert!(source.contains("@group(0) @binding(0) var<uniform> tint: vec4<f32>;"));
     assert!(source.contains("textureLoad(material_texture"));
     assert!(source.contains("return sample_color() * tint;"));
@@ -523,13 +523,16 @@ fn source_id_is_compact_while_variant_key_retains_full_canonical_content() {
     let first = MaterialCompiler::compile(&make_definition(&first_body)).unwrap();
     let second = MaterialCompiler::compile(&make_definition(&second_body)).unwrap();
 
-    assert_eq!(first.contribution().source_id.len(), "material:".len() + 64);
+    assert_eq!(
+        first.contribution().source_id().len(),
+        "material:".len() + 64
+    );
     assert_ne!(
-        first.contribution().source_id,
-        second.contribution().source_id
+        first.contribution().source_id(),
+        second.contribution().source_id()
     );
     assert_ne!(first.key(), second.key());
-    assert!(first.key().as_str().len() > first.contribution().source_id.len());
+    assert!(first.key().as_str().len() > first.contribution().source_id().len());
 }
 
 fn material_reference() -> MaterialAssetRef {

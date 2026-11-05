@@ -10,6 +10,7 @@
 mod feature;
 mod frame_data;
 mod graph;
+mod pbr;
 mod pipeline;
 mod preparation;
 mod render_scene;
@@ -17,14 +18,17 @@ mod renderer;
 mod residency;
 
 pub use feature::{
-    CpuFeature, CpuPhase, CpuPhaseContribution, CpuPhaseContributions, FeatureBinding,
-    FeatureContext, FeatureError, FeatureHandle, FeatureIssuer, RenderFeature,
-    TypedFeatureSnapshot, TypedFeatureStorage, validate_context,
+    CpuFeature, CpuPhase, CpuPhaseContribution, CpuPhaseContributions, DeferredPositionDeformer,
+    DeformationBinding, FeatureBinding, FeatureContext, FeatureError, FeatureHandle, FeatureIssuer,
+    PositionDeformation, RenderFeature, TypedFeatureSnapshot, TypedFeatureStorage,
+    validate_context,
 };
 pub use pipeline::{
-    BoundsVisibility, ClearForwardPass, ForwardCompositionContext, ForwardCompositionPass,
-    ForwardCpuPipeline, ForwardFeaturePass, ForwardPhaseContext, FramePipeline, FrameTopology,
-    OpaqueForwardPass, PipelineError, PreparedFrame, VisibilityProvider,
+    BoundsVisibility, ClearForwardPass, DeferredCpuPipeline, DeferredDeformationPass,
+    DeferredGeometryPass, DeferredLightingPass, DeferredPhaseContext, ForwardCompositionContext,
+    ForwardCompositionPass, ForwardCpuPipeline, ForwardFeaturePass, ForwardPhaseContext,
+    FramePipeline, FrameTopology, OpaqueForwardPass, PipelineError, PreparedFrame,
+    VisibilityProvider,
 };
 pub use preparation::{
     ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, ForwardDrawOrder,
@@ -40,5 +44,6 @@ pub use render_scene::{
     RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError,
 };
 pub use renderer::{
-    ForwardCacheStats, Renderer, RendererError, ShaderAdmissionError, ShutdownReport, Submission,
+    DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, Renderer, RendererError, ShaderAdmissionError,
+    ShutdownReport, Submission,
 };

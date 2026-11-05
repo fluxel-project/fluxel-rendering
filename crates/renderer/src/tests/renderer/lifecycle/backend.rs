@@ -5,16 +5,18 @@
 //! consumer's responsibility.
 
 use std::{
-    future::{ready, Future, Ready},
+    future::{Future, Ready, ready},
     ops::Range,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex, Weak,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
 use fluxel_assets::AssetKind;
 use fluxel_rhi::{api::*, backend::*};
+
+mod compute;
 
 pub(super) struct Bytes;
 impl AssetKind for Bytes {}
@@ -62,6 +64,7 @@ pub(super) struct Native {
     pub(super) idle_waits: AtomicUsize,
     pub(super) waited_completions: Mutex<Vec<usize>>,
     pub(super) created_buffers: AtomicUsize,
+    pub(super) pipeline_color_formats: Mutex<Vec<Vec<TextureFormat>>>,
     pub(super) dropped_buffers: AtomicUsize,
     pub(super) outcome: Mutex<Weak<OutcomeGuard>>,
 }
@@ -85,6 +88,7 @@ pub(super) struct CompletionMarker {
 }
 
 pub(super) struct WitnessBackend;
+pub(super) struct WitnessCompute;
 #[derive(Clone)]
 pub(super) struct WitnessImage {
     generation: Arc<std::sync::atomic::AtomicU64>,
@@ -133,7 +137,7 @@ impl Backend for WitnessBackend {
     type NativeSurfaceImage = WitnessImage;
     type NativeUncertainty = ();
     type MemoryObservation = Unavailable;
-    type Compute = Unavailable;
+    type Compute = WitnessCompute;
     type Mesh = Unavailable;
     type Ray = Unavailable;
     type Extras = Unavailable;
@@ -205,13 +209,13 @@ impl ResourceBackend for WitnessBackend {
         Err(Error::Unsupported("sampler"))
     }
     fn create_bind_group_layout(_: &Arc<Native>, _: &BindGroupLayoutDesc) -> Result<()> {
-        Err(Error::Unsupported("layout"))
+        Ok(())
     }
     fn create_bind_group(device: &Arc<Native>, _: &BindGroupDesc<'_, Self>) -> Result<Arc<Native>> {
         Ok(Arc::clone(device))
     }
     fn create_pipeline_layout(_: &Arc<Native>, _: &PipelineLayoutDesc<'_, Self>) -> Result<()> {
-        Err(Error::Unsupported("pipeline layout"))
+        Ok(())
     }
 }
 
@@ -248,10 +252,18 @@ impl PipelineBackend for WitnessBackend {
     type RasterPipelineFuture<'a> = Ready<Result<()>>;
 
     fn create_raster_pipeline<'a>(
-        _: &'a Arc<Native>,
-        _: &'a RasterPipelineDesc<Self>,
+        device: &'a Arc<Native>,
+        descriptor: &'a RasterPipelineDesc<Self>,
         _: Option<DynamicDepthBias>,
     ) -> Self::RasterPipelineFuture<'a> {
+        device.pipeline_color_formats.lock().unwrap().push(
+            descriptor
+                .color_targets
+                .iter()
+                .flatten()
+                .map(|target| target.format)
+                .collect(),
+        );
         ready(Ok(()))
     }
 }
@@ -466,7 +478,9 @@ impl Future for WitnessWait {
         } else if self.idle && matches!(self.native.script, Script::AcceptedIdleFailure) {
             std::task::Poll::Ready(Err(Error::Backend("scripted idle failure".to_owned())))
         } else if (self.idle && matches!(self.native.script, Script::AcceptedIdleDeviceLost))
-            || (!self.idle && matches!(self.native.script, Script::AcceptedCompletionDeviceLost))
+            || (!self.idle
+                && self.native.fault_enabled.load(Ordering::SeqCst)
+                && matches!(self.native.script, Script::AcceptedCompletionDeviceLost))
         {
             std::task::Poll::Ready(Err(Error::DeviceLost))
         } else {

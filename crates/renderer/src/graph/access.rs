@@ -1,9 +1,9 @@
-//! Pass-local authority for concrete resource recording.
+//! Indexed, graph-derived recording access coverage.
 //!
-//! This is deliberately derived from graph declarations rather than reflection
-//! or backend handles. A recorder may ask only for a resource operation that
-//! its exact graph pass declared.
+//! This remains a private graph-derived authority.  It precomputes declaration
+//! coverage only; it does not change binding, provenance, or graph ownership.
 
+use fluxel_rhi::api::TextureAspects;
 use std::ops::Range;
 
 use super::{
@@ -54,21 +54,22 @@ impl AccessPlan {
                 textures: Vec::with_capacity(node.texture_accesses.len()),
             };
             for access in &node.accesses {
-                authority.buffers.push(BufferDeclaration {
-                    slot: BufferSlot::from(access.buffer),
-                    range: access.range.bytes(),
-                    kind: access.kind,
-                    contract: access.contract.ok_or(AccessError::MissingBufferContract)?,
-                });
+                authority.add_buffer(
+                    BufferSlot::from(access.buffer),
+                    access.range.bytes(),
+                    access.kind,
+                    access.contract.ok_or(AccessError::MissingBufferContract)?,
+                );
             }
             for access in &node.texture_accesses {
-                authority.textures.push(TextureDeclaration {
-                    slot: TextureSlot::from(access.texture),
-                    range: access.range.clone(),
-                    kind: access.kind,
-                    contract: access.contract.ok_or(AccessError::MissingTextureContract)?,
-                });
+                authority.add_texture(
+                    TextureSlot::from(access.texture),
+                    access.range.clone(),
+                    access.kind,
+                    access.contract.ok_or(AccessError::MissingTextureContract)?,
+                );
             }
+            authority.normalize_buffer_ranges();
             passes.push((pass, authority));
         }
         Ok(Self { passes })
@@ -86,11 +87,91 @@ impl AccessPlan {
 /// The only logical resource operations a particular pass may record.
 #[derive(Clone, Debug)]
 pub(crate) struct PassAccess {
-    buffers: Vec<BufferDeclaration>,
-    textures: Vec<TextureDeclaration>,
+    buffers: Vec<BufferSlotDeclarations>,
+    textures: Vec<TextureSlotDeclarations>,
 }
 
 impl PassAccess {
+    fn add_buffer(
+        &mut self,
+        slot: BufferSlot,
+        range: Range<u64>,
+        kind: AccessKind,
+        contract: BufferAccessContract,
+    ) {
+        let declarations = match self.buffers.iter().position(|known| known.slot == slot) {
+            Some(index) => &mut self.buffers[index],
+            None => {
+                self.buffers.push(BufferSlotDeclarations {
+                    slot,
+                    groups: Vec::new(),
+                });
+                self.buffers
+                    .last_mut()
+                    .expect("buffer slot was just inserted")
+            }
+        };
+        let group = match declarations
+            .groups
+            .iter()
+            .position(|known| known.kind == kind && known.contract == contract)
+        {
+            Some(index) => &mut declarations.groups[index],
+            None => {
+                declarations.groups.push(BufferDeclarationGroup {
+                    kind,
+                    contract,
+                    ranges: Vec::new(),
+                });
+                declarations
+                    .groups
+                    .last_mut()
+                    .expect("buffer group was just inserted")
+            }
+        };
+        group.ranges.push(range);
+    }
+
+    fn add_texture(
+        &mut self,
+        slot: TextureSlot,
+        range: TextureRange,
+        kind: AccessKind,
+        contract: TextureAccessContract,
+    ) {
+        let declarations = match self.textures.iter().position(|known| known.slot == slot) {
+            Some(index) => &mut self.textures[index],
+            None => {
+                self.textures.push(TextureSlotDeclarations {
+                    slot,
+                    declarations: Vec::new(),
+                });
+                self.textures
+                    .last_mut()
+                    .expect("texture slot was just inserted")
+            }
+        };
+        if !declarations.declarations.iter().any(|declaration| {
+            declaration.range == range
+                && declaration.kind == kind
+                && declaration.contract == contract
+        }) {
+            declarations.declarations.push(TextureDeclaration {
+                range,
+                kind,
+                contract,
+            });
+        }
+    }
+
+    fn normalize_buffer_ranges(&mut self) {
+        for declarations in &mut self.buffers {
+            for group in &mut declarations.groups {
+                normalize_ranges(&mut group.ranges);
+            }
+        }
+    }
+
     /// Requires a fully declared buffer operation before recording it.
     pub(crate) fn require_buffer(
         &self,
@@ -99,25 +180,34 @@ impl PassAccess {
         kind: AccessKind,
         contract: BufferAccessContract,
     ) -> Result<(), AccessError> {
-        let declarations = self
+        let Some(declarations) = self
             .buffers
             .iter()
-            .filter(|declaration| declaration.slot == slot)
-            .collect::<Vec<_>>();
-        if declarations.is_empty() {
+            .find(|declarations| declarations.slot == slot)
+        else {
             return Err(AccessError::UndeclaredBuffer);
-        }
-        let compatible = declarations
-            .into_iter()
-            .filter(|declaration| {
-                declaration.kind == kind && buffer_contract_covers(declaration.contract, contract)
-            })
-            .collect::<Vec<_>>();
-        if compatible.is_empty() {
+        };
+        let mut compatible = declarations
+            .groups
+            .iter()
+            .filter(|group| group.kind == kind && buffer_contract_covers(group.contract, contract));
+        let Some(first) = compatible.next() else {
             return Err(AccessError::IncompatibleBufferContract);
+        };
+        if range.start >= range.end {
+            return Err(AccessError::BufferRangeOutsideDeclaration);
         }
+        let Some(second) = compatible.next() else {
+            return first
+                .covers(&range)
+                .then_some(())
+                .ok_or(AccessError::BufferRangeOutsideDeclaration);
+        };
         if ranges_cover(
-            compatible.into_iter().map(|declaration| &declaration.range),
+            std::iter::once(first)
+                .chain(std::iter::once(second))
+                .chain(compatible)
+                .flat_map(|group| group.ranges.iter()),
             &range,
         ) {
             Ok(())
@@ -134,27 +224,20 @@ impl PassAccess {
         kind: AccessKind,
         contract: TextureAccessContract,
     ) -> Result<(), AccessError> {
-        let declarations = self
+        let Some(declarations) = self
             .textures
             .iter()
-            .filter(|declaration| declaration.slot == slot)
-            .collect::<Vec<_>>();
-        if declarations.is_empty() {
+            .find(|declarations| declarations.slot == slot)
+        else {
             return Err(AccessError::UndeclaredTexture);
-        }
-        let compatible = declarations
-            .into_iter()
-            .filter(|declaration| {
-                declaration.kind == kind && texture_contract_covers(declaration.contract, contract)
-            })
-            .collect::<Vec<_>>();
-        if compatible.is_empty() {
+        };
+        let compatible = declarations.declarations.iter().filter(|declaration| {
+            declaration.kind == kind && texture_contract_covers(declaration.contract, contract)
+        });
+        if compatible.clone().next().is_none() {
             return Err(AccessError::IncompatibleTextureContract);
         }
-        if texture_ranges_cover(
-            compatible.into_iter().map(|declaration| &declaration.range),
-            &range,
-        ) {
+        if texture_ranges_cover(compatible.map(|declaration| &declaration.range), &range) {
             Ok(())
         } else {
             Err(AccessError::TextureRangeOutsideDeclaration)
@@ -163,19 +246,57 @@ impl PassAccess {
 }
 
 #[derive(Clone, Debug)]
-struct BufferDeclaration {
+struct BufferSlotDeclarations {
     slot: BufferSlot,
-    range: Range<u64>,
+    groups: Vec<BufferDeclarationGroup>,
+}
+
+#[derive(Clone, Debug)]
+struct BufferDeclarationGroup {
     kind: AccessKind,
     contract: BufferAccessContract,
+    ranges: Vec<Range<u64>>,
+}
+
+impl BufferDeclarationGroup {
+    fn covers(&self, requested: &Range<u64>) -> bool {
+        let index = self
+            .ranges
+            .partition_point(|range| range.end <= requested.start);
+        self.ranges
+            .get(index)
+            .is_some_and(|range| range.start <= requested.start && range.end >= requested.end)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TextureSlotDeclarations {
+    slot: TextureSlot,
+    declarations: Vec<TextureDeclaration>,
 }
 
 #[derive(Clone, Debug)]
 struct TextureDeclaration {
-    slot: TextureSlot,
     range: TextureRange,
     kind: AccessKind,
     contract: TextureAccessContract,
+}
+
+fn normalize_ranges(ranges: &mut Vec<Range<u64>>) {
+    ranges.sort_unstable_by(|left, right| {
+        left.start.cmp(&right.start).then(left.end.cmp(&right.end))
+    });
+    let mut normalized: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
+    for range in ranges.drain(..) {
+        if let Some(previous) = normalized.last_mut() {
+            if range.start <= previous.end {
+                previous.end = previous.end.max(range.end);
+                continue;
+            }
+        }
+        normalized.push(range);
+    }
+    *ranges = normalized;
 }
 
 fn buffer_contract_covers(declared: BufferAccessContract, requested: BufferAccessContract) -> bool {
@@ -224,7 +345,10 @@ fn texture_ranges_cover<'a>(
     ranges: impl Iterator<Item = &'a TextureRange>,
     requested: &TextureRange,
 ) -> bool {
+    let known_aspects =
+        TextureAspects::COLOR.0 | TextureAspects::DEPTH.0 | TextureAspects::STENCIL.0;
     if requested.aspects.0 == 0
+        || requested.aspects.0 & !known_aspects != 0
         || requested.mips.start >= requested.mips.end
         || requested.layers.start >= requested.layers.end
     {

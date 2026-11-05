@@ -538,7 +538,10 @@ where
     }
     fs::write(
         o.join("s6-pending-lifecycle.json"),
-        format!("{{\"schemaVersion\":1,\"pendingAfterThree\":{},\"fourthSubmission\":\"Backpressure\",\"callbacksUnchangedOnBackpressure\":true,\"retirements\":[{{\"case\":\"pending-old\",\"pendingAfter\":{}}},{{\"case\":\"pending-new\",\"pendingAfter\":{}}},{{\"case\":\"pending-new-warm\",\"pendingAfter\":{}}}]}}\n", 3, pending_after_old, pending_after_new, pending_after_warm),
+        format!(
+            "{{\"schemaVersion\":1,\"pendingAfterThree\":{},\"fourthSubmission\":\"Backpressure\",\"callbacksUnchangedOnBackpressure\":true,\"retirements\":[{{\"case\":\"pending-old\",\"pendingAfter\":{}}},{{\"case\":\"pending-new\",\"pendingAfter\":{}}},{{\"case\":\"pending-new-warm\",\"pendingAfter\":{}}}]}}\n",
+            3, pending_after_old, pending_after_new, pending_after_warm
+        ),
     )?;
     Ok(())
 }

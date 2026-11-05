@@ -57,7 +57,13 @@ where
 
         let active_programs: std::collections::HashSet<_> = inputs
             .iter()
-            .map(|input| ForwardProgramKey::for_material(input.prepared(), color_format))
+            .map(|input| {
+                ForwardProgramKey::for_material(
+                    input.prepared(),
+                    color_format,
+                    input.transform_uniform_bytes(),
+                )
+            })
             .collect();
         // Submitted frames retain their own executable handles. Cache residency
         // is bounded by this frame's concrete program/layout set.
@@ -67,6 +73,7 @@ where
             .iter()
             .map(|input| ForwardUniformInput {
                 transform: input.clip_from_local(),
+                normal_from_local: input.normal_from_local(),
                 tint: input.tint(),
             })
             .collect();
@@ -284,7 +291,11 @@ where
         let mut draws = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
             let objects = self
-                .forward_pipeline(input.prepared(), color_format)
+                .forward_pipeline(
+                    input.prepared(),
+                    color_format,
+                    input.transform_uniform_bytes(),
+                )
                 .await?;
             let material_group = self
                 .device
@@ -317,7 +328,7 @@ where
                         binding: 0,
                         resource: BindingResource::Buffer {
                             buffer: frame_uniform,
-                            range: 0..64,
+                            range: 0..input.transform_uniform_bytes(),
                         },
                     }],
                 })

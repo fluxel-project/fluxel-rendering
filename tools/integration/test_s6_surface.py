@@ -77,7 +77,7 @@ def fixture(run: Path) -> None:
             artifact_names[frame].append(name)
         (run / "s6-surface-stable-mask.bin").write_bytes(mask)
         _bmp(run / f"surface-client-frame-{frame}.bmp", frame, extent)
-        _json(run / f"surface-client-frame-{frame}.capture.json", {"schemaVersion": 1, "clientExtent": list(extent), "pixelFormat": "BGRA8-top-down", "automaticVisualPass": False, "image": f"surface-client-frame-{frame}.bmp"})
+        _json(run / f"surface-client-frame-{frame}.capture.json", {"schemaVersion": 1, "frame": frame, "clientExtent": list(extent), "pixelFormat": "BGRA8-top-down", "automaticVisualPass": False, "image": f"surface-client-frame-{frame}.bmp"})
         _json(run / f"surface-client-frame-{frame}.verdict.json", {"schemaVersion": 1, "frame": frame, "image": f"surface-client-frame-{frame}.bmp", "status": "passed"})
         artifact_names[frame] += [input_name, f"surface-client-frame-{frame}.bmp", f"surface-client-frame-{frame}.capture.json", f"surface-client-frame-{frame}.verdict.json"]
         if frame == 0:
@@ -88,6 +88,25 @@ def fixture(run: Path) -> None:
     _json(run / "s6-surface-reconfigure-input.json", {"previousExtent": [320, 180], "observedClientExtent": [256, 144], "nextOperation": "configure"})
     artifact_names[0] += ["s6-surface-lifecycle.jsonl", "surface-events.jsonl", "surface-configuration.jsonl", "s6-surface-reconfigure-input.json"]
     _json(run / "s6-surface-workload.json", {"schemaVersion": 1, "workload": "s6-composed-surface-resize", "initialExtent": [320, 180], "resizedExtent": [256, 144], "surfaceProof": "native-client-capture", "readbackProof": "same-snapshot-offscreen-companion", "featureCallbacks": {"prepare": 4, "contribute": 4}, "cases": [{"name": name, "artifacts": artifact_names[index]} for index, name in enumerate(("mesh-after-quad-initial", "quad-after-mesh-resized"))]})
+
+
+def schema2_capture(run: Path, frame: int, extent: tuple[int, int]) -> None:
+    """Upgrade one fixture capture to current WGC metadata without changing pixels."""
+    image = f"surface-client-frame-{frame}.bmp"
+    state = {"foregroundHwnd": 7, "visible": True, "minimized": False, "topmost": False}
+    _json(run / f"surface-client-frame-{frame}.capture.json", {
+        "schemaVersion": 2, "frame": frame, "clientExtent": list(extent),
+        "method": "windows-graphics-capture-window", "pixelFormat": "BGRA8-top-down",
+        "image": image, "captureContentExtent": [extent[0] + 16, extent[1] + 39],
+        "clientCrop": [8, 31, *extent], "captureTimeoutMs": 2000,
+        "windowStateBefore": state, "windowStateAfter": dict(state),
+        "windowStateUnchanged": True, "automaticVisualPass": False,
+    })
+    _json(run / f"surface-client-frame-{frame}.verdict.json", {
+        "schemaVersion": 2, "frame": frame, "image": image,
+        "oracle": "window-graphics-capture-corners-exact-and-stable-triangle-interior",
+        "status": "passed",
+    })
 
 
 class S6SurfaceReviewTests(unittest.TestCase):
@@ -116,3 +135,37 @@ class S6SurfaceReviewTests(unittest.TestCase):
             rows[2], rows[3] = rows[3], rows[2]
             (run / "s6-surface-lifecycle.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
             self.assertTrue(any("lifecycle" in item for item in surface.review(run)))
+
+    def test_schema2_allows_exact_bottom_corner_antialiasing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            fixture(run)
+            extent = (256, 144)
+            schema2_capture(run, 1, extent)
+            bmp = bytearray((run / "surface-client-frame-1.bmp").read_bytes())
+            offset = 54 + ((extent[1] - 1) * extent[0]) * 4
+            bmp[offset:offset + 4] = b"\x80\x80\x80\xff"
+            (run / "surface-client-frame-1.bmp").write_bytes(bmp)
+            self.assertEqual(surface.review(run), [])
+
+    def test_schema2_rejects_pixel_next_to_exact_corner_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            fixture(run)
+            extent = (256, 144)
+            schema2_capture(run, 1, extent)
+            bmp = bytearray((run / "surface-client-frame-1.bmp").read_bytes())
+            offset = 54 + ((extent[1] - 1) * extent[0] + 16) * 4
+            bmp[offset:offset + 4] = b"\x80\x80\x80\xff"
+            (run / "surface-client-frame-1.bmp").write_bytes(bmp)
+            self.assertTrue(any("geometry oracle at 16,143" in item for item in surface.review(run)))
+
+    def test_schema2_window_exclusion_never_weakens_companion_raw_oracle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            fixture(run)
+            schema2_capture(run, 1, (256, 144))
+            raw = bytearray((run / "s6-surface-frame-1-readback.rgba").read_bytes())
+            raw[:4] = b"\xff\xff\xff\xff"
+            (run / "s6-surface-frame-1-readback.rgba").write_bytes(raw)
+            self.assertTrue(any("pixel" in item or "stable" in item for item in surface.review(run)))

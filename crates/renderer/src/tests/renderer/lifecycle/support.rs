@@ -29,6 +29,7 @@ pub(super) fn fixture_with_caps(
         idle_waits: AtomicUsize::new(0),
         waited_completions: Mutex::new(Vec::new()),
         created_buffers: AtomicUsize::new(0),
+        pipeline_color_formats: Mutex::new(Vec::new()),
         dropped_buffers: AtomicUsize::new(0),
         outcome: Mutex::new(Weak::new()),
     });
@@ -178,6 +179,9 @@ impl Renderer<WitnessBackend> {
         .await
     }
 }
+
+#[path = "../deferred.rs"]
+mod deferred_tests;
 #[path = "../forward/cache.rs"]
 mod forward_cache_tests;
 #[path = "../forward/composed.rs"]
@@ -188,6 +192,8 @@ mod forward_contribution_tests;
 mod forward_lifecycle_tests;
 #[path = "../forward/pending.rs"]
 mod forward_pending_tests;
+#[path = "../forward/s8_lifecycle.rs"]
+mod forward_s8_lifecycle_tests;
 #[path = "../forward/surface_contribution.rs"]
 mod forward_surface_contribution_tests;
 #[path = "../raster.rs"]

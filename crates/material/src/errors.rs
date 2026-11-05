@@ -1,7 +1,7 @@
 //! Material composition and instance validation failures.
 
 use super::{
-    BindingLocation, MaterialAssetRef, MaterialResourceKind, MaterialType, SurfaceOutput, fmt,
+    fmt, BindingLocation, MaterialAssetRef, MaterialResourceKind, MaterialType, SurfaceOutput,
 };
 
 /// Material composition and instance validation failures.
@@ -19,6 +19,16 @@ pub enum MaterialError {
         /// Duplicate name.
         name: String,
     },
+    /// A Code Node source unit had no diagnostic identity.
+    EmptyCodeNodeSourceId {
+        /// Code Node whose source identity was empty.
+        node: String,
+    },
+    /// Two Code Nodes claimed the same diagnostic source identity.
+    DuplicateCodeNodeSourceId {
+        /// Duplicate source-unit identity.
+        source_id: String,
+    },
     /// A parameter name occurred more than once.
     DuplicateParameter {
         /// Duplicate name.
@@ -27,6 +37,11 @@ pub enum MaterialError {
     /// A resource name occurred more than once.
     DuplicateResource {
         /// Duplicate name.
+        name: String,
+    },
+    /// A Code Node and definition-level declaration disagreed about one resource.
+    ConflictingResourceDeclaration {
+        /// Resource name with incompatible declarations.
         name: String,
     },
     /// A parameter named a resource that the material did not declare.
@@ -100,6 +115,23 @@ pub enum MaterialError {
     RootInputsUnsupported {
         /// Root fragment name.
         fragment: String,
+    },
+    /// The metallic-roughness surface domain named no property callable.
+    MissingSurfaceProperties {
+        /// Requested property callable name.
+        properties: String,
+    },
+    /// The metallic-roughness property callable returned the wrong type.
+    SurfacePropertiesTypeMismatch {
+        /// Property callable name.
+        properties: String,
+        /// Declared callable result type.
+        actual: MaterialType,
+    },
+    /// The metallic-roughness property callable needs arguments.
+    SurfacePropertiesInputsUnsupported {
+        /// Property callable name.
+        properties: String,
     },
     /// A dynamic parameter was not declared by the variant.
     UnknownParameter {

@@ -12,6 +12,10 @@ if __package__:
 else:
     import common  # type: ignore[no-redef]
     import oracle  # type: ignore[no-redef]
+try:
+    from .. import capture_contract
+except ImportError:
+    import capture_contract  # type: ignore[no-redef]
 
 
 _CASES = ("mesh-after-quad-initial", "quad-after-mesh-resized")
@@ -110,18 +114,18 @@ def _capture_failures(run: Path, frame: int, extent: tuple[int, int]) -> list[st
         return [f"frame {frame} native capture: {error}"]
     capture = _object(run / f"surface-client-frame-{frame}.capture.json", failures)
     verdict = _object(run / f"surface-client-frame-{frame}.verdict.json", failures)
-    if (capture.get("schemaVersion") != 1 or capture.get("clientExtent") != list(extent)
-            or capture.get("pixelFormat") != "BGRA8-top-down"
-            or capture.get("automaticVisualPass") is not False
-            or capture.get("image") != f"surface-client-frame-{frame}.bmp"):
-        failures.append(f"frame {frame} capture metadata does not bind the actual BMP")
-    if (verdict.get("schemaVersion") != 1 or verdict.get("frame") != frame
-            or verdict.get("image") != f"surface-client-frame-{frame}.bmp"
-            or verdict.get("status") != "passed"):
-        failures.append(f"frame {frame} capture verdict is absent or failed")
+    failures += [f"frame {frame} {reason}" for reason in capture_contract.capture_failures(
+        capture, frame, extent, f"surface-client-frame-{frame}.bmp")]
+    failures += [f"frame {frame} {reason}" for reason in capture_contract.verdict_failures(
+        verdict, frame, f"surface-client-frame-{frame}.bmp", capture.get("schemaVersion"))]
     expected, mask = oracle.image(f"frame-{frame}", *extent)
+    # Only schema-2 Windows Graphics Capture BMPs include the two DWM rounded
+    # bottom corners. Raw RHI evidence and schema-1 historical BMPs use their
+    # original complete stable masks.
+    visual_mask = (capture_contract.window_stable_mask(mask, extent)
+                   if capture.get("schemaVersion") == 2 else mask)
     assert pixels is not None
-    for index, stable in enumerate(mask):
+    for index, stable in enumerate(visual_mask):
         if stable and pixels[index * 4:index * 4 + 3] != expected[index * 4:index * 4 + 3][::-1]:
             failures.append(f"frame {frame} native BMP differs from geometry oracle at {index % extent[0]},{index // extent[0]}")
             break

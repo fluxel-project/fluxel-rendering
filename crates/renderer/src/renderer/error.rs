@@ -48,6 +48,14 @@ pub enum RendererError {
     ForwardFeature(crate::FeatureError),
     /// Logical Forward assets did not satisfy the selected consumer.
     ForwardPreparation(crate::ForwardPreparationError),
+    /// Shared Material composition failed for the provisional Deferred target.
+    DeferredMaterial(crate::MaterialPreparationError),
+    /// Deferred scene selection or real Graph phase contribution was rejected.
+    DeferredPipeline(crate::PipelineError),
+    /// Typed GPU deformation input did not belong to this frame or was rejected.
+    DeferredFeature(crate::FeatureError),
+    /// External GPU deformation source failed logical composition or reflection.
+    DeformationShader(fluxel_shader::ShaderError),
     /// A Forward device operation failed; the original RHI error is preserved.
     ForwardOperation {
         /// The device operation being performed.
@@ -96,6 +104,10 @@ impl fmt::Display for RendererError {
             Self::ForwardPipeline(error) => error.fmt(formatter),
             Self::ForwardFeature(error) => error.fmt(formatter),
             Self::ForwardPreparation(error) => error.fmt(formatter),
+            Self::DeferredMaterial(error) => error.fmt(formatter),
+            Self::DeferredPipeline(error) => error.fmt(formatter),
+            Self::DeferredFeature(error) => error.fmt(formatter),
+            Self::DeformationShader(error) => error.fmt(formatter),
             Self::ForwardOperation { operation, error } => {
                 write!(formatter, "Forward {operation}: {error}")
             }

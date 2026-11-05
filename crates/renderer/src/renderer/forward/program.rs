@@ -15,9 +15,10 @@ where
         &mut self,
         prepared: &PreparedMaterial,
         color_format: TextureFormat,
+        transform_uniform_bytes: u64,
     ) -> std::result::Result<Arc<ForwardPipelineObjects<B>>, RendererError> {
         self.ensure_open()?;
-        let key = ForwardProgramKey::for_material(prepared, color_format);
+        let key = ForwardProgramKey::for_material(prepared, color_format, transform_uniform_bytes);
         if let Some(objects) = self.forward_programs.get(&key) {
             return Ok(Arc::clone(objects));
         }
@@ -115,7 +116,11 @@ where
             .device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some("Forward transform bindings".into()),
-                entries: vec![uniform_entry(0, 64, ShaderStage::Vertex)],
+                entries: vec![uniform_entry(
+                    0,
+                    transform_uniform_bytes,
+                    ShaderStage::Vertex,
+                )],
             })
             .map_err(|error| self.observe_forward_error("transform layout", error))?;
         let layout = self

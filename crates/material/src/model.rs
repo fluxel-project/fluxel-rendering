@@ -11,20 +11,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use fluxel_assets::{AssetId, AssetKind, AssetSnapshot, ContentGeneration};
-use fluxel_shader::{
-    BindingDeclaration, BindingKind, BindingShape, CallableDeclaration, ScalarType, SourceUnit,
-    ValueType,
-};
-use sha2::{Digest, Sha256};
+use fluxel_shader::{ScalarType, ValueType};
 
+#[path = "code_node.rs"]
+mod code_node;
 #[path = "compiler.rs"]
 mod compiler;
+#[path = "contribution.rs"]
+mod contribution;
 #[path = "errors.rs"]
 mod errors;
 #[path = "names.rs"]
 mod names;
+#[path = "surface.rs"]
+mod surface;
 #[path = "validation.rs"]
 mod validation;
+pub use code_node::MaterialCodeNode;
+pub use contribution::MaterialShaderContribution;
 pub use errors::MaterialError;
 use validation::NormalizedMaterialIr;
 
@@ -232,16 +236,22 @@ pub struct MaterialFragment {
 }
 
 /// The selected surface output for the minimal material contribution.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SurfaceOutput {
     /// A fragment-color `vec4<f32>` output.
     Color,
+    /// A base color plus metallic and perceptual-roughness property callable.
+    MetallicRoughness {
+        /// Zero-argument `vec2<f32>` callable yielding metallic then roughness.
+        properties: String,
+    },
 }
 
 /// One material's validated, author-facing definition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterialDefinition {
     fragments: Vec<MaterialFragment>,
+    code_nodes: Vec<MaterialCodeNode>,
     root_fragment: String,
     parameters: Vec<MaterialParameter>,
     resources: Vec<MaterialResource>,
@@ -262,12 +272,26 @@ impl MaterialDefinition {
     ) -> Self {
         Self {
             fragments,
+            code_nodes: Vec::new(),
             root_fragment: root_fragment.into(),
             parameters,
             resources,
             static_options,
             output,
         }
+    }
+
+    /// Adds one first-class author WGSL node to this material definition.
+    #[must_use]
+    pub fn with_code_node(mut self, node: MaterialCodeNode) -> Self {
+        self.code_nodes.push(node);
+        self
+    }
+
+    /// Returns the selected surface domain.
+    #[must_use]
+    pub fn output(&self) -> &SurfaceOutput {
+        &self.output
     }
 }
 
@@ -310,72 +334,6 @@ pub struct MaterialParameterBinding {
     pub ty: MaterialType,
 }
 
-/// Generic source and interface data for a Shader composition request.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MaterialShaderContribution {
-    /// Short deterministic source-unit identifier for diagnostics and source maps.
-    ///
-    /// This is not the material cache key: the complete canonical variant key and
-    /// complete shader composition request remain the collision-safe identities.
-    pub source_id: String,
-    /// WGSL declarations containing `evaluate_material`.
-    pub source: String,
-    /// Resource declarations Shader must compare against reflection.
-    pub bindings: Vec<MaterialBindingDeclaration>,
-    /// Dynamic parameter-to-uniform associations consumed by the renderer.
-    pub parameter_bindings: Vec<MaterialParameterBinding>,
-    /// Function signatures that Shader must validate against actual WGSL.
-    pub callables: Vec<CallableDeclaration>,
-    /// Canonical static choices participating in composition identity.
-    pub static_options: BTreeMap<String, StaticValue>,
-}
-
-impl MaterialShaderContribution {
-    /// Returns Shader-owned callable metadata for WGSL signature validation.
-    #[must_use]
-    pub fn callable_declarations(&self) -> Vec<CallableDeclaration> {
-        self.callables.clone()
-    }
-    /// Converts this contribution into the Shader-owned source unit.
-    #[must_use]
-    pub fn source_unit(&self) -> SourceUnit {
-        SourceUnit::new(self.source_id.clone(), self.source.clone())
-    }
-
-    /// Converts resource metadata into Shader-owned binding declarations.
-    #[must_use]
-    pub fn binding_declarations(&self) -> Vec<BindingDeclaration> {
-        self.bindings
-            .iter()
-            .map(|binding| {
-                BindingDeclaration::new(
-                    binding.location.group,
-                    binding.location.binding,
-                    match binding.kind {
-                        MaterialResourceKind::UniformVec4 => BindingKind::Uniform,
-                        MaterialResourceKind::Texture2dF32 => BindingKind::Texture,
-                    },
-                )
-                .with_shape(match binding.kind {
-                    MaterialResourceKind::UniformVec4 => {
-                        BindingShape::Uniform(ValueType::Vec4(ScalarType::F32))
-                    }
-                    MaterialResourceKind::Texture2dF32 => BindingShape::Texture2dF32,
-                })
-            })
-            .collect()
-    }
-
-    /// Converts static material choices into Shader composition option values.
-    #[must_use]
-    pub fn shader_static_options(&self) -> BTreeMap<String, String> {
-        self.static_options
-            .iter()
-            .map(|(name, value)| (name.clone(), value.canonical()))
-            .collect()
-    }
-}
-
 /// A compiled static material variant.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompiledMaterialVariant {
@@ -384,6 +342,7 @@ pub struct CompiledMaterialVariant {
     contribution: MaterialShaderContribution,
     parameters: Vec<MaterialParameter>,
     resources: Vec<MaterialResource>,
+    output: SurfaceOutput,
 }
 
 impl CompiledMaterialVariant {
@@ -402,6 +361,12 @@ impl CompiledMaterialVariant {
     #[must_use]
     pub fn contribution(&self) -> &MaterialShaderContribution {
         &self.contribution
+    }
+
+    /// Returns the selected surface domain for this compiled variant.
+    #[must_use]
+    pub fn output(&self) -> &SurfaceOutput {
+        &self.output
     }
 }
 

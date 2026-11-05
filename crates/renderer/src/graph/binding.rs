@@ -1,7 +1,7 @@
 //! Pre-record validation for concrete buffer instances bound to a compiled graph.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ops::Range,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -183,26 +183,29 @@ impl TextureBindingManifest {
         device: DeviceId,
         bindings: &[TextureBinding],
     ) -> Result<(), BindingError> {
+        let requirement_indices: HashMap<_, _> = self
+            .requirements
+            .iter()
+            .enumerate()
+            .map(|(index, requirement)| (requirement.slot, index))
+            .collect();
         let mut slots = HashSet::with_capacity(bindings.len());
-        for binding in bindings {
+        let mut binding_indices = vec![None; self.requirements.len()];
+        for (binding_index, binding) in bindings.iter().enumerate() {
             if !slots.insert(binding.slot) {
                 return Err(BindingError::DuplicateSlot);
             }
-            if !self
-                .requirements
-                .iter()
-                .any(|requirement| requirement.slot == binding.slot)
-            {
-                return Err(BindingError::UndeclaredResource);
-            }
+            let requirement_index = requirement_indices
+                .get(&binding.slot)
+                .ok_or(BindingError::UndeclaredResource)?;
+            binding_indices[*requirement_index] = Some(binding_index);
         }
         if bindings.len() != self.requirements.len() {
             return Err(BindingError::MissingResource);
         }
-        for requirement in &self.requirements {
-            let binding = bindings
-                .iter()
-                .find(|binding| binding.slot == requirement.slot)
+        for (requirement_index, requirement) in self.requirements.iter().enumerate() {
+            let binding = binding_indices[requirement_index]
+                .map(|binding_index| &bindings[binding_index])
                 .ok_or(BindingError::MissingResource)?;
             if binding.device != device {
                 return Err(BindingError::WrongDevice);
@@ -232,28 +235,29 @@ impl TextureBindingManifest {
                 return Err(BindingError::IncompatibleIncomingState);
             }
         }
-        for left in 0..self.requirements.len() {
-            for right in left + 1..self.requirements.len() {
-                let left_requirement = &self.requirements[left];
-                let right_requirement = &self.requirements[right];
-                let left_binding = bindings
-                    .iter()
-                    .find(|binding| binding.slot == left_requirement.slot)
-                    .ok_or(BindingError::MissingResource)?;
-                let right_binding = bindings
-                    .iter()
-                    .find(|binding| binding.slot == right_requirement.slot)
-                    .ok_or(BindingError::MissingResource)?;
-                if left_binding.instance != right_binding.instance {
-                    continue;
+        let mut first_requirement_for_instance = HashMap::with_capacity(self.requirements.len());
+        let mut first_alias = None;
+        for (requirement_index, binding_index) in binding_indices.iter().enumerate() {
+            let binding_index = binding_index.ok_or(BindingError::MissingResource)?;
+            let instance = bindings[binding_index].instance;
+            if let Some(left) = first_requirement_for_instance.get(&instance) {
+                let candidate = (*left, requirement_index);
+                if first_alias.is_none_or(|first| candidate < first) {
+                    first_alias = Some(candidate);
                 }
-                let lifetimes_overlap = left_requirement.first_pass <= right_requirement.last_pass
-                    && right_requirement.first_pass <= left_requirement.last_pass;
-                if lifetimes_overlap {
-                    return Err(BindingError::AliasedLiveResources);
-                }
-                return Err(BindingError::AliasedResourcesRequireRecompile);
+            } else {
+                first_requirement_for_instance.insert(instance, requirement_index);
             }
+        }
+        if let Some((left, right)) = first_alias {
+            let left_requirement = &self.requirements[left];
+            let right_requirement = &self.requirements[right];
+            let lifetimes_overlap = left_requirement.first_pass <= right_requirement.last_pass
+                && right_requirement.first_pass <= left_requirement.last_pass;
+            if lifetimes_overlap {
+                return Err(BindingError::AliasedLiveResources);
+            }
+            return Err(BindingError::AliasedResourcesRequireRecompile);
         }
         Ok(())
     }

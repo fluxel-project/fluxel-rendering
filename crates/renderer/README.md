@@ -9,6 +9,9 @@ The bounded S4 CPU closure is recorded
 in [the S4 CPU closure record](../../documents/s4-cpu-closure.md). S6 adds a
 separately evidenced typed opaque-Forward Feature composition subset without
 making the Graph, scheduler, RHI objects, or general GPU-product model public.
+S7 adds the named Deferred subset, and S8 accepts only private validation-index
+lookup for a material-heavy Forward workload; neither broadens this crate's
+public Graph or resource authority.
 
 ```text
 renderer/
@@ -128,8 +131,12 @@ and completion-held pending ownership. See the
 This is not a general Feature or GPU-product API. Cross-pass products,
 transparent composition, arbitrary runtime Feature loading, plugin ABIs, and
 backend support beyond the named Windows DX12/WGL matrix remain outside the
-accepted subset. Browser, Metal, S7/S8 work, and the final full-workspace
-regression are not claimed here.
+accepted subset. The [S8 measured closure](../../documents/s8-measured-closure.md)
+adds final source-bound DX12/WGL evidence for a private Forward validation-index
+optimization, including lifecycle proof and affected regression. It preserves
+per-frame Graph declaration and actual owner descriptor/device/state validation;
+it does not claim browser, Metal, Vulkan, a general SRP, Forward+, shadows,
+PostFX, full PBR, or a public cache/index API.
 
 The target uses batch-level Rust traits with generics and monomorphization for
 Feature and frame-policy composition. External crates supply concrete local

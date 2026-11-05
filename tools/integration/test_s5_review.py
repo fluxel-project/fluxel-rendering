@@ -47,8 +47,8 @@ class S5ReviewTests(unittest.TestCase):
             frames = []
             for index in range(2):
                 bmp = run / f"surface-client-frame-{index}.bmp"; bmp.write_bytes(b"BM")
-                capture = run / f"surface-client-frame-{index}.capture.json"; capture.write_text(json.dumps({"image": bmp.name, "automaticVisualPass": False}))
-                verdict = run / f"surface-client-frame-{index}.verdict.json"; verdict.write_text(json.dumps({"image": bmp.name, "status": "passed"}))
+                capture = run / f"surface-client-frame-{index}.capture.json"; capture.write_text(json.dumps({"schemaVersion": 1, "frame": index, "clientExtent": [320, 180], "pixelFormat": "BGRA8-top-down", "image": bmp.name, "automaticVisualPass": False}))
+                verdict = run / f"surface-client-frame-{index}.verdict.json"; verdict.write_text(json.dumps({"schemaVersion": 1, "frame": index, "image": bmp.name, "status": "passed"}))
                 triple = [bmp, capture, verdict]; records += [{"path": str(path), "sha256": s5_review._REVIEW.sha256(path)} for path in triple]
                 frames.append({"screenshot": records[-3], "capture": records[-2], "verdict": records[-1], "human_verdict": "passed"})
             attempt = {"commands": [{"result": {"retained_files": records}}]}

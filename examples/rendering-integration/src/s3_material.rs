@@ -128,7 +128,7 @@ where
     let contribution = variant.contribution();
     fs::write(
         output.join("s3-material-contribution.wgsl"),
-        &contribution.source,
+        contribution.source(),
     )?;
     fs::write(
         output.join("s3-material-variant.txt"),
@@ -226,7 +226,7 @@ where
     let replacement_output = output.join("replacement");
     fs::write(
         replacement_output.join("s3-material-contribution.wgsl"),
-        &replacement_contribution.source,
+        replacement_contribution.source(),
     )?;
     fs::write(
         replacement_output.join("s3-material-variant.txt"),

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "archive": "native-evidence.zip",
+  "sha256": "d56a35e791f0733d0407fc0b4f8cd3b4dae803f06261fd5902e2402300927b81",
+  "bytes": 39603597,
+  "members": 789,
+  "scope": "Six native S7 attempts; original source, executable, locks, raw diagnostics, inputs, readbacks, captures, focused tests and final independent/relocated review",
+  "review": "review.json",
+  "currentReviewerProvenance": "reviewer-v2/provenance.json",
+  "visualProvenance": "reviewer/provenance.json",
+  "supersededArchive": {
+    "sha256": "18325fe04be032e82257231f280b5682bd7777191fc57d6d375c0b1fb9eea637",
+    "reason": "First relocation review revealed an absolute-path matching bug in the reviewer; native artifacts are unchanged and the failed review is retained under reviewer-v2/relocation-v1-failed.json."
+  }
+}

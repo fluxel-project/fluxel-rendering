@@ -6,8 +6,11 @@
 > are independently evidenced. S5 closes bounded Forward preparation, residency,
 > frame data and a public FramePipeline facade for the named Windows DX12/WGL
 > matrix; see the [S5 closure record](s5-forward-closure.md). S6 closes the
-> demonstrated typed opaque-Forward Feature composition subset; general GPU
-> products and cross-pass Features remain consumer-gated.
+> demonstrated typed opaque-Forward Feature composition subset; S7 additionally
+> closes a named Deferred one-mesh subset on that matrix. S8 closes one private
+> validation-index optimization on a material-heavy Forward workload, while
+> preserving Graph and owner-validation authority. General GPU products
+> and cross-pass Features remain consumer-gated.
 > The organization roadmap
 > owns delivery order; [the implementation plan](version-plan.md) owns local
 > scope and acceptance. This design does not authorize implementing later-stage
@@ -436,12 +439,25 @@ and structured-error boundary without exposing Graph, RHI, backend objects,
 submission, or a mutable scheduler. It is not a `RenderFeature` or FramePipeline
 contract and does not supply GPU work authority.
 
-The S5 FramePipeline facade permits its bounded Forward phase/access declarations
-on the real Graph transaction. It hides graph compiler state, allocator
-internals, scheduler mutation, backend objects, and independent submission; a
-raw mutable Graph implementation is not the SPI. General imports,
+The shared `FramePipeline` facade now has a Deferred topology as well as the
+bounded Forward topology. `ExternalDeferredPipeline` uses its controlled
+Deferred context to make genuine Graph callbacks; it does not receive a mutable
+Graph, allocator, backend object, encoder, or submission capability. The public
+`submit_deferred` and `submit_deferred_with_deformation` entries retain the
+same scene/material preparation contract as Forward. General imports,
 raster/compute/copy work, roots, semantic outputs, and broader Feature authority
 remain consumer-gated rather than implied by this facade.
+
+This facade currently selects three built-in products: opaque Forward,
+clear-only, and Deferred. It does not yet let an external pipeline define its
+own pass chain, intermediate resources, or new GPU pass behavior. Forward and
+Deferred integration evidence therefore does not establish a general
+programmable render pipeline. A proposed next boundary probe is an independent
+consumer that renders a scene, runs a custom post-processing pass, and produces
+the final output without changing renderer internals. Such a probe must exercise
+real Graph declarations, output pixels, reuse, and failure cleanup before a
+broader public extension contract is selected; it is not an added release
+commitment.
 
 During recording, a pass uses scoped access to already declared resources and
 portable RHI recording operations. Resource/binding validation must precede the
@@ -460,6 +476,147 @@ guessed internal topology on a cache hit: the caller's declaration itself is the
 evidence being validated.
 
 ## Material and Shader integration
+
+The shared Deferred route reuses the exact `FrameSnapshot<ForwardResources>` and
+`ForwardAssets` consumed by Forward. `ExternalDeferredPipeline` contributes
+through the real Deferred Graph context. The public `submit_deferred` entry
+uses that pipeline policy; `submit_deferred_with_deformation` additionally
+accepts one statically dispatched `DeferredPositionDeformer` with issuer- and
+snapshot-validated typed input, a named WGSL `SourceUnit`, and four finite
+parameters. The Feature cannot own GPU objects, Graph state, an encoder, or
+submission.
+
+The selected one-mesh, position-only product records five actual passes:
+upload, compute deformation, Deferred geometry, lighting, and readback. The
+renderer owns packed `array<f32>` source and product storage rather than using a
+`vec3` storage stride; compute writes the 12-byte-per-vertex product consumed by
+the later vertex pass, with no CPU deformation intermediate. Material continues
+through MaterialCompiler and ShaderComposer, while lighting uses the same Shader
+composition/admission path. Owners retain allocation descriptors, incoming
+states, and device provenance through the existing completion lifecycle.
+
+Focused witness tests
+replace actual product owners with another same-device allocation and a foreign
+device allocation, proving refusal before mapping or recording.
+
+The Color route remains single-mesh and position-only. Its derivative normal is
+in local/object space and its bounded lighting formula is not PBR. The separate
+metallic/roughness consumer below does not change that Color behavior. Deferred
+caching, Surface coverage, and broader material or Feature contracts remain open.
+The C1 Material/Shader consumer is a bounded Code Node path. A typed
+`MaterialCodeNode`, added with `MaterialDefinition::with_code_node`, joins the
+same private function graph as legacy fragments. Identical named node and
+definition resource declarations merge; incompatible declarations refuse. Source
+units are immutable authoritative inputs: `source_units()` preserves each
+author's identity, while derived `source()` and `source_id()` compatibility
+getters cannot become an independent source of truth. `prepare_material` passes
+those units to Shader composition and rejects invalid WGSL or callable signatures
+before GPU work.
+
+The external `ChannelMapVariant` exercised actual BGR×factor source variants
+`[0.5, 1.0, 1.0]` and `[1.0, 0.5, 1.0]`. For each variant, both routes consume
+the same exact scene and assets. Development attempts `dx12-20261104T162347864453Z-6652` and
+`native-gl-wgl-20261104T162456696039Z-17624` retain 454 identical source inputs,
+20 raw outputs, and actually viewed montages. Code Node cases observed
+`0 -> 1 -> 0` pending ownership on each route, alongside deformation's
+`0 -> 1 -> 2 -> 1 -> 0`; no pending native diagnostic remains. These positive
+native observations and focused witness negatives have different scopes. They
+do not establish PBR, a Deferred cache or Surface matrix, or S7 closure.
+
+### Selected metallic/roughness consumer
+
+C2 adds an opaque `SurfaceOutput::MetallicRoughness` consumer through the same
+public submission and material preparation paths. Material supplies a zero-input
+Vec4 base-color evaluator and a zero-input Vec2 metallic/perceptual-roughness
+evaluator. Renderer consumes their results; Material does not select a pipeline.
+The selected external material reads base RGB and metallic from its texture and
+roughness from its dynamic tint alpha. These are author functions using the
+existing uniform/texture schema, not hidden Renderer reads of material channels.
+
+Both routes require exactly POSITION and NORMAL Float32x3 attributes in vertex
+streams. Preparation validates actual CPU payloads, finite nonzero normals, and
+a finite invertible affine world-from-local transform. The normal matrix is the
+inverse transpose of the model's linear part; projection is never used as the
+world normal transform. The transform binding contains two column-major matrices
+(128 bytes), while Color retains its 64-byte binding. Uniform packing, layout,
+program identity and Graph physical access ranges consume the same byte count.
+Interpolation can cancel opposing normals; the shader maps a zero interpolated
+normal to the unlit back-facing direction on both routes.
+
+The private `pbr` module shares one direct-light calculation: GGX distribution,
+height-correlated Smith visibility, Schlick Fresnel and Lambert diffuse weighted
+by the remaining dielectric energy. The specular equations follow the
+[Filament material model](https://google.github.io/filament/main/filament.html).
+This selected policy uses world-space light direction `(0.6, 0, 0.8)`, radiance
+`3`, and fixed orthographic view direction `(0, 0, 1)`. Base color and metallic
+are clamped to `[0,1]`, perceptual roughness to `[0.04,1]`; alpha is opaque.
+Inputs and output are linear, with no tone mapping or sRGB conversion. This is
+not a perspective-view, configurable-light, IBL, normal-map or emissive model.
+
+Deferred writes base RGB/metallic to its first RGBA8 attachment and encoded
+world normal/perceptual roughness to its second, alongside Depth32Float. Lighting
+reads those actual attachments, renormalizes the decoded normal, and calls the
+same BRDF. Its UNORM quantization is part of the independently predicted result;
+it need not match unquantized Forward pixels exactly. The position-only compute
+deformer cannot supply the required normals and is refused for this surface.
+
+Focused tests and separate DX12/WGL development attempts now validate the bounded
+implementation. Five PBR cases change base color, metallic, roughness and a
+rotated nonuniform model transform while sharing the exact material asset and
+static program. Independent Rust and Python numeric oracles account for each
+route's quantization; the representative native images have also been opened.
+Actual short/retagged transform ranges and invalid normal inputs refuse before
+protected work. C1 Color evidence alone cannot prove these results. Exact
+attempts, evidence limits and remaining stage work are in `version-plan.md`.
+
+Deferred now keeps device-local program and completed resident caches. Every
+submission authors its current Graph declaration before a compatible compiled
+plan can be selected; actual owner descriptors, provenance and incoming states
+are checked again before mapping or recording. A partial resident hit uploads
+only the missing products. An omitted upload requires the corresponding owner
+to carry its actual initialized vertex-read or sampled-read state.
+
+The accepted S8 private indices only accelerate lookup of a candidate binding
+manifest and pass range for the material-heavy Forward consumer. They are not a
+second scheduler or a substitute for Graph declaration. The Graph remains
+authoritative for this frame's accesses and dependencies; the owner's saved
+allocation descriptor, actual incoming state, and selected RHI device provenance
+remain the facts checked before each protected allocation, upload, recording, or
+submission operation. The [S8 measured closure](s8-measured-closure.md) records
+the bounded DX12/WGL lifecycle and CPU/API elapsed evidence; it does not make
+this private arrangement a public optimization contract.
+
+Offscreen frame and G-buffer allocations enter the bounded slot pool after
+completion and successful readback. Completion failure retains pending owners;
+known device loss clears reusable caches and rejects new work. Program eviction
+does not release cloned RHI executable handles held by pending submissions.
+The settled cache path avoids static uploads but still allocates a small unused
+resident staging buffer; allocation counters include it. The selected S7 closure also covers Surface and device isolation; see the
+[acceptance record](s7-deferred-closure.md) for its exact source and evidence boundary.
+
+Deferred also has a transient Surface output route. Both routes now author the
+same upload, optional deformation, geometry and lighting Graph body; the final
+output selects a texture/readback pair or a Surface attachment followed by an
+explicit presentation step. A Surface lease never enters resident or plan
+binding caches. Admission checks its device, current generation and view extent
+before dependent device work, and the lighting executable uses its actual format.
+Retirement requires completion evidence covering the accepted presentation.
+
+The combined archived Surface baseline independently validates Color initial and
+resized windows, two PBR roughness cases and two external position-deformation
+parameters on DX12 and WGL. Each presented frame has a separate offscreen
+companion using the same immutable scene, assets and applicable typed input.
+Retained actual inputs support independent full stable-region pixel oracles for
+both captures and raw readbacks. The later [S7 acceptance record](s7-deferred-closure.md) adds the formal
+device/failure matrix and identifies the six exact native attempts.
+
+The later formal matrix closes only the bounded S7 Deferred contract recorded in
+the [S7 Deferred acceptance record](s7-deferred-closure.md): shared scene and
+material inputs, optional statically composed deformation, selected CodeNode and
+metallic/roughness cases, and cache, Surface/resize, device-isolation,
+generation-replacement, pending, and refusal evidence on DX12/WGL. It does not
+stabilize general PBR, arbitrary material/pipeline chains, or broader Feature
+products.
 
 ```text
 MaterialGraph -> private Material IR -> generic source/interface contribution
@@ -599,7 +756,7 @@ normal delivery, not retrofitted after a closed Forward renderer:
 | S5 | Reference Forward plus external prototype; geometry layouts and a local policy can change without core edits |
 | S6 | Bounded external typed opaque-Forward Feature, FramePipeline and custom material run with the reference mesh in one Graph pass; broader GPU products remain consumer-gated |
 | S7 | A materially different consumer proves broader deformation, cross-pass or GPU-product seams before stabilization |
-| S8 | Profile-led layout, streaming, batching and execution optimizations |
+| S8 | Profile-led layout, streaming, batching and execution optimizations; the current acceptance covers only private validation indices for one material-heavy Forward workload |
 
 S0/S1 has a separately bounded foundation closure. Its current fixed Copy/Raster/Compute entry points and
 fixed vertex formats are fixtures, not the future public renderer model. Retain

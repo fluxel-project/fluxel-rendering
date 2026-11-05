@@ -76,6 +76,13 @@ pub(super) enum Workload {
     S5DeviceIsolation,
     S6Composed,
     S6Surface,
+    S7Deferred,
+    S7DeferredSurface,
+    S7DeviceIsolation,
+    DemoForward,
+    DemoDeferred,
+    S8Material(crate::s8_material::Config),
+    S8Lifecycle,
 }
 
 pub(super) fn output_directory() -> Result<(PathBuf, Workload), Box<dyn Error>> {
@@ -87,6 +94,8 @@ fn parse_arguments(
 ) -> Result<(PathBuf, Workload), Box<dyn Error>> {
     let mut output = None;
     let mut selected = None;
+    let mut s8_scenario = None;
+    let mut s8_smoke = false;
     while let Some(argument) = args.next() {
         if argument == "--output" {
             output = Some(
@@ -94,6 +103,17 @@ fn parse_arguments(
                     .ok_or("--output requires a directory argument")?
                     .into(),
             );
+            continue;
+        }
+        if argument == "--s8-scenario" {
+            let value = args.next().ok_or("--s8-scenario requires a scenario")?;
+            s8_scenario = Some(crate::s8_material::Scenario::parse(
+                value.to_str().ok_or("--s8-scenario must be UTF-8")?,
+            )?);
+            continue;
+        }
+        if argument == "--s8-smoke" {
+            s8_smoke = true;
             continue;
         }
         let workload = match argument.to_str() {
@@ -104,6 +124,16 @@ fn parse_arguments(
             Some("--s5-device-only") => Workload::S5DeviceIsolation,
             Some("--s6-only") => Workload::S6Composed,
             Some("--s6-surface-only") => Workload::S6Surface,
+            Some("--s7-deferred-only") => Workload::S7Deferred,
+            Some("--s7-deferred-surface-only") => Workload::S7DeferredSurface,
+            Some("--s7-device-isolation-only") => Workload::S7DeviceIsolation,
+            Some("--demo-forward") => Workload::DemoForward,
+            Some("--demo-deferred") => Workload::DemoDeferred,
+            Some("--s8-material-only") => Workload::S8Material(crate::s8_material::Config::new(
+                crate::s8_material::Scenario::Cold,
+                false,
+            )),
+            Some("--s8-lifecycle-only") => Workload::S8Lifecycle,
             _ => {
                 return Err(format!("unsupported argument: {}", argument.to_string_lossy()).into());
             }
@@ -113,9 +143,22 @@ fn parse_arguments(
         }
         selected = Some(workload);
     }
+    let selected = match selected.unwrap_or_default() {
+        Workload::S8Material(_) => Workload::S8Material(crate::s8_material::Config::new(
+            s8_scenario.unwrap_or(crate::s8_material::Scenario::Cold),
+            s8_smoke,
+        )),
+        Workload::S8Lifecycle if s8_scenario.is_some() || s8_smoke => {
+            return Err("S8 options require --s8-material-only".into());
+        }
+        _ if s8_scenario.is_some() || s8_smoke => {
+            return Err("S8 options require --s8-material-only".into());
+        }
+        selected => selected,
+    };
     Ok((
         output.unwrap_or_else(|| PathBuf::from("target/integration-copy")),
-        selected.unwrap_or_default(),
+        selected,
     ))
 }
 

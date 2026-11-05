@@ -8,9 +8,13 @@
 > CPU-only scope is unchanged. S5 now implements bounded Forward preparation,
 > FramePipeline contributions, residency and frame data, with a reviewed six-run
 > DX12/WGL matrix and retained release measurements; the bounded
-> [S5 acceptance is closed](s5-forward-closure.md). S6 same-frame Feature composition remains
-> pending. Full regression remains
-> pending until the planned S-stage sequence is tested. Stage labels are work
+> [S5 acceptance is closed](s5-forward-closure.md). S6 same-frame Feature composition is
+> closed for its named subset, and the bounded [S7 Deferred acceptance is
+> closed](s7-deferred-closure.md). S8 and the affected final regression are closed
+> for the selected private validation-index strategy; its exact evidence boundary is
+> in the [S8 measured closure](s8-measured-closure.md). Cross-repository
+> documentation reconciliation, commit, and push remain separate publication work.
+> Stage labels are work
 > packages, not release numbers or completion claims. The organization
 > [roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md) owns
 > order and authorization; this document defines rendering scope and acceptance.
@@ -28,9 +32,9 @@ cases. A crate, trait, or independently green library test is not stage closure.
 | S3 Material Core | New `fluxel-material`; functions/fragments, parameters/resources, minimal composition IR, evaluation WGSL, instances/variants | Closed for the reviewed DX12/WGL fixture matrix, including replacement; no authoring/PBR/FramePipeline claim |
 | S4 RenderScene | Renderer scene storage, generational RenderIds, views, transforms/bounds, batch changes, snapshots | Closed CPU-only data/facade boundary with retained external evidence; S5 consumes it for Forward integration |
 | S5 Forward integration | Renderer pipeline/preparation/culling/sorting; public FramePipeline facade, phases, resolvers, residency and frame data | Closed for the named DX12/WGL Forward, device-isolation and Surface matrix, with external pipeline/provider prototype and retained baseline; S6 composition remains open |
-| S6 Extension MVP | Renderer feature registration/storage/phase contribution; independent Rust Feature and FramePipeline | External Feature, external FramePipeline, and custom material cooperate in the same frame; first product MVP closes |
-| S7 Rendering expansion | Material/Shader/Renderer and selected Features; Code Nodes, PBR, Forward+/Deferred, shadows/PostFX | A second pipeline shares scene/material contracts; materially different Features validate broader extension seams |
-| S8 Measured strategies | Renderer resource/execution optimization; selected LOD, streaming, GPU culling, indirect work, batching/aliasing | Representative workloads demonstrate improvement with bounded memory and preserved lifecycle correctness |
+| S6 Extension MVP | Renderer feature registration/storage/phase contribution; independent Rust Feature and FramePipeline | Closed for the named external Feature, external FramePipeline, and custom-material same-frame subset |
+| S7 Rendering expansion | Material/Shader/Renderer and selected Features; Code Nodes, selected PBR and Deferred | Closed only for the named DX12/WGL Deferred acceptance; Forward+, shadows, and PostFX remain outside it |
+| S8 Measured strategies | Renderer resource/execution optimization; selected LOD, streaming, GPU culling, indirect work, batching/aliasing | Closed only for the private validation-index strategy on the named DX12/WGL material-heavy Forward workload; other strategies remain future work |
 
 ```text
 S0 baseline selection -> S0 asset integration + S1 Graph -> foundation closure
@@ -399,39 +403,60 @@ successful demos do not establish their composition.
   of unknown Feature types and a stable plugin binary ABI are outside this
   static extension architecture.
 
-The bounded closure does not add browser or Metal evidence and does not replace
-the final full-workspace regression. S7 and S8 remain uncompleted stages.
+The bounded S6 closure does not add browser or Metal evidence and does not
+replace the final full-workspace regression. Its historical record remains
+separate from the later S7 acceptance.
 
 ## S7. Material, pipeline, and Feature expansion
 
 **Owners:** Material/Shader semantics; Renderer and selected Feature algorithms.
 
-Extend Code Nodes and source diagnostics, material lowering/variants, PBR,
-Forward+, shadows, and PostFX incrementally. Prove Deferred as a second
-FramePipeline sharing scene/material contracts. Code Nodes use the same WGSL
-composition/reflection path; they are planned functionality.
+**Status:** accepted for the selected Windows DX12 and desktop OpenGL/WGL
+subset in the [S7 acceptance record](s7-deferred-closure.md). S8 and the
+affected final regression are separately closed for their selected strategy;
+cross-repository reconciliation and publication remain separate work.
 
-Select a second materially different external Feature, such as skinning or terrain,
-to exercise cross-pass and shader/material extensions before those stabilize.
-Lighting extensions must affect shading through the defined seams; graph-only
-hooks cannot establish that capability. Water, particles, vegetation, and area
-lights are candidate workloads, not an exhaustive stage-exit checklist.
+The selected work establishes a second pipeline and a materially different
+external Feature through the existing scene/material and static extension seams:
 
-The selected consumer proves the relevant extension boundary: for example,
-skinning or morphing proves deformation inputs and any produced stream; terrain
-proves a distinct spatial provider; a GPU-driven path proves its producer,
-consumer, and cross-pass contracts. Keep those interfaces provisional until such
-a consumer succeeds. This stage does not require every animation, terrain, water,
-or particle implementation.
+| Function | Delivered behavior and boundary |
+| --- | --- |
+| Deferred FramePipeline | One mesh uses upload, optional GPU deformation, geometry/G-buffer, lighting and readback; Surface output ends with explicit presentation. Forward and Deferred resolve the same immutable scene/assets and Material definitions. |
+| External GPU producer | A statically typed external position Feature produces a packed Float32x3 stream through the actual Graph. Four finite parameters and composed WGSL affect GPU output; no CPU intermediate or separate submission authority is introduced. |
+| Material Code Nodes | Typed nodes enter the normal Material function graph and Shader source units, with variant/source diagnostics and structured validation errors. |
+| Selected PBR | Opaque metallic/roughness shares GGX/Smith/Schlick and Lambert across Forward/Deferred. POSITION/NORMAL and a 128-byte transform carry inverse-transpose normals; Color keeps its 64-byte transform. Lighting and view are fixed. |
+| Completed-product reuse | Exact asset identity/generation and device isolate geometry, texture and program reuse. Graph hits still consume this frame's contribution and validate its actual bindings. Completed frame/G-buffer owners can be reused after successful readback. |
+| Surface and lifetime | Color, PBR and the selected Color/Bend combination cover presentation and resize. Surface leases never become cached images; retirement needs covering completion. Loss clears reusable caches and rejects new work while uncertain owners remain pending. |
 
-**Acceptance:** shared scene/material inputs work under Forward and Deferred; the
-selected external Feature works without changing core object dispatch. Declare
-compatibility/refusal per pipeline/backend and rerun affected external consumers
-when their extension contracts change.
+Color plus the selected position-only producer is supported by Deferred. PBR plus
+that producer is explicitly refused before dependent GPU work, with positive PBR
+controls. This does not establish a general deformation interface, arbitrary SRP
+pass chains, IBL, configurable lighting, perspective view vectors, normal maps or
+emissive inputs. Forward+, shadows, PostFX, terrain, water, particles, vegetation
+and area lights remain unselected scope; S7 acceptance does not promise them.
+
+**Acceptance evidence:** six native attempts cover DX12/WGL offscreen,
+Surface/resize and two simultaneously live devices, including return to the old
+device, exact-generation replacement and pending-owner retention. Each native
+attempt binds the same 503 frozen dirty-worktree inputs and selected dependency
+revisions. Focused failures cover declaration/binding/physical ranges,
+capabilities, typed inputs, Surface present rejection/loss and indeterminate
+execution. The acceptance record identifies the original artifacts, diagnostics,
+test logs, independent input-derived raw/BMP review and the separate final
+reviewer version. All 14 final checks also pass with the original runtime
+artifacts unavailable and the archive's own reviewer tools in use.
+
+This is the named native consumer proof, not broader backend or browser evidence.
+The [acceptance record](s7-deferred-closure.md) and its hashed archive are the
+canonical evidence locator; development probes are not additional current claims.
 
 ## S8. Measured performance and resource strategies
 
 **Owner:** Renderer integration; callers/platform services keep source policy.
+
+**Status:** closed for one source-bound material-heavy Forward workload on DX12
+and desktop OpenGL/WGL; see the [S8 measured closure](s8-measured-closure.md).
+This is a selected optimization, not a blanket performance or product claim.
 
 Use retained workloads to select residency budgets, streaming/LOD, GPU culling,
 indirect work, batching, aliasing, multi-queue execution, or parallel recording.
@@ -444,12 +469,25 @@ extensibility boundaries already required by S2 through S7. Layout and provider
 choices remain replaceable unless a measured workload and an exercised consumer
 justify stabilizing them.
 
+The accepted strategy uses private validation indices to avoid repeated binding
+manifest and pass-range lookup. Every frame still authors the real Graph
+declaration before a cache decision. Before allocation, upload, recording, or
+submission, the protected operation validates the actual owner's saved
+descriptor, incoming state, and selected RHI device provenance; an index is not
+authority and cannot replace those checks. The 10,000-visible-draw / 1,000-real-
+texture workload covers cold, warm, and 10% generation-replacement cases, with
+completion-held retirement and device recreation. The final measured CPU/API
+elapsed improvements are DX12 89.976% cold, 91.598% warm, 92.166% replacement;
+WGL 91.714%, 91.779%, 92.429%. They are not GPU timestamp measurements.
+
 **Acceptance:** record baseline/candidate inputs, CPU/GPU measurements where
 available, memory/upload/allocation counts, compiler/runtime identity, raw results,
 and declared thresholds. Demonstrate bounded memory, replacement/eviction while
 old data remains in flight, cancellation, upload failure, and device recreation.
 Keep CPU asset caches, GPU residency, frame data, and graph transients distinct.
 Retain the simpler implementation when an optimization has no measured gain.
+Streaming/LOD, GPU culling, indirect work, batching/aliasing beyond this index,
+and multi-queue or parallel recording have no S8 acceptance here.
 
 ## Undecided scope and future engine runtime
 

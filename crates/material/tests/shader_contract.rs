@@ -135,8 +135,8 @@ fn forced_source_id_collision_fails_closed_without_cache_aliasing() {
     ))
     .unwrap()
     .contribution()
-    .source_id
-    .clone();
+    .source_id()
+    .to_owned();
     let first = SourceUnit::new(
         source_id.clone(),
         "@fragment fn collision_target() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
@@ -371,8 +371,8 @@ fn static_options_change_emitted_wgsl_and_shader_identity() {
         MaterialCompiler::compile(&material_definition_with_static(body, false)).unwrap();
     assert_ne!(enabled.key(), disabled.key());
     assert_ne!(
-        enabled.contribution().source,
-        disabled.contribution().source
+        enabled.contribution().source(),
+        disabled.contribution().source()
     );
     let enabled_artifact = compose(enabled.contribution()).unwrap();
     let disabled_artifact = compose(disabled.contribution()).unwrap();
@@ -380,13 +380,13 @@ fn static_options_change_emitted_wgsl_and_shader_identity() {
     assert!(
         enabled
             .contribution()
-            .source
+            .source()
             .contains("const MATERIAL_ENABLED: bool = true;")
     );
     assert!(
         disabled
             .contribution()
-            .source
+            .source()
             .contains("const MATERIAL_ENABLED: bool = false;")
     );
 }

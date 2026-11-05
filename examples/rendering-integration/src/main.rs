@@ -10,6 +10,8 @@ mod capabilities;
 #[cfg(all(windows, any(feature = "dx12", feature = "native-gl-wgl")))]
 mod capture;
 mod compute;
+mod demo;
+mod demo_evidence;
 mod diagnostics;
 mod executable_cache;
 mod raster;
@@ -20,6 +22,10 @@ mod s3_material;
 mod s5_forward;
 mod s5_forward_surface;
 mod s6_composed;
+mod s7_deferred;
+mod s7_device_isolation;
+mod s7_surface;
+mod s8_material;
 mod shader_admission;
 mod surface;
 
@@ -44,6 +50,7 @@ use fluxel_rhi::{
 use shader_admission::json_string;
 
 mod main_copy;
+mod main_demo;
 mod main_native;
 mod main_support;
 
@@ -54,6 +61,10 @@ use main_native::run_wgl;
 use main_support::{block_on, output_directory};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Initialize before native objects and balance only after they are gone;
+    // capture and the surrounding renderer share this thread's apartment.
+    #[cfg(all(windows, any(feature = "dx12", feature = "native-gl-wgl")))]
+    let _capture_runtime = capture::CaptureRuntime::new()?;
     // Pixel-sized RHI surfaces and desktop client captures must share one
     // coordinate space. This configures only this fixture process.
     #[cfg(windows)]

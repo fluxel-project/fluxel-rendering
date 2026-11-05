@@ -1,189 +1,101 @@
 //! Normalization and authoring validation for material definitions.
 
 use super::*;
+use fluxel_shader::CallableDeclaration;
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug)]
 pub(super) struct NormalizedMaterialIr {
     fragments: Vec<MaterialFragment>,
+    code_nodes: Vec<MaterialCodeNode>,
     root_fragment: String,
     pub(super) parameters: Vec<MaterialParameter>,
     pub(super) resources: Vec<MaterialResource>,
     static_options: BTreeMap<String, StaticValue>,
+    pub(super) output: SurfaceOutput,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct FunctionSignature {
+    pub(super) inputs: Vec<MaterialType>,
+    pub(super) output: MaterialType,
+    calls: Vec<FragmentCall>,
 }
 
 impl NormalizedMaterialIr {
     pub(super) fn from_definition(definition: &MaterialDefinition) -> Result<Self, MaterialError> {
         let mut fragments = definition.fragments.clone();
         fragments.sort_by(|left, right| left.name.cmp(&right.name));
-        let mut names = BTreeSet::new();
-        for fragment in &fragments {
-            if !names.insert(fragment.name.as_str()) {
-                return Err(MaterialError::DuplicateFragment {
-                    name: fragment.name.clone(),
-                });
-            }
-        }
-        let fragment_map = fragments
-            .iter()
-            .map(|fragment| (fragment.name.as_str(), fragment))
-            .collect::<BTreeMap<_, _>>();
-        let root = fragment_map
+        let mut code_nodes = definition.code_nodes.clone();
+        code_nodes.sort_by(|left, right| left.name.cmp(&right.name));
+        validate_code_node_sources(&code_nodes)?;
+        let functions = function_signatures(&fragments, &code_nodes)?;
+        let root = functions
             .get(definition.root_fragment.as_str())
             .ok_or_else(|| MaterialError::MissingFragment {
                 name: definition.root_fragment.clone(),
             })?;
-        if definition.output == SurfaceOutput::Color && root.output != MaterialType::Vec4 {
-            return Err(MaterialError::UnsupportedOutput {
-                output: definition.output,
-            });
-        }
-        if !root.inputs.is_empty() {
-            return Err(MaterialError::RootInputsUnsupported {
-                fragment: root.name.clone(),
-            });
-        }
-        let mut parameter_names = BTreeSet::new();
-        for parameter in &definition.parameters {
-            if !parameter_names.insert(parameter.name.as_str()) {
-                return Err(MaterialError::DuplicateParameter {
-                    name: parameter.name.clone(),
-                });
-            }
-        }
-        let mut resource_names = BTreeSet::new();
-        let mut locations = BTreeSet::new();
-        for resource in &definition.resources {
-            if !resource_names.insert(resource.name.as_str()) {
-                return Err(MaterialError::DuplicateResource {
-                    name: resource.name.clone(),
-                });
-            }
-            if !locations.insert(resource.location) {
-                return Err(MaterialError::BindingConflict {
-                    location: resource.location,
-                });
-            }
-        }
-        let resources = definition
-            .resources
-            .iter()
-            .map(|resource| (resource.name.as_str(), resource))
-            .collect::<BTreeMap<_, _>>();
-        let mut parameter_resources = BTreeSet::new();
-        for parameter in &definition.parameters {
-            let conflicts_with_resource = resources
-                .get(parameter.name.as_str())
-                .is_some_and(|resource| resource.name != parameter.resource);
-            if conflicts_with_resource
-                || fragment_map.contains_key(parameter.name.as_str())
-                || definition
-                    .static_options
-                    .contains_key(parameter.name.as_str())
-                || parameter.name == "evaluate_material"
-            {
-                return Err(MaterialError::ParameterNameConflict {
-                    parameter: parameter.name.clone(),
-                });
-            }
-            let resource = resources.get(parameter.resource.as_str()).ok_or_else(|| {
-                MaterialError::ParameterResourceMissing {
-                    parameter: parameter.name.clone(),
-                    resource: parameter.resource.clone(),
-                }
-            })?;
-            if !parameter_resources.insert(resource.name.as_str()) {
-                return Err(MaterialError::ParameterResourceConflict {
-                    resource: resource.name.clone(),
-                });
-            }
-            if parameter.ty != MaterialType::Vec4
-                || resource.kind != MaterialResourceKind::UniformVec4
-            {
-                return Err(MaterialError::ParameterResourceTypeMismatch {
-                    parameter: parameter.name.clone(),
-                    parameter_type: parameter.ty,
-                    resource_kind: resource.kind,
-                });
-            }
-        }
-        validate_top_level_names(
-            &fragments,
-            &definition.resources,
+        super::surface::validate(
+            &definition.output,
+            root,
+            &functions,
+            &definition.root_fragment,
+        )?;
+        validate_parameters(
             &definition.parameters,
+            &functions,
             &definition.static_options,
         )?;
-        for fragment in &fragments {
-            for call in &fragment.calls {
-                let callee = fragment_map.get(call.fragment.as_str()).ok_or_else(|| {
-                    MaterialError::InvalidCall {
-                        caller: fragment.name.clone(),
-                        callee: call.fragment.clone(),
-                    }
-                })?;
-                if callee
-                    .inputs
-                    .iter()
-                    .map(|input| input.ty)
-                    .ne(call.arguments.iter().copied())
-                {
-                    return Err(MaterialError::CallTypeMismatch {
-                        caller: fragment.name.clone(),
-                        callee: call.fragment.clone(),
-                    });
-                }
-            }
-        }
-        let mut visiting = BTreeSet::new();
-        let mut visited = BTreeSet::new();
-        for fragment in &fragments {
-            visit(&fragment.name, &fragment_map, &mut visiting, &mut visited)?;
-        }
+        let resources = merge_resources(&definition.resources, &code_nodes)?;
+        validate_parameter_resources(&definition.parameters, &resources)?;
+        validate_top_level_names(
+            &fragments,
+            &code_nodes,
+            &resources,
+            &definition.parameters,
+            &definition.static_options,
+            &definition.output,
+        )?;
+        validate_calls(&functions)?;
         Ok(Self {
             fragments,
+            code_nodes,
             root_fragment: definition.root_fragment.clone(),
             parameters: sorted_by_name(definition.parameters.clone(), |value| &value.name),
-            resources: sorted_by_name(definition.resources.clone(), |value| &value.name),
+            resources,
             static_options: definition.static_options.clone(),
+            output: definition.output.clone(),
         })
     }
 
     pub(super) fn variant_key(&self) -> MaterialVariantKey {
         let mut canonical = String::new();
         canonical_piece(&mut canonical, "root", &self.root_fragment);
+        super::surface::canonical(&self.output, &mut canonical);
         for fragment in &self.fragments {
             canonical_piece(&mut canonical, "fragment", &fragment.name);
             canonical_piece(&mut canonical, "output", fragment.output.wgsl());
             canonical_piece(&mut canonical, "wgsl", &fragment.wgsl);
-            for input in &fragment.inputs {
-                canonical_piece(&mut canonical, "input-name", &input.name);
-                canonical_piece(&mut canonical, "input-type", input.ty.wgsl());
-            }
-            for call in &fragment.calls {
-                canonical_piece(&mut canonical, "call", &call.fragment);
-                for argument in &call.arguments {
-                    canonical_piece(&mut canonical, "argument", argument.wgsl());
-                }
-            }
+            canonical_inputs(&mut canonical, &fragment.inputs);
+            canonical_calls(&mut canonical, &fragment.calls);
+        }
+        for node in &self.code_nodes {
+            canonical_piece(&mut canonical, "code-node", &node.name);
+            canonical_piece(&mut canonical, "source-id", &node.source.id.0);
+            canonical_piece(&mut canonical, "source", &node.source.source);
+            canonical_piece(&mut canonical, "output", node.output.wgsl());
+            canonical_inputs(&mut canonical, &node.inputs);
+            canonical_calls(&mut canonical, &node.calls);
+            let mut resources = node.resources.clone();
+            resources.sort_by(|left, right| left.name.cmp(&right.name));
+            canonical_resources(&mut canonical, &resources);
         }
         for parameter in &self.parameters {
             canonical_piece(&mut canonical, "parameter", &parameter.name);
             canonical_piece(&mut canonical, "parameter-type", parameter.ty.wgsl());
             canonical_piece(&mut canonical, "parameter-resource", &parameter.resource);
         }
-        for resource in &self.resources {
-            canonical_piece(&mut canonical, "resource", &resource.name);
-            canonical_piece(&mut canonical, "resource-kind", resource.kind.wgsl());
-            canonical_piece(
-                &mut canonical,
-                "resource-group",
-                &resource.location.group.to_string(),
-            );
-            canonical_piece(
-                &mut canonical,
-                "resource-binding",
-                &resource.location.binding.to_string(),
-            );
-        }
+        canonical_resources(&mut canonical, &self.resources);
         for (name, value) in &self.static_options {
             canonical_piece(&mut canonical, "static-name", name);
             canonical_piece(&mut canonical, "static-value", &value.canonical());
@@ -195,49 +107,44 @@ impl NormalizedMaterialIr {
     }
 
     pub(super) fn contribution(&self) -> MaterialShaderContribution {
-        let mut source = String::from("// Generated by fluxel-material.\n");
+        let mut generated = String::from("// Generated by fluxel-material.\n");
         for (name, value) in &self.static_options {
             match value {
                 StaticValue::Bool(value) => {
-                    source.push_str(&format!("const {name}: bool = {value};\n"))
+                    generated.push_str(&format!("const {name}: bool = {value};\n"))
                 }
                 StaticValue::U32(value) => {
-                    source.push_str(&format!("const {name}: u32 = {value}u;\n"))
+                    generated.push_str(&format!("const {name}: u32 = {value}u;\n"))
                 }
             }
         }
         for resource in &self.resources {
-            let shader_name = self
-                .parameters
-                .iter()
-                .find(|parameter| parameter.resource == resource.name)
-                .map_or(resource.name.as_str(), |parameter| parameter.name.as_str());
+            let shader_name = shader_resource_name(resource, &self.parameters);
             let prefix = match resource.kind {
                 MaterialResourceKind::UniformVec4 => "var<uniform>",
                 MaterialResourceKind::Texture2dF32 => "var",
             };
-            source.push_str(&format!(
-                "@group({}) @binding({}) {prefix} {}: {};\n",
+            generated.push_str(&format!(
+                "@group({}) @binding({}) {prefix} {shader_name}: {};\n",
                 resource.location.group,
                 resource.location.binding,
-                shader_name,
                 resource.kind.wgsl()
             ));
         }
         for fragment in &self.fragments {
-            source.push_str(&fragment.wgsl);
-            source.push('\n');
+            generated.push_str(&fragment.wgsl);
+            generated.push('\n');
         }
-        source.push_str(&format!(
-            "fn evaluate_material() -> vec4<f32> {{\n    return {}();\n}}\n",
-            self.root_fragment
-        ));
+        super::surface::append_evaluators(&mut generated, &self.root_fragment, &self.output);
         let variant_key = self.variant_key();
-        MaterialShaderContribution {
-            source_id: source_unit_id(variant_key.as_str()),
-            source,
-            bindings: self
-                .resources
+        MaterialShaderContribution::new(
+            source_unit_id(variant_key.as_str()),
+            generated,
+            self.code_nodes
+                .iter()
+                .map(|node| node.source.clone())
+                .collect(),
+            self.resources
                 .iter()
                 .map(|resource| MaterialBindingDeclaration {
                     name: resource.name.clone(),
@@ -245,8 +152,7 @@ impl NormalizedMaterialIr {
                     kind: resource.kind,
                 })
                 .collect(),
-            parameter_bindings: self
-                .parameters
+            self.parameters
                 .iter()
                 .map(|parameter| {
                     let resource = self
@@ -262,31 +168,237 @@ impl NormalizedMaterialIr {
                     }
                 })
                 .collect(),
-            callables: self
-                .fragments
-                .iter()
-                .map(|fragment| CallableDeclaration {
-                    name: fragment.name.clone(),
-                    arguments: fragment
-                        .inputs
-                        .iter()
-                        .map(|input| input.ty.shader_type())
-                        .collect(),
-                    result: Some(fragment.output.shader_type()),
-                })
-                .collect(),
-            static_options: self.static_options.clone(),
+            callable_declarations(&self.fragments, &self.code_nodes),
+            self.static_options.clone(),
+        )
+    }
+}
+
+fn validate_code_node_sources(nodes: &[MaterialCodeNode]) -> Result<(), MaterialError> {
+    let mut ids = BTreeSet::new();
+    for node in nodes {
+        if node.source.id.0.is_empty() {
+            return Err(MaterialError::EmptyCodeNodeSourceId {
+                node: node.name.clone(),
+            });
+        }
+        if !ids.insert(node.source.id.0.as_str()) {
+            return Err(MaterialError::DuplicateCodeNodeSourceId {
+                source_id: node.source.id.0.clone(),
+            });
         }
     }
+    Ok(())
+}
+
+fn function_signatures(
+    fragments: &[MaterialFragment],
+    nodes: &[MaterialCodeNode],
+) -> Result<BTreeMap<String, FunctionSignature>, MaterialError> {
+    let mut functions = BTreeMap::new();
+    for fragment in fragments {
+        insert_signature(
+            &mut functions,
+            &fragment.name,
+            &fragment.inputs,
+            fragment.output,
+            &fragment.calls,
+        )?;
+    }
+    for node in nodes {
+        insert_signature(
+            &mut functions,
+            &node.name,
+            &node.inputs,
+            node.output,
+            &node.calls,
+        )?;
+    }
+    Ok(functions)
+}
+
+fn insert_signature(
+    functions: &mut BTreeMap<String, FunctionSignature>,
+    name: &str,
+    inputs: &[FragmentInput],
+    output: MaterialType,
+    calls: &[FragmentCall],
+) -> Result<(), MaterialError> {
+    if functions
+        .insert(
+            name.into(),
+            FunctionSignature {
+                inputs: inputs.iter().map(|input| input.ty).collect(),
+                output,
+                calls: calls.to_vec(),
+            },
+        )
+        .is_some()
+    {
+        return Err(MaterialError::DuplicateFragment { name: name.into() });
+    }
+    Ok(())
+}
+
+fn validate_parameters(
+    parameters: &[MaterialParameter],
+    functions: &BTreeMap<String, FunctionSignature>,
+    static_options: &BTreeMap<String, StaticValue>,
+) -> Result<(), MaterialError> {
+    let mut names = BTreeSet::new();
+    for parameter in parameters {
+        if !names.insert(parameter.name.as_str()) {
+            return Err(MaterialError::DuplicateParameter {
+                name: parameter.name.clone(),
+            });
+        }
+        if functions.contains_key(&parameter.name)
+            || static_options.contains_key(&parameter.name)
+            || parameter.name == "evaluate_material"
+        {
+            return Err(MaterialError::ParameterNameConflict {
+                parameter: parameter.name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn merge_resources(
+    definition_resources: &[MaterialResource],
+    nodes: &[MaterialCodeNode],
+) -> Result<Vec<MaterialResource>, MaterialError> {
+    let mut resources = BTreeMap::<String, MaterialResource>::new();
+    let mut locations = BTreeMap::<BindingLocation, String>::new();
+    for resource in definition_resources {
+        if resources.contains_key(&resource.name) {
+            return Err(MaterialError::DuplicateResource {
+                name: resource.name.clone(),
+            });
+        }
+        insert_resource(&mut resources, &mut locations, resource, true)?;
+    }
+    for node in nodes {
+        for resource in &node.resources {
+            insert_resource(&mut resources, &mut locations, resource, false)?;
+        }
+    }
+    Ok(resources.into_values().collect())
+}
+
+fn insert_resource(
+    resources: &mut BTreeMap<String, MaterialResource>,
+    locations: &mut BTreeMap<BindingLocation, String>,
+    candidate: &MaterialResource,
+    definition_resource: bool,
+) -> Result<(), MaterialError> {
+    if let Some(existing) = resources.get(&candidate.name) {
+        if existing == candidate && !definition_resource {
+            return Ok(());
+        }
+        return Err(if definition_resource {
+            MaterialError::DuplicateResource {
+                name: candidate.name.clone(),
+            }
+        } else {
+            MaterialError::ConflictingResourceDeclaration {
+                name: candidate.name.clone(),
+            }
+        });
+    }
+    if locations
+        .insert(candidate.location, candidate.name.clone())
+        .is_some()
+    {
+        return Err(MaterialError::BindingConflict {
+            location: candidate.location,
+        });
+    }
+    resources.insert(candidate.name.clone(), candidate.clone());
+    Ok(())
+}
+
+fn validate_parameter_resources(
+    parameters: &[MaterialParameter],
+    resources: &[MaterialResource],
+) -> Result<(), MaterialError> {
+    let resources = resources
+        .iter()
+        .map(|resource| (resource.name.as_str(), resource))
+        .collect::<BTreeMap<_, _>>();
+    let mut parameter_resources = BTreeSet::new();
+    for parameter in parameters {
+        let conflicts_with_resource = resources
+            .get(parameter.name.as_str())
+            .is_some_and(|resource| resource.name != parameter.resource);
+        if conflicts_with_resource {
+            return Err(MaterialError::ParameterNameConflict {
+                parameter: parameter.name.clone(),
+            });
+        }
+        let resource = resources.get(parameter.resource.as_str()).ok_or_else(|| {
+            MaterialError::ParameterResourceMissing {
+                parameter: parameter.name.clone(),
+                resource: parameter.resource.clone(),
+            }
+        })?;
+        if !parameter_resources.insert(resource.name.as_str()) {
+            return Err(MaterialError::ParameterResourceConflict {
+                resource: resource.name.clone(),
+            });
+        }
+        if parameter.ty != MaterialType::Vec4 || resource.kind != MaterialResourceKind::UniformVec4
+        {
+            return Err(MaterialError::ParameterResourceTypeMismatch {
+                parameter: parameter.name.clone(),
+                parameter_type: parameter.ty,
+                resource_kind: resource.kind,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_calls(functions: &BTreeMap<String, FunctionSignature>) -> Result<(), MaterialError> {
+    for (caller, function) in functions {
+        for call in &function.calls {
+            let callee =
+                functions
+                    .get(&call.fragment)
+                    .ok_or_else(|| MaterialError::InvalidCall {
+                        caller: caller.clone(),
+                        callee: call.fragment.clone(),
+                    })?;
+            if callee
+                .inputs
+                .iter()
+                .copied()
+                .ne(call.arguments.iter().copied())
+            {
+                return Err(MaterialError::CallTypeMismatch {
+                    caller: caller.clone(),
+                    callee: call.fragment.clone(),
+                });
+            }
+        }
+    }
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for name in functions.keys() {
+        visit(name, functions, &mut visiting, &mut visited)?;
+    }
+    Ok(())
 }
 
 fn validate_top_level_names(
     fragments: &[MaterialFragment],
+    nodes: &[MaterialCodeNode],
     resources: &[MaterialResource],
     parameters: &[MaterialParameter],
     static_options: &BTreeMap<String, StaticValue>,
+    output: &SurfaceOutput,
 ) -> Result<(), MaterialError> {
-    let mut names = BTreeSet::from([String::from("evaluate_material")]);
+    let mut names = super::surface::reserved_names(output);
     let mut insert = |name: &str| {
         if names.insert(name.to_owned()) {
             Ok(())
@@ -300,18 +412,85 @@ fn validate_top_level_names(
         insert(name)?;
     }
     for resource in resources {
-        let shader_name = parameters
-            .iter()
-            .find(|parameter| parameter.resource == resource.name)
-            .map_or(resource.name.as_str(), |parameter| parameter.name.as_str());
-        insert(shader_name)?;
+        insert(shader_resource_name(resource, parameters))?;
     }
     for fragment in fragments {
         for name in wgsl_top_level_names(&fragment.wgsl)? {
             insert(&name)?;
         }
     }
+    for node in nodes {
+        for name in wgsl_top_level_names(&node.source.source)? {
+            insert(&name)?;
+        }
+    }
     Ok(())
+}
+
+fn callable_declarations(
+    fragments: &[MaterialFragment],
+    nodes: &[MaterialCodeNode],
+) -> Vec<CallableDeclaration> {
+    let mut callables = Vec::with_capacity(fragments.len() + nodes.len());
+    for (name, inputs, output) in fragments
+        .iter()
+        .map(|fragment| (&fragment.name, &fragment.inputs, fragment.output))
+        .chain(
+            nodes
+                .iter()
+                .map(|node| (&node.name, &node.inputs, node.output)),
+        )
+    {
+        callables.push(CallableDeclaration {
+            name: name.clone(),
+            arguments: inputs.iter().map(|input| input.ty.shader_type()).collect(),
+            result: Some(output.shader_type()),
+        });
+    }
+    callables
+}
+
+fn shader_resource_name<'a>(
+    resource: &'a MaterialResource,
+    parameters: &'a [MaterialParameter],
+) -> &'a str {
+    parameters
+        .iter()
+        .find(|parameter| parameter.resource == resource.name)
+        .map_or(resource.name.as_str(), |parameter| parameter.name.as_str())
+}
+
+fn canonical_inputs(output: &mut String, inputs: &[FragmentInput]) {
+    for input in inputs {
+        canonical_piece(output, "input-name", &input.name);
+        canonical_piece(output, "input-type", input.ty.wgsl());
+    }
+}
+
+fn canonical_calls(output: &mut String, calls: &[FragmentCall]) {
+    for call in calls {
+        canonical_piece(output, "call", &call.fragment);
+        for argument in &call.arguments {
+            canonical_piece(output, "argument", argument.wgsl());
+        }
+    }
+}
+
+fn canonical_resources(output: &mut String, resources: &[MaterialResource]) {
+    for resource in resources {
+        canonical_piece(output, "resource", &resource.name);
+        canonical_piece(output, "resource-kind", resource.kind.wgsl());
+        canonical_piece(
+            output,
+            "resource-group",
+            &resource.location.group.to_string(),
+        );
+        canonical_piece(
+            output,
+            "resource-binding",
+            &resource.location.binding.to_string(),
+        );
+    }
 }
 
 fn source_unit_id(canonical: &str) -> String {
@@ -320,7 +499,7 @@ fn source_unit_id(canonical: &str) -> String {
 
 fn visit(
     name: &str,
-    fragments: &BTreeMap<&str, &MaterialFragment>,
+    functions: &BTreeMap<String, FunctionSignature>,
     visiting: &mut BTreeSet<String>,
     visited: &mut BTreeSet<String>,
 ) -> Result<(), MaterialError> {
@@ -332,9 +511,9 @@ fn visit(
             fragment: name.to_owned(),
         });
     }
-    let fragment = fragments.get(name).expect("validated root and calls");
-    for call in &fragment.calls {
-        visit(&call.fragment, fragments, visiting, visited)?;
+    let function = functions.get(name).expect("validated function name");
+    for call in &function.calls {
+        visit(&call.fragment, functions, visiting, visited)?;
     }
     visiting.remove(name);
     visited.insert(name.to_owned());

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "reviewer": "archive-only Python stdlib audit",
+  "sources": {
+    "review_archive.py": "f0360a92c3b9f8024b5ee403f69bc2c88bfdda2ab3d5cb80798ddce5f00d2781",
+    "review_semantic.py": "d3f2870a9f4b59514766a051d1eebf3c844a0b2ea31771fa1b0438301f6a5198",
+    "review_perf.py": "af9913ea63b4488c925bef8a969f866dde4de7cfabe43b004e5bc7baedea235f",
+    "review_native_oracles.py": "92164f51530e445857b3db90e10441ccf0527f7e80d02e85f7c16437e7efc7d2",
+    "review_native.py": "98471f74bcc4bea1b24c2cf40f2b19fb7a8c7008638023d24cef81f04a056ccd"
+  },
+  "scope": "Independent archive integrity, frozen-helper raw oracle, native oracle, source and CPU-log audit; no GPU execution, build, or test-suite rerun.",
+  "relocation": "All 6277 logical evidence files were materialized and hash-checked under E:/fv-c24fb5c. Reviewers import only the safely extracted archived frozen source from that root and do not consult the original target directory."
+}

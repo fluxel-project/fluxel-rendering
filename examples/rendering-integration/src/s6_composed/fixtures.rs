@@ -1,5 +1,5 @@
 use external_renderer::{
-    quad_geometry_data, quad_marker_material_definition, QuadAssets, QuadInput, QuadMarker,
+    QuadAssets, QuadInput, QuadMarker, quad_geometry_data, quad_marker_material_definition,
 };
 use fluxel_assets::{Acquire, AssetSnapshot, AssetStore, Production, ResidentBytes};
 use fluxel_material::{

@@ -19,8 +19,11 @@ use super::{
     vertex_layout_key,
 };
 
+#[path = "forward_pbr.rs"]
+mod forward_pbr;
 #[path = "forward_validation.rs"]
 mod forward_validation;
+use forward_pbr::normal_from_local;
 use forward_validation::{
     finite_transform, forward_template, multiply_columns, resolve_asset, validate_cpu_geometry,
     validate_material_schema, validate_texture,
@@ -109,6 +112,7 @@ pub struct ForwardDrawInput {
     transform: RenderTransform,
     view: RenderView,
     clip_from_local: [[f32; 4]; 4],
+    normal_from_local: Option<[[f32; 4]; 4]>,
 }
 
 /// One exact device-program compatibility class for opaque Forward draws.
@@ -251,6 +255,20 @@ impl ForwardDrawInput {
         self.clip_from_local
     }
 
+    /// Returns the PBR local-normal transform, when this draw consumes normals.
+    pub fn normal_from_local(&self) -> Option<[[f32; 4]; 4]> {
+        self.normal_from_local
+    }
+
+    /// Returns the exact transform-uniform payload size selected for this draw.
+    pub const fn transform_uniform_bytes(&self) -> u64 {
+        if self.normal_from_local.is_some() {
+            128
+        } else {
+            64
+        }
+    }
+
     /// Returns the output extent of the retained view.
     pub fn extent(&self) -> [u32; 2] {
         self.view.extent
@@ -329,6 +347,23 @@ pub enum ForwardPreparationError {
     /// `UV` and `COLOR` must occur together for the first optional-attribute template.
     IncompleteOptionalAttributes {
         /// Draw requesting the geometry.
+        source: ForwardDrawSource,
+    },
+    /// PBR geometry did not expose the required `NORMAL` semantic.
+    MissingNormal {
+        /// Draw requesting the PBR normal.
+        source: ForwardDrawSource,
+    },
+    /// A consumed PBR normal was non-finite or had zero length.
+    InvalidNormal {
+        /// Draw requesting the PBR normal.
+        source: ForwardDrawSource,
+        /// Stream containing the invalid normal.
+        stream: usize,
+    },
+    /// PBR needs an affine world transform with an invertible linear part.
+    NonInvertibleNormalTransform {
+        /// Draw requesting the normal transform.
         source: ForwardDrawSource,
     },
     /// A Material contribution is outside the initial Forward binding schema.
@@ -453,16 +488,29 @@ fn prepare_draw(
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
     let texture = resolve_asset(&assets.textures, resources.texture, "texture", source)?;
     validate_texture(texture.value(), source)?;
-    let template = forward_template(&geometry.value().layout, source)?;
-    let prepared = prepare_material(
-        &material,
-        &geometry.value().layout,
-        composer,
-        template.request(),
-    )
-    .map_err(ForwardPreparationError::Material)?;
+    let request = match material.value().output() {
+        fluxel_material::SurfaceOutput::Color => {
+            forward_template(&geometry.value().layout, source)?.request()
+        }
+        fluxel_material::SurfaceOutput::MetallicRoughness { .. } => {
+            crate::pbr::forward_request(&geometry.value().layout)
+                .ok_or(ForwardPreparationError::MissingNormal { source })?
+        }
+    };
+    let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
+        .map_err(ForwardPreparationError::Material)?;
     validate_material_schema(&prepared, source)?;
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
+    let normal_from_local = normal_from_local(
+        geometry.value(),
+        prepared.geometry(),
+        transform,
+        matches!(
+            material.value().output(),
+            fluxel_material::SurfaceOutput::MetallicRoughness { .. }
+        ),
+        source,
+    )?;
     let clip_from_local = multiply_columns(view.transform, transform);
     if !clip_from_local
         .iter()
@@ -482,6 +530,7 @@ fn prepare_draw(
         transform,
         view: view.clone(),
         clip_from_local,
+        normal_from_local,
     })
 }
 
@@ -531,3 +580,7 @@ mod forward_batches;
 #[cfg(test)]
 #[path = "../tests/preparation/feature_draws.rs"]
 mod feature_draws;
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_pbr.rs"]
+mod forward_pbr_tests;

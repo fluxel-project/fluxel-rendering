@@ -11,8 +11,10 @@ from typing import Any
 import zipfile
 if __package__:
     from .smoke_inputs import git_value, sha256
+    from . import capture_contract
 else:
     from smoke_inputs import git_value, sha256
+    import capture_contract
 ROOT = Path(__file__).resolve().parents[2]
 BACKENDS = ("dx12", "native-gl-wgl")
 RHI_REVISION = "b5d569feace548a6ed498901deaf31a5efcaca61"
@@ -236,16 +238,9 @@ def nested_workload_evidence(run_directory: Path, workload: str) -> dict[str, An
                     capture = json.loads((surface_directory / f"surface-client-frame-{frame}.capture.json").read_text(encoding="utf-8"))
                     verdict = json.loads((surface_directory / f"surface-client-frame-{frame}.verdict.json").read_text(encoding="utf-8"))
                     image = f"surface-client-frame-{frame}.bmp"
-                    if (
-                        capture.get("frame") != frame
-                        or capture.get("clientExtent") != extent
-                        or capture.get("image") != image
-                        or capture.get("automaticVisualPass") is not False
-                        or verdict.get("frame") != frame
-                        or verdict.get("image") != image
-                        or verdict.get("oracle") != "desktop-capture-corners-and-stable-triangle-interior"
-                        or verdict.get("status") != "passed"
-                    ):
+                    if (capture_contract.capture_failures(capture, frame, extent, image)
+                            or capture_contract.verdict_failures(
+                                verdict, frame, image, capture.get("schemaVersion"))):
                         failures.append(f"S5 surface capture verdict for frame {frame} is incomplete or failed")
             except (OSError, json.JSONDecodeError) as error:
                 failures.append(f"malformed S5 surface raw evidence: {error}")

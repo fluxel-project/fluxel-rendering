@@ -2,6 +2,8 @@
 
 mod forward;
 pub use forward::{FeatureBinding, RenderFeature};
+mod deformation;
+pub use deformation::{DeferredPositionDeformer, DeformationBinding, PositionDeformation};
 
 use std::sync::{
     Arc,

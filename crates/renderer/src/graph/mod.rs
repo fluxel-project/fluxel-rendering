@@ -8,6 +8,11 @@ mod binding;
 pub(crate) mod compiler;
 mod compute;
 mod copy;
+mod deferred;
+pub(crate) use deferred::{
+    DeferredDeformationPass, DeferredGeometryPass, DeferredLightingPass, DeferredPhaseDriver,
+    DeferredPlan,
+};
 mod definition;
 mod execution;
 mod forward;
@@ -28,3 +33,7 @@ pub(crate) use compute::{ComputeFixtureBindings, ComputePlan};
 pub(crate) use copy::{CopyFrame, CopyPlan};
 pub(crate) use raster::{RasterPlan, SurfaceRasterPlan};
 pub(crate) use read_set_raster::{ReadSetRasterBindings, ReadSetRasterFrame, ReadSetRasterPlan};
+
+#[cfg(test)]
+#[path = "../tests/graph/graph_cost_diagnostic.rs"]
+mod cost_diagnostic;

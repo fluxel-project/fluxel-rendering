@@ -19,10 +19,10 @@
   ],
   "properties": {
     "schema_version": {
-      "enum": [2, 3, 4, 5]
+      "enum": [2, 3, 4, 5, 6]
     },
     "stage": {
-      "enum": ["S0/S1", "S0-S3 integration evidence", "S5 Forward integration evidence", "S6 typed Forward integration evidence"]
+      "enum": ["S0/S1", "S0-S3 integration evidence", "S5 Forward integration evidence", "S6 typed Forward integration evidence", "S7 Deferred integration evidence"]
     },
     "artifact": {
       "type": "object",
@@ -110,6 +110,21 @@
       "then": {
         "required": ["support_decision"],
         "properties": { "stage": { "const": "S0/S1" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 6 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["historical_foundation_support_decision"],
+        "properties": {
+          "stage": { "const": "S7 Deferred integration evidence" },
+          "attempts": {
+            "items": { "$ref": "#/$defs/s7_attempt" }
+          }
+        }
       }
     },
     {
@@ -368,6 +383,53 @@
                     "expected_cases": {
                       "const": ["mesh-after-quad-initial", "quad-after-mesh-resized"]
                     }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "s7_attempt": {
+      "allOf": [
+        { "$ref": "#/$defs/attempt" },
+        {
+          "required": ["workload", "source_inputs", "source_snapshot", "retained_attempt_files"],
+          "properties": {
+            "workload": {
+              "type": "object",
+              "required": ["selection", "entry_argument", "directory", "required_nested_workload", "expected_cases", "subworkloads", "manifest_contract"],
+              "properties": {
+                "expected_cases": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                "subworkloads": { "type": "array", "items": { "type": "string" } },
+                "manifest_contract": {
+                  "const": "schemaVersion=1; exact named cases; every raw artifact is listed exactly once by sharedArtifacts, a case, or a declared subworkload manifest"
+                }
+              },
+              "oneOf": [
+                {
+                  "properties": {
+                    "selection": { "const": "s7-deferred-native-offscreen-probe" },
+                    "entry_argument": { "const": "--s7-deferred-only" },
+                    "directory": { "const": "s7-deferred" },
+                    "required_nested_workload": { "const": "s7-deferred/s7-deferred-workload.json" }
+                  }
+                },
+                {
+                  "properties": {
+                    "selection": { "const": "s7-deferred-color-surface-resize" },
+                    "entry_argument": { "const": "--s7-deferred-surface-only" },
+                    "directory": { "const": "s7-deferred-surface" },
+                    "required_nested_workload": { "const": "s7-deferred-surface/s7-deferred-surface-workload.json" }
+                  }
+                },
+                {
+                  "properties": {
+                    "selection": { "const": "s7-deferred-device-isolation" },
+                    "entry_argument": { "const": "--s7-device-isolation-only" },
+                    "directory": { "const": "s7-deferred-device-isolation" },
+                    "required_nested_workload": { "const": "s7-deferred-device-isolation/s7-deferred-device-isolation-workload.json" }
                   }
                 }
               ]

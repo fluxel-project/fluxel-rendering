@@ -39,7 +39,8 @@ class SmokeRunnerTests(unittest.TestCase):
             for frame, extent in enumerate(([320, 180], [256, 144])):
                 image = f"surface-client-frame-{frame}.bmp"
                 (run / f"surface-client-frame-{frame}.capture.json").write_text(json.dumps({
-                    "frame": frame, "clientExtent": extent, "image": image, "automaticVisualPass": False,
+                    "schemaVersion": 1, "frame": frame, "clientExtent": extent, "pixelFormat": "BGRA8-top-down",
+                    "image": image, "automaticVisualPass": False,
                 }), encoding="utf-8")
                 (run / f"surface-client-frame-{frame}.verdict.json").write_text(json.dumps({
                     "frame": frame, "image": image,

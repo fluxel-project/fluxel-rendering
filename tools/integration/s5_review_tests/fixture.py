@@ -121,8 +121,8 @@ def _surface(run: Path, review) -> None:
     for frame, extent in enumerate(((320, 180), (256, 144))):
         image = f"surface-client-frame-{frame}.bmp"
         _write(run / image, _bmp(*extent))
-        _write(run / f"surface-client-frame-{frame}.capture.json", {"frame": frame, "clientExtent": list(extent), "image": image, "automaticVisualPass": False})
-        _write(run / f"surface-client-frame-{frame}.verdict.json", {"frame": frame, "image": image, "oracle": "desktop-capture-corners-and-stable-triangle-interior", "status": "passed"})
+        _write(run / f"surface-client-frame-{frame}.capture.json", {"schemaVersion": 1, "frame": frame, "clientExtent": list(extent), "pixelFormat": "BGRA8-top-down", "image": image, "automaticVisualPass": False})
+        _write(run / f"surface-client-frame-{frame}.verdict.json", {"schemaVersion": 1, "frame": frame, "image": image, "oracle": "desktop-capture-corners-and-stable-triangle-interior", "status": "passed"})
 
 
 def build(root: Path, review) -> dict[str, object]:

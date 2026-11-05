@@ -1,0 +1,205 @@
+{
+  "scope": "archive-only dedicated native oracles and exact CPU log scope",
+  "native": [
+    {
+      "backend": "dx12",
+      "workload": "s0-s3",
+      "attempt": "dx12-20261105T083440201455Z-25548",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s5-forward",
+      "attempt": "dx12-20261105T083554868314Z-27412",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s5-surface",
+      "attempt": "dx12-20261105T083657912788Z-19436",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s5-device-isolation",
+      "attempt": "dx12-20261105T083800545975Z-25516",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s6-composed",
+      "attempt": "dx12-20261105T083903135276Z-23280",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s6-surface",
+      "attempt": "dx12-20261105T084005315871Z-15132",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s7-deferred",
+      "attempt": "dx12-20261105T084106817584Z-27788",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s7-deferred-surface",
+      "attempt": "dx12-20261105T084225478041Z-23168",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "dx12",
+      "workload": "s7-deferred-device-isolation",
+      "attempt": "dx12-20261105T084347453277Z-8372",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s0-s3",
+      "attempt": "native-gl-wgl-20261105T084507014686Z-4500",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s5-forward",
+      "attempt": "native-gl-wgl-20261105T084632130177Z-29456",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s5-surface",
+      "attempt": "native-gl-wgl-20261105T084745234327Z-27928",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s5-device-isolation",
+      "attempt": "native-gl-wgl-20261105T084904536611Z-26004",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s6-composed",
+      "attempt": "native-gl-wgl-20261105T085035715206Z-21280",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s6-surface",
+      "attempt": "native-gl-wgl-20261105T085213996211Z-26616",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s7-deferred",
+      "attempt": "native-gl-wgl-20261105T085328246726Z-8092",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s7-deferred-surface",
+      "attempt": "native-gl-wgl-20261105T085506869459Z-27744",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "backend": "native-gl-wgl",
+      "workload": "s7-deferred-device-isolation",
+      "attempt": "native-gl-wgl-20261105T085631278890Z-23940",
+      "status": "passed",
+      "failures": []
+    }
+  ],
+  "cpu": [
+    {
+      "log": "workspace-test-final.log",
+      "sha256": "547bdadacd412a695cc9b73b2f132449307356bc2daebf211ba68839f43938ca",
+      "rustPassed": 308,
+      "rustIgnored": 1,
+      "pythonRan": [],
+      "accepted": true
+    },
+    {
+      "log": "workspace-clippy-fixed.log",
+      "sha256": "167144e7e8448c47aaa3e6bf7a74f44adb48221e7a935d5f3a41bf4c2f38d2f3",
+      "rustPassed": 0,
+      "rustIgnored": 0,
+      "pythonRan": [],
+      "accepted": true
+    },
+    {
+      "log": "external-renderer-test.log",
+      "sha256": "e6c18f89302947b13f8ddf19887d2472137609313a5288e4bda1bbe6778c44c2",
+      "rustPassed": 10,
+      "rustIgnored": 0,
+      "pythonRan": [],
+      "accepted": true
+    },
+    {
+      "log": "integration-dx12-test.log",
+      "sha256": "9649bce10fddc770e929f6ca06cf464cb0b899bbf248017467dd1ee13aac7428",
+      "rustPassed": 28,
+      "rustIgnored": 0,
+      "pythonRan": [],
+      "accepted": true
+    },
+    {
+      "log": "integration-wgl-test.log",
+      "sha256": "56dcda262e15063c855715cb6850fcc29620fa1fe87fe1a38a1d1d7ed1651af3",
+      "rustPassed": 31,
+      "rustIgnored": 0,
+      "pythonRan": [],
+      "accepted": true
+    },
+    {
+      "log": "bench-python-test.log",
+      "sha256": "d34b6ed8255c6f99c03380a5dd05beccef20db91d04dd2ba6d7889e2ce699987",
+      "rustPassed": 0,
+      "rustIgnored": 0,
+      "pythonRan": [
+        17
+      ],
+      "accepted": true
+    },
+    {
+      "log": "integration-python-test.log",
+      "sha256": "bd5cc552a6f2eb3dc5d54d0d86ee9d1a48bb3611bb0a399b1b79ab39a560ce3f",
+      "rustPassed": 0,
+      "rustIgnored": 0,
+      "pythonRan": [
+        78
+      ],
+      "accepted": true,
+      "scope": "77 passed; aggregate import failure is recovered by packaged smoke log"
+    },
+    {
+      "log": "smoke-python-test-package.log",
+      "sha256": "9cab5573793849fe37ebaaeb023d182cac1c2e24d3ea395b41bd435dbd4e580f",
+      "rustPassed": 0,
+      "rustIgnored": 0,
+      "pythonRan": [
+        37
+      ],
+      "accepted": true
+    }
+  ],
+  "status": "verified"
+}

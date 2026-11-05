@@ -9,6 +9,13 @@ Fluxel Rendering turns renderer-selected scene data into portable GPU work.
 Its architecture favors one owner for each meaning and reuses the portable GPU
 contract instead of duplicating it for crate separation.
 
+The current acceptance is a bounded Windows DX12/desktop WGL subset, including
+the selected S7 Deferred consumer and a private S8 material-heavy Forward
+validation-index optimization. Those records validate the implemented subset;
+the broader architecture below remains a design direction, not a claim of
+browser, Metal, Vulkan, a general programmable pipeline, Forward+, shadows,
+PostFX, or full PBR support.
+
 ## Frame execution
 
 ```text
@@ -60,6 +67,26 @@ cache identity; it never receives `MaterialIr` or depends on Material. The
 opened RHI device then selects `ShaderRoute`/`ShaderTarget` and performs any
 backend Naga or native lowering, compilation, and ABI validation. This is a
 conceptual compilation flow, not the per-frame call chain.
+
+The selected S7 C1 path adds a typed `MaterialCodeNode` to that existing private
+function graph through `MaterialDefinition::with_code_node`. Its immutable WGSL
+`SourceUnit` remains an author-attributed contribution: `source_units()` is the
+single source authority, while aggregate `source()` and `source_id()` are
+derived compatibility getters. Preparation forwards those units to the normal
+Shader composer, where invalid WGSL and callable signatures refuse before GPU
+work.
+
+The bounded C2 extension now adds `Color` and
+`MetallicRoughness { properties }` surface outputs. The latter composes a
+zero-argument `Vec4` base-color root and a zero-argument `Vec2`
+metallic/perceptual-roughness root through separate generated evaluators in the
+same Shader request. The Material tests establish logical composition. The
+selected Renderer consumer remains a private PBR module, with inverse-transpose
+world normals, fixed world-space lighting, GGX/Smith/Schlick shading, and
+RGBA8 G-buffer plus depth; separate DX12/WGL development attempts now validate
+the bounded GPU outputs with independent numeric oracles. See
+[the Renderer design](design-renderer.md). Neither C1 nor C2 establishes a
+complete authoring graph, full PBR product, or general material-domain system.
 
 A shader module may contain several entry points; a GPU pipeline selects the
 applicable stages and fixed-function state. A Graph pass is an execution node,
@@ -113,7 +140,7 @@ buffers, textures, pipelines, bindings, and frame attachments.
 | --- | --- | --- |
 | `fluxel-renderer` | RenderScene, views, Feature/FramePipeline facade and reference consumers, preparation protocols and resolvers, residency, frame data, retirement, internal Graph | Mandatory visibility/sorting/geometry algorithms, gameplay/ECS, platform I/O, backend objects, host policy |
 | Renderer `graph` module | Logical resources/versions, dependencies, definedness, hazards, lifetimes, transitions, deterministic plans | Scene/material semantics, asset policy, backend allocation mechanisms |
-| `fluxel-material` | MaterialGraph, material functions and later code nodes, typed composition IR, evaluation-code generation, parameter/uniform schemas, instances, material variants, generic Shader contributions | Renderer dependency, graph passes, submission, executable shader IR |
+| `fluxel-material` | MaterialGraph, material functions and the selected Code Node path, typed composition IR, evaluation-code generation, parameter/uniform schemas, instances, material variants, generic Shader contributions | Renderer dependency, graph passes, submission, executable shader IR |
 | `fluxel-shader` | Generic source/function interfaces, complete program composition, logical WGSL/Naga validation/reflection, artifacts, variants, source-level compilation caches | MaterialGraph/MaterialIr semantics, scenes, rendering strategy, backend-private ABI or compiler ownership |
 | `fluxel-rhi` | Portable GPU resources, capabilities, device shader-route selection and target ABI, backend lowering/compilation, recording, submission, completion, presentation, device lifecycle | Renderer policy, graph declarations, gameplay/asset policy, native objects in its public API |
 

@@ -103,12 +103,22 @@ where
             _ => {}
         }
     }
-    pub(super) fn recycle_forward_readback(&mut self, work: super::PendingWork<B>, slot: usize) {
-        if let super::PendingWork::Forward { _frame, .. } = work {
-            let frame = *_frame;
-            let had_draws = !frame.draws.is_empty();
-            self.forward_frames[slot] =
-                Some(crate::frame_data::pool::recycle(frame.frame, had_draws));
+    pub(super) fn recycle_completed_readback(&mut self, work: super::PendingWork<B>, slot: usize) {
+        match work {
+            super::PendingWork::Forward { _frame, .. } => {
+                let frame = *_frame;
+                let had_draws = !frame.draws.is_empty();
+                self.forward_frames[slot] =
+                    Some(crate::frame_data::pool::recycle(frame.frame, had_draws));
+            }
+            super::PendingWork::Deferred { _frame, .. } => {
+                let frame = *_frame;
+                self.deferred_frames[slot] = Some(crate::frame_data::deferred_pool::recycle(
+                    frame.frame,
+                    frame.gbuffer,
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -127,9 +137,14 @@ pub(super) struct ForwardProgramKey {
     program: fluxel_shader::ShaderArtifactKey,
     layout: Vec<crate::preparation::VertexLayoutKey>,
     color_format: TextureFormat,
+    transform_uniform_bytes: u64,
 }
 impl ForwardProgramKey {
-    fn for_material(prepared: &PreparedMaterial, color_format: TextureFormat) -> Self {
+    fn for_material(
+        prepared: &PreparedMaterial,
+        color_format: TextureFormat,
+        transform_uniform_bytes: u64,
+    ) -> Self {
         Self {
             program: prepared.shader().cache_key().clone(),
             layout: prepared
@@ -139,6 +154,7 @@ impl ForwardProgramKey {
                 .map(crate::preparation::vertex_layout_key)
                 .collect(),
             color_format,
+            transform_uniform_bytes,
         }
     }
 }

@@ -58,6 +58,7 @@ where
         if let Err(error) = self.device.wait_idle().await {
             if matches!(error, Error::DeviceLost) {
                 self.plans.clear();
+                self.clear_deferred_caches();
                 self.forward_programs.clear();
                 self.forward_residency.clear();
                 self.forward_plans.clear();
@@ -69,9 +70,13 @@ where
         }
 
         let retired_submissions = self.slots.iter_mut().filter_map(Option::take).count();
-        let released_cached_plans =
-            self.plans.len() + self.forward_plans.len() + self.forward_surface_plans.len();
+        let released_cached_plans = self.plans.len()
+            + self.forward_plans.len()
+            + self.forward_surface_plans.len()
+            + self.deferred_plans.len()
+            + self.deferred_surface_plans.len();
         self.plans.clear();
+        self.clear_deferred_caches();
         self.forward_programs.clear();
         self.forward_residency.clear();
         self.forward_plans.clear();
@@ -98,6 +103,7 @@ where
     pub(super) fn note_device_loss(&mut self, error: &Error) {
         if matches!(error, Error::DeviceLost) {
             self.plans.clear();
+            self.clear_deferred_caches();
             self.forward_programs.clear();
             self.forward_residency.remove_device(self.device.id());
             self.forward_plans.clear();

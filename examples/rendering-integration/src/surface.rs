@@ -276,7 +276,10 @@ pub(crate) fn run_dx12(
     output: &Path,
 ) -> Result<(), Box<dyn Error>> {
     use raw_window_handle::HasWindowHandle;
-    let window = Window::new(WindowConfig::new("Fluxel S1 Surface DX12", 320, 180)?)?;
+    let window = Window::new(
+        WindowConfig::new("Fluxel S1 Surface DX12", 320, 180)?
+            .with_visibility(fluxel_host::WindowVisibility::Hidden),
+    )?;
     let raw = window
         .window_handle()
         .map_err(|error| format!("DX12 surface window handle: {error:?}"))?
@@ -294,6 +297,7 @@ pub(crate) fn run_dx12(
             Ok(())
         },
         &|frame, extent, color| {
+            window.show_background()?;
             crate::capture::capture_client(&window, output, frame, extent, color)
         },
     )
@@ -306,6 +310,9 @@ pub(crate) fn run_wgl(
     output: &Path,
 ) -> Result<(), Box<dyn Error>> {
     let surface = fluxel_rhi::gl::Gl::surface(&device)?;
+    // WGL needs a mapped drawable before its first visible presentation.
+    // This background transition preserves the current foreground window.
+    window.show_background()?;
     run_frames(
         device,
         surface,
@@ -317,6 +324,7 @@ pub(crate) fn run_wgl(
             Ok(())
         },
         &|frame, extent, color| {
+            window.show_background()?;
             crate::capture::capture_client(window, output, frame, extent, color)
         },
     )

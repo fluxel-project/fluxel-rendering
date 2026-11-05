@@ -18,19 +18,29 @@ erasure is used for extensibility. SoA/AoS layouts remain workload choices, and
 all frame GPU work uses the internal Graph. The public subset includes
 RenderScene storage, immutable snapshots, a bounded CPU feature facade, S5
 Forward's controlled `FramePipeline` preparation and pass/access declarations,
-and the demonstrated S6 typed opaque-Forward composition subset. That subset is
-not a general GPU-product or cross-pass Feature contract. See the
+and the demonstrated S6 typed opaque-Forward composition subset, plus the named
+S7 Deferred one-mesh acceptance subset, plus the selected S8 measured
+resource-strategy acceptance. Neither is a general GPU-product or
+cross-pass Feature contract. See the
 [Renderer design](documents/design-renderer.md) for the target contracts.
 
 ## Current implementation and target
 
 The checked-out `0.16` workspace contains the S0/S1 foundation plus the first
 implemented S2 Shader, S3 Material, closed S4 CPU scene/feature data boundary,
-S5 Forward integration, and a bounded S6 external typed-Feature composition.
+S5 Forward integration, a bounded S6 external typed-Feature composition, and a
+bounded S7 Deferred pipeline acceptance, and the selected S8 measured
+resource-strategy acceptance.
 S5 renders multiple meshes, layouts, materials and textures through Scene ->
 FramePipeline -> Graph -> RHI. S6 adds one independently built typed quad
 Feature, custom material, and external composed pipeline alongside those meshes
 in the same opaque Forward Graph pass; it does not claim general GPU products.
+S7 adds one selected Deferred path sharing scene/material inputs, with optional
+static external deformation, selected CodeNode and metallic/roughness PBR cases,
+and fixed-light output; it does not claim a general PBR or pipeline framework.
+S8 measures only the private validation-index strategy used by the material-heavy
+Forward consumer; it preserves the existing Graph and owner-validation authority
+and does not turn that consumer into a general optimization API.
 
 | Workspace crate | Current role |
 | --- | --- |
@@ -66,6 +76,12 @@ replacement, plus S5 multi-layout Forward, device isolation and Surface resize.
 It records structured refusals as well as accepted routes. Old logs
 and images are not compatibility or support evidence for the rebuilt path.
 
+The consumer also provides persistent `--demo-forward` and `--demo-deferred`
+windows on DX12/WGL. They start behind existing work without activation;
+offscreen workloads keep their context hosts hidden. See the
+[demo guide](tools/integration/README.md#visible-demos-and-hidden-tests) for the
+commands and separate window-capture/readback verification.
+
 ## Observed native evidence
 
 S0/S1 foundation acceptance is scoped to Windows DX12 and desktop OpenGL 4+
@@ -100,8 +116,16 @@ per backend, pending replacement/refusal coverage, and a two-frame native
 Surface resize matrix on DX12 and WGL. Its retained inputs and outputs are in
 the [S6 evidence index](documents/evidence/s6-typed-forward-candidate/index.json),
 and its release baseline is recorded separately in
-[the S6 measurement baseline](documents/s6-measurement-baseline.md). S7/S8 and
-the final full-workspace regression remain uncompleted.
+[the S6 measurement baseline](documents/s6-measurement-baseline.md). The
+[S7 Deferred acceptance record](documents/s7-deferred-closure.md) records six
+reviewed native attempts for the named DX12/WGL subset. The
+[S8 measured closure](documents/s8-measured-closure.md) records the final
+source-bound DX12/WGL material-heavy Forward evidence, lifecycle proof, and
+affected full-workspace regression. Its CPU/API elapsed measurements are not GPU
+durations: cold/warm/replacement results are 89.976/91.598/92.166% on DX12 and
+91.714/91.779/92.429% on WGL. This closes only the selected private-index
+strategy, not streaming, LOD, GPU culling, indirect work, browser, Metal,
+Vulkan, an SRP, Forward+, shadows, PostFX, or full PBR.
 
 Vulkan, browser WebGPU, and browser WebGL2 are deferred from this closure. The
 historical `fluxel-rendering-wasm` capsule has been removed. Browser restoration
@@ -179,6 +203,8 @@ planning and is not a rendering milestone.
 - [S4 CPU closure record](documents/s4-cpu-closure.md)
 - [S2/S3 named-Windows closure](documents/s2-s3-closure.md)
 - [S6 typed Forward closure record](documents/s6-typed-forward-closure.md)
+- [S7 Deferred closure record](documents/s7-deferred-closure.md)
+- [S8 measured closure record](documents/s8-measured-closure.md)
 - [S6 measurement baseline](documents/s6-measurement-baseline.md)
 - [RenderGraph design](documents/design-rendergraph.md)
 - [Architecture decisions](documents/adr/README.md)

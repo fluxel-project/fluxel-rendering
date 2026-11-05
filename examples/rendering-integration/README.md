@@ -1,5 +1,15 @@
 # Rendering integration fixtures
 
+For an interactive result, run `--demo-forward` or `--demo-deferred` with the
+`dx12` or `native-gl-wgl` feature. These animate in a real window until closed;
+automatic display stays behind existing work without activation. Offscreen
+selectors keep any WGL context hosts hidden. The
+[window and evidence guide](../../tools/integration/README.md#visible-demos-and-hidden-tests)
+describes execution, opt-in bounded capture, and independent visual review.
+The final S8 demo evidence uses actual per-HWND Windows Graphics Capture rather
+than an RHI fallback: DX12 may finish its hidden first frame before background
+reveal, while WGL maps its background window before its first visible render.
+
 This independent consumer was rebuilt from the current workspace. Its
 previous sources targeted removed APIs and are retired. No source is recovered
 from repository history, and previous execution results are not current evidence.
@@ -41,6 +51,12 @@ The [foundation closure review](../../documents/s0-s1-closure.md) remains the
 S0/S1 record. Each attempt archive identifies its exact source snapshot and
 target observations; historical source snapshots do not certify later edits.
 
+The [S8 measured closure](../../documents/s8-measured-closure.md) is the current
+final record for the selected material-heavy Forward validation-index workload,
+its lifecycle cases, visible demo evidence, and affected regression. S7 remains
+a historical Deferred archive; neither record establishes browser, Metal,
+Vulkan, a general programmable pipeline, Forward+, shadows, PostFX, or full PBR.
+
 ## Selected current inputs
 
 Selection was audited against the current sibling source and clean checkout
@@ -51,7 +67,7 @@ metadata before adding the new dependency edges.
 | Rendering | Current source snapshot; runner records revision and dirty state | Renderer facade, private Graph, Shader/Material and S5 Scene/Forward consumers |
 | RHI | `b5d569feace548a6ed498901deaf31a5efcaca61` | `fluxel-rhi =0.1.0`, defaults disabled; portable common execution, mapping, explicit copy transitions, readback, and configured Surface lease facts |
 | Bases | `ee640d57a8d7c32d251252d0e8b32950636a770c` | `fluxel-assets =0.13.4`, immutable snapshots and content replacement |
-| Host | `33a6bbb3fa15500e928b4192ca8f280b735034d9` | `fluxel-host =0.1.0`; owns native windows and lifecycle events in this executable, not a Renderer dependency |
+| Host | `8d101624c603a6c1e0badf729768c6b26e70fba8` | `fluxel-host =0.1.0`; owns hidden/background windows and lifecycle events in this executable, not a Renderer dependency |
 
 The first workload uses three immutable source snapshots under the same logical
 asset identity. They carry asymmetric sentinel prefixes and suffixes around

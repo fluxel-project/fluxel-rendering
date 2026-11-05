@@ -1,0 +1,522 @@
+{
+  "schemaVersion": 1,
+  "scope": "archived helper replay, no build/test/GPU execution",
+  "demos": [
+    {
+      "status": "passed",
+      "route": "deferred",
+      "denseReadbacks": 11,
+      "windowCaptures": 3,
+      "frames": [
+        {
+          "frame": 0,
+          "readback": {
+            "inside": 30979,
+            "outside": 242471
+          },
+          "window": {
+            "inside": 30979,
+            "outside": 241959
+          }
+        },
+        {
+          "frame": 1,
+          "readback": {
+            "inside": 30982,
+            "outside": 242243
+          }
+        },
+        {
+          "frame": 2,
+          "readback": {
+            "inside": 30985,
+            "outside": 242592
+          }
+        },
+        {
+          "frame": 3,
+          "readback": {
+            "inside": 30986,
+            "outside": 242870
+          }
+        },
+        {
+          "frame": 4,
+          "readback": {
+            "inside": 30978,
+            "outside": 242783
+          }
+        },
+        {
+          "frame": 5,
+          "readback": {
+            "inside": 30983,
+            "outside": 242299
+          },
+          "window": {
+            "inside": 30983,
+            "outside": 241924
+          }
+        },
+        {
+          "frame": 6,
+          "readback": {
+            "inside": 30973,
+            "outside": 242158
+          }
+        },
+        {
+          "frame": 7,
+          "readback": {
+            "inside": 30980,
+            "outside": 243227
+          }
+        },
+        {
+          "frame": 8,
+          "readback": {
+            "inside": 30990,
+            "outside": 243956
+          }
+        },
+        {
+          "frame": 9,
+          "readback": {
+            "inside": 30980,
+            "outside": 244357
+          }
+        },
+        {
+          "frame": 10,
+          "readback": {
+            "inside": 30982,
+            "outside": 244310
+          },
+          "window": {
+            "inside": 30982,
+            "outside": 243798
+          }
+        }
+      ],
+      "windowDecorationExclusion": "exclude bottom two 16x16 corner squares from schema-2 window capture only",
+      "scope": "fixed Color triangle; stable pixels; manual screenshot inspection required"
+    },
+    {
+      "status": "passed",
+      "route": "forward",
+      "denseReadbacks": 11,
+      "windowCaptures": 3,
+      "frames": [
+        {
+          "frame": 0,
+          "readback": {
+            "inside": 30979,
+            "outside": 242471
+          },
+          "window": {
+            "inside": 30979,
+            "outside": 241959
+          }
+        },
+        {
+          "frame": 1,
+          "readback": {
+            "inside": 30982,
+            "outside": 242243
+          }
+        },
+        {
+          "frame": 2,
+          "readback": {
+            "inside": 30985,
+            "outside": 242592
+          }
+        },
+        {
+          "frame": 3,
+          "readback": {
+            "inside": 30986,
+            "outside": 242870
+          }
+        },
+        {
+          "frame": 4,
+          "readback": {
+            "inside": 30978,
+            "outside": 242783
+          }
+        },
+        {
+          "frame": 5,
+          "readback": {
+            "inside": 30983,
+            "outside": 242299
+          },
+          "window": {
+            "inside": 30983,
+            "outside": 241924
+          }
+        },
+        {
+          "frame": 6,
+          "readback": {
+            "inside": 30973,
+            "outside": 242158
+          }
+        },
+        {
+          "frame": 7,
+          "readback": {
+            "inside": 30980,
+            "outside": 243227
+          }
+        },
+        {
+          "frame": 8,
+          "readback": {
+            "inside": 30990,
+            "outside": 243956
+          }
+        },
+        {
+          "frame": 9,
+          "readback": {
+            "inside": 30980,
+            "outside": 244357
+          }
+        },
+        {
+          "frame": 10,
+          "readback": {
+            "inside": 30982,
+            "outside": 244310
+          },
+          "window": {
+            "inside": 30982,
+            "outside": 243798
+          }
+        }
+      ],
+      "windowDecorationExclusion": "exclude bottom two 16x16 corner squares from schema-2 window capture only",
+      "scope": "fixed Color triangle; stable pixels; manual screenshot inspection required"
+    },
+    {
+      "status": "passed",
+      "route": "deferred",
+      "denseReadbacks": 11,
+      "windowCaptures": 3,
+      "frames": [
+        {
+          "frame": 0,
+          "readback": {
+            "inside": 30979,
+            "outside": 242471
+          },
+          "window": {
+            "inside": 30979,
+            "outside": 241959
+          }
+        },
+        {
+          "frame": 1,
+          "readback": {
+            "inside": 30982,
+            "outside": 242243
+          }
+        },
+        {
+          "frame": 2,
+          "readback": {
+            "inside": 30985,
+            "outside": 242592
+          }
+        },
+        {
+          "frame": 3,
+          "readback": {
+            "inside": 30986,
+            "outside": 242870
+          }
+        },
+        {
+          "frame": 4,
+          "readback": {
+            "inside": 30978,
+            "outside": 242783
+          }
+        },
+        {
+          "frame": 5,
+          "readback": {
+            "inside": 30983,
+            "outside": 242299
+          },
+          "window": {
+            "inside": 30983,
+            "outside": 241924
+          }
+        },
+        {
+          "frame": 6,
+          "readback": {
+            "inside": 30973,
+            "outside": 242158
+          }
+        },
+        {
+          "frame": 7,
+          "readback": {
+            "inside": 30980,
+            "outside": 243227
+          }
+        },
+        {
+          "frame": 8,
+          "readback": {
+            "inside": 30990,
+            "outside": 243956
+          }
+        },
+        {
+          "frame": 9,
+          "readback": {
+            "inside": 30980,
+            "outside": 244357
+          }
+        },
+        {
+          "frame": 10,
+          "readback": {
+            "inside": 30982,
+            "outside": 244310
+          },
+          "window": {
+            "inside": 30982,
+            "outside": 243798
+          }
+        }
+      ],
+      "windowDecorationExclusion": "exclude bottom two 16x16 corner squares from schema-2 window capture only",
+      "scope": "fixed Color triangle; stable pixels; manual screenshot inspection required"
+    },
+    {
+      "status": "passed",
+      "route": "forward",
+      "denseReadbacks": 11,
+      "windowCaptures": 3,
+      "frames": [
+        {
+          "frame": 0,
+          "readback": {
+            "inside": 30979,
+            "outside": 242471
+          },
+          "window": {
+            "inside": 30979,
+            "outside": 241959
+          }
+        },
+        {
+          "frame": 1,
+          "readback": {
+            "inside": 30982,
+            "outside": 242243
+          }
+        },
+        {
+          "frame": 2,
+          "readback": {
+            "inside": 30985,
+            "outside": 242592
+          }
+        },
+        {
+          "frame": 3,
+          "readback": {
+            "inside": 30986,
+            "outside": 242870
+          }
+        },
+        {
+          "frame": 4,
+          "readback": {
+            "inside": 30978,
+            "outside": 242783
+          }
+        },
+        {
+          "frame": 5,
+          "readback": {
+            "inside": 30983,
+            "outside": 242299
+          },
+          "window": {
+            "inside": 30983,
+            "outside": 241924
+          }
+        },
+        {
+          "frame": 6,
+          "readback": {
+            "inside": 30973,
+            "outside": 242158
+          }
+        },
+        {
+          "frame": 7,
+          "readback": {
+            "inside": 30980,
+            "outside": 243227
+          }
+        },
+        {
+          "frame": 8,
+          "readback": {
+            "inside": 30990,
+            "outside": 243956
+          }
+        },
+        {
+          "frame": 9,
+          "readback": {
+            "inside": 30980,
+            "outside": 244357
+          }
+        },
+        {
+          "frame": 10,
+          "readback": {
+            "inside": 30982,
+            "outside": 244310
+          },
+          "window": {
+            "inside": 30982,
+            "outside": 243798
+          }
+        }
+      ],
+      "windowDecorationExclusion": "exclude bottom two 16x16 corner squares from schema-2 window capture only",
+      "scope": "fixed Color triangle; stable pixels; manual screenshot inspection required"
+    }
+  ],
+  "performance": [
+    {
+      "campaign": "final-dx12-candidateAB-20261105T0905",
+      "runs": 84,
+      "drawChecks": 989800,
+      "backgroundChecks": 989800,
+      "textures": [
+        10,
+        1000
+      ]
+    },
+    {
+      "campaign": "final-native-gl-wgl-candidateAB-20261105T0905",
+      "runs": 84,
+      "drawChecks": 989800,
+      "backgroundChecks": 989800,
+      "textures": [
+        10,
+        1000
+      ]
+    }
+  ],
+  "lifecycle": [
+    {
+      "status": "passed",
+      "cases": [
+        {
+          "case": "device-old-cold",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        },
+        {
+          "case": "pending-old",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        },
+        {
+          "case": "pending-replacement",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "first-10pct-replaced",
+          "status": "passed"
+        },
+        {
+          "case": "device-new-cold",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        },
+        {
+          "case": "device-old-return",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        }
+      ],
+      "pending": [
+        1,
+        2,
+        2,
+        1,
+        0
+      ],
+      "scope": "native high-cardinality replacement/device paths; fault injection is witness-only"
+    },
+    {
+      "status": "passed",
+      "cases": [
+        {
+          "case": "device-old-cold",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        },
+        {
+          "case": "pending-old",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        },
+        {
+          "case": "pending-replacement",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "first-10pct-replaced",
+          "status": "passed"
+        },
+        {
+          "case": "device-new-cold",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        },
+        {
+          "case": "device-old-return",
+          "drawChecks": 10000,
+          "textures": 1000,
+          "generationSelection": "original",
+          "status": "passed"
+        }
+      ],
+      "pending": [
+        1,
+        2,
+        2,
+        1,
+        0
+      ],
+      "scope": "native high-cardinality replacement/device paths; fault injection is witness-only"
+    }
+  ]
+}

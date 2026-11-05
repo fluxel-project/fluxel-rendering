@@ -141,7 +141,7 @@ source = "git+https://github.com/fluxel-project/fluxel-bases.git?rev=ee640d57a8d
 [[package]]
 name = "fluxel-host"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-host?rev=33a6bbb3fa15500e928b4192ca8f280b735034d9#33a6bbb3fa15500e928b4192ca8f280b735034d9"
+source = "git+https://github.com/fluxel-project/fluxel-host?rev=8d101624c603a6c1e0badf729768c6b26e70fba8#8d101624c603a6c1e0badf729768c6b26e70fba8"
 dependencies = [
  "raw-window-handle",
  "windows",

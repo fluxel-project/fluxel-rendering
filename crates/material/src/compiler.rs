@@ -14,6 +14,7 @@ impl MaterialCompiler {
             contribution: ir.contribution(),
             parameters: ir.parameters,
             resources: ir.resources,
+            output: ir.output,
         })
     }
 

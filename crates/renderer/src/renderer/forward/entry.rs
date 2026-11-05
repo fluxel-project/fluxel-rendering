@@ -106,6 +106,11 @@ where
                     .map_err(RendererError::ForwardPreparation)?
             }
             crate::FrameTopology::ClearOnly => Vec::new(),
+            crate::FrameTopology::Deferred => {
+                return Err(RendererError::ForwardPipeline(
+                    crate::PipelineError::InvalidPhaseContribution,
+                ));
+            }
         };
         self.submit_prepared_forward(
             snapshot.clone(),

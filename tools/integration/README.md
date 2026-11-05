@@ -1,5 +1,34 @@
 # Native integration evidence tooling
 
+## Visible demos and hidden tests
+
+Run a persistent real-window demo on Windows with either `--demo-forward` or
+`--demo-deferred`:
+
+```powershell
+cargo +1.87.0 run --manifest-path examples/rendering-integration/Cargo.toml --features dx12 -- --demo-forward --output target/demo-forward
+```
+
+Select `native-gl-wgl` instead of `dx12` for WGL. Demos animate until the user
+closes their window. Automatic display happens behind existing windows without
+activation; users can select the demo normally. Offscreen workloads create any
+required WGL context windows hidden and never display them. WGL visible routes
+map the background drawable before rendering; DX12 can render before revealing.
+
+Window evidence uses independent per-HWND Windows Graphics Capture, never a
+temporary topmost window or an RHI readback substituted for a window image.
+Schema 2 retains client cropping and unchanged foreground/visibility/topmost
+observations; old schema 1 archives retain their historical scope.
+
+For bounded demo verification, set `FLUXEL_DEMO_EVIDENCE=1`: the same demo writes
+eleven deterministic inputs and companion readbacks, captures window frames
+0/5/10, and exits. `demo_review.py DEMO_OUTPUT --report REVIEW_JSON` independently
+checks retained geometry, texture, transform and tint against stable raw/window
+pixels. Only the bottom two 16x16 DWM decoration corners are excluded from the
+window check; raw readbacks have no decoration exclusion. Inspect the screenshots
+as well. This mode proves the fixed animated Color triangle, not a general
+scene, arbitrary materials, or an unattended platform certification.
+
 The independent `rendering-integration` executable has been rewritten for the
 Copy, offscreen Raster, supported Compute, fixed Surface presentation, direct
 Shader, and Material fixtures. The S2 direct-Shader raster and texture paths
@@ -52,6 +81,22 @@ It is not a general backend-support or Feature-support decision: the record is
 limited to the demonstrated opaque Forward composition and its named failures.
 Release timing is documented separately in the
 [S6 measurement baseline](../../documents/s6-measurement-baseline.md).
+
+S7 retains a separate formal Deferred archive: the six native attempts cover
+Deferred offscreen, Deferred Surface/resize, and Deferred device isolation on
+DX12 and WGL. The immutable archive, final self-contained 14-check review, and
+scope limits are recorded in the [S7 evidence directory](../../documents/evidence/s7-deferred-candidate/README.md)
+and [S7 Deferred closure record](../../documents/s7-deferred-closure.md). It is
+not a general backend, browser, PBR, or pipeline-support decision.
+
+S8's final material-heavy Forward record is separate from that S7 archive. The
+[S8 measured closure](../../documents/s8-measured-closure.md) binds current
+DX12/WGL inputs, lifecycle and affected-regression results, plus four formal
+demos with eleven raw frames and three real WGC window captures per route. CPU/API
+elapsed results (DX12 cold/warm/replacement 89.976/91.598/92.166%; WGL
+91.714/91.779/92.429%) are not GPU timings. WGC is the actual per-HWND capture
+path, never an RHI fallback. The bottom two 16x16 DWM corners are excluded only
+from schema-2 window checks, never raw readbacks or historical schema-1 material.
 
 `s5_review.py` reviews exactly six selected attempts: Forward, device isolation
 and Surface for each backend. Pass `--attempt CLOSURE ID BACKEND WORKLOAD` once

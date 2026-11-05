@@ -21,6 +21,11 @@ _SPEC = importlib.util.spec_from_file_location("integration_review", Path(__file
 assert _SPEC and _SPEC.loader
 _REVIEW = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_REVIEW)
+_CAPTURE_SPEC = importlib.util.spec_from_file_location(
+    "integration_capture_contract", Path(__file__).with_name("capture_contract.py"))
+assert _CAPTURE_SPEC and _CAPTURE_SPEC.loader
+capture_contract = importlib.util.module_from_spec(_CAPTURE_SPEC)
+_CAPTURE_SPEC.loader.exec_module(capture_contract)
 _SMOKE = _REVIEW._SMOKE
 BACKENDS = ("dx12", "native-gl-wgl")
 
@@ -259,7 +264,7 @@ def surface_failures(attempt: dict[str, Any], closure: Path, human: dict[str, An
     failures += human_link_failures(human, human_base, identifier, attempt)
     for frame, extent in enumerate(((320, 180), (256, 144))):
         capture, error = read_json(run / f"surface-client-frame-{frame}.capture.json")
-        if error or not isinstance(capture, dict) or capture.get("clientExtent") != list(extent) or capture.get("automaticVisualPass") is not False:
+        if error or capture_contract.capture_failures(capture, frame, extent, f"surface-client-frame-{frame}.bmp"):
             failures.append(f"surface capture metadata for frame {frame} is incomplete")
         try:
             data = (run / f"surface-client-frame-{frame}.bmp").read_bytes()
@@ -305,7 +310,12 @@ def human_link_failures(human: dict[str, Any] | None, base: Path, identifier: st
         if len(linked) == 3:
             shot, capture, verdict = linked
             capture_value, capture_error = read_json(capture); verdict_value, verdict_error = read_json(verdict)
-            if capture_error or verdict_error or not isinstance(capture_value, dict) or not isinstance(verdict_value, dict) or capture_value.get("image") != shot.name or verdict_value.get("image") != shot.name or verdict_value.get("status") != "passed":
+            extent = capture_value.get("clientExtent") if isinstance(capture_value, dict) else []
+            frame_index = capture_value.get("frame") if isinstance(capture_value, dict) else -1
+            if (capture_error or verdict_error
+                    or capture_contract.capture_failures(capture_value, frame_index, extent, shot.name)
+                    or capture_contract.verdict_failures(verdict_value, frame_index, shot.name,
+                                                         capture_value.get("schemaVersion") if isinstance(capture_value, dict) else None)):
                 failures.append("human review links inconsistent capture/verdict evidence")
             seen.add(shot.name)
     if seen != required: failures.append("human review does not bind both expected surface screenshots")

@@ -62,6 +62,71 @@ fn texture_manifest() -> TextureBindingManifest {
         .clone()
 }
 
+fn four_texture_manifest() -> TextureBindingManifest {
+    let mut graph = GraphBuilder::default();
+    let first = graph.create_texture(texture_desc()).unwrap();
+    let left = graph.create_texture(texture_desc()).unwrap();
+    let right = graph.create_texture(texture_desc()).unwrap();
+    let last = graph.create_texture(texture_desc()).unwrap();
+    let write = TextureUses {
+        stages: StageMask::COLOR_OUTPUT,
+        accesses: AccessMask::COLOR_WRITE,
+    };
+    let range = TextureRange::new(TextureAspects::COLOR, 0..1, 0..1);
+
+    graph
+        .add_pass("first", |pass| {
+            let _ = pass.write_texture_with_use(
+                first,
+                range.clone(),
+                write,
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )?;
+            pass.side_effect();
+            Ok(())
+        })
+        .unwrap();
+    graph
+        .add_pass("middle", |pass| {
+            let _ = pass.write_texture_with_use(
+                left,
+                range.clone(),
+                write,
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )?;
+            let _ = pass.write_texture_with_use(
+                right,
+                range.clone(),
+                write,
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )?;
+            pass.side_effect();
+            Ok(())
+        })
+        .unwrap();
+    graph
+        .add_pass("last", |pass| {
+            let _ = pass.write_texture_with_use(
+                last,
+                range,
+                write,
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )?;
+            pass.side_effect();
+            Ok(())
+        })
+        .unwrap();
+    GraphCompiler
+        .compile(&graph)
+        .unwrap()
+        .texture_bindings()
+        .clone()
+}
+
 fn texture_bindings(manifest: &TextureBindingManifest, device: DeviceId) -> Vec<TextureBinding> {
     manifest
         .requirements
@@ -303,6 +368,90 @@ fn texture_manifest_checks_description_ranges_device_and_incoming_layout() {
     assert_eq!(
         manifest.validate(device, &wrong_layout),
         Err(BindingError::IncompatibleIncomingState)
+    );
+}
+
+#[test]
+fn texture_manifest_accepts_shuffled_bindings_and_retains_input_guards() {
+    let manifest = four_texture_manifest();
+    let device = DeviceId::allocate().unwrap();
+    let valid = texture_bindings(&manifest, device);
+
+    let mut shuffled = valid.clone();
+    shuffled.rotate_left(1);
+    manifest.validate(device, &shuffled).unwrap();
+
+    assert_eq!(
+        manifest.validate(device, &valid[..3]),
+        Err(BindingError::MissingResource)
+    );
+    let mut duplicate = valid.clone();
+    duplicate.push(valid[0].clone());
+    assert_eq!(
+        manifest.validate(device, &duplicate),
+        Err(BindingError::DuplicateSlot)
+    );
+    let mut undeclared = valid.clone();
+    undeclared[0].slot.resource += 100;
+    assert_eq!(
+        manifest.validate(device, &undeclared),
+        Err(BindingError::UndeclaredResource)
+    );
+    let mut wrong_device = valid.clone();
+    wrong_device[0].device = DeviceId::allocate().unwrap();
+    assert_eq!(
+        manifest.validate(device, &wrong_device),
+        Err(BindingError::WrongDevice)
+    );
+    let mut wrong_incoming = valid;
+    wrong_incoming[0].layout = ImageLayout::General;
+    assert_eq!(
+        manifest.validate(device, &wrong_incoming),
+        Err(BindingError::IncompatibleIncomingState)
+    );
+}
+
+#[test]
+fn texture_alias_priority_uses_the_first_requirement_pair() {
+    let manifest = four_texture_manifest();
+    let requirements = manifest.requirements();
+    assert_eq!(requirements.len(), 4);
+    assert!(requirements[0].last_pass < requirements[3].first_pass);
+    assert!(requirements[1].first_pass <= requirements[2].last_pass);
+    assert!(requirements[2].first_pass <= requirements[1].last_pass);
+
+    let device = DeviceId::allocate().unwrap();
+    let mut bindings = texture_bindings(&manifest, device);
+    let first_instance = ResourceInstanceId::fresh().unwrap();
+    let second_instance = ResourceInstanceId::fresh().unwrap();
+    bindings[0].instance = first_instance;
+    bindings[3].instance = first_instance;
+    bindings[1].instance = second_instance;
+    bindings[2].instance = second_instance;
+
+    assert_eq!(
+        manifest.validate(device, &bindings),
+        Err(BindingError::AliasedResourcesRequireRecompile)
+    );
+}
+
+#[test]
+fn texture_aliases_retain_live_and_recompile_refusals() {
+    let manifest = four_texture_manifest();
+    let device = DeviceId::allocate().unwrap();
+
+    let mut overlapping = texture_bindings(&manifest, device);
+    overlapping[2].instance = overlapping[1].instance;
+    assert_eq!(
+        manifest.validate(device, &overlapping),
+        Err(BindingError::AliasedLiveResources)
+    );
+
+    let mut disjoint = texture_bindings(&manifest, device);
+    disjoint[3].instance = disjoint[0].instance;
+    assert_eq!(
+        manifest.validate(device, &disjoint),
+        Err(BindingError::AliasedResourcesRequireRecompile)
     );
 }
 

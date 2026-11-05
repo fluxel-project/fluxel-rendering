@@ -8,7 +8,15 @@ use fluxel_renderer::{
     PipelineError, RenderBounds, RenderId, VisibilityProvider,
 };
 
+pub mod code_node;
+pub mod deferred;
+pub mod deformation;
+pub mod pbr;
 pub mod quad;
+pub use code_node::ChannelMapVariant;
+pub use deferred::ExternalDeferredPipeline;
+pub use deformation::{BEND_SOURCE, BendFeature, BendInput};
+pub use pbr::{PROPERTIES as PBR_PROPERTIES, definition as pbr_definition};
 pub use quad::{
     ExternalComposedPipeline, PreparedQuads, QuadAssets, QuadFeature, QuadInput, QuadMarker,
     quad_geometry_data, quad_marker_material_definition,

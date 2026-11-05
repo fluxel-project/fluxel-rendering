@@ -8,6 +8,7 @@ mod admission;
 mod cache;
 mod compute;
 mod copy;
+mod deferred;
 mod error;
 mod forward;
 mod raster;
@@ -43,6 +44,7 @@ use crate::{
 };
 
 pub use admission::AdmissionError as ShaderAdmissionError;
+pub use deferred::{DeferredCacheStats, DeferredProbeFacts};
 pub use error::RendererError;
 pub use forward::ForwardCacheStats;
 pub use shutdown::ShutdownReport;
@@ -80,6 +82,15 @@ where
     forward_plans: Vec<Arc<crate::graph::ForwardPlan<B>>>,
     forward_surface_plans: Vec<Arc<crate::graph::SurfaceForwardPlan<B>>>,
     forward_plan_compilations: usize,
+    deferred_plan_compilations: usize,
+    deferred_probe_facts: Option<DeferredProbeFacts>,
+    deferred_programs: deferred::DeferredProgramCache<B>,
+    deferred_plans: Vec<Arc<crate::graph::DeferredPlan<B>>>,
+    deferred_surface_plans: Vec<Arc<crate::graph::DeferredPlan<B>>>,
+    deferred_residency: crate::residency::ForwardResidentCache<B>,
+    deferred_stats: DeferredCacheStats,
+    deferred_frames:
+        [Option<crate::frame_data::deferred_pool::DeferredFramePoolEntry<B>>; SLOT_COUNT],
     forward_residency: crate::residency::ForwardResidentCache<B>,
     forward_stats: forward::ForwardCacheStats,
     forward_frames: [Option<crate::residency::ForwardFrameBuffers<B>>; SLOT_COUNT],
@@ -107,6 +118,16 @@ pub(super) enum PendingWork<B>
 where
     B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend,
 {
+    Deferred {
+        _frame: Box<crate::residency::DeferredFrame<B>>,
+        plan: Arc<crate::graph::DeferredPlan<B>>,
+        extent: [u32; 2],
+        row_pitch: u32,
+    },
+    DeferredSurface {
+        _frame: Box<crate::residency::DeferredSurfaceFrame<B>>,
+        plan: Arc<crate::graph::DeferredPlan<B>>,
+    },
     Forward {
         _frame: Box<crate::residency::ForwardFrame<B>>,
         publication: forward::ForwardPublication,
@@ -167,6 +188,14 @@ where
             forward_plans: Vec::new(),
             forward_surface_plans: Vec::new(),
             forward_plan_compilations: 0,
+            deferred_plan_compilations: 0,
+            deferred_probe_facts: None,
+            deferred_programs: Default::default(),
+            deferred_plans: Vec::new(),
+            deferred_surface_plans: Vec::new(),
+            deferred_residency: Default::default(),
+            deferred_stats: Default::default(),
+            deferred_frames: std::array::from_fn(|_| None),
             forward_residency: Default::default(),
             forward_stats: Default::default(),
             forward_frames: std::array::from_fn(|_| None),
@@ -184,7 +213,7 @@ where
 
     /// Returns the plan identity only when exactly one private topology was compiled.
     pub fn plan_id(&self) -> Option<fluxel_rhi::api::PlanId> {
-        if self.plans.len() + self.forward_plan_compilations != 1 {
+        if self.compilations() != 1 {
             None
         } else {
             self.plans
@@ -192,12 +221,13 @@ where
                 .next()
                 .map(cache::CachedPlan::id)
                 .or_else(|| self.forward_plans.first().map(|plan| plan.id()))
+                .or_else(|| self.deferred_probe_facts.map(|facts| facts.plan))
         }
     }
 
     /// Returns the number of cached fixture topologies.
     pub fn compilations(&self) -> usize {
-        self.plans.len() + self.forward_plan_compilations
+        self.plans.len() + self.forward_plan_compilations + self.deferred_plan_compilations
     }
 
     /// Returns the number of frame binding sets that passed resource preflight.
