@@ -14,7 +14,7 @@
 > for the selected private validation-index strategy; its exact evidence boundary is
 > in the [S8 measured closure](s8-measured-closure.md). Cross-repository
 > documentation reconciliation and publication of that S7/S8 baseline are complete.
-> The [maintenance review](s0-s8-review-follow-up.md) records subsequent fixes
+> The [maintenance review](review-follow-up.md#current-maintenance-review) records subsequent fixes
 > and CPU gates without expanding those historical native acceptance claims.
 > Stage labels are work
 > packages, not release numbers or completion claims. The organization

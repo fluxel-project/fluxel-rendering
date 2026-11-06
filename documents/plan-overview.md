@@ -6,7 +6,7 @@
 
 ## Product direction
 
-The [S0–S8 maintenance review](s0-s8-review-follow-up.md) retains the existing
+The [S0–S8 maintenance review](review-follow-up.md#current-maintenance-review) retains the existing
 bounded architecture. A future cross-pass Feature needs a real producer and
 consumer before new public protocols are designed; it is not added scope here.
 

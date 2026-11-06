@@ -26,7 +26,7 @@ cross-pass Feature contract. See the
 
 ## Current implementation and target
 
-The [S0–S8 maintenance review](documents/s0-s8-review-follow-up.md) records the
+The [S0–S8 maintenance review](documents/review-follow-up.md#current-maintenance-review) records the
 texture subresource correction, submission-level CPU CI gates, and the boundary
 between retained historical native evidence and current maintenance checks.
 
