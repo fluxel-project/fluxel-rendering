@@ -158,9 +158,9 @@ pub(super) fn witness_surface(device: &Device<WitnessBackend>) -> Surface<Witnes
 }
 
 impl Renderer<WitnessBackend> {
-    async fn execute_forward<T: Send + Sync + 'static>(
+    async fn execute_forward(
         &mut self,
-        retained: T,
+        retained: crate::renderer::PendingInputs,
         frame: crate::residency::ForwardFrame<WitnessBackend>,
         publication: crate::renderer::forward::ForwardPublication,
     ) -> std::result::Result<Submission, RendererError> {

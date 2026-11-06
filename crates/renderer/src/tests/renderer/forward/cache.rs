@@ -35,7 +35,7 @@ fn blank_frame(device: &Device<WitnessBackend>) -> ForwardFrame<WitnessBackend> 
 
 fn execute(
     renderer: &mut Renderer<WitnessBackend>,
-    retained: Arc<()>,
+    retained: crate::renderer::PendingInputs,
     frame: ForwardFrame<WitnessBackend>,
 ) -> std::result::Result<Submission, RendererError> {
     block_on(renderer.execute_forward(retained, frame, ForwardPublication::default()))
@@ -387,7 +387,7 @@ fn forward_frame_pool_waits_for_readback_then_reuses_same_owner_instances() {
         frame.frame.target_instance,
         frame.frame.readback_instance,
     );
-    let submission = execute(&mut renderer, Arc::new(()), frame).unwrap();
+    let submission = execute(&mut renderer, crate::renderer::PendingInputs::None, frame).unwrap();
 
     assert!(renderer.forward_frames[submission.slot].is_none());
     assert_eq!(renderer.pending(), 1);
@@ -437,7 +437,12 @@ fn device_loss_clears_completed_frame_pool_before_backend_reentry() {
     // Seed a previously completed allocation; the failure path must clear it
     // together with every device-local cache before rejecting new work.
     renderer.forward_frames[0] = Some(crate::frame_data::pool::recycle(frame.frame, false));
-    let submission = execute(&mut renderer, Arc::new(()), blank_frame(&device)).unwrap();
+    let submission = execute(
+        &mut renderer,
+        crate::renderer::PendingInputs::None,
+        blank_frame(&device),
+    )
+    .unwrap();
 
     assert!(matches!(
         block_on(renderer.readback(&submission)),
@@ -445,7 +450,11 @@ fn device_loss_clears_completed_frame_pool_before_backend_reentry() {
     ));
     assert!(renderer.forward_frames.iter().all(Option::is_none));
     assert!(matches!(
-        execute(&mut renderer, Arc::new(()), blank_frame(&device)),
+        execute(
+            &mut renderer,
+            crate::renderer::PendingInputs::None,
+            blank_frame(&device)
+        ),
         Err(RendererError::RendererClosed)
     ));
 }

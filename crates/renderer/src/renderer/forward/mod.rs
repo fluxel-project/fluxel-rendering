@@ -1,6 +1,6 @@
 //! Device realization for the material-backed Forward consumer.
 use super::{
-    NEXT_PLAN_ORDINAL, PendingWork, Renderer, RendererError, SLOT_COUNT, Submission,
+    NEXT_PLAN_ORDINAL, PendingInputs, PendingWork, Renderer, RendererError, SLOT_COUNT, Submission,
     admission::{self, PipelineCapabilityFacts},
 };
 use crate::PreparedMaterial;

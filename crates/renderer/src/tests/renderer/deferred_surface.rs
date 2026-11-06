@@ -62,6 +62,11 @@ fn deferred_surface_retires_only_after_present_completion() {
         block_on(surface.acquire()).expect("image"),
     )
     .expect("Deferred Surface submit");
+    let facts = renderer
+        .deferred_probe_facts()
+        .expect("Deferred Surface facts");
+    assert_eq!(renderer.compilations(), 1);
+    assert_eq!(renderer.plan_id(), Some(facts.plan));
     assert_eq!(renderer.pending(), 1);
     assert!(
         block_on(renderer.readback(&submission)).is_err(),

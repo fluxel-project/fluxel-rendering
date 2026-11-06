@@ -33,6 +33,9 @@ Current supported consumers include bounded Forward preparation for multiple
 meshes, layouts, materials, and textures; a controlled opaque typed Feature in
 the same pass; and a selected Deferred path with one mesh, fixed lighting,
 optional position deformation, and selected metallic/roughness material output.
+The external position deformer supplies a compute function and typed parameters;
+Graph orders its GPU position-buffer production before geometry vertex fetch,
+and Renderer retains the product until completion.
 They do not form a general programmable pipeline, arbitrary cross-pass Feature
 model, runtime plugin system, transparent compositor, complete PBR system,
 Forward+, shadow, PostFX, streaming, LOD, or GPU-culling API.

@@ -27,7 +27,7 @@ fn blank_frame(device: &Device<WitnessBackend>) -> ForwardFrame<WitnessBackend> 
 
 fn execute(
     renderer: &mut Renderer<WitnessBackend>,
-    retained: Arc<()>,
+    retained: crate::renderer::PendingInputs,
     frame: ForwardFrame<WitnessBackend>,
 ) -> std::result::Result<Submission, RendererError> {
     block_on(renderer.execute_forward(retained, frame, ForwardPublication::default()))
@@ -35,7 +35,7 @@ fn execute(
 
 fn execute_surface(
     renderer: &mut Renderer<WitnessBackend>,
-    retained: Arc<()>,
+    retained: crate::renderer::PendingInputs,
     frame: SurfaceForwardFrame<WitnessBackend>,
     topology: FrameTopology,
     image: SurfaceImage<WitnessBackend>,
@@ -58,17 +58,23 @@ fn execute_surface(
     ))
 }
 
+fn retained() -> crate::renderer::PendingInputs {
+    crate::renderer::PendingInputs::Bytes {
+        _bytes: Arc::new(Vec::new()),
+    }
+}
+
 #[test]
 fn surface_forward_requires_present_frontier_before_retiring_owner() {
     let (device, native) = fixture(Script::AcceptedWrongFrontier);
     let mut renderer = Renderer::new(device.clone()).unwrap();
     let mut surface = witness_surface(&device);
-    let retained = Arc::new(());
+    let retained = Arc::new(Vec::new());
     let weak = Arc::downgrade(&retained);
     let image = block_on(surface.acquire()).unwrap();
     let submission = execute_surface(
         &mut renderer,
-        retained,
+        crate::renderer::PendingInputs::Bytes { _bytes: retained },
         blank_surface_frame(&device),
         FrameTopology::OpaqueForward,
         image,
@@ -95,7 +101,7 @@ fn surface_forward_cache_keeps_topologies_separate() {
         let image = block_on(surface.acquire()).unwrap();
         let submission = execute_surface(
             &mut renderer,
-            Arc::new(()),
+            retained(),
             blank_surface_frame(&device),
             topology,
             image,
@@ -104,6 +110,39 @@ fn surface_forward_cache_keeps_topologies_separate() {
         block_on(renderer.complete(&submission)).unwrap();
     }
     assert_eq!(renderer.compilations(), initial + 2);
+}
+
+#[test]
+fn surface_only_forward_plan_has_a_diagnostic_identity() {
+    let (device, _) = fixture(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).unwrap();
+    let mut surface = witness_surface(&device);
+
+    let first = execute_surface(
+        &mut renderer,
+        crate::renderer::PendingInputs::None,
+        blank_surface_frame(&device),
+        FrameTopology::OpaqueForward,
+        block_on(surface.acquire()).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(renderer.compilations(), 1);
+    let plan = renderer.plan_id().expect("one Surface Forward plan");
+    assert_eq!(plan.device, device.id());
+    block_on(renderer.complete(&first)).unwrap();
+
+    let second = execute_surface(
+        &mut renderer,
+        retained(),
+        blank_surface_frame(&device),
+        FrameTopology::OpaqueForward,
+        block_on(surface.acquire()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(renderer.compilations(), 1);
+    assert_eq!(renderer.plan_id(), Some(plan));
+    block_on(renderer.complete(&second)).unwrap();
 }
 
 #[test]
@@ -117,7 +156,7 @@ fn cached_surface_plan_rejects_an_illegal_current_contribution_before_mapping_or
     };
     let calls = std::cell::Cell::new(0);
     let first = block_on(renderer.execute_forward_surface(
-        Arc::new(()),
+        retained(),
         blank_surface_frame(&device),
         ForwardPublication::default(),
         FrameTopology::OpaqueForward,
@@ -137,7 +176,7 @@ fn cached_surface_plan_rejects_an_illegal_current_contribution_before_mapping_or
 
     assert!(matches!(
         block_on(renderer.execute_forward_surface(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_surface_frame(&device),
             ForwardPublication::default(),
             FrameTopology::OpaqueForward,
@@ -178,7 +217,7 @@ fn stale_surface_forward_image_is_rejected_before_execution() {
     assert!(matches!(
         execute_surface(
             &mut renderer,
-            Arc::new(()),
+            retained(),
             blank_surface_frame(&device),
             FrameTopology::OpaqueForward,
             image,
@@ -210,7 +249,7 @@ fn surface_forward_rejects_a_lease_with_a_different_extent_during_raster_recordi
     assert!(matches!(
         execute_surface(
             &mut renderer,
-            Arc::new(()),
+            retained(),
             blank_surface_frame(&device),
             FrameTopology::OpaqueForward,
             image,
@@ -245,7 +284,7 @@ fn surface_forward_rejects_a_lease_with_a_different_pipeline_format_during_raste
     assert!(matches!(
         execute_surface(
             &mut renderer,
-            Arc::new(()),
+            retained(),
             blank_surface_frame(&device),
             FrameTopology::OpaqueForward,
             image,
@@ -295,9 +334,14 @@ fn surface_forward_plan_rejects_a_different_access_shape() {
 fn forward_executor_retires_blank_frame_after_confirmed_completion() {
     let (device, native) = fixture(Script::AcceptedExact);
     let mut renderer = Renderer::new(device.clone()).unwrap();
-    let retained = Arc::new(());
+    let retained = Arc::new(Vec::new());
     let weak = Arc::downgrade(&retained);
-    let submission = execute(&mut renderer, retained, blank_frame(&device)).unwrap();
+    let submission = execute(
+        &mut renderer,
+        crate::renderer::PendingInputs::Bytes { _bytes: retained },
+        blank_frame(&device),
+    )
+    .unwrap();
 
     assert_eq!(renderer.pending(), 1);
     assert!(weak.upgrade().is_some());
@@ -314,11 +358,15 @@ fn forward_partial_or_indeterminate_execution_retains_real_frame_and_snapshot() 
     for script in [Script::PartialAccepted, Script::Indeterminate] {
         let (device, native) = fixture(script);
         let mut renderer = Renderer::new(device.clone()).unwrap();
-        let retained = Arc::new(());
+        let retained = Arc::new(Vec::new());
         let weak = Arc::downgrade(&retained);
 
         assert!(matches!(
-            execute(&mut renderer, retained, blank_frame(&device)),
+            execute(
+                &mut renderer,
+                crate::renderer::PendingInputs::Bytes { _bytes: retained },
+                blank_frame(&device)
+            ),
             Err(RendererError::RetainedExecution { .. })
         ));
         assert_eq!(renderer.pending(), 1);
@@ -335,9 +383,14 @@ fn forward_partial_or_indeterminate_execution_retains_real_frame_and_snapshot() 
 fn forward_completion_loss_keeps_owner_and_quarantines_renderer() {
     let (device, native) = fixture(Script::AcceptedCompletionDeviceLost);
     let mut renderer = Renderer::new(device.clone()).unwrap();
-    let retained = Arc::new(());
+    let retained = Arc::new(Vec::new());
     let weak = Arc::downgrade(&retained);
-    let submission = execute(&mut renderer, retained, blank_frame(&device)).unwrap();
+    let submission = execute(
+        &mut renderer,
+        crate::renderer::PendingInputs::Bytes { _bytes: retained },
+        blank_frame(&device),
+    )
+    .unwrap();
 
     assert!(matches!(
         block_on(renderer.readback(&submission)),
@@ -350,7 +403,11 @@ fn forward_completion_loss_keeps_owner_and_quarantines_renderer() {
     assert!(weak.upgrade().is_some());
     let commands = native.command_calls.load(Ordering::SeqCst);
     assert!(matches!(
-        execute(&mut renderer, Arc::new(()), blank_frame(&device)),
+        execute(
+            &mut renderer,
+            crate::renderer::PendingInputs::None,
+            blank_frame(&device)
+        ),
         Err(RendererError::RendererClosed)
     ));
     assert_eq!(native.command_calls.load(Ordering::SeqCst), commands);
@@ -360,9 +417,14 @@ fn forward_completion_loss_keeps_owner_and_quarantines_renderer() {
 fn forward_readback_loss_after_completion_releases_owner_but_quarantines_renderer() {
     let (device, native) = fixture(Script::AcceptedReadbackDeviceLost);
     let mut renderer = Renderer::new(device.clone()).unwrap();
-    let retained = Arc::new(());
+    let retained = Arc::new(Vec::new());
     let weak = Arc::downgrade(&retained);
-    let submission = execute(&mut renderer, retained, blank_frame(&device)).unwrap();
+    let submission = execute(
+        &mut renderer,
+        crate::renderer::PendingInputs::Bytes { _bytes: retained },
+        blank_frame(&device),
+    )
+    .unwrap();
 
     assert!(matches!(
         block_on(renderer.readback(&submission)),
@@ -377,7 +439,11 @@ fn forward_readback_loss_after_completion_releases_owner_but_quarantines_rendere
     // failure must not put its allocation into a reusable frame slot.
     assert!(renderer.forward_frames.iter().all(Option::is_none));
     assert!(matches!(
-        execute(&mut renderer, Arc::new(()), blank_frame(&device)),
+        execute(
+            &mut renderer,
+            crate::renderer::PendingInputs::None,
+            blank_frame(&device)
+        ),
         Err(RendererError::RendererClosed)
     ));
     assert_eq!(native.waits.load(Ordering::SeqCst), 1);
@@ -387,11 +453,15 @@ fn forward_readback_loss_after_completion_releases_owner_but_quarantines_rendere
 fn forward_recording_failure_retains_owner_until_successful_idle() {
     let (device, native) = fixture(Script::RecordingFailureAfterPrefix);
     let mut renderer = Renderer::new(device.clone()).unwrap();
-    let retained = Arc::new(());
+    let retained = Arc::new(Vec::new());
     let weak = Arc::downgrade(&retained);
 
     assert!(matches!(
-        execute(&mut renderer, retained, blank_frame(&device)),
+        execute(
+            &mut renderer,
+            crate::renderer::PendingInputs::Bytes { _bytes: retained },
+            blank_frame(&device)
+        ),
         Err(RendererError::RetainedExecution {
             status: ExecutionStatus::PartiallyAccepted,
             ..
@@ -412,11 +482,15 @@ fn forward_recording_failure_retains_owner_until_successful_idle() {
 fn forward_finish_loss_quarantines_and_preserves_uncertain_owner() {
     let (device, native) = fixture(Script::FinishDeviceLost);
     let mut renderer = Renderer::new(device.clone()).unwrap();
-    let retained = Arc::new(());
+    let retained = Arc::new(Vec::new());
     let weak = Arc::downgrade(&retained);
 
     assert!(matches!(
-        execute(&mut renderer, retained, blank_frame(&device)),
+        execute(
+            &mut renderer,
+            crate::renderer::PendingInputs::Bytes { _bytes: retained },
+            blank_frame(&device)
+        ),
         Err(RendererError::RetainedExecution {
             execution_error: Some(Error::DeviceLost),
             ..
@@ -429,7 +503,11 @@ fn forward_finish_loss_quarantines_and_preserves_uncertain_owner() {
     let commands = native.command_calls.load(Ordering::SeqCst);
 
     assert!(matches!(
-        execute(&mut renderer, Arc::new(()), blank_frame(&device)),
+        execute(
+            &mut renderer,
+            crate::renderer::PendingInputs::None,
+            blank_frame(&device)
+        ),
         Err(RendererError::RendererClosed)
     ));
     assert_eq!(native.command_calls.load(Ordering::SeqCst), commands);
@@ -448,7 +526,7 @@ fn forward_clean_rejection_releases_real_owners_without_pending_slot() {
     let created_before = native.created_buffers.load(Ordering::SeqCst);
 
     assert!(matches!(
-        execute(&mut renderer, Arc::new(()), blank_frame(&device)),
+        execute(&mut renderer, retained(), blank_frame(&device)),
         Err(RendererError::ForwardOperation { .. })
     ));
     assert_eq!(renderer.pending(), 0);
@@ -469,7 +547,7 @@ fn forward_malformed_uniform_upload_refuses_before_execution_begins() {
     let commands = native.command_calls.load(Ordering::SeqCst);
 
     assert!(matches!(
-        execute(&mut renderer, Arc::new(()), frame),
+        execute(&mut renderer, retained(), frame),
         Err(RendererError::ForwardOperation { .. })
     ));
     assert_eq!(native.command_calls.load(Ordering::SeqCst), commands);

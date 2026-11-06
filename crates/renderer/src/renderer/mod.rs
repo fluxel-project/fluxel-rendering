@@ -19,7 +19,6 @@ mod submission;
 mod validation;
 
 use std::{
-    any::Any,
     collections::HashMap,
     mem,
     sync::{Arc, atomic::AtomicU64},
@@ -105,13 +104,31 @@ where
     B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend,
 {
     pub(super) serial: u64,
-    pub(super) _snapshot: Box<dyn Any + Send + Sync>,
+    pub(super) _inputs: PendingInputs,
     pub(super) ticket: Option<ReadbackTicket<B>>,
     pub(super) outcome: Outcome<B>,
     pub(super) recording_error: Option<Error>,
     pub(super) execution_error: Option<Error>,
     pub(super) workload: PendingWork<B>,
     pub(super) device: Device<B>,
+}
+
+/// Concrete CPU inputs held beside submitted GPU work.
+///
+/// Fixture uploads have completed before execution starts, so their immutable
+/// byte owner is sufficient. Forward and Deferred keep both the scene snapshot
+/// and every resolved draw input, preserving the exact generations used to
+/// assemble the frame until completion retires it.
+pub(super) enum PendingInputs {
+    #[cfg(test)]
+    None,
+    Bytes {
+        _bytes: Arc<Vec<u8>>,
+    },
+    Frame {
+        _snapshot: crate::FrameSnapshot<crate::ForwardResources>,
+        _inputs: Vec<crate::ForwardDrawInput>,
+    },
 }
 
 pub(super) enum PendingWork<B>
@@ -221,7 +238,9 @@ where
                 .next()
                 .map(cache::CachedPlan::id)
                 .or_else(|| self.forward_plans.first().map(|plan| plan.id()))
-                .or_else(|| self.deferred_probe_facts.map(|facts| facts.plan))
+                .or_else(|| self.forward_surface_plans.first().map(|plan| plan.id()))
+                .or_else(|| self.deferred_plans.first().map(|plan| plan.id()))
+                .or_else(|| self.deferred_surface_plans.first().map(|plan| plan.id()))
         }
     }
 
@@ -292,11 +311,11 @@ where
     /// Records the ownership result after `finish` has supplied authoritative
     /// execution facts. All fixture paths use this to keep their result and
     /// retention semantics identical.
-    pub(super) fn settle_submission<T: Send + Sync + 'static>(
+    pub(super) fn settle_submission(
         &mut self,
         slot: usize,
         serial: u64,
-        snapshot: T,
+        inputs: PendingInputs,
         ticket: Option<ReadbackTicket<B>>,
         execution: (Outcome<B>, Result<(), Error>),
         workload: PendingWork<B>,
@@ -331,7 +350,7 @@ where
         {
             self.slots[slot] = Some(Pending {
                 serial,
-                _snapshot: Box::new(snapshot),
+                _inputs: inputs,
                 ticket,
                 outcome,
                 recording_error: recording_error.clone(),
@@ -354,7 +373,7 @@ where
         };
         self.slots[slot] = Some(Pending {
             serial,
-            _snapshot: Box::new(snapshot),
+            _inputs: inputs,
             ticket,
             outcome,
             recording_error: None,

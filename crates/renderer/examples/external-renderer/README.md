@@ -18,6 +18,12 @@ pipeline demonstrate the controlled opaque Forward composition seam: the Feature
 provides prepared requests and receives a resolved read scope, while Renderer
 retains Graph, RHI, and lifetime ownership.
 
+Its `BendFeature` implements `DeferredPositionDeformer`: typed parameters and a
+WGSL function feed a Renderer-owned compute pass whose position buffer is read
+by the subsequent Deferred geometry pass. Native offscreen and Surface consumers
+live in `../rendering-integration`; this CPU reference alone does not certify
+that GPU execution.
+
 Run from this directory:
 
 ```powershell

@@ -1,4 +1,6 @@
-use super::{PendingWork, Renderer, RendererError, Submission, validate_read_set_requirements};
+use super::{
+    PendingInputs, PendingWork, Renderer, RendererError, Submission, validate_read_set_requirements,
+};
 use crate::{
     graph::{
         ReadSetRasterFrame,
@@ -120,7 +122,16 @@ where
             extent: EXTENT,
             row_pitch: 256,
         };
-        self.settle_submission(slot, serial, snapshot, ticket, (outcome, recorded), work)
+        self.settle_submission(
+            slot,
+            serial,
+            PendingInputs::Bytes {
+                _bytes: snapshot.value_arc(),
+            },
+            ticket,
+            (outcome, recorded),
+            work,
+        )
     }
 }
 pub(super) fn validate(

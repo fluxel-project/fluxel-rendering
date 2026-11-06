@@ -10,6 +10,12 @@ direct Shader and Material composition, bounded Forward work, controlled opaque
 Feature composition, selected Deferred work, and the material-heavy validation
 workload. These are concrete consumers, not a general graphics API.
 
+The Deferred deformation workloads use the independent consumer's `BendFeature`
+to produce positions in a Graph compute pass and consume them as geometry vertex
+input. Offscreen and Surface paths exercise this bounded cross-pass GPU product;
+its source, parameters, readbacks and pending-owner facts belong to each evidence
+attempt. Historical acceptance does not certify a changed checkout.
+
 For an interactive result, select `dx12` or `native-gl-wgl` and run a demo:
 
 ```powershell

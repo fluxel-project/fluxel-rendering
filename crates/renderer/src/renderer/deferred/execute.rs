@@ -12,9 +12,9 @@ impl<B> Renderer<B>
 where
     B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend + RasterBackend,
 {
-    pub(super) async fn execute_deferred_probe<T: Send + Sync + 'static, F>(
+    pub(super) async fn execute_deferred_probe<F>(
         &mut self,
-        retained: T,
+        retained: PendingInputs,
         frame: DeferredFrame<B>,
         declare: F,
     ) -> Result<Submission, RendererError>
@@ -156,9 +156,9 @@ where
         Ok(())
     }
 
-    pub(super) async fn execute_deferred_surface<T: Send + Sync + 'static, F>(
+    pub(super) async fn execute_deferred_surface<F>(
         &mut self,
-        retained: T,
+        retained: PendingInputs,
         frame: DeferredSurfaceFrame<B>,
         image: SurfaceImage<B>,
         declare: F,

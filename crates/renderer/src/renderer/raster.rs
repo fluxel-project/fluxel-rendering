@@ -1,5 +1,5 @@
 use super::{
-    PendingWork, Renderer, RendererError, Submission, validate_raster_input,
+    PendingInputs, PendingWork, Renderer, RendererError, Submission, validate_raster_input,
     validate_raster_requirements,
 };
 use crate::residency::{RasterBuffers, SurfaceRasterBuffers};
@@ -84,7 +84,16 @@ where
             extent,
             row_pitch,
         };
-        self.settle_submission(slot, serial, snapshot, ticket, (outcome, recorded), work)
+        self.settle_submission(
+            slot,
+            serial,
+            PendingInputs::Bytes {
+                _bytes: snapshot.value_arc(),
+            },
+            ticket,
+            (outcome, recorded),
+            work,
+        )
     }
 
     /// Submits the fixed triangle fixture directly to one acquired surface image.
@@ -168,6 +177,15 @@ where
             _pipeline: pipeline,
             plan,
         };
-        self.settle_submission(slot, serial, snapshot, None, (outcome, recorded), work)
+        self.settle_submission(
+            slot,
+            serial,
+            PendingInputs::Bytes {
+                _bytes: snapshot.value_arc(),
+            },
+            None,
+            (outcome, recorded),
+            work,
+        )
     }
 }

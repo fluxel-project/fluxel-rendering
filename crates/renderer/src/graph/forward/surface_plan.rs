@@ -98,6 +98,9 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
     pub(crate) fn submission(&self) -> &SubmissionPlan<B> {
         &self.submission
     }
+    pub(crate) fn id(&self) -> PlanId {
+        self.id
+    }
     pub(crate) fn upload_step(&self) -> StepId {
         StepId {
             plan: self.id,

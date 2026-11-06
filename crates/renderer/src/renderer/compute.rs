@@ -1,4 +1,6 @@
-use super::{PendingWork, Renderer, RendererError, Submission, validate_compute_input};
+use super::{
+    PendingInputs, PendingWork, Renderer, RendererError, Submission, validate_compute_input,
+};
 use crate::residency::ComputeBuffers;
 use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_rhi::{
@@ -78,6 +80,15 @@ where
             _pipeline: pipeline,
             plan,
         };
-        self.settle_submission(slot, serial, snapshot, ticket, (outcome, recorded), work)
+        self.settle_submission(
+            slot,
+            serial,
+            PendingInputs::Bytes {
+                _bytes: snapshot.value_arc(),
+            },
+            ticket,
+            (outcome, recorded),
+            work,
+        )
     }
 }

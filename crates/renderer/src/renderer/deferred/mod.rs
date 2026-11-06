@@ -20,7 +20,7 @@ pub(crate) use program::DeferredProgramCache;
 #[path = "../../tests/renderer/deferred_preparation.rs"]
 mod test_preparation;
 
-use super::{Renderer, RendererError, Submission};
+use super::{PendingInputs, Renderer, RendererError, Submission};
 use crate::{
     ForwardAssets, ForwardResources, FramePipeline, FrameSnapshot, RenderBounds, RenderViewId,
 };
@@ -166,9 +166,14 @@ where
             .prepare_deferred_frame(input)
             .await
             .map_err(|error| self.observe_renderer_error(error))?;
-        self.execute_deferred_probe((snapshot.clone(), inputs), frame, |context| {
-            pipeline.contribute_deferred(&selected, context)
-        })
+        self.execute_deferred_probe(
+            PendingInputs::Frame {
+                _snapshot: snapshot.clone(),
+                _inputs: inputs,
+            },
+            frame,
+            |context| pipeline.contribute_deferred(&selected, context),
+        )
         .await
     }
 
@@ -228,9 +233,15 @@ where
             .prepare_deferred_surface_frame(input, format)
             .await
             .map_err(|error| self.observe_renderer_error(error))?;
-        self.execute_deferred_surface((snapshot.clone(), inputs), frame, image, |context| {
-            pipeline.contribute_deferred(&selected, context)
-        })
+        self.execute_deferred_surface(
+            PendingInputs::Frame {
+                _snapshot: snapshot.clone(),
+                _inputs: inputs,
+            },
+            frame,
+            image,
+            |context| pipeline.contribute_deferred(&selected, context),
+        )
         .await
     }
 }

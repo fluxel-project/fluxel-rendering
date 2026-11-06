@@ -370,7 +370,10 @@ where
                 ],
             });
         }
-        let retained = (retained_snapshot, inputs);
+        let retained = PendingInputs::Frame {
+            _snapshot: retained_snapshot,
+            _inputs: inputs,
+        };
         let preparation_elapsed_ns = preparation_started.elapsed().as_nanos();
         let result = match (surface, offscreen_frame.take(), surface_frame.take()) {
             (Some((image, _)), None, Some(frame)) => {

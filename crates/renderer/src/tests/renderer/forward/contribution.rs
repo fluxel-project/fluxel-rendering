@@ -192,7 +192,7 @@ fn cached_forward_plan_declares_the_current_contribution_once_before_reuse() {
     let initial = renderer.compilations();
 
     let first = block_on(renderer.execute_forward_with_contribution(
-        Arc::new(()),
+        crate::renderer::PendingInputs::None,
         blank_frame(&device),
         ForwardPublication::default(),
         FrameTopology::OpaqueForward,
@@ -208,7 +208,7 @@ fn cached_forward_plan_declares_the_current_contribution_once_before_reuse() {
     assert_eq!(renderer.compilations(), initial + 1);
 
     let second = block_on(renderer.execute_forward_with_contribution(
-        Arc::new(()),
+        crate::renderer::PendingInputs::None,
         blank_frame(&device),
         ForwardPublication::default(),
         FrameTopology::OpaqueForward,
@@ -233,7 +233,7 @@ fn cached_forward_plan_rejects_the_current_illegal_contribution_before_mapping_o
         batches: 0,
     };
     let first = block_on(renderer.execute_forward_with_contribution(
-        Arc::new(()),
+        crate::renderer::PendingInputs::None,
         blank_frame(&device),
         ForwardPublication::default(),
         FrameTopology::OpaqueForward,
@@ -248,7 +248,7 @@ fn cached_forward_plan_rejects_the_current_illegal_contribution_before_mapping_o
 
     assert!(matches!(
         block_on(renderer.execute_forward_with_contribution(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_frame(&device),
             ForwardPublication::default(),
             FrameTopology::OpaqueForward,
@@ -337,7 +337,7 @@ fn assert_opaque_refusal(case: OpaqueRefusal) {
     let finishes = native.finishes.load(Ordering::SeqCst);
     assert!(matches!(
         block_on(renderer.execute_forward_with_contribution(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_frame(&device),
             ForwardPublication::default(),
             FrameTopology::OpaqueForward,
@@ -366,7 +366,7 @@ fn assert_opaque_refusal(case: OpaqueRefusal) {
     assert_eq!(renderer.pending(), 0, "first {case:?}");
 
     let accepted = block_on(renderer.execute_forward_with_contribution(
-        Arc::new(()),
+        crate::renderer::PendingInputs::None,
         blank_frame(&device),
         ForwardPublication::default(),
         FrameTopology::OpaqueForward,
@@ -380,7 +380,7 @@ fn assert_opaque_refusal(case: OpaqueRefusal) {
     let finishes = native.finishes.load(Ordering::SeqCst);
     assert!(matches!(
         block_on(renderer.execute_forward_with_contribution(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_frame(&device),
             ForwardPublication::default(),
             FrameTopology::OpaqueForward,

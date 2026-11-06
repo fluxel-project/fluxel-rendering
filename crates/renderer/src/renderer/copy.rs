@@ -1,4 +1,6 @@
-use super::{PendingWork, Renderer, RendererError, Submission, validate_copy_requirements};
+use super::{
+    PendingInputs, PendingWork, Renderer, RendererError, Submission, validate_copy_requirements,
+};
 use crate::graph::CopyFrame;
 use crate::residency::UploadBuffers;
 use fluxel_assets::{AssetKind, AssetSnapshot};
@@ -84,7 +86,9 @@ where
         self.settle_submission(
             slot,
             serial,
-            snapshot,
+            PendingInputs::Bytes {
+                _bytes: snapshot.value_arc(),
+            },
             ticket,
             (outcome, recorded),
             PendingWork::Copy {

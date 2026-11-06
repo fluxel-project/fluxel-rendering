@@ -7,9 +7,9 @@ where
     B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend + RasterBackend,
 {
     #[allow(clippy::too_many_arguments)] // The acquired image and policy callback have independent ownership.
-    pub(in crate::renderer) async fn execute_forward_surface<T, F>(
+    pub(in crate::renderer) async fn execute_forward_surface<F>(
         &mut self,
-        retained: T,
+        retained: PendingInputs,
         frame: crate::residency::SurfaceForwardFrame<B>,
         publication: ForwardPublication,
         topology: crate::FrameTopology,
@@ -18,7 +18,6 @@ where
         contribute: F,
     ) -> std::result::Result<super::Submission, RendererError>
     where
-        T: Send + Sync + 'static,
         F: FnOnce(
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,
@@ -146,9 +145,9 @@ where
         result
     }
 
-    pub(in crate::renderer) async fn execute_forward_with_contribution<T, F>(
+    pub(in crate::renderer) async fn execute_forward_with_contribution<F>(
         &mut self,
-        retained: T,
+        retained: PendingInputs,
         frame: crate::residency::ForwardFrame<B>,
         publication: ForwardPublication,
         topology: crate::FrameTopology,
@@ -156,7 +155,6 @@ where
         contribute: F,
     ) -> std::result::Result<super::Submission, RendererError>
     where
-        T: Send + Sync + 'static,
         F: FnOnce(
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,

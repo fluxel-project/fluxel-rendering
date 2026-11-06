@@ -178,6 +178,14 @@ device loss clears non-reusable caches and refuses new work; it does not invent
 retirement evidence. Conversely, a later CPU map/readback failure does not undo
 a completion that was already observed for the GPU work.
 
+Pending submissions retain concrete CPU content owners as well as their typed
+GPU workload. Byte fixtures retain the exact immutable `Arc<Vec<u8>>` after
+upload; their logical asset handle and generation are no longer used by execution
+or retirement. Forward and Deferred retain the concrete scene snapshot and
+resolved draw inputs, including their exact asset generations. This ownership
+uses a closed enum rather than runtime type erasure, and follows the same
+completion and failure boundaries as the GPU owners.
+
 Surface images are leases, not cacheable texture views. Presentation, resize,
 loss, and host lifecycle remain bounded by RHI and Host contracts. Renderer must
 not let a surface lease escape a frame or become persistent residency.
@@ -196,8 +204,17 @@ the controlled phase interface. The current topology is intentionally limited to
 opaque Forward, clear-only, and the selected Deferred product. This does not
 freeze a universal render-pass taxonomy.
 
-An eventual GPU product produced by a Feature must be a first-class Graph
-resource with an explicit producer, consumer, version, access, and lifetime.
+The current `DeferredPositionDeformer` seam already exercises a bounded GPU
+product: the external `BendFeature` supplies typed parameters and WGSL, a
+Renderer-owned compute pass writes a position buffer, and the following geometry
+pass consumes that buffer as a vertex stream. The private Graph declares the
+producer/consumer accesses and dependency; actual-owner validation and pending
+submission ownership cover the buffer through completion. Both offscreen and
+Surface consumers exist in `examples/rendering-integration`; this is one
+controlled product, not an arbitrary external pass-chain interface.
+
+Any additional GPU product produced by a Feature must likewise be a first-class
+Graph resource with an explicit producer, consumer, version, access, and lifetime.
 Renderer must not force it through a CPU draw list or readback merely because
 the current Forward path is CPU-prepared. A future transparent phase needs an
 explicit final ordering/composition policy across Features.

@@ -81,9 +81,14 @@ where
             .await
             .map_err(|error| self.observe_renderer_error(error))?;
         frame.deformation = Some(self.realize_deformation(producer).await?);
-        self.execute_deferred_probe((snapshot.clone(), inputs), frame, |context| {
-            pipeline.contribute_deformed(&selected, feature.feature, context)
-        })
+        self.execute_deferred_probe(
+            PendingInputs::Frame {
+                _snapshot: snapshot.clone(),
+                _inputs: inputs,
+            },
+            frame,
+            |context| pipeline.contribute_deformed(&selected, feature.feature, context),
+        )
         .await
     }
 
@@ -168,9 +173,15 @@ where
             .await
             .map_err(|error| self.observe_renderer_error(error))?;
         frame.deformation = Some(self.realize_deformation(producer).await?);
-        self.execute_deferred_surface((snapshot.clone(), inputs), frame, image, |context| {
-            pipeline.contribute_deformed(&selected, feature.feature, context)
-        })
+        self.execute_deferred_surface(
+            PendingInputs::Frame {
+                _snapshot: snapshot.clone(),
+                _inputs: inputs,
+            },
+            frame,
+            image,
+            |context| pipeline.contribute_deformed(&selected, feature.feature, context),
+        )
         .await
     }
 }

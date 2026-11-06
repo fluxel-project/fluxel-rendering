@@ -29,7 +29,7 @@ fn blank_frame(device: &Device<WitnessBackend>) -> ForwardFrame<WitnessBackend> 
 
 fn execute(
     renderer: &mut Renderer<WitnessBackend>,
-    retained: Arc<()>,
+    retained: crate::renderer::PendingInputs,
     frame: ForwardFrame<WitnessBackend>,
 ) -> std::result::Result<Submission, RendererError> {
     block_on(renderer.execute_forward(retained, frame, ForwardPublication::default()))
@@ -60,17 +60,38 @@ fn forward_three_pending_slots_isolate_real_owners_and_recycle_only_completed_sl
     let (device, _) = fixture(Script::AcceptedExact);
     let mut renderer = Renderer::new(device.clone()).unwrap();
 
-    let retained = [Arc::new(()), Arc::new(()), Arc::new(())];
+    let retained = [Arc::new(vec![1]), Arc::new(vec![2]), Arc::new(vec![3])];
     let weak = retained.each_ref().map(Arc::downgrade);
     let first_frame = blank_frame(&device);
     let first_expected = owner_instances(&first_frame);
-    let first = execute(&mut renderer, Arc::clone(&retained[0]), first_frame).unwrap();
+    let first = execute(
+        &mut renderer,
+        crate::renderer::PendingInputs::Bytes {
+            _bytes: Arc::clone(&retained[0]),
+        },
+        first_frame,
+    )
+    .unwrap();
     let second_frame = blank_frame(&device);
     let second_expected = owner_instances(&second_frame);
-    let second = execute(&mut renderer, Arc::clone(&retained[1]), second_frame).unwrap();
+    let second = execute(
+        &mut renderer,
+        crate::renderer::PendingInputs::Bytes {
+            _bytes: Arc::clone(&retained[1]),
+        },
+        second_frame,
+    )
+    .unwrap();
     let third_frame = blank_frame(&device);
     let third_expected = owner_instances(&third_frame);
-    let third = execute(&mut renderer, Arc::clone(&retained[2]), third_frame).unwrap();
+    let third = execute(
+        &mut renderer,
+        crate::renderer::PendingInputs::Bytes {
+            _bytes: Arc::clone(&retained[2]),
+        },
+        third_frame,
+    )
+    .unwrap();
     drop(retained);
 
     assert_ne!(first_expected, second_expected);
@@ -132,11 +153,15 @@ fn forward_upload_map_or_flush_failure_drops_unsubmitted_owners_and_leaves_no_pe
         let created_before = native.created_buffers.load(Ordering::SeqCst);
         let dropped_before = native.dropped_buffers.load(Ordering::SeqCst);
         let frame = blank_frame(&device);
-        let retained = Arc::new(());
+        let retained = Arc::new(vec![1]);
         let weak = Arc::downgrade(&retained);
 
         assert!(matches!(
-            execute(&mut renderer, retained, frame),
+            execute(
+                &mut renderer,
+                crate::renderer::PendingInputs::Bytes { _bytes: retained },
+                frame,
+            ),
             Err(RendererError::ForwardOperation {
                 error: Error::DeviceLost,
                 ..

@@ -61,6 +61,26 @@ workspace. Each library crate contains its README, design and dual-license
 texts. Local plans, reviews and historical evidence are kept under ignored
 `draft/`; they are not public design documents or current support claims.
 
+## Historical acceptance index
+
+The S0--S8 records were intentionally removed from the live source tree during
+the layout consolidation. They remain auditable at rendering revision
+[`c24f9adf17cfd12ed2bc3035f45cd1f477879afc`](https://github.com/fluxel-project/fluxel-rendering/tree/c24f9adf17cfd12ed2bc3035f45cd1f477879afc):
+
+| Scope | Historical record |
+| --- | --- |
+| S0--S1 foundation | [`documents/s0-s1-closure.md`](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/s0-s1-closure.md) |
+| S2--S3 Shader and Material | [`documents/s2-s3-closure.md`](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/s2-s3-closure.md) |
+| S4 RenderScene CPU boundary | [`documents/s4-cpu-closure.md`](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/s4-cpu-closure.md) |
+| S5 Forward | [`documents/s5-forward-closure.md`](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/s5-forward-closure.md) |
+| S6 typed Forward Feature | [`documents/s6-typed-forward-closure.md`](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/s6-typed-forward-closure.md) |
+| S7 bounded Deferred | [`documents/s7-deferred-closure.md`](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/s7-deferred-closure.md) |
+| S8 validation-index strategy | [`documents/s8-measured-closure.md`](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/s8-measured-closure.md) and its [final evidence index](https://github.com/fluxel-project/fluxel-rendering/blob/c24f9adf17cfd12ed2bc3035f45cd1f477879afc/documents/evidence/s8-final-candidate/README.md) |
+
+These are bounded historical results for the source, inputs, and native matrix
+named by each record. They do not certify this checkout, expand backend or host
+support, or replace current executable validation.
+
 ## Development
 
 ```powershell

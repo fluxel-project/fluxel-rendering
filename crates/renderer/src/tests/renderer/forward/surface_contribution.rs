@@ -41,7 +41,7 @@ fn assert_surface_refusal(case: SurfaceRefusal) {
     let finishes = native.finishes.load(Ordering::SeqCst);
     assert!(matches!(
         block_on(renderer.execute_forward_surface(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_surface_frame(&device),
             crate::renderer::forward::ForwardPublication::default(),
             crate::FrameTopology::ClearOnly,
@@ -72,7 +72,7 @@ fn assert_surface_refusal(case: SurfaceRefusal) {
     assert_eq!(renderer.pending(), 0, "first {case:?}");
 
     let accepted = block_on(renderer.execute_forward_surface(
-        Arc::new(()),
+        crate::renderer::PendingInputs::None,
         blank_surface_frame(&device),
         crate::renderer::forward::ForwardPublication::default(),
         crate::FrameTopology::ClearOnly,
@@ -87,7 +87,7 @@ fn assert_surface_refusal(case: SurfaceRefusal) {
     let finishes = native.finishes.load(Ordering::SeqCst);
     assert!(matches!(
         block_on(renderer.execute_forward_surface(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_surface_frame(&device),
             crate::renderer::forward::ForwardPublication::default(),
             crate::FrameTopology::ClearOnly,
@@ -181,7 +181,7 @@ fn assert_surface_opaque_refusal(case: OpaqueSurfaceRefusal) {
     let finishes = native.finishes.load(Ordering::SeqCst);
     assert!(matches!(
         block_on(renderer.execute_forward_surface(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_surface_frame(&device),
             crate::renderer::forward::ForwardPublication::default(),
             crate::FrameTopology::OpaqueForward,
@@ -210,7 +210,7 @@ fn assert_surface_opaque_refusal(case: OpaqueSurfaceRefusal) {
     );
 
     let accepted = block_on(renderer.execute_forward_surface(
-        Arc::new(()),
+        crate::renderer::PendingInputs::None,
         blank_surface_frame(&device),
         crate::renderer::forward::ForwardPublication::default(),
         crate::FrameTopology::OpaqueForward,
@@ -225,7 +225,7 @@ fn assert_surface_opaque_refusal(case: OpaqueSurfaceRefusal) {
     let finishes = native.finishes.load(Ordering::SeqCst);
     assert!(matches!(
         block_on(renderer.execute_forward_surface(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_surface_frame(&device),
             crate::renderer::forward::ForwardPublication::default(),
             crate::FrameTopology::OpaqueForward,
@@ -280,7 +280,7 @@ fn legal_surface_contribution_runs_once_per_frame_while_reusing_the_compiled_pla
     };
     for _ in 0..2 {
         let submission = block_on(renderer.execute_forward_surface(
-            Arc::new(()),
+            crate::renderer::PendingInputs::None,
             blank_surface_frame(&device),
             crate::renderer::forward::ForwardPublication::default(),
             crate::FrameTopology::OpaqueForward,

@@ -14,6 +14,7 @@ fn successful_shutdown_waits_idle_then_releases_pending_owners_and_plans() {
     assert_eq!(report.released_cached_plans, 1);
     assert_eq!(renderer.pending(), 0);
     assert_eq!(renderer.compilations(), 0);
+    assert_eq!(renderer.plan_id(), None);
     assert!(renderer.is_shutdown());
     assert!(weak.upgrade().is_none());
     assert_eq!(native.dropped_buffers.load(Ordering::SeqCst), 2);

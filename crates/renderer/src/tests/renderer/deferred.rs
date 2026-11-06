@@ -183,6 +183,8 @@ fn deferred_probe_records_four_graph_passes_and_retires_after_readback() {
 
     let submission = submit(&mut renderer, snapshot, view, &assets).expect("submission");
     let facts = renderer.deferred_probe_facts().expect("deferred facts");
+    assert_eq!(renderer.compilations(), 1);
+    assert_eq!(renderer.plan_id(), Some(facts.plan));
     assert_eq!(facts.passes, 4);
     assert_eq!(
         facts.gbuffer_formats,
@@ -199,6 +201,9 @@ fn deferred_probe_records_four_graph_passes_and_retires_after_readback() {
     assert_eq!(readback.len(), 8 * 8 * 4);
     assert_eq!(renderer.pending(), 0);
     assert_eq!(native.waits.load(Ordering::SeqCst), 1);
+    block_on(renderer.shutdown()).expect("successful shutdown");
+    assert!(renderer.deferred_probe_facts().is_some());
+    assert_eq!(renderer.plan_id(), None);
 }
 
 #[test]
