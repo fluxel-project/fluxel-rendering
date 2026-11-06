@@ -1,1 +1,0 @@
-two object-map records, one view, and one material replacement

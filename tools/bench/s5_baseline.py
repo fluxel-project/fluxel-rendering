@@ -32,7 +32,7 @@ from smoke_inputs import source_consistency, source_input_paths
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CONSUMER = ROOT / "examples" / "rendering-integration"
+CONSUMER = ROOT / "crates/renderer/examples/rendering-integration"
 MANIFEST = CONSUMER / "Cargo.toml"
 LOCKS = (ROOT / "Cargo.lock", CONSUMER / "Cargo.lock")
 REQUIRED_CACHE_FACTS = (

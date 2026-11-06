@@ -1,246 +1,114 @@
-# Native integration evidence tooling
+# Native integration tooling
 
-## Visible demos and hidden tests
+This directory owns the runnable native-consumer procedures and their validation
+policy. The consumers live under `crates/renderer/examples/` with independent
+Cargo manifests and lockfiles; they exercise public Renderer, Shader, Material,
+RHI, Host, and Bases interfaces without adding workspace-private access.
 
-Run a persistent real-window demo on Windows with either `--demo-forward` or
+`manifest.schema.json` defines retained-attempt records. `policy.md` defines
+what an attempt may claim and the diagnostic, source-closure, capture, and
+review rules. The tools retain inputs and observations for review; they do not
+by themselves make a product-support or release decision.
+
+## Consumer locations
+
+| Consumer | Manifest | Purpose |
+| --- | --- | --- |
+| Native integration | `crates/renderer/examples/rendering-integration/Cargo.toml` | Native DX12 or desktop WGL workload, hidden/offscreen checks, and bounded visible demos. |
+| External reference | `crates/renderer/examples/external-renderer/Cargo.toml` | Public CPU facade and private-API compile-fail contracts. |
+
+Run CPU contracts without opening a demo window:
+
+```powershell
+cargo +1.87.0 test --manifest-path crates/renderer/examples/rendering-integration/Cargo.toml --features dx12 --locked
+cargo +1.87.0 test --manifest-path crates/renderer/examples/rendering-integration/Cargo.toml --features native-gl-wgl --locked
+cargo +1.87.0 test --manifest-path crates/renderer/examples/external-renderer/Cargo.toml --locked
+python -m unittest discover -s tools/integration -p "test_*.py"
+```
+
+These commands check executable contracts and tooling. They do not create a
+native device merely because a backend feature is enabled in a test target.
+
+## Visible demos and hidden workloads
+
+Run a persistent real-window demo on Windows with `--demo-forward` or
 `--demo-deferred`:
 
 ```powershell
-cargo +1.87.0 run --manifest-path examples/rendering-integration/Cargo.toml --features dx12 -- --demo-forward --output target/demo-forward
+cargo +1.87.0 run --manifest-path crates/renderer/examples/rendering-integration/Cargo.toml --features dx12 -- --demo-forward --output target/demo-forward
 ```
 
-Select `native-gl-wgl` instead of `dx12` for WGL. Demos animate until the user
-closes their window. Automatic display happens behind existing windows without
-activation; users can select the demo normally. Offscreen workloads create any
-required WGL context windows hidden and never display them. WGL visible routes
-map the background drawable before rendering; DX12 can render before revealing.
+Select `native-gl-wgl` for desktop WGL. A visible demo is placed behind existing
+windows without activation; the user may select it normally. Offscreen workloads
+create required WGL context windows hidden from their first creation. WGL visible
+routes map the background drawable before their first render; DX12 can render
+before reveal.
 
-Window evidence uses independent per-HWND Windows Graphics Capture, never a
-temporary topmost window or an RHI readback substituted for a window image.
-Schema 2 retains client cropping and unchanged foreground/visibility/topmost
-observations; old schema 1 archives retain their historical scope.
+For deterministic demo evidence, set `FLUXEL_DEMO_EVIDENCE=1`. The demo writes
+its inputs and readbacks, captures window frames 0, 5, and 10, then exits.
+`demo_review.py DEMO_OUTPUT --report REVIEW_JSON` independently checks the
+retained geometry, texture, transform, and tint against raw and window pixels.
+Only the bottom two 16x16 DWM decoration corners are excluded from a schema-2
+window comparison; raw readbacks have no decoration exclusion. Always inspect
+the retained window images as well. A successful readback is not a substitute
+for visible-window validation.
 
-For bounded demo verification, set `FLUXEL_DEMO_EVIDENCE=1`: the same demo writes
-eleven deterministic inputs and companion readbacks, captures window frames
-0/5/10, and exits. `demo_review.py DEMO_OUTPUT --report REVIEW_JSON` independently
-checks retained geometry, texture, transform and tint against stable raw/window
-pixels. Only the bottom two 16x16 DWM decoration corners are excluded from the
-window check; raw readbacks have no decoration exclusion. Inspect the screenshots
-as well. This mode proves the fixed animated Color triangle, not a general
-scene, arbitrary materials, or an unattended platform certification.
+## Native attempt runner
 
-The independent `rendering-integration` executable has been rewritten for the
-Copy, offscreen Raster, supported Compute, fixed Surface presentation, direct
-Shader, and Material fixtures. The S2 direct-Shader raster and texture paths
-retain their own source, reflection, route, expected pixels, and readbacks. The
-S3 Material path separately exercises the original and replacement static
-contributions, including a visible channel reordering, with independent
-expected pixels and readbacks. Fixed S0/S1 fixture schemas still do not define
-the future Geometry, Feature, or FramePipeline model.
-
-The `--workload s5-forward` route invokes the executable with `--s5-only` and
-writes a separate S5 closure. It hashes the root and consumer locks, freezes
-the complete source-input set, records every nested `*workload.json` beneath
-the run directory, and rejects a successful process that omitted required S5
-input, expected-pixel, readback, cache, or replacement artifacts. Failed
-attempts retain the same source snapshot, command logs and recursive artifact
-inventory for diagnosis.
-
-The `--workload s5-device-isolation` route invokes `--s5-device-only`. It
-requires two simultaneously live devices to consume the same logical asset
-snapshots, retains both device readbacks plus an old-device cache-reuse readback,
-and rejects an attempt unless the new device records fresh static uploads and
-zero completed-product hits. It has its own closure and never shares an attempt
-directory with the four-layout scene workload.
-
-The `--workload s5-surface` route invokes `--s5-surface-only`. It retains the
-independent triangle expectation and inputs, each native client capture and
-its verdict, plus the actual Host resize event and both Surface configurations.
-The runner rejects a successful process unless the two captured frames cover
-the initial and resized client extents and both visual verdicts passed.
-
-S6 uses two separately named closures. `--workload s6-composed` invokes
-`--s6-only` and writes the offscreen typed-quad cases under `s6-composed/`:
-`original-three-frame-cache`, `enabled-disabled-enabled`,
-`independent-providers`, and `three-pending-replacements`.
-`--workload s6-surface` invokes `--s6-surface-only` and writes the native
-typed-composition resize cases under `s6-surface/`:
-`mesh-after-quad-initial` and `quad-after-mesh-resized`. Each S6 workload
-manifest enumerates every raw output by exactly one named case; the runner
-rejects omitted, aliased, escaping, or unlisted files. S6 manifests use schema
-v5 and `S6 typed Forward integration evidence`; v5 does not accept S5
-contracts, and v4 does not accept S6 contracts.
-
-The S6 review combines `s6_review_parts.offscreen.review` with the separate
-surface review and common source, command, and diagnostic checks. The selected
-DX12/WGL matrix is retained in the
-[S6 evidence index](../../documents/evidence/s6-typed-forward-candidate/index.json)
-and supports the bounded decision in the
-[S6 typed Forward closure record](../../documents/s6-typed-forward-closure.md).
-It is not a general backend-support or Feature-support decision: the record is
-limited to the demonstrated opaque Forward composition and its named failures.
-Release timing is documented separately in the
-[S6 measurement baseline](../../documents/s6-measurement-baseline.md).
-
-S7 retains a separate formal Deferred archive: the six native attempts cover
-Deferred offscreen, Deferred Surface/resize, and Deferred device isolation on
-DX12 and WGL. The immutable archive, final self-contained 14-check review, and
-scope limits are recorded in the [S7 evidence directory](../../documents/evidence/s7-deferred-candidate/README.md)
-and [S7 Deferred closure record](../../documents/s7-deferred-closure.md). It is
-not a general backend, browser, PBR, or pipeline-support decision.
-
-S8's final material-heavy Forward record is separate from that S7 archive. The
-[S8 measured closure](../../documents/s8-measured-closure.md) binds current
-DX12/WGL inputs, lifecycle and affected-regression results, plus four formal
-demos with eleven raw frames and three real WGC window captures per route. CPU/API
-elapsed results (DX12 cold/warm/replacement 89.976/91.598/92.166%; WGL
-91.714/91.779/92.429%) are not GPU timings. WGC is the actual per-HWND capture
-path, never an RHI fallback. The bottom two 16x16 DWM corners are excluded only
-from schema-2 window checks, never raw readbacks or historical schema-1 material.
-
-`s5_review.py` reviews exactly six selected attempts: Forward, device isolation
-and Surface for each backend. Pass `--attempt CLOSURE ID BACKEND WORKLOAD` once
-per selection, `--human-review VISUAL_REVIEW_JSON` and `--output REVIEW_JSON`.
-It checks frozen/current source, commands and nonzero focused tests, diagnostics,
-raw inputs/readbacks, the independent pixel oracle, cache/device facts, measurement
-facts and hash-bound visual review. The retained command is included in the
-[S5 archive](../../documents/evidence/s5-forward-candidate/index.json).
-`--human-review` and `human_verdict` are legacy schema names; the review record
-must identify the actual reviewer. The selected S5 record explicitly identifies
-Codex assistant image inspection and does not claim human approval.
-The report verifies evidence; the [S5 closure record](../../documents/s5-forward-closure.md)
-makes the bounded stage decision. Release timing uses the separate
-[baseline tool](../../documents/s5-measurement-baseline.md).
-
-The historical [S0/S1 support decision](../../documents/s0-s1-support-decision.md)
-is retained and hashed only as a historical reference. It cannot approve S2/S3
-support, native output, or any current stage decision.
-
-Copy, Raster, and Compute submit three immutable generations before
-their first completion wait. The executable checks all readback bytes and structured
-empty/capacity/foreign/stale refusals, Raster image pixels, all transformed
-Compute words, and a presented Surface frame after verified HWND resize/restore.
-Original inputs, WGSL and readbacks are retained before oracles. The read-set
-fixture adds uniform-window changes and non-white sampled texels over the same
-Graph/cache/completion path. S2 texture and S3 Material workloads retain
-separate inputs, expected output, and readback evidence; device replacement
-exercises both native routes.
-
-Run one selected backend from the repository root:
+Run one selected workload from the repository root:
 
 ```powershell
 python tools/integration/smoke.py --backend dx12
 python tools/integration/smoke.py --backend native-gl-wgl
 python tools/integration/smoke.py --backend dx12 --workload s5-forward
-python tools/integration/smoke.py --backend native-gl-wgl --workload s5-forward
 python tools/integration/smoke.py --backend dx12 --workload s5-surface
-python tools/integration/smoke.py --backend native-gl-wgl --workload s5-surface
 python tools/integration/smoke.py --backend dx12 --workload s5-device-isolation
-python tools/integration/smoke.py --backend native-gl-wgl --workload s5-device-isolation
 python tools/integration/smoke.py --backend dx12 --workload s6-composed
-python tools/integration/smoke.py --backend native-gl-wgl --workload s6-composed
 python tools/integration/smoke.py --backend dx12 --workload s6-surface
-python tools/integration/smoke.py --backend native-gl-wgl --workload s6-surface
 ```
 
-Use `RUSTUP_TOOLCHAIN=1.87.0` in the process environment for MSRV runs. Each
-attempt builds with the independent lock and explicit features, checks Cargo's
-actual source identities, hashes source inputs and the executable, and retains
-raw output under `target/integration/<workload>/<revision>/attempts/`, where
-`<workload>` is `s0-s3`, `s5-forward`, `s5-surface`, `s5-device-isolation`,
-`s6-composed`, or `s6-surface`. The index links all attempts,
-including a missing consumer manifest before any build starts.
-Concurrent source edits invalidate an attempt. Diagnostic classification records
-the hash of this current policy; the historical ledger cannot grant waivers.
-Each new attempt also freezes its exact worktree inputs in `source-inputs.zip`,
-including new files and both locks. The archive manifest and every member hash
-are checked independently by the reviewer. A capture-time edit is retained as a
-failed attempt rather than attributed to the binary. The archive identifies a
-source snapshot; a dirty Git revision alone is not a frozen input.
-The source closure includes package build scripts and the applicable workspace
-and consumer `.cargo/config` or `config.toml` files, while excluding `target`,
-Git metadata, local `draft` and `AGENTS.md` material, and all credentials files.
-Build-affecting Rust/Cargo override variables are recorded only as safe hashes;
-an override, configured explicit `CARGO_HOME`, or configured default Cargo home
-is rejected rather than silently attributed to the archived source. Probable
-secret files are never archived and instead fail the attempt without exposing
-their paths or contents.
-This runner does not claim a complete process-environment sandbox for Cargo
-build scripts: any selected `build.rs`, dynamic `include_*` expression, or
-root-escaping link/include is retained as a refusal rather than attributed to a
-source snapshot. Transitive locked Cargo dependencies may also contain build
-scripts; this local runner does not presently prove their complete environment
-closure, so its source archive is not a reproducibility claim for those scripts.
-Build and focused-test children receive a Windows/MSVC/Rust/Cargo toolchain
-allowlist, not the parent environment; recorded values are hashes only. Runtime
-children add only runner-owned diagnostics/evidence variables. For attended
-capture, request the hold explicitly with `--frame-hold-ms`; inherited
-`FLUXEL_*` variables are discarded.
-The executed binary is copied into its own attempt directory and checked before
-and after execution. A later backend build cannot overwrite that retained native
-artifact; Cargo's original output path is recorded separately.
+Repeat a selected workload with `native-gl-wgl` where that backend is in scope.
+The formal Deferred runner is separate:
 
-Every D3D12 diagnostic fails these workloads; historical clear-warning
-waivers do not apply. With validation enabled, the runner requests
-`FLUXEL_DX12_DEBUG` and requires a marker written after the selected DX12
-device opens. The WGL route queries the exact RHI-owned context's KHR_debug
-message log through a scoped native-interop lease and retains the result as
-`wgl-debug-observer.json`. A missing or malformed marker is unverified and a
-driver diagnostic still fails the attempt. WGL replacement-context observers
-are checked recursively; a clean original-context log cannot cover another
-context. Actual Cargo Git checkout revisions and cleanliness are verified in
-addition to package-ID strings (only Cargo's `.cargo-ok` marker is ignored). Neither an empty diagnostic log nor
-a successful workload oracle closes any stage. The report is integration
-evidence only; stage-support and closure decisions require their own current
-review.
-Presented-window inspection, Graph binding checks and fault evidence must be
-linked explicitly in the integration-evidence review. Physical device-removal recovery and a
-general public Graph/Material API are not implied by these fixtures.
-External review JSON is fail-closed: visual review must pair every retained
-surface-frame BMP with its capture/verdict metadata and an explicit visual verdict;
-test review must link a nonempty retained log to its exact command, nonzero
-execution count, and zero exit status. Supply those runner-owned test records
-with repeatable `--test-command-json '["python","-m","unittest",...]'` arguments;
-the external review only names the recorded command index and log, never a
-self-reported command result. Fault and read-set review must each link
-the fixed mandatory raw scenario artifacts for every selected attempt. A file
-that merely says `reviewed` or hashes unrelated artifacts cannot approve evidence.
-These local hashes detect accidental edits and mismatched records. They are not a
-signature, WORM store, or protection against an actor able to rewrite both the
-attempt directory and its manifest.
+```powershell
+python tools/integration/s7_smoke.py --backend dx12 --workload s7-deferred
+```
 
-For an attended presented-window capture, pass a bounded hold explicitly, for
-example `--frame-hold-ms 30000`, to the smoke runner. It supplies
-`FLUXEL_INTEGRATION_FRAME_HOLD_MS` only to the runtime child; arbitrary parent
-`FLUXEL_*` variables are not inherited. After each completed Surface frame the
-executable writes `surface-frame-<n>.ready.json`, continues to pump Host
-events, and waits for the named `.release` file. Capture the HWND while it is
-stable, then create that release file to advance through the initial, resized,
-and restored frames. These capture files are review inputs; they do not replace
-the raw Surface lifecycle or diagnostic evidence.
+Use `RUSTUP_TOOLCHAIN=1.87.0` for MSRV runs. Every attempt has its own unique
+directory under `target/integration/<workload>/<revision>/attempts/`; it records
+the exact source input set, consumer and workspace locks, executable hash,
+commands, raw diagnostics, and output inventory. An attempt retains a failed
+snapshot and logs before any build or oracle failure. Source edits during an
+attempt invalidate it instead of being attributed to the built binary.
 
-Development validation follows the local batch policy: finish a coherent
-implementation batch, then select only the necessary affected crate/test checks.
-Do not run a workspace or complete dual-backend matrix for each small change or
-routine batch. Full regression is reserved for a completed major refactor or
-complete goal implementation and its closure. The runner commands above are
-available procedures, not an instruction to run a full matrix during this
-implementation batch awaiting native verification.
+The source snapshot includes source packages, this README, the manifest schema,
+the policy, and relevant Cargo configuration. It excludes `target`, Git metadata,
+local `draft`, local agent instructions, and credential-like files. Build-affecting
+overrides, unsafe links/includes, build scripts, or Cargo configuration outside
+the source closure reject the attempt rather than silently expanding its claim.
 
-KHR_debug messages identified by `DEBUG_SOURCE_APPLICATION`, notification severity,
-and marker/push-group/pop-group type are retained in `applicationMarkers`. They
-are application instrumentation, including RHI pass labels, rather than driver
-diagnostics. Every other returned entry remains in `nativeDiagnostics` and fails
-the attempt. Classification uses OpenGL metadata decoded strictly from the pinned glow
-0.18.0 Debug representation (the entry type has no public field accessors).
-Unknown representations remain fatal native diagnostics. Message text and
-historical driver-warning exemptions never grant an exception. The observer's own activation marker is
-also checked by source, type, severity, ID and exact message. Early queue entries
-are preserved alongside the final drain, including when a workload fails.
+The executed binary is copied into its own attempt directory and re-hashed after
+execution, so a later backend build cannot overwrite the retained artifact.
 
-WGL application push/pop-group notifications are disabled at log admission to
-avoid consuming the bounded driver queue with pass labels. Other sources/types,
-including driver/API errors, warnings and performance messages, remain enabled.
-Every drain checks `MAX_DEBUG_LOGGED_MESSAGES`; a full, unknown-capacity or
-non-progressing log records saturation and cannot pass validation. Saturation is
-sticky across the old and final observations of each context.
+## Diagnostics, capture, and review
+
+Every D3D12 diagnostic fails an attempt. With validation enabled, the runner
+requests `FLUXEL_DX12_DEBUG` and requires an activation marker after device open.
+The WGL route reads the selected RHI context's KHR_debug log through a scoped
+native-interop lease and retains it as `wgl-debug-observer.json`. Missing or
+malformed activation evidence remains unverified; a clean log alone does not
+prove that observation was active.
+
+Application debug markers and driver/API diagnostics remain separate. The former
+are retained as instrumentation; every other native message is a failure.
+Unknown or saturated WGL log representations fail closed. Window capture never
+raises, activates, or makes a window topmost. A held frame must be requested
+explicitly with `--frame-hold-ms`; arbitrary parent `FLUXEL_*` variables are not
+inherited by runtime children.
+
+Review tools consume retained facts, not self-reported success. A visual verdict
+must link each image to its capture metadata and oracle; a test verdict must link
+to a nonempty retained log, an executed command, and a nonzero test count. Raw
+inputs and readbacks must exist before an oracle is evaluated. See `policy.md`
+for the detailed fail-closed contract and `manifest.schema.json` for the record
+format.

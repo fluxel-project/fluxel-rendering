@@ -36,14 +36,14 @@ jobs:
       - name: Documentation contracts
         run: cargo test --workspace --doc --locked
       - name: Independent consumer and private-API compile failures
-        run: cargo test --manifest-path examples/external-renderer/Cargo.toml --locked
+        run: cargo test --manifest-path crates/renderer/examples/external-renderer/Cargo.toml --locked
       - name: Independent consumer lint
         if: matrix.toolchain == 'stable'
-        run: cargo clippy --manifest-path examples/external-renderer/Cargo.toml --all-targets --locked -- -D warnings
+        run: cargo clippy --manifest-path crates/renderer/examples/external-renderer/Cargo.toml --all-targets --locked -- -D warnings
       - name: DX12 integration CPU contracts
-        run: cargo test --manifest-path examples/rendering-integration/Cargo.toml --features dx12 --locked
+        run: cargo test --manifest-path crates/renderer/examples/rendering-integration/Cargo.toml --features dx12 --locked
       - name: WGL integration CPU contracts
-        run: cargo test --manifest-path examples/rendering-integration/Cargo.toml --features native-gl-wgl --locked
+        run: cargo test --manifest-path crates/renderer/examples/rendering-integration/Cargo.toml --features native-gl-wgl --locked
 
   python:
     runs-on: windows-latest

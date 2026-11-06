@@ -1,1 +1,0 @@
-two ECS-shaped component rows, one view, and one material replacement

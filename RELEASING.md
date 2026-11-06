@@ -5,25 +5,6 @@ annotated tag, such as `v0.16.0`. The independent `fluxel-rhi` has its own relea
 its version is not coupled to the rendering workspace version. Source consumers
 must pin tags or revisions.
 
-## Migration status
-
-Renderer was reset and its previous public paths were removed. Fixed Copy,
-Raster, supported Compute, Surface and read-set consumers use pinned Bases/RHI
-and a private Graph; Shader/Material remain scaffolds. The named DX12/WGL
-foundation acceptance and its source-specific evidence are described in the
-[S0/S1 closure record](documents/s0-s1-closure.md). This foundation acceptance
-does not constitute a release or certify deferred backends.
-
-The old top-level platform examples and `scripts/` verification harnesses have
-been removed. Their old commands are not a current release procedure. Retained
-results in historical tags prove only their original revisions and targets.
-
-S0 of the [implementation plan](documents/version-plan.md) establishes the new
-integration artifact, target matrix, executable commands, lock inputs, and evidence
-location. The integration runner and named native foundation matrix have been
-reviewed; release candidates still require the applicable release verification
-gate below and cannot rely on portable tests alone.
-
 ## Candidate inputs
 
 Before tagging, record:
@@ -40,8 +21,8 @@ consumers. Build the actual producer artifact with those consumers. A dependency
 change must not be certified from separate green library tests.
 
 The integration artifact owner maintains a machine-readable closure manifest.
-The planned rendering destination is
-`target/integration/<stage>/<rendering-sha>/manifest.json`; S0 makes the path and
+The integration runner writes workload-scoped records under
+`target/integration/<stage>/<rendering-sha>/manifest.json`; the selected workload makes the path and
 commands executable. Evidence records must remain retrievable and attributable
 to the tested commits after a release. Large generated artifacts need not enter
 Git, but deleting their only retained copy invalidates reproducibility claims.
@@ -87,5 +68,5 @@ push the branch and tag. Verify the remote branch/tag identities. Do not create 
 release tag for a failing or unverified required matrix.
 
 The annotated tag is the release identity; a GitHub Release object is not required.
-Ordinary documentation commits and stage-planning updates do not require a release
+Ordinary documentation commits and local planning updates do not require a release
 tag and do not imply that the described implementation gates have closed.

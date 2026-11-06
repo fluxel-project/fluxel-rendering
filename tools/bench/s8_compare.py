@@ -13,7 +13,7 @@ import zipfile
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-CONSUMER = ROOT / "examples" / "rendering-integration"
+CONSUMER = ROOT / "crates/renderer/examples/rendering-integration"
 MANIFEST = CONSUMER / "Cargo.toml"
 MSRV = "1.87.0"
 SCENARIOS = ("cold", "warm", "replacement-10pct")

@@ -17,7 +17,7 @@ class SmokeRunnerTests(unittest.TestCase):
         names = ["fluxel-assets", "fluxel-rhi", "fluxel-host"]
         locked = [{"name": name, "source": source + "#abc"} for name in names]
         inventory = [{"name": name, "package_id": source + "#" + name + "@0.1.0"} for name in names]
-        inventory.append({"name": "external-renderer", "package_id": "path+file:///external-renderer", "manifest_path": str(smoke.ROOT / "examples/external-renderer/Cargo.toml")})
+        inventory.append({"name": "external-renderer", "package_id": "path+file:///external-renderer", "manifest_path": str(smoke.ROOT / "crates/renderer/examples/external-renderer/Cargo.toml")})
         inventory.append({"name": "fluxel-renderer", "package_id": "path+file:///renderer", "manifest_path": str(smoke.ROOT / "crates/renderer/Cargo.toml")})
         inventory.extend([
             {"name": "fluxel-shader", "package_id": "path+file:///shader", "manifest_path": str(smoke.ROOT / "crates/shader/Cargo.toml")},
@@ -36,7 +36,7 @@ class SmokeRunnerTests(unittest.TestCase):
             report.write_text(json.dumps({
                 "reason": "compiler-artifact",
                 "package_id": "path+file:///external-renderer#external-renderer@0.0.0",
-                "manifest_path": str(smoke.ROOT / "examples/external-renderer/Cargo.toml"),
+                "manifest_path": str(smoke.ROOT / "crates/renderer/examples/external-renderer/Cargo.toml"),
                 "target": {"name": "external_renderer", "kind": ["lib"]},
                 "features": [],
             }) + "\n", encoding="utf-8")
@@ -70,8 +70,9 @@ class SmokeRunnerTests(unittest.TestCase):
                 "Cargo.toml": "[workspace]\n",
                 "crates/shader/Cargo.toml": "[package]\nname='shader'\n",
                 "crates/shader/build.rs": "fn main() {}\n",
-                "examples/rendering-integration/Cargo.toml": "[package]\nname='consumer'\n",
+                "crates/renderer/examples/rendering-integration/Cargo.toml": "[package]\nname='consumer'\n",
                 ".cargo/config.toml": "[build]\n",
+                "crates/renderer/examples/.cargo/config.toml": "[build]\n",
                 ".cargo/credentials.toml": "token = 'secret'\n",
                 "crates/shader/draft/private.rs": "secret\n",
                 "crates/shader/AGENTS.md": "local\n",
@@ -82,6 +83,7 @@ class SmokeRunnerTests(unittest.TestCase):
             paths = {path.relative_to(resolved_root).as_posix() for path in smoke.source_input_paths(root)}
             self.assertIn("crates/shader/build.rs", paths)
             self.assertIn(".cargo/config.toml", paths)
+            self.assertIn("crates/renderer/examples/.cargo/config.toml", paths)
             self.assertNotIn(".cargo/credentials.toml", paths)
             self.assertNotIn("crates/shader/draft/private.rs", paths)
             self.assertNotIn("crates/shader/AGENTS.md", paths)
@@ -102,8 +104,8 @@ class SmokeRunnerTests(unittest.TestCase):
             root = Path(temporary)
             files = {
                 "tools/integration/reviewer/helpers.py": "def review(): pass\n",
-                "examples/external-renderer/Cargo.toml": "[package]\nname='external-renderer'\n",
-                "examples/external-renderer/src/lib.rs": "pub fn render() {}\n",
+                "crates/renderer/examples/external-renderer/Cargo.toml": "[package]\nname='external-renderer'\n",
+                "crates/renderer/examples/external-renderer/src/lib.rs": "pub fn render() {}\n",
             }
             for relative, content in files.items():
                 path = root / relative
@@ -112,8 +114,8 @@ class SmokeRunnerTests(unittest.TestCase):
             paths = {path.relative_to(root.resolve()).as_posix()
                      for path in smoke.source_input_paths(root)}
             self.assertIn("tools/integration/reviewer/helpers.py", paths)
-            self.assertIn("examples/external-renderer/Cargo.toml", paths)
-            self.assertIn("examples/external-renderer/src/lib.rs", paths)
+            self.assertIn("crates/renderer/examples/external-renderer/Cargo.toml", paths)
+            self.assertIn("crates/renderer/examples/external-renderer/src/lib.rs", paths)
             inputs = [{"path": name, "sha256": smoke.sha256(root / name)} for name in sorted(paths)]
             self.assertEqual(smoke.source_consistency(inputs, root)["status"], "stable")
             (root / "tools/integration/reviewer/helpers.py").write_text("def changed(): pass\n", encoding="utf-8")
@@ -144,7 +146,7 @@ class SmokeRunnerTests(unittest.TestCase):
     def test_parent_cargo_config_and_target_rustflags_are_rejected_without_values(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary); root = parent / "workspace"
-            (root / "examples/rendering-integration").mkdir(parents=True)
+            (root / "crates/renderer/examples/rendering-integration").mkdir(parents=True)
             config = parent / ".cargo/config.toml"; config.parent.mkdir()
             config.write_text("[build]\n", encoding="utf-8")
             with mock.patch.dict(smoke.os.environ, {"CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS": "-C link-arg=secret"}, clear=False):
@@ -256,7 +258,7 @@ class SmokeRunnerTests(unittest.TestCase):
         locked = [{"name": name, "source": source + "#abc"} for name in names]
         inventory = [{"name": name, "package_id": source + "#" + name + "@0.1.0"} for name in names]
         inventory.append({"name": "external-renderer", "package_id": "path+file:///external-renderer",
-                          "manifest_path": str(smoke.ROOT / "examples/external-renderer/Cargo.toml")})
+                          "manifest_path": str(smoke.ROOT / "crates/renderer/examples/external-renderer/Cargo.toml")})
         inventory.append({"name": "fluxel-renderer", "package_id": "path+file:///renderer",
                           "manifest_path": str(smoke.ROOT / "crates/renderer/Cargo.toml")})
         inventory.extend([
@@ -299,7 +301,7 @@ class SmokeRunnerTests(unittest.TestCase):
             stderr.write_text(historical + "\n" + unknown + "\n", encoding="utf-8")
             report = smoke.classify_dx12_diagnostics(stderr)
             self.assertEqual(report["unreviewed_native_diagnostics"], [historical, unknown])
-            self.assertEqual(report["policy"], "tools/integration/README.md")
+            self.assertEqual(report["policy"], "tools/integration/policy.md")
             self.assertIsNotNone(report["policy_sha256"])
 
 

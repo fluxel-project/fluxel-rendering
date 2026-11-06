@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 description = "Scene preparation, frame policy, and internal render graph for Fluxel"
 readme = "README.md"
 repository = "https://github.com/fluxel-project/fluxel-rendering"
+documentation = "https://docs.rs/fluxel-renderer"
 keywords = ["renderer", "graphics", "headless"]
 categories = ["rendering", "graphics", "game-development"]
 
@@ -18,7 +19,7 @@ dx12 = ["fluxel-rhi/dx12"]
 native-gl-wgl = ["fluxel-rhi/native-gl-wgl"]
 
 [dependencies]
-fluxel-shader = { path = "../shader" }
-fluxel-material = { path = "../material" }
+fluxel-shader = { path = "../shader", version = "0.16.0" }
+fluxel-material = { path = "../material", version = "0.16.0" }
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "124e825f82e5cd0eb485c95fe1281b11c8dbc844", version = "=0.13.4" }
 fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "b5d569feace548a6ed498901deaf31a5efcaca61", version = "=0.1.0", default-features = false }

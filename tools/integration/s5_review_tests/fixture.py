@@ -22,8 +22,7 @@ def _record(review, path: Path) -> dict[str, str]:
 def _source_tree(root: Path, review) -> list[dict[str, str]]:
     for relative in (
         "Cargo.toml", "Cargo.lock", "build.rs", "tools/integration/README.md",
-        "documents/s0-s1-support-decision.md", "documents/integration-known-diagnostics.md",
-        "documents/integration-manifest.schema.json",
+        "tools/integration/manifest.schema.json", "tools/integration/policy.md",
     ):
         _write(root / relative, b"fixture\n")
     inputs = []

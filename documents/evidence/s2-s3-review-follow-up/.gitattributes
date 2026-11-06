@@ -1,2 +1,0 @@
-# Keep archived evidence and its index byte-for-byte across platforms.
-* -text -diff

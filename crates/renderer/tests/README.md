@@ -1,12 +1,11 @@
 # Renderer integration tests
 
-Add public-API integration tests here as those APIs are implemented. Keep unit
-test implementations under `src/tests/`, grouped by their production component.
-Production modules retain only test-only module declarations that reference them.
-Real-target support requires a runnable ecosystem consumer and retained evidence;
-an empty scaffold or a successful build is not stage completion. The independent
-`examples/external-renderer/` workspace currently supplies the S4 CPU reference
-consumer for the public RenderScene and CPU-feature boundaries. It implements
-the provisional Renderer-exported `CpuFeature` facade with issuer-bound typed
-storage and controlled CPU phase contributions. It is not a GPU integration
-test and does not establish a FramePipeline contract.
+Public-API integration tests belong here. Unit-test implementations belong under
+`src/tests/`, grouped by their production component; production modules retain
+only test-only declarations that reference them.
+
+The independent `examples/external-renderer/` consumer exercises public
+RenderScene, CPU Feature, and controlled FramePipeline boundaries. It remains a
+CPU/public-contract consumer and does not create a GPU device or establish
+backend support. Real-target behavior requires a runnable ecosystem consumer and
+retained evidence; a successful build alone is insufficient.

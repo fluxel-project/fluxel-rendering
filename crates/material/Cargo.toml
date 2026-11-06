@@ -7,10 +7,13 @@ license = "MIT OR Apache-2.0"
 description = "Material functions and typed composition for Fluxel"
 repository = "https://github.com/fluxel-project/fluxel-rendering"
 readme = "README.md"
+documentation = "https://docs.rs/fluxel-material"
+keywords = ["material", "shader", "graphics", "rendering"]
+categories = ["graphics", "rendering"]
 publish = false
 
 [dependencies]
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "124e825f82e5cd0eb485c95fe1281b11c8dbc844", version = "=0.13.4" }
-fluxel-shader = { path = "../shader" }
+fluxel-shader = { path = "../shader", version = "0.16.0" }
 sha2 = "0.10.9"
 unicode-ident = "1.0.22"

@@ -366,7 +366,7 @@ def retain_executable(source: Path, attempt_directory: Path) -> dict[str, Any]:
 def built_fluxel_packages(build_stdout: Path) -> list[dict[str, Any]]:
     """Retain Cargo's actual compiled package identities and active features."""
     result = []
-    external_manifest = (ROOT / "examples/external-renderer/Cargo.toml").resolve()
+    external_manifest = (ROOT / "crates/renderer/examples/external-renderer/Cargo.toml").resolve()
     for line in build_stdout.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             message = json.loads(line)
@@ -408,7 +408,7 @@ def verify_built_sources(inventory: list[dict[str, Any]], locked: list[dict[str,
         if name in expected and package["package_id"].partition("#")[0] not in expected[name]:
             mismatches.append({"name": name, "actual": package["package_id"], "expected": sorted(expected[name])})
         local_manifests = {
-            "external-renderer": ROOT / "examples/external-renderer/Cargo.toml",
+            "external-renderer": ROOT / "crates/renderer/examples/external-renderer/Cargo.toml",
             "fluxel-renderer": ROOT / "crates/renderer/Cargo.toml",
             "fluxel-shader": ROOT / "crates/shader/Cargo.toml",
             "fluxel-material": ROOT / "crates/material/Cargo.toml",

@@ -92,7 +92,11 @@ def source_snapshot_failures(attempt: dict[str, Any], directory: Path) -> list[s
                 # Absolute original paths are informational; find their root-relative
                 # suffix in the immutable input archive.
                 original = str(lock.get("path", "")).replace("\\", "/") if isinstance(lock, dict) else ""
-                name = "examples/rendering-integration/Cargo.lock" if original.endswith("examples/rendering-integration/Cargo.lock") else "Cargo.lock"
+                consumer_locks = (
+                    "crates/renderer/examples/rendering-integration/Cargo.lock",
+                    "examples/rendering-integration/Cargo.lock",
+                )
+                name = next((candidate for candidate in consumer_locks if original.endswith(candidate)), "Cargo.lock")
                 if hashlib.sha256(archive.read(name)).hexdigest() != lock.get("sha256"):
                     failures.append(f"frozen lock bytes mismatch: {name}")
     except (OSError, KeyError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as error:

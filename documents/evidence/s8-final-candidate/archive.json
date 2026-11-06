@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 1,
-  "archive": "evidence.zip",
-  "sha256": "c24fb5c04be7722052ea1422a07d1d5a671b2d9a344da3f74915679325d12051",
-  "bytes": 52778935,
-  "files": 6277,
-  "uniqueBlobs": 1252,
-  "scope": "exact producer records; independent review is a separate gate"
-}

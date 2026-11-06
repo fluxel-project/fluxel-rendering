@@ -29,7 +29,7 @@ class SmokeRunnerTests(unittest.TestCase):
 
     def test_schema_v4_requires_the_s5_workload_contract(self) -> None:
         schema = json.loads(
-            (Path(__file__).parents[3] / "documents" / "integration-manifest.schema.json")
+            (Path(__file__).parents[1] / "manifest.schema.json")
             .read_text(encoding="utf-8")
         )
         s5_clause = next(
@@ -51,7 +51,7 @@ class SmokeRunnerTests(unittest.TestCase):
         """The real CLI path must retain tests without replacing the manifest path."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            artifact = root / "examples" / "rendering-integration"
+            artifact = root / "crates" / "renderer" / "examples" / "rendering-integration"
             artifact.mkdir(parents=True)
             (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
             (root / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
@@ -100,7 +100,7 @@ class SmokeRunnerTests(unittest.TestCase):
     def test_build_mode_rejects_focused_test_command_that_runs_zero_tests(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            artifact = root / "examples" / "rendering-integration"
+            artifact = root / "crates" / "renderer" / "examples" / "rendering-integration"
             artifact.mkdir(parents=True)
             (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
             (root / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")

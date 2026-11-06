@@ -2,8 +2,7 @@
 /draft/
 
 # Rust build output
-/target/
-/examples/rendering-integration/target/
+**/target/
 
 # trybuild temporary snapshots
 /wip/

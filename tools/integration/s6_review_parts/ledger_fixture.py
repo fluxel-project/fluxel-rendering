@@ -55,7 +55,7 @@ def build(root: Path, base, populate_offscreen, populate_surface) -> dict:
             if not attempts:
                 test_commands = [
                     ["cargo", "test", "-p", "fluxel-renderer", "--lib", "forward"],
-                    ["cargo", "test", "--manifest-path", "../external-renderer/Cargo.toml", "--lib"],
+                    ["cargo", "test", "--manifest-path", "../../crates/renderer/examples/external-renderer/Cargo.toml", "--lib"],
                     ["cargo", "test", "--manifest-path", "Cargo.toml", "cli"],
                     ["python", "-m", "unittest", "discover", "-p", "test_s6*.py"],
                 ]

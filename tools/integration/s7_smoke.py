@@ -32,7 +32,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / "examples" / "rendering-integration"
+ARTIFACT = ROOT / "crates/renderer/examples/rendering-integration"
 TOOLCHAIN = "1.87.0"
 BACKENDS = ("dx12", "native-gl-wgl")
 WORKLOADS = ("s7-deferred", "s7-deferred-surface", "s7-deferred-device-isolation")
@@ -56,7 +56,7 @@ def _commands(args: argparse.Namespace) -> list[list[str]]:
     return [
         [args.cargo, "test", "--manifest-path", str(ARTIFACT / "Cargo.toml"), "--locked", "--no-default-features", "--features", args.backend, "--bin", "rendering-integration"],
         [args.cargo, "test", "--manifest-path", str(ROOT / "Cargo.toml"), "-p", "fluxel-renderer", "--lib", "deferred"],
-        [args.cargo, "test", "--manifest-path", str(ROOT / "examples" / "external-renderer" / "Cargo.toml"), "--locked"],
+        [args.cargo, "test", "--manifest-path", str(ROOT / "crates/renderer/examples/external-renderer" / "Cargo.toml"), "--locked"],
         [sys.executable, "-m", "unittest", "discover", "--start-directory", "tools/integration", "--pattern", "test_s7*.py"],
     ]
 
@@ -95,12 +95,12 @@ def _completed_focused_group(previous: object, inputs: list[dict[str, Any]]) -> 
         if not isinstance(command, list):
             continue
         text = " ".join(command)
-        if str(ROOT / "crates") in text or ("-p fluxel-renderer" in text and "--lib deferred" in text):
-            kinds.add("renderer")
-        elif str(ROOT / "examples" / "external-renderer" / "Cargo.toml") in text:
+        if str(ROOT / "crates/renderer/examples/external-renderer" / "Cargo.toml") in text:
             kinds.add("external")
         elif str(ARTIFACT / "Cargo.toml") in text and "--bin rendering-integration" in text:
             kinds.add("integration")
+        elif str(ROOT / "crates") in text or ("-p fluxel-renderer" in text and "--lib deferred" in text):
+            kinds.add("renderer")
         elif "unittest discover" in text and "test_s7*.py" in text:
             kinds.add("tools")
     return kinds == {"renderer", "integration", "external", "tools"}
@@ -246,8 +246,8 @@ def main() -> int:
         "sibling_checkout_inventory": {name: checkout_inventory(parent / name) for name in ("fluxel-rhi", "fluxel-bases", "fluxel-host", "fluxel-jsbridge")},
         "root_lock": {"path": str(ROOT / "Cargo.lock"), "sha256": sha256(ROOT / "Cargo.lock")},
         "historical_foundation_support_decision": {
-            "path": str(ROOT / "documents" / "s0-s1-support-decision.md"),
-            "sha256": sha256(ROOT / "documents" / "s0-s1-support-decision.md"),
+            "path": "git:c24f9adf17cfd12ed2bc3035f45cd1f477879afc:documents/s0-s1-support-decision.md",
+            "sha256": "6fdc5f921f921a323ec264bfbe621a3cffae6b4fd3de38f49fad3b789afa0c56",
             "status": "historical_reference_only", "scope": "S0/S1", "cannot_approve_current_support": True,
         },
         "attempts": attempts,

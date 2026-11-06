@@ -28,7 +28,7 @@ BACKENDS = ("dx12", "native-gl-wgl")
 WORKLOADS = ("s0-s3", "s5-forward", "s5-surface", "s5-device-isolation", "s6-composed", "s6-surface")
 RHI_REVISION = "b5d569feace548a6ed498901deaf31a5efcaca61"
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / "examples" / "rendering-integration"
+ARTIFACT = ROOT / "crates/renderer/examples/rendering-integration"
 EXCLUDED_SOURCE_PARTS = {".git", "target", "draft"}
 SENSITIVE_SOURCE_NAMES = {".env", ".env.local", ".envrc"}
 SENSITIVE_SOURCE_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".token"}
@@ -318,7 +318,13 @@ def main() -> int:
     # relying only on the successful executable-run subdirectory.
     attempt["retained_attempt_files"] = retained_files(attempt_dir)
     parent = ROOT.parent
-    decision = ROOT / "documents" / "s0-s1-support-decision.md"
+    historical_decision = {
+        "path": "git:c24f9adf17cfd12ed2bc3035f45cd1f477879afc:documents/s0-s1-support-decision.md",
+        "sha256": "6fdc5f921f921a323ec264bfbe621a3cffae6b4fd3de38f49fad3b789afa0c56",
+        "status": "historical_reference_only",
+        "scope": "S0/S1",
+        "cannot_approve_current_support": True,
+    }
     manifest = {
         "schema_version": schema_version_for_workload(args.workload),
         "stage": stage_for_workload(args.workload),
@@ -326,13 +332,7 @@ def main() -> int:
         "rendering_checkout": rendering,
         "sibling_checkout_inventory": {name: checkout_inventory(parent / name) for name in ("fluxel-rhi", "fluxel-bases", "fluxel-host", "fluxel-jsbridge")},
         "root_lock": {"path": str(ROOT / "Cargo.lock"), "sha256": sha256(ROOT / "Cargo.lock")},
-        "historical_foundation_support_decision": {
-            "path": str(decision),
-            "sha256": sha256(decision),
-            "status": "historical_reference_only",
-            "scope": "S0/S1",
-            "cannot_approve_current_support": True,
-        },
+        "historical_foundation_support_decision": historical_decision,
         "attempts": load_attempts(index) + [attempt],
         "capability_snapshot": {"status": "unverified", "reason": "No reviewed complete capability snapshot is linked."},
         "outputs": {"status": "unverified", "reason": "Attempt artifacts contain workload-specific facts; closure-level output review is incomplete."},

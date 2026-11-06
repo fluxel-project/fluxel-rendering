@@ -1,7 +1,0 @@
-
-running 2 tests
-test tests::ordinary_and_ecs_style_adapters_produce_the_same_public_scene_result ... ok
-test tests::external_code_cannot_access_renderer_private_graph_state ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
-

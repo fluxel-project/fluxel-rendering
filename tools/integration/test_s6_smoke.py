@@ -123,7 +123,7 @@ class S6SmokeTests(unittest.TestCase):
 
     def test_schema_v5_selects_only_s6_attempt_contracts(self) -> None:
         schema = json.loads(
-            (Path(__file__).parents[2] / "documents" / "integration-manifest.schema.json")
+            (Path(__file__).parent / "manifest.schema.json")
             .read_text(encoding="utf-8")
         )
         self.assertIn(5, schema["properties"]["schema_version"]["enum"])

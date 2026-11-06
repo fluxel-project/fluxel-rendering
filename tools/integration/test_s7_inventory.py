@@ -20,7 +20,7 @@ class S7InventoryTests(unittest.TestCase):
             "commands": [
                 {"kind": "test", "command": ["cargo", "test", "-p", "fluxel-renderer", "--lib", "deferred"], "result": result or passed},
                 {"kind": "test", "command": ["cargo", "test", "--manifest-path", str(s7_smoke.ARTIFACT / "Cargo.toml"), "--bin", "rendering-integration"], "result": result or passed},
-                {"kind": "test", "command": ["cargo", "test", "--manifest-path", str(s7_smoke.ROOT / "examples" / "external-renderer" / "Cargo.toml")], "result": result or passed},
+                {"kind": "test", "command": ["cargo", "test", "--manifest-path", str(s7_smoke.ROOT / "crates/renderer/examples/external-renderer" / "Cargo.toml")], "result": result or passed},
                 {"kind": "test", "command": ["python", "-m", "unittest", "discover", "--start-directory", "tools/integration", "--pattern", "test_s7*.py"], "result": result or passed},
             ],
         }
@@ -40,7 +40,7 @@ class S7InventoryTests(unittest.TestCase):
         self.assertEqual(len(smoke_s7.s7_workload_contract("s7-deferred-device-isolation")["expected_cases"]), 8)
 
     def test_schema_selects_only_s7_attempts(self) -> None:
-        schema = json.loads((Path(__file__).parents[2] / "documents" / "integration-manifest.schema.json").read_text(encoding="utf-8"))
+        schema = json.loads((Path(__file__).parent / "manifest.schema.json").read_text(encoding="utf-8"))
         self.assertIn(6, schema["properties"]["schema_version"]["enum"])
         clauses = {item["if"]["properties"]["schema_version"]["const"]: item["then"] for item in schema["allOf"]}
         self.assertEqual(clauses[6]["properties"]["attempts"]["items"]["$ref"], "#/$defs/s7_attempt")

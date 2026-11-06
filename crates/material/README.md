@@ -1,56 +1,28 @@
 # Fluxel Material
 
-`fluxel-material` implements Rust-defined fragments, WGSL Code Nodes, typed parameters and
-resources, a validated call graph, private normalized composition, static
-variants, instances, and generic WGSL contributions.
-
-Material contributes source and interfaces in Shader-owned vocabulary. It does
-not depend on Renderer or choose a rendering pipeline. Renderer combines those
-contributions with pass templates before Shader assembles a complete program.
-Geometry, visibility, deformation and phase policy remain with the consuming
-Features/pipeline. Their concrete extensions are assembled statically under
-[ADR-0026](../../documents/adr/0026-static-extension-composition.md); Material
-runtime data does not require a Rust type per material or trait-object plugins.
+`fluxel-material` models Rust-defined material functions, WGSL Code Nodes,
+typed parameters and resources, static variants, dynamic instances, and generic
+Shader contributions. It owns authoring semantics and lowering; it does not own
+a render pipeline, Graph, GPU resource, or device object.
 
 `MaterialCompiler` validates a `MaterialDefinition` and produces a
-`CompiledMaterialVariant`. Parameters explicitly map to declared resources;
-instances retain asset identity and content generation while dynamic values reuse
-the compiled static variant. Invalid fragments, missing calls, cycles, type
-mismatches, duplicate bindings, unsupported outputs, invalid instance values, and
-emitted WGSL top-level namespace collisions return structured errors. The compact
-`source_id` is a SHA-256 digest of the full canonical variant key; the full key
-and complete Shader composition source remain collision-safe cache identities.
+`CompiledMaterialVariant`. Validation rejects invalid fragments and call graphs,
+cycles, type errors, duplicate or incompatible resource declarations, invalid
+instance values, unsupported surface outputs, and emitted WGSL top-level name
+collisions. A compact `source_id` is a SHA-256 digest for diagnostics; the full
+canonical key and full composed source remain the cache identity.
 
-`MaterialDefinition::with_code_node` adds a `MaterialCodeNode` to the same typed
-call graph. A node carries its callable name, input/result types, call edges,
-resource declarations, and an author-owned Shader `SourceUnit`. Shared identical
-resource declarations merge; conflicting resources and duplicate source identities
-are rejected. Shader composition validates the actual WGSL callable and bindings.
-The implemented surface outputs are `Color` and
-`MetallicRoughness { properties }`. Both use a zero-argument `Vec4` base-color
-root. Metallic-roughness additionally requires a named zero-argument `Vec2`
-callable returning metallic then perceptual roughness, and emits
-`evaluate_metallic_roughness()` beside `evaluate_material()`. Invalid property
-roots and reserved generated evaluator names fail before Shader composition. A
-typed node with inputs is reached through a material function that supplies them.
+The implemented surface roots are `Color` and selected
+`MetallicRoughness { properties }`. Code Nodes participate in the same typed call
+graph and preserve their source-unit identity for Shader diagnostics. Renderer
+adds a pass template and entry points, then Shader assembles and validates the
+complete logical program. Concrete resources and their physical access ranges
+remain Renderer responsibilities.
 
-Pass consumers use `MaterialShaderContribution::source_units()` to preserve node
-identities and source locations in diagnostics. `source()` derives aggregate WGSL,
-and `source_unit()` provides the legacy single-unit representation; aggregation
-does not preserve each node's diagnostic identity. The generated unit identity is
-available through `source_id()`. Source units are the only stored source authority.
+Material definitions and instances are runtime data, while extension
+implementations use concrete Rust types and generics. The crate has no
+trait-object plugin registry.
 
-Material emits source units and metadata in Shader vocabulary. It neither chooses
-a render pipeline nor creates RHI objects. The repository's S3 fixture combines a
-contribution with a pass template, validates reflected bindings against concrete
-resources, and executes it through the S2 and Graph paths on the reviewed DX12
-and desktop WGL fixture routes. The S7 consumer extends this path with a selected
-Code Node shared by Forward and Deferred. C2 additionally proves Material/Shader
-composition for the bounded metallic-roughness evaluator pair. Separate native
-DX12/WGL consumers validate its opaque direct-light output through both routes.
-These do not establish an editor graph, arbitrary surface domains, or a complete
-PBR product. The selected private Renderer PBR consumer is documented
-in [the Renderer design](../../documents/design-renderer.md).
-The later S8 validation-index measurement is Renderer-private: it does not alter
-Material source authority, variant identity, or the requirement that each frame
-declare and validate its actual bindings.
+Read the durable design in [documents/design.md](documents/design.md). See
+`fluxel-shader` for logical program assembly and `fluxel-renderer` for scene,
+preparation, Graph, and execution ownership.

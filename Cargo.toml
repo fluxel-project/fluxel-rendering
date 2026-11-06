@@ -5,7 +5,10 @@ members = [
     "crates/material",
     "crates/renderer",
 ]
-exclude = ["examples/rendering-integration"]
+exclude = [
+    "crates/renderer/examples/external-renderer",
+    "crates/renderer/examples/rendering-integration",
+]
 
 [workspace.package]
 version = "0.16.0"

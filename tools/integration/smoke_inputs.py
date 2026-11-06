@@ -11,7 +11,7 @@ import tomllib
 import zipfile
 from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / "examples" / "rendering-integration"
+ARTIFACT = ROOT / "crates/renderer/examples/rendering-integration"
 EXCLUDED_SOURCE_PARTS = {".git", "target", "draft"}
 SENSITIVE_SOURCE_NAMES = {".env", ".env.local", ".envrc"}
 SENSITIVE_SOURCE_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".token"}
@@ -46,11 +46,12 @@ def source_path_is_safe(path: Path, root: Path) -> bool:
 
 def sensitive_build_inputs(root: Path) -> int:
     """Fail closed rather than archive an unreviewable probable secret."""
-    artifact = root / "examples" / "rendering-integration"
-    external = root / "examples" / "external-renderer"
+    artifact = root / "crates/renderer/examples/rendering-integration"
+    external = root / "crates/renderer/examples/external-renderer"
     count = 0
     for directory in (root / "crates/renderer", root / "crates/shader", root / "crates/material", artifact, external,
-                      root / ".cargo", root / "examples/.cargo", artifact / ".cargo"):
+                      root / ".cargo", root / "crates/.cargo", root / "crates/renderer/.cargo",
+                      root / "crates/renderer/examples/.cargo", artifact / ".cargo"):
         if not directory.is_dir():
             continue
         for path in directory.rglob("*"):
@@ -68,8 +69,8 @@ def sensitive_build_inputs(root: Path) -> int:
 
 def closure_escape_count(root: Path) -> int:
     """Reject links and include macros whose exact input cannot be archived."""
-    artifact = root / "examples" / "rendering-integration"
-    external = root / "examples" / "external-renderer"
+    artifact = root / "crates/renderer/examples/rendering-integration"
+    external = root / "crates/renderer/examples/external-renderer"
     directories = (root / "crates/renderer", root / "crates/shader", root / "crates/material", artifact, external)
     failures = 0
     for directory in directories:
@@ -110,8 +111,8 @@ def closure_escape_count(root: Path) -> int:
 
 def uncontrolled_build_script_count(root: Path) -> int:
     """A build script can read arbitrary process state; no full env closure exists here."""
-    artifact = root / "examples" / "rendering-integration"
-    external = root / "examples" / "external-renderer"
+    artifact = root / "crates/renderer/examples/rendering-integration"
+    external = root / "crates/renderer/examples/external-renderer"
     return sum((directory / "build.rs").is_file() for directory in (
         root, root / "crates/renderer", root / "crates/shader", root / "crates/material", artifact, external))
 
@@ -144,14 +145,13 @@ def external_cargo_config_count(root: Path) -> int:
 
 def source_input_paths(root: Path = ROOT) -> list[Path]:
     """The complete, non-secret build-input closure for this bounded consumer."""
-    artifact = root / "examples" / "rendering-integration"
-    external = root / "examples" / "external-renderer"
+    artifact = root / "crates/renderer/examples/rendering-integration"
+    external = root / "crates/renderer/examples/external-renderer"
     paths: list[Path] = [
         root / "Cargo.toml", root / "Cargo.lock", root / "build.rs",
         root / "tools/integration/README.md",
-        root / "documents/s0-s1-support-decision.md",
-        root / "documents/integration-known-diagnostics.md",
-        root / "documents/integration-manifest.schema.json",
+        root / "tools/integration/manifest.schema.json",
+        root / "tools/integration/policy.md",
     ]
     for package in (root / "crates/renderer", root / "crates/shader",
                     root / "crates/material", artifact, external):
@@ -160,7 +160,8 @@ def source_input_paths(root: Path = ROOT) -> list[Path]:
     paths.extend(path for path in tools.rglob("*.py") if source_path_is_safe(path, root))
     # Cargo is invoked from the consumer. Config in each ancestor on that route
     # can alter the build; only Cargo's two configuration filenames are inputs.
-    for directory in (root, root / "examples", artifact, external):
+    for directory in (root, root / "crates", root / "crates/renderer",
+                      root / "crates/renderer/examples", artifact, external):
         paths.extend(cargo_config_paths(directory, root))
     resolved_root = root.resolve()
     return sorted({path.resolve() for path in paths if source_path_is_safe(path, root)},
@@ -221,8 +222,8 @@ def classify_dx12_diagnostics(stderr: Path) -> dict[str, Any]:
     return {
         "native_callback_observed": bool(native),
         "unreviewed_native_diagnostics": native,
-        "policy": "tools/integration/README.md",
-        "policy_sha256": sha256(ROOT / "tools/integration/README.md"),
+        "policy": "tools/integration/policy.md",
+        "policy_sha256": sha256(ROOT / "tools/integration/policy.md"),
     }
 
 
