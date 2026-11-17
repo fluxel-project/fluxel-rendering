@@ -124,14 +124,19 @@ impl ForwardReadState {
         Self::ensure_uncovered(indices, &self.texture_covered)?;
         for &draw_index in indices {
             let draw = self.draws.get(draw_index).ok_or(())?;
-            pass.read_texture_with_use(
-                *self.textures.get(draw.texture).ok_or(())?,
-                whole(),
-                texture_read_uses().uses,
-                ImageLayout::ShaderReadOnly,
-                TextureUsage::TEXTURE_BINDING,
-            )
-            .map_err(|_| ())?;
+            if draw.textures.is_empty() {
+                return Err(());
+            }
+            for texture in &draw.textures {
+                pass.read_texture_with_use(
+                    *self.textures.get(*texture).ok_or(())?,
+                    whole(),
+                    texture_read_uses().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+                .map_err(|_| ())?;
+            }
         }
         Self::mark_covered(indices, &mut self.texture_covered);
         Ok(())

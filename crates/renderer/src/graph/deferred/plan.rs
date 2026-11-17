@@ -291,6 +291,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     /// declaration for this frame. This validates the concrete owners and
     /// ranges against that cached Graph before mapping or recording.
     pub(crate) fn validate_frame(&self, frame: &DeferredFrame<B>) -> Result<()> {
+        super::validate_resident_texture_devices(&frame.resident, self.id.device)?;
         if frame.draws.is_empty()
             || frame.resident.device != self.id.device
             || frame.draws.iter().any(|draw| {

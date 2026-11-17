@@ -15,7 +15,7 @@ pub(super) struct ResidentAssembly<B: ResourceBackend> {
     pub upload: ForwardResidentUpload,
     pub publication: DeferredPublication,
     pub mappings: Vec<Vec<usize>>,
-    pub textures: Vec<usize>,
+    pub textures: Vec<Vec<usize>>,
     pub buffer_allocations: u64,
     pub texture_allocations: u64,
 }
@@ -83,56 +83,70 @@ where
                 mapping
             };
             mappings.push(mapping);
-            let texture_key = ForwardResidentCache::<B>::texture_key(input, self.device.id())
-                .ok_or(Error::InvalidState)?;
-            let data = input.asset_texture().ok_or(Error::InvalidState)?.value();
-            if crate::renderer::forward::material_requires_ordinary_sampler(material) {
-                crate::renderer::forward::require_filterable_material_texture(
-                    &self.device,
-                    data.extent,
-                    data.encoding,
-                )
-                .map_err(|error| self.observe_rhi_error(error))?;
-            }
-            let slot = if let Some(slot) = textures.get(&texture_key) {
-                *slot
-            } else {
-                let slot = final_textures.len();
-                if let Some(cached) = self.deferred_residency.texture(texture_key) {
-                    self.deferred_stats.texture_hits =
-                        self.deferred_stats.texture_hits.saturating_add(1);
-                    final_textures.push(Some(cached));
-                } else {
-                    let pitch = super::prepare::aligned_row(data.extent[0])?;
-                    let size = u64::from(pitch)
-                        .checked_mul(u64::from(data.extent[1]))
-                        .ok_or(Error::InvalidRange)?;
-                    if size > self.device.capabilities().limits.max_buffer_bytes {
-                        return Err(Error::InvalidRange.into());
-                    }
-                    let mut bytes =
-                        vec![0; usize::try_from(size).map_err(|_| Error::InvalidRange)?];
-                    let tight = usize::try_from(data.extent[0])
-                        .map_err(|_| Error::InvalidRange)?
-                        .checked_mul(4)
-                        .ok_or(Error::InvalidRange)?;
-                    for (row, source) in data.rgba8.chunks_exact(tight).enumerate() {
-                        let start = row * pitch as usize;
-                        bytes[start..start + tight].copy_from_slice(source);
-                    }
-                    texture_inputs.push(ForwardTextureInput {
-                        bytes,
-                        extent: data.extent,
-                        bytes_per_row: pitch,
-                        encoding: data.encoding,
-                    });
-                    fresh_texture_slots.push(slot);
-                    final_textures.push(None);
+            let mut draw_slots = Vec::with_capacity(
+                material
+                    .binding_schema()
+                    .ok_or(Error::InvalidState)?
+                    .textures
+                    .len(),
+            );
+            for texture_index in 0..input.resolved_textures().len() {
+                let texture_key =
+                    ForwardResidentCache::<B>::texture_key(input, texture_index, self.device.id())
+                        .ok_or(Error::InvalidState)?;
+                let data = input
+                    .asset_texture(texture_index)
+                    .ok_or(Error::InvalidState)?
+                    .value();
+                if crate::renderer::forward::material_requires_ordinary_sampler(material) {
+                    crate::renderer::forward::require_filterable_material_texture(
+                        &self.device,
+                        data.extent,
+                        data.encoding,
+                    )
+                    .map_err(|error| self.observe_rhi_error(error))?;
                 }
-                textures.insert(texture_key, slot);
-                slot
-            };
-            draw_textures.push(slot);
+                let slot = if let Some(slot) = textures.get(&texture_key) {
+                    *slot
+                } else {
+                    let slot = final_textures.len();
+                    if let Some(cached) = self.deferred_residency.texture(texture_key) {
+                        self.deferred_stats.texture_hits =
+                            self.deferred_stats.texture_hits.saturating_add(1);
+                        final_textures.push(Some(cached));
+                    } else {
+                        let pitch = super::prepare::aligned_row(data.extent[0])?;
+                        let size = u64::from(pitch)
+                            .checked_mul(u64::from(data.extent[1]))
+                            .ok_or(Error::InvalidRange)?;
+                        if size > self.device.capabilities().limits.max_buffer_bytes {
+                            return Err(Error::InvalidRange.into());
+                        }
+                        let mut bytes =
+                            vec![0; usize::try_from(size).map_err(|_| Error::InvalidRange)?];
+                        let tight = usize::try_from(data.extent[0])
+                            .map_err(|_| Error::InvalidRange)?
+                            .checked_mul(4)
+                            .ok_or(Error::InvalidRange)?;
+                        for (row, source) in data.rgba8.chunks_exact(tight).enumerate() {
+                            let start = row * pitch as usize;
+                            bytes[start..start + tight].copy_from_slice(source);
+                        }
+                        texture_inputs.push(ForwardTextureInput {
+                            bytes,
+                            extent: data.extent,
+                            bytes_per_row: pitch,
+                            encoding: data.encoding,
+                        });
+                        fresh_texture_slots.push(slot);
+                        final_textures.push(None);
+                    }
+                    textures.insert(texture_key, slot);
+                    slot
+                };
+                draw_slots.push(slot);
+            }
+            draw_textures.push(draw_slots);
         }
         let plan = plan_forward_resident(stream_inputs, texture_inputs)?;
         for desc in plan

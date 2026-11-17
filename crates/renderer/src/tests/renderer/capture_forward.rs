@@ -60,7 +60,7 @@ fn receiver_at(locations: [u32; 3]) -> (crate::PreparedCaptureReceiver, ForwardA
     let resources = crate::ForwardCaptureResources {
         geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
         material: SceneAssetRef::from_snapshot(&assets.materials[0]),
-        texture: crate::ForwardTextureSource::CaptureSlot("captured".into()),
+        textures: vec![crate::ForwardTextureBinding::capture("captured", "captured")],
         tint: [1.0; 4],
     };
     let prepared = crate::prepare_forward_capture_receiver(

@@ -192,6 +192,7 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
             (capture, &self.capture_shape, self.capture_topology),
             (receiver, &self.receiver_shape, self.receiver_topology),
         ] {
+            validate_resident_texture_devices(&frame.resident, self.id.device)?;
             if let Some(owner) = frame.specular.as_ref() {
                 owner.validate_for_sampling(self.id.device)?;
             }
@@ -219,6 +220,8 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
         receiver: &'a ForwardFrame<B>,
         image: &'a SurfaceImage<B>,
     ) -> Result<FrameBindings<'a, B>> {
+        validate_resident_texture_devices(&capture.resident, self.id.device)?;
+        validate_resident_texture_devices(&receiver.resident, self.id.device)?;
         validate_capture_alias(capture, receiver)?;
         let mut buffers = Vec::new();
         let mut textures = Vec::new();

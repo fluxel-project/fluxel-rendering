@@ -17,7 +17,7 @@ pub(super) fn draws<B: ResourceBackend>(
     uniform: &Buffer<B>,
     values: &ForwardUniformData,
     mappings: &[Vec<usize>],
-    textures: &[usize],
+    textures: &[Vec<usize>],
     pbr: bool,
 ) -> Result<Vec<DeferredDraw<B>>, Error> {
     let count = inputs.len();
@@ -40,30 +40,32 @@ pub(super) fn draws<B: ResourceBackend>(
         let schema = prepared[index]
             .binding_schema()
             .ok_or(Error::InvalidState)?;
-        let texture = resident
-            .textures
-            .get(textures[index])
-            .ok_or(Error::InvalidRange)?;
-        let mut entries = vec![
-            BindGroupEntry {
-                binding: schema.tint,
-                resource: BindingResource::Buffer {
-                    buffer: uniform,
-                    range: 0..16,
-                },
+        if schema.textures.len() != textures[index].len() {
+            return Err(Error::InvalidRange);
+        }
+        let mut entries = vec![BindGroupEntry {
+            binding: schema.tint,
+            resource: BindingResource::Buffer {
+                buffer: uniform,
+                range: 0..16,
             },
-            BindGroupEntry {
-                binding: schema.texture,
+        }];
+        for (texture_index, binding) in schema.textures.iter().enumerate() {
+            let slot = textures[index][texture_index];
+            let texture = resident.textures.get(slot).ok_or(Error::InvalidRange)?;
+            crate::renderer::forward::validate_material_texture_owner(
+                resident,
+                slot,
+                device.id(),
+                &inputs[index],
+                texture_index,
+                crate::renderer::forward::material_requires_ordinary_sampler(&prepared[index]),
+            )?;
+            entries.push(BindGroupEntry {
+                binding: binding.binding,
                 resource: BindingResource::TextureView(&texture.view),
-            },
-        ];
-        crate::renderer::forward::validate_material_texture_owner(
-            resident,
-            textures[index],
-            device.id(),
-            &inputs[index],
-            crate::renderer::forward::material_requires_ordinary_sampler(&prepared[index]),
-        )?;
+            });
+        }
         if let Some(binding) = schema.sampler {
             let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
             crate::renderer::forward::validate_ordinary_sampler(&sampler.desc)?;
@@ -106,7 +108,7 @@ pub(super) fn draws<B: ResourceBackend>(
             vertex_layouts: prepared[index].geometry().streams.clone(),
             vertex_ranges: ranges,
             vertex_streams: mappings[index].clone(),
-            texture: textures[index],
+            textures: textures[index].clone(),
             vertices: inputs[index].geometry().value().vertices.clone(),
             tint_range: values.tints[index].clone(),
             transform_range: values.transforms[index].clone(),

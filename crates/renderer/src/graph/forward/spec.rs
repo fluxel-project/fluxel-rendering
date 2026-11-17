@@ -74,7 +74,7 @@ pub(crate) struct ForwardDrawShape {
     pub(crate) ranges: Vec<std::ops::Range<u64>>,
     pub(crate) vertices: std::ops::Range<u32>,
     pub(crate) instances: std::ops::Range<u32>,
-    pub(crate) texture: usize,
+    pub(crate) textures: Vec<usize>,
     pub(crate) groups: Vec<(u32, Vec<u32>, Vec<std::ops::Range<u64>>)>,
 }
 
@@ -137,7 +137,7 @@ pub(crate) struct ForwardGraphDraw {
     pub(crate) vertices: Range<u32>,
     pub(crate) instances: Range<u32>,
     pub(crate) uniform_ranges: Vec<Range<u64>>,
-    pub(crate) texture: usize,
+    pub(crate) textures: Vec<usize>,
     pub(crate) accesses: Vec<Option<Range<u64>>>,
 }
 
@@ -199,7 +199,7 @@ impl ForwardGraphSpec {
                         .iter()
                         .flat_map(|group| group.uniform_ranges.iter().cloned())
                         .collect(),
-                    texture: draw.texture,
+                    textures: draw.textures.clone(),
                     accesses: draw_accesses(frame, draw)?,
                 })
             })
@@ -392,7 +392,7 @@ pub(super) fn forward_shape<B: ResourceBackend>(frame: &ForwardFrame<B>) -> Forw
                 ranges: draw.vertex_ranges.clone(),
                 vertices: draw.vertices.clone(),
                 instances: draw.instances.clone(),
-                texture: draw.texture,
+                textures: draw.textures.clone(),
                 groups: draw
                     .bind_groups
                     .iter()
@@ -469,7 +469,7 @@ pub(super) fn surface_forward_shape<B: ResourceBackend>(
                 ranges: draw.vertex_ranges.clone(),
                 vertices: draw.vertices.clone(),
                 instances: draw.instances.clone(),
-                texture: draw.texture,
+                textures: draw.textures.clone(),
                 groups: draw
                     .bind_groups
                     .iter()

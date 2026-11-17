@@ -147,6 +147,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
     /// identity itself is deliberately absent from that key; `FrameBindings`
     /// validates each incoming owner independently.
     pub(crate) fn validate_frame(&self, frame: &ForwardFrame<B>) -> Result<()> {
+        validate_resident_texture_devices(&frame.resident, self.id.device)?;
         if frame.resident.device != self.id.device
             || frame
                 .environment
@@ -179,7 +180,12 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         validate_batches(frame)?;
         for draw in &frame.draws {
             validate_offsets(draw, self.uniform_alignment)?;
-            if draw.texture >= self.texture_count {
+            if draw.textures.is_empty()
+                || draw
+                    .textures
+                    .iter()
+                    .any(|texture| *texture >= self.texture_count)
+            {
                 return Err(Error::InvalidRange);
             }
             draw_accesses(frame, draw)?;
@@ -191,6 +197,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         &'a self,
         frame: &'a ForwardFrame<B>,
     ) -> Result<FrameBindings<'a, B>> {
+        validate_resident_texture_devices(&frame.resident, self.id.device)?;
         let mut buffers = vec![
             BoundBuffer::new(
                 self.frame_upload_slot,

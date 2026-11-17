@@ -45,9 +45,7 @@ where
     B: ResourceBackend,
     F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
 {
-    if frame.resident.device != device.id() {
-        return Err(Error::WrongDevice.into());
-    }
+    validate_resident_texture_devices(&frame.resident, device.id())?;
     let uniform_alignment = device.capabilities().limits.uniform_offset_alignment;
     if frame.extent.contains(&0) || uniform_alignment == 0 {
         return Err(Error::InvalidRange.into());
@@ -63,7 +61,12 @@ where
         validate_draw(draw, frame.resident.streams.len())?;
         validate_offsets(draw, uniform_alignment)?;
         surface_draw_accesses(frame, draw)?;
-        if draw.texture >= frame.resident.textures.len() {
+        if draw.textures.is_empty()
+            || draw
+                .textures
+                .iter()
+                .any(|texture| *texture >= frame.resident.textures.len())
+        {
             return Err(Error::InvalidRange.into());
         }
     }
@@ -383,7 +386,7 @@ where
                         .iter()
                         .flat_map(|group| group.uniform_ranges.iter().cloned())
                         .collect(),
-                    texture: draw.texture,
+                    textures: draw.textures.clone(),
                     accesses: surface_draw_accesses(frame, draw)?,
                 })
             })

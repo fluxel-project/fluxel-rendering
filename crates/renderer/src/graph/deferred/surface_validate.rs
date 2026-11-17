@@ -9,6 +9,7 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
     device: &Device<B>,
     frame: &DeferredSurfaceFrame<B>,
 ) -> Result<()> {
+    super::validate_resident_texture_devices(&frame.resident, device.id())?;
     validate_draw_uniform_ranges(
         frame.draws.first().ok_or(Error::InvalidRange)?,
         frame.frame.uniform_desc.size,
@@ -108,7 +109,12 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
             frame.frame.uniform_desc.size,
             device.capabilities().limits.uniform_offset_alignment,
         )?;
-        if draw.texture >= frame.resident.textures.len() {
+        if draw.textures.is_empty()
+            || draw
+                .textures
+                .iter()
+                .any(|texture| *texture >= frame.resident.textures.len())
+        {
             return Err(Error::InvalidRange);
         }
         surface_draw_accesses(frame, draw)?;

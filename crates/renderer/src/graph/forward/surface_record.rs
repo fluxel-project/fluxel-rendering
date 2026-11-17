@@ -72,15 +72,20 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                     )?;
                 }
             }
-            pass.texture(
-                *self
-                    .texture_slots
-                    .get(draw.texture)
-                    .ok_or(Error::InvalidRange)?,
-                whole(),
-                AccessKind::Read,
-                texture_read_uses(),
-            )?;
+            if draw.textures.is_empty() {
+                return Err(Error::InvalidRange);
+            }
+            for texture in &draw.textures {
+                pass.texture(
+                    *self
+                        .texture_slots
+                        .get(*texture)
+                        .ok_or(Error::InvalidRange)?,
+                    whole(),
+                    AccessKind::Read,
+                    texture_read_uses(),
+                )?;
+            }
         }
         if frame.environment.is_some() {
             pass.texture(

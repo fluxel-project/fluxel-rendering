@@ -28,6 +28,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
 
     pub(crate) fn validate_surface_frame(&self, frame: &DeferredSurfaceFrame<B>) -> Result<()> {
         validate_surface_inputs(&self.device, frame)?;
+        super::validate_resident_texture_devices(&frame.resident, self.id.device)?;
         if !matches!(self.output, DeferredOutputPlan::Surface { .. })
             || frame.extent != self.extent
             || frame
@@ -71,6 +72,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         frame: &'a DeferredSurfaceFrame<B>,
         image: &'a fluxel_rhi::api::SurfaceImage<B>,
     ) -> Result<FrameBindings<'a, B>> {
+        super::validate_resident_texture_devices(&frame.resident, self.id.device)?;
         let uses = |slot| {
             self.execution
                 .logical()

@@ -144,6 +144,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         self.present_step
     }
     pub(crate) fn validate_frame(&self, frame: &SurfaceForwardFrame<B>) -> Result<()> {
+        validate_resident_texture_devices(&frame.resident, self.id.device)?;
         if frame.resident.device != self.id.device
             || frame
                 .environment
@@ -171,7 +172,12 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             validate_draw(draw, self.stream_count)?;
             validate_offsets(draw, self.uniform_alignment)?;
             surface_draw_accesses(frame, draw)?;
-            if draw.texture >= self.texture_count {
+            if draw.textures.is_empty()
+                || draw
+                    .textures
+                    .iter()
+                    .any(|texture| *texture >= self.texture_count)
+            {
                 return Err(Error::InvalidRange);
             }
         }
@@ -192,6 +198,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         frame: &'a SurfaceForwardFrame<B>,
         image: &'a SurfaceImage<B>,
     ) -> Result<FrameBindings<'a, B>> {
+        validate_resident_texture_devices(&frame.resident, self.id.device)?;
         let mut buffers = vec![
             BoundBuffer::new(
                 self.frame_upload_slot,

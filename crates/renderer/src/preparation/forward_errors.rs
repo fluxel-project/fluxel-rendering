@@ -128,6 +128,34 @@ pub enum ForwardPreparationError {
         /// Draw requesting the texture.
         source: ForwardDrawSource,
     },
+    /// A material texture resource appears more than once in one draw input.
+    DuplicateTextureResource {
+        /// Draw requesting the material resource.
+        source: ForwardDrawSource,
+        /// Duplicate material resource name.
+        resource: String,
+    },
+    /// A material-declared texture resource has no supplied source.
+    MissingTextureResource {
+        /// Draw requesting the material resource.
+        source: ForwardDrawSource,
+        /// Missing material resource name.
+        resource: String,
+    },
+    /// A draw supplied a source for no material-declared texture resource.
+    UnexpectedTextureResource {
+        /// Draw requesting the material resource.
+        source: ForwardDrawSource,
+        /// Unexpected material resource name.
+        resource: String,
+    },
+    /// An ordinary Forward draw attempted to consume a same-frame capture slot.
+    CaptureTextureOutsideReceiver {
+        /// Draw requesting the capture product.
+        source: ForwardDrawSource,
+        /// Material resource requested from the capture product.
+        resource: String,
+    },
     /// A capture receiver supplied an ordinary CPU texture source.
     CaptureReceiverRequiresSlot {
         /// Draw requesting the capture product.

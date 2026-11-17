@@ -86,7 +86,10 @@ fn fixture(uv: bool) -> (ForwardCaptureResources, ForwardAssets) {
     let resources = ForwardCaptureResources {
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
-        texture: ForwardTextureSource::CaptureSlot("captured_image".into()),
+        textures: vec![crate::ForwardTextureBinding::capture(
+            "captured_image",
+            "captured_image",
+        )],
         tint: [0.25, 0.5, 0.75, 1.0],
     };
     (
@@ -125,8 +128,8 @@ fn capture_receiver_prepares_without_any_cpu_texture_asset() {
     let draw = prepare(&resources, &assets)
         .expect("capture slot is the only texture input")
         .into_draw_input();
-    assert!(draw.asset_texture().is_none());
-    assert_eq!(draw.capture_texture_slot(), Some("captured_image"));
+    assert!(draw.asset_texture(0).is_none());
+    assert_eq!(draw.capture_texture_slot(0), Some("captured_image"));
     assert_eq!(draw.tint(), [0.25, 0.5, 0.75, 1.0]);
     assert_eq!(draw.extent(), [32, 24]);
     assert_eq!(draw.geometry().value().vertices, 0..3);
@@ -140,12 +143,13 @@ fn capture_receiver_rejects_asset_substitution_and_wrong_logical_slot() {
         encoding: crate::TextureEncoding::Linear,
         rgba8: vec![255; 4],
     });
-    resources.texture = ForwardTextureSource::Asset(SceneAssetRef::from_snapshot(&texture));
+    resources.textures[0].source =
+        ForwardTextureSource::Asset(SceneAssetRef::from_snapshot(&texture));
     assert!(matches!(
         prepare(&resources, &assets),
         Err(ForwardPreparationError::CaptureReceiverRequiresSlot { .. })
     ));
-    resources.texture = ForwardTextureSource::CaptureSlot("another_image".into());
+    resources.textures[0].source = ForwardTextureSource::CaptureSlot("another_image".into());
     assert!(matches!(
         prepare(&resources, &assets),
         Err(ForwardPreparationError::InvalidCaptureSlot { .. })

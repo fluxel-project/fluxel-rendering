@@ -1,5 +1,7 @@
 //! Graph declaration and recording for the bounded Forward consumer.
 
+use super::validate_resident_texture_devices;
+
 mod access_contracts;
 mod capture_bindings;
 mod capture_declaration;

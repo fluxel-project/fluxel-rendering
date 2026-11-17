@@ -44,7 +44,7 @@ where
         use crate::residency::{
             EnvironmentFrameOwner, ForwardBindGroup, ForwardDraw, ForwardFrame,
             ForwardFrameBuffers, ForwardResidentBuffers, ForwardSampler, ForwardStreamInput,
-            ForwardTextureInput, SurfaceForwardFrame, SurfaceForwardFrameBuffers,
+            SurfaceForwardFrame, SurfaceForwardFrameBuffers,
         };
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
@@ -138,26 +138,6 @@ where
         let mut mappings = Vec::new();
         let mut draw_textures = Vec::new();
         for input in &inputs {
-            let texture = input.asset_texture();
-            if material_requires_ordinary_sampler(input.prepared()) {
-                match texture {
-                    Some(texture) => require_filterable_material_texture(
-                        &self.device,
-                        texture.value().extent,
-                        texture.value().encoding,
-                    )
-                    .map_err(|error| {
-                        self.observe_forward_error("sampled material texture admission", error)
-                    })?,
-                    None => {
-                        validate_capture_material_texture(
-                            capture_texture,
-                            input,
-                            self.device.id(),
-                        )?;
-                    }
-                }
-            }
             let geometry_key =
                 crate::residency::ForwardResidentCache::<B>::geometry_key(input, self.device.id());
             let mapping = if let Some(mapping) = geometry_slots.get(&geometry_key) {
@@ -179,8 +159,9 @@ where
                         .iter()
                         .zip(&input.prepared().geometry().streams)
                     {
-                        mapping.push(final_streams.len());
-                        fresh_stream_slots.push(final_streams.len());
+                        let slot = final_streams.len();
+                        mapping.push(slot);
+                        fresh_stream_slots.push(slot);
                         final_streams.push(None);
                         stream_inputs.push(ForwardStreamInput {
                             bytes: bytes.clone(),
@@ -192,73 +173,79 @@ where
                 mapping
             };
             mappings.push(mapping);
-            let texture_slot = if let Some(texture) = texture {
-                let texture_key = crate::residency::ForwardResidentCache::<B>::texture_key(
-                    input,
-                    self.device.id(),
-                )
-                .ok_or(Error::InvalidState)?;
-                if let Some(slot) = texture_slots.get(&texture_key) {
-                    *slot
-                } else {
-                    let slot = final_textures.len();
-                    if let Some(cached) = self.forward_residency.texture(texture_key) {
-                        self.forward_stats.texture_hits =
-                            self.forward_stats.texture_hits.saturating_add(1);
-                        final_textures.push(Some(cached));
-                    } else {
-                        let data = texture.value();
-                        let pitch = aligned_forward_row(data.extent[0])?;
-                        let size = u64::from(pitch)
-                            .checked_mul(u64::from(data.extent[1]))
-                            .ok_or(Error::InvalidRange)?;
-                        if size > limits.max_buffer_bytes {
-                            return Err(Error::InvalidRange.into());
+            let mut input_texture_slots = Vec::new();
+            for texture_index in 0..input.resolved_textures().len() {
+                let texture = input.asset_texture(texture_index);
+                if material_requires_ordinary_sampler(input.prepared()) {
+                    match texture {
+                        Some(texture) => require_filterable_material_texture(
+                            &self.device,
+                            texture.value().extent,
+                            texture.value().encoding,
+                        )
+                        .map_err(|error| {
+                            self.observe_forward_error("sampled material texture admission", error)
+                        })?,
+                        None => {
+                            validate_capture_material_texture(
+                                capture_texture,
+                                input,
+                                self.device.id(),
+                            )?;
                         }
-                        let size = usize::try_from(size).map_err(|_| Error::InvalidRange)?;
-                        let mut bytes = Vec::new();
-                        bytes
-                            .try_reserve_exact(size)
-                            .map_err(|_| Error::OutOfMemory)?;
-                        bytes.resize(size, 0);
-                        let tight = usize::try_from(data.extent[0])
-                            .map_err(|_| Error::InvalidRange)?
-                            .checked_mul(4)
-                            .ok_or(Error::InvalidRange)?;
-                        for (row, source) in data.rgba8.chunks_exact(tight).enumerate() {
-                            let start = row * pitch as usize;
-                            bytes[start..start + tight].copy_from_slice(source);
-                        }
-                        texture_inputs.push(ForwardTextureInput {
-                            bytes,
-                            extent: data.extent,
-                            bytes_per_row: pitch,
-                            encoding: data.encoding,
-                        });
-                        fresh_texture_slots.push(slot);
-                        final_textures.push(None);
                     }
-                    texture_slots.insert(texture_key, slot);
-                    slot
                 }
-            } else {
-                let capture = capture_texture.ok_or(Error::InvalidState)?;
-                let slot = input.capture_texture_slot().ok_or(Error::InvalidState)?;
-                capture.validate_for_receiver(self.device.id(), slot)?;
-                let texture_slot = final_textures.len();
-                final_textures.push(Some(crate::residency::ForwardTexture {
-                    texture: capture.texture.clone(),
-                    view: capture.view.clone(),
-                    desc: capture.desc.clone(),
-                    instance: capture.instance,
-                    incoming: capture.incoming,
-                    layout: capture.layout,
-                    device: capture.device,
-                    filterable: capture.filterable,
-                }));
-                texture_slot
-            };
-            draw_textures.push(texture_slot);
+                let texture_slot = if let Some(texture) = texture {
+                    let texture_key = crate::residency::ForwardResidentCache::<B>::texture_key(
+                        input,
+                        texture_index,
+                        self.device.id(),
+                    )
+                    .ok_or(Error::InvalidState)?;
+                    if let Some(slot) = texture_slots.get(&texture_key) {
+                        *slot
+                    } else {
+                        let slot = final_textures.len();
+                        if let Some(cached) = self.forward_residency.texture(texture_key) {
+                            self.forward_stats.texture_hits =
+                                self.forward_stats.texture_hits.saturating_add(1);
+                            final_textures.push(Some(cached));
+                        } else {
+                            let data = texture.value();
+                            texture_inputs
+                                .push(super::texture_upload::stage(data, limits.max_buffer_bytes)?);
+                            fresh_texture_slots.push(slot);
+                            final_textures.push(None);
+                        }
+                        texture_slots.insert(texture_key, slot);
+                        slot
+                    }
+                } else {
+                    let capture = capture_texture.ok_or(Error::InvalidState)?;
+                    if input.resolved_textures().len() != 1 {
+                        return Err(Error::Unsupported(
+                            "mixed capture and asset material textures",
+                        )
+                        .into());
+                    }
+                    let slot = input.capture_texture_slot(0).ok_or(Error::InvalidState)?;
+                    capture.validate_for_receiver(self.device.id(), slot)?;
+                    let texture_slot = final_textures.len();
+                    final_textures.push(Some(crate::residency::ForwardTexture {
+                        texture: capture.texture.clone(),
+                        view: capture.view.clone(),
+                        desc: capture.desc.clone(),
+                        instance: capture.instance,
+                        incoming: capture.incoming,
+                        layout: capture.layout,
+                        device: capture.device,
+                        filterable: capture.filterable,
+                    }));
+                    texture_slot
+                };
+                input_texture_slots.push(texture_slot);
+            }
+            draw_textures.push(input_texture_slots);
         }
         let resident_plan = crate::residency::plan_forward_resident(stream_inputs, texture_inputs)
             .map_err(|error| self.observe_forward_error("resident planning", error))?;
@@ -424,29 +411,32 @@ where
                     depth_mode,
                 )
                 .await?;
-            let mut material_entries = vec![
-                BindGroupEntry {
-                    binding: schema.tint,
-                    resource: BindingResource::Buffer {
-                        buffer: frame_uniform,
-                        range: 0..16,
-                    },
+            let mut material_entries = vec![BindGroupEntry {
+                binding: schema.tint,
+                resource: BindingResource::Buffer {
+                    buffer: frame_uniform,
+                    range: 0..16,
                 },
-                BindGroupEntry {
-                    binding: schema.texture,
-                    resource: BindingResource::TextureView(
-                        &resident.textures[draw_textures[index]].view,
-                    ),
-                },
-            ];
-            validate_material_texture_owner(
-                &resident,
-                draw_textures[index],
-                self.device.id(),
-                input,
-                material_requires_ordinary_sampler(input.prepared()),
-            )
-            .map_err(|error| self.observe_forward_error("sampled material owner", error))?;
+            }];
+            if schema.textures.len() != draw_textures[index].len() {
+                return Err(Error::InvalidRange.into());
+            }
+            for (texture_index, texture) in schema.textures.iter().enumerate() {
+                let slot = draw_textures[index][texture_index];
+                validate_material_texture_owner(
+                    &resident,
+                    slot,
+                    self.device.id(),
+                    input,
+                    texture_index,
+                    material_requires_ordinary_sampler(input.prepared()),
+                )
+                .map_err(|error| self.observe_forward_error("sampled material owner", error))?;
+                material_entries.push(BindGroupEntry {
+                    binding: texture.binding,
+                    resource: BindingResource::TextureView(&resident.textures[slot].view),
+                });
+            }
             if let Some(binding) = schema.sampler {
                 let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
                 validate_ordinary_sampler(&sampler.desc)?;
@@ -503,7 +493,7 @@ where
                 batch: draw_batch_ids[index],
                 compatibility: draw_compatibility[index].clone(),
                 pipeline: objects.pipeline.clone(),
-                texture: draw_textures[index],
+                textures: draw_textures[index].clone(),
                 vertex_streams: mappings[index].clone(),
                 vertex_layouts: input.prepared().geometry().streams.clone(),
                 vertex_ranges,

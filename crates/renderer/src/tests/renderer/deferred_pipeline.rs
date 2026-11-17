@@ -24,7 +24,10 @@ fn deferred_multi_record_refuses_an_incompatible_lighting_family_before_allocati
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
                 material: SceneAssetRef::from_snapshot(&assets.materials[0]),
-                texture: SceneAssetRef::from_snapshot(&assets.textures[0]),
+                textures: vec![crate::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(&assets.textures[0]),
+                )],
                 tint: [1.; 4],
             },
             transform: RenderTransform::identity(),

@@ -45,25 +45,10 @@ fn resources() -> ForwardResources {
             .unwrap(),
         _ => unreachable!(),
     };
-    let texture_store = AssetStore::<ColorTextureAsset, ColorTextureData, ()>::new();
-    let texture_handle = texture_store.create().unwrap();
-    let texture = match texture_store.acquire(&texture_handle).unwrap() {
-        Acquire::Producer(producer) => producer
-            .commit(
-                ColorTextureData {
-                    extent: [1, 1],
-                    encoding: crate::TextureEncoding::Linear,
-                    rgba8: vec![0; 4],
-                },
-                ResidentBytes::new(4),
-            )
-            .unwrap(),
-        _ => unreachable!(),
-    };
     ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
-        texture: SceneAssetRef::from_snapshot(&texture),
+        textures: Vec::new(),
         tint: [1.0; 4],
     }
 }

@@ -97,11 +97,13 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
         if self.draws.is_empty() || (self.deformation.is_some() && self.draws.len() != 1) {
             return Err(Error::InvalidRange);
         }
-        if self
-            .draws
-            .iter()
-            .any(|draw| draw.texture >= self.resident.textures.len())
-        {
+        if self.draws.iter().any(|draw| {
+            draw.textures.is_empty()
+                || draw
+                    .textures
+                    .iter()
+                    .any(|texture| *texture >= self.resident.textures.len())
+        }) {
             return Err(Error::InvalidRange);
         }
         match self.source {
@@ -114,7 +116,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
                         accesses: draw_accesses(frame, draw)?,
                         tint: draw.tint_range.clone(),
                         transform: draw.transform_range.clone(),
-                        texture: draw.texture,
+                        textures: draw.textures.clone(),
                     })
                 })
                 .collect(),
@@ -127,7 +129,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
                         accesses: super::surface_validate::surface_draw_accesses(frame, draw)?,
                         tint: draw.tint_range.clone(),
                         transform: draw.transform_range.clone(),
-                        texture: draw.texture,
+                        textures: draw.textures.clone(),
                     })
                 })
                 .collect(),

@@ -176,7 +176,10 @@ fn scene(assets: &ForwardAssets) -> (crate::FrameSnapshot<ForwardResources>, cra
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
                 material: SceneAssetRef::from_snapshot(&assets.materials[0]),
-                texture: SceneAssetRef::from_snapshot(texture),
+                textures: vec![crate::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(texture),
+                )],
                 tint: [1.0; 4],
             },
             transform: RenderTransform::identity(),

@@ -103,14 +103,14 @@ fn material_at(effects: bool, locations: [u32; 3]) -> MaterialDefinition {
             inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
             output: MaterialType::Vec4,
             calls: Vec::new(),
-            wgsl: "fn sampled(uv: vec2<f32>) -> vec4<f32> { return textureSample(material_texture, material_sampler, uv) * tint; }".into(),
+            wgsl: "fn sampled(uv: vec2<f32>) -> vec4<f32> { let base = textureSample(base_color, material_sampler, uv); let emission = textureSample(emissive, material_sampler, uv); return (base + emission * 0.125) * tint; }".into(),
         },
         MaterialFragment {
             name: "properties".into(),
             inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
             output: MaterialType::Vec2,
             calls: Vec::new(),
-            wgsl: "fn properties(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.2, 0.7); }".into(),
+            wgsl: "fn properties(uv: vec2<f32>) -> vec2<f32> { let packed = textureSample(orm, material_sampler, uv); return vec2<f32>(packed.g, packed.b); }".into(),
         },
     ];
     let resources = vec![
@@ -123,12 +123,27 @@ fn material_at(effects: bool, locations: [u32; 3]) -> MaterialDefinition {
             },
         },
         MaterialResource {
-            name: "material_texture".into(),
+            name: "base_color".into(),
             kind: MaterialResourceKind::Texture2dF32,
             location: BindingLocation {
                 group: 0,
                 binding: locations[1],
             },
+        },
+        MaterialResource {
+            name: "normal_texture".into(),
+            kind: MaterialResourceKind::Texture2dF32,
+            location: BindingLocation { group: 0, binding: 3 },
+        },
+        MaterialResource {
+            name: "orm".into(),
+            kind: MaterialResourceKind::Texture2dF32,
+            location: BindingLocation { group: 0, binding: 4 },
+        },
+        MaterialResource {
+            name: "emissive".into(),
+            kind: MaterialResourceKind::Texture2dF32,
+            location: BindingLocation { group: 0, binding: 5 },
         },
         MaterialResource {
             name: "material_sampler".into(),
@@ -151,7 +166,7 @@ fn material_at(effects: bool, locations: [u32; 3]) -> MaterialDefinition {
         output: MaterialType::Vec3,
         calls: Vec::new(),
         source: fluxel_shader::SourceUnit::new("multi:normal",
-            "fn sample_normal(uv: vec2<f32>) -> vec3<f32> { return textureSample(material_texture, material_sampler, uv).xyz; }"),
+            "fn sample_normal(uv: vec2<f32>) -> vec3<f32> { return textureSample(normal_texture, material_sampler, uv).xyz; }"),
         resources: Vec::new(),
     })
     .with_node_graph(MaterialNodeGraph {
@@ -171,7 +186,7 @@ fn material_at(effects: bool, locations: [u32; 3]) -> MaterialDefinition {
                 calls: vec![],
                 source: fluxel_shader::SourceUnit::new(
                     "multi:ao",
-                    "fn ao(uv: vec2<f32>) -> f32 { return 0.75 + uv.x * 0.0; }",
+                    "fn ao(uv: vec2<f32>) -> f32 { return textureSample(orm, material_sampler, uv).r; }",
                 ),
                 resources: vec![],
             })
@@ -287,7 +302,24 @@ fn multi_scene_at(
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&gs[index]),
                 material: SceneAssetRef::from_snapshot(&ms[index]),
-                texture: SceneAssetRef::from_snapshot(&ts[index]),
+                textures: vec![
+                    crate::ForwardTextureBinding::asset(
+                        "orm",
+                        SceneAssetRef::from_snapshot(&ts[(index + 1) % 2]),
+                    ),
+                    crate::ForwardTextureBinding::asset(
+                        "emissive",
+                        SceneAssetRef::from_snapshot(&ts[index]),
+                    ),
+                    crate::ForwardTextureBinding::asset(
+                        "base_color",
+                        SceneAssetRef::from_snapshot(&ts[index]),
+                    ),
+                    crate::ForwardTextureBinding::asset(
+                        "normal_texture",
+                        SceneAssetRef::from_snapshot(&ts[index]),
+                    ),
+                ],
                 tint: [1.0, 0.75 + index as f32 * 0.25, 1.0, 1.0],
             },
             transform: RenderTransform::identity(),
@@ -308,6 +340,15 @@ fn multi_scene_at(
 
 #[path = "schema_bindings.rs"]
 mod schema_binding_tests;
+
+#[path = "deferred_multi_completion.rs"]
+mod deferred_multi_completion_tests;
+
+#[path = "deferred_multi_texture_failures.rs"]
+mod deferred_multi_texture_failure_tests;
+
+#[path = "deferred_multi_generation.rs"]
+mod deferred_multi_generation_tests;
 
 #[path = "encoding_lifecycle.rs"]
 mod encoding_tests;
@@ -396,11 +437,22 @@ fn deferred_multi_record_submission_keeps_distinct_owners_until_completion_and_w
     assert_eq!(_frame.draws.len(), 2);
     assert_eq!(_frame.resident.streams.len(), 2);
     assert_eq!(_frame.resident.textures.len(), 2);
+    assert_eq!(_frame.draws[0].textures.len(), 4);
+    assert_eq!(_frame.draws[1].textures.len(), 4);
+    assert_eq!(
+        _frame.draws[0].textures[0], _frame.draws[0].textures[1],
+        "one physical asset aliases the base-color and normal logical bindings"
+    );
+    assert_eq!(
+        _frame.draws[0].textures[0], _frame.draws[1].textures[2],
+        "one exact asset generation is shared across records"
+    );
+    assert_eq!(_frame.publication.textures.len(), 2);
     assert_ne!(
         _frame.draws[0].vertex_streams,
         _frame.draws[1].vertex_streams
     );
-    assert_ne!(_frame.draws[0].texture, _frame.draws[1].texture);
+    assert_ne!(_frame.draws[0].textures, _frame.draws[1].textures);
     assert_ne!(
         _frame.draws[0].transform_range,
         _frame.draws[1].transform_range
@@ -489,7 +541,9 @@ fn deferred_multi_record_rejects_missing_inputs_and_mutated_actual_texture_befor
     let crate::renderer::PendingWork::Deferred { _frame, .. } = &mut pending.workload else {
         panic!()
     };
-    Arc::get_mut(&mut _frame.resident).unwrap().textures[1].layout =
+    let selected = _frame.draws[0].textures[2];
+    assert_ne!(selected, _frame.draws[0].textures[0]);
+    Arc::get_mut(&mut _frame.resident).unwrap().textures[selected].layout =
         fluxel_rhi::api::ImageLayout::ShaderReadOnly;
     let pending = renderer.pending_for(&submission).unwrap();
     let crate::renderer::PendingWork::Deferred { _frame, plan, .. } = &pending.workload else {
@@ -529,33 +583,4 @@ fn deferred_multi_record_cache_never_accepts_a_missing_current_graph_callback() 
     ));
     assert_eq!(missing.calls.get(), 1);
     assert_eq!(native.command_calls.load(Ordering::SeqCst), before);
-}
-
-#[test]
-fn deferred_multi_record_completion_failure_retains_every_owner() {
-    let (device, _) = device(Script::AcceptedCompletionDeviceLost);
-    let mut renderer = Renderer::new(device).unwrap();
-    let (snapshot, view, assets) = multi_scene(true);
-    let submission = block_on(renderer.submit_deferred(
-        &DeferredCpuPipeline::new(BoundsVisibility),
-        snapshot,
-        view,
-        bounds(),
-        &assets,
-    ))
-    .unwrap();
-    let pending = renderer.pending_for(&submission).unwrap();
-    let crate::renderer::PendingWork::Deferred { _frame, .. } = &pending.workload else {
-        panic!("Deferred work")
-    };
-    assert_eq!(_frame.draws.len(), 2);
-    assert!(matches!(
-        block_on(renderer.readback(&submission)),
-        Err(RendererError::Rhi(Error::DeviceLost))
-    ));
-    assert_eq!(
-        renderer.pending(),
-        1,
-        "completion failure may not retire owners"
-    );
 }

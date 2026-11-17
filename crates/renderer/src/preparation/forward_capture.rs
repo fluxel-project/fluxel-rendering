@@ -17,19 +17,8 @@ impl From<SceneAssetRef<ColorTextureAsset>> for ForwardTextureSource {
     }
 }
 
-/// Asset references for a receiver which samples an explicitly named capture
-/// product rather than a CPU texture asset.
-#[derive(Clone, Debug)]
-pub struct ForwardCaptureResources {
-    /// Exact immutable geometry generation.
-    pub geometry: SceneAssetRef<GeometryAsset>,
-    /// Exact immutable Material generation.
-    pub material: SceneAssetRef<MaterialAsset>,
-    /// Renderer-owned capture product slot consumed by this material.
-    pub texture: ForwardTextureSource,
-    /// Per-record material tint uploaded through group 0 binding 0 later.
-    pub tint: [f32; 4],
-}
+/// Resources for a receiver which samples an explicitly named capture product.
+pub type ForwardCaptureResources = ForwardResources;
 
 /// The concrete source for a prepared Forward material texture binding.
 #[derive(Clone)]
@@ -46,7 +35,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) geometry: AssetSnapshot<GeometryAsset, GeometryData>,
     pub(crate) material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
     pub(crate) prepared: PreparedMaterial,
-    pub(crate) capture_slot: String,
+    pub(crate) textures: Vec<ResolvedForwardTexture>,
     pub(crate) tint: [f32; 4],
     pub(crate) transform: RenderTransform,
     pub(crate) view: RenderView,
@@ -61,7 +50,7 @@ impl PreparedCaptureReceiver {
             order: self.order,
             geometry: self.geometry,
             material: self.material,
-            texture: ResolvedForwardTexture::CaptureSlot(self.capture_slot),
+            textures: self.textures,
             prepared: self.prepared,
             tint: self.tint,
             transform: self.transform,
@@ -92,15 +81,6 @@ pub fn prepare_forward_capture_receiver(
     if !resources.tint.iter().all(|value| value.is_finite()) {
         return Err(ForwardPreparationError::InvalidTint { source });
     }
-    let ForwardTextureSource::CaptureSlot(capture_slot) = &resources.texture else {
-        return Err(ForwardPreparationError::CaptureReceiverRequiresSlot { source });
-    };
-    if capture_slot.is_empty() {
-        return Err(ForwardPreparationError::MissingCaptureSlot {
-            source,
-            slot: capture_slot.clone(),
-        });
-    }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
     let request = match material.value().output() {
@@ -115,7 +95,24 @@ pub fn prepare_forward_capture_receiver(
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
     let schema = validate_material_schema(&prepared, source)?;
-    if schema.texture_name != *capture_slot {
+    let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
+    if textures.len() != 1 {
+        return Err(ForwardPreparationError::CaptureReceiverRequiresSlot { source });
+    }
+    let texture = textures[0];
+    let ForwardTextureSource::CaptureSlot(capture_slot) = &texture.source else {
+        return Err(ForwardPreparationError::CaptureReceiverRequiresSlot { source });
+    };
+    if capture_slot.is_empty() {
+        return Err(ForwardPreparationError::MissingCaptureSlot {
+            source,
+            slot: capture_slot.clone(),
+        });
+    }
+    // The current capture entry names one product and one receiver binding
+    // with the same slot. General product-to-binding aliases belong to the
+    // mixed-source capture consumer, rather than silently widening this path.
+    if capture_slot != &texture.resource {
         return Err(ForwardPreparationError::InvalidCaptureSlot {
             source,
             slot: capture_slot.clone(),
@@ -137,7 +134,7 @@ pub fn prepare_forward_capture_receiver(
         geometry,
         material,
         prepared,
-        capture_slot: capture_slot.clone(),
+        textures: vec![ResolvedForwardTexture::CaptureSlot(capture_slot.clone())],
         tint: resources.tint,
         transform,
         view: view.clone(),

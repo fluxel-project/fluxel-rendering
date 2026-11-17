@@ -44,6 +44,8 @@ where
     Receiver:
         FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
 {
+    validate_resident_texture_devices(&capture.resident, device.id())?;
+    validate_resident_texture_devices(&receiver.resident, device.id())?;
     if image.device() != device.id() {
         return Err(Error::WrongDevice.into());
     }
@@ -67,7 +69,10 @@ where
             .contains(TextureUsage::TEXTURE_BINDING)
         || receiver_spec.textures.len() != 1
         || !receiver_spec.texture_uploads.is_empty()
-        || receiver_spec.draws.iter().any(|draw| draw.texture != 0)
+        || receiver_spec
+            .draws
+            .iter()
+            .any(|draw| draw.textures.as_slice() != [0])
     {
         return Err(Error::InvalidState.into());
     }

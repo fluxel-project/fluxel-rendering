@@ -15,7 +15,7 @@ use super::{
     BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, ForwardShape,
     GraphBuilder, GraphPass, TextureSlot, copy_read_uses, copy_write_uses, graph_texture_copy_end,
     one_color_mip, texture_copy_read_uses, texture_copy_write_uses, validate_depth_spec,
-    validate_forward_topology, validate_graph_draw, whole,
+    validate_forward_topology, validate_graph_draw, validate_resident_texture_devices, whole,
 };
 
 /// A complete, uncompiled offscreen Forward declaration.
@@ -58,6 +58,7 @@ where
     B: ResourceBackend,
     F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
 {
+    validate_resident_texture_devices(&frame.resident, device.id())?;
     let spec = ForwardGraphSpec::from_frame(frame)?;
     declare_offscreen_spec_with(device, &spec, expected, contribute)
 }
@@ -86,7 +87,11 @@ where
     }
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
-        if draw.texture >= spec.textures.len()
+        if draw.textures.is_empty()
+            || draw
+                .textures
+                .iter()
+                .any(|texture| *texture >= spec.textures.len())
             || draw
                 .uniform_ranges
                 .iter()

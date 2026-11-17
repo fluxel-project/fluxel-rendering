@@ -13,6 +13,7 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
     device: &Device<B>,
     frame: &DeferredFrame<B>,
 ) -> Result<()> {
+    super::validate_resident_texture_devices(&frame.resident, device.id())?;
     if frame.resident.device != device.id()
         || frame.extent.contains(&0)
         || device.capabilities().limits.max_color_attachments
@@ -127,7 +128,12 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
     }
     validate_uploads(frame)?;
     for draw in &frame.draws {
-        if draw.texture >= frame.resident.textures.len() {
+        if draw.textures.is_empty()
+            || draw
+                .textures
+                .iter()
+                .any(|texture| *texture >= frame.resident.textures.len())
+        {
             return Err(Error::InvalidRange);
         }
         draw_accesses(frame, draw)?;

@@ -8,9 +8,15 @@ use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
 #[derive(Clone, Debug)]
 pub(crate) struct MaterialBindingSchema {
     pub(crate) tint: u32,
-    pub(crate) texture: u32,
-    pub(crate) texture_name: String,
+    pub(crate) textures: Vec<MaterialTextureBinding>,
     pub(crate) sampler: Option<u32>,
+}
+
+/// One material-declared texture location, ordered by its actual binding.
+#[derive(Clone, Debug)]
+pub(crate) struct MaterialTextureBinding {
+    pub(crate) binding: u32,
+    pub(crate) name: String,
 }
 
 pub(crate) fn material_binding_schema(
@@ -47,10 +53,10 @@ pub(crate) fn material_binding_schema(
             .count()
             == 1;
     if !valid_parameter
-        || texture.len() != 1
+        || texture.is_empty()
         || sampler.len() > 1
         || bindings.len() != contribution.bindings.len()
-        || bindings.len() != 2 + sampler.len()
+        || bindings.len() != 1 + texture.len() + sampler.len()
     {
         return Err(ForwardPreparationError::MaterialBindingSchema { source });
     }
@@ -97,10 +103,17 @@ pub(crate) fn material_binding_schema(
     {
         return Err(ForwardPreparationError::MaterialBindingSchema { source });
     }
+    let mut textures: Vec<_> = texture
+        .into_iter()
+        .map(|binding| MaterialTextureBinding {
+            binding: binding.location.binding,
+            name: binding.name.clone(),
+        })
+        .collect();
+    textures.sort_unstable_by_key(|texture| texture.binding);
     Ok(MaterialBindingSchema {
         tint: tint[0].location.binding,
-        texture: texture[0].location.binding,
-        texture_name: texture[0].name.clone(),
+        textures,
         sampler: sampler.first().map(|binding| binding.location.binding),
     })
 }

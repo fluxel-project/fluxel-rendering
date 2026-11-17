@@ -64,6 +64,7 @@ fn deferred_surface_refuses_a_mutated_cached_sampler_texture_owner() {
     .expect("prepared input");
     let texture_key = crate::residency::ForwardResidentCache::<WitnessBackend>::texture_key(
         &inputs[0],
+        0,
         device.id(),
     )
     .expect("ordinary Deferred fixture has an asset texture");

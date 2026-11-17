@@ -102,21 +102,19 @@ where
             nonuniform_indexing: false,
         };
         let schema = prepared.binding_schema().ok_or(Error::InvalidState)?;
-        let mut material_entries = vec![
-            uniform_entry(schema.tint, 16, ShaderStage::Fragment),
-            BindGroupLayoutEntry {
-                binding: schema.texture,
-                visibility: vec![ShaderStage::Fragment],
-                ty: BindingType::SampledTexture {
-                    sample: TextureSampleType::Float,
-                    dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: BindingCount::One,
-                partially_bound: false,
-                nonuniform_indexing: false,
+        let mut material_entries = vec![uniform_entry(schema.tint, 16, ShaderStage::Fragment)];
+        material_entries.extend(schema.textures.iter().map(|texture| BindGroupLayoutEntry {
+            binding: texture.binding,
+            visibility: vec![ShaderStage::Fragment],
+            ty: BindingType::SampledTexture {
+                sample: TextureSampleType::Float,
+                dimension: TextureViewDimension::D2,
+                multisampled: false,
             },
-        ];
+            count: BindingCount::One,
+            partially_bound: false,
+            nonuniform_indexing: false,
+        }));
         if let Some(binding) = schema.sampler {
             material_entries.push(BindGroupLayoutEntry {
                 binding,

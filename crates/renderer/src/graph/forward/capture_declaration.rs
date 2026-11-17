@@ -14,7 +14,7 @@ use crate::{
 use super::{
     BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, GraphBuilder,
     GraphPass, TextureSlot, copy_write_uses, texture_copy_read_uses, validate_depth_spec,
-    validate_forward_topology, validate_graph_draw, whole,
+    validate_forward_topology, validate_graph_draw, validate_resident_texture_devices, whole,
 };
 
 /// All Graph slots imported for one Forward frame namespace.
@@ -71,6 +71,8 @@ where
     Receiver:
         FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
 {
+    validate_resident_texture_devices(&capture.resident, device.id())?;
+    validate_resident_texture_devices(&receiver.resident, device.id())?;
     let capture_spec = ForwardGraphSpec::from_frame(capture)?;
     let receiver_spec = ForwardGraphSpec::from_frame(receiver)?;
     if capture_spec.device != device.id() || receiver_spec.device != device.id() {
@@ -86,7 +88,10 @@ where
             .contains(TextureUsage::TEXTURE_BINDING)
         || receiver_spec.textures.len() != 1
         || !receiver_spec.texture_uploads.is_empty()
-        || receiver_spec.draws.iter().any(|draw| draw.texture != 0)
+        || receiver_spec
+            .draws
+            .iter()
+            .any(|draw| draw.textures.as_slice() != [0])
     {
         return Err(Error::InvalidState.into());
     }
@@ -219,8 +224,13 @@ pub(super) fn validate_spec<B: ResourceBackend>(
     }
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
-        if (!receiver && draw.texture >= spec.textures.len())
-            || (receiver && draw.texture != 0)
+        if (!receiver
+            && (draw.textures.is_empty()
+                || draw
+                    .textures
+                    .iter()
+                    .any(|texture| *texture >= spec.textures.len())))
+            || (receiver && draw.textures.as_slice() != [0])
             || draw
                 .uniform_ranges
                 .iter()

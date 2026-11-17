@@ -53,7 +53,10 @@ fn feature_resources(assets: &crate::ForwardAssets) -> ForwardResources {
     ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
         material: SceneAssetRef::from_snapshot(&assets.materials[0]),
-        texture: SceneAssetRef::from_snapshot(&assets.textures[0]),
+        textures: vec![crate::ForwardTextureBinding::asset(
+            "material_texture",
+            SceneAssetRef::from_snapshot(&assets.textures[0]),
+        )],
         tint: [1.0; 4],
     }
 }
@@ -143,7 +146,10 @@ fn mixed_requests(assets: &mut crate::ForwardAssets) -> Vec<ForwardDrawRequest> 
     let color_resources = ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
         material: SceneAssetRef::from_snapshot(&color),
-        texture: SceneAssetRef::from_snapshot(&assets.textures[0]),
+        textures: vec![crate::ForwardTextureBinding::asset(
+            "material_texture",
+            SceneAssetRef::from_snapshot(&assets.textures[0]),
+        )],
         tint: [1.0; 4],
     };
     assets.materials.push(color);

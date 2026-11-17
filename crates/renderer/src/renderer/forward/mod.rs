@@ -182,6 +182,7 @@ mod execute;
 mod prepare;
 mod sampler;
 mod surface_composite;
+mod texture_upload;
 #[cfg(test)]
 pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{

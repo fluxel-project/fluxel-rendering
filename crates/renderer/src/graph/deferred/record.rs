@@ -130,15 +130,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     uniform_read(),
                 )?;
             }
-            pass.texture(
-                *self
-                    .texture_slots
-                    .get(draw.texture)
-                    .ok_or(Error::InvalidRange)?,
-                whole_color(),
-                AccessKind::Read,
-                sampled_read(),
-            )?;
+            if draw.textures.is_empty() {
+                return Err(Error::InvalidRange);
+            }
+            for texture in &draw.textures {
+                pass.texture(
+                    *self
+                        .texture_slots
+                        .get(*texture)
+                        .ok_or(Error::InvalidRange)?,
+                    whole_color(),
+                    AccessKind::Read,
+                    sampled_read(),
+                )?;
+            }
         }
         pass.texture(
             self.gbuffer_slots[0],

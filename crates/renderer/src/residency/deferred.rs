@@ -34,7 +34,8 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
     /// Indices into the frame-wide resident stream owner.
     pub(crate) vertex_streams: Vec<usize>,
     /// Index into the frame-wide resident texture owner.
-    pub(crate) texture: usize,
+    /// Resident texture slots in `binding_schema.textures` order.
+    pub(crate) textures: Vec<usize>,
     pub(crate) vertices: Range<u32>,
     pub(crate) tint_range: Range<u64>,
     pub(crate) transform_range: Range<u64>,

@@ -38,7 +38,10 @@ fn read_only_texture_queries_remain_valid_without_a_sampler() {
         resources: ForwardResources {
             geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
             material: SceneAssetRef::from_snapshot(&material),
-            texture: SceneAssetRef::from_snapshot(&assets.textures[0]),
+            textures: vec![crate::ForwardTextureBinding::asset(
+                "image",
+                SceneAssetRef::from_snapshot(&assets.textures[0]),
+            )],
             tint: [0.25; 4],
         },
         transform: RenderTransform::identity(),

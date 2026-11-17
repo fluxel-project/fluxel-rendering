@@ -77,7 +77,7 @@ where
             return Err(Error::InvalidState.into());
         };
         let slot_name = receiver_input
-            .capture_texture_slot()
+            .capture_texture_slot(0)
             .ok_or(Error::InvalidState)?;
         let capture_owner = super::captured::CaptureTextureOwner::from_capture_frame(
             &self.device,

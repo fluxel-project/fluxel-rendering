@@ -4,7 +4,8 @@ use super::*;
 use crate::{ForwardDrawRequest, ForwardPreparationError, ForwardResources, SceneAssetRef};
 use fluxel_assets::{Acquire, AssetStore, ResidentBytes};
 use fluxel_material::{
-    MaterialAsset, MaterialDefinition, MaterialFragment, MaterialType, SurfaceOutput,
+    BindingLocation, MaterialAsset, MaterialDefinition, MaterialFragment, MaterialParameter,
+    MaterialResource, MaterialResourceKind, MaterialType, SurfaceOutput,
 };
 use fluxel_rhi::api::{VertexFormat, VertexStepMode};
 use std::{cell::Cell, collections::BTreeMap, sync::atomic::Ordering};
@@ -133,28 +134,10 @@ fn unavailable_resources() -> ForwardResources {
             .expect("material snapshot"),
         _ => unreachable!(),
     };
-    let texture_store = AssetStore::<crate::ColorTextureAsset, crate::ColorTextureData, ()>::new();
-    let texture_handle = texture_store.create().expect("texture handle");
-    let texture = match texture_store
-        .acquire(&texture_handle)
-        .expect("texture producer")
-    {
-        Acquire::Producer(producer) => producer
-            .commit(
-                crate::ColorTextureData {
-                    extent: [1, 1],
-                    encoding: crate::TextureEncoding::Linear,
-                    rgba8: vec![0; 4],
-                },
-                ResidentBytes::new(4),
-            )
-            .expect("texture snapshot"),
-        _ => unreachable!(),
-    };
     ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
-        texture: SceneAssetRef::from_snapshot(&texture),
+        textures: Vec::new(),
         tint: [1.0; 4],
     }
 }
@@ -198,15 +181,30 @@ fn assets_with_texture_payload(bytes: Vec<u8>) -> (ForwardResources, crate::Forw
             .commit(
                 MaterialDefinition::new(
                     vec![MaterialFragment {
-                        name: "unused".into(),
+                        name: "sampled".into(),
                         inputs: Vec::new(),
                         output: MaterialType::Vec4,
                         calls: Vec::new(),
-                        wgsl: "fn unused() -> vec4<f32> { return vec4<f32>(1.0); }".into(),
+                        wgsl: "fn sampled() -> vec4<f32> { return textureLoad(material_texture, vec2<i32>(0, 0), 0) * tint; }".into(),
                     }],
-                    "unused",
-                    Vec::new(),
-                    Vec::new(),
+                    "sampled",
+                    vec![MaterialParameter {
+                        name: "tint".into(),
+                        ty: MaterialType::Vec4,
+                        resource: "material_tint".into(),
+                    }],
+                    vec![
+                        MaterialResource {
+                            name: "material_tint".into(),
+                            kind: MaterialResourceKind::UniformVec4,
+                            location: BindingLocation { group: 0, binding: 0 },
+                        },
+                        MaterialResource {
+                            name: "material_texture".into(),
+                            kind: MaterialResourceKind::Texture2dF32,
+                            location: BindingLocation { group: 0, binding: 1 },
+                        },
+                    ],
                     BTreeMap::new(),
                     SurfaceOutput::Color,
                 ),
@@ -237,7 +235,10 @@ fn assets_with_texture_payload(bytes: Vec<u8>) -> (ForwardResources, crate::Forw
     let resources = ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
-        texture: SceneAssetRef::from_snapshot(&texture),
+        textures: vec![crate::ForwardTextureBinding::asset(
+            "material_texture",
+            SceneAssetRef::from_snapshot(&texture),
+        )],
         tint: [1.0; 4],
     };
     let assets = crate::ForwardAssets {
@@ -444,7 +445,7 @@ fn feature_request_with_present_invalid_material_schema_is_rejected_before_alloc
     let mut renderer = Renderer::new(device).expect("renderer");
     let (scene, issuer, view) = setup_scene();
     let handle = issuer.issue("invalid-material").expect("handle");
-    let (resources, feature_assets) = assets_with_texture_payload(vec![0; 4]);
+    let (resources, feature_assets) = invalid_material::assets();
     let feature = MissingAssetFeature {
         handle,
         requests: vec![ForwardDrawRequest {
@@ -522,3 +523,6 @@ fn invalid_composition_declarations_reject_before_map_record_or_submit() {
         assert_eq!(renderer.pending(), 0);
     }
 }
+
+#[path = "invalid_material.rs"]
+mod invalid_material;

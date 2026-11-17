@@ -16,6 +16,7 @@ pub(crate) use deferred::{
 mod definition;
 mod execution;
 mod forward;
+mod owner_validation;
 #[allow(unused_imports)]
 // Consumed by the coordinator once it lowers resident/frame planning facts.
 pub(crate) use forward::{
@@ -32,6 +33,7 @@ mod state;
 pub(crate) use binding::{BindingError, ResourceInstanceId};
 pub(crate) use compute::{ComputeFixtureBindings, ComputePlan};
 pub(crate) use copy::{CopyFrame, CopyPlan};
+use owner_validation::validate_resident_texture_devices;
 pub(crate) use raster::{RasterPlan, SurfaceRasterPlan};
 pub(crate) use read_set_raster::{ReadSetRasterBindings, ReadSetRasterFrame, ReadSetRasterPlan};
 

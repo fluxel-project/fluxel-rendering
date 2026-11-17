@@ -51,7 +51,7 @@ fn nonempty_reads(graph: &mut GraphBuilder) -> ForwardReadState {
             vertices: 0..1,
             instances: 0..1,
             uniform_ranges: vec![uniform_range],
-            texture,
+            textures: vec![texture],
             accesses: vec![Some(access)],
         }
     };

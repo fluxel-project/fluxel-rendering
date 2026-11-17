@@ -88,9 +88,10 @@ pub(crate) fn validate_material_texture_owner<B: ResourceBackend>(
     texture: usize,
     selected_device: DeviceId,
     input: &crate::ForwardDrawInput,
+    texture_index: usize,
     requires_filtering: bool,
 ) -> std::result::Result<(), Error> {
-    if let Some(source) = input.asset_texture() {
+    if let Some(source) = input.asset_texture(texture_index) {
         let extent = source.value().extent;
         let owner = resident.textures.get(texture).ok_or(Error::InvalidRange)?;
         if owner.desc.extent != [extent[0], extent[1], 1] {
@@ -98,7 +99,7 @@ pub(crate) fn validate_material_texture_owner<B: ResourceBackend>(
         }
     }
     let expected_encoding = input
-        .asset_texture()
+        .asset_texture(texture_index)
         .map(|texture| texture.value().encoding)
         .unwrap_or(crate::TextureEncoding::Linear);
     validate_sampled_texture_owner(
@@ -124,7 +125,7 @@ pub(crate) fn validate_capture_material_texture<B: ResourceBackend>(
             },
         )
     })?;
-    let slot = input.capture_texture_slot().ok_or(Error::InvalidState)?;
+    let slot = input.capture_texture_slot(0).ok_or(Error::InvalidState)?;
     capture.validate_for_receiver(device, slot)?;
     Ok(())
 }

@@ -102,6 +102,7 @@ pub(crate) struct ForwardVertexUpload {
 /// One source-to-device texture copy, with physical copy layout.
 #[derive(Clone, Debug)]
 pub(crate) struct ForwardTextureUpload {
+    /// Physical resident slot written by this copy.
     pub(crate) texture: usize,
     pub(crate) source_offset: u64,
     pub(crate) bytes_per_row: u32,
@@ -186,7 +187,7 @@ pub(crate) struct ForwardDraw<B: ResourceBackend> {
     pub(crate) instances: Range<u32>,
     pub(crate) bind_groups: Vec<ForwardBindGroup<B>>,
     /// Index of the concrete material texture sampled by this draw.
-    pub(crate) texture: usize,
+    pub(crate) textures: Vec<usize>,
 }
 
 /// Complete concrete owners and uploads admitted for one Forward submission.

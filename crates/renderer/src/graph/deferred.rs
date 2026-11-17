@@ -1,5 +1,7 @@
 //! Private two-pass Deferred graph for the first bounded offscreen probe.
 
+use super::validate_resident_texture_devices;
+
 mod declaration;
 mod declaration_validation;
 mod diagnostic;

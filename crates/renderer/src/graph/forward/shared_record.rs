@@ -412,15 +412,20 @@ where
         )?;
     }
     for draw in &frame.draws {
-        pass.texture(
-            *slots
-                .texture_slots
-                .get(draw.texture)
-                .ok_or(Error::InvalidRange)?,
-            whole(),
-            AccessKind::Read,
-            texture_read_uses(),
-        )?;
+        if draw.textures.is_empty() {
+            return Err(Error::InvalidRange);
+        }
+        for texture in &draw.textures {
+            pass.texture(
+                *slots
+                    .texture_slots
+                    .get(*texture)
+                    .ok_or(Error::InvalidRange)?,
+                whole(),
+                AccessKind::Read,
+                texture_read_uses(),
+            )?;
+        }
     }
     pass.texture(
         slots.target_slot,

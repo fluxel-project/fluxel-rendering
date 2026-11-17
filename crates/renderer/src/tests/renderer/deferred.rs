@@ -137,7 +137,10 @@ fn scene_and_assets() -> (
     let resources = ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
-        texture: SceneAssetRef::from_snapshot(&texture),
+        textures: vec![crate::ForwardTextureBinding::asset(
+            "material_texture",
+            SceneAssetRef::from_snapshot(&texture),
+        )],
         tint: [0.75, 0.5, 0.25, 1.0],
     };
     let assets = ForwardAssets {

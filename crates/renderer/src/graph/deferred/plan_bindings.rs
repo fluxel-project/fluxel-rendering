@@ -7,6 +7,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         &'a self,
         frame: &'a DeferredFrame<B>,
     ) -> Result<FrameBindings<'a, B>> {
+        super::validate_resident_texture_devices(&frame.resident, self.id.device)?;
         let uses_buffer = |slot| {
             self.execution
                 .logical()

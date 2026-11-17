@@ -40,7 +40,7 @@ pub(super) struct DeferredGraphDraw {
     pub(super) accesses: Vec<Option<std::ops::Range<u64>>>,
     pub(super) tint: std::ops::Range<u64>,
     pub(super) transform: std::ops::Range<u64>,
-    pub(super) texture: usize,
+    pub(super) textures: Vec<usize>,
 }
 
 /// Private owner of the two real Deferred Graph transactions.
@@ -353,15 +353,20 @@ impl DeferredGeometryPass<'_, '_> {
     pub(crate) fn read_sampled_textures(&mut self) -> std::result::Result<(), ()> {
         self.mark(MATERIAL)?;
         for draw in self.draws {
-            self.pass
-                .read_texture_with_use(
-                    *self.materials.get(draw.texture).ok_or(())?,
-                    whole_color(),
-                    sampled_read().uses,
-                    ImageLayout::ShaderReadOnly,
-                    TextureUsage::TEXTURE_BINDING,
-                )
-                .map_err(|_| ())?;
+            if draw.textures.is_empty() {
+                return Err(());
+            }
+            for texture in &draw.textures {
+                self.pass
+                    .read_texture_with_use(
+                        *self.materials.get(*texture).ok_or(())?,
+                        whole_color(),
+                        sampled_read().uses,
+                        ImageLayout::ShaderReadOnly,
+                        TextureUsage::TEXTURE_BINDING,
+                    )
+                    .map_err(|_| ())?;
+            }
         }
         Ok(())
     }

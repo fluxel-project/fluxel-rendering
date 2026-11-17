@@ -269,7 +269,10 @@ pub(super) fn scene_and_assets(
         resources: ForwardResources {
             geometry: SceneAssetRef::from_snapshot(&geometry),
             material: SceneAssetRef::from_snapshot(&material),
-            texture: SceneAssetRef::from_snapshot(&texture),
+            textures: vec![crate::ForwardTextureBinding::asset(
+                "material_texture",
+                SceneAssetRef::from_snapshot(&texture),
+            )],
             tint: [1.0; 4],
         },
         transform: RenderTransform::identity(),

@@ -530,10 +530,13 @@ where
         label: &str,
         schema: &crate::preparation::MaterialBindingSchema,
     ) -> std::result::Result<BindGroupLayout<B>, RendererError> {
-        let mut entries = vec![
-            uniform(schema.tint, 16, ShaderStage::Fragment),
-            sampled_texture(schema.texture, TextureSampleType::Float),
-        ];
+        let mut entries = vec![uniform(schema.tint, 16, ShaderStage::Fragment)];
+        entries.extend(
+            schema
+                .textures
+                .iter()
+                .map(|texture| sampled_texture(texture.binding, TextureSampleType::Float)),
+        );
         if let Some(binding) = schema.sampler {
             entries.push(ordinary_sampler(binding));
         }

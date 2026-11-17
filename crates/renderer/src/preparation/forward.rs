@@ -1,11 +1,11 @@
 //! Logical CPU preparation for the first built-in Forward consumer.
 //!
 //! This module resolves exact scene asset generations, validates CPU payloads,
-//! composes a Material with one of two Forward Shader templates, and retains
+//! composes a Material with a bounded Forward Shader template, and retains
 //! the resulting immutable inputs. It does not allocate GPU objects, declare
 //! Graph access, or submit work.
 
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_material::{MaterialAsset, MaterialDefinition};
@@ -97,10 +97,40 @@ pub struct ForwardResources {
     pub geometry: SceneAssetRef<GeometryAsset>,
     /// Exact immutable Material generation.
     pub material: SceneAssetRef<MaterialAsset>,
-    /// Exact immutable color-texture generation.
-    pub texture: SceneAssetRef<ColorTextureAsset>,
-    /// Per-record material tint uploaded through group 0 binding 0 later.
+    /// Named material texture sources. Names must exactly match the material
+    /// contribution's texture resource names.
+    pub textures: Vec<ForwardTextureBinding>,
+    /// Per-record vec4 value uploaded to the schema's material uniform binding.
     pub tint: [f32; 4],
+}
+
+/// One named texture source supplied to a Forward material.
+#[derive(Clone, Debug)]
+pub struct ForwardTextureBinding {
+    /// Exact resource name declared by the material contribution.
+    pub resource: String,
+    /// Source resolved for this material resource.
+    pub source: ForwardTextureSource,
+}
+
+impl ForwardTextureBinding {
+    /// Binds an immutable color-texture asset to `resource`.
+    #[must_use]
+    pub fn asset(resource: impl Into<String>, asset: SceneAssetRef<ColorTextureAsset>) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::Asset(asset),
+        }
+    }
+
+    /// Binds a same-frame capture slot to `resource`.
+    #[must_use]
+    pub fn capture(resource: impl Into<String>, slot: impl Into<String>) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::CaptureSlot(slot.into()),
+        }
+    }
 }
 
 /// A Forward draw supplied directly by one typed render feature.
@@ -137,7 +167,7 @@ pub struct ForwardDrawInput {
     order: i64,
     geometry: AssetSnapshot<GeometryAsset, GeometryData>,
     material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
-    texture: ResolvedForwardTexture,
+    textures: Vec<ResolvedForwardTexture>,
     prepared: PreparedMaterial,
     tint: [f32; 4],
     transform: RenderTransform,
@@ -252,20 +282,26 @@ impl ForwardDrawInput {
         &self.material
     }
 
-    /// Returns the retained immutable color-texture generation when this draw
-    /// follows the normal asset route.
+    /// Returns all resolved material texture sources in schema binding order.
+    pub(crate) fn resolved_textures(&self) -> &[ResolvedForwardTexture] {
+        &self.textures
+    }
+
+    /// Returns the asset texture at `index`, if its source is an immutable
+    /// color-texture asset.
     pub(crate) fn asset_texture(
         &self,
+        index: usize,
     ) -> Option<&AssetSnapshot<ColorTextureAsset, ColorTextureData>> {
-        match &self.texture {
+        match self.textures.get(index)? {
             ResolvedForwardTexture::Asset(texture) => Some(texture),
             ResolvedForwardTexture::CaptureSlot(_) => None,
         }
     }
 
-    /// Returns the required same-frame capture product slot, if any.
-    pub(crate) fn capture_texture_slot(&self) -> Option<&str> {
-        match &self.texture {
+    /// Returns the capture slot at `index`, if that is its resolved source.
+    pub(crate) fn capture_texture_slot(&self, index: usize) -> Option<&str> {
+        match self.textures.get(index)? {
             ResolvedForwardTexture::Asset(_) => None,
             ResolvedForwardTexture::CaptureSlot(slot) => Some(slot),
         }
@@ -351,8 +387,6 @@ fn prepare_draw(
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
     let extensions = material.value().surface_extensions();
     let has_surface_effects = extensions.occlusion.is_some() || extensions.emissive.is_some();
-    let texture = resolve_asset(&assets.textures, resources.texture, "texture", source)?;
-    validate_texture(texture.value(), source)?;
     let request = match material.value().output() {
         fluxel_material::SurfaceOutput::Color => {
             forward_template(&geometry.value().layout, source)?.request()
@@ -400,6 +434,7 @@ fn prepare_draw(
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
     let schema = validate_material_schema(&prepared, source)?;
+    let textures = resolve_asset_textures(resources, &schema, assets, source)?;
     let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
     let normal_from_local = normal_from_local(
@@ -426,7 +461,7 @@ fn prepare_draw(
         order,
         geometry,
         material,
-        texture: ResolvedForwardTexture::Asset(texture),
+        textures,
         prepared,
         tint: resources.tint,
         transform,
@@ -434,6 +469,68 @@ fn prepare_draw(
         clip_from_local,
         normal_from_local,
     })
+}
+
+pub(crate) fn ordered_texture_sources<'a>(
+    provided: &'a [ForwardTextureBinding],
+    expected: &[super::MaterialTextureBinding],
+    source: ForwardDrawSource,
+) -> Result<Vec<&'a ForwardTextureBinding>, ForwardPreparationError> {
+    let mut by_name = HashMap::with_capacity(provided.len());
+    for texture in provided {
+        if by_name.insert(texture.resource.as_str(), texture).is_some() {
+            return Err(ForwardPreparationError::DuplicateTextureResource {
+                source,
+                resource: texture.resource.clone(),
+            });
+        }
+    }
+    let mut ordered = Vec::with_capacity(expected.len());
+    for texture in expected {
+        let Some(provided) = by_name.get(texture.name.as_str()) else {
+            return Err(ForwardPreparationError::MissingTextureResource {
+                source,
+                resource: texture.name.clone(),
+            });
+        };
+        ordered.push(*provided);
+    }
+    for texture in provided {
+        if !expected
+            .iter()
+            .any(|expected| expected.name == texture.resource)
+        {
+            return Err(ForwardPreparationError::UnexpectedTextureResource {
+                source,
+                resource: texture.resource.clone(),
+            });
+        }
+    }
+    Ok(ordered)
+}
+
+fn resolve_asset_textures(
+    resources: &ForwardResources,
+    schema: &super::MaterialBindingSchema,
+    assets: &ForwardAssets,
+    source: ForwardDrawSource,
+) -> Result<Vec<ResolvedForwardTexture>, ForwardPreparationError> {
+    ordered_texture_sources(&resources.textures, &schema.textures, source)?
+        .into_iter()
+        .map(|texture| match &texture.source {
+            ForwardTextureSource::Asset(reference) => {
+                let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
+                validate_texture(asset.value(), source)?;
+                Ok(ResolvedForwardTexture::Asset(asset))
+            }
+            ForwardTextureSource::CaptureSlot(_) => {
+                Err(ForwardPreparationError::CaptureTextureOutsideReceiver {
+                    source,
+                    resource: texture.resource.clone(),
+                })
+            }
+        })
+        .collect()
 }
 
 /// Orders opaque Forward draws into contiguous raster-program batches.

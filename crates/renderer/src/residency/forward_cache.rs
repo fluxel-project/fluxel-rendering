@@ -94,9 +94,10 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
     /// Derives the completed texture cache key used by one prepared draw.
     pub(crate) fn texture_key(
         draw: &ForwardDrawInput,
+        texture_index: usize,
         device: DeviceId,
     ) -> Option<ForwardTextureCacheKey> {
-        draw.asset_texture()
+        draw.asset_texture(texture_index)
             .map(|texture| ForwardTextureCacheKey::from_snapshot(texture, device))
     }
 
