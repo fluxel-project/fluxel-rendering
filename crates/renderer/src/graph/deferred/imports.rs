@@ -28,6 +28,7 @@ pub(super) struct DeferredImports {
 pub(super) fn import<B: ResourceBackend>(
     graph: &mut GraphBuilder,
     frame: &DeferredRecordView<'_, B>,
+    fresh_mip_chains: &[bool],
 ) -> Result<DeferredImports> {
     let resident_upload = graph
         .import_buffer_desc(
@@ -51,12 +52,24 @@ pub(super) fn import<B: ResourceBackend>(
         .map(|stream| graph.import_buffer_desc(stream.desc.clone(), stream.incoming))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| Error::InvalidState)?;
+    if fresh_mip_chains.len() != frame.resident.textures.len() {
+        return Err(Error::InvalidState);
+    }
     let materials = frame
         .resident
         .textures
         .iter()
-        .map(|texture| {
-            graph.import_texture_with_state(texture.desc.clone(), texture.incoming, texture.layout)
+        .zip(fresh_mip_chains)
+        .map(|(texture, fresh_mip_chain)| {
+            if *fresh_mip_chain {
+                graph.create_texture(texture.desc.clone())
+            } else {
+                graph.import_texture_with_state(
+                    texture.desc.clone(),
+                    texture.incoming,
+                    texture.layout,
+                )
+            }
         })
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| Error::InvalidState)?;

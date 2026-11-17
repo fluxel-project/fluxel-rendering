@@ -67,7 +67,30 @@ pub(super) fn draws<B: ResourceBackend>(
             });
         }
         if let Some(binding) = schema.sampler {
-            let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
+            let levels = textures[index]
+                .iter()
+                .map(|slot| {
+                    resident
+                        .textures
+                        .get(*slot)
+                        .map(|texture| texture.desc.mip_levels)
+                        .ok_or(Error::InvalidRange)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .max()
+                .ok_or(Error::InvalidRange)?;
+            let expected = crate::renderer::forward::material_sampler(levels)?;
+            let sampler = resident
+                .samplers
+                .iter()
+                .find(|sampler| {
+                    sampler.desc.mip_filter == expected.mip_filter
+                        && sampler.desc.lod == expected.lod
+                        && sampler.desc.mag_filter == expected.mag_filter
+                        && sampler.desc.min_filter == expected.min_filter
+                })
+                .ok_or(Error::InvalidState)?;
             crate::renderer::forward::validate_ordinary_sampler(&sampler.desc)?;
             entries.push(BindGroupEntry {
                 binding,

@@ -198,7 +198,8 @@ where
         };
         let scene_color = allocate_deferred_scene_color(&self.device, input.extent())
             .map_err(|error| self.observe_rhi_error(error))?;
-        let scene_color_sampler_desc = crate::renderer::forward::default_material_sampler();
+        let scene_color_sampler_desc = crate::renderer::forward::material_sampler(1)
+            .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color_sampler = self
             .device
             .create_sampler(&scene_color_sampler_desc)

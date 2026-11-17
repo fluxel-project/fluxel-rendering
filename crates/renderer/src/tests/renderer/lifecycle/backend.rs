@@ -16,6 +16,7 @@ use std::{
 use fluxel_assets::AssetKind;
 use fluxel_rhi::{api::*, backend::*};
 
+mod commands;
 mod compute;
 
 pub(super) struct Bytes;
@@ -54,6 +55,10 @@ pub(super) struct Native {
     pub(super) fault_enabled: AtomicBool,
     pub(super) texture_filterable: AtomicBool,
     pub(super) depth_supported: AtomicBool,
+    pub(super) blit_supported: AtomicBool,
+    pub(super) texture_max_mips: AtomicUsize,
+    pub(super) blits: Mutex<Vec<(u32, u32, [u32; 3], [u32; 3], FilterMode)>>,
+    pub(super) transitions: AtomicUsize,
     pub(super) finishes: AtomicUsize,
     pub(super) next_completion: AtomicUsize,
     pub(super) command_calls: AtomicUsize,
@@ -149,7 +154,7 @@ impl Backend for WitnessBackend {
     type NativeAcceleration = ();
     type NativeSparseAllocation = ();
     type NativeQuerySet = ();
-    type NativeEncoder = ();
+    type NativeEncoder = Arc<Native>;
     type NativeCompletion = Arc<CompletionMarker>;
     type NativeSurface = WitnessSurface;
     type NativeSurfaceImage = WitnessImage;
@@ -203,7 +208,7 @@ impl ResourceBackend for WitnessBackend {
         Support::Supported(TextureSupport {
             max_extent: [u32::MAX; 3],
             max_array_layers: u32::MAX,
-            max_mips: u32::MAX,
+            max_mips: device.texture_max_mips.load(Ordering::SeqCst) as u32,
             sample_counts: vec![1],
             compatible_view_formats: Vec::new(),
             filterable: device.texture_filterable.load(Ordering::SeqCst),
@@ -360,80 +365,19 @@ impl MappingBackend for WitnessBackend {
     fn unmap(_: WitnessMap) {}
 }
 
-impl CommandBackend for WitnessBackend {
-    fn begin_encoder(_: &Arc<Native>, _: LaneId) -> Result<()> {
-        Ok(())
-    }
-    fn transition(_: &mut (), _: &[ResourceTransition<'_, Self>]) -> Result<()> {
-        Ok(())
-    }
-    fn copy_buffer(
-        _: &mut (),
-        source: &Arc<NativeBuffer>,
-        _: u64,
-        _: &Arc<NativeBuffer>,
-        destination: u64,
-        bytes: u64,
-    ) -> Result<()> {
-        source.native.copied_bytes.lock().unwrap().push(bytes);
-        source
-            .native
-            .copy_destinations
-            .lock()
-            .unwrap()
-            .push(destination..destination + bytes);
-        Ok(())
-    }
-    fn copy_texture(
-        _: &mut (),
-        _: TextureRegion<'_, Self>,
-        _: TextureRegion<'_, Self>,
-    ) -> Result<()> {
-        Err(Error::Unsupported("texture"))
-    }
-    fn buffer_to_texture(
-        _: &mut (),
-        source: &Arc<NativeBuffer>,
-        layout: TexelCopyBufferLayout,
-        _: TextureRegion<'_, Self>,
-    ) -> Result<()> {
-        source
-            .native
-            .texture_uploads
-            .lock()
-            .unwrap()
-            .push((layout.offset, layout.bytes_per_row));
-        Ok(())
-    }
-    fn texture_to_buffer(
-        _: &mut (),
-        _: TextureRegion<'_, Self>,
-        _: &Arc<NativeBuffer>,
-        _: TexelCopyBufferLayout,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn write_buffer(_: &mut (), _: &Arc<NativeBuffer>, _: u64, _: &[u8]) -> Result<()> {
-        Ok(())
-    }
-    fn write_texture(
-        _: &mut (),
-        _: TextureRegion<'_, Self>,
-        _: TexelCopyBufferLayout,
-        _: &[u8],
-    ) -> Result<()> {
-        Err(Error::Unsupported("texture"))
-    }
-}
-
 impl RasterBackend for WitnessBackend {
-    fn begin_raster(_: &mut (), _: &RasterPassDesc<'_, Self>) -> Result<()> {
+    fn begin_raster(_: &mut Arc<Native>, _: &RasterPassDesc<'_, Self>) -> Result<()> {
         Ok(())
     }
-    fn set_pipeline(_: &mut (), _: &()) -> Result<()> {
+    fn set_pipeline(_: &mut Arc<Native>, _: &()) -> Result<()> {
         Ok(())
     }
-    fn set_bind_group(_: &mut (), _: u32, group: &Arc<Native>, offsets: &[u32]) -> Result<()> {
+    fn set_bind_group(
+        _: &mut Arc<Native>,
+        _: u32,
+        group: &Arc<Native>,
+        offsets: &[u32],
+    ) -> Result<()> {
         group
             .uniform_offsets
             .lock()
@@ -441,11 +385,17 @@ impl RasterBackend for WitnessBackend {
             .extend_from_slice(offsets);
         Ok(())
     }
-    fn set_vertex_buffer(_: &mut (), _: u32, _: &Arc<NativeBuffer>, _: u64, _: u64) -> Result<()> {
+    fn set_vertex_buffer(
+        _: &mut Arc<Native>,
+        _: u32,
+        _: &Arc<NativeBuffer>,
+        _: u64,
+        _: u64,
+    ) -> Result<()> {
         Ok(())
     }
     fn set_index_buffer(
-        _: &mut (),
+        _: &mut Arc<Native>,
         _: &Arc<NativeBuffer>,
         _: u64,
         _: u64,
@@ -453,28 +403,28 @@ impl RasterBackend for WitnessBackend {
     ) -> Result<()> {
         Ok(())
     }
-    fn viewport(_: &mut (), _: Viewport) -> Result<()> {
+    fn viewport(_: &mut Arc<Native>, _: Viewport) -> Result<()> {
         Ok(())
     }
-    fn scissor(_: &mut (), _: Rect) -> Result<()> {
+    fn scissor(_: &mut Arc<Native>, _: Rect) -> Result<()> {
         Ok(())
     }
-    fn blend_constant(_: &mut (), _: [f32; 4]) -> Result<()> {
+    fn blend_constant(_: &mut Arc<Native>, _: [f32; 4]) -> Result<()> {
         Ok(())
     }
-    fn stencil_reference(_: &mut (), _: u32) -> Result<()> {
+    fn stencil_reference(_: &mut Arc<Native>, _: u32) -> Result<()> {
         Ok(())
     }
-    fn draw(_: &mut (), _: Range<u32>, _: Range<u32>) -> Result<()> {
+    fn draw(_: &mut Arc<Native>, _: Range<u32>, _: Range<u32>) -> Result<()> {
         Ok(())
     }
-    fn draw_indexed(_: &mut (), _: Range<u32>, _: i32, _: Range<u32>) -> Result<()> {
+    fn draw_indexed(_: &mut Arc<Native>, _: Range<u32>, _: i32, _: Range<u32>) -> Result<()> {
         Ok(())
     }
-    fn end_raster(_: &mut ()) -> Result<()> {
+    fn end_raster(_: &mut Arc<Native>) -> Result<()> {
         Ok(())
     }
-    fn abort_raster(_: &mut ()) {}
+    fn abort_raster(_: &mut Arc<Native>) {}
 }
 
 impl CompletionBackend for WitnessBackend {
@@ -536,7 +486,7 @@ impl ReadbackBackend for WitnessBackend {
     type NativeReadback = Range<u64>;
     type ReadbackFuture<'a> = Ready<Result<ReadbackData>>;
     fn encode_readback(
-        _: &mut (),
+        _: &mut Arc<Native>,
         buffer: &Arc<NativeBuffer>,
         range: Range<u64>,
     ) -> Result<Range<u64>> {

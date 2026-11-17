@@ -306,7 +306,15 @@ where
         let first = execution.commands(plan.capture_upload_step(), |encoder| {
             plan.record_capture_upload(encoder, &capture, &receiver)
         });
-        let second = first.and_then(|()| {
+        let capture_mips = first.and_then(|()| {
+            for (index, generation) in plan.capture_mip_generations().iter().enumerate() {
+                execution.commands(plan.capture_mip_generation_step(index)?, |encoder| {
+                    plan.record_capture_mip_generation(encoder, &capture, &receiver, generation)
+                })?;
+            }
+            Ok(())
+        });
+        let second = capture_mips.and_then(|()| {
             execution.commands(plan.capture_raster_step(), |encoder| {
                 plan.record_capture_raster(encoder, &capture, &receiver)
             })
@@ -316,7 +324,15 @@ where
                 plan.record_receiver_upload(encoder, &capture, &receiver)
             })
         });
-        let fourth = third.and_then(|()| {
+        let receiver_mips = third.and_then(|()| {
+            for (index, generation) in plan.receiver_mip_generations().iter().enumerate() {
+                execution.commands(plan.receiver_mip_generation_step(index)?, |encoder| {
+                    plan.record_receiver_mip_generation(encoder, &capture, &receiver, generation)
+                })?;
+            }
+            Ok(())
+        });
+        let fourth = receiver_mips.and_then(|()| {
             execution.commands(plan.receiver_raster_step(), |encoder| {
                 plan.record_receiver_raster(encoder, &capture, &receiver)
             })
@@ -437,7 +453,21 @@ where
         let a = execution.commands(plan.capture_upload_step(), |e| {
             plan.record_capture_upload(e, &capture, &receiver, present_image)
         });
-        let b = a.and_then(|()| {
+        let capture_mips = a.and_then(|()| {
+            for (index, generation) in plan.capture_mip_generations().iter().enumerate() {
+                execution.commands(plan.capture_mip_generation_step(index)?, |encoder| {
+                    plan.record_capture_mip_generation(
+                        encoder,
+                        &capture,
+                        &receiver,
+                        present_image,
+                        generation,
+                    )
+                })?;
+            }
+            Ok(())
+        });
+        let b = capture_mips.and_then(|()| {
             execution.commands(plan.capture_raster_step(), |e| {
                 plan.record_capture_raster(e, &capture, &receiver, present_image)
             })
@@ -447,7 +477,21 @@ where
                 plan.record_receiver_upload(e, &capture, &receiver, present_image)
             })
         });
-        let d = c.and_then(|()| {
+        let receiver_mips = c.and_then(|()| {
+            for (index, generation) in plan.receiver_mip_generations().iter().enumerate() {
+                execution.commands(plan.receiver_mip_generation_step(index)?, |encoder| {
+                    plan.record_receiver_mip_generation(
+                        encoder,
+                        &capture,
+                        &receiver,
+                        present_image,
+                        generation,
+                    )
+                })?;
+            }
+            Ok(())
+        });
+        let d = receiver_mips.and_then(|()| {
             execution.commands(plan.receiver_raster_step(), |e| {
                 plan.record_receiver_raster(e, &capture, &receiver, present_image)
             })

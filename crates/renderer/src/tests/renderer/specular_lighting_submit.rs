@@ -90,6 +90,7 @@ fn scene(
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![255; 4],
                 },
                 ResidentBytes::new(4),

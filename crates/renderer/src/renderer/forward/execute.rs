@@ -96,9 +96,16 @@ where
         .map_err(|error| self.observe_forward_error("surface begin execution", error))?;
         let mut present = Some(PresentBinding::new(image));
         let image = present.as_ref().ok_or(Error::InvalidState)?.image();
-        let upload = execution.commands(plan.upload_step(), |encoder| {
+        let mut upload = execution.commands(plan.upload_step(), |encoder| {
             plan.record_upload(encoder, &frame, &image)
         });
+        for (index, step) in plan.mip_steps().enumerate() {
+            if upload.is_ok() {
+                upload = execution.commands(step, |encoder| {
+                    plan.record_mip(index, encoder, &frame, &image)
+                });
+            }
+        }
         let raster = match upload {
             Ok(()) => execution.commands(plan.raster_step(), |encoder| {
                 plan.record_raster(encoder, &frame, &image)
@@ -239,10 +246,17 @@ where
                 .begin_execution(plan.submission().clone(), CompletionRequest::End)
         }
         .map_err(|error| self.observe_forward_error("begin execution", error))?;
-        let upload = execution.commands(plan.upload_step(), |encoder| {
+        let mut upload = execution.commands(plan.upload_step(), |encoder| {
             plan.record_upload(encoder, &frame)
         });
         let mut failure_operation = "upload recording";
+        for (index, step) in plan.mip_steps().enumerate() {
+            if upload.is_ok() {
+                failure_operation = "mip generation recording";
+                upload =
+                    execution.commands(step, |encoder| plan.record_mip(index, encoder, &frame));
+            }
+        }
         let raster = match upload {
             Ok(()) => {
                 failure_operation = "raster recording";

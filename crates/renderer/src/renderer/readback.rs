@@ -101,8 +101,10 @@ where
         let status = pending.outcome.facts().status;
         // Terminal GPU completion is established even if the subsequent CPU
         // read/map fails. Only completed products enter the reusable cache.
-        self.publish_forward_completion(&pending.workload);
-        self.publish_deferred_completion(&pending.workload);
+        if pending.recording_error.is_none() && pending.execution_error.is_none() {
+            self.publish_forward_completion(&pending.workload);
+            self.publish_deferred_completion(&pending.workload);
+        }
         let ticket = match pending.ticket.take() {
             Some(v) => v,
             None => {
@@ -182,8 +184,10 @@ where
             self.slots[submission.slot] = Some(pending);
             return Err(RendererError::StaleSubmission);
         }
-        self.publish_forward_completion(&pending.workload);
-        self.publish_deferred_completion(&pending.workload);
+        if pending.recording_error.is_none() && pending.execution_error.is_none() {
+            self.publish_forward_completion(&pending.workload);
+            self.publish_deferred_completion(&pending.workload);
+        }
         let slot = submission.slot;
         self.recycle_forward_surface(pending.workload, slot);
         Ok(())

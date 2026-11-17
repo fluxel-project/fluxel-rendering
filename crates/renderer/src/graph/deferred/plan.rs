@@ -21,6 +21,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         }
         let execution = CompiledExecution::compile(&declaration.graph)?;
         let mut expected = vec![declaration.upload_pass];
+        expected.extend(
+            declaration
+                .mip_generation
+                .iter()
+                .map(|generation| generation.pass),
+        );
         if let Some(pass) = declaration.deformation_pass {
             expected.push(pass);
         }
@@ -73,6 +79,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             execution,
             declaration: declaration.graph.clone(),
             upload_pass: declaration.upload_pass,
+            mip_generation: declaration.mip_generation,
             deformation_pass: declaration.deformation_pass,
             geometry_pass: declaration.geometry_pass,
             lighting_pass: declaration.lighting_pass,
@@ -123,6 +130,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if !self.declaration.same_declaration(&declaration.graph)
             || self.lane != declaration.lane
             || self.upload_pass.1 != declaration.upload_pass.1
+            || self
+                .mip_generation
+                .iter()
+                .map(|generation| {
+                    (
+                        generation.pass.1,
+                        generation.texture,
+                        generation.source_mip,
+                        generation.destination_mip,
+                    )
+                })
+                .ne(declaration.mip_generation.iter().map(|generation| {
+                    (
+                        generation.pass.1,
+                        generation.texture,
+                        generation.source_mip,
+                        generation.destination_mip,
+                    )
+                }))
             || self.deformation_pass.map(|pass| pass.1)
                 != declaration.deformation_pass.map(|pass| pass.1)
             || self.geometry_pass.1 != declaration.geometry_pass.1
@@ -204,49 +230,58 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         }
     }
 
+    pub(crate) fn mip_generation_steps(
+        &self,
+    ) -> impl Iterator<Item = (StepId, &super::super::mip_generation::MipGenerationPass)> {
+        self.mip_generation.iter().map(|generation| {
+            (
+                StepId {
+                    plan: self.id,
+                    index: u32::try_from(generation.pass.1).expect("graph pass index fits StepId"),
+                },
+                generation,
+            )
+        })
+    }
+
     pub(crate) fn geometry_step(&self) -> StepId {
         StepId {
             plan: self.id,
-            index: if self.deformation_pass.is_some() {
-                2
-            } else {
-                1
-            },
+            index: u32::try_from(self.geometry_pass.1).expect("graph pass index fits StepId"),
         }
     }
 
     pub(crate) fn deformation_step(&self) -> Option<StepId> {
-        self.deformation_pass.map(|_| StepId {
+        self.deformation_pass.map(|pass| StepId {
             plan: self.id,
-            index: 1,
+            index: u32::try_from(pass.1).expect("graph pass index fits StepId"),
         })
     }
 
     pub(crate) fn lighting_step(&self) -> StepId {
         StepId {
             plan: self.id,
-            index: if self.deformation_pass.is_some() {
-                3
-            } else {
-                2
-            },
+            index: u32::try_from(self.lighting_pass.1).expect("graph pass index fits StepId"),
         }
     }
 
     pub(crate) fn readback_step(&self) -> StepId {
-        if !matches!(self.output, DeferredOutputPlan::Offscreen { .. }) {
-            return self.lighting_step();
-        }
-        StepId {
-            plan: self.id,
-            index: self.composite_step().index + 1,
+        match self.output {
+            DeferredOutputPlan::Offscreen { readback_pass } => StepId {
+                plan: self.id,
+                index: u32::try_from(readback_pass.1).expect("graph pass index fits StepId"),
+            },
+            DeferredOutputPlan::Surface { .. } => self.lighting_step(),
         }
     }
 
     pub(crate) fn composite_step(&self) -> StepId {
+        let pass = self
+            .composite_pass
+            .expect("compiled Deferred has composite pass");
         StepId {
             plan: self.id,
-            index: self.lighting_step().index + u32::from(self.composite_pass.is_some()),
+            index: u32::try_from(pass.1).expect("graph pass index fits StepId"),
         }
     }
 
@@ -395,6 +430,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         B: ExecutionBackend,
     {
         let mut expected = vec![self.upload_step()];
+        expected.extend(self.mip_generation_steps().map(|(step, _)| step));
         if let Some(step) = self.deformation_step() {
             expected.push(step);
         }
@@ -431,6 +467,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     {
         let present = self.present_step()?;
         let mut expected = vec![self.upload_step()];
+        expected.extend(self.mip_generation_steps().map(|(step, _)| step));
         if let Some(step) = self.deformation_step() {
             expected.push(step);
         }

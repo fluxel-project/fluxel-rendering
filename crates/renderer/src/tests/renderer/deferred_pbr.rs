@@ -190,6 +190,7 @@ fn scene_and_assets_with_material(
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![128, 96, 64, 255],
                 },
                 ResidentBytes::new(4),

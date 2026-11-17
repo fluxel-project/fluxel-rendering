@@ -1,4 +1,4 @@
-use super::{validate_forward_topology, validate_surface_topology, Error, FrameTopology};
+use super::{Error, FrameTopology, validate_forward_topology, validate_surface_topology};
 
 #[test]
 fn clear_only_offscreen_rejects_draw_or_batch_facts() {

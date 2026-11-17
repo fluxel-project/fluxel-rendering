@@ -57,6 +57,10 @@ pub struct ColorTextureData {
     pub extent: [u32; 2],
     /// Transfer encoding of the supplied RGBA8 payload.
     pub encoding: TextureEncoding,
+    /// Total mip levels requested for the immutable GPU texture. `rgba8`
+    /// always contains only the base level; levels above zero are generated
+    /// by the renderer after upload.
+    pub mip_levels: u32,
     /// Exactly four bytes per texel in row-major order.
     pub rgba8: Vec<u8>,
 }
@@ -552,3 +556,7 @@ mod forward_pbr_tests;
 #[cfg(test)]
 #[path = "../tests/preparation/color_uv0.rs"]
 mod color_uv0_tests;
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_texture_validation.rs"]
+mod forward_texture_validation_tests;

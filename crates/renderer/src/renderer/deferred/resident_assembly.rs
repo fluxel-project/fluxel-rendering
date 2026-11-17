@@ -99,10 +99,11 @@ where
                     .ok_or(Error::InvalidState)?
                     .value();
                 if crate::renderer::forward::material_requires_ordinary_sampler(material) {
-                    crate::renderer::forward::require_filterable_material_texture(
+                    crate::renderer::forward::require_filterable_material_texture_with_mip_levels(
                         &self.device,
                         data.extent,
                         data.encoding,
+                        data.mip_levels,
                     )
                     .map_err(|error| self.observe_rhi_error(error))?;
                 }
@@ -137,6 +138,7 @@ where
                             extent: data.extent,
                             bytes_per_row: pitch,
                             encoding: data.encoding,
+                            mip_levels: data.mip_levels,
                         });
                         fresh_texture_slots.push(slot);
                         final_textures.push(None);
@@ -168,17 +170,6 @@ where
         let (resident, mut upload) = ForwardResidentBuffers::allocate_planned(&self.device, plan)
             .map_err(|error| self.observe_rhi_error(error))?;
         let mut resident = Arc::try_unwrap(resident).map_err(|_| Error::InvalidState)?;
-        if prepared
-            .iter()
-            .any(crate::renderer::forward::material_requires_ordinary_sampler)
-        {
-            let desc = crate::renderer::forward::default_material_sampler();
-            let sampler = self
-                .device
-                .create_sampler(&desc)
-                .map_err(|error| self.observe_rhi_error(error))?;
-            resident.samplers.push(ForwardSampler { sampler, desc });
-        }
         for (index, stream) in std::mem::take(&mut resident.streams)
             .into_iter()
             .enumerate()
@@ -205,6 +196,40 @@ where
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or(Error::InvalidState)?;
+        let mut sampler_levels = inputs
+            .iter()
+            .zip(&draw_textures)
+            .zip(prepared)
+            .filter(|(_, prepared)| {
+                crate::renderer::forward::material_requires_ordinary_sampler(prepared)
+            })
+            .map(|((_, textures), _)| {
+                textures
+                    .iter()
+                    .map(|slot| {
+                        resident
+                            .textures
+                            .get(*slot)
+                            .map(|texture| texture.desc.mip_levels)
+                            .ok_or(Error::InvalidRange)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .max()
+                    .ok_or(Error::InvalidRange)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        sampler_levels.sort_unstable();
+        sampler_levels.dedup();
+        for levels in sampler_levels {
+            let desc = crate::renderer::forward::material_sampler(levels)
+                .map_err(|error| self.observe_rhi_error(error))?;
+            let sampler = self
+                .device
+                .create_sampler(&desc)
+                .map_err(|error| self.observe_rhi_error(error))?;
+            resident.samplers.push(ForwardSampler { sampler, desc });
+        }
         if upload.vertices.is_empty() && upload.textures.is_empty() {
             upload.bytes.clear();
         }

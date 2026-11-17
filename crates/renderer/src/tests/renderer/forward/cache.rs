@@ -88,6 +88,7 @@ fn completed_forward_cache_keys_exact_assets_and_device_owners() {
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![1, 2, 3, 4],
                 },
                 ResidentBytes::new(4),
@@ -101,6 +102,7 @@ fn completed_forward_cache_keys_exact_assets_and_device_owners() {
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![5, 6, 7, 8],
                 },
                 ResidentBytes::new(4),
@@ -124,6 +126,7 @@ fn completed_forward_cache_keys_exact_assets_and_device_owners() {
             extent: [1, 1],
             bytes_per_row: 256,
             encoding: crate::TextureEncoding::Linear,
+            mip_levels: 1,
         }],
     )
     .unwrap();
@@ -245,6 +248,7 @@ fn coexisting_renderers_never_adopt_completed_forward_products_from_another_devi
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![1, 2, 3, 4],
                 },
                 ResidentBytes::new(4),
@@ -268,6 +272,7 @@ fn coexisting_renderers_never_adopt_completed_forward_products_from_another_devi
             extent: [1, 1],
             bytes_per_row: 256,
             encoding: crate::TextureEncoding::Linear,
+            mip_levels: 1,
         }],
     )
     .unwrap();
@@ -357,6 +362,7 @@ fn coexisting_renderers_never_adopt_completed_forward_products_from_another_devi
             extent: [1, 1],
             bytes_per_row: 256,
             encoding: crate::TextureEncoding::Linear,
+            mip_levels: 1,
         }],
     )
     .unwrap();

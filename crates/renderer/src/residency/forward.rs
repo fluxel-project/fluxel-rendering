@@ -37,12 +37,14 @@ pub(crate) struct ForwardStreamInput {
     pub(crate) layout: VertexBufferLayout,
 }
 
-/// Source bytes and copied extent for the initial RGBA8 material texture.
+/// Source bytes and copied extent for one RGBA8 material texture base level.
 pub(crate) struct ForwardTextureInput {
     pub(crate) bytes: Vec<u8>,
     pub(crate) extent: [u32; 2],
     pub(crate) bytes_per_row: u32,
     pub(crate) encoding: crate::preparation::TextureEncoding,
+    /// Exact total mip count requested by the immutable asset.
+    pub(crate) mip_levels: u32,
 }
 
 /// One device-local vertex stream and its allocation facts.
@@ -267,6 +269,7 @@ pub(crate) fn plan_forward_resident(
     }
     for texture in &textures {
         if texture.extent.contains(&0)
+            || texture.mip_levels == 0
             || texture.bytes_per_row == 0
             || texture.bytes_per_row % 256 != 0
             || texture.bytes_per_row
@@ -275,6 +278,12 @@ pub(crate) fn plan_forward_resident(
                     .ok_or(Error::InvalidRange)?
         {
             return Err(Error::InvalidRange);
+        }
+        let max_mip_levels = 1 + texture.extent[0].max(texture.extent[1]).ilog2();
+        if texture.mip_levels > max_mip_levels
+            || (texture.encoding == crate::TextureEncoding::Srgb && texture.mip_levels > 1)
+        {
+            return Err(Error::Unsupported("linear RGBA8 material mip generation"));
         }
         let texture_bytes = u64::from(texture.bytes_per_row)
             .checked_mul(u64::from(texture.extent[1]))
@@ -318,15 +327,19 @@ pub(crate) fn plan_forward_resident(
             rows_per_image: texture.extent[1],
             extent: [texture.extent[0], texture.extent[1], 1],
         });
+        let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
+        if texture.mip_levels > 1 {
+            usage |= TextureUsage::COPY_SRC;
+        }
         texture_descs.push(TextureDesc {
             label: Some("fluxel forward material texture".into()),
             dimension: TextureDimension::D2,
             extent: [texture.extent[0], texture.extent[1], 1],
             array_layers: 1,
             format: texture.encoding.rgba8_format(),
-            mip_levels: 1,
+            mip_levels: texture.mip_levels,
             samples: 1,
-            usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
+            usage,
             view_formats: Vec::new(),
         });
     }
@@ -371,7 +384,12 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
         let mut resident_textures = Vec::with_capacity(plan.texture_descs.len());
         for texture_desc in plan.texture_descs {
             let filterable = match device.texture_support(&texture_desc) {
-                Support::Supported(support) => support.filterable,
+                Support::Supported(support) if texture_desc.mip_levels <= support.max_mips => {
+                    support.filterable
+                }
+                Support::Supported(_) => {
+                    return Err(Error::Unsupported("material texture mip levels"));
+                }
                 Support::Unsupported(reason) => return Err(Error::Unsupported(reason)),
             };
             let texture_handle = device.create_texture(&texture_desc)?;
@@ -381,7 +399,7 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
                     format: texture_desc.format,
                     dimension: TextureViewDimension::D2,
                     aspects: fluxel_rhi::api::TextureAspects::COLOR,
-                    mips: 0..1,
+                    mips: 0..texture_desc.mip_levels,
                     layers: 0..1,
                 },
             )?;

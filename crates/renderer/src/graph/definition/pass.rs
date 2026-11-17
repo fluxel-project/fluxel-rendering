@@ -2,6 +2,23 @@
 use super::*;
 
 impl PassBuilder<'_> {
+    /// Returns the complete declared footprint of this current texture version.
+    /// Actual allocation facts remain independently checked when binding it.
+    pub(crate) fn full_texture_range(
+        &self,
+        texture: TextureHandle,
+    ) -> Result<TextureRange, GraphError> {
+        self.graph.texture_version(texture)?;
+        let node = self
+            .graph
+            .textures
+            .get(texture.resource)
+            .ok_or(GraphError::UnknownResource)?;
+        let range = full_texture_range(&node.desc);
+        self.validate_texture_current(texture, &range)?;
+        Ok(range)
+    }
+
     /// Returns this pass identity for private dependency authoring.
     #[allow(dead_code)] // Exercised by graph failure tests and later pass composition.
     pub(crate) fn current(&self) -> GraphPass {

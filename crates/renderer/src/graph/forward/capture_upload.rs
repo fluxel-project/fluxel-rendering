@@ -1,6 +1,42 @@
 //! Upload declarations for two independent capture-frame namespaces.
-use super::capture_declaration::FrameHandles;
+use super::super::mip_generation::{MipGenerationPass, declare_chain};
+use super::capture_declaration::{FrameHandles, SharedResidentImports};
 use super::*;
+
+pub(super) fn declare_mip_generations(
+    graph: &mut GraphBuilder,
+    spec: &ForwardGraphSpec,
+    mut handles: FrameHandles,
+    shared: &mut SharedResidentImports,
+) -> std::result::Result<(FrameHandles, Vec<MipGenerationPass>), ForwardPlanBuildError> {
+    if handles.textures.len() != handles.cold_textures.len()
+        || handles.textures.len() != spec.textures.len()
+        || spec.textures.len() != spec.texture_instances.len()
+    {
+        return Err(Error::InvalidRange.into());
+    }
+    let mut generations = Vec::new();
+    for (index, cold) in handles.cold_textures.iter().copied().enumerate() {
+        if !cold {
+            continue;
+        }
+        let (output, mut chain) = declare_chain(
+            graph,
+            handles.textures[index],
+            index,
+            spec.textures[index].desc.mip_levels,
+        )
+        .map_err(|_| Error::InvalidState)?;
+        handles.textures[index] = output;
+        generations.append(&mut chain);
+        shared
+            .textures
+            .get_mut(&spec.texture_instances[index])
+            .ok_or(Error::InvalidState)?
+            .0 = output;
+    }
+    Ok((handles, generations))
+}
 
 pub(super) fn declare_upload(
     graph: &mut GraphBuilder,
@@ -57,6 +93,14 @@ pub(super) fn declare_upload(
             )?;
             let mut textures = handles.textures.clone();
             for (upload, end) in spec.texture_uploads.iter().zip(ends) {
+                if !handles
+                    .cold_textures
+                    .get(upload.texture)
+                    .copied()
+                    .ok_or(crate::graph::definition::GraphError::InvalidRange)?
+                {
+                    continue;
+                }
                 let texture = *textures
                     .get(upload.texture)
                     .ok_or(crate::graph::definition::GraphError::InvalidRange)?;
@@ -68,7 +112,7 @@ pub(super) fn declare_upload(
                 )?;
                 textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    whole(),
+                    one_color_mip(0),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,

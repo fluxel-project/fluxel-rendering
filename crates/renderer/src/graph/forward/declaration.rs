@@ -11,6 +11,7 @@ pub(crate) struct SurfaceForwardDeclaration {
     pub(super) graph: GraphBuilder,
     pub(super) lane: LaneId,
     pub(super) upload_pass: GraphPass,
+    pub(super) mip_passes: Vec<super::super::mip_generation::MipGenerationPass>,
     pub(super) raster_pass: GraphPass,
     pub(super) resident_upload_slot: BufferSlot,
     pub(super) frame_upload_slot: BufferSlot,
@@ -134,10 +135,24 @@ where
         .resident
         .textures
         .iter()
-        .map(|texture| {
-            graph
-                .import_texture_with_state(texture.desc.clone(), texture.incoming, texture.layout)
-                .map_err(|_| Error::InvalidState)
+        .enumerate()
+        .map(|(index, texture)| {
+            if frame
+                .resident_upload
+                .textures
+                .iter()
+                .any(|upload| upload.texture == index)
+                && texture.desc.mip_levels > 1
+            {
+                graph.create_texture(texture.desc.clone())
+            } else {
+                graph.import_texture_with_state(
+                    texture.desc.clone(),
+                    texture.incoming,
+                    texture.layout,
+                )
+            }
+            .map_err(|_| Error::InvalidState)
         })
         .collect::<Result<Vec<_>>>()?;
     let environment = frame
@@ -209,7 +224,7 @@ where
         (
             streams,
             uniform,
-            textures,
+            mut textures,
             environment,
             specular_radiance,
             specular_brdf_lut,
@@ -268,7 +283,7 @@ where
                 )?;
                 output_textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    whole(),
+                    one_color_mip(0),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
@@ -371,6 +386,29 @@ where
             ))
         })
         .map_err(|_| Error::InvalidState)?;
+    let mut mip_passes = Vec::new();
+    for upload in &frame.resident_upload.textures {
+        let texture = *textures.get(upload.texture).ok_or(Error::InvalidRange)?;
+        let levels = frame
+            .resident
+            .textures
+            .get(upload.texture)
+            .ok_or(Error::InvalidRange)?
+            .desc
+            .mip_levels;
+        if levels > 1 {
+            let (texture, passes) = super::super::mip_generation::declare_chain(
+                &mut graph,
+                texture,
+                upload.texture,
+                levels,
+            )
+            .map_err(|_| Error::InvalidState)?;
+            textures[upload.texture] = texture;
+            mip_passes.extend(passes);
+        }
+    }
+    let raster_dependency = mip_passes.last().map_or(upload_pass, |pass| pass.pass);
     let raster_pass = {
         let draws = frame
             .draws
@@ -397,7 +435,7 @@ where
             graph: Some(&mut graph),
             marker: PhantomData,
             expected,
-            upload: Some(upload_pass),
+            upload: Some(raster_dependency),
             streams: streams.clone(),
             uniform: Some(uniform),
             textures: textures.clone(),
@@ -426,6 +464,7 @@ where
         graph,
         lane,
         upload_pass,
+        mip_passes,
         raster_pass,
         resident_upload_slot: BufferSlot::from(resident_upload),
         frame_upload_slot: BufferSlot::from(frame_upload),

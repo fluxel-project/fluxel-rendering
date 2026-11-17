@@ -55,6 +55,33 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             frame,
         )
     }
+    pub(crate) fn record_mip(
+        &self,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let generation = self.mip_passes.get(index).ok_or(Error::InvalidRange)?;
+        let slot = *self
+            .texture_slots
+            .get(generation.texture)
+            .ok_or(Error::InvalidRange)?;
+        let texture = frame
+            .resident
+            .textures
+            .get(generation.texture)
+            .ok_or(Error::InvalidRange)?;
+        super::super::mip_generation::record(
+            generation,
+            &self.bindings(frame)?,
+            slot,
+            texture,
+            encoder,
+        )
+    }
     pub(crate) fn record_readback(
         &self,
         encoder: &mut CommandEncoder<B>,

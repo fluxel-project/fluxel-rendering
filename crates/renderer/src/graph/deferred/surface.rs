@@ -470,6 +470,23 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         )
     }
 
+    pub(crate) fn surface_record_mip_generation(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredSurfaceFrame<B>,
+        image: &fluxel_rhi::api::SurfaceImage<B>,
+        generation: &super::super::mip_generation::MipGenerationPass,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        self.record_body_mip_generation(
+            encoder,
+            super::record_view::DeferredRecordView::surface_with_image(frame, image),
+            generation,
+        )
+    }
+
     pub(crate) fn surface_record_upload(
         &self,
         encoder: &mut CommandEncoder<B>,

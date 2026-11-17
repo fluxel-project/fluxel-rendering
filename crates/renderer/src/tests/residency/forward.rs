@@ -54,3 +54,37 @@ impl<B: ResourceBackend> SurfaceForwardFrameBuffers<B> {
         )
     }
 }
+
+#[test]
+fn resident_plan_preserves_the_asset_mip_chain_descriptor() {
+    let plan = plan_forward_resident(
+        Vec::new(),
+        vec![ForwardTextureInput {
+            bytes: vec![0; 512],
+            extent: [2, 2],
+            bytes_per_row: 256,
+            encoding: crate::TextureEncoding::Linear,
+            mip_levels: 2,
+        }],
+    )
+    .expect("linear two-level texture plan");
+    assert_eq!(plan.texture_descs[0].mip_levels, 2);
+    assert!(plan.texture_descs[0].usage.contains(TextureUsage::COPY_SRC));
+}
+
+#[test]
+fn resident_plan_refuses_srgb_mip_generation() {
+    assert!(matches!(
+        plan_forward_resident(
+            Vec::new(),
+            vec![ForwardTextureInput {
+                bytes: vec![0; 512],
+                extent: [2, 2],
+                bytes_per_row: 256,
+                encoding: crate::TextureEncoding::Srgb,
+                mip_levels: 2,
+            }],
+        ),
+        Err(Error::Unsupported("linear RGBA8 material mip generation"))
+    ));
+}

@@ -39,6 +39,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             .map(|lane| lane.id)
             .ok_or(Error::WrongLane)?;
         let mut graph = GraphBuilder::default();
+        let fresh_mip_chains = frame
+            .resident
+            .textures
+            .iter()
+            .enumerate()
+            .map(|(index, texture)| {
+                texture.desc.mip_levels > 1
+                    && frame
+                        .resident_upload
+                        .textures
+                        .iter()
+                        .any(|upload| upload.texture == index)
+            })
+            .collect::<Vec<_>>();
         let super::imports::DeferredImports {
             resident_upload,
             frame_upload,
@@ -59,14 +73,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             readback,
             row_pitch,
             deformation: deformation_handles,
-        } = super::imports::import(&mut graph, &frame)?;
+        } = super::imports::import(&mut graph, &frame, &fresh_mip_chains)?;
 
         let (
             upload_pass,
             (
                 streams,
                 uniform,
-                materials,
+                mut materials,
                 environment,
                 specular_radiance,
                 specular_brdf_lut,
@@ -117,7 +131,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     )?;
                     materials[copy.texture] = pass.write_texture_with_use(
                         texture,
-                        whole_color(),
+                        one_color_mip(0),
                         texture_copy_write().uses,
                         ImageLayout::CopyDst,
                         TextureUsage::COPY_DST,
@@ -268,6 +282,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .map_err(|_| Error::InvalidState)?;
 
+        let mut mip_generation = Vec::new();
+        for (index, (texture, fresh)) in materials.iter_mut().zip(&fresh_mip_chains).enumerate() {
+            if *fresh {
+                let levels = frame
+                    .resident
+                    .textures
+                    .get(index)
+                    .ok_or(Error::InvalidState)?
+                    .desc
+                    .mip_levels;
+                let (generated, passes) = super::super::mip_generation::declare_chain(
+                    &mut graph, *texture, index, levels,
+                )
+                .map_err(|_| Error::InvalidState)?;
+                *texture = generated;
+                mip_generation.extend(passes);
+            }
+        }
+
         let draws = frame.draw_graph_data()?;
         let (deformation_pass, geometry_pass, gbuffer, lighting_pass, scene_color) = {
             let mut driver = DeferredPhaseDriver {
@@ -379,6 +412,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             graph,
             lane,
             upload_pass,
+            mip_generation,
             deformation_pass,
             geometry_pass,
             lighting_pass,

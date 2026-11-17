@@ -181,10 +181,11 @@ where
                 let texture = input.asset_texture(texture_index);
                 if material_requires_ordinary_sampler(input.prepared()) {
                     match texture {
-                        Some(texture) => require_filterable_material_texture(
+                        Some(texture) => require_filterable_material_texture_with_mip_levels(
                             &self.device,
                             texture.value().extent,
                             texture.value().encoding,
+                            texture.value().mip_levels,
                         )
                         .map_err(|error| {
                             self.observe_forward_error("sampled material texture admission", error)
@@ -275,7 +276,7 @@ where
             .iter()
             .any(|input| material_requires_ordinary_sampler(input.prepared()))
         {
-            let desc = default_material_sampler();
+            let desc = material_sampler_for_inputs(&inputs)?;
             let sampler = self
                 .device
                 .create_sampler(&desc)

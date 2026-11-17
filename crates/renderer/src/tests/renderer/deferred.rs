@@ -127,6 +127,7 @@ fn scene_and_assets() -> (
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![192, 96, 48, 255],
                 },
                 ResidentBytes::new(4),
@@ -365,3 +366,6 @@ mod pbr_tests;
 mod pipeline_tests;
 #[path = "deferred_surface.rs"]
 mod surface_tests;
+
+#[path = "material_mips.rs"]
+mod material_mip_tests;

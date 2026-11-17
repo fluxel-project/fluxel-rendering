@@ -7,16 +7,17 @@ use fluxel_rhi::{
 use std::collections::HashMap;
 
 use crate::{
+    FrameTopology,
     pipeline::{ForwardPhaseContext, PipelineError},
     residency::ForwardFrame,
-    FrameTopology,
 };
 
+use super::super::mip_generation::MipGenerationPass;
 use super::{
-    copy_write_uses, texture_copy_read_uses, validate_depth_spec, validate_forward_topology,
-    validate_graph_draw, validate_resident_texture_devices, whole, BufferGraphFact, BufferSlot,
-    ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, GraphBuilder, GraphPass,
-    TextureGraphFact, TextureSlot,
+    BufferGraphFact, BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError,
+    GraphBuilder, GraphPass, TextureGraphFact, TextureSlot, copy_write_uses,
+    texture_copy_read_uses, validate_depth_spec, validate_forward_topology, validate_graph_draw,
+    validate_resident_texture_devices, whole,
 };
 
 /// All Graph slots imported for one Forward frame namespace.
@@ -43,7 +44,7 @@ pub(super) struct SharedResidentImports {
         crate::graph::ResourceInstanceId,
         (crate::graph::definition::BufferHandle, BufferGraphFact),
     >,
-    textures: HashMap<
+    pub(super) textures: HashMap<
         crate::graph::ResourceInstanceId,
         (crate::graph::definition::TextureHandle, TextureGraphFact),
     >,
@@ -54,8 +55,10 @@ pub(crate) struct CaptureForwardDeclaration {
     pub(super) graph: GraphBuilder,
     pub(super) lane: LaneId,
     pub(super) capture_upload: GraphPass,
+    pub(super) capture_mip_generations: Vec<MipGenerationPass>,
     pub(super) capture_raster: GraphPass,
     pub(super) receiver_upload: GraphPass,
+    pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
     pub(super) receiver_raster: GraphPass,
     pub(super) receiver_readback: GraphPass,
     pub(super) capture: CaptureFrameSlots,
@@ -134,6 +137,8 @@ where
         import_frame(&mut graph, &capture_spec, None, &mut shared)?;
     let (capture_upload, capture_handles) =
         declare_upload(&mut graph, &capture_spec, capture_handles)?;
+    let (capture_handles, capture_mip_generations) =
+        declare_mip_generations(&mut graph, &capture_spec, capture_handles, &mut shared)?;
     let (capture_raster, capture_target) = declare_raster(
         &mut graph,
         &capture_spec,
@@ -150,6 +155,8 @@ where
         import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
+    let (receiver_handles, receiver_mip_generations) =
+        declare_mip_generations(&mut graph, &receiver_spec, receiver_handles, &mut shared)?;
     let (receiver_raster, receiver_target) = declare_raster(
         &mut graph,
         &receiver_spec,
@@ -168,8 +175,10 @@ where
         graph,
         lane,
         capture_upload,
+        capture_mip_generations,
         capture_raster,
         receiver_upload,
+        receiver_mip_generations,
         receiver_raster,
         receiver_readback,
         capture: capture_slots,
@@ -236,6 +245,7 @@ pub(super) struct FrameHandles {
     pub(super) specular_view_uniform: Option<crate::graph::definition::BufferHandle>,
     pub(super) streams: Vec<crate::graph::definition::BufferHandle>,
     pub(super) textures: Vec<crate::graph::definition::TextureHandle>,
+    pub(super) cold_textures: Vec<bool>,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
     pub(super) specular_radiance: Option<crate::graph::definition::TextureHandle>,
     pub(super) specular_brdf_lut: Option<crate::graph::definition::TextureHandle>,
@@ -378,6 +388,13 @@ pub(super) fn import_frame(
     if aliases.is_some_and(|aliases| aliases.len() != spec.textures.len()) {
         return Err(Error::InvalidRange.into());
     }
+    let mut uploaded = vec![false; spec.textures.len()];
+    for upload in &spec.texture_uploads {
+        *uploaded
+            .get_mut(upload.texture)
+            .ok_or(Error::InvalidRange)? = true;
+    }
+    let mut cold_textures = vec![false; spec.textures.len()];
     let textures = spec
         .textures
         .iter()
@@ -397,9 +414,26 @@ pub(super) fn import_frame(
                         }
                         return Ok(*handle);
                     }
-                    let handle = graph
-                        .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
-                        .map_err(|_| Error::InvalidState)?;
+                    let handle = if uploaded[index] {
+                        if owner.incoming.stages != fluxel_rhi::api::StageMask::EMPTY
+                            || owner.incoming.accesses != fluxel_rhi::api::AccessMask::EMPTY
+                            || owner.layout != ImageLayout::Undefined
+                        {
+                            return Err(Error::InvalidState);
+                        }
+                        cold_textures[index] = true;
+                        graph
+                            .create_texture(owner.desc.clone())
+                            .map_err(|_| Error::InvalidState)?
+                    } else {
+                        graph
+                            .import_texture_with_state(
+                                owner.desc.clone(),
+                                owner.incoming,
+                                owner.layout,
+                            )
+                            .map_err(|_| Error::InvalidState)?
+                    };
                     shared.textures.insert(instance, (handle, owner.clone()));
                     Ok(handle)
                 })
@@ -462,6 +496,7 @@ pub(super) fn import_frame(
             specular_brdf_lut,
             streams,
             textures,
+            cold_textures,
             environment,
             depth,
             target,
@@ -470,7 +505,7 @@ pub(super) fn import_frame(
     ))
 }
 
-pub(super) use super::capture_upload::declare_upload;
+pub(super) use super::capture_upload::{declare_mip_generations, declare_upload};
 
 pub(super) fn declare_raster<B, F>(
     graph: &mut GraphBuilder,

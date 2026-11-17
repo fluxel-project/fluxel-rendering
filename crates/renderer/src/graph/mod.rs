@@ -16,6 +16,7 @@ pub(crate) use deferred::{
 mod definition;
 mod execution;
 mod forward;
+mod mip_generation;
 mod owner_validation;
 #[allow(unused_imports)]
 // Consumed by the coordinator once it lowers resident/frame planning facts.

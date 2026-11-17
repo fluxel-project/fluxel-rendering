@@ -17,29 +17,29 @@ impl ComputeOps<WitnessBackend> for WitnessCompute {
         ready(Ok(()))
     }
 
-    fn begin(_: &mut ()) -> Result<()> {
+    fn begin(_: &mut Arc<Native>) -> Result<()> {
         Ok(())
     }
 
-    fn set_pipeline(_: &mut (), _: &()) -> Result<()> {
+    fn set_pipeline(_: &mut Arc<Native>, _: &()) -> Result<()> {
         Ok(())
     }
 
-    fn set_bind_group(_: &mut (), _: u32, _: &Arc<Native>, _: &[u32]) -> Result<()> {
+    fn set_bind_group(_: &mut Arc<Native>, _: u32, _: &Arc<Native>, _: &[u32]) -> Result<()> {
         Ok(())
     }
 
-    fn dispatch(_: &mut (), _: [u32; 3]) -> Result<()> {
+    fn dispatch(_: &mut Arc<Native>, _: [u32; 3]) -> Result<()> {
         Ok(())
     }
 
-    fn dispatch_indirect(_: &mut (), _: &Arc<NativeBuffer>, _: u64) -> Result<()> {
+    fn dispatch_indirect(_: &mut Arc<Native>, _: &Arc<NativeBuffer>, _: u64) -> Result<()> {
         Ok(())
     }
 
-    fn end(_: &mut ()) -> Result<()> {
+    fn end(_: &mut Arc<Native>) -> Result<()> {
         Ok(())
     }
 
-    fn abort(_: &mut ()) {}
+    fn abort(_: &mut Arc<Native>) {}
 }

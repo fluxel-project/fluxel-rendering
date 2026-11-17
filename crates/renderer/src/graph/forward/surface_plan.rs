@@ -23,6 +23,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         if !self.declaration.same_declaration(&declaration.graph)
             || self.lane != declaration.lane
             || self.upload_pass.1 != declaration.upload_pass.1
+            || !same_mip_passes(&self.mip_passes, &declaration.mip_passes)
             || self.raster_pass.1 != declaration.raster_pass.1
             || self.resident_upload_slot.resource != declaration.resident_upload_slot.resource
             || self.frame_upload_slot.resource != declaration.frame_upload_slot.resource
@@ -71,16 +72,28 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             return Err(Error::WrongDevice.into());
         }
         let execution = CompiledExecution::compile(&declaration.graph)?;
-        if execution.logical().passes() != [declaration.upload_pass, declaration.raster_pass] {
+        let mut expected = Vec::with_capacity(declaration.mip_passes.len() + 2);
+        expected.push(declaration.upload_pass);
+        expected.extend(declaration.mip_passes.iter().map(|pass| pass.pass));
+        expected.push(declaration.raster_pass);
+        if execution.logical().passes() != expected {
             return Err(Error::InvalidState.into());
         }
-        let present_step = StepId { plan: id, index: 2 };
+        let present_step = StepId {
+            plan: id,
+            index: 2 + u32::try_from(declaration.mip_passes.len())
+                .expect("mip pass count fits u32"),
+        };
         let mut steps = execution.steps(device, id, declaration.lane)?;
         steps.push(StepDesc {
             lane: declaration.lane,
             kind: StepKind::Present,
             waits: vec![StepWait {
-                previous: StepId { plan: id, index: 1 },
+                previous: StepId {
+                    plan: id,
+                    index: 1 + u32::try_from(declaration.mip_passes.len())
+                        .expect("mip pass count fits u32"),
+                },
                 destination: AccessScope {
                     stages: StageMask::ALL_COMMANDS,
                     accesses: AccessMask::ALL,
@@ -96,6 +109,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             execution,
             declaration: declaration.graph.clone(),
             upload_pass: declaration.upload_pass,
+            mip_passes: declaration.mip_passes,
             raster_pass: declaration.raster_pass,
             present_step,
             resident_upload_slot: declaration.resident_upload_slot,
@@ -137,8 +151,14 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
     pub(crate) fn raster_step(&self) -> StepId {
         StepId {
             plan: self.id,
-            index: 1,
+            index: 1 + u32::try_from(self.mip_passes.len()).expect("mip pass count fits u32"),
         }
+    }
+    pub(crate) fn mip_steps(&self) -> impl ExactSizeIterator<Item = StepId> + '_ {
+        (0..self.mip_passes.len()).map(|index| StepId {
+            plan: self.id,
+            index: 1 + u32::try_from(index).expect("mip pass index fits u32"),
+        })
     }
     pub(crate) fn present_step(&self) -> StepId {
         self.present_step
@@ -362,10 +382,12 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
 
 impl<B: ExecutionBackend + ResourceBackend> SurfaceForwardPlan<B> {
     pub(crate) fn completion(&self, outcome: &Outcome<B>) -> Result<CompletionPoint<B>> {
-        let expected = [self.upload_step(), self.raster_step(), self.present_step];
+        let mut expected = vec![self.upload_step()];
+        expected.extend(self.mip_steps());
+        expected.extend([self.raster_step(), self.present_step]);
         let facts = outcome.facts();
         if facts.status != ExecutionStatus::Accepted
-            || facts.accepted != Some(&expected)
+            || facts.accepted != Some(expected.as_slice())
             || !facts.presents.is_some_and(|presents| {
                 presents.len() == 1
                     && presents[0].accepted

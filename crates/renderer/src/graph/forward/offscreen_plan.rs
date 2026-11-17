@@ -23,6 +23,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         if !self.declaration.same_declaration(&declaration.graph)
             || self.lane != declaration.lane
             || self.upload_pass.1 != declaration.upload_pass.1
+            || !same_mip_passes(&self.mip_passes, &declaration.mip_passes)
             || self.raster_pass.1 != declaration.raster_pass.1
             || self.readback_pass.1 != declaration.readback_pass.1
             || self.resident_upload_slot.resource != declaration.resident_upload_slot.resource
@@ -72,13 +73,11 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             return Err(Error::WrongDevice.into());
         }
         let execution = CompiledExecution::compile(&declaration.graph)?;
-        if execution.logical().passes()
-            != [
-                declaration.upload_pass,
-                declaration.raster_pass,
-                declaration.readback_pass,
-            ]
-        {
+        let mut expected = Vec::with_capacity(declaration.mip_passes.len() + 3);
+        expected.push(declaration.upload_pass);
+        expected.extend(declaration.mip_passes.iter().map(|pass| pass.pass));
+        expected.extend([declaration.raster_pass, declaration.readback_pass]);
+        if execution.logical().passes() != expected {
             return Err(Error::InvalidState.into());
         }
         let submission = execution.submission(device, id, declaration.lane)?;
@@ -89,6 +88,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             execution,
             declaration: declaration.graph.clone(),
             upload_pass: declaration.upload_pass,
+            mip_passes: declaration.mip_passes,
             raster_pass: declaration.raster_pass,
             readback_pass: declaration.readback_pass,
             resident_upload_slot: declaration.resident_upload_slot,
@@ -130,14 +130,20 @@ impl<B: ResourceBackend> ForwardPlan<B> {
     pub(crate) fn raster_step(&self) -> StepId {
         StepId {
             plan: self.id,
-            index: 1,
+            index: 1 + u32::try_from(self.mip_passes.len()).expect("mip pass count fits u32"),
         }
     }
     pub(crate) fn readback_step(&self) -> StepId {
         StepId {
             plan: self.id,
-            index: 2,
+            index: 2 + u32::try_from(self.mip_passes.len()).expect("mip pass count fits u32"),
         }
+    }
+    pub(crate) fn mip_steps(&self) -> impl ExactSizeIterator<Item = StepId> + '_ {
+        (0..self.mip_passes.len()).map(|index| StepId {
+            plan: self.id,
+            index: 1 + u32::try_from(index).expect("mip pass index fits u32"),
+        })
     }
 
     /// Rejects a frame whose structural shape cannot use this plan.
@@ -380,7 +386,10 @@ impl<B: ResourceBackend> ForwardPlan<B> {
     where
         B: ExecutionBackend,
     {
-        let expected = [self.upload_step(), self.raster_step(), self.readback_step()];
+        let expected: Vec<_> = std::iter::once(self.upload_step())
+            .chain(self.mip_steps())
+            .chain([self.raster_step(), self.readback_step()])
+            .collect();
         let facts = outcome.facts();
         if facts.status != ExecutionStatus::Accepted || facts.accepted != Some(&expected) {
             return Err(Error::InvalidState);

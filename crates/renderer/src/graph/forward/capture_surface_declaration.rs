@@ -1,7 +1,8 @@
 //! Surface terminal declaration for same-Graph Forward capture.
+use super::super::mip_generation::MipGenerationPass;
 use super::capture_declaration::{
-    capture_texture_slots, declare_raster, declare_upload, import_frame, same_texture_owner_desc,
-    validate_spec,
+    capture_texture_slots, declare_mip_generations, declare_raster, declare_upload, import_frame,
+    same_texture_owner_desc, validate_spec,
 };
 use super::*;
 use fluxel_rhi::api::TextureDimension;
@@ -10,8 +11,10 @@ pub(crate) struct CaptureForwardSurfaceDeclaration {
     pub(super) graph: GraphBuilder,
     pub(super) lane: LaneId,
     pub(super) capture_upload: GraphPass,
+    pub(super) capture_mip_generations: Vec<MipGenerationPass>,
     pub(super) capture_raster: GraphPass,
     pub(super) receiver_upload: GraphPass,
+    pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
     pub(super) receiver_raster: GraphPass,
     pub(super) composite: GraphPass,
     pub(super) capture: CaptureFrameSlots,
@@ -99,6 +102,8 @@ where
         import_frame(&mut graph, &capture_spec, None, &mut shared)?;
     let (capture_upload, capture_handles) =
         declare_upload(&mut graph, &capture_spec, capture_handles)?;
+    let (capture_handles, capture_mip_generations) =
+        declare_mip_generations(&mut graph, &capture_spec, capture_handles, &mut shared)?;
     let (capture_raster, capture_target) = declare_raster(
         &mut graph,
         &capture_spec,
@@ -115,6 +120,8 @@ where
         import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
+    let (receiver_handles, receiver_mip_generations) =
+        declare_mip_generations(&mut graph, &receiver_spec, receiver_handles, &mut shared)?;
     let (receiver_raster, receiver_target) = declare_raster(
         &mut graph,
         &receiver_spec,
@@ -163,8 +170,10 @@ where
         graph,
         lane,
         capture_upload,
+        capture_mip_generations,
         capture_raster,
         receiver_upload,
+        receiver_mip_generations,
         receiver_raster,
         composite,
         capture: capture_slots,

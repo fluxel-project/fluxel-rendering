@@ -82,7 +82,12 @@ where
             AccessKind::Read,
             copy_read_uses(),
         )?;
-        pass.texture(slot, whole(), AccessKind::Write, texture_copy_write_uses())?;
+        pass.texture(
+            slot,
+            one_color_mip(0),
+            AccessKind::Write,
+            texture_copy_write_uses(),
+        )?;
     }
     if let (Some(slot), Some(owner)) = (slots.environment_upload_slot, frame.environment.as_ref()) {
         pass.buffer(
@@ -201,7 +206,7 @@ where
                 .texture_slots
                 .get(copy.texture)
                 .ok_or(Error::InvalidRange)?,
-            whole(),
+            one_color_mip(0),
             AccessKind::Write,
             texture_copy_write_uses(),
         )?;
@@ -421,7 +426,7 @@ where
                     .texture_slots
                     .get(*texture)
                     .ok_or(Error::InvalidRange)?,
-                whole(),
+                all_color_mips(frame.resident.textures[*texture].desc.mip_levels),
                 AccessKind::Read,
                 texture_read_uses(),
             )?;

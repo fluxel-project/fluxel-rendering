@@ -1,8 +1,8 @@
 //! Forward scoped-read state-machine tests using a real Graph transaction.
 
 use super::super::phase::{
-    opaque_requirements_met, COLOR_WRITE, DEPTH_WRITE, TEXTURE_READS, UNIFORM_READS,
-    UPLOAD_DEPENDENCY, VERTEX_READS,
+    COLOR_WRITE, DEPTH_WRITE, TEXTURE_READS, UNIFORM_READS, UPLOAD_DEPENDENCY, VERTEX_READS,
+    opaque_requirements_met,
 };
 use super::super::{depth_write_uses, whole_depth};
 use super::*;

@@ -253,6 +253,7 @@ pub(super) fn scene_and_assets(
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![1, 2, 3, 255],
                 },
                 ResidentBytes::new(4),

@@ -153,6 +153,7 @@ fn capture_receiver_mixes_asset_and_two_logical_aliases_of_one_producer() {
     let asset = snapshot::<ColorTextureAsset, _>(ColorTextureData {
         extent: [1, 1],
         encoding: crate::TextureEncoding::Linear,
+        mip_levels: 1,
         rgba8: vec![1, 2, 3, 255],
     });
     resources.material = SceneAssetRef::from_snapshot(&material);
@@ -219,6 +220,7 @@ fn pbr_uv0_normal_capture_receiver_keeps_normal_transform_and_lighting_contract(
     let asset = snapshot::<ColorTextureAsset, _>(ColorTextureData {
         extent: [1, 1],
         encoding: crate::TextureEncoding::Linear,
+        mip_levels: 1,
         rgba8: vec![1, 2, 3, 255],
     });
     resources.geometry = SceneAssetRef::from_snapshot(&geometry);
@@ -271,6 +273,7 @@ fn capture_receiver_rejects_asset_only_but_accepts_logical_binding_to_producer_a
     let texture = snapshot::<ColorTextureAsset, _>(ColorTextureData {
         extent: [1, 1],
         encoding: crate::TextureEncoding::Linear,
+        mip_levels: 1,
         rgba8: vec![255; 4],
     });
     assets.textures = vec![texture.clone()];

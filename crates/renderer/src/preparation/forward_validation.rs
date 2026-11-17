@@ -37,6 +37,20 @@ pub(super) fn validate_texture(
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     let [width, height] = texture.extent;
+    if width == 0 || height == 0 || texture.mip_levels == 0 {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    let max_mip_levels = 1 + width.max(height).ilog2();
+    if texture.mip_levels > max_mip_levels {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    if texture.encoding == super::TextureEncoding::Srgb && texture.mip_levels > 1 {
+        return Err(ForwardPreparationError::UnsupportedTextureMipGeneration {
+            source,
+            encoding: texture.encoding,
+            mip_levels: texture.mip_levels,
+        });
+    }
     let Some(bytes) = u64::from(width)
         .checked_mul(u64::from(height))
         .and_then(|texels| texels.checked_mul(4))
@@ -44,7 +58,7 @@ pub(super) fn validate_texture(
     else {
         return Err(ForwardPreparationError::InvalidTexture { source });
     };
-    if width == 0 || height == 0 || texture.rgba8.len() != bytes {
+    if texture.rgba8.len() != bytes {
         return Err(ForwardPreparationError::InvalidTexture { source });
     }
     Ok(())

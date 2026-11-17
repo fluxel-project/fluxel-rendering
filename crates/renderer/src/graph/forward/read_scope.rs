@@ -128,9 +128,11 @@ impl ForwardReadState {
                 return Err(());
             }
             for texture in &draw.textures {
+                let texture = *self.textures.get(*texture).ok_or(())?;
+                let range = pass.full_texture_range(texture).map_err(|_| ())?;
                 pass.read_texture_with_use(
-                    *self.textures.get(*texture).ok_or(())?,
-                    whole(),
+                    texture,
+                    range,
                     texture_read_uses().uses,
                     ImageLayout::ShaderReadOnly,
                     TextureUsage::TEXTURE_BINDING,

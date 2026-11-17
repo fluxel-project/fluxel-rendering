@@ -81,7 +81,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                         .texture_slots
                         .get(*texture)
                         .ok_or(Error::InvalidRange)?,
-                    whole(),
+                    all_color_mips(frame.resident.textures[*texture].desc.mip_levels),
                     AccessKind::Read,
                     texture_read_uses(),
                 )?;
@@ -207,6 +207,35 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         raster.finish()
     }
 
+    pub(crate) fn record_mip(
+        &self,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &SurfaceForwardFrame<B>,
+        image: &SurfaceImage<B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend + ResourceBackend,
+    {
+        let generation = self.mip_passes.get(index).ok_or(Error::InvalidRange)?;
+        let slot = *self
+            .texture_slots
+            .get(generation.texture)
+            .ok_or(Error::InvalidRange)?;
+        let texture = frame
+            .resident
+            .textures
+            .get(generation.texture)
+            .ok_or(Error::InvalidRange)?;
+        super::super::mip_generation::record(
+            generation,
+            &self.bindings(frame, image)?,
+            slot,
+            texture,
+            encoder,
+        )
+    }
+
     fn record_surface_upload(
         &self,
         encoder: &mut CommandEncoder<B>,
@@ -269,7 +298,12 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 AccessKind::Read,
                 copy_read_uses(),
             )?;
-            pass.texture(slot, whole(), AccessKind::Write, texture_copy_write_uses())?;
+            pass.texture(
+                slot,
+                one_color_mip(0),
+                AccessKind::Write,
+                texture_copy_write_uses(),
+            )?;
         }
         if let (Some(slot), Some(owner)) =
             (self.environment_upload_slot, frame.environment.as_ref())

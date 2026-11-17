@@ -37,5 +37,6 @@ pub(super) fn stage(
         extent: data.extent,
         bytes_per_row: pitch,
         encoding: data.encoding,
+        mip_levels: data.mip_levels,
     })
 }

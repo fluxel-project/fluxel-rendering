@@ -3,6 +3,43 @@
 use super::*;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
+    pub(crate) fn record_mip_generation(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredFrame<B>,
+        generation: &super::super::mip_generation::MipGenerationPass,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        self.record_body_mip_generation(
+            encoder,
+            super::record_view::DeferredRecordView::offscreen(frame),
+            generation,
+        )
+    }
+
+    pub(super) fn record_body_mip_generation(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        generation: &super::super::mip_generation::MipGenerationPass,
+    ) -> Result<()>
+    where
+        B: CommandBackend + ResourceBackend,
+    {
+        let slot = *self
+            .texture_slots
+            .get(generation.texture)
+            .ok_or(Error::InvalidRange)?;
+        let texture = frame
+            .resident
+            .textures
+            .get(generation.texture)
+            .ok_or(Error::InvalidRange)?;
+        let bindings = self.record_bindings(&frame)?;
+        super::super::mip_generation::record(generation, &bindings, slot, texture, encoder)
+    }
     pub(crate) fn record_deformation(
         &self,
         encoder: &mut CommandEncoder<B>,
@@ -133,13 +170,18 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             if draw.textures.is_empty() {
                 return Err(Error::InvalidRange);
             }
-            for texture in &draw.textures {
+            for texture_index in &draw.textures {
+                let texture = frame
+                    .resident
+                    .textures
+                    .get(*texture_index)
+                    .ok_or(Error::InvalidRange)?;
                 pass.texture(
                     *self
                         .texture_slots
-                        .get(*texture)
+                        .get(*texture_index)
                         .ok_or(Error::InvalidRange)?,
-                    whole_color(),
+                    all_color_mips(texture.desc.mip_levels),
                     AccessKind::Read,
                     sampled_read(),
                 )?;

@@ -360,7 +360,9 @@ impl DeferredGeometryPass<'_, '_> {
                 self.pass
                     .read_texture_with_use(
                         *self.materials.get(*texture).ok_or(())?,
-                        whole_color(),
+                        self.pass
+                            .full_texture_range(*self.materials.get(*texture).ok_or(())?)
+                            .map_err(|_| ())?,
                         sampled_read().uses,
                         ImageLayout::ShaderReadOnly,
                         TextureUsage::TEXTURE_BINDING,

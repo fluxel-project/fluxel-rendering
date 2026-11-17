@@ -225,6 +225,7 @@ fn assets_with_texture_payload(bytes: Vec<u8>) -> (ForwardResources, crate::Forw
                 crate::ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: bytes,
                 },
                 ResidentBytes::new(byte_len),

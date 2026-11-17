@@ -128,6 +128,15 @@ pub enum ForwardPreparationError {
         /// Draw requesting the texture.
         source: ForwardDrawSource,
     },
+    /// The initial GPU mip-generation path only implements linear RGBA8.
+    UnsupportedTextureMipGeneration {
+        /// Draw requesting the texture.
+        source: ForwardDrawSource,
+        /// Transfer encoding whose mip generation has no defined color path.
+        encoding: TextureEncoding,
+        /// Requested total mip levels.
+        mip_levels: u32,
+    },
     /// A material texture resource appears more than once in one draw input.
     DuplicateTextureResource {
         /// Draw requesting the material resource.

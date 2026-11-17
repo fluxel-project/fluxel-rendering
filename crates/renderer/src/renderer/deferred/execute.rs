@@ -100,6 +100,16 @@ where
             plan.record_upload(encoder, &frame)
         });
         if recorded.is_ok() {
+            for (step, generation) in plan.mip_generation_steps() {
+                recorded = execution.commands(step, |encoder| {
+                    plan.record_mip_generation(encoder, &frame, generation)
+                });
+                if recorded.is_err() {
+                    break;
+                }
+            }
+        }
+        if recorded.is_ok() {
             if let Some(step) = plan.deformation_step() {
                 recorded =
                     execution.commands(step, |encoder| plan.record_deformation(encoder, &frame));
@@ -265,6 +275,16 @@ where
         let mut recorded = execution.commands(plan.upload_step(), |encoder| {
             plan.surface_record_upload(encoder, &frame, &image)
         });
+        if recorded.is_ok() {
+            for (step, generation) in plan.mip_generation_steps() {
+                recorded = execution.commands(step, |encoder| {
+                    plan.surface_record_mip_generation(encoder, &frame, &image, generation)
+                });
+                if recorded.is_err() {
+                    break;
+                }
+            }
+        }
         if recorded.is_ok() {
             if let Some(step) = plan.deformation_step() {
                 recorded = execution.commands(step, |encoder| {

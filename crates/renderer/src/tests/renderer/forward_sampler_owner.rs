@@ -65,6 +65,7 @@ fn sampled_binding_rejects_the_mutated_actual_owner_filterability() {
             extent: [1, 1],
             bytes_per_row: 256,
             encoding: crate::TextureEncoding::Linear,
+            mip_levels: 1,
         }],
     )
     .expect("one real resident texture plan");
@@ -102,6 +103,7 @@ fn sampled_binding_rejects_the_mutated_actual_owner_device() {
             extent: [1, 1],
             bytes_per_row: 256,
             encoding: crate::TextureEncoding::Linear,
+            mip_levels: 1,
         }],
     )
     .expect("one real resident texture plan");
@@ -136,6 +138,7 @@ fn srgb_payload_allocates_an_srgb_actual_owner() {
             extent: [1, 1],
             bytes_per_row: 256,
             encoding: crate::TextureEncoding::Srgb,
+            mip_levels: 1,
         }],
     )
     .expect("sRGB resident plan");
@@ -168,6 +171,7 @@ fn sampled_binding_rejects_an_owner_with_the_wrong_encoding_format() {
             extent: [1, 1],
             bytes_per_row: 256,
             encoding: crate::TextureEncoding::Srgb,
+            mip_levels: 1,
         }],
     )
     .expect("sRGB resident plan");

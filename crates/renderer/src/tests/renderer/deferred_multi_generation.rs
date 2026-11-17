@@ -72,6 +72,7 @@ fn generation_assets() -> (ForwardAssets, ForwardAssets) {
                     ColorTextureData {
                         extent: [1, 1],
                         encoding: crate::TextureEncoding::Linear,
+                        mip_levels: 1,
                         rgba8: value.to_vec(),
                     },
                     ResidentBytes::new(4),
@@ -89,6 +90,7 @@ fn generation_assets() -> (ForwardAssets, ForwardAssets) {
                 ColorTextureData {
                     extent: [1, 1],
                     encoding: crate::TextureEncoding::Linear,
+                    mip_levels: 1,
                     rgba8: vec![91, 92, 93, 255],
                 },
                 ResidentBytes::new(4),

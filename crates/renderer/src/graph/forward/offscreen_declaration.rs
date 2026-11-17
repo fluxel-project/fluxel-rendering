@@ -6,16 +6,16 @@ use fluxel_rhi::{
 };
 
 use crate::{
+    FrameTopology,
     pipeline::{ForwardPhaseContext, PipelineError},
     residency::ForwardFrame,
-    FrameTopology,
 };
 
 use super::{
-    copy_read_uses, copy_write_uses, graph_texture_copy_end, one_color_mip, texture_copy_read_uses,
-    texture_copy_write_uses, validate_depth_spec, validate_forward_topology, validate_graph_draw,
-    validate_resident_texture_devices, whole, BufferSlot, ForwardGraphSpec, ForwardPhaseDriver,
-    ForwardPlanBuildError, ForwardShape, GraphBuilder, GraphPass, TextureSlot,
+    BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, ForwardShape,
+    GraphBuilder, GraphPass, TextureSlot, copy_read_uses, copy_write_uses, graph_texture_copy_end,
+    one_color_mip, texture_copy_read_uses, texture_copy_write_uses, validate_depth_spec,
+    validate_forward_topology, validate_graph_draw, validate_resident_texture_devices, whole,
 };
 
 /// A complete, uncompiled offscreen Forward declaration.
@@ -23,6 +23,7 @@ pub(crate) struct OffscreenForwardDeclaration {
     pub(super) graph: GraphBuilder,
     pub(super) lane: LaneId,
     pub(super) upload_pass: GraphPass,
+    pub(super) mip_passes: Vec<super::super::mip_generation::MipGenerationPass>,
     pub(super) raster_pass: GraphPass,
     pub(super) readback_pass: GraphPass,
     pub(super) resident_upload_slot: BufferSlot,
@@ -159,10 +160,23 @@ where
     let textures = spec
         .textures
         .iter()
-        .map(|texture| {
-            graph
-                .import_texture_with_state(texture.desc.clone(), texture.incoming, texture.layout)
-                .map_err(|_| Error::InvalidState)
+        .enumerate()
+        .map(|(index, texture)| {
+            if spec
+                .texture_uploads
+                .iter()
+                .any(|upload| upload.texture == index)
+                && texture.desc.mip_levels > 1
+            {
+                graph.create_texture(texture.desc.clone())
+            } else {
+                graph.import_texture_with_state(
+                    texture.desc.clone(),
+                    texture.incoming,
+                    texture.layout,
+                )
+            }
+            .map_err(|_| Error::InvalidState)
         })
         .collect::<Result<Vec<_>>>()?;
     let environment = spec
@@ -221,7 +235,7 @@ where
         (
             streams,
             uniform,
-            textures,
+            mut textures,
             environment,
             specular_radiance,
             specular_brdf_lut,
@@ -279,7 +293,7 @@ where
                 )?;
                 outputs_textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    whole(),
+                    one_color_mip(0),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
@@ -388,12 +402,34 @@ where
             ))
         })
         .map_err(|_| Error::InvalidState)?;
+    let mut mip_passes = Vec::new();
+    for upload in &spec.texture_uploads {
+        let texture = *textures.get(upload.texture).ok_or(Error::InvalidRange)?;
+        let levels = spec
+            .textures
+            .get(upload.texture)
+            .ok_or(Error::InvalidRange)?
+            .desc
+            .mip_levels;
+        if levels > 1 {
+            let (texture, passes) = super::super::mip_generation::declare_chain(
+                &mut graph,
+                texture,
+                upload.texture,
+                levels,
+            )
+            .map_err(|_| Error::InvalidState)?;
+            textures[upload.texture] = texture;
+            mip_passes.extend(passes);
+        }
+    }
+    let raster_dependency = mip_passes.last().map_or(upload_pass, |pass| pass.pass);
     let (raster_pass, target) = {
         let mut driver = ForwardPhaseDriver {
             graph: Some(&mut graph),
             marker: std::marker::PhantomData,
             expected,
-            upload: Some(upload_pass),
+            upload: Some(raster_dependency),
             streams: streams.clone(),
             uniform: Some(uniform),
             textures: textures.clone(),
@@ -443,6 +479,7 @@ where
         graph,
         lane,
         upload_pass,
+        mip_passes,
         raster_pass,
         readback_pass,
         resident_upload_slot: BufferSlot::from(resident_upload),

@@ -45,7 +45,7 @@ impl ExecutionBackend for WitnessBackend {
 }
 impl DeferredBackend for WitnessBackend {
     type NativeRecordedWork = ();
-    fn finish_encoder(_: (), _: LaneId) -> Result<()> {
+    fn finish_encoder(_: Arc<Native>, _: LaneId) -> Result<()> {
         Ok(())
     }
     unsafe fn submit(_: &Arc<Native>, _: SubmitPacket<Self>) -> SubmitOutcome<Self> {

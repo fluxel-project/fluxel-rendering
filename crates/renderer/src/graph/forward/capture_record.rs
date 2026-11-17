@@ -1,4 +1,5 @@
 //! Recording against the shared, checked capture/receiver Graph bindings.
+use super::super::mip_generation::{MipGenerationPass, record as record_mip_generation};
 use super::shared_record::{self, RecordSlots};
 use super::*;
 
@@ -64,6 +65,33 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
         )
     }
 
+    pub(crate) fn record_capture_mip_generation(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        capture: &ForwardFrame<B>,
+        receiver: &ForwardFrame<B>,
+        generation: &MipGenerationPass,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        record_mip_generation(
+            generation,
+            &self.bindings(capture, receiver)?,
+            *self
+                .capture
+                .textures
+                .get(generation.texture)
+                .ok_or(Error::InvalidRange)?,
+            capture
+                .resident
+                .textures
+                .get(generation.texture)
+                .ok_or(Error::InvalidRange)?,
+            encoder,
+        )
+    }
+
     pub(crate) fn record_receiver_upload(
         &self,
         encoder: &mut CommandEncoder<B>,
@@ -97,6 +125,33 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             &self.bindings(capture, receiver)?,
             encoder,
             receiver,
+        )
+    }
+
+    pub(crate) fn record_receiver_mip_generation(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        capture: &ForwardFrame<B>,
+        receiver: &ForwardFrame<B>,
+        generation: &MipGenerationPass,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        record_mip_generation(
+            generation,
+            &self.bindings(capture, receiver)?,
+            *self
+                .receiver
+                .textures
+                .get(generation.texture)
+                .ok_or(Error::InvalidRange)?,
+            receiver
+                .resident
+                .textures
+                .get(generation.texture)
+                .ok_or(Error::InvalidRange)?,
+            encoder,
         )
     }
 

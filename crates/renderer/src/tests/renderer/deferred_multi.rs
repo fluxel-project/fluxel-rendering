@@ -290,6 +290,7 @@ fn multi_scene_at(
                     ColorTextureData {
                         extent: [1, 1],
                         encoding,
+                        mip_levels: 1,
                         rgba8: rgba.to_vec(),
                     },
                     ResidentBytes::new(4),
