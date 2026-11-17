@@ -2,20 +2,58 @@
 
 use super::validate_resident_texture_devices;
 
+mod capture_aliases;
+mod capture_bindings;
+mod capture_declaration;
+mod capture_namespace;
+mod capture_owner_validation;
+mod capture_plan;
+mod capture_producer;
+mod capture_record;
 mod declaration;
 mod declaration_validation;
 mod diagnostic;
+mod forward_capture_bindings;
+mod forward_capture_declaration;
+mod forward_capture_owners;
+mod forward_capture_plan;
+mod forward_capture_record;
+mod hybrid_record;
 mod imports;
+mod oit_bindings;
+mod oit_declaration;
+mod oit_plan;
+mod oit_record;
 mod phase;
 mod plan;
 mod plan_bindings;
+mod prefix;
 mod raster;
 mod record;
 mod record_lighting;
 mod record_view;
+mod reverse_capture_bindings;
+mod reverse_capture_declaration;
+mod reverse_capture_owners;
+mod reverse_capture_plan;
+mod reverse_capture_record;
+mod shared_imports;
 mod surface;
 mod surface_record;
 mod surface_validate;
+mod terminal;
+mod transparent_bindings;
+use oit_declaration::DeferredOitDeclaration;
+pub(crate) use oit_plan::DeferredOitPlan;
+mod transparent_declaration;
+mod transparent_plan;
+mod transparent_record;
+pub(crate) use capture_plan::DeferredCapturePlan;
+pub(crate) use capture_producer::DeferredCaptureOverlay;
+pub(crate) use forward_capture_plan::DeferredForwardCapturePlan;
+pub(crate) use reverse_capture_plan::ForwardDeferredCapturePlan;
+use transparent_declaration::DeferredTransparentDeclaration;
+pub(crate) use transparent_plan::DeferredTransparentPlan;
 mod upload_record;
 mod uploads;
 mod validation;
@@ -68,6 +106,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     deformation_pass: Option<GraphPass>,
     geometry_pass: GraphPass,
     lighting_pass: GraphPass,
+    composition_passes: Vec<GraphPass>,
     composite_pass: Option<GraphPass>,
     output: DeferredOutputPlan,
     resident_upload_slot: BufferSlot,
@@ -97,6 +136,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
 ///
 /// It contains no backend owner identity; the selected plan separately checks
 /// every concrete owner immediately before recording.
+#[derive(Clone)]
 pub(crate) struct DeferredDeclaration {
     graph: GraphBuilder,
     lane: LaneId,
@@ -134,12 +174,20 @@ pub(crate) struct DeferredDeclaration {
 /// Deferred body.  A surface lease has no persistent Graph binding.
 #[derive(Clone, Copy)]
 enum DeferredOutputPlan {
-    Offscreen { readback_pass: GraphPass },
-    Surface { present_step: StepId },
+    /// A capture producer stops at its lighting product. It has no composite,
+    /// readback, or presentation operation of its own.
+    Capture,
+    Offscreen {
+        readback_pass: GraphPass,
+    },
+    Surface {
+        present_step: StepId,
+    },
 }
 
 #[derive(Clone, Copy)]
 enum DeferredOutputDeclaration {
+    Capture,
     Offscreen { readback_pass: GraphPass },
     Surface,
 }

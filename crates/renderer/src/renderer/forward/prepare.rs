@@ -20,7 +20,7 @@ where
     /// receiver material bind group against the capture product, while the
     /// normal path below continues to execute exactly one assembled frame.
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn assemble_prepared_forward(
+    pub(in crate::renderer) async fn assemble_prepared_forward_with_attachments(
         &mut self,
         retained_snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         prepared_inputs: Vec<crate::ForwardDrawInput>,
@@ -33,6 +33,7 @@ where
         preparation_started: Instant,
         capture_texture: Option<&super::captured::CaptureTextureOwner<B>>,
         sampled_target: bool,
+        attachments: Option<BorrowedForwardAttachments<B>>,
         environment_snapshot: Option<
             fluxel_assets::AssetSnapshot<
                 crate::EnvironmentIrradianceAsset,
@@ -43,12 +44,49 @@ where
         use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
         use crate::residency::{
             EnvironmentFrameOwner, ForwardBindGroup, ForwardDraw, ForwardFrame,
-            ForwardFrameBuffers, ForwardResidentBuffers, ForwardSampler, ForwardStreamInput,
-            SurfaceForwardFrame, SurfaceForwardFrameBuffers,
+            ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, SurfaceForwardFrame,
         };
         self.ensure_open()?;
+        let borrowed_attachments = attachments.is_some();
+        if let Some(attachments) = attachments.as_ref() {
+            if surface.is_some()
+                || depth_mode != crate::ForwardDepthMode::Depth32LessEqualWrite
+                || !matches!(topology, crate::FrameTopology::SortedForward)
+                || color_format != attachments.color.desc.format
+            {
+                return Err(Error::InvalidState.into());
+            }
+            attachments
+                .validate(self.device.id(), extent)
+                .map_err(|error| {
+                    self.observe_forward_error("borrowed Forward attachments", error)
+                })?;
+            crate::renderer::require_supported_surface_modes(&prepared_inputs, topology)
+                .map_err(|error| self.observe_forward_error("borrowed surface policy", error))?;
+            crate::renderer::require_blendable_target(
+                &self.device,
+                &attachments.color.desc,
+                topology,
+            )
+            .map_err(|error| self.observe_forward_error("borrowed target admission", error))?;
+        } else {
+            super::target_admission::admit_assembly(
+                &self.device,
+                &prepared_inputs,
+                topology,
+                extent,
+                color_format,
+                surface.is_some(),
+                sampled_target,
+            )
+            .map_err(|error| self.observe_forward_error("surface target admission", error))?;
+        }
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
-        let depth = super::depth::allocate_depth(&self.device, depth_mode, topology, extent)?;
+        let depth = if borrowed_attachments {
+            None
+        } else {
+            super::depth::allocate_depth(&self.device, depth_mode, topology, extent)?
+        };
         let specular = if let Some(input) = prepared_inputs
             .iter()
             .find(|input| input.prepared().uses_specular_ibl())
@@ -81,8 +119,12 @@ where
         if draw_batch_ids.len() != inputs.len() || draw_compatibility.len() != inputs.len() {
             return Err(Error::InvalidState.into());
         }
-
-        self.retain_programs_for(&inputs, color_format, depth_mode);
+        let active_programs =
+            super::program_selection::active_programs(&inputs, color_format, depth_mode);
+        // Submitted frames retain their own executable handles. Cache residency
+        // is bounded by this frame's concrete program/layout set.
+        self.forward_programs
+            .retain(|key, _| active_programs.contains(key));
         let uniform_inputs: Vec<_> = inputs
             .iter()
             .map(|input| ForwardUniformInput {
@@ -240,17 +282,12 @@ where
         }
         let resident_plan = crate::residency::plan_forward_resident(stream_inputs, texture_inputs)
             .map_err(|error| self.observe_forward_error("resident planning", error))?;
-        let resident_buffer_allocations = u64::try_from(resident_plan.stream_descs.len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1);
-        let resident_buffer_allocation_bytes = resident_plan
-            .stream_descs
-            .iter()
-            .fold(resident_plan.upload_desc.size, |total, desc| {
-                total.saturating_add(desc.size)
-            });
-        let resident_texture_allocations =
-            u64::try_from(resident_plan.texture_descs.len()).unwrap_or(u64::MAX);
+        let resident_allocations =
+            super::assembly::ForwardAllocationStats::from_resident_descriptors(
+                &resident_plan.stream_descs,
+                resident_plan.upload_desc.size,
+                resident_plan.texture_descs.len(),
+            );
         let (fresh, mut resident_upload) =
             ForwardResidentBuffers::allocate_planned(&self.device, resident_plan)
                 .map_err(|error| self.observe_forward_error("resident allocation", error))?;
@@ -290,80 +327,28 @@ where
             geometry: geometry_slots.into_iter().collect(),
             textures: texture_slots.into_iter().collect(),
         };
-        let reusable_frame = if sampled_target {
-            None
-        } else {
-            self.forward_frames[slot].take().filter(|buffers| {
-                crate::frame_data::pool::compatible(
-                    buffers,
-                    self.device.id(),
-                    extent,
-                    uniform_len,
-                    row_pitch,
-                )
-            })
-        };
-        let (
-            mut offscreen_frame,
-            mut surface_frame,
-            uniform_upload,
-            frame_buffer_allocations,
-            frame_buffer_allocation_bytes,
-            frame_texture_allocations,
-        ) = if surface.is_some() {
-            let frame_plan = crate::residency::plan_surface_forward_frame(
-                uniform_len,
-                uniform_len,
-                0..uniform_len,
-                limits.uniform_offset_alignment,
-            )
-            .map_err(|error| self.observe_forward_error("surface frame planning", error))?;
-            let allocation_bytes = frame_plan
-                .upload_desc
-                .size
-                .saturating_add(frame_plan.uniform_desc.size);
-            let (buffers, upload) =
-                SurfaceForwardFrameBuffers::allocate_planned(&self.device, frame_plan).map_err(
-                    |error| self.observe_forward_error("surface frame allocation", error),
-                )?;
-            (None, Some(buffers), upload, 2, allocation_bytes, 0)
-        } else if let Some(buffers) = reusable_frame {
-            self.forward_stats.frame_reuses = self.forward_stats.frame_reuses.saturating_add(1);
-            (
-                Some(buffers),
-                None,
-                crate::residency::ForwardUniformUpload {
-                    source: 0..uniform_len,
-                    destination: 0..uniform_len,
-                },
-                0,
-                0,
-                0,
-            )
-        } else {
-            let frame_plan = crate::residency::plan_forward_frame(
-                extent,
-                uniform_len,
-                uniform_len,
-                0..uniform_len,
-                row_pitch,
-                limits.uniform_offset_alignment,
-                sampled_target,
-            )
-            .map_err(|error| self.observe_forward_error("frame planning", error))?;
-            let allocation_bytes = frame_plan
-                .upload_desc
-                .size
-                .saturating_add(frame_plan.uniform_desc.size)
-                .saturating_add(frame_plan.readback_desc.size);
-            let (buffers, upload) = ForwardFrameBuffers::allocate_planned(&self.device, frame_plan)
-                .map_err(|error| self.observe_forward_error("frame allocation", error))?;
-            (Some(buffers), None, upload, 3, allocation_bytes, 1)
-        };
-        match (&mut offscreen_frame, &mut surface_frame) {
-            (Some(frame), None) => frame.depth = depth,
-            (None, Some(frame)) => frame.depth = depth,
-            _ => return Err(Error::InvalidState.into()),
+        let allocated = self.allocate_prepared_forward_frame(
+            slot,
+            extent,
+            uniform_len,
+            row_pitch,
+            limits.uniform_offset_alignment,
+            surface.is_some(),
+            sampled_target,
+            attachments.as_ref(),
+        )?;
+        let mut offscreen_frame = allocated.offscreen;
+        let mut surface_frame = allocated.surface;
+        let uniform_upload = allocated.uniform_upload;
+        let frame_buffer_allocations = allocated.buffers;
+        let frame_buffer_allocation_bytes = allocated.bytes;
+        let frame_texture_allocations = allocated.textures;
+        if !borrowed_attachments {
+            match (&mut offscreen_frame, &mut surface_frame) {
+                (Some(frame), None) => frame.depth = depth,
+                (None, Some(frame)) => frame.depth = depth,
+                _ => return Err(Error::InvalidState.into()),
+            }
         }
         let frame_uniform = match (&offscreen_frame, &surface_frame) {
             (Some(buffers), None) => &buffers.uniform,
@@ -575,13 +560,12 @@ where
             topology,
             batch_stats,
             preparation_elapsed_ns,
-            buffer_allocations: resident_buffer_allocations
-                .saturating_add(frame_buffer_allocations),
-            buffer_allocation_bytes: resident_buffer_allocation_bytes
-                .saturating_add(frame_buffer_allocation_bytes),
-            texture_allocations: resident_texture_allocations
-                .saturating_add(frame_texture_allocations)
-                .saturating_add(u64::from(depth_mode != crate::ForwardDepthMode::Disabled)),
+            allocations: resident_allocations.with_frame(
+                frame_buffer_allocations,
+                frame_buffer_allocation_bytes,
+                frame_texture_allocations,
+                !borrowed_attachments && depth_mode != crate::ForwardDepthMode::Disabled,
+            ),
         })
     }
 }

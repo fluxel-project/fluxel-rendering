@@ -23,6 +23,14 @@ pub(super) fn opaque_triangles() -> PrimitiveState {
         conservative: false,
     }
 }
+
+/// Triangle state for one material draw after its transform-specific winding
+/// and Material-owned cull policy have been selected.
+pub(super) fn surface_triangles(surface: crate::renderer::RasterSurfaceState) -> PrimitiveState {
+    let mut primitive = opaque_triangles();
+    surface.apply_to(&mut primitive);
+    primitive
+}
 pub(super) fn single_sample() -> MultisampleState {
     MultisampleState {
         count: 1,

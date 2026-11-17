@@ -2,10 +2,7 @@
 
 use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_rhi::api::{VertexFormat, VertexStepMode};
-use fluxel_shader::{
-    BindingDeclaration, BindingKind, EntryPoint, ScalarType, ShaderCompositionRequest, ShaderStage,
-    SourceUnit, VertexInputDeclaration, VertexType,
-};
+use fluxel_shader::ShaderCompositionRequest;
 
 use crate::{RenderTransform, SceneAssetRef};
 
@@ -13,6 +10,7 @@ use super::{
     ColorTextureData, ForwardDrawSource, ForwardPreparationError, GeometryData, GeometryLayout,
     PreparedMaterial,
 };
+use crate::preparation::forward_templates;
 
 pub(super) fn resolve_asset<K: AssetKind, V>(
     snapshots: &[AssetSnapshot<K, V>],
@@ -43,13 +41,6 @@ pub(super) fn validate_texture(
     let max_mip_levels = 1 + width.max(height).ilog2();
     if texture.mip_levels > max_mip_levels {
         return Err(ForwardPreparationError::InvalidTexture { source });
-    }
-    if texture.encoding == super::TextureEncoding::Srgb && texture.mip_levels > 1 {
-        return Err(ForwardPreparationError::UnsupportedTextureMipGeneration {
-            source,
-            encoding: texture.encoding,
-            mip_levels: texture.mip_levels,
-        });
     }
     let Some(bytes) = u64::from(width)
         .checked_mul(u64::from(height))
@@ -138,69 +129,9 @@ pub(super) enum ForwardTemplate {
 impl ForwardTemplate {
     pub(super) fn request(self) -> ShaderCompositionRequest {
         match self {
-            Self::Position => ShaderCompositionRequest::new(vec![SourceUnit::new(
-                "forward-template-position",
-                POSITION_TEMPLATE,
-            )])
-            .with_entry_point(EntryPoint::new("forward_vs", ShaderStage::Vertex))
-            .with_entry_point(EntryPoint::new("forward_fs", ShaderStage::Fragment))
-            .with_binding(
-                BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                    .with_visibility([ShaderStage::Vertex]),
-            )
-            .with_vertex_input(VertexInputDeclaration::new(
-                "POSITION",
-                0,
-                VertexType::Vec3(ScalarType::F32),
-            ))
-            .with_static_option("forward.vertex_inputs", "position"),
-            Self::PositionUv0 => ShaderCompositionRequest::new(vec![SourceUnit::new(
-                "forward-template-position-uv0",
-                POSITION_UV0_TEMPLATE,
-            )])
-            .with_entry_point(EntryPoint::new("forward_vs", ShaderStage::Vertex))
-            .with_entry_point(EntryPoint::new("forward_fs", ShaderStage::Fragment))
-            .with_binding(
-                BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                    .with_visibility([ShaderStage::Vertex]),
-            )
-            .with_vertex_input(VertexInputDeclaration::new(
-                "POSITION",
-                0,
-                VertexType::Vec3(ScalarType::F32),
-            ))
-            .with_vertex_input(VertexInputDeclaration::new(
-                "UV0",
-                1,
-                VertexType::Vec2(ScalarType::F32),
-            ))
-            .with_static_option("forward.vertex_inputs", "position-uv0"),
-            Self::PositionUvColor => ShaderCompositionRequest::new(vec![SourceUnit::new(
-                "forward-template-position-uv-color",
-                POSITION_UV_COLOR_TEMPLATE,
-            )])
-            .with_entry_point(EntryPoint::new("forward_vs", ShaderStage::Vertex))
-            .with_entry_point(EntryPoint::new("forward_fs", ShaderStage::Fragment))
-            .with_binding(
-                BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                    .with_visibility([ShaderStage::Vertex]),
-            )
-            .with_vertex_input(VertexInputDeclaration::new(
-                "POSITION",
-                0,
-                VertexType::Vec3(ScalarType::F32),
-            ))
-            .with_vertex_input(VertexInputDeclaration::new(
-                "UV",
-                1,
-                VertexType::Vec2(ScalarType::F32),
-            ))
-            .with_vertex_input(VertexInputDeclaration::new(
-                "COLOR",
-                2,
-                VertexType::Vec4(ScalarType::F32),
-            ))
-            .with_static_option("forward.vertex_inputs", "position-uv-color"),
+            Self::Position => forward_templates::position_request(),
+            Self::PositionUv0 => forward_templates::position_uv0_request(),
+            Self::PositionUvColor => forward_templates::position_uv_color_request(),
         }
     }
 }
@@ -295,77 +226,3 @@ fn forward_format_size(format: VertexFormat) -> Option<u64> {
         .contains(&components)
         .then_some(bytes * u64::from(components))
 }
-
-const POSITION_TEMPLATE: &str = r#"
-@group(1) @binding(0) var<uniform> forward_clip_from_local: mat4x4<f32>;
-
-struct ForwardVertexOutput {
-    @builtin(position) position: vec4<f32>,
-};
-
-@vertex
-fn forward_vs(@location(0) forward_position: vec3<f32>) -> ForwardVertexOutput {
-    var output: ForwardVertexOutput;
-    output.position = forward_clip_from_local * vec4<f32>(forward_position, 1.0);
-    return output;
-}
-
-@fragment
-fn forward_fs() -> @location(0) vec4<f32> {
-    return evaluate_material();
-}
-"#;
-
-const POSITION_UV0_TEMPLATE: &str = r#"
-@group(1) @binding(0) var<uniform> forward_clip_from_local: mat4x4<f32>;
-
-struct ForwardUv0VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv0: vec2<f32>,
-};
-
-@vertex
-fn forward_vs(
-    @location(0) forward_position: vec3<f32>,
-    @location(1) forward_uv0: vec2<f32>,
-) -> ForwardUv0VertexOutput {
-    var output: ForwardUv0VertexOutput;
-    output.position = forward_clip_from_local * vec4<f32>(forward_position, 1.0);
-    output.uv0 = forward_uv0;
-    return output;
-}
-
-@fragment
-fn forward_fs(input: ForwardUv0VertexOutput) -> @location(0) vec4<f32> {
-    return evaluate_material_uv0(input.uv0);
-}
-"#;
-
-const POSITION_UV_COLOR_TEMPLATE: &str = r#"
-@group(1) @binding(0) var<uniform> forward_clip_from_local: mat4x4<f32>;
-
-struct ForwardVertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-@vertex
-fn forward_vs(
-    @location(0) forward_position: vec3<f32>,
-    @location(1) forward_uv: vec2<f32>,
-    @location(2) forward_color: vec4<f32>,
-) -> ForwardVertexOutput {
-    var output: ForwardVertexOutput;
-    output.position = forward_clip_from_local * vec4<f32>(forward_position, 1.0);
-    output.uv = forward_uv;
-    output.color = forward_color;
-    return output;
-}
-
-@fragment
-fn forward_fs(input: ForwardVertexOutput) -> @location(0) vec4<f32> {
-    let uv_factor = input.uv.x * 0.0 + 1.0;
-    return evaluate_material() * input.color * uv_factor;
-}
-"#;

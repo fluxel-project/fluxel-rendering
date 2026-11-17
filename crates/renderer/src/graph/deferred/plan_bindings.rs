@@ -3,10 +3,12 @@
 use super::*;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
-    pub(super) fn bindings<'a>(
+    /// Collects exact ordinary Deferred owners so a combined Graph may append
+    /// its own declared overlay owners before constructing FrameBindings.
+    pub(super) fn collect_bindings<'a>(
         &'a self,
         frame: &'a DeferredFrame<B>,
-    ) -> Result<FrameBindings<'a, B>> {
+    ) -> Result<(Vec<BoundBuffer<'a, B>>, Vec<BoundTexture<'a, B>>)> {
         super::validate_resident_texture_devices(&frame.resident, self.id.device)?;
         let uses_buffer = |slot| {
             self.execution
@@ -31,14 +33,16 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 &frame.frame.uniform_desc,
                 frame.frame.uniform_incoming,
             ),
-            BoundBuffer::new(
-                self.readback_slot.ok_or(Error::InvalidState)?,
+        ];
+        if let Some(slot) = self.readback_slot.filter(|slot| uses_buffer(*slot)) {
+            buffers.push(BoundBuffer::new(
+                slot,
                 frame.frame.readback_instance,
                 &frame.frame.readback,
                 &frame.frame.readback_desc,
                 frame.frame.readback_incoming,
-            ),
-        ];
+            ));
+        }
         if uses_buffer(self.resident_upload_slot) {
             buffers.push(BoundBuffer::new(
                 self.resident_upload_slot,
@@ -207,15 +211,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     frame.scene_color.incoming,
                     frame.scene_color.layout,
                 )))
-                .chain(std::iter::once(BoundTexture::new(
-                    self.target_slot.ok_or(Error::InvalidState)?,
-                    frame.frame.target_instance,
-                    &frame.frame.target,
-                    &frame.frame.target_desc,
-                    frame.frame.target_incoming,
-                    frame.frame.target_layout,
-                )))
+                .chain(self.target_slot.into_iter().map(|slot| {
+                    BoundTexture::new(
+                        slot,
+                        frame.frame.target_instance,
+                        &frame.frame.target,
+                        &frame.frame.target_desc,
+                        frame.frame.target_incoming,
+                        frame.frame.target_layout,
+                    )
+                }))
                 .collect();
+        Ok((buffers, textures))
+    }
+
+    pub(super) fn bindings<'a>(
+        &'a self,
+        frame: &'a DeferredFrame<B>,
+    ) -> Result<FrameBindings<'a, B>> {
+        let (buffers, textures) = self.collect_bindings(frame)?;
         FrameBindings::new(&self.execution, self.id.device, buffers, textures)
             .map_err(binding_error)
     }

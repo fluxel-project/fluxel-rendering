@@ -2,7 +2,7 @@
 use super::super::mip_generation::MipGenerationPass;
 use super::capture_declaration::{
     capture_texture_slots, declare_mip_generations, declare_raster, declare_upload, import_frame,
-    same_texture_owner_desc, validate_spec,
+    validate_spec,
 };
 use super::*;
 use fluxel_rhi::api::TextureDimension;
@@ -74,20 +74,7 @@ where
         return Err(Error::InvalidState.into());
     }
     let receiver_capture = capture_texture_slots(&receiver_spec)?;
-    let alias = receiver_capture
-        .iter()
-        .position(|capture| *capture)
-        .and_then(|index| receiver.resident.textures.get(index))
-        .ok_or(Error::InvalidState)?;
-    if alias.instance != capture.frame.target_instance
-        || alias.texture.device() != capture.frame.target.device()
-        || alias.view.device() != capture.frame.target_view.device()
-        || !same_texture_owner_desc(&alias.desc, &capture.frame.target_desc)
-        || alias.incoming != capture.frame.target_incoming
-        || alias.layout != capture.frame.target_layout
-    {
-        return Err(Error::InvalidState.into());
-    }
+    super::capture_bindings::validate_capture_alias(capture, receiver)?;
     validate_spec(device, &capture_spec, capture_topology, false)?;
     validate_spec(device, &receiver_spec, receiver_topology, true)?;
     let lane = device

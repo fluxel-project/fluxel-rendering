@@ -1,5 +1,9 @@
 //! Checked pass resources and portable lowering of compiled graph contracts.
 
+#[path = "execution_owner.rs"]
+mod execution_owner;
+pub(in crate::graph) use execution_owner::{merge_buffer_bindings, merge_texture_bindings};
+
 use std::{ops::Range, sync::Arc};
 
 use fluxel_rhi::{

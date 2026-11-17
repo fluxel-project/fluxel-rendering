@@ -16,6 +16,17 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         id: PlanId,
         declaration: DeferredDeclaration,
     ) -> Result<Self> {
+        Self::compile_with_composition(device, id, declaration, &[])
+    }
+
+    /// Compiles the existing Deferred Graph with real composition passes
+    /// authored between lighting and the final scene-color composite.
+    pub(super) fn compile_with_composition(
+        device: &Device<B>,
+        id: PlanId,
+        declaration: DeferredDeclaration,
+        composition_passes: &[GraphPass],
+    ) -> Result<Self> {
         if id.device != device.id() || declaration.lane.device != device.id() {
             return Err(Error::WrongDevice);
         }
@@ -31,6 +42,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             expected.push(pass);
         }
         expected.extend([declaration.geometry_pass, declaration.lighting_pass]);
+        expected.extend_from_slice(composition_passes);
         if let Some(pass) = declaration.composite_pass {
             expected.push(pass);
         }
@@ -41,6 +53,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             return Err(Error::InvalidState);
         }
         let (submission, output) = match declaration.output {
+            DeferredOutputDeclaration::Capture => return Err(Error::InvalidState),
             DeferredOutputDeclaration::Offscreen { readback_pass } => (
                 execution.submission(device, id, declaration.lane)?,
                 DeferredOutputPlan::Offscreen { readback_pass },
@@ -83,6 +96,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             deformation_pass: declaration.deformation_pass,
             geometry_pass: declaration.geometry_pass,
             lighting_pass: declaration.lighting_pass,
+            composition_passes: composition_passes.to_vec(),
             composite_pass: declaration.composite_pass,
             output,
             resident_upload_slot: declaration.resident_upload_slot,
@@ -153,9 +167,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 != declaration.deformation_pass.map(|pass| pass.1)
             || self.geometry_pass.1 != declaration.geometry_pass.1
             || self.lighting_pass.1 != declaration.lighting_pass.1
+            || !self.composition_passes.is_empty()
             || self.composite_pass.map(|pass| pass.1)
                 != declaration.composite_pass.map(|pass| pass.1)
             || !match (self.output, declaration.output) {
+                (DeferredOutputPlan::Capture, DeferredOutputDeclaration::Capture) => true,
                 (
                     DeferredOutputPlan::Offscreen {
                         readback_pass: left,
@@ -267,6 +283,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
 
     pub(crate) fn readback_step(&self) -> StepId {
         match self.output {
+            DeferredOutputPlan::Capture => self.lighting_step(),
             DeferredOutputPlan::Offscreen { readback_pass } => StepId {
                 plan: self.id,
                 index: u32::try_from(readback_pass.1).expect("graph pass index fits StepId"),
@@ -288,7 +305,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     pub(crate) fn present_step(&self) -> Result<StepId> {
         match self.output {
             DeferredOutputPlan::Surface { present_step } => Ok(present_step),
-            DeferredOutputPlan::Offscreen { .. } => Err(Error::InvalidState),
+            DeferredOutputPlan::Capture | DeferredOutputPlan::Offscreen { .. } => {
+                Err(Error::InvalidState)
+            }
         }
     }
 
@@ -326,6 +345,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     /// declaration for this frame. This validates the concrete owners and
     /// ranges against that cached Graph before mapping or recording.
     pub(crate) fn validate_frame(&self, frame: &DeferredFrame<B>) -> Result<()> {
+        self.validate_frame_facts(frame)?;
+        self.bindings(frame).map(|_| ())
+    }
+
+    /// Validates owner and descriptor facts without constructing bindings.
+    /// Combined capture validates both namespaces before binding their single
+    /// compiled Graph at the recording boundary.
+    pub(super) fn validate_frame_facts(&self, frame: &DeferredFrame<B>) -> Result<()> {
         super::validate_resident_texture_devices(&frame.resident, self.id.device)?;
         if frame.draws.is_empty()
             || frame.resident.device != self.id.device
@@ -406,13 +433,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 )
             })
             || self.effects_slot.is_some() != frame.effects.is_some()
-            || !matches_final_target_template(&frame.frame.target_desc, self.extent)
+            || (!matches!(self.output, DeferredOutputPlan::Capture)
+                && !matches_final_target_template(&frame.frame.target_desc, self.extent))
             || !matches_gbuffer_template(
                 &frame.scene_color.desc,
                 self.extent,
                 fluxel_rhi::api::TextureFormat::Rgba8Unorm,
             )
-            || self.composite_pass.is_none()
+            || (!matches!(self.output, DeferredOutputPlan::Capture)
+                && self.composite_pass.is_none())
             || self.scene_color_slot.is_none()
         {
             return Err(Error::InvalidState);
@@ -422,7 +451,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         for draw in &frame.draws {
             draw_accesses(frame, draw)?;
         }
-        self.bindings(frame).map(|_| ())
+        Ok(())
     }
 
     pub(crate) fn completion(&self, outcome: &Outcome<B>) -> Result<CompletionPoint<B>>
@@ -435,6 +464,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             expected.push(step);
         }
         expected.extend([self.geometry_step(), self.lighting_step()]);
+        expected.extend(self.composition_passes.iter().map(|pass| StepId {
+            plan: self.id,
+            index: u32::try_from(pass.1).expect("graph pass index fits StepId"),
+        }));
         if self.composite_pass.is_some() {
             expected.push(self.composite_step());
         }
@@ -471,12 +504,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(step) = self.deformation_step() {
             expected.push(step);
         }
-        expected.extend([
-            self.geometry_step(),
-            self.lighting_step(),
-            self.composite_step(),
-            present,
-        ]);
+        expected.extend([self.geometry_step(), self.lighting_step()]);
+        expected.extend(self.composition_passes.iter().map(|pass| StepId {
+            plan: self.id,
+            index: u32::try_from(pass.1).expect("graph pass index fits StepId"),
+        }));
+        expected.extend([self.composite_step(), present]);
         let facts = outcome.facts();
         if facts.status != ExecutionStatus::Accepted
             || facts.accepted != Some(&expected)

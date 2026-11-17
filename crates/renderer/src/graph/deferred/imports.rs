@@ -1,5 +1,6 @@
 //! Concrete-owner imports for one Deferred Graph declaration.
 
+pub(super) use super::shared_imports::SharedDeferredImports;
 use super::{record_view::DeferredRecordView, *};
 use crate::graph::definition::{BufferHandle, TextureHandle};
 
@@ -29,7 +30,10 @@ pub(super) fn import<B: ResourceBackend>(
     graph: &mut GraphBuilder,
     frame: &DeferredRecordView<'_, B>,
     fresh_mip_chains: &[bool],
+    aliases: Option<&[Option<TextureHandle>]>,
+    mut shared: Option<&mut SharedDeferredImports>,
 ) -> Result<DeferredImports> {
+    super::capture_aliases::validate(&frame, aliases)?;
     let resident_upload = graph
         .import_buffer_desc(
             frame.resident.upload_desc.clone(),
@@ -49,9 +53,23 @@ pub(super) fn import<B: ResourceBackend>(
         .resident
         .streams
         .iter()
-        .map(|stream| graph.import_buffer_desc(stream.desc.clone(), stream.incoming))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| Error::InvalidState)?;
+        .enumerate()
+        .map(|(index, stream)| match shared.as_deref_mut() {
+            Some(shared) => shared.deferred_stream(
+                graph,
+                frame.resident.device,
+                stream,
+                frame
+                    .resident_upload
+                    .vertices
+                    .iter()
+                    .any(|copy| copy.stream == index),
+            ),
+            None => graph
+                .import_buffer_desc(stream.desc.clone(), stream.incoming)
+                .map_err(|_| Error::InvalidState),
+        })
+        .collect::<Result<Vec<_>>>()?;
     if fresh_mip_chains.len() != frame.resident.textures.len() {
         return Err(Error::InvalidState);
     }
@@ -60,8 +78,25 @@ pub(super) fn import<B: ResourceBackend>(
         .textures
         .iter()
         .zip(fresh_mip_chains)
-        .map(|(texture, fresh_mip_chain)| {
-            if *fresh_mip_chain {
+        .enumerate()
+        .map(|(index, (texture, fresh_mip_chain))| {
+            if let Some(alias) = aliases.and_then(|items| items[index]) {
+                return Ok(alias);
+            }
+            if let Some(shared) = shared.as_deref_mut() {
+                return shared.deferred_texture(
+                    graph,
+                    frame.resident.device,
+                    texture,
+                    frame
+                        .resident_upload
+                        .textures
+                        .iter()
+                        .any(|copy| copy.texture == index),
+                    *fresh_mip_chain,
+                );
+            }
+            (if *fresh_mip_chain {
                 graph.create_texture(texture.desc.clone())
             } else {
                 graph.import_texture_with_state(
@@ -69,10 +104,10 @@ pub(super) fn import<B: ResourceBackend>(
                     texture.incoming,
                     texture.layout,
                 )
-            }
+            })
+            .map_err(|_| Error::InvalidState)
         })
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| Error::InvalidState)?;
+        .collect::<Result<Vec<_>>>()?;
     let environment_upload = frame
         .environment
         .map(|owner| graph.import_buffer_desc(owner.upload_desc.clone(), owner.upload_incoming))

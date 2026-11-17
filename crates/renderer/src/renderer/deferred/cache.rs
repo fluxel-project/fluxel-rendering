@@ -44,8 +44,56 @@ where
         &mut self,
         work: &super::super::PendingWork<B>,
     ) {
+        if let super::super::PendingWork::DeferredCapture {
+            _producer,
+            _receiver,
+            ..
+        }
+        | super::super::PendingWork::DeferredCaptureSurface {
+            _producer,
+            _receiver,
+            ..
+        } = work
+        {
+            for frame in [_producer, _receiver] {
+                self.publish_deferred_residents(
+                    &frame.publication,
+                    frame.deformation.is_none(),
+                    &frame.resident,
+                );
+            }
+            return;
+        }
         let (publication, deformation, resident) = match work {
+            super::super::PendingWork::ForwardDeferredCapture {
+                _receiver: frame, ..
+            }
+            | super::super::PendingWork::ForwardDeferredCaptureSurface {
+                _receiver: frame, ..
+            } => (
+                &frame.publication,
+                frame.deformation.as_ref(),
+                &frame.resident,
+            ),
+            super::super::PendingWork::DeferredForwardCapture {
+                _producer: frame, ..
+            }
+            | super::super::PendingWork::DeferredForwardCaptureSurface {
+                _producer: frame, ..
+            } => (
+                &frame.publication,
+                frame.deformation.as_ref(),
+                &frame.resident,
+            ),
             super::super::PendingWork::Deferred { _frame: frame, .. } => (
+                &frame.publication,
+                frame.deformation.as_ref(),
+                &frame.resident,
+            ),
+            super::super::PendingWork::DeferredTransparent { _opaque: frame, .. }
+            | super::super::PendingWork::DeferredOit { _opaque: frame, .. }
+            | super::super::PendingWork::DeferredOitSurface { _opaque: frame, .. }
+            | super::super::PendingWork::DeferredTransparentSurface { _opaque: frame, .. } => (
                 &frame.publication,
                 frame.deformation.as_ref(),
                 &frame.resident,
@@ -57,10 +105,19 @@ where
             ),
             _ => return,
         };
+        self.publish_deferred_residents(publication, deformation.is_none(), resident);
+    }
+
+    fn publish_deferred_residents(
+        &mut self,
+        publication: &crate::residency::DeferredPublication,
+        undeformed: bool,
+        resident: &crate::residency::ForwardResidentBuffers<B>,
+    ) {
         // Deformation reads its fresh packed source and product. The otherwise
         // unused original resident stream is not necessarily in vertex-read
         // state, so it must not be published with that outgoing-state promise.
-        if deformation.is_none() {
+        if undeformed {
             for (key, mapping) in &publication.geometry {
                 let streams: Option<Vec<_>> = mapping
                     .iter()

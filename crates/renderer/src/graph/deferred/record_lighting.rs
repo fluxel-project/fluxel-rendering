@@ -11,8 +11,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     where
         B: RasterBackend,
     {
-        let scene_color_slot = self.scene_color_slot.ok_or(Error::InvalidState)?;
         let bindings = self.bindings(frame)?;
+        self.record_lighting_with_bindings(encoder, frame, &bindings)
+    }
+
+    pub(super) fn record_lighting_with_bindings(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredFrame<B>,
+        bindings: &FrameBindings<'_, B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        let scene_color_slot = self.scene_color_slot.ok_or(Error::InvalidState)?;
         let pass = bindings.pass(self.lighting_pass)?;
         for (slot, range) in [
             (self.gbuffer_slots[0], whole_color()),

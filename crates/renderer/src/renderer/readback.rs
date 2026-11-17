@@ -13,11 +13,32 @@ where
 {
     fn completion(&self) -> Result<fluxel_rhi::api::CompletionPoint<B>, Error> {
         match &self.workload {
+            PendingWork::ForwardDeferredCapture { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::ForwardDeferredCaptureSurface { plan, .. } => {
+                plan.surface_completion(&self.outcome)
+            }
+            PendingWork::DeferredForwardCapture { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::DeferredForwardCaptureSurface { plan, .. } => {
+                plan.surface_completion(&self.outcome)
+            }
+            PendingWork::DeferredCapture { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::DeferredCaptureSurface { plan, .. } => {
+                plan.surface_completion(&self.outcome)
+            }
             PendingWork::Deferred { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::DeferredTransparent { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::DeferredOit { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::DeferredOitSurface { plan, .. } => plan.surface_completion(&self.outcome),
+            PendingWork::DeferredTransparentSurface { plan, .. } => {
+                plan.surface_completion(&self.outcome)
+            }
             PendingWork::DeferredSurface { plan, .. } => plan.surface_completion(&self.outcome),
             PendingWork::Forward { plan, .. } => plan.completion(&self.outcome),
             PendingWork::ForwardSurface { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::ForwardOitSurface { plan, .. } => plan.surface_completion(&self.outcome),
             PendingWork::CaptureForward { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::CaptureOit { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::CaptureOitSurface { plan, .. } => plan.surface_completion(&self.outcome),
             PendingWork::CaptureForwardSurface { plan, .. } => {
                 plan.surface_completion(&self.outcome)
             }
@@ -32,11 +53,29 @@ where
         match &self.workload {
             PendingWork::Deferred {
                 extent, row_pitch, ..
+            }
+            | PendingWork::DeferredCapture {
+                extent, row_pitch, ..
+            }
+            | PendingWork::DeferredForwardCapture {
+                extent, row_pitch, ..
+            }
+            | PendingWork::ForwardDeferredCapture {
+                extent, row_pitch, ..
+            }
+            | PendingWork::DeferredTransparent {
+                extent, row_pitch, ..
+            }
+            | PendingWork::DeferredOit {
+                extent, row_pitch, ..
             } => super::strip_raster_padding(bytes, *extent, *row_pitch),
             PendingWork::Forward {
                 extent, row_pitch, ..
             } => super::strip_raster_padding(bytes, *extent, *row_pitch),
             PendingWork::CaptureForward {
+                extent, row_pitch, ..
+            }
+            | PendingWork::CaptureOit {
                 extent, row_pitch, ..
             } => super::strip_raster_padding(bytes, *extent, *row_pitch),
             PendingWork::Copy { .. } | PendingWork::Compute { .. } => Ok(bytes),
@@ -47,8 +86,15 @@ where
                 extent, row_pitch, ..
             } => super::strip_raster_padding(bytes, *extent, *row_pitch),
             PendingWork::SurfaceRaster { .. }
+            | PendingWork::ForwardOitSurface { .. }
             | PendingWork::ForwardSurface { .. }
+            | PendingWork::DeferredOitSurface { .. }
+            | PendingWork::DeferredCaptureSurface { .. }
+            | PendingWork::DeferredForwardCaptureSurface { .. }
+            | PendingWork::ForwardDeferredCaptureSurface { .. }
+            | PendingWork::DeferredTransparentSurface { .. }
             | PendingWork::DeferredSurface { .. }
+            | PendingWork::CaptureOitSurface { .. }
             | PendingWork::CaptureForwardSurface { .. } => Err(RendererError::RetainedExecution {
                 status: self.outcome.facts().status,
                 recording_error: self.recording_error.clone(),
@@ -146,8 +192,15 @@ where
             if !matches!(
                 pending.workload,
                 PendingWork::SurfaceRaster { .. }
+                    | PendingWork::ForwardOitSurface { .. }
                     | PendingWork::ForwardSurface { .. }
+                    | PendingWork::DeferredOitSurface { .. }
+                    | PendingWork::DeferredCaptureSurface { .. }
+                    | PendingWork::DeferredForwardCaptureSurface { .. }
+                    | PendingWork::ForwardDeferredCaptureSurface { .. }
+                    | PendingWork::DeferredTransparentSurface { .. }
                     | PendingWork::DeferredSurface { .. }
+                    | PendingWork::CaptureOitSurface { .. }
                     | PendingWork::CaptureForwardSurface { .. }
             ) {
                 return Err(RendererError::StaleSubmission);
@@ -177,8 +230,15 @@ where
         if !matches!(
             pending.workload,
             PendingWork::SurfaceRaster { .. }
+                | PendingWork::ForwardOitSurface { .. }
                 | PendingWork::ForwardSurface { .. }
+                | PendingWork::DeferredOitSurface { .. }
+                | PendingWork::DeferredCaptureSurface { .. }
+                | PendingWork::DeferredForwardCaptureSurface { .. }
+                | PendingWork::ForwardDeferredCaptureSurface { .. }
+                | PendingWork::DeferredTransparentSurface { .. }
                 | PendingWork::DeferredSurface { .. }
+                | PendingWork::CaptureOitSurface { .. }
                 | PendingWork::CaptureForwardSurface { .. }
         ) {
             self.slots[submission.slot] = Some(pending);

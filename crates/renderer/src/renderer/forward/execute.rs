@@ -290,6 +290,7 @@ where
                 (outcome, recorded),
                 super::PendingWork::Forward {
                     _frame: Box::new(frame),
+                    _oit: None,
                     publication,
                     plan,
                     extent,

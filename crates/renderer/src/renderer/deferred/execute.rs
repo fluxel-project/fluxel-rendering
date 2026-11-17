@@ -159,7 +159,7 @@ where
         Ok(submission)
     }
 
-    async fn write_deferred_upload(
+    pub(super) async fn write_deferred_upload(
         &mut self,
         buffer: &Buffer<B>,
         bytes: &[u8],

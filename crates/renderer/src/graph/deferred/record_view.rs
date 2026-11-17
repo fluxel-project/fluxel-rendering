@@ -99,6 +99,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
         }
         if self.draws.iter().any(|draw| {
             draw.textures.is_empty()
+                || draw.capture_textures.len() != draw.textures.len()
                 || draw
                     .textures
                     .iter()

@@ -1,5 +1,35 @@
 //! Bind both frame namespaces to their actual owners, with one capture target.
 use super::*;
+use crate::graph::ResourceInstanceId;
+use fluxel_rhi::api::{Texture, TextureView};
+
+/// Borrowed actual producer product used by capture alias validation.
+///
+/// It carries Graph instance/state facts alongside native handles; cloned RHI
+/// handles are therefore accepted when they name the same actual product.
+pub(super) struct CaptureProductOwner<'a, B: ResourceBackend> {
+    pub(super) texture: &'a Texture<B>,
+    pub(super) view: &'a TextureView<B>,
+    pub(super) desc: &'a TextureDesc,
+    pub(super) instance: ResourceInstanceId,
+    pub(super) incoming: TextureUses,
+    pub(super) layout: ImageLayout,
+    pub(super) extent: [u32; 2],
+}
+
+impl<'a, B: ResourceBackend> CaptureProductOwner<'a, B> {
+    pub(super) fn from_forward_frame(frame: &'a ForwardFrame<B>) -> Self {
+        Self {
+            texture: &frame.frame.target,
+            view: &frame.frame.target_view,
+            desc: &frame.frame.target_desc,
+            instance: frame.frame.target_instance,
+            incoming: frame.frame.target_incoming,
+            layout: frame.frame.target_layout,
+            extent: frame.extent,
+        }
+    }
+}
 
 impl<B: ResourceBackend> CaptureForwardPlan<B> {
     pub(crate) fn validate_frames(
@@ -59,8 +89,20 @@ pub(super) fn validate_capture_alias<B: ResourceBackend>(
     capture: &ForwardFrame<B>,
     receiver: &ForwardFrame<B>,
 ) -> Result<()> {
+    validate_capture_product_alias(&CaptureProductOwner::from_forward_frame(capture), receiver)
+}
+
+/// Validates receiver aliases against a real producer product (ordinary or
+/// OIT final output) without requiring a CPU-uploaded copy.
+pub(super) fn validate_capture_product_alias<B: ResourceBackend>(
+    product: &CaptureProductOwner<'_, B>,
+    receiver: &ForwardFrame<B>,
+) -> Result<()> {
     let expected =
         capture_declaration::capture_texture_slots(&ForwardGraphSpec::from_frame(receiver)?)?;
+    if receiver.resident.textures.len() != expected.len() {
+        return Err(Error::InvalidState);
+    }
     if receiver
         .resident_upload
         .textures
@@ -70,23 +112,20 @@ pub(super) fn validate_capture_alias<B: ResourceBackend>(
             .resident
             .textures
             .iter()
-            .zip(expected)
+            .zip(expected.iter().copied())
             .any(|(alias, capture_texture)| {
                 capture_texture
-                    && (alias.instance != capture.frame.target_instance
-                        || alias.texture.device() != capture.frame.target.device()
-                        || alias.view.device() != capture.frame.target_view.device()
-                        || !capture_declaration::same_texture_owner_desc(
-                            &alias.desc,
-                            &capture.frame.target_desc,
-                        )
-                        || alias.incoming != capture.frame.target_incoming
-                        || alias.layout != capture.frame.target_layout
+                    && (alias.instance != product.instance
+                        || alias.texture.device() != product.texture.device()
+                        || alias.view.device() != product.view.device()
+                        || !capture_declaration::same_texture_owner_desc(&alias.desc, product.desc)
+                        || alias.incoming != product.incoming
+                        || alias.layout != product.layout
                         || !alias.desc.usage.contains(TextureUsage::TEXTURE_BINDING))
-                    || (!capture_texture && alias.instance == capture.frame.target_instance)
+                    || (!capture_texture && alias.instance == product.instance)
             })
-        || capture.frame.target_instance == receiver.frame.target_instance
-        || capture.extent != receiver.extent
+        || product.instance == receiver.frame.target_instance
+        || product.extent != receiver.extent
     {
         return Err(Error::InvalidState);
     }

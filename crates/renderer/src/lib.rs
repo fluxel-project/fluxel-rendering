@@ -26,11 +26,11 @@ pub use feature::{
 };
 pub use pipeline::{
     BoundsVisibility, ClearForwardPass, DeferredCpuPipeline, DeferredDeformationPass,
-    DeferredGeometryPass, DeferredLightingPass, DeferredPhaseContext, ForwardCompositionContext,
-    ForwardCompositionPass, ForwardCpuPipeline, ForwardDepthMode, ForwardFeaturePass,
-    ForwardPairCompositionContext, ForwardPairCompositionPass, ForwardPhaseContext, FramePipeline,
-    FrameTopology, OpaqueForwardPass, PipelineError,
-    PreparedFrame, VisibilityProvider,
+    DeferredGeometryPass, DeferredLightingPass, DeferredPhaseContext, DualDepthPeelingConfig,
+    ForwardCompositionContext, ForwardCompositionPass, ForwardCpuPipeline, ForwardDepthMode,
+    ForwardFeaturePass, ForwardPairCompositionContext, ForwardPairCompositionPass,
+    ForwardPhaseContext, FramePipeline, FrameTopology, OpaqueForwardPass, PipelineError,
+    PreparedFrame, SortedForwardPass, VisibilityProvider,
 };
 pub use preparation::{
     ColorTextureAsset, ColorTextureData, EnvironmentIrradianceAsset, EnvironmentIrradianceData,

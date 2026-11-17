@@ -71,6 +71,19 @@ impl ForwardReadState {
         self.scopes_pending_finish += 1;
         Ok(selected)
     }
+    pub(super) fn scope<'scope, 'builder>(
+        &'scope mut self,
+        pass: &'scope mut crate::graph::definition::PassBuilder<'builder>,
+        indices: &[usize],
+    ) -> std::result::Result<ForwardReadScope<'scope, 'builder>, ()> {
+        let indices = self.select(indices)?;
+        Ok(ForwardReadScope {
+            pass,
+            state: self,
+            indices,
+            declared: 0,
+        })
+    }
     pub(super) fn read_vertex_streams_for(
         &mut self,
         pass: &mut crate::graph::definition::PassBuilder<'_>,
@@ -181,13 +194,7 @@ impl<'pass, 'builder, 'frame, B: ResourceBackend> OpaqueForwardPass<'pass, 'buil
         &'scope mut self,
         indices: &[usize],
     ) -> std::result::Result<ForwardReadScope<'scope, 'builder>, ()> {
-        let selected = self.reads.select(indices)?;
-        Ok(ForwardReadScope {
-            pass: &mut *self.pass,
-            state: &mut self.reads,
-            indices: selected,
-            declared: 0,
-        })
+        self.reads.scope(&mut *self.pass, indices)
     }
 }
 

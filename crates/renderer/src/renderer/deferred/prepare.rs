@@ -40,9 +40,20 @@ where
         &mut self,
         inputs: &[ForwardDrawInput],
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
+        self.prepare_deferred_frames_with_capture(inputs, None)
+            .await
+    }
+
+    pub(super) async fn prepare_deferred_frames_with_capture(
+        &mut self,
+        inputs: &[ForwardDrawInput],
+        capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
+    ) -> std::result::Result<DeferredFrame<B>, RendererError> {
         self.ensure_open()?;
+        crate::renderer::require_opaque_or_mask(inputs)
+            .map_err(|error| self.observe_rhi_error(error))?;
         let (prepared, pbr, effects) = super::scene_prepare::materials(inputs)?;
-        self.prepare_deferred_resources(inputs, &prepared, pbr, effects)
+        self.prepare_deferred_resources(inputs, &prepared, pbr, effects, capture)
             .await
     }
 
@@ -52,7 +63,14 @@ where
         prepared: &[PreparedMaterial],
         pbr: bool,
         effects: bool,
+        capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
+        super::resident_assembly::validate_capture_inputs(
+            inputs,
+            prepared,
+            capture,
+            self.device.id(),
+        )?;
         let input = inputs.first().ok_or(Error::InvalidState)?;
         let specular = if pbr {
             self.environment_specular
@@ -119,12 +137,17 @@ where
         if let Support::Unsupported(reason) = self.device.texture_support(&frame_plan.target_desc) {
             return Err(self.observe_rhi_error(Error::Unsupported(reason)));
         }
-        self.retain_deferred_gbuffer_programs(prepared, pbr, effects);
+        self.retain_deferred_gbuffer_programs(inputs, prepared, pbr, effects);
         let mut geometry_programs = Vec::with_capacity(prepared.len());
-        for material in prepared {
+        for (input, material) in inputs.iter().zip(prepared) {
             geometry_programs.push(
-                self.deferred_gbuffer_program(material, pbr, effects)
-                    .await?,
+                self.deferred_gbuffer_program(
+                    material,
+                    pbr,
+                    effects,
+                    crate::renderer::raster_surface_state(input),
+                )
+                .await?,
             );
         }
         let environment = if pbr {
@@ -161,9 +184,10 @@ where
             publication,
             mappings,
             textures: draw_textures,
+            capture_textures: draw_capture_textures,
             buffer_allocations: resident_buffers,
             texture_allocations: resident_textures,
-        } = self.assemble_deferred_residents(inputs, prepared)?;
+        } = self.assemble_deferred_residents(inputs, prepared, capture)?;
 
         // Reuse only owners that were retained after both GPU completion and
         // successful CPU readback. The compatibility check reads the saved
@@ -221,6 +245,7 @@ where
             &uniforms,
             &mappings,
             &draw_textures,
+            &draw_capture_textures,
             pbr,
         )
         .map_err(|error| self.observe_rhi_error(error))?;

@@ -13,6 +13,7 @@ mod forward;
 pub(crate) mod forward_fragment;
 mod forward_sampler;
 mod forward_schema;
+pub(crate) mod forward_templates;
 pub(crate) use forward_schema::{
     MaterialBindingSchema, MaterialTextureBinding, material_binding_schema,
 };
@@ -29,8 +30,9 @@ pub use forward::{
     PreparedCaptureReceiver, TextureEncoding, prepare_forward, prepare_forward_capture_receiver,
 };
 pub(crate) use forward::{
-    ForwardBatchStats, ForwardCompatibilityKey, batch_forward_draws,
-    prepare_feature_draws_with_lighting, prepare_forward_with_lighting,
+    ForwardBatchStats, ForwardCompatibilityKey, OitDrawPartition, batch_forward_draws,
+    partition_oit_draws, prepare_feature_draws_with_lighting, prepare_forward_with_lighting,
+    prepare_oit_material,
 };
 pub use forward_sources::{ForwardDrawOrder, ForwardDrawSource};
 pub(crate) use geometry_key::{VertexLayoutKey, vertex_layout_key};

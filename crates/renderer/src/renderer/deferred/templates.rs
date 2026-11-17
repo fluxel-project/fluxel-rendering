@@ -178,11 +178,13 @@ fn deferred_gbuffer_vs(@location(0) position: vec3<f32>) -> DeferredVertexOutput
 }
 
 @fragment
-fn deferred_gbuffer_fs(input: DeferredVertexOutput) -> GbufferOutput {
+fn deferred_gbuffer_fs(input: DeferredVertexOutput, @builtin(front_facing) front_facing: bool) -> GbufferOutput {
     let derivative_normal = normalize(cross(dpdx(input.local_position), dpdy(input.local_position)));
+    let material = evaluate_material();
+    if material_alpha_rejected(material.a) { discard; }
     var output: GbufferOutput;
-    output.albedo = evaluate_material();
-    output.normal = vec4<f32>(derivative_normal * 0.5 + vec3<f32>(0.5), 1.0);
+    output.albedo = vec4<f32>(material.rgb, material_output_alpha(material.a));
+    output.normal = vec4<f32>(select(derivative_normal, -derivative_normal, material_two_sided_lighting() && !front_facing) * 0.5 + vec3<f32>(0.5), 1.0);
     return output;
 }
 "#;
@@ -214,11 +216,13 @@ fn deferred_gbuffer_vs(
 }
 
 @fragment
-fn deferred_gbuffer_fs(input: DeferredUv0VertexOutput) -> GbufferOutput {
+fn deferred_gbuffer_fs(input: DeferredUv0VertexOutput, @builtin(front_facing) front_facing: bool) -> GbufferOutput {
     let derivative_normal = normalize(cross(dpdx(input.local_position), dpdy(input.local_position)));
+    let material = evaluate_material_uv0(input.uv0);
+    if material_alpha_rejected(material.a) { discard; }
     var output: GbufferOutput;
-    output.albedo = evaluate_material_uv0(input.uv0);
-    output.normal = vec4<f32>(derivative_normal * 0.5 + vec3<f32>(0.5), 1.0);
+    output.albedo = vec4<f32>(material.rgb, material_output_alpha(material.a));
+    output.normal = vec4<f32>(select(derivative_normal, -derivative_normal, material_two_sided_lighting() && !front_facing) * 0.5 + vec3<f32>(0.5), 1.0);
     return output;
 }
 "#;

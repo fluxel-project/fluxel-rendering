@@ -1,5 +1,10 @@
 //! Checked recording shared by ordinary and captured Forward frames.
 use super::*;
+#[path = "shared_raster.rs"]
+mod shared_raster;
+pub(super) use shared_raster::{
+    RasterColorSelection, RasterDepthSelection, RasterSelection, record_raster_selection,
+};
 
 pub(super) struct RecordSlots<'a> {
     pub(super) device: DeviceId,
@@ -351,176 +356,47 @@ where
 {
     validate_forward_topology(slots.topology, frame.draws.len(), frame.draw_batches.len())?;
     validate_batches(frame)?;
-    let pass = bindings.pass(pass_id)?;
-    for draw in &frame.draws {
-        validate_draw(draw, slots.stream_slots.len())?;
-        if draw.pipeline.device() != slots.device {
-            return Err(Error::WrongDevice);
-        }
-        if draw
-            .bind_groups
-            .iter()
-            .any(|group| group.group.device() != slots.device)
-        {
-            return Err(Error::WrongDevice);
-        }
-        for (stream_index, range) in draw.vertex_streams.iter().zip(draw_accesses(frame, draw)?) {
-            let slot = *slots
-                .stream_slots
-                .get(*stream_index)
-                .ok_or(Error::InvalidRange)?;
-            let Some(range) = range else {
-                continue;
-            };
-            pass.buffer(slot, range.clone(), AccessKind::Read, vertex_read_uses())?;
-        }
-        for group in &draw.bind_groups {
-            for range in &group.uniform_ranges {
-                pass.buffer(
-                    slots.uniform_slot,
-                    range.clone(),
-                    AccessKind::Read,
-                    shader_read_uses(),
-                )?;
-            }
-        }
+    if frame
+        .frame
+        .depth
+        .as_ref()
+        .is_some_and(|owner| owner.device != slots.device)
+    {
+        return Err(Error::WrongDevice);
     }
-    if frame.environment.is_some() {
-        pass.texture(
-            slots.environment_slot.ok_or(Error::InvalidState)?,
-            whole(),
-            AccessKind::Read,
-            texture_read_uses(),
-        )?;
-    }
-    if let Some(owner) = frame.specular.as_ref() {
-        owner.validate_for_sampling(slots.device)?;
-        pass.texture(
-            slots.specular_radiance_slot.ok_or(Error::InvalidState)?,
-            all_color_mips(owner.radiance.desc.mip_levels),
-            AccessKind::Read,
-            texture_read_uses(),
-        )?;
-        pass.texture(
-            slots.specular_brdf_lut_slot.ok_or(Error::InvalidState)?,
-            whole(),
-            AccessKind::Read,
-            texture_read_uses(),
-        )?;
-        pass.buffer(
-            slots
-                .specular_view_uniform_slot
-                .ok_or(Error::InvalidState)?,
-            0..112,
-            AccessKind::Read,
-            shader_read_uses(),
-        )?;
-    }
-    for draw in &frame.draws {
-        if draw.textures.is_empty() {
-            return Err(Error::InvalidRange);
-        }
-        for texture in &draw.textures {
-            pass.texture(
-                *slots
-                    .texture_slots
-                    .get(*texture)
-                    .ok_or(Error::InvalidRange)?,
-                all_color_mips(frame.resident.textures[*texture].desc.mip_levels),
-                AccessKind::Read,
-                texture_read_uses(),
-            )?;
-        }
-    }
-    pass.texture(
-        slots.target_slot,
-        whole(),
-        AccessKind::Write,
-        color_write_uses(),
-    )?;
-    let depth_stencil = match (slots.depth_slot, frame.frame.depth.as_ref()) {
+    let depth = match (slots.depth_slot, frame.frame.depth.as_ref()) {
         (None, None) => None,
-        (Some(slot), Some(owner)) => {
-            if owner.device != slots.device
-                || owner.texture.device() != slots.device
-                || owner.view.device() != slots.device
-            {
-                return Err(Error::WrongDevice);
-            }
-            pass.texture(slot, whole_depth(), AccessKind::Write, depth_write_uses())?;
-            Some(DepthStencilAttachment {
-                view: AttachmentView::Texture(&owner.view),
-                depth: Some((LoadOp::Clear(1.0), StoreOp::Discard)),
-                stencil: None,
-                depth_read_only: false,
-                stencil_read_only: true,
-            })
-        }
+        (Some(slot), Some(owner)) => Some(RasterDepthSelection {
+            slot,
+            texture: &owner.texture,
+            view: &owner.view,
+            instance: owner.instance,
+            load: LoadOp::Clear(1.0),
+            store: StoreOp::Discard,
+            read_only: false,
+            read_write: slots.topology == FrameTopology::SortedForward,
+        }),
         _ => return Err(Error::InvalidState),
     };
-    pass.transition(encoder)?;
-    let colors = [Some(ColorAttachment {
-        view: AttachmentView::Texture(&frame.frame.target_view),
-        resolve_target: None,
-        load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
-        store: StoreOp::Store,
-    })];
-    let mut raster = encoder.begin_raster(&RasterPassDesc {
-        label: Some("fluxel forward opaque"),
-        colors: &colors,
-        depth_stencil,
-        render_area: Rect {
-            x: 0,
-            y: 0,
-            width: frame.extent[0],
-            height: frame.extent[1],
+    record_raster_selection(
+        slots,
+        pass_id,
+        bindings,
+        encoder,
+        frame,
+        RasterSelection {
+            draws: 0..frame.draws.len(),
+            color: RasterColorSelection {
+                slot: slots.target_slot,
+                texture: &frame.frame.target,
+                view: &frame.frame.target_view,
+                instance: frame.frame.target_instance,
+                load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                read_write: slots.topology == FrameTopology::SortedForward,
+            },
+            depth,
         },
-        multiview_mask: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        secondary_inheritance: None,
-    })?;
-    raster.viewport(Viewport {
-        x: 0.0,
-        y: 0.0,
-        width: frame.extent[0] as f32,
-        height: frame.extent[1] as f32,
-        min_depth: 0.0,
-        max_depth: 1.0,
-    })?;
-    raster.scissor(Rect {
-        x: 0,
-        y: 0,
-        width: frame.extent[0],
-        height: frame.extent[1],
-    })?;
-    for (batch, range) in frame.draw_batches.iter().enumerate() {
-        let draws = frame.draws.get(range.clone()).ok_or(Error::InvalidRange)?;
-        let first = draws.first().ok_or(Error::InvalidRange)?;
-        raster.set_pipeline(&first.pipeline)?;
-        for draw in draws {
-            if draw.batch != batch {
-                return Err(Error::InvalidState);
-            }
-            for group in &draw.bind_groups {
-                raster.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
-            }
-            for (slot, (stream, range)) in draw
-                .vertex_streams
-                .iter()
-                .zip(&draw.vertex_ranges)
-                .enumerate()
-            {
-                raster.set_vertex_buffer(
-                    u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
-                    &frame.resident.streams[*stream].buffer,
-                    range.clone(),
-                )?;
-            }
-            raster.draw(draw.vertices.clone(), draw.instances.clone())?;
-        }
-    }
-    raster.finish()
+    )
 }
 
 pub(super) fn record_readback<B: ResourceBackend>(

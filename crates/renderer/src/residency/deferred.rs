@@ -36,6 +36,8 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
     /// Index into the frame-wide resident texture owner.
     /// Resident texture slots in `binding_schema.textures` order.
     pub(crate) textures: Vec<usize>,
+    /// Parallel logical binding facts: true selects the same-Graph capture product.
+    pub(crate) capture_textures: Vec<bool>,
     pub(crate) vertices: Range<u32>,
     pub(crate) tint_range: Range<u64>,
     pub(crate) transform_range: Range<u64>,
@@ -201,11 +203,7 @@ pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
         device.capabilities().limits.max_color_attachments,
         false,
     )?;
-    let desc = gbuffer_desc(
-        "fluxel deferred scene color",
-        extent,
-        TextureFormat::Rgba8Unorm,
-    );
+    let desc = deferred_scene_color_desc(extent);
     let support = match device.texture_support(&desc) {
         Support::Supported(support) => support,
         Support::Unsupported(reason) => return Err(Error::Unsupported(reason)),
@@ -214,6 +212,15 @@ pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
         return Err(Error::Unsupported("filterable Deferred scene-color"));
     }
     allocate_texture(device, desc, fluxel_rhi::api::TextureAspects::COLOR)
+}
+
+/// The exact descriptor used by the lighting owner and transparent admission.
+pub(crate) fn deferred_scene_color_desc(extent: [u32; 2]) -> TextureDesc {
+    gbuffer_desc(
+        "fluxel deferred scene color",
+        extent,
+        TextureFormat::Rgba8Unorm,
+    )
 }
 
 fn validate_request(extent: [u32; 2], max_color_attachments: u32, effects: bool) -> Result<()> {

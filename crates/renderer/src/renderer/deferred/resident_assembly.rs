@@ -16,6 +16,7 @@ pub(super) struct ResidentAssembly<B: ResourceBackend> {
     pub publication: DeferredPublication,
     pub mappings: Vec<Vec<usize>>,
     pub textures: Vec<Vec<usize>>,
+    pub capture_textures: Vec<Vec<bool>>,
     pub buffer_allocations: u64,
     pub texture_allocations: u64,
 }
@@ -34,12 +35,15 @@ where
         &mut self,
         inputs: &[ForwardDrawInput],
         prepared: &[PreparedMaterial],
+        capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
     ) -> Result<ResidentAssembly<B>, RendererError> {
         if inputs.len() != prepared.len() {
             return Err(Error::InvalidState.into());
         }
+        validate_capture_inputs(inputs, prepared, capture, self.device.id())?;
         let mut geometries = HashMap::new();
         let mut textures = HashMap::new();
+        let mut capture_textures = HashMap::new();
         let mut final_streams: Vec<Option<ForwardVertexStream<B>>> = Vec::new();
         let mut final_textures: Vec<Option<ForwardTexture<B>>> = Vec::new();
         let mut fresh_stream_slots = Vec::new();
@@ -48,6 +52,7 @@ where
         let mut texture_inputs = Vec::new();
         let mut mappings = Vec::new();
         let mut draw_textures = Vec::new();
+        let mut draw_capture_textures = Vec::new();
         for (input, material) in inputs.iter().zip(prepared) {
             let geometry_key = ForwardResidentCache::<B>::geometry_key(input, self.device.id());
             let mapping = if let Some(mapping) = geometries.get(&geometry_key) {
@@ -90,65 +95,96 @@ where
                     .textures
                     .len(),
             );
+            let mut draw_capture_slots = Vec::with_capacity(draw_slots.capacity());
             for texture_index in 0..input.resolved_textures().len() {
-                let texture_key =
-                    ForwardResidentCache::<B>::texture_key(input, texture_index, self.device.id())
-                        .ok_or(Error::InvalidState)?;
-                let data = input
-                    .asset_texture(texture_index)
-                    .ok_or(Error::InvalidState)?
-                    .value();
-                if crate::renderer::forward::material_requires_ordinary_sampler(material) {
-                    crate::renderer::forward::require_filterable_material_texture_with_mip_levels(
-                        &self.device,
-                        data.extent,
-                        data.encoding,
-                        data.mip_levels,
+                let (slot, is_capture) = if let Some(texture) = input.asset_texture(texture_index) {
+                    let texture_key = ForwardResidentCache::<B>::texture_key(
+                        input,
+                        texture_index,
+                        self.device.id(),
                     )
-                    .map_err(|error| self.observe_rhi_error(error))?;
-                }
-                let slot = if let Some(slot) = textures.get(&texture_key) {
-                    *slot
-                } else {
-                    let slot = final_textures.len();
-                    if let Some(cached) = self.deferred_residency.texture(texture_key) {
-                        self.deferred_stats.texture_hits =
-                            self.deferred_stats.texture_hits.saturating_add(1);
-                        final_textures.push(Some(cached));
-                    } else {
-                        let pitch = super::prepare::aligned_row(data.extent[0])?;
-                        let size = u64::from(pitch)
-                            .checked_mul(u64::from(data.extent[1]))
-                            .ok_or(Error::InvalidRange)?;
-                        if size > self.device.capabilities().limits.max_buffer_bytes {
-                            return Err(Error::InvalidRange.into());
-                        }
-                        let mut bytes =
-                            vec![0; usize::try_from(size).map_err(|_| Error::InvalidRange)?];
-                        let tight = usize::try_from(data.extent[0])
-                            .map_err(|_| Error::InvalidRange)?
-                            .checked_mul(4)
-                            .ok_or(Error::InvalidRange)?;
-                        for (row, source) in data.rgba8.chunks_exact(tight).enumerate() {
-                            let start = row * pitch as usize;
-                            bytes[start..start + tight].copy_from_slice(source);
-                        }
-                        texture_inputs.push(ForwardTextureInput {
-                            bytes,
-                            extent: data.extent,
-                            bytes_per_row: pitch,
-                            encoding: data.encoding,
-                            mip_levels: data.mip_levels,
-                        });
-                        fresh_texture_slots.push(slot);
-                        final_textures.push(None);
+                    .ok_or(Error::InvalidState)?;
+                    let data = texture.value();
+                    if crate::renderer::forward::material_requires_ordinary_sampler(material) {
+                        crate::renderer::forward::require_filterable_material_texture_with_mip_levels(
+                            &self.device,
+                            data.extent,
+                            data.encoding,
+                            data.mip_levels,
+                        )
+                        .map_err(|error| self.observe_rhi_error(error))?;
                     }
-                    textures.insert(texture_key, slot);
-                    slot
+                    if let Some(slot) = textures.get(&texture_key) {
+                        (*slot, false)
+                    } else {
+                        let slot = final_textures.len();
+                        if let Some(cached) = self.deferred_residency.texture(texture_key) {
+                            self.deferred_stats.texture_hits =
+                                self.deferred_stats.texture_hits.saturating_add(1);
+                            final_textures.push(Some(cached));
+                        } else {
+                            let pitch = super::prepare::aligned_row(data.extent[0])?;
+                            let size = u64::from(pitch)
+                                .checked_mul(u64::from(data.extent[1]))
+                                .ok_or(Error::InvalidRange)?;
+                            if size > self.device.capabilities().limits.max_buffer_bytes {
+                                return Err(Error::InvalidRange.into());
+                            }
+                            let mut bytes =
+                                vec![0; usize::try_from(size).map_err(|_| Error::InvalidRange)?];
+                            let tight = usize::try_from(data.extent[0])
+                                .map_err(|_| Error::InvalidRange)?
+                                .checked_mul(4)
+                                .ok_or(Error::InvalidRange)?;
+                            for (row, source) in data.rgba8.chunks_exact(tight).enumerate() {
+                                let start = row * pitch as usize;
+                                bytes[start..start + tight].copy_from_slice(source);
+                            }
+                            texture_inputs.push(ForwardTextureInput {
+                                bytes,
+                                extent: data.extent,
+                                bytes_per_row: pitch,
+                                encoding: data.encoding,
+                                mip_levels: data.mip_levels,
+                            });
+                            fresh_texture_slots.push(slot);
+                            final_textures.push(None);
+                        }
+                        textures.insert(texture_key, slot);
+                        (slot, false)
+                    }
+                } else {
+                    let capture = capture.ok_or_else(|| {
+                        RendererError::ForwardPreparation(
+                            crate::ForwardPreparationError::CaptureReceiverRequiresSlot {
+                                source: input.source(),
+                            },
+                        )
+                    })?;
+                    let slot_name = input
+                        .capture_texture_slot(texture_index)
+                        .ok_or(Error::InvalidState)?;
+                    capture
+                        .validate_for_receiver(
+                            self.device.id(),
+                            slot_name,
+                            crate::renderer::forward::material_requires_ordinary_sampler(material),
+                        )
+                        .map_err(|error| self.observe_rhi_error(error))?;
+                    if let Some(slot) = capture_textures.get(&capture.instance) {
+                        (*slot, true)
+                    } else {
+                        let slot = final_textures.len();
+                        final_textures.push(Some(capture.resident()));
+                        capture_textures.insert(capture.instance, slot);
+                        (slot, true)
+                    }
                 };
                 draw_slots.push(slot);
+                draw_capture_slots.push(is_capture);
             }
             draw_textures.push(draw_slots);
+            draw_capture_textures.push(draw_capture_slots);
         }
         let plan = plan_forward_resident(stream_inputs, texture_inputs)?;
         for desc in plan
@@ -229,8 +265,45 @@ where
             },
             mappings,
             textures: draw_textures,
+            capture_textures: draw_capture_textures,
             buffer_allocations,
             texture_allocations,
         })
     }
+}
+
+pub(super) fn validate_capture_inputs<B: ResourceBackend>(
+    inputs: &[ForwardDrawInput],
+    prepared: &[PreparedMaterial],
+    capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
+    device: fluxel_rhi::api::DeviceId,
+) -> Result<(), RendererError> {
+    if inputs.len() != prepared.len() {
+        return Err(Error::InvalidState.into());
+    }
+    for (input, material) in inputs.iter().zip(prepared) {
+        for texture_index in 0..input.resolved_textures().len() {
+            if input.asset_texture(texture_index).is_some() {
+                continue;
+            }
+            let capture = capture.ok_or_else(|| {
+                RendererError::ForwardPreparation(
+                    crate::ForwardPreparationError::CaptureReceiverRequiresSlot {
+                        source: input.source(),
+                    },
+                )
+            })?;
+            let slot = input
+                .capture_texture_slot(texture_index)
+                .ok_or(Error::InvalidState)?;
+            capture
+                .validate_for_receiver(
+                    device,
+                    slot,
+                    crate::renderer::forward::material_requires_ordinary_sampler(material),
+                )
+                .map_err(RendererError::Rhi)?;
+        }
+    }
+    Ok(())
 }

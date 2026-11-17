@@ -53,9 +53,7 @@ where
     }
     validate_surface_topology(expected, frame.draws.len(), frame.draw_batches.len())?;
     validate_surface_depth(frame)?;
-    if frame.frame.depth.is_some() && expected != FrameTopology::OpaqueForward {
-        return Err(Error::InvalidState.into());
-    }
+    validate_depth_topology(expected, frame.frame.depth.is_some())?;
     validate_surface_uploads(frame)?;
     validate_surface_batches(frame)?;
     for draw in &frame.draws {

@@ -14,15 +14,15 @@ use fluxel_shader::ShaderComposer;
 use crate::{FeatureHandle, PreparedFrame, RenderId, RenderTransform, RenderView, SceneAssetRef};
 
 use super::ForwardDrawSource;
-use super::{
-    GeometryLayout, MaterialPreparationError, PreparedMaterial, VertexLayoutKey, prepare_material,
-    vertex_layout_key,
-};
+use super::{GeometryLayout, MaterialPreparationError, PreparedMaterial, prepare_material};
 
+#[path = "forward_oit.rs"]
+mod forward_oit;
 #[path = "forward_pbr.rs"]
 mod forward_pbr;
 #[path = "forward_transmission.rs"]
 mod forward_transmission;
+pub(crate) use forward_oit::{OitDrawPartition, partition_oit_draws, prepare_oit_material};
 #[path = "forward_validation.rs"]
 mod forward_validation;
 use forward_pbr::normal_from_local;
@@ -213,80 +213,6 @@ pub struct ForwardDrawInput {
     view: RenderView,
     clip_from_local: [[f32; 4]; 4],
     normal_from_local: Option<[[f32; 4]; 4]>,
-}
-
-/// One exact device-program compatibility class for opaque Forward draws.
-///
-/// The key deliberately describes only facts which select a raster program:
-/// the complete composed Shader request and every resolved vertex-buffer
-/// layout. Dynamic uniform values, transform, texture identity and source
-/// bytes remain per-draw binding facts, so they do not split a program batch.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ForwardCompatibilityKey {
-    shader: fluxel_shader::ShaderArtifactKey,
-    layouts: Vec<VertexLayoutKey>,
-}
-
-impl ForwardCompatibilityKey {
-    pub(crate) fn from_draw(draw: &ForwardDrawInput) -> Self {
-        Self {
-            shader: draw.prepared.shader().cache_key().clone(),
-            layouts: draw
-                .prepared
-                .geometry()
-                .streams
-                .iter()
-                .map(vertex_layout_key)
-                .collect(),
-        }
-    }
-}
-
-/// A contiguous compatible range in [`ForwardPreparedBatches::draws`].
-///
-/// Every draw in a range may use the same raster pipeline. They still retain
-/// separate dynamic bindings and are recorded as separate draws by the first
-/// Forward product.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ForwardDrawBatch {
-    pub(crate) key: ForwardCompatibilityKey,
-    pub(crate) draws: Range<usize>,
-}
-
-/// Deterministic Forward opaque ordering and its program-compatible ranges.
-///
-/// Batches only merge adjacent compatible draws. The initial Forward product
-/// can run without depth, so moving a later compatible draw ahead of an
-/// intervening incompatible draw could change overlapping geometry. Preserve
-/// the pipeline's selected global order regardless of depth selection.
-#[derive(Clone)]
-pub(crate) struct ForwardPreparedBatches {
-    draws: Vec<ForwardDrawInput>,
-    batches: Vec<ForwardDrawBatch>,
-}
-
-impl ForwardPreparedBatches {
-    /// Returns counts suitable for renderer workload reporting.
-    pub(crate) fn stats(&self) -> ForwardBatchStats {
-        ForwardBatchStats {
-            candidates: self.draws.len(),
-            batches: self.batches.len(),
-        }
-    }
-
-    /// Consumes the container into ordered draws and their contiguous ranges.
-    pub(crate) fn into_draws_and_batches(self) -> (Vec<ForwardDrawInput>, Vec<ForwardDrawBatch>) {
-        (self.draws, self.batches)
-    }
-}
-
-/// Counts derived from one Forward opaque preparation result.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ForwardBatchStats {
-    /// Number of prepared opaque candidates.
-    pub(crate) candidates: usize,
-    /// Number of contiguous raster-program compatibility classes.
-    pub(crate) batches: usize,
 }
 
 impl ForwardDrawInput {
@@ -549,12 +475,26 @@ fn resolve_asset_textures(
         .collect()
 }
 
-/// Orders opaque Forward draws into contiguous raster-program batches.
-///
-/// This runs after all asset, material and geometry validation. It owns the
-/// returned draws so a later device coordinator cannot accidentally apply the
-/// ranges to an un-ordered input vector. It preserves candidate order and only
-/// joins neighboring draws that select identical raster-program facts.
 #[path = "forward_batch.rs"]
 mod forward_batch;
-pub(crate) use forward_batch::batch_forward_draws;
+pub(crate) use forward_batch::{ForwardBatchStats, ForwardCompatibilityKey, batch_forward_draws};
+
+#[cfg(test)]
+#[path = "../tests/preparation/feature_draws.rs"]
+mod feature_draws;
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_pbr.rs"]
+mod forward_pbr_tests;
+
+#[cfg(test)]
+#[path = "../tests/preparation/color_uv0.rs"]
+mod color_uv0_tests;
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_texture_validation.rs"]
+mod forward_texture_validation_tests;
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_sampler.rs"]
+mod forward_sampler_tests;

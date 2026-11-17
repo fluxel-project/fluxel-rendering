@@ -47,7 +47,10 @@ where
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
-        if topology != crate::FrameTopology::OpaqueForward {
+        if !matches!(
+            topology,
+            crate::FrameTopology::OpaqueForward | crate::FrameTopology::SortedForward
+        ) {
             return Err(RendererError::ForwardPipeline(
                 crate::PipelineError::InvalidPhaseContribution,
             ));
@@ -65,6 +68,7 @@ where
             .map_err(RendererError::ForwardPreparation)?
             .into_draw_input();
         validate_receiver_sources(&receiver_input, &producer_slot)?;
+        let receiver_topology = receiver_topology(&receiver_input)?;
         let retained_assets = capture_assets(assets, &receiver_input);
         if receiver_input.extent() != extent {
             return Err(Error::InvalidRange.into());
@@ -77,8 +81,9 @@ where
             self.environment_specular.is_some(),
         )
         .map_err(RendererError::ForwardPreparation)?;
-        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs, topology)
-            .map_err(RendererError::ForwardPipeline)?;
+        let capture_inputs =
+            super::composed::order_draws(pipeline, &selected, capture_inputs, topology)
+                .map_err(RendererError::ForwardPipeline)?;
         let environment = self.environment_irradiance.clone().filter(|_| {
             capture_inputs
                 .iter()
@@ -91,6 +96,7 @@ where
             producer_slot,
             extent,
             topology,
+            receiver_topology,
             depth_mode,
             &retained_assets,
             Some(image),
@@ -130,7 +136,10 @@ where
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
-        if topology != crate::FrameTopology::OpaqueForward {
+        if !matches!(
+            topology,
+            crate::FrameTopology::OpaqueForward | crate::FrameTopology::SortedForward
+        ) {
             return Err(RendererError::ForwardPipeline(
                 crate::PipelineError::InvalidPhaseContribution,
             ));
@@ -153,12 +162,14 @@ where
             .map_err(RendererError::ForwardPreparation)?
             .into_draw_input();
         validate_receiver_sources(&receiver_input, &producer_slot)?;
+        let receiver_topology = receiver_topology(&receiver_input)?;
         let retained_assets = capture_assets(assets, &receiver_input);
         if receiver_input.extent() != extent {
             return Err(Error::InvalidRange.into());
         }
-        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs, topology)
-            .map_err(RendererError::ForwardPipeline)?;
+        let capture_inputs =
+            super::composed::order_draws(pipeline, &selected, capture_inputs, topology)
+                .map_err(RendererError::ForwardPipeline)?;
         let capture_environment = self.environment_irradiance.clone().filter(|_| {
             capture_inputs
                 .iter()
@@ -171,6 +182,7 @@ where
             producer_slot,
             extent,
             topology,
+            receiver_topology,
             depth_mode,
             &retained_assets,
             None,
@@ -182,9 +194,26 @@ where
     }
 }
 
+fn receiver_topology(
+    receiver: &crate::ForwardDrawInput,
+) -> std::result::Result<crate::FrameTopology, RendererError> {
+    super::composed::validate_transparent_input(receiver)
+        .map_err(RendererError::ForwardPipeline)?;
+    Ok(
+        if matches!(
+            receiver.prepared().material().surface_policy().alpha_mode,
+            fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend
+        ) {
+            crate::FrameTopology::SortedForward
+        } else {
+            crate::FrameTopology::OpaqueForward
+        },
+    )
+}
+
 /// Resolves receiver references against an independently named producer before
 /// allocation or upload. Logical material names may alias the same product.
-fn validate_receiver_sources(
+pub(in crate::renderer) fn validate_receiver_sources(
     receiver: &crate::ForwardDrawInput,
     producer: &CaptureTextureSlot,
 ) -> std::result::Result<(), RendererError> {
@@ -214,7 +243,7 @@ fn validate_receiver_sources(
 
 /// Cache retention includes the receiver's immutable snapshots even when the
 /// producer scene did not select them. Pending owners remain independent.
-fn capture_assets(
+pub(in crate::renderer) fn capture_assets(
     producer: &crate::ForwardAssets,
     receiver: &crate::ForwardDrawInput,
 ) -> crate::ForwardAssets {

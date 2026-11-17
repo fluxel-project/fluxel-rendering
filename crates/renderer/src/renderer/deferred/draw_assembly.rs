@@ -18,6 +18,7 @@ pub(super) fn draws<B: ResourceBackend>(
     values: &ForwardUniformData,
     mappings: &[Vec<usize>],
     textures: &[Vec<usize>],
+    capture_textures: &[Vec<bool>],
     pbr: bool,
 ) -> Result<Vec<DeferredDraw<B>>, Error> {
     let count = inputs.len();
@@ -26,6 +27,7 @@ pub(super) fn draws<B: ResourceBackend>(
         programs.len(),
         mappings.len(),
         textures.len(),
+        capture_textures.len(),
         values.transforms.len(),
         values.tints.len(),
     ]
@@ -40,7 +42,15 @@ pub(super) fn draws<B: ResourceBackend>(
         let schema = prepared[index]
             .binding_schema()
             .ok_or(Error::InvalidState)?;
-        if schema.textures.len() != textures[index].len() {
+        if schema.textures.len() != textures[index].len()
+            || capture_textures[index].len() != textures[index].len()
+            || capture_textures[index]
+                .iter()
+                .enumerate()
+                .any(|(slot, &capture)| {
+                    capture != inputs[index].capture_texture_slot(slot).is_some()
+                })
+        {
             return Err(Error::InvalidRange);
         }
         let mut entries = vec![BindGroupEntry {
@@ -117,6 +127,7 @@ pub(super) fn draws<B: ResourceBackend>(
             vertex_ranges: ranges,
             vertex_streams: mappings[index].clone(),
             textures: textures[index].clone(),
+            capture_textures: capture_textures[index].clone(),
             vertices: inputs[index].geometry().value().vertices.clone(),
             tint_range: values.tints[index].clone(),
             transform_range: values.transforms[index].clone(),

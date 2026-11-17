@@ -1,6 +1,7 @@
 //! Frame policy and preparation for the first Forward consumer.
 
 mod composition;
+pub(crate) use composition::with_forward_feature_scope;
 pub use composition::{ForwardCompositionContext, ForwardCompositionPass, ForwardFeaturePass};
 mod composition_pair;
 pub use composition_pair::{ForwardPairCompositionContext, ForwardPairCompositionPass};
@@ -15,6 +16,8 @@ pub use deferred::{
 };
 mod forward_topology;
 pub use forward_topology::FrameTopology;
+mod oit;
+pub use oit::DualDepthPeelingConfig;
 
 use std::{collections::HashSet, fmt};
 

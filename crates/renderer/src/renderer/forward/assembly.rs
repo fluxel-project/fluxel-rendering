@@ -14,7 +14,7 @@ where
         + ShaderBackend,
 {
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn submit_prepared_forward<F>(
+    pub(in crate::renderer) async fn submit_prepared_forward<F>(
         &mut self,
         retained_snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         prepared_inputs: Vec<crate::ForwardDrawInput>,
@@ -87,21 +87,21 @@ where
             self.forward_stats.accepted_buffer_allocations = self
                 .forward_stats
                 .accepted_buffer_allocations
-                .saturating_add(assembled.buffer_allocations);
+                .saturating_add(assembled.allocations.buffer_count);
             self.forward_stats.accepted_buffer_allocation_bytes = self
                 .forward_stats
                 .accepted_buffer_allocation_bytes
-                .saturating_add(assembled.buffer_allocation_bytes);
+                .saturating_add(assembled.allocations.buffer_bytes);
             self.forward_stats.accepted_texture_allocations = self
                 .forward_stats
                 .accepted_texture_allocations
-                .saturating_add(assembled.texture_allocations);
+                .saturating_add(assembled.allocations.texture_count);
         }
         result
     }
 }
 
-pub(super) enum AssembledForwardTarget<B: ResourceBackend> {
+pub(in crate::renderer) enum AssembledForwardTarget<B: ResourceBackend> {
     Offscreen {
         frame: crate::residency::ForwardFrame<B>,
     },
@@ -111,14 +111,61 @@ pub(super) enum AssembledForwardTarget<B: ResourceBackend> {
     },
 }
 
-pub(super) struct AssembledForward<B: ResourceBackend> {
-    pub(super) retained: PendingInputs,
-    pub(super) target: AssembledForwardTarget<B>,
-    pub(super) publication: ForwardPublication,
-    pub(super) topology: crate::FrameTopology,
-    pub(super) batch_stats: crate::preparation::ForwardBatchStats,
-    pub(super) preparation_elapsed_ns: u128,
-    pub(super) buffer_allocations: u64,
-    pub(super) buffer_allocation_bytes: u64,
-    pub(super) texture_allocations: u64,
+pub(in crate::renderer) struct AssembledForward<B: ResourceBackend> {
+    pub(in crate::renderer) retained: PendingInputs,
+    pub(in crate::renderer) target: AssembledForwardTarget<B>,
+    pub(in crate::renderer) publication: ForwardPublication,
+    pub(in crate::renderer) topology: crate::FrameTopology,
+    pub(in crate::renderer) batch_stats: crate::preparation::ForwardBatchStats,
+    pub(in crate::renderer) preparation_elapsed_ns: u128,
+    pub(in crate::renderer) allocations: ForwardAllocationStats,
+}
+
+/// Allocation facts produced while assembling a Forward frame.
+///
+/// Depth is a texture allocation whenever the selected depth policy owns one;
+/// the other counts already represent the concrete resident and frame plans.
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::renderer) struct ForwardAllocationStats {
+    pub(in crate::renderer) buffer_count: u64,
+    pub(in crate::renderer) buffer_bytes: u64,
+    pub(in crate::renderer) texture_count: u64,
+}
+
+impl ForwardAllocationStats {
+    /// Counts owners requested by a concrete resident upload plan before that
+    /// plan is consumed by device allocation.
+    pub(super) fn from_resident_descriptors(
+        streams: &[fluxel_rhi::api::BufferDesc],
+        upload_bytes: u64,
+        texture_count: usize,
+    ) -> Self {
+        Self {
+            buffer_count: u64::try_from(streams.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+            buffer_bytes: streams
+                .iter()
+                .fold(upload_bytes, |total, desc| total.saturating_add(desc.size)),
+            texture_count: u64::try_from(texture_count).unwrap_or(u64::MAX),
+        }
+    }
+
+    /// Adds allocations selected by the concrete frame target and depth mode.
+    pub(super) fn with_frame(
+        self,
+        frame_buffer_count: u64,
+        frame_buffer_bytes: u64,
+        frame_texture_count: u64,
+        owns_depth: bool,
+    ) -> Self {
+        Self {
+            buffer_count: self.buffer_count.saturating_add(frame_buffer_count),
+            buffer_bytes: self.buffer_bytes.saturating_add(frame_buffer_bytes),
+            texture_count: self
+                .texture_count
+                .saturating_add(frame_texture_count)
+                .saturating_add(u64::from(owns_depth)),
+        }
+    }
 }

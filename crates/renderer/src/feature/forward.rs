@@ -34,10 +34,15 @@ pub trait RenderFeature {
     /// Borrows the feature's own logical draw requests, not scene record IDs.
     fn draws<'a>(&self, prepared: &'a Self::Prepared) -> &'a [ForwardDrawRequest];
 
-    /// Declares this batch's actual accesses inside the real opaque Graph pass.
+    /// Declares this batch's actual accesses inside the real Forward Graph pass.
     ///
     /// The scope cannot name another feature's draws or declare output writes.
     /// All three read classes must be declared once, including an empty batch.
+    /// Sorted Forward merges these draws with scene draws before recording;
+    /// a feature does not own an independent transparent ordering or blend.
+    /// OIT calls this method for every actual material pass, including an
+    /// empty intersection with that pass's draw range. Declare the provided
+    /// scope on each call; frame-local caching cannot replace its Graph reads.
     fn contribute(
         &self,
         _prepared: &Self::Prepared,

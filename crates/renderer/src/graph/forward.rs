@@ -6,7 +6,16 @@ mod access_contracts;
 mod capture_binding_collection;
 mod capture_bindings;
 mod capture_declaration;
+mod capture_oit_declaration;
+use capture_oit_declaration::CaptureOitDeclaration;
+mod capture_oit_bindings;
+mod capture_oit_plan;
+mod capture_oit_record;
+mod capture_oit_surface_declaration;
+mod capture_oit_surface_record;
+pub(crate) use capture_oit_plan::CaptureOitPlan;
 mod capture_plan;
+mod capture_receiver;
 mod capture_record;
 mod capture_specular_bindings;
 mod capture_surface_declaration;
@@ -14,9 +23,28 @@ mod capture_surface_plan;
 mod capture_surface_record;
 mod capture_upload;
 mod declaration;
+mod offscreen_bindings;
 mod offscreen_declaration;
 mod offscreen_plan;
+mod offscreen_prefix;
 mod offscreen_record;
+mod oit_declaration;
+mod oit_draw_reads;
+mod oit_read_context;
+pub(crate) use oit_read_context::ForwardOitReadContext;
+mod oit_plan;
+mod oit_record;
+mod oit_stages;
+pub(in crate::graph) use capture_declaration::{same_buffer_owner_desc, same_texture_owner_desc};
+mod overlay;
+pub(in crate::graph) use capture_declaration::SharedResidentImports;
+pub(in crate::graph) use capture_receiver::{
+    ForwardCaptureReceiver, ForwardReceiverTerminal, declare_forward_capture_namespace,
+    declare_receiver_after_deferred, declare_receiver_terminal,
+};
+pub(in crate::graph) use overlay::{
+    OverlaySlots, declare_overlay_prefix, declare_overlay_prefix_with_shared,
+};
 mod phase;
 mod read_scope;
 mod shared_record;
@@ -34,6 +62,7 @@ pub(crate) use spec::{
     TextureGraphFact,
 };
 use spec::{SurfaceForwardShape, forward_shape, surface_forward_shape};
+pub(crate) use validation::draw_accesses as forward_draw_accesses;
 use validation::*;
 
 use fluxel_rhi::{
@@ -50,9 +79,9 @@ use fluxel_rhi::{
         ReadbackBackend, ResourceBackend,
     },
 };
-use std::{marker::PhantomData, ops::Range, sync::Arc};
+use std::{marker::PhantomData, num::NonZeroU32, ops::Range, sync::Arc};
 
-use crate::residency::{ForwardFrame, SurfaceForwardFrame};
+use crate::residency::{ForwardFrame, OitOwners, OitTextureOwner, SurfaceForwardFrame};
 use crate::{
     FrameTopology,
     pipeline::{ForwardPhaseContext, PipelineError},
@@ -78,6 +107,18 @@ use capture_surface_declaration::{
 pub(crate) use capture_surface_plan::CaptureForwardSurfacePlan;
 use declaration::{SurfaceForwardDeclaration, declare_surface_with};
 use offscreen_declaration::{OffscreenForwardDeclaration, declare_offscreen_with};
+
+/// Exact offscreen resources and stable draw partition for one OIT frame.
+/// This is Graph-private: the renderer retains all actual native programs and
+/// sampled bind groups through completion separately.
+#[derive(Clone, Copy)]
+pub(crate) struct ForwardOitInput<'a, B: ResourceBackend> {
+    pub(crate) owners: &'a OitOwners<B>,
+    pub(crate) output: &'a OitTextureOwner<B>,
+    pub(crate) opaque_count: usize,
+    pub(crate) peel_count: usize,
+    pub(crate) rounds: NonZeroU32,
+}
 
 type Outcome<B> = <<B as ExecutionBackend>::Mode as ExecutionMode<B>>::Outcome;
 
@@ -153,6 +194,7 @@ pub(crate) struct ForwardPlan<B: ResourceBackend> {
     shape: ForwardShape,
     uniform_alignment: u64,
     topology: FrameTopology,
+    oit: Option<oit_plan::ForwardOitPlan>,
 }
 
 /// Forward execution plan whose final raster attachment is an acquired surface

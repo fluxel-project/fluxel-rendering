@@ -32,6 +32,7 @@ pub(super) struct GbufferProgramKey {
     multisample_count: u32,
     pbr: bool,
     effects: bool,
+    surface: crate::renderer::RasterSurfaceState,
 }
 
 impl GbufferProgramKey {
@@ -41,6 +42,7 @@ impl GbufferProgramKey {
         transform_uniform_bytes: u64,
         pbr: bool,
         effects: bool,
+        surface: crate::renderer::RasterSurfaceState,
     ) -> Self {
         Self {
             device,
@@ -57,6 +59,7 @@ impl GbufferProgramKey {
             multisample_count: 1,
             pbr,
             effects,
+            surface,
         }
     }
 }

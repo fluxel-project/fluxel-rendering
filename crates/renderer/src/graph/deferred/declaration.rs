@@ -32,13 +32,47 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             &mut crate::DeferredPhaseContext<'_, '_>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
+        let prefix = Self::declare_prefix(device, frame, declare)?;
+        super::terminal::declare_terminal(prefix, None)
+    }
+
+    /// Declares the one Deferred Graph through lighting without selecting an
+    /// output terminal.  The returned handles are versions in this exact Graph.
+    pub(super) fn declare_prefix<F>(
+        device: &Device<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        declare: F,
+    ) -> Result<super::prefix::DeferredGraphPrefix>
+    where
+        F: FnOnce(
+            &mut crate::DeferredPhaseContext<'_, '_>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+    {
+        Self::declare_prefix_in_graph(device, frame, GraphBuilder::default(), None, None, declare)
+    }
+
+    /// Continues an existing Graph with this Deferred namespace. Capture
+    /// aliases refer to the producer's actual final versions in that Graph;
+    /// they never create a second import for the producer allocation.
+    pub(super) fn declare_prefix_in_graph<F>(
+        device: &Device<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        mut graph: GraphBuilder,
+        aliases: Option<&[Option<super::super::definition::TextureHandle>]>,
+        shared: Option<&mut super::imports::SharedDeferredImports>,
+        declare: F,
+    ) -> Result<super::prefix::DeferredGraphPrefix>
+    where
+        F: FnOnce(
+            &mut crate::DeferredPhaseContext<'_, '_>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+    {
         let lane = device
             .lanes()
             .iter()
             .find(|lane| lane.class == LaneClass::Graphics)
             .map(|lane| lane.id)
             .ok_or(Error::WrongLane)?;
-        let mut graph = GraphBuilder::default();
         let fresh_mip_chains = frame
             .resident
             .textures
@@ -73,7 +107,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             readback,
             row_pitch,
             deformation: deformation_handles,
-        } = super::imports::import(&mut graph, &frame, &fresh_mip_chains)?;
+        } = super::imports::import(&mut graph, &frame, &fresh_mip_chains, aliases, shared)?;
 
         let (
             upload_pass,
@@ -328,87 +362,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             driver.finish().map_err(|_| Error::InvalidState)?
         };
 
-        let (composite_pass, output) = if let Some(readback) = readback {
-            let target = target.ok_or(Error::InvalidState)?;
-            let scene_color = scene_color.ok_or(Error::InvalidState)?;
-            let (composite_pass, target) = graph
-                .add_pass("deferred-scene-color-composite", |pass| {
-                    pass.depends_on(lighting_pass)?;
-                    pass.read_texture_with_use(
-                        scene_color,
-                        whole_color(),
-                        sampled_read().uses,
-                        ImageLayout::ShaderReadOnly,
-                        TextureUsage::TEXTURE_BINDING,
-                    )?;
-                    let target = pass.write_texture_with_use(
-                        target,
-                        whole_color(),
-                        color_write().uses,
-                        ImageLayout::ColorAttachment,
-                        TextureUsage::RENDER_ATTACHMENT,
-                    )?;
-                    Ok(target)
-                })
-                .map_err(|_| Error::InvalidState)?;
-            let (readback_pass, ()) = graph
-                .add_pass("deferred-readback", |pass| {
-                    let length = u64::from(row_pitch.ok_or(GraphError::InvalidRange)?)
-                        .checked_mul(u64::from(frame.extent[1]))
-                        .ok_or(GraphError::InvalidRange)?;
-                    pass.read_texture_with_use(
-                        target,
-                        whole_color(),
-                        texture_copy_read().uses,
-                        ImageLayout::CopySrc,
-                        TextureUsage::COPY_SRC,
-                    )?;
-                    pass.write_with_use(
-                        readback,
-                        0..length,
-                        copy_write().uses,
-                        BufferUsage::COPY_DST,
-                    )?;
-                    pass.side_effect();
-                    Ok(())
-                })
-                .map_err(|_| Error::InvalidState)?;
-            (
-                Some(composite_pass),
-                DeferredOutputDeclaration::Offscreen { readback_pass },
-            )
-        } else {
-            let scene_color = scene_color.ok_or(Error::InvalidState)?;
-            let surface_target = surface_target.ok_or(Error::InvalidState)?;
-            let (composite_pass, ()) = graph
-                .add_pass("deferred-surface-scene-color-composite", |pass| {
-                    pass.depends_on(lighting_pass)?;
-                    pass.read_texture_with_use(
-                        scene_color,
-                        whole_color(),
-                        sampled_read().uses,
-                        ImageLayout::ShaderReadOnly,
-                        TextureUsage::TEXTURE_BINDING,
-                    )?;
-                    pass.write_texture_with_use(
-                        surface_target,
-                        whole_color(),
-                        color_write().uses,
-                        ImageLayout::ColorAttachment,
-                        TextureUsage::RENDER_ATTACHMENT,
-                    )?;
-                    // Presentation consumes this lease after the Graph's
-                    // command steps; retain the terminal write in the live
-                    // Graph rather than treating it as an untracked side
-                    // effect at recording time.
-                    pass.side_effect();
-                    Ok(())
-                })
-                .map_err(|_| Error::InvalidState)?;
-            (Some(composite_pass), DeferredOutputDeclaration::Surface)
-        };
-
-        Ok(DeferredDeclaration {
+        let prefix = super::prefix::DeferredGraphPrefix {
             graph,
             lane,
             upload_pass,
@@ -416,33 +370,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             deformation_pass,
             geometry_pass,
             lighting_pass,
-            composite_pass,
-            output,
-            resident_upload_slot: BufferSlot::from(resident_upload),
-            frame_upload_slot: BufferSlot::from(frame_upload),
-            uniform_slot: BufferSlot::from(uniform),
-            stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
-            texture_slots: materials.into_iter().map(TextureSlot::from).collect(),
-            environment_upload_slot: environment_upload.map(BufferSlot::from),
-            environment_slot: environment.map(TextureSlot::from),
-            specular_upload_slot: specular_upload.map(BufferSlot::from),
-            specular_view_uniform_slot: specular_view_uniform.map(BufferSlot::from),
-            specular_radiance_slot: specular_radiance.map(TextureSlot::from),
-            specular_brdf_lut_slot: specular_brdf_lut.map(TextureSlot::from),
-            gbuffer_slots: std::array::from_fn(|index| TextureSlot::from(gbuffer[index])),
-            effects_slot: effects.map(TextureSlot::from),
-            scene_color_slot: scene_color.map(TextureSlot::from),
-            surface_target_slot: surface_target.map(TextureSlot::from),
-            target_slot: target.map(TextureSlot::from),
-            readback_slot: readback.map(BufferSlot::from),
-            deformation_slots: deformation_handles.map(|(upload, source, product, parameters)| {
-                [
-                    BufferSlot::from(upload),
-                    BufferSlot::from(source),
-                    BufferSlot::from(product),
-                    BufferSlot::from(parameters),
-                ]
-            }),
+            scene_color: scene_color.ok_or(Error::InvalidState)?,
+            resident_upload,
+            frame_upload,
+            uniform,
+            streams,
+            materials,
+            environment_upload,
+            environment,
+            specular_upload,
+            specular_view_uniform,
+            specular_radiance,
+            specular_brdf_lut,
+            gbuffer,
+            effects,
+            surface_target,
+            target,
+            readback,
+            row_pitch,
+            deformation_handles,
             extent: frame.extent,
             uniform_alignment: device.capabilities().limits.uniform_offset_alignment,
             transform_bytes: frame
@@ -450,6 +396,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 .iter()
                 .map(|draw| draw.transform_bytes)
                 .collect(),
-        })
+        };
+        Ok(prefix)
     }
 }

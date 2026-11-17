@@ -28,6 +28,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     where
         B: CommandBackend + ResourceBackend,
     {
+        let bindings = self.record_bindings(&frame)?;
+        self.record_body_mip_generation_with_bindings(encoder, frame, generation, &bindings)
+    }
+
+    pub(super) fn record_body_mip_generation_with_bindings(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        generation: &super::super::mip_generation::MipGenerationPass,
+        bindings: &FrameBindings<'_, B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend + ResourceBackend,
+    {
         let slot = *self
             .texture_slots
             .get(generation.texture)
@@ -37,7 +51,6 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             .textures
             .get(generation.texture)
             .ok_or(Error::InvalidRange)?;
-        let bindings = self.record_bindings(&frame)?;
         super::super::mip_generation::record(generation, &bindings, slot, texture, encoder)
     }
     pub(crate) fn record_deformation(
@@ -139,6 +152,18 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             )?;
         }
         let bindings = self.record_bindings(&frame)?;
+        self.record_body_geometry_with_bindings(encoder, frame, &bindings)
+    }
+
+    pub(super) fn record_body_geometry_with_bindings(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        bindings: &FrameBindings<'_, B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
         let pass = bindings.pass(self.geometry_pass)?;
         let draw_data = frame.draw_graph_data()?;
         if let (Some(slots), Some(_)) = (self.deformation_slots, &frame.deformation) {
@@ -299,10 +324,22 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     where
         B: RasterBackend,
     {
+        let bindings = self.bindings(frame)?;
+        self.record_composite_with_bindings(encoder, frame, &bindings)
+    }
+
+    pub(super) fn record_composite_with_bindings(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredFrame<B>,
+        bindings: &FrameBindings<'_, B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
         let composite_pass = self.composite_pass.ok_or(Error::InvalidState)?;
         let scene_color_slot = self.scene_color_slot.ok_or(Error::InvalidState)?;
         let target_slot = self.target_slot.ok_or(Error::InvalidState)?;
-        let bindings = self.bindings(frame)?;
         let pass = bindings.pass(composite_pass)?;
         pass.texture(
             scene_color_slot,
@@ -343,15 +380,29 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     where
         B: ReadbackBackend,
     {
+        let bindings = self.bindings(frame)?;
+        self.record_readback_with_bindings(encoder, frame, &bindings)
+    }
+
+    pub(super) fn record_readback_with_bindings(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredFrame<B>,
+        bindings: &FrameBindings<'_, B>,
+    ) -> Result<fluxel_rhi::api::ReadbackTicket<B>>
+    where
+        B: ReadbackBackend,
+    {
         let target_slot = self.target_slot.ok_or(Error::InvalidState)?;
         let readback_slot = self.readback_slot.ok_or(Error::InvalidState)?;
         let length = u64::from(frame.readback_row_pitch)
             .checked_mul(u64::from(frame.extent[1]))
             .ok_or(Error::InvalidRange)?;
-        let bindings = self.bindings(frame)?;
         let readback_pass = match self.output {
             DeferredOutputPlan::Offscreen { readback_pass } => readback_pass,
-            DeferredOutputPlan::Surface { .. } => return Err(Error::InvalidState),
+            DeferredOutputPlan::Capture | DeferredOutputPlan::Surface { .. } => {
+                return Err(Error::InvalidState);
+            }
         };
         let pass = bindings.pass(readback_pass)?;
         let target = pass.texture(

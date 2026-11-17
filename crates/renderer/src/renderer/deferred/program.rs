@@ -24,6 +24,7 @@ mod program_fixed;
 mod program_layout;
 use program_fixed::{
     color_target, color_target_with_format, depth_state, opaque_triangles, single_sample,
+    surface_triangles,
 };
 
 use program_layout::{ordinary_sampler, sampled_texture, uniform};
@@ -59,19 +60,22 @@ where
 {
     pub(super) fn retain_deferred_gbuffer_programs(
         &mut self,
+        inputs: &[crate::ForwardDrawInput],
         materials: &[PreparedMaterial],
         pbr: bool,
         effects: bool,
     ) {
-        let active = materials
+        let active = inputs
             .iter()
-            .map(|material| {
+            .zip(materials)
+            .map(|(input, material)| {
                 program_cache::GbufferProgramKey::for_material(
                     self.device.id(),
                     material,
                     if pbr { 192 } else { 64 },
                     pbr,
                     effects,
+                    crate::renderer::raster_surface_state(input),
                 )
             })
             .collect();
@@ -83,6 +87,7 @@ where
         prepared: &PreparedMaterial,
         pbr: bool,
         effects: bool,
+        surface: crate::renderer::RasterSurfaceState,
     ) -> std::result::Result<Arc<GbufferProgram<B>>, RendererError> {
         self.ensure_open()?;
         let transform_uniform_bytes = if pbr { 192 } else { 64 };
@@ -92,6 +97,7 @@ where
             transform_uniform_bytes,
             pbr,
             effects,
+            surface,
         );
         if let Some(program) = self.deferred_programs.get_gbuffer(&key) {
             self.deferred_stats.gbuffer_program_hits += 1;
@@ -180,7 +186,7 @@ where
                 } else {
                     vec![Some(color_target()), Some(color_target())]
                 },
-                primitive: opaque_triangles(),
+                primitive: surface_triangles(surface),
                 depth_stencil: Some(depth_state()),
                 multisample: single_sample(),
                 multiview: None,

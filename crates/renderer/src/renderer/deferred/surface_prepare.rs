@@ -37,6 +37,8 @@ where
         color_format: TextureFormat,
     ) -> std::result::Result<DeferredSurfaceFrame<B>, RendererError> {
         self.ensure_open()?;
+        crate::renderer::require_opaque_or_mask(inputs)
+            .map_err(|error| self.observe_rhi_error(error))?;
         let (prepared, pbr, effects) = super::scene_prepare::materials(inputs)?;
         self.prepare_deferred_surface_resources(inputs, &prepared, pbr, effects, color_format)
             .await
@@ -102,12 +104,17 @@ where
                 return Err(self.observe_rhi_error(Error::Unsupported(reason)));
             }
         }
-        self.retain_deferred_gbuffer_programs(prepared, pbr, effects);
+        self.retain_deferred_gbuffer_programs(inputs, prepared, pbr, effects);
         let mut geometry_programs = Vec::with_capacity(prepared.len());
-        for material in prepared {
+        for (input, material) in inputs.iter().zip(prepared) {
             geometry_programs.push(
-                self.deferred_gbuffer_program(material, pbr, effects)
-                    .await?,
+                self.deferred_gbuffer_program(
+                    material,
+                    pbr,
+                    effects,
+                    crate::renderer::raster_surface_state(input),
+                )
+                .await?,
             );
         }
         let environment = if pbr {
@@ -142,9 +149,10 @@ where
             publication,
             mappings,
             textures: draw_textures,
+            capture_textures: draw_capture_textures,
             buffer_allocations: resident_buffers,
             texture_allocations: resident_textures,
-        } = self.assemble_deferred_residents(inputs, prepared)?;
+        } = self.assemble_deferred_residents(inputs, prepared, None)?;
 
         let (frame, uniform_upload) =
             SurfaceForwardFrameBuffers::allocate_planned(&self.device, frame_plan)
@@ -176,6 +184,7 @@ where
             &uniforms,
             &mappings,
             &draw_textures,
+            &draw_capture_textures,
             pbr,
         )
         .map_err(|error| self.observe_rhi_error(error))?;

@@ -1,9 +1,9 @@
-//! Renderer-private fullscreen owner for a capture receiver Surface terminal.
+//! Renderer-private fullscreen presentation of frame-local Forward color.
 
 use super::*;
 
 /// Concrete pipeline, binding, and sampler retained until presentation proves
-/// that a receiver target is no longer sampled by the terminal composite.
+/// that the source target is no longer sampled by the terminal composite.
 pub(crate) struct SurfaceCompositeOwner<B: ResourceBackend> {
     pipeline: RasterPipeline<B>,
     group: BindGroup<B>,
@@ -14,7 +14,7 @@ pub(crate) struct SurfaceCompositeOwner<B: ResourceBackend> {
     target_instance: crate::graph::ResourceInstanceId,
     device: DeviceId,
     extent: [u32; 2],
-    color_format: TextureFormat,
+    target_format: TextureFormat,
 }
 
 impl<B: ResourceBackend> SurfaceCompositeOwner<B> {
@@ -35,30 +35,51 @@ impl<B: ResourceBackend> SurfaceCompositeOwner<B> {
         device: &Device<B>,
         image: &SurfaceImage<B>,
     ) -> std::result::Result<(), Error> {
+        self.validate_offscreen(device, image.extent(), image.format())?;
+        if image.device() != device.id() || !image.is_current() {
+            return Err(if image.device() != device.id() {
+                Error::WrongDevice
+            } else if !image.is_current() {
+                Error::SurfaceOutdated
+            } else {
+                Error::InvalidState
+            });
+        }
+        Ok(())
+    }
+
+    /// Validates a terminal composite against an ordinary offscreen target.
+    /// This deliberately does not construct a synthetic `SurfaceImage`.
+    pub(crate) fn validate_offscreen(
+        &self,
+        device: &Device<B>,
+        extent: [u32; 2],
+        target_format: TextureFormat,
+    ) -> std::result::Result<(), Error> {
         if self.device != device.id()
             || self.pipeline.device() != device.id()
             || self.group.device() != device.id()
             || self.sampler.device() != device.id()
             || self.target.device() != device.id()
             || self.target_view.device() != device.id()
-            || image.device() != device.id()
-            || !image.is_current()
-            || image.extent() != self.extent
-            || image.format() != self.color_format
+            || self.extent != extent
+            || self.target_format != target_format
+            || self.target_desc.dimension != TextureDimension::D2
+            || self.target_desc.extent != [extent[0], extent[1], 1]
+            || self.target_desc.array_layers != 1
+            || self.target_desc.mip_levels != 1
+            || self.target_desc.samples != 1
+            || self.target_desc.format != TextureFormat::Rgba8Unorm
             || !self
                 .target_desc
                 .usage
                 .contains(TextureUsage::TEXTURE_BINDING)
         {
-            return Err(
-                if image.device() != device.id() || self.device != device.id() {
-                    Error::WrongDevice
-                } else if !image.is_current() {
-                    Error::SurfaceOutdated
-                } else {
-                    Error::InvalidState
-                },
-            );
+            return Err(if self.device != device.id() {
+                Error::WrongDevice
+            } else {
+                Error::InvalidState
+            });
         }
         Ok(())
     }
@@ -78,30 +99,126 @@ where
         + PipelineBackend
         + ShaderBackend,
 {
-    pub(super) async fn surface_composite_owner(
+    pub(in crate::renderer) async fn surface_composite_owner(
         &mut self,
         receiver: &crate::residency::ForwardFrame<B>,
         image: &SurfaceImage<B>,
     ) -> std::result::Result<SurfaceCompositeOwner<B>, RendererError> {
-        if receiver.extent != image.extent() || image.device() != self.device.id() {
+        if receiver.resident.device != self.device.id() {
+            return Err(Error::InvalidState.into());
+        }
+        self.surface_composite_from_target(
+            &receiver.frame.target,
+            &receiver.frame.target_view,
+            &receiver.frame.target_desc,
+            receiver.frame.target_instance,
+            receiver.extent,
+            image,
+        )
+        .await
+    }
+
+    /// Presents the actual Deferred lighting result while preserving its
+    /// separate sampled owner and the acquired image's destination format.
+    pub(in crate::renderer) async fn deferred_surface_composite_owner(
+        &mut self,
+        color: &crate::residency::ForwardTexture<B>,
+        extent: [u32; 2],
+        image: &SurfaceImage<B>,
+    ) -> std::result::Result<SurfaceCompositeOwner<B>, RendererError> {
+        if color.device != self.device.id() {
+            return Err(Error::WrongDevice.into());
+        }
+        self.surface_composite_from_target(
+            &color.texture,
+            &color.view,
+            &color.desc,
+            color.instance,
+            extent,
+            image,
+        )
+        .await
+    }
+
+    /// Builds the terminal surface composite from OIT's actual final output,
+    /// never from the opaque intermediate used by peeling.
+    pub(in crate::renderer) async fn oit_surface_composite_owner(
+        &mut self,
+        output: &crate::residency::OitTextureOwner<B>,
+        extent: [u32; 2],
+        image: &SurfaceImage<B>,
+    ) -> std::result::Result<SurfaceCompositeOwner<B>, RendererError> {
+        validate_oit_output(&self.device, output, extent)?;
+        self.surface_composite_from_target(
+            &output.texture,
+            &output.view,
+            &output.desc,
+            output.instance,
+            extent,
+            image,
+        )
+        .await
+    }
+
+    /// Builds the same fullscreen color composite for an offscreen terminal.
+    /// The source is OIT's completed output, not the opaque input target.
+    pub(in crate::renderer) async fn oit_offscreen_composite_owner(
+        &mut self,
+        output: &crate::residency::OitTextureOwner<B>,
+        extent: [u32; 2],
+        target_format: TextureFormat,
+    ) -> std::result::Result<SurfaceCompositeOwner<B>, RendererError> {
+        validate_oit_output(&self.device, output, extent)?;
+        self.color_composite_from_target(
+            &output.texture,
+            &output.view,
+            &output.desc,
+            output.instance,
+            extent,
+            target_format,
+        )
+        .await
+    }
+
+    async fn surface_composite_from_target(
+        &mut self,
+        target: &Texture<B>,
+        target_view: &TextureView<B>,
+        desc: &TextureDesc,
+        target_instance: crate::graph::ResourceInstanceId,
+        extent: [u32; 2],
+        image: &SurfaceImage<B>,
+    ) -> std::result::Result<SurfaceCompositeOwner<B>, RendererError> {
+        if extent != image.extent() || image.device() != self.device.id() {
             return Err(Error::InvalidRange.into());
         }
         if !image.is_current() {
             return Err(Error::SurfaceOutdated.into());
         }
-        let target = &receiver.frame.target;
-        let target_view = &receiver.frame.target_view;
-        let desc = &receiver.frame.target_desc;
-        if receiver.resident.device != self.device.id()
-            || target.device() != self.device.id()
-            || target_view.device() != self.device.id()
-            || !desc.usage.contains(TextureUsage::TEXTURE_BINDING)
-            || !matches!(self.device.texture_support(desc), Support::Supported(facts) if facts.filterable)
-        {
-            return Err(Error::InvalidState.into());
-        }
+        self.color_composite_from_target(
+            target,
+            target_view,
+            desc,
+            target_instance,
+            extent,
+            image.format(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn color_composite_from_target(
+        &mut self,
+        target: &Texture<B>,
+        target_view: &TextureView<B>,
+        desc: &TextureDesc,
+        target_instance: crate::graph::ResourceInstanceId,
+        extent: [u32; 2],
+        target_format: TextureFormat,
+    ) -> std::result::Result<SurfaceCompositeOwner<B>, RendererError> {
+        validate_composite_source(&self.device, target, target_view, desc, extent)?;
         let program = self
-            .deferred_scene_color_composite_program(image.format())
+            .deferred_scene_color_composite_program(target_format)
             .await?;
         let sampler_desc = default_material_sampler();
         validate_ordinary_sampler(&sampler_desc)
@@ -113,7 +230,7 @@ where
         let group = self
             .device
             .create_bind_group(&BindGroupDesc {
-                label: Some("Forward capture surface composite".into()),
+                label: Some("Forward surface composite".into()),
                 layout: &program.layout,
                 entries: &[
                     BindGroupEntry {
@@ -134,10 +251,52 @@ where
             target: target.clone(),
             target_view: target_view.clone(),
             target_desc: desc.clone(),
-            target_instance: receiver.frame.target_instance,
+            target_instance,
             device: self.device.id(),
-            extent: receiver.extent,
-            color_format: image.format(),
+            extent,
+            target_format,
         })
     }
+}
+
+fn validate_composite_source<B: ResourceBackend>(
+    device: &Device<B>,
+    target: &Texture<B>,
+    target_view: &TextureView<B>,
+    desc: &TextureDesc,
+    extent: [u32; 2],
+) -> std::result::Result<(), RendererError> {
+    if target.device() != device.id()
+        || target_view.device() != device.id()
+        || desc.dimension != TextureDimension::D2
+        || desc.extent != [extent[0], extent[1], 1]
+        || desc.array_layers != 1
+        || desc.mip_levels != 1
+        || desc.samples != 1
+        || desc.format != TextureFormat::Rgba8Unorm
+        || !desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+        || !matches!(device.texture_support(desc), Support::Supported(facts) if facts.filterable)
+    {
+        return Err(Error::InvalidState.into());
+    }
+    Ok(())
+}
+
+fn validate_oit_output<B: ResourceBackend>(
+    device: &Device<B>,
+    output: &crate::residency::OitTextureOwner<B>,
+    extent: [u32; 2],
+) -> std::result::Result<(), RendererError> {
+    if output.device != device.id()
+        || output.texture.device() != device.id()
+        || output.view.device() != device.id()
+        || output.view_desc.format != output.desc.format
+        || output.view_desc.dimension != TextureViewDimension::D2
+        || output.view_desc.aspects != TextureAspects::COLOR
+        || output.view_desc.mips != (0..1)
+        || output.view_desc.layers != (0..1)
+    {
+        return Err(Error::InvalidState.into());
+    }
+    validate_composite_source(device, &output.texture, &output.view, &output.desc, extent)
 }

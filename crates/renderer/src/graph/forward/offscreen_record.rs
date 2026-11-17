@@ -3,7 +3,7 @@ use super::shared_record::{self, RecordSlots};
 use super::*;
 
 impl<B: ResourceBackend> ForwardPlan<B> {
-    fn record_slots(&self) -> RecordSlots<'_> {
+    pub(super) fn record_slots(&self) -> RecordSlots<'_> {
         RecordSlots {
             device: self.id.device,
             topology: self.topology,

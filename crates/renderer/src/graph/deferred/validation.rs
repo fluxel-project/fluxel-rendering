@@ -1,12 +1,11 @@
 //! Concrete pre-recording checks for the offscreen Deferred frame.
 
 use super::{
-    DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
     declaration_validation::{
         matches_final_target_template, matches_gbuffer_template, validate_deformation,
         validate_draw_uniforms, validate_uploads,
     },
-    draw_accesses,
+    draw_accesses, DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
 };
 
 pub(super) fn validate_frame_inputs<B: ResourceBackend>(

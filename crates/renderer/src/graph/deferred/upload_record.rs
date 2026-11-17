@@ -26,6 +26,18 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         B: CommandBackend,
     {
         let bindings = self.record_bindings(&frame)?;
+        self.record_body_upload_with_bindings(encoder, frame, &bindings)
+    }
+
+    pub(super) fn record_body_upload_with_bindings(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        bindings: &FrameBindings<'_, B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend + ResourceBackend,
+    {
         let pass = bindings.pass(self.upload_pass)?;
         for upload in &frame.resident_upload.vertices {
             let slot = *self

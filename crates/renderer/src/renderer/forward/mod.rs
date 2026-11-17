@@ -13,6 +13,9 @@ use fluxel_rhi::{
 };
 use std::sync::Arc;
 
+mod borrowed_attachments;
+pub(in crate::renderer) use borrowed_attachments::BorrowedForwardAttachments;
+
 /// Cumulative traffic and completed-product reuse in the Forward coordinator.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ForwardCacheStats {
@@ -86,12 +89,88 @@ where
                 }
             };
         match work {
+            super::PendingWork::ForwardDeferredCapture { _producer, .. }
+            | super::PendingWork::ForwardDeferredCaptureSurface { _producer, .. } => {
+                publish(
+                    &_producer.frame.resident,
+                    &_producer.publication,
+                    &mut self.forward_residency,
+                );
+            }
+            super::PendingWork::DeferredForwardCapture {
+                _composition,
+                _receiver,
+                ..
+            }
+            | super::PendingWork::DeferredForwardCaptureSurface {
+                _composition,
+                _receiver,
+                ..
+            } => {
+                if let Some(composition) = _composition {
+                    publish(
+                        &composition.frame.resident,
+                        &composition.publication,
+                        &mut self.forward_residency,
+                    );
+                }
+                publish(
+                    &_receiver.frame.resident,
+                    &_receiver.publication,
+                    &mut self.forward_residency,
+                );
+            }
+            super::PendingWork::DeferredCapture {
+                _composition: Some(composition),
+                ..
+            }
+            | super::PendingWork::DeferredCaptureSurface {
+                _composition: Some(composition),
+                ..
+            } => {
+                publish(
+                    &composition.frame.resident,
+                    &composition.publication,
+                    &mut self.forward_residency,
+                );
+            }
             super::PendingWork::Forward {
+                _frame,
+                publication,
+                ..
+            }
+            | super::PendingWork::ForwardOitSurface {
                 _frame,
                 publication,
                 ..
             } => {
                 publish(&_frame.resident, publication, &mut self.forward_residency);
+            }
+            super::PendingWork::DeferredTransparent {
+                _transparent,
+                publication,
+                ..
+            }
+            | super::PendingWork::DeferredOit {
+                _transparent,
+                publication,
+                ..
+            }
+            | super::PendingWork::DeferredOitSurface {
+                _transparent,
+                publication,
+                ..
+            }
+            | super::PendingWork::DeferredTransparentSurface {
+                _transparent,
+                publication,
+                ..
+            } => {
+                publish(
+                    &_transparent.resident,
+                    publication,
+                    &mut self.forward_residency,
+                );
             }
             super::PendingWork::ForwardSurface {
                 _frame,
@@ -101,6 +180,20 @@ where
                 publish(&_frame.resident, publication, &mut self.forward_residency);
             }
             super::PendingWork::CaptureForward {
+                _capture,
+                _receiver,
+                capture_publication,
+                receiver_publication,
+                ..
+            }
+            | super::PendingWork::CaptureOit {
+                _capture,
+                _receiver,
+                capture_publication,
+                receiver_publication,
+                ..
+            }
+            | super::PendingWork::CaptureOitSurface {
                 _capture,
                 _receiver,
                 capture_publication,
@@ -130,7 +223,12 @@ where
     }
     pub(super) fn recycle_completed_readback(&mut self, work: super::PendingWork<B>, slot: usize) {
         match work {
-            super::PendingWork::Forward { _frame, .. } => {
+            super::PendingWork::Forward { _frame, _oit, .. } => {
+                if _oit.is_some() {
+                    // OIT samples the opaque target; the ordinary pool expects
+                    // a final CopySrc target. Retire this frame at completion.
+                    return;
+                }
                 let frame = *_frame;
                 let had_draws = !frame.draws.is_empty();
                 self.forward_frames[slot] =
@@ -191,6 +289,8 @@ impl ForwardProgramKey {
     }
 }
 pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
+    /// Immutable facts of the concrete cached pipeline and its layouts.
+    /// OIT must compare against these, not reconstruct expected facts.
     pub(super) key: ForwardProgramKey,
     pub(super) pipeline: RasterPipeline<B>,
     pub(super) material_layout: BindGroupLayout<B>,
@@ -200,20 +300,36 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
 }
 
 mod assembly;
+pub(in crate::renderer) use assembly::AssembledForwardTarget;
+pub(in crate::renderer) use composed::order_draws as order_forward_draws;
 mod capture_entry;
 mod capture_execute;
+mod capture_oit_entry;
+mod capture_oit_execute;
 mod captured;
 mod composed;
 mod composed_pair;
 mod depth;
 mod entry;
 mod execute;
+mod oit_composed;
+mod oit_composed_pair;
+mod oit_entry;
+mod oit_execute;
+pub(in crate::renderer) use oit_execute::OitExecutionTarget;
+mod oit_order;
+pub(in crate::renderer) use oit_order::order_oit_draws as order_forward_oit_draws;
+mod oit_prepared;
+mod oit_program;
+mod oit_resources;
+pub(super) use oit_resources::OitFrameResources;
 mod prepare;
-mod prepare_programs;
+mod prepare_entry;
+mod prepare_frames;
 mod sampler;
 mod surface_composite;
-mod texture_upload;
 mod target_admission;
+mod texture_upload;
 #[cfg(test)]
 pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{
@@ -224,6 +340,10 @@ pub(crate) use sampler::{
     validate_ordinary_sampler,
 };
 mod program;
+mod program_selection;
+pub(in crate::renderer) use capture_entry::{capture_assets, validate_receiver_sources};
+pub(in crate::renderer) use capture_oit_entry::CaptureOitSide;
+pub(in crate::renderer) use captured::CaptureTextureOwner;
 pub use captured::CaptureTextureSlot;
 pub(crate) use surface_composite::SurfaceCompositeOwner;
 

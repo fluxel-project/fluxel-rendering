@@ -4,6 +4,31 @@ use super::assembly::{AssembledForward, AssembledForwardTarget};
 use super::*;
 use std::{sync::Arc, time::Instant};
 
+fn receiver_contribution<B: ResourceBackend>(
+    context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
+    topology: crate::FrameTopology,
+) -> std::result::Result<(), crate::PipelineError> {
+    match topology {
+        crate::FrameTopology::OpaqueForward => context.opaque(|pass| {
+            pass.depends_on_uploads()?;
+            pass.read_vertex_streams()?;
+            pass.read_frame_uniforms()?;
+            pass.read_sampled_textures()?;
+            pass.write_selected_depth()?;
+            pass.write_main_color()
+        }),
+        crate::FrameTopology::SortedForward => context.sorted(|pass| {
+            pass.depends_on_uploads()?;
+            pass.read_vertex_streams()?;
+            pass.read_frame_uniforms()?;
+            pass.read_sampled_textures()?;
+            pass.write_selected_depth()?;
+            pass.read_write_main_color()
+        }),
+        _ => Err(crate::PipelineError::InvalidPhaseContribution),
+    }
+}
+
 impl<B> Renderer<B>
 where
     B: ExecutionBackend
@@ -23,6 +48,7 @@ where
         producer_slot: CaptureTextureSlot,
         extent: [u32; 2],
         capture_topology: crate::FrameTopology,
+        receiver_topology: crate::FrameTopology,
         depth_mode: crate::ForwardDepthMode,
         assets: &crate::ForwardAssets,
         surface: Option<SurfaceImage<B>>,
@@ -40,6 +66,18 @@ where
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
+        // The receiver is assembled after its producer, but its target facts
+        // are already known. Admit a transparent receiver before any producer
+        // allocation so an unsupported final target cannot strand that work.
+        super::target_admission::admit(
+            &self.device,
+            receiver_topology,
+            extent,
+            TextureFormat::Rgba8Unorm,
+            false,
+            surface.is_some(),
+        )
+        .map_err(|error| self.observe_forward_error("capture receiver blend admission", error))?;
         let capture = self
             .assemble_prepared_forward(
                 snapshot.clone(),
@@ -70,9 +108,7 @@ where
             topology: _,
             batch_stats: _,
             preparation_elapsed_ns: _,
-            buffer_allocations: capture_buffer_allocations,
-            buffer_allocation_bytes: capture_buffer_allocation_bytes,
-            texture_allocations: capture_texture_allocations,
+            allocations: capture_allocations,
         } = capture
         else {
             return Err(Error::InvalidState.into());
@@ -87,13 +123,18 @@ where
             .environment_irradiance
             .clone()
             .filter(|_| receiver_input.prepared().uses_environment_irradiance());
+        let receiver_depth_mode = if receiver_topology == crate::FrameTopology::SortedForward {
+            crate::ForwardDepthMode::Depth32LessEqualWrite
+        } else {
+            depth_mode
+        };
         let receiver = self
             .assemble_prepared_forward(
                 snapshot,
                 vec![receiver_input],
                 extent,
-                crate::FrameTopology::OpaqueForward,
-                depth_mode,
+                receiver_topology,
+                receiver_depth_mode,
                 assets,
                 None,
                 TextureFormat::Rgba8Unorm,
@@ -117,9 +158,7 @@ where
             topology: receiver_topology,
             batch_stats: _,
             preparation_elapsed_ns,
-            buffer_allocations,
-            buffer_allocation_bytes,
-            texture_allocations,
+            allocations: receiver_allocations,
         } = receiver
         else {
             return Err(Error::InvalidState.into());
@@ -213,18 +252,18 @@ where
             self.forward_stats.accepted_buffer_allocations = self
                 .forward_stats
                 .accepted_buffer_allocations
-                .saturating_add(capture_buffer_allocations)
-                .saturating_add(buffer_allocations);
+                .saturating_add(capture_allocations.buffer_count)
+                .saturating_add(receiver_allocations.buffer_count);
             self.forward_stats.accepted_buffer_allocation_bytes = self
                 .forward_stats
                 .accepted_buffer_allocation_bytes
-                .saturating_add(capture_buffer_allocation_bytes)
-                .saturating_add(buffer_allocation_bytes);
+                .saturating_add(capture_allocations.buffer_bytes)
+                .saturating_add(receiver_allocations.buffer_bytes);
             self.forward_stats.accepted_texture_allocations = self
                 .forward_stats
                 .accepted_texture_allocations
-                .saturating_add(capture_texture_allocations)
-                .saturating_add(texture_allocations);
+                .saturating_add(capture_allocations.texture_count)
+                .saturating_add(receiver_allocations.texture_count);
             submission
         })
     }
@@ -255,16 +294,7 @@ where
             capture_topology,
             receiver_topology,
             capture_contribute,
-            |context| {
-                context.opaque(|pass| {
-                    pass.depends_on_uploads()?;
-                    pass.read_vertex_streams()?;
-                    pass.read_frame_uniforms()?;
-                    pass.read_sampled_textures()?;
-                    pass.write_selected_depth()?;
-                    pass.write_main_color()
-                })
-            },
+            |context| receiver_contribution(context, receiver_topology),
         )
         .map_err(|error| self.forward_plan_error("capture graph declaration", error))?;
         let id = self.next_forward_plan_id()?;
@@ -391,16 +421,7 @@ where
             capture_topology,
             receiver_topology,
             capture_contribute,
-            |context| {
-                context.opaque(|pass| {
-                    pass.depends_on_uploads()?;
-                    pass.read_vertex_streams()?;
-                    pass.read_frame_uniforms()?;
-                    pass.read_sampled_textures()?;
-                    pass.write_selected_depth()?;
-                    pass.write_main_color()
-                })
-            },
+            |context| receiver_contribution(context, receiver_topology),
         )
         .map_err(|error| self.forward_plan_error("capture surface graph declaration", error))?;
         let id = self.next_forward_plan_id()?;

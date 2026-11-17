@@ -10,11 +10,14 @@ use fluxel_material::{
     CompiledMaterialVariant, MaterialAsset, MaterialCompiler, MaterialDefinition, MaterialError,
 };
 use fluxel_shader::{
-    ShaderArtifact, ShaderComposer, ShaderCompositionRequest, ShaderError, VertexInputDeclaration,
+    BindingKind, BindingShape, ShaderArtifact, ShaderComposer, ShaderCompositionRequest,
+    ShaderError, ShaderStage, VertexInputDeclaration,
 };
 
 use super::{
-    GeometryError, GeometryLayout, PreparedGeometry, forward_schema::MaterialBindingSchema,
+    GeometryError, GeometryLayout, PreparedGeometry,
+    forward_fragment::{OitDepthPrecision, OitDrawStage},
+    forward_schema::MaterialBindingSchema,
 };
 
 /// The mutually validated logical products needed by a later Forward draw.
@@ -26,6 +29,7 @@ pub struct PreparedMaterial {
     environment_irradiance: bool,
     specular_ibl: bool,
     transmission: bool,
+    oit_fragment: Option<(OitDrawStage, OitDepthPrecision)>,
     binding_schema: Option<MaterialBindingSchema>,
 }
 
@@ -54,6 +58,12 @@ impl PreparedMaterial {
 
     pub(crate) fn uses_transmission(&self) -> bool {
         self.transmission
+    }
+
+    /// Returns the renderer-owned OIT shader stage and its admitted extrema
+    /// representation when this artifact was prepared for dual depth peeling.
+    pub(crate) fn oit_fragment(&self) -> Option<(OitDrawStage, OitDepthPrecision)> {
+        self.oit_fragment
     }
 
     pub(crate) fn uses_environment_irradiance(&self) -> bool {
@@ -91,6 +101,8 @@ pub enum MaterialPreparationError {
     },
     /// The selected environment route does not match the reflected sampling bindings.
     InvalidEnvironmentRoute,
+    /// Renderer-owned OIT metadata does not match the reflected texture ABI.
+    InvalidOitFragmentRoute,
 }
 
 impl fmt::Display for MaterialPreparationError {
@@ -113,6 +125,9 @@ impl fmt::Display for MaterialPreparationError {
             }
             Self::InvalidEnvironmentRoute => {
                 formatter.write_str("invalid renderer environment route")
+            }
+            Self::InvalidOitFragmentRoute => {
+                formatter.write_str("invalid renderer OIT fragment route")
             }
         }
     }
@@ -229,6 +244,7 @@ pub fn prepare_material(
             }
         }
     }
+    let oit_fragment = oit_fragment_route(&request, shader.interface().bindings())?;
     Ok(PreparedMaterial {
         material,
         shader,
@@ -236,8 +252,54 @@ pub fn prepare_material(
         environment_irradiance,
         specular_ibl,
         transmission,
+        oit_fragment,
         binding_schema: None,
     })
+}
+
+fn oit_fragment_route(
+    request: &ShaderCompositionRequest,
+    bindings: &[fluxel_shader::ReflectedBinding],
+) -> Result<Option<(OitDrawStage, OitDepthPrecision)>, MaterialPreparationError> {
+    let stage = match request
+        .static_options
+        .get("renderer.forward_fragment_stage")
+        .map(String::as_str)
+    {
+        Some("ordinary") | None => return Ok(None),
+        Some("oit-initial-depth") => OitDrawStage::InitialDepth,
+        Some("oit-peel") => OitDrawStage::Peel,
+        Some(_) => return Err(MaterialPreparationError::InvalidOitFragmentRoute),
+    };
+    let precision = match request
+        .static_options
+        .get("renderer.oit_depth_precision")
+        .map(String::as_str)
+    {
+        Some("rg32float") => OitDepthPrecision::Rg32Float,
+        Some("rg16float") => OitDepthPrecision::Rg16Float,
+        _ => return Err(MaterialPreparationError::InvalidOitFragmentRoute),
+    };
+    let expected = match stage {
+        OitDrawStage::InitialDepth => &[0][..],
+        OitDrawStage::Peel => &[0, 1][..],
+    };
+    let valid = bindings.iter().filter(|actual| actual.group == 3).count() == expected.len()
+        && expected.iter().all(|binding| {
+            bindings.iter().any(|actual| {
+                actual.group == 3
+                    && actual.binding == *binding
+                    && actual.kind == BindingKind::Texture
+                    && actual.shape == Some(BindingShape::Texture2dF32)
+                    && actual.visibility.contains(&ShaderStage::Fragment)
+                    && actual.read
+                    && !actual.write
+            })
+        });
+    if !valid {
+        return Err(MaterialPreparationError::InvalidOitFragmentRoute);
+    }
+    Ok(Some((stage, precision)))
 }
 
 fn validate_vertex_semantics(

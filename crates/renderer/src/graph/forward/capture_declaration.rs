@@ -16,8 +16,8 @@ use super::super::mip_generation::MipGenerationPass;
 use super::{
     BufferGraphFact, BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError,
     GraphBuilder, GraphPass, TextureGraphFact, TextureSlot, copy_write_uses,
-    texture_copy_read_uses, validate_depth_spec, validate_forward_topology, validate_graph_draw,
-    validate_resident_texture_devices, whole,
+    texture_copy_read_uses, validate_depth_spec, validate_depth_topology,
+    validate_forward_topology, validate_graph_draw, validate_resident_texture_devices, whole,
 };
 
 /// All Graph slots imported for one Forward frame namespace.
@@ -38,8 +38,13 @@ pub(super) struct CaptureFrameSlots {
     pub(super) readback: BufferSlot,
 }
 
+/// Actual resident imports which may be reused by namespaces in one Graph.
+///
+/// Only imports whose owner is already complete are retained here.  Resources
+/// with this frame's upload work deliberately get a fresh handle/version so a
+/// second namespace cannot observe an unrecorded or partially written product.
 #[derive(Default)]
-pub(super) struct SharedResidentImports {
+pub(in crate::graph) struct SharedResidentImports {
     streams: HashMap<
         crate::graph::ResourceInstanceId,
         (crate::graph::definition::BufferHandle, BufferGraphFact),
@@ -49,6 +54,9 @@ pub(super) struct SharedResidentImports {
         (crate::graph::definition::TextureHandle, TextureGraphFact),
     >,
 }
+
+#[path = "capture_shared_imports.rs"]
+mod capture_shared_imports;
 
 /// The five-pass same-submission capture contract.
 pub(crate) struct CaptureForwardDeclaration {
@@ -107,22 +115,9 @@ where
         return Err(Error::InvalidState.into());
     }
     let receiver_capture = capture_texture_slots(&receiver_spec)?;
-    let receiver_texture = receiver_capture
-        .iter()
-        .position(|capture| *capture)
-        .and_then(|index| receiver.resident.textures.get(index))
-        .ok_or(Error::InvalidState)?;
-    // The sampled receiver binding must be the exact producer allocation;
-    // matching declarations alone cannot establish resource identity.
-    if receiver_texture.instance != capture.frame.target_instance
-        || receiver_texture.texture.device() != capture.frame.target.device()
-        || receiver_texture.view.device() != capture.frame.target_view.device()
-        || !same_texture_owner_desc(&receiver_texture.desc, &capture.frame.target_desc)
-        || receiver_texture.incoming != capture.frame.target_incoming
-        || receiver_texture.layout != capture.frame.target_layout
-    {
-        return Err(Error::InvalidState.into());
-    }
+    // Validate every named alias against the actual producer before adding
+    // either namespace to the Graph, including aliases beyond the first slot.
+    super::capture_bindings::validate_capture_alias(capture, receiver)?;
     validate_spec(device, &capture_spec, capture_topology, false)?;
     validate_spec(device, &receiver_spec, receiver_topology, true)?;
     let lane = device
@@ -191,7 +186,7 @@ where
     })
 }
 
-pub(super) fn same_texture_owner_desc(
+pub(in crate::graph) fn same_texture_owner_desc(
     left: &fluxel_rhi::api::TextureDesc,
     right: &fluxel_rhi::api::TextureDesc,
 ) -> bool {
@@ -205,7 +200,7 @@ pub(super) fn same_texture_owner_desc(
         && left.view_formats == right.view_formats
 }
 
-pub(super) fn same_buffer_owner_desc(
+pub(in crate::graph) fn same_buffer_owner_desc(
     left: &fluxel_rhi::api::BufferDesc,
     right: &fluxel_rhi::api::BufferDesc,
 ) -> bool {
@@ -266,9 +261,7 @@ pub(super) fn validate_spec<B: ResourceBackend>(
     }
     validate_forward_topology(topology, spec.draws.len(), spec.shape.batches.len())?;
     validate_depth_spec(spec)?;
-    if spec.depth.is_some() && topology != FrameTopology::OpaqueForward {
-        return Err(Error::InvalidState.into());
-    }
+    validate_depth_topology(topology, spec.depth.is_some())?;
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
         if (!receiver
@@ -301,6 +294,21 @@ pub(super) fn import_frame(
     spec: &ForwardGraphSpec,
     aliases: Option<&[Option<crate::graph::definition::TextureHandle>]>,
     shared: &mut SharedResidentImports,
+) -> std::result::Result<(CaptureFrameSlots, FrameHandles), ForwardPlanBuildError> {
+    import_frame_inner(graph, spec, aliases, shared, None)
+}
+
+/// Imports the material namespace while retaining attachments already declared
+/// by the enclosing Graph. The caller validates their actual owner identities.
+pub(super) fn import_frame_inner(
+    graph: &mut GraphBuilder,
+    spec: &ForwardGraphSpec,
+    aliases: Option<&[Option<crate::graph::definition::TextureHandle>]>,
+    shared: &mut SharedResidentImports,
+    attachments: Option<(
+        crate::graph::definition::TextureHandle,
+        crate::graph::definition::TextureHandle,
+    )>,
 ) -> std::result::Result<(CaptureFrameSlots, FrameHandles), ForwardPlanBuildError> {
     let resident_upload = graph
         .import_buffer_desc(
@@ -369,7 +377,17 @@ pub(super) fn import_frame(
         .iter()
         .cloned()
         .zip(&spec.stream_instances)
-        .map(|(owner, instance)| {
+        .enumerate()
+        .map(|(index, (owner, instance))| {
+            let fresh = spec
+                .vertex_uploads
+                .iter()
+                .any(|upload| upload.stream == index);
+            if fresh {
+                return graph
+                    .import_buffer_desc(owner.desc.clone(), owner.incoming)
+                    .map_err(|_| Error::InvalidState);
+            }
             if let Some((handle, saved)) = shared.streams.get(instance) {
                 if !same_buffer_owner_desc(&saved.desc, &owner.desc)
                     || saved.incoming != owner.incoming
@@ -405,6 +423,18 @@ pub(super) fn import_frame(
                 .map(Ok)
                 .unwrap_or_else(|| {
                     let instance = spec.texture_instances[index];
+                    if uploaded[index] {
+                        if owner.incoming.stages != fluxel_rhi::api::StageMask::EMPTY
+                            || owner.incoming.accesses != fluxel_rhi::api::AccessMask::EMPTY
+                            || owner.layout != ImageLayout::Undefined
+                        {
+                            return Err(Error::InvalidState);
+                        }
+                        cold_textures[index] = true;
+                        return graph
+                            .create_texture(owner.desc.clone())
+                            .map_err(|_| Error::InvalidState);
+                    }
                     if let Some((handle, saved)) = shared.textures.get(&instance) {
                         if !same_texture_owner_desc(&saved.desc, &owner.desc)
                             || saved.incoming != owner.incoming
@@ -414,26 +444,9 @@ pub(super) fn import_frame(
                         }
                         return Ok(*handle);
                     }
-                    let handle = if uploaded[index] {
-                        if owner.incoming.stages != fluxel_rhi::api::StageMask::EMPTY
-                            || owner.incoming.accesses != fluxel_rhi::api::AccessMask::EMPTY
-                            || owner.layout != ImageLayout::Undefined
-                        {
-                            return Err(Error::InvalidState);
-                        }
-                        cold_textures[index] = true;
-                        graph
-                            .create_texture(owner.desc.clone())
-                            .map_err(|_| Error::InvalidState)?
-                    } else {
-                        graph
-                            .import_texture_with_state(
-                                owner.desc.clone(),
-                                owner.incoming,
-                                owner.layout,
-                            )
-                            .map_err(|_| Error::InvalidState)?
-                    };
+                    let handle = graph
+                        .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                        .map_err(|_| Error::InvalidState)?;
                     shared.textures.insert(instance, (handle, owner.clone()));
                     Ok(handle)
                 })
@@ -448,22 +461,28 @@ pub(super) fn import_frame(
                 .map_err(|_| Error::InvalidState)
         })
         .transpose()?;
-    let target = graph
-        .import_texture_with_state(
-            spec.target.desc.clone(),
-            spec.target.incoming,
-            spec.target.layout,
-        )
-        .map_err(|_| Error::InvalidState)?;
-    let depth = spec
-        .depth
-        .as_ref()
-        .map(|owner| {
-            graph
-                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
-                .map_err(|_| Error::InvalidState)
-        })
-        .transpose()?;
+    let (target, depth) = match attachments {
+        Some((color, depth)) => (color, Some(depth)),
+        None => {
+            let target = graph
+                .import_texture_with_state(
+                    spec.target.desc.clone(),
+                    spec.target.incoming,
+                    spec.target.layout,
+                )
+                .map_err(|_| Error::InvalidState)?;
+            let depth = spec
+                .depth
+                .as_ref()
+                .map(|owner| {
+                    graph
+                        .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                        .map_err(|_| Error::InvalidState)
+                })
+                .transpose()?;
+            (target, depth)
+        }
+    };
     let readback = graph
         .import_buffer_desc(spec.readback.desc.clone(), spec.readback.incoming)
         .map_err(|_| Error::InvalidState)?;
