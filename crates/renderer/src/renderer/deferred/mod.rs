@@ -17,6 +17,8 @@ mod resident_assembly;
 mod scene_prepare;
 mod surface_prepare;
 mod templates;
+mod transparent_entry;
+mod transparent_execute;
 
 pub use cache::DeferredCacheStats;
 pub(crate) use program::DeferredProgramCache;
@@ -160,11 +162,41 @@ where
                 crate::PipelineError::InvalidPhaseContribution,
             ));
         }
-        let inputs =
-            crate::prepare_forward(&selected, assets, &mut fluxel_shader::ShaderComposer::new())
-                .map_err(RendererError::ForwardPreparation)?;
+        let inputs = crate::preparation::prepare_forward_with_lighting(
+            &selected,
+            assets,
+            &mut fluxel_shader::ShaderComposer::new(),
+            self.environment_irradiance.is_some(),
+            self.environment_specular.is_some(),
+        )
+        .map_err(RendererError::ForwardPreparation)?;
         if inputs.is_empty() {
             return Err(Error::Unsupported("Deferred requires visible geometry").into());
+        }
+        if inputs.iter().any(|input| {
+            matches!(
+                input.material().value().surface_policy().alpha_mode,
+                fluxel_material::SurfaceAlphaMode::Blend
+                    | fluxel_material::SurfaceAlphaMode::MaskBlend,
+            )
+        }) {
+            let inputs = super::forward::order_forward_draws(
+                pipeline,
+                &selected,
+                inputs,
+                crate::FrameTopology::SortedForward,
+            )
+            .map_err(RendererError::DeferredPipeline)?;
+            return self
+                .submit_prepared_deferred_transparent(
+                    snapshot.clone(),
+                    inputs,
+                    selected.view_record().extent,
+                    assets,
+                    None,
+                    |context| pipeline.contribute_deferred(&selected, context),
+                )
+                .await;
         }
         self.deferred_residency.retain_assets(assets);
         let frame = self
@@ -225,11 +257,41 @@ where
                 crate::PipelineError::InvalidPhaseContribution,
             ));
         }
-        let inputs =
-            crate::prepare_forward(&selected, assets, &mut fluxel_shader::ShaderComposer::new())
-                .map_err(RendererError::ForwardPreparation)?;
+        let inputs = crate::preparation::prepare_forward_with_lighting(
+            &selected,
+            assets,
+            &mut fluxel_shader::ShaderComposer::new(),
+            self.environment_irradiance.is_some(),
+            self.environment_specular.is_some(),
+        )
+        .map_err(RendererError::ForwardPreparation)?;
         if inputs.is_empty() {
             return Err(Error::Unsupported("Deferred surface requires visible geometry").into());
+        }
+        if inputs.iter().any(|input| {
+            matches!(
+                input.material().value().surface_policy().alpha_mode,
+                fluxel_material::SurfaceAlphaMode::Blend
+                    | fluxel_material::SurfaceAlphaMode::MaskBlend,
+            )
+        }) {
+            let inputs = super::forward::order_forward_draws(
+                pipeline,
+                &selected,
+                inputs,
+                crate::FrameTopology::SortedForward,
+            )
+            .map_err(RendererError::DeferredPipeline)?;
+            return self
+                .submit_prepared_deferred_transparent(
+                    snapshot.clone(),
+                    inputs,
+                    selected.view_record().extent,
+                    assets,
+                    Some(image),
+                    |context| pipeline.contribute_deferred(&selected, context),
+                )
+                .await;
         }
         self.deferred_residency.retain_assets(assets);
         let frame = self
