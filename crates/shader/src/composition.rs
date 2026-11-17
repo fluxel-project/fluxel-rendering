@@ -322,6 +322,11 @@ fn binding_shape(module: &naga::Module, global: &naga::GlobalVariable) -> Option
                     },
             },
         ) => Some(BindingShape::Texture2dF32),
+        (naga::AddressSpace::Handle, naga::TypeInner::Sampler { comparison }) => {
+            Some(BindingShape::Sampler {
+                comparison: *comparison,
+            })
+        }
         _ => None,
     }
 }

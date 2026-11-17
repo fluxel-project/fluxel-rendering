@@ -163,3 +163,23 @@ complete PBR, a general programmable pipeline, arbitrary backend support,
 native-binary caching, or device execution merely because the logical artifact
 is valid. Future consumers may add only the narrow request, reflection, or
 requirement vocabulary exercised by an actual producer and execution path.
+
+## Planned richer material consumers
+
+Sampler reflection preserves the WGSL comparison mode as
+`BindingShape::Sampler { comparison }`. WGSL does not describe filtering, so
+consumers must check filtering against the actual sampler and texture facts.
+Logical validation rejects a declared comparison mode that disagrees with the
+program; it does not establish device support.
+
+The [Material direction](../../material/documents/design.md#babylon-aligned-material-direction-planned)
+requires one node-authored definition to feed Forward and Deferred, including
+transparent and refractive products. Shader continues to consume generic ordered
+source units, typed callable/binding interfaces and static requirements. It does
+not import Material node types, select blend policy or allocate intermediate
+images. New sampler/texture interfaces and evaluator inputs require actual
+reflection and both consumer templates before their signatures stabilize.
+Preserve source attribution through generated wrappers; include structural
+interfaces and static choices in artifact identity while excluding dynamic
+instance values. Naga validation remains logical evidence; selected-device
+admission must independently prove creation, binding and execution support.

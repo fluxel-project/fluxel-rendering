@@ -181,6 +181,64 @@ fn specified_binding_shape_and_visibility_must_match_actual_program() {
 }
 
 #[test]
+fn sampler_reflection_keeps_comparison_mode_but_not_unrepresentable_filtering() {
+    let source = r#"
+        @group(0) @binding(0) var ordinary: sampler;
+        @group(0) @binding(1) var comparison: sampler_comparison;
+        @group(0) @binding(2) var depth: texture_depth_2d;
+        @group(0) @binding(3) var color: texture_2d<f32>;
+
+        @fragment fn main() -> @location(0) vec4<f32> {
+            let compared = textureSampleCompareLevel(depth, comparison, vec2<f32>(0.5), 0.5);
+            return textureSample(color, ordinary, vec2<f32>(0.5)) * compared;
+        }
+    "#;
+    let base = request(source).with_entry_point(EntryPoint::new("main", ShaderStage::Fragment));
+    let matching = base
+        .clone()
+        .with_binding(
+            BindingDeclaration::new(0, 0, BindingKind::Sampler)
+                .with_shape(BindingShape::Sampler { comparison: false }),
+        )
+        .with_binding(
+            BindingDeclaration::new(0, 1, BindingKind::Sampler)
+                .with_shape(BindingShape::Sampler { comparison: true }),
+        )
+        .with_binding(BindingDeclaration::new(0, 2, BindingKind::Texture))
+        .with_binding(BindingDeclaration::new(0, 3, BindingKind::Texture));
+    let artifact = ShaderComposer::new().compose(&matching).unwrap();
+    assert!(artifact.interface().bindings().iter().any(|binding| {
+        binding.group == 0
+            && binding.binding == 0
+            && binding.shape == Some(BindingShape::Sampler { comparison: false })
+    }));
+    assert!(artifact.interface().bindings().iter().any(|binding| {
+        binding.group == 0
+            && binding.binding == 1
+            && binding.shape == Some(BindingShape::Sampler { comparison: true })
+    }));
+
+    let wrong_mode = base
+        .with_binding(
+            BindingDeclaration::new(0, 0, BindingKind::Sampler)
+                .with_shape(BindingShape::Sampler { comparison: true }),
+        )
+        .with_binding(
+            BindingDeclaration::new(0, 1, BindingKind::Sampler)
+                .with_shape(BindingShape::Sampler { comparison: true }),
+        )
+        .with_binding(BindingDeclaration::new(0, 2, BindingKind::Texture))
+        .with_binding(BindingDeclaration::new(0, 3, BindingKind::Texture));
+    assert!(matches!(
+        ShaderComposer::new().compose(&wrong_mode),
+        Err(fluxel_shader::ShaderError::BindingMismatch {
+            group: 0,
+            binding: 0
+        })
+    ));
+}
+
+#[test]
 fn access_is_attributed_to_each_selected_entry() {
     let source = "@group(0) @binding(0) var<storage, read_write> data: array<u32>;\n@compute @workgroup_size(1) fn read_main() { let value = data[0]; _ = value; }\n@compute @workgroup_size(1) fn write_main() { data[0] = 7u; }";
     let read = EntryPoint::new("read_main", ShaderStage::Compute);

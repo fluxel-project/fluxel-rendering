@@ -168,6 +168,15 @@ pub enum BindingShape {
     Uniform(ValueType),
     /// Non-arrayed, non-multisampled float 2D texture.
     Texture2dF32,
+    /// Sampler comparison mode declared by WGSL.
+    ///
+    /// WGSL distinguishes ordinary and comparison samplers, but does not
+    /// declare filterability. The consumer validates filtering against the
+    /// concrete sampler descriptor and sampled texture.
+    Sampler {
+        /// Whether WGSL declares this as a comparison sampler.
+        comparison: bool,
+    },
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 /// Entry-reachable use flags reported by the logical validator.
