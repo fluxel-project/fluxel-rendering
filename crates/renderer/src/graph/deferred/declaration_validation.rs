@@ -53,6 +53,7 @@ pub(super) fn validate_deformation<B: ResourceBackend>(
             != usize::try_from(deformation.upload.desc.size).unwrap_or(usize::MAX)
         || draw.vertex_layouts.len() != 1
         || draw.vertex_ranges.len() != 1
+        || draw.vertex_streams.as_slice() != [0]
         || u64::from(deformation.vertex_count).checked_mul(12) != Some(deformation.source_bytes)
         || deformation.groups != [deformation.vertex_count.div_ceil(64), 1, 1]
     {
@@ -65,7 +66,13 @@ pub(super) fn validate_draw_uniforms<B: ResourceBackend>(
     frame: &DeferredFrame<B>,
     alignment: u64,
 ) -> Result<()> {
-    validate_draw_uniform_ranges(&frame.draw, frame.frame.uniform_desc.size, alignment)
+    if frame.draws.is_empty() {
+        return Err(Error::InvalidRange);
+    }
+    for draw in &frame.draws {
+        validate_draw_uniform_ranges(draw, frame.frame.uniform_desc.size, alignment)?;
+    }
+    Ok(())
 }
 
 pub(super) fn validate_draw_uniform_ranges<B: ResourceBackend>(

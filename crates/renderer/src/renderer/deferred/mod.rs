@@ -7,9 +7,12 @@
 mod cache;
 mod deformation;
 mod deformed;
+mod draw_assembly;
 mod execute;
 mod prepare;
 mod program;
+mod resident_assembly;
+mod scene_prepare;
 mod surface_prepare;
 mod templates;
 
@@ -156,14 +159,12 @@ where
         let inputs =
             crate::prepare_forward(&selected, assets, &mut fluxel_shader::ShaderComposer::new())
                 .map_err(RendererError::ForwardPreparation)?;
-        let [input] = inputs.as_slice() else {
-            return Err(
-                Error::Unsupported("Deferred probe requires exactly one visible mesh").into(),
-            );
-        };
+        if inputs.is_empty() {
+            return Err(Error::Unsupported("Deferred requires visible geometry").into());
+        }
         self.deferred_residency.retain_assets(assets);
         let frame = self
-            .prepare_deferred_frame(input)
+            .prepare_deferred_frames(&inputs)
             .await
             .map_err(|error| self.observe_renderer_error(error))?;
         self.execute_deferred_probe(
@@ -223,14 +224,12 @@ where
         let inputs =
             crate::prepare_forward(&selected, assets, &mut fluxel_shader::ShaderComposer::new())
                 .map_err(RendererError::ForwardPreparation)?;
-        let [input] = inputs.as_slice() else {
-            return Err(
-                Error::Unsupported("Deferred surface requires exactly one visible mesh").into(),
-            );
-        };
+        if inputs.is_empty() {
+            return Err(Error::Unsupported("Deferred surface requires visible geometry").into());
+        }
         self.deferred_residency.retain_assets(assets);
         let frame = self
-            .prepare_deferred_surface_frame(input, format)
+            .prepare_deferred_surface_frames(&inputs, format)
             .await
             .map_err(|error| self.observe_renderer_error(error))?;
         self.execute_deferred_surface(

@@ -559,9 +559,9 @@ fn pbr_deferred_surface_consumes_actual_lease_format_and_exact_transform_owner()
         let crate::renderer::PendingWork::DeferredSurface { _frame, .. } = &pending.workload else {
             panic!("must retain an actual Deferred Surface owner");
         };
-        assert_eq!(_frame.draw.transform_bytes, 192);
+        assert_eq!(_frame.draws[0].transform_bytes, 192);
         assert_eq!(
-            _frame.draw.transform_range.end - _frame.draw.transform_range.start,
+            _frame.draws[0].transform_range.end - _frame.draws[0].transform_range.start,
             192
         );
         assert_eq!(_frame.color_format, format);

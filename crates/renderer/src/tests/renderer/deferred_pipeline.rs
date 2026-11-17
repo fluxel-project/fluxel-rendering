@@ -9,6 +9,62 @@ use crate::{
     PipelineError, PreparedFrame,
 };
 
+#[test]
+fn deferred_multi_record_refuses_an_incompatible_lighting_family_before_allocation() {
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (_, _, assets) = scene_and_assets();
+    let mut scene = RenderScene::new().unwrap();
+    let mut changes = RenderChangeSet::new();
+    changes.push(RenderChange::InsertView(
+        RenderView::new(RenderTransform::identity(), [8, 8]).unwrap(),
+    ));
+    for _ in 0..2 {
+        changes.push(RenderChange::Insert(RenderRecord {
+            resources: ForwardResources {
+                geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
+                material: SceneAssetRef::from_snapshot(&assets.materials[0]),
+                texture: SceneAssetRef::from_snapshot(&assets.textures[0]),
+                tint: [1.; 4],
+            },
+            transform: RenderTransform::identity(),
+            bounds: bounds(),
+        }));
+    }
+    let receipt = scene.apply(&changes).unwrap();
+    let before = (
+        native.created_buffers.load(Ordering::SeqCst),
+        native.created_textures.load(Ordering::SeqCst),
+        native.map_calls.load(Ordering::SeqCst),
+        native.command_calls.load(Ordering::SeqCst),
+    );
+    let result = block_on(renderer.submit_deferred(
+        &ExternalDeferredPipeline::new(),
+        scene.snapshot(),
+        receipt.inserted_views()[0],
+        bounds(),
+        &assets,
+    ));
+    assert!(
+        matches!(
+            result,
+            Err(RendererError::Rhi(Error::Unsupported(
+                "multiple Deferred draws require the UV0-normal MR family"
+            )))
+        ),
+        "family admission must be the actual refusal: {result:?}"
+    );
+    assert_eq!(
+        before,
+        (
+            native.created_buffers.load(Ordering::SeqCst),
+            native.created_textures.load(Ordering::SeqCst),
+            native.map_calls.load(Ordering::SeqCst),
+            native.command_calls.load(Ordering::SeqCst)
+        )
+    );
+}
+
 struct ExternalDeferredPipeline {
     callbacks: Cell<usize>,
 }

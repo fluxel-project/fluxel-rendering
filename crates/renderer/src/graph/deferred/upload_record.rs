@@ -65,7 +65,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 copy_read(),
             )?;
             pass.texture(
-                self.texture_slot,
+                *self
+                    .texture_slots
+                    .get(copy.texture)
+                    .ok_or(Error::InvalidRange)?,
                 whole_color(),
                 AccessKind::Write,
                 texture_copy_write(),
@@ -219,7 +222,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 copy_read(),
             )?;
             let material = pass.texture(
-                self.texture_slot,
+                *self
+                    .texture_slots
+                    .get(copy.texture)
+                    .ok_or(Error::InvalidRange)?,
                 whole_color(),
                 AccessKind::Write,
                 texture_copy_write(),

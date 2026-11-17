@@ -1,12 +1,11 @@
 //! Concrete pre-recording checks for the offscreen Deferred frame.
 
 use super::{
-    DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
     declaration_validation::{
         matches_final_target_template, matches_gbuffer_template, validate_deformation,
         validate_draw_uniforms, validate_uploads,
     },
-    draw_accesses,
+    draw_accesses, DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
 };
 
 pub(super) fn validate_frame_inputs<B: ResourceBackend>(
@@ -20,8 +19,7 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
         || device.capabilities().limits.uniform_offset_alignment == 0
         || frame.resident.streams.is_empty()
         || frame.resident.textures.is_empty()
-        || frame.draw.vertex_layouts.len() != frame.resident.streams.len()
-        || frame.draw.vertex_ranges.len() != frame.resident.streams.len()
+        || frame.draws.is_empty()
         || frame.uniform_upload.source.start >= frame.uniform_upload.source.end
         || frame.uniform_upload.destination.start >= frame.uniform_upload.destination.end
         || frame.uniform_upload.source.end - frame.uniform_upload.source.start
@@ -43,10 +41,11 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
     {
         return Err(Error::InvalidRange);
     }
-    if frame.draw.pipeline.device() != device.id()
-        || frame.draw.material_group.device() != device.id()
-        || frame.draw.transform_group.device() != device.id()
-        || frame.lighting_pipeline.device() != device.id()
+    if frame.draws.iter().any(|draw| {
+        draw.pipeline.device() != device.id()
+            || draw.material_group.device() != device.id()
+            || draw.transform_group.device() != device.id()
+    }) || frame.lighting_pipeline.device() != device.id()
         || frame.lighting_group.device() != device.id()
         || frame.composite_pipeline.device() != device.id()
         || frame.composite_group.device() != device.id()
@@ -96,7 +95,10 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
         if device.compute().is_none() {
             return Err(Error::Unsupported("compute"));
         }
-        validate_deformation(device, &frame.draw, deformation)?;
+        if frame.draws.len() != 1 {
+            return Err(Error::InvalidState);
+        }
+        validate_deformation(device, &frame.draws[0], deformation)?;
     }
     for (texture, format) in frame.gbuffer.iter().zip([
         TextureFormat::Rgba8Unorm,
@@ -123,6 +125,11 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
         return Err(Error::InvalidRange);
     }
     validate_uploads(frame)?;
-    draw_accesses(frame, &frame.draw)?;
+    for draw in &frame.draws {
+        if draw.texture >= frame.resident.textures.len() {
+            return Err(Error::InvalidRange);
+        }
+        draw_accesses(frame, draw)?;
+    }
     Ok(())
 }

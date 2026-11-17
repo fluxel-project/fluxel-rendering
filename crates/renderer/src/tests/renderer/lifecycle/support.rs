@@ -188,6 +188,8 @@ impl Renderer<WitnessBackend> {
     }
 }
 
+#[path = "../deferred_multi.rs"]
+mod deferred_multi_tests;
 #[path = "../deferred.rs"]
 mod deferred_tests;
 #[path = "../forward/cache.rs"]

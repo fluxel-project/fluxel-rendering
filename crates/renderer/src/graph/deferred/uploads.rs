@@ -34,12 +34,16 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
             return Err(Error::InvalidRange);
         }
     }
-    let mut texture_uploaded = false;
+    let mut textures = vec![false; resident.textures.len()];
     for copy in &uploads.textures {
-        if texture_uploaded
-            || copy.texture != 0
+        let texture = resident
+            .textures
+            .get(copy.texture)
+            .ok_or(Error::InvalidRange)?;
+        let uploaded = textures.get_mut(copy.texture).ok_or(Error::InvalidRange)?;
+        if std::mem::replace(uploaded, true)
             || !copy.source_offset.is_multiple_of(512)
-            || copy.extent != resident.textures[0].desc.extent
+            || copy.extent != texture.desc.extent
             || copy.rows_per_image != copy.extent[1]
             || copy.bytes_per_row == 0
             || !copy.bytes_per_row.is_multiple_of(256)
@@ -49,15 +53,19 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
         {
             return Err(Error::InvalidRange);
         }
-        texture_uploaded = true;
     }
-    let texture = &resident.textures[0];
-    let texture_ready = texture.incoming
-        == TextureUses {
-            stages: StageMask::FRAGMENT,
-            accesses: AccessMask::SHADER_READ,
-        }
-        && texture.layout == ImageLayout::ShaderReadOnly;
+    let textures_ready = textures
+        .iter()
+        .zip(&resident.textures)
+        .all(|(uploaded, texture)| {
+            *uploaded
+                || (texture.incoming
+                    == TextureUses {
+                        stages: StageMask::FRAGMENT,
+                        accesses: AccessMask::SHADER_READ,
+                    }
+                    && texture.layout == ImageLayout::ShaderReadOnly)
+        });
     let streams_ready = streams
         .iter()
         .zip(&resident.streams)
@@ -69,7 +77,7 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
                         accesses: AccessMask::VERTEX_READ,
                     }
         });
-    if (!texture_uploaded && !texture_ready) || !streams_ready {
+    if !textures_ready || !streams_ready {
         return Err(Error::InvalidRange);
     }
     Ok(())

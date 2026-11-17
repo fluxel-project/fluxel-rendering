@@ -39,211 +39,34 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             .map(|lane| lane.id)
             .ok_or(Error::WrongLane)?;
         let mut graph = GraphBuilder::default();
-        let resident_upload = graph
-            .import_buffer_desc(
-                frame.resident.upload_desc.clone(),
-                frame.resident.upload_incoming,
-            )
-            .map_err(|_| Error::InvalidState)?;
-        let frame_upload = graph
-            .import_buffer_desc(frame.frame.upload_desc.clone(), frame.frame.upload_incoming)
-            .map_err(|_| Error::InvalidState)?;
-        let uniform = graph
-            .import_buffer_desc(
-                frame.frame.uniform_desc.clone(),
-                frame.frame.uniform_incoming,
-            )
-            .map_err(|_| Error::InvalidState)?;
-        let streams = frame
-            .resident
-            .streams
-            .iter()
-            .map(|stream| graph.import_buffer_desc(stream.desc.clone(), stream.incoming))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| Error::InvalidState)?;
-        let material = graph
-            .import_texture_with_state(
-                frame.resident.textures[0].desc.clone(),
-                frame.resident.textures[0].incoming,
-                frame.resident.textures[0].layout,
-            )
-            .map_err(|_| Error::InvalidState)?;
-        let environment_upload = frame
-            .environment
-            .map(|owner| graph.import_buffer_desc(owner.upload_desc.clone(), owner.upload_incoming))
-            .transpose()
-            .map_err(|_| Error::InvalidState)?;
-        let environment = frame
-            .environment
-            .map(|owner| {
-                graph.import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
-            })
-            .transpose()
-            .map_err(|_| Error::InvalidState)?;
-        let specular_upload = frame
-            .specular
-            .map(|owner| graph.import_buffer_desc(owner.upload_desc.clone(), owner.upload_incoming))
-            .transpose()
-            .map_err(|_| Error::InvalidState)?;
-        let specular_view_uniform = frame
-            .specular
-            .map(|owner| {
-                graph.import_buffer_desc(
-                    owner.view_uniform_desc.clone(),
-                    owner.view_uniform_incoming,
-                )
-            })
-            .transpose()
-            .map_err(|_| Error::InvalidState)?;
-        let specular_radiance = frame
-            .specular
-            .map(|owner| {
-                graph.import_texture_with_state(
-                    owner.radiance.desc.clone(),
-                    owner.radiance.incoming,
-                    owner.radiance.layout,
-                )
-            })
-            .transpose()
-            .map_err(|_| Error::InvalidState)?;
-        let specular_brdf_lut = frame
-            .specular
-            .map(|owner| {
-                graph.import_texture_with_state(
-                    owner.brdf_lut.desc.clone(),
-                    owner.brdf_lut.incoming,
-                    owner.brdf_lut.layout,
-                )
-            })
-            .transpose()
-            .map_err(|_| Error::InvalidState)?;
-        let gbuffer = frame
-            .gbuffer
-            .iter()
-            .map(|texture| {
-                graph.import_texture_with_state(
-                    texture.desc.clone(),
-                    texture.incoming,
-                    texture.layout,
-                )
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| Error::InvalidState)?;
-        let effects = frame
-            .effects
-            .map(|texture| {
-                graph.import_texture_with_state(
-                    texture.desc.clone(),
-                    texture.incoming,
-                    texture.layout,
-                )
-            })
-            .transpose()
-            .map_err(|_| Error::InvalidState)?;
-        let (target, scene_color, surface_target, readback, row_pitch) = match frame.source {
-            super::record_view::RecordSource::Offscreen(owner) => (
-                Some(
-                    graph
-                        .import_texture_with_state(
-                            owner.frame.target_desc.clone(),
-                            owner.frame.target_incoming,
-                            owner.frame.target_layout,
-                        )
-                        .map_err(|_| Error::InvalidState)?,
-                ),
-                Some(
-                    graph
-                        .import_texture_with_state(
-                            owner.scene_color.desc.clone(),
-                            owner.scene_color.incoming,
-                            owner.scene_color.layout,
-                        )
-                        .map_err(|_| Error::InvalidState)?,
-                ),
-                None,
-                Some(
-                    graph
-                        .import_buffer_desc(
-                            owner.frame.readback_desc.clone(),
-                            owner.frame.readback_incoming,
-                        )
-                        .map_err(|_| Error::InvalidState)?,
-                ),
-                Some(owner.readback_row_pitch),
-            ),
-            super::record_view::RecordSource::Surface { frame: owner, .. } => {
-                let desc = fluxel_rhi::api::TextureDesc {
-                    label: Some("fluxel deferred surface lease".into()),
-                    dimension: fluxel_rhi::api::TextureDimension::D2,
-                    extent: [owner.extent[0], owner.extent[1], 1],
-                    array_layers: 1,
-                    format: owner.color_format,
-                    mip_levels: 1,
-                    samples: 1,
-                    usage: TextureUsage::RENDER_ATTACHMENT,
-                    view_formats: Vec::new(),
-                };
-                (
-                    None,
-                    Some(
-                        graph
-                            .import_texture_with_state(
-                                owner.scene_color.desc.clone(),
-                                owner.scene_color.incoming,
-                                owner.scene_color.layout,
-                            )
-                            .map_err(|_| Error::InvalidState)?,
-                    ),
-                    Some(
-                        graph
-                            .import_surface_texture(desc)
-                            .map_err(|_| Error::InvalidState)?,
-                    ),
-                    None,
-                    None,
-                )
-            }
-        };
-
-        let deformation_handles = frame
-            .deformation
-            .as_ref()
-            .map(|deformation| {
-                Ok::<_, Error>((
-                    graph
-                        .import_buffer_desc(
-                            deformation.upload.desc.clone(),
-                            deformation.upload.incoming,
-                        )
-                        .map_err(|_| Error::InvalidState)?,
-                    graph
-                        .import_buffer_desc(
-                            deformation.source.desc.clone(),
-                            deformation.source.incoming,
-                        )
-                        .map_err(|_| Error::InvalidState)?,
-                    graph
-                        .import_buffer_desc(
-                            deformation.product.desc.clone(),
-                            deformation.product.incoming,
-                        )
-                        .map_err(|_| Error::InvalidState)?,
-                    graph
-                        .import_buffer_desc(
-                            deformation.parameters.desc.clone(),
-                            deformation.parameters.incoming,
-                        )
-                        .map_err(|_| Error::InvalidState)?,
-                ))
-            })
-            .transpose()?;
+        let super::imports::DeferredImports {
+            resident_upload,
+            frame_upload,
+            uniform,
+            streams,
+            materials,
+            environment_upload,
+            environment,
+            specular_upload,
+            specular_view_uniform,
+            specular_radiance,
+            specular_brdf_lut,
+            gbuffer,
+            effects,
+            target,
+            scene_color,
+            surface_target,
+            readback,
+            row_pitch,
+            deformation: deformation_handles,
+        } = super::imports::import(&mut graph, &frame)?;
 
         let (
             upload_pass,
             (
                 streams,
                 uniform,
-                material,
+                materials,
                 environment,
                 specular_radiance,
                 specular_brdf_lut,
@@ -280,11 +103,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     copy_write().uses,
                     BufferUsage::COPY_DST,
                 )?;
-                let mut material = material;
+                let mut materials = materials;
                 for copy in &frame.resident_upload.textures {
-                    if copy.texture != 0 {
-                        return Err(GraphError::InvalidRange);
-                    }
+                    let texture = *materials
+                        .get(copy.texture)
+                        .ok_or(GraphError::InvalidRange)?;
                     pass.read_with_use(
                         resident_upload,
                         copy.source_offset
@@ -292,8 +115,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         copy_read().uses,
                         BufferUsage::COPY_SRC,
                     )?;
-                    material = pass.write_texture_with_use(
-                        material,
+                    materials[copy.texture] = pass.write_texture_with_use(
+                        texture,
                         whole_color(),
                         texture_copy_write().uses,
                         ImageLayout::CopyDst,
@@ -435,7 +258,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 Ok((
                     output_streams,
                     uniform,
-                    material,
+                    materials,
                     environment,
                     specular_radiance,
                     specular_brdf_lut,
@@ -445,17 +268,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .map_err(|_| Error::InvalidState)?;
 
-        let accesses = frame.draw_accesses()?;
+        let draws = frame.draw_graph_data()?;
         let (deformation_pass, geometry_pass, gbuffer, lighting_pass, scene_color) = {
             let mut driver = DeferredPhaseDriver {
                 graph: &mut graph,
                 upload: upload_pass,
                 streams: streams.clone(),
-                stream_reads: accesses,
+                draws,
                 uniform,
-                tint: frame.draw.tint_range.clone(),
-                transform: frame.draw.transform_range.clone(),
-                material,
+                materials: materials.clone(),
                 environment,
                 specular_radiance,
                 specular_brdf_lut,
@@ -567,7 +388,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             frame_upload_slot: BufferSlot::from(frame_upload),
             uniform_slot: BufferSlot::from(uniform),
             stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
-            texture_slot: TextureSlot::from(material),
+            texture_slots: materials.into_iter().map(TextureSlot::from).collect(),
             environment_upload_slot: environment_upload.map(BufferSlot::from),
             environment_slot: environment.map(TextureSlot::from),
             specular_upload_slot: specular_upload.map(BufferSlot::from),
@@ -590,7 +411,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             }),
             extent: frame.extent,
             uniform_alignment: device.capabilities().limits.uniform_offset_alignment,
-            transform_bytes: frame.draw.transform_bytes,
+            transform_bytes: frame
+                .draws
+                .iter()
+                .map(|draw| draw.transform_bytes)
+                .collect(),
         })
     }
 }

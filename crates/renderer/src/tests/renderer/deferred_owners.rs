@@ -164,7 +164,7 @@ fn deferred_plan_rejects_short_or_misaligned_dynamic_uniform_ranges_before_execu
 
     let mut short_tint = deferred_frame(&mut renderer, &snapshot, view, &assets);
     let short_tint_plan = plan(&device, 71_004, &short_tint);
-    short_tint.draw.tint_range = 0..15;
+    short_tint.draws[0].tint_range = 0..15;
     let before = execution_counts(&native);
     assert!(matches!(
         short_tint_plan.validate_frame(&short_tint),
@@ -174,7 +174,7 @@ fn deferred_plan_rejects_short_or_misaligned_dynamic_uniform_ranges_before_execu
 
     let mut short_transform = deferred_frame(&mut renderer, &snapshot, view, &assets);
     let short_transform_plan = plan(&device, 71_005, &short_transform);
-    short_transform.draw.transform_range = 0..63;
+    short_transform.draws[0].transform_range = 0..63;
     let before = execution_counts(&native);
     assert!(matches!(
         short_transform_plan.validate_frame(&short_transform),
@@ -184,7 +184,7 @@ fn deferred_plan_rejects_short_or_misaligned_dynamic_uniform_ranges_before_execu
 
     let mut misaligned_tint = deferred_frame(&mut renderer, &snapshot, view, &assets);
     let misaligned_tint_plan = plan(&device, 71_006, &misaligned_tint);
-    misaligned_tint.draw.tint_range = 4..20;
+    misaligned_tint.draws[0].tint_range = 4..20;
     let before = execution_counts(&native);
     assert!(matches!(
         misaligned_tint_plan.validate_frame(&misaligned_tint),
@@ -194,7 +194,7 @@ fn deferred_plan_rejects_short_or_misaligned_dynamic_uniform_ranges_before_execu
 
     let mut misaligned_transform = deferred_frame(&mut renderer, &snapshot, view, &assets);
     let misaligned_transform_plan = plan(&device, 71_007, &misaligned_transform);
-    misaligned_transform.draw.transform_range = 4..68;
+    misaligned_transform.draws[0].transform_range = 4..68;
     let before = execution_counts(&native);
     assert!(matches!(
         misaligned_transform_plan.validate_frame(&misaligned_transform),

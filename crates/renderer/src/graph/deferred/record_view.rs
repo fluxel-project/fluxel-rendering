@@ -25,7 +25,7 @@ pub(super) struct DeferredRecordView<'a, B: ResourceBackend> {
     pub(super) deformation: Option<&'a DeferredDeformation<B>>,
     pub(super) gbuffer: &'a [ForwardTexture<B>; 3],
     pub(super) effects: Option<&'a ForwardTexture<B>>,
-    pub(super) draw: &'a DeferredDraw<B>,
+    pub(super) draws: &'a [DeferredDraw<B>],
     pub(super) extent: [u32; 2],
 }
 
@@ -54,7 +54,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             deformation: frame.deformation.as_ref(),
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
-            draw: &frame.draw,
+            draws: &frame.draws,
             extent: frame.extent,
         }
     }
@@ -76,7 +76,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             deformation: frame.deformation.as_ref(),
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
-            draw: &frame.draw,
+            draws: &frame.draws,
             extent: frame.extent,
         }
     }
@@ -93,12 +93,44 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
         view
     }
 
-    pub(super) fn draw_accesses(&self) -> Result<Vec<Option<Range<u64>>>> {
+    pub(super) fn draw_graph_data(&self) -> Result<Vec<super::phase::DeferredGraphDraw>> {
+        if self.draws.is_empty() || (self.deformation.is_some() && self.draws.len() != 1) {
+            return Err(Error::InvalidRange);
+        }
+        if self
+            .draws
+            .iter()
+            .any(|draw| draw.texture >= self.resident.textures.len())
+        {
+            return Err(Error::InvalidRange);
+        }
         match self.source {
-            RecordSource::Offscreen(frame) => draw_accesses(frame, &frame.draw),
-            RecordSource::Surface { frame, .. } => {
-                super::surface_validate::surface_draw_accesses(frame, &frame.draw)
-            }
+            RecordSource::Offscreen(frame) => frame
+                .draws
+                .iter()
+                .map(|draw| {
+                    Ok(super::phase::DeferredGraphDraw {
+                        streams: draw.vertex_streams.clone(),
+                        accesses: draw_accesses(frame, draw)?,
+                        tint: draw.tint_range.clone(),
+                        transform: draw.transform_range.clone(),
+                        texture: draw.texture,
+                    })
+                })
+                .collect(),
+            RecordSource::Surface { frame, .. } => frame
+                .draws
+                .iter()
+                .map(|draw| {
+                    Ok(super::phase::DeferredGraphDraw {
+                        streams: draw.vertex_streams.clone(),
+                        accesses: super::surface_validate::surface_draw_accesses(frame, draw)?,
+                        tint: draw.tint_range.clone(),
+                        transform: draw.transform_range.clone(),
+                        texture: draw.texture,
+                    })
+                })
+                .collect(),
         }
     }
 }

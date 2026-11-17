@@ -25,6 +25,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     where
         B: CommandBackend + ResourceBackend,
     {
+        if frame.draws.len() != 1 {
+            return Err(Error::InvalidRange);
+        }
         let (pass_id, slots, deformation) = match (
             self.deformation_pass,
             self.deformation_slots,
@@ -33,6 +36,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             (Some(pass), Some(slots), Some(deformation)) => (pass, slots, deformation),
             _ => return Err(Error::InvalidState),
         };
+        super::declaration_validation::validate_deformation(
+            &self.device,
+            &frame.draws[0],
+            deformation,
+        )?;
         let bindings = self.record_bindings(&frame)?;
         let pass = bindings.pass(pass_id)?;
         pass.buffer(
@@ -79,36 +87,59 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     where
         B: RasterBackend,
     {
+        if frame.draws.iter().any(|draw| {
+            draw.pipeline.device() != self.id.device
+                || draw.material_group.device() != self.id.device
+                || draw.transform_group.device() != self.id.device
+        }) {
+            return Err(Error::WrongDevice);
+        }
+        for draw in frame.draws {
+            super::declaration_validation::validate_draw_uniform_ranges(
+                draw,
+                frame.frame.uniform_desc.size,
+                self.uniform_alignment,
+            )?;
+        }
         let bindings = self.record_bindings(&frame)?;
         let pass = bindings.pass(self.geometry_pass)?;
-        let accesses = frame.draw_accesses()?;
+        let draw_data = frame.draw_graph_data()?;
         if let (Some(slots), Some(_)) = (self.deformation_slots, &frame.deformation) {
-            let range = accesses
+            let range = draw_data
                 .first()
+                .and_then(|draw| draw.accesses.first())
                 .and_then(|range| range.clone())
                 .ok_or(Error::InvalidRange)?;
             pass.buffer(slots[2], range, AccessKind::Read, vertex_read())?;
         } else {
-            for (slot, access) in self.stream_slots.iter().copied().zip(accesses) {
-                if let Some(range) = access {
-                    pass.buffer(slot, range, AccessKind::Read, vertex_read())?;
+            for draw in &draw_data {
+                for (&stream, access) in draw.streams.iter().zip(&draw.accesses) {
+                    if let Some(range) = access {
+                        let slot = *self.stream_slots.get(stream).ok_or(Error::InvalidRange)?;
+                        pass.buffer(slot, range.clone(), AccessKind::Read, vertex_read())?;
+                    }
                 }
             }
         }
-        for range in [&frame.draw.tint_range, &frame.draw.transform_range] {
-            pass.buffer(
-                self.uniform_slot,
-                range.clone(),
+        for draw in &draw_data {
+            for range in [&draw.tint, &draw.transform] {
+                pass.buffer(
+                    self.uniform_slot,
+                    range.clone(),
+                    AccessKind::Read,
+                    uniform_read(),
+                )?;
+            }
+            pass.texture(
+                *self
+                    .texture_slots
+                    .get(draw.texture)
+                    .ok_or(Error::InvalidRange)?,
+                whole_color(),
                 AccessKind::Read,
-                uniform_read(),
+                sampled_read(),
             )?;
         }
-        pass.texture(
-            self.texture_slot,
-            whole_color(),
-            AccessKind::Read,
-            sampled_read(),
-        )?;
         pass.texture(
             self.gbuffer_slots[0],
             whole_color(),
@@ -171,39 +202,45 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             secondary_inheritance: None,
         })?;
         configure_raster(&mut raster, frame.extent)?;
-        raster.set_pipeline(&frame.draw.pipeline)?;
-        raster.set_bind_group(
-            0,
-            &frame.draw.material_group,
-            &[u32::try_from(frame.draw.tint_range.start).map_err(|_| Error::InvalidRange)?],
-        )?;
-        raster.set_bind_group(
-            1,
-            &frame.draw.transform_group,
-            &[u32::try_from(frame.draw.transform_range.start).map_err(|_| Error::InvalidRange)?],
-        )?;
-        if let Some(deformation) = &frame.deformation {
-            raster.set_vertex_buffer(
+        for draw in frame.draws {
+            raster.set_pipeline(&draw.pipeline)?;
+            raster.set_bind_group(
                 0,
-                &deformation.product.buffer,
-                frame.draw.vertex_ranges[0].clone(),
+                &draw.material_group,
+                &[u32::try_from(draw.tint_range.start).map_err(|_| Error::InvalidRange)?],
             )?;
-        } else {
-            for (index, (stream, range)) in frame
-                .resident
-                .streams
-                .iter()
-                .zip(&frame.draw.vertex_ranges)
-                .enumerate()
-            {
+            raster.set_bind_group(
+                1,
+                &draw.transform_group,
+                &[u32::try_from(draw.transform_range.start).map_err(|_| Error::InvalidRange)?],
+            )?;
+            if let Some(deformation) = &frame.deformation {
                 raster.set_vertex_buffer(
-                    u32::try_from(index).map_err(|_| Error::InvalidRange)?,
-                    &stream.buffer,
-                    range.clone(),
+                    0,
+                    &deformation.product.buffer,
+                    draw.vertex_ranges[0].clone(),
                 )?;
+            } else {
+                for (slot, (&stream_index, range)) in draw
+                    .vertex_streams
+                    .iter()
+                    .zip(&draw.vertex_ranges)
+                    .enumerate()
+                {
+                    let stream = frame
+                        .resident
+                        .streams
+                        .get(stream_index)
+                        .ok_or(Error::InvalidRange)?;
+                    raster.set_vertex_buffer(
+                        u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
+                        &stream.buffer,
+                        range.clone(),
+                    )?;
+                }
             }
+            raster.draw(draw.vertices.clone(), 0..1)?;
         }
-        raster.draw(frame.draw.vertices.clone(), 0..1)?;
         raster.finish()
     }
 

@@ -31,11 +31,22 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
     pub(crate) transform_group: BindGroup<B>,
     pub(crate) vertex_layouts: Vec<VertexBufferLayout>,
     pub(crate) vertex_ranges: Vec<Range<u64>>,
+    /// Indices into the frame-wide resident stream owner.
+    pub(crate) vertex_streams: Vec<usize>,
+    /// Index into the frame-wide resident texture owner.
+    pub(crate) texture: usize,
     pub(crate) vertices: Range<u32>,
     pub(crate) tint_range: Range<u64>,
     pub(crate) transform_range: Range<u64>,
     /// Exact transform binding footprint selected by the material route.
     pub(crate) transform_bytes: u64,
+}
+
+/// Exact immutable resident products eligible for completion-gated reuse.
+#[derive(Default)]
+pub(crate) struct DeferredPublication {
+    pub(crate) geometry: Vec<(super::ForwardGeometryCacheKey, Vec<usize>)>,
+    pub(crate) textures: Vec<(super::ForwardTextureCacheKey, usize)>,
 }
 
 /// Concrete resources retained through the Deferred submission's completion.
@@ -45,8 +56,7 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
 /// their descriptors, incoming state, instances, and views remain together in
 /// [`ForwardTexture`].
 pub(crate) struct DeferredFrame<B: ResourceBackend> {
-    pub(crate) geometry_key: Option<super::ForwardGeometryCacheKey>,
-    pub(crate) texture_key: Option<super::ForwardTextureCacheKey>,
+    pub(crate) publication: DeferredPublication,
     pub(crate) deformation: Option<super::DeferredDeformation<B>>,
     pub(crate) resident: Arc<ForwardResidentBuffers<B>>,
     pub(crate) resident_upload: ForwardResidentUpload,
@@ -63,7 +73,7 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) scene_color: ForwardTexture<B>,
     pub(crate) scene_color_sampler: fluxel_rhi::api::Sampler<B>,
     pub(crate) scene_color_sampler_desc: SamplerDesc,
-    pub(crate) draw: DeferredDraw<B>,
+    pub(crate) draws: Vec<DeferredDraw<B>>,
     pub(crate) lighting_pipeline: RasterPipeline<B>,
     pub(crate) lighting_group: BindGroup<B>,
     pub(crate) lighting_environment_group: Option<BindGroup<B>>,
@@ -77,8 +87,7 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
 /// to a transient surface lease. The lease itself stays in execution ownership;
 /// it is intentionally absent here and cannot enter any reusable cache.
 pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
-    pub(crate) geometry_key: Option<super::ForwardGeometryCacheKey>,
-    pub(crate) texture_key: Option<super::ForwardTextureCacheKey>,
+    pub(crate) publication: DeferredPublication,
     pub(crate) deformation: Option<super::DeferredDeformation<B>>,
     pub(crate) resident: Arc<ForwardResidentBuffers<B>>,
     pub(crate) resident_upload: ForwardResidentUpload,
@@ -93,7 +102,7 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) scene_color: ForwardTexture<B>,
     pub(crate) scene_color_sampler: fluxel_rhi::api::Sampler<B>,
     pub(crate) scene_color_sampler_desc: SamplerDesc,
-    pub(crate) draw: DeferredDraw<B>,
+    pub(crate) draws: Vec<DeferredDraw<B>>,
     pub(crate) lighting_pipeline: RasterPipeline<B>,
     pub(crate) lighting_group: BindGroup<B>,
     pub(crate) lighting_environment_group: Option<BindGroup<B>>,

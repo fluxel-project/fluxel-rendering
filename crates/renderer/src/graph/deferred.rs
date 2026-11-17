@@ -3,6 +3,7 @@
 mod declaration;
 mod declaration_validation;
 mod diagnostic;
+mod imports;
 mod phase;
 mod plan;
 mod plan_bindings;
@@ -44,8 +45,8 @@ use super::{
         TextureAccessContract, TextureRange,
     },
     execution::{
-        BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution, FrameBindings,
-        binding_error,
+        binding_error, BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution,
+        FrameBindings,
     },
 };
 
@@ -70,7 +71,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     frame_upload_slot: BufferSlot,
     uniform_slot: BufferSlot,
     stream_slots: Vec<BufferSlot>,
-    texture_slot: TextureSlot,
+    texture_slots: Vec<TextureSlot>,
     environment_upload_slot: Option<BufferSlot>,
     environment_slot: Option<TextureSlot>,
     specular_upload_slot: Option<BufferSlot>,
@@ -86,7 +87,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     deformation_slots: Option<[BufferSlot; 4]>,
     extent: [u32; 2],
     uniform_alignment: u64,
-    transform_bytes: u64,
+    transform_bytes: Vec<u64>,
 }
 
 /// Fresh private Graph declaration used only to select a cached plan.
@@ -106,7 +107,7 @@ pub(crate) struct DeferredDeclaration {
     frame_upload_slot: BufferSlot,
     uniform_slot: BufferSlot,
     stream_slots: Vec<BufferSlot>,
-    texture_slot: TextureSlot,
+    texture_slots: Vec<TextureSlot>,
     environment_upload_slot: Option<BufferSlot>,
     environment_slot: Option<TextureSlot>,
     specular_upload_slot: Option<BufferSlot>,
@@ -122,7 +123,7 @@ pub(crate) struct DeferredDeclaration {
     deformation_slots: Option<[BufferSlot; 4]>,
     extent: [u32; 2],
     uniform_alignment: u64,
-    transform_bytes: u64,
+    transform_bytes: Vec<u64>,
 }
 
 /// The physical final-output owner is deliberately kept out of the common
@@ -329,8 +330,9 @@ fn draw_accesses_parts<B: ResourceBackend>(
     deformation: Option<&crate::residency::DeferredDeformation<B>>,
     draw: &DeferredDraw<B>,
 ) -> Result<Vec<Option<Range<u64>>>> {
-    if draw.vertex_layouts.len() != draw.vertex_ranges.len()
-        || (deformation.is_none() && draw.vertex_layouts.len() != resident.streams.len())
+    if draw.vertex_layouts.is_empty()
+        || draw.vertex_layouts.len() != draw.vertex_ranges.len()
+        || draw.vertex_layouts.len() != draw.vertex_streams.len()
         || draw.vertices.start >= draw.vertices.end
     {
         return Err(Error::InvalidRange);
@@ -348,19 +350,23 @@ fn draw_accesses_parts<B: ResourceBackend>(
             range: draw.vertex_ranges[0].clone(),
         }]
     } else {
-        resident
-            .streams
+        draw.vertex_streams
             .iter()
             .zip(&draw.vertex_ranges)
-            .map(|(owner, range)| GeometryStreamBinding {
-                owner: GeometryBufferOwner::new(
-                    resident.device,
-                    owner.desc.clone(),
-                    owner.incoming,
-                ),
-                range: range.clone(),
+            .map(|(&index, range)| {
+                let owner = resident.streams.get(index).ok_or(Error::InvalidRange)?;
+                Ok(GeometryStreamBinding {
+                    owner: {
+                        GeometryBufferOwner::new(
+                            resident.device,
+                            owner.desc.clone(),
+                            owner.incoming,
+                        )
+                    },
+                    range: range.clone(),
+                })
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
     };
     PreparedGeometry {
         streams: draw.vertex_layouts.clone(),

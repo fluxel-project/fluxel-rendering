@@ -18,8 +18,13 @@ use super::*;
 
 #[path = "program_cache.rs"]
 mod program_cache;
+#[path = "program_fixed.rs"]
+mod program_fixed;
 #[path = "program_layout.rs"]
 mod program_layout;
+use program_fixed::{
+    color_target, color_target_with_format, depth_state, opaque_triangles, single_sample,
+};
 
 use program_layout::{ordinary_sampler, sampled_texture, uniform};
 
@@ -52,6 +57,27 @@ where
         + PipelineBackend
         + ShaderBackend,
 {
+    pub(super) fn retain_deferred_gbuffer_programs(
+        &mut self,
+        materials: &[PreparedMaterial],
+        pbr: bool,
+        effects: bool,
+    ) {
+        let active = materials
+            .iter()
+            .map(|material| {
+                program_cache::GbufferProgramKey::for_material(
+                    self.device.id(),
+                    material,
+                    if pbr { 192 } else { 64 },
+                    pbr,
+                    effects,
+                )
+            })
+            .collect();
+        self.deferred_programs.retain_gbuffer(&active);
+    }
+
     pub(super) async fn deferred_gbuffer_program(
         &mut self,
         prepared: &PreparedMaterial,
@@ -544,55 +570,5 @@ where
                 }],
             })
             .map_err(|error| self.observe_rhi_error(error))
-    }
-}
-
-fn color_target() -> ColorTargetState {
-    color_target_with_format(TextureFormat::Rgba8Unorm)
-}
-
-fn color_target_with_format(format: TextureFormat) -> ColorTargetState {
-    ColorTargetState {
-        format,
-        blend: None,
-        write_mask: 0xf,
-    }
-}
-fn opaque_triangles() -> PrimitiveState {
-    PrimitiveState {
-        topology: PrimitiveTopology::TriangleList,
-        strip_index_format: None,
-        front_face: FrontFace::Ccw,
-        cull_mode: CullMode::None,
-        unclipped_depth: false,
-        polygon_mode: PolygonMode::Fill,
-        conservative: false,
-    }
-}
-fn single_sample() -> MultisampleState {
-    MultisampleState {
-        count: 1,
-        mask: u64::from(u32::MAX),
-        alpha_to_coverage_enabled: false,
-    }
-}
-fn depth_state() -> DepthStencilState {
-    let stencil = StencilFaceState {
-        compare: CompareFunction::Always,
-        fail: StencilOperation::Keep,
-        depth_fail: StencilOperation::Keep,
-        pass: StencilOperation::Keep,
-    };
-    DepthStencilState {
-        format: TextureFormat::Depth32Float,
-        depth_write_enabled: true,
-        depth_compare: CompareFunction::Less,
-        stencil_front: stencil,
-        stencil_back: stencil,
-        stencil_read_mask: 0,
-        stencil_write_mask: 0,
-        depth_bias_constant: 0,
-        depth_bias_slope_scale: 0.0,
-        depth_bias_clamp: 0.0,
     }
 }

@@ -118,15 +118,17 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 deformation.vertex_count,
             );
         }
-        texture(
-            &mut output,
-            "material[0]",
-            frame.resident.textures[0].instance,
-            frame.resident.textures[0].texture.device(),
-            &frame.resident.textures[0].desc,
-            frame.resident.textures[0].incoming,
-            frame.resident.textures[0].layout,
-        );
+        for (index, material) in frame.resident.textures.iter().enumerate() {
+            texture(
+                &mut output,
+                &format!("material[{index}]"),
+                material.instance,
+                material.texture.device(),
+                &material.desc,
+                material.incoming,
+                material.layout,
+            );
+        }
         for (index, texture_owner) in frame.gbuffer.iter().enumerate() {
             texture(
                 &mut output,
@@ -158,14 +160,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 );
             }
         }
-        let _ = writeln!(
-            output,
-            "draw={{vertices:{:?}, vertex_ranges:{:?}, tint:{:?}, transform:{:?}}}",
-            frame.draw.vertices,
-            frame.draw.vertex_ranges,
-            frame.draw.tint_range,
-            frame.draw.transform_range,
-        );
+        for (index, draw) in frame.draws.iter().enumerate() {
+            let _ = writeln!(
+                output,
+                "draw[{index}]={{streams:{:?}, texture:{}, vertices:{:?}, vertex_ranges:{:?}, tint:{:?}, transform:{:?}}}",
+                draw.vertex_streams, draw.texture, draw.vertices, draw.vertex_ranges,
+                draw.tint_range, draw.transform_range,
+            );
+        }
         output
     }
 }

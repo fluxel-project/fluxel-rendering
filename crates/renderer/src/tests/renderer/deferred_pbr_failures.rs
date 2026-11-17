@@ -235,9 +235,9 @@ fn pbr_compiled_plan_refuses_short_or_retyped_transform_footprints_before_work()
     let (snapshot, view, assets) =
         scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
     let mut frame = pbr_frame(&mut renderer, &snapshot, view, &assets);
-    assert_eq!(frame.draw.transform_bytes, 192);
+    assert_eq!(frame.draws[0].transform_bytes, 192);
     assert_eq!(
-        frame.draw.transform_range.end - frame.draw.transform_range.start,
+        frame.draws[0].transform_range.end - frame.draws[0].transform_range.start,
         192
     );
     let plan = crate::graph::DeferredPlan::compile(
@@ -250,14 +250,14 @@ fn pbr_compiled_plan_refuses_short_or_retyped_transform_footprints_before_work()
     )
     .unwrap();
     let before = counts(&native);
-    frame.draw.transform_range.end = frame.draw.transform_range.start + 64;
+    frame.draws[0].transform_range.end = frame.draws[0].transform_range.start + 64;
     assert!(matches!(
         plan.validate_frame(&frame),
         Err(Error::InvalidRange)
     ));
     assert_eq!(counts(&native), before);
 
-    frame.draw.transform_bytes = 64;
+    frame.draws[0].transform_bytes = 64;
     assert!(matches!(
         plan.validate_frame(&frame),
         Err(Error::InvalidState)
@@ -300,10 +300,10 @@ fn pbr_surface_plan_refuses_short_and_retagged_actual_transform_ranges() {
     plan.validate_surface_frame(&frame)
         .expect("legal frame before mutation");
     let before = counts(&native);
-    frame.draw.transform_range.end = frame.draw.transform_range.start + 64;
+    frame.draws[0].transform_range.end = frame.draws[0].transform_range.start + 64;
     assert!(plan.validate_surface_frame(&frame).is_err());
     assert_eq!(counts(&native), before);
-    frame.draw.transform_bytes = 64;
+    frame.draws[0].transform_bytes = 64;
     assert!(plan.validate_surface_frame(&frame).is_err());
     assert_eq!(counts(&native), before);
 }

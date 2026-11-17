@@ -82,7 +82,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             frame_upload_slot: declaration.frame_upload_slot,
             uniform_slot: declaration.uniform_slot,
             stream_slots: declaration.stream_slots,
-            texture_slot: declaration.texture_slot,
+            texture_slots: declaration.texture_slots,
             environment_upload_slot: declaration.environment_upload_slot,
             environment_slot: declaration.environment_slot,
             specular_upload_slot: declaration.specular_upload_slot,
@@ -145,7 +145,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.frame_upload_slot.resource != declaration.frame_upload_slot.resource
             || self.uniform_slot.resource != declaration.uniform_slot.resource
             || !same_buffer_slots(&self.stream_slots, &declaration.stream_slots)
-            || self.texture_slot.resource != declaration.texture_slot.resource
+            || self.texture_slots.len() != declaration.texture_slots.len()
+            || self
+                .texture_slots
+                .iter()
+                .zip(&declaration.texture_slots)
+                .any(|(left, right)| left.resource != right.resource)
             || self.environment_upload_slot.map(|slot| slot.resource)
                 != declaration
                     .environment_upload_slot
@@ -286,10 +291,13 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     /// declaration for this frame. This validates the concrete owners and
     /// ranges against that cached Graph before mapping or recording.
     pub(crate) fn validate_frame(&self, frame: &DeferredFrame<B>) -> Result<()> {
-        if frame.resident.device != self.id.device
-            || frame.draw.pipeline.device() != self.id.device
-            || frame.draw.material_group.device() != self.id.device
-            || frame.draw.transform_group.device() != self.id.device
+        if frame.draws.is_empty()
+            || frame.resident.device != self.id.device
+            || frame.draws.iter().any(|draw| {
+                draw.pipeline.device() != self.id.device
+                    || draw.material_group.device() != self.id.device
+                    || draw.transform_group.device() != self.id.device
+            })
             || frame.lighting_pipeline.device() != self.id.device
             || frame.lighting_group.device() != self.id.device
             || frame.composite_pipeline.device() != self.id.device
@@ -322,16 +330,23 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         }
         crate::renderer::validate_ordinary_sampler(&frame.scene_color_sampler_desc)?;
         if let Some(deformation) = &frame.deformation {
-            validate_deformation(&self.device, &frame.draw, deformation)?;
+            if frame.draws.len() != 1 {
+                return Err(Error::InvalidState);
+            }
+            validate_deformation(&self.device, &frame.draws[0], deformation)?;
             if self.deformation_slots.is_none() {
                 return Err(Error::InvalidState);
             }
         }
         if frame.extent != self.extent
-            || frame.draw.transform_bytes != self.transform_bytes
+            || frame
+                .draws
+                .iter()
+                .map(|draw| draw.transform_bytes)
+                .collect::<Vec<_>>()
+                != self.transform_bytes
             || self.stream_slots.len() != frame.resident.streams.len()
-            || frame.draw.vertex_layouts.len() != self.stream_slots.len()
-            || frame.draw.vertex_ranges.len() != self.stream_slots.len()
+            || self.texture_slots.len() != frame.resident.textures.len()
             || !matches_gbuffer_template(
                 &frame.gbuffer[0].desc,
                 self.extent,
@@ -368,7 +383,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         }
         validate_draw_uniforms(frame, self.uniform_alignment)?;
         validate_uploads(frame)?;
-        draw_accesses(frame, &frame.draw)?;
+        for draw in &frame.draws {
+            draw_accesses(frame, draw)?;
+        }
         self.bindings(frame).map(|_| ())
     }
 

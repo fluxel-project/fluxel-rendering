@@ -44,16 +44,14 @@ where
         &mut self,
         work: &super::super::PendingWork<B>,
     ) {
-        let (geometry_key, texture_key, deformation, resident) = match work {
+        let (publication, deformation, resident) = match work {
             super::super::PendingWork::Deferred { _frame: frame, .. } => (
-                frame.geometry_key,
-                frame.texture_key,
+                &frame.publication,
                 frame.deformation.as_ref(),
                 &frame.resident,
             ),
             super::super::PendingWork::DeferredSurface { _frame: frame, .. } => (
-                frame.geometry_key,
-                frame.texture_key,
+                &frame.publication,
                 frame.deformation.as_ref(),
                 &frame.resident,
             ),
@@ -63,14 +61,20 @@ where
         // unused original resident stream is not necessarily in vertex-read
         // state, so it must not be published with that outgoing-state promise.
         if deformation.is_none() {
-            if let Some(key) = geometry_key {
-                let streams: Vec<_> = resident.streams.iter().collect();
-                self.deferred_residency.publish_geometry(key, &streams);
+            for (key, mapping) in &publication.geometry {
+                let streams: Option<Vec<_>> = mapping
+                    .iter()
+                    .map(|&index| resident.streams.get(index))
+                    .collect();
+                if let Some(streams) = streams {
+                    self.deferred_residency.publish_geometry(*key, &streams);
+                }
             }
         }
-        if let Some(key) = texture_key {
-            self.deferred_residency
-                .publish_texture(key, &resident.textures[0]);
+        for (key, index) in &publication.textures {
+            if let Some(texture) = resident.textures.get(*index) {
+                self.deferred_residency.publish_texture(*key, texture);
+            }
         }
     }
 

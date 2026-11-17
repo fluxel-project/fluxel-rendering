@@ -118,101 +118,103 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             }
         }
         let textures =
-            std::iter::once(BoundTexture::new(
-                self.texture_slot,
-                frame.resident.textures[0].instance,
-                &frame.resident.textures[0].texture,
-                &frame.resident.textures[0].desc,
-                frame.resident.textures[0].incoming,
-                frame.resident.textures[0].layout,
-            ))
-            .chain(
-                self.gbuffer_slots
-                    .iter()
-                    .copied()
-                    .zip(&frame.gbuffer)
-                    .map(|(slot, texture)| {
-                        BoundTexture::new(
-                            slot,
-                            texture.instance,
-                            &texture.texture,
-                            &texture.desc,
-                            texture.incoming,
-                            texture.layout,
-                        )
-                    }),
-            )
-            .chain(
-                self.effects_slot
-                    .zip(frame.effects.as_ref())
-                    .map(|(slot, texture)| {
-                        BoundTexture::new(
-                            slot,
-                            texture.instance,
-                            &texture.texture,
-                            &texture.desc,
-                            texture.incoming,
-                            texture.layout,
-                        )
-                    }),
-            )
-            .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
-                |(slot, environment)| {
+            self.texture_slots
+                .iter()
+                .copied()
+                .zip(&frame.resident.textures)
+                .map(|(slot, texture)| {
                     BoundTexture::new(
                         slot,
-                        environment.texture_instance,
-                        &environment.texture,
-                        &environment.desc,
-                        environment.incoming,
-                        environment.layout,
+                        texture.instance,
+                        &texture.texture,
+                        &texture.desc,
+                        texture.incoming,
+                        texture.layout,
                     )
-                },
-            ))
-            .chain(
-                self.specular_radiance_slot
-                    .zip(frame.specular.as_ref())
-                    .map(|(slot, owner)| {
+                })
+                .chain(self.gbuffer_slots.iter().copied().zip(&frame.gbuffer).map(
+                    |(slot, texture)| {
                         BoundTexture::new(
                             slot,
-                            owner.radiance.instance,
-                            &owner.radiance.texture,
-                            &owner.radiance.desc,
-                            owner.radiance.incoming,
-                            owner.radiance.layout,
+                            texture.instance,
+                            &texture.texture,
+                            &texture.desc,
+                            texture.incoming,
+                            texture.layout,
                         )
-                    }),
-            )
-            .chain(
-                self.specular_brdf_lut_slot
-                    .zip(frame.specular.as_ref())
-                    .map(|(slot, owner)| {
+                    },
+                ))
+                .chain(
+                    self.effects_slot
+                        .zip(frame.effects.as_ref())
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
+                    |(slot, environment)| {
                         BoundTexture::new(
                             slot,
-                            owner.brdf_lut.instance,
-                            &owner.brdf_lut.texture,
-                            &owner.brdf_lut.desc,
-                            owner.brdf_lut.incoming,
-                            owner.brdf_lut.layout,
+                            environment.texture_instance,
+                            &environment.texture,
+                            &environment.desc,
+                            environment.incoming,
+                            environment.layout,
                         )
-                    }),
-            )
-            .chain(std::iter::once(BoundTexture::new(
-                self.scene_color_slot.ok_or(Error::InvalidState)?,
-                frame.scene_color.instance,
-                &frame.scene_color.texture,
-                &frame.scene_color.desc,
-                frame.scene_color.incoming,
-                frame.scene_color.layout,
-            )))
-            .chain(std::iter::once(BoundTexture::new(
-                self.target_slot.ok_or(Error::InvalidState)?,
-                frame.frame.target_instance,
-                &frame.frame.target,
-                &frame.frame.target_desc,
-                frame.frame.target_incoming,
-                frame.frame.target_layout,
-            )))
-            .collect();
+                    },
+                ))
+                .chain(
+                    self.specular_radiance_slot
+                        .zip(frame.specular.as_ref())
+                        .map(|(slot, owner)| {
+                            BoundTexture::new(
+                                slot,
+                                owner.radiance.instance,
+                                &owner.radiance.texture,
+                                &owner.radiance.desc,
+                                owner.radiance.incoming,
+                                owner.radiance.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.specular_brdf_lut_slot
+                        .zip(frame.specular.as_ref())
+                        .map(|(slot, owner)| {
+                            BoundTexture::new(
+                                slot,
+                                owner.brdf_lut.instance,
+                                &owner.brdf_lut.texture,
+                                &owner.brdf_lut.desc,
+                                owner.brdf_lut.incoming,
+                                owner.brdf_lut.layout,
+                            )
+                        }),
+                )
+                .chain(std::iter::once(BoundTexture::new(
+                    self.scene_color_slot.ok_or(Error::InvalidState)?,
+                    frame.scene_color.instance,
+                    &frame.scene_color.texture,
+                    &frame.scene_color.desc,
+                    frame.scene_color.incoming,
+                    frame.scene_color.layout,
+                )))
+                .chain(std::iter::once(BoundTexture::new(
+                    self.target_slot.ok_or(Error::InvalidState)?,
+                    frame.frame.target_instance,
+                    &frame.frame.target,
+                    &frame.frame.target_desc,
+                    frame.frame.target_incoming,
+                    frame.frame.target_layout,
+                )))
+                .collect();
         FrameBindings::new(&self.execution, self.id.device, buffers, textures)
             .map_err(binding_error)
     }

@@ -31,16 +31,26 @@ pub(super) struct DeferredDeformationGraph {
     pub(super) product_stream: usize,
 }
 
+/// Per-draw physical footprints captured from the concrete frame before the
+/// real Graph transaction starts.  The public phase still exposes one set of
+/// reads; those reads expand across every retained draw here.
+#[derive(Clone)]
+pub(super) struct DeferredGraphDraw {
+    pub(super) streams: Vec<usize>,
+    pub(super) accesses: Vec<Option<std::ops::Range<u64>>>,
+    pub(super) tint: std::ops::Range<u64>,
+    pub(super) transform: std::ops::Range<u64>,
+    pub(super) texture: usize,
+}
+
 /// Private owner of the two real Deferred Graph transactions.
 pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) graph: &'graph mut GraphBuilder,
     pub(super) upload: GraphPass,
     pub(super) streams: Vec<super::super::definition::BufferHandle>,
-    pub(super) stream_reads: Vec<Option<std::ops::Range<u64>>>,
+    pub(super) draws: Vec<DeferredGraphDraw>,
     pub(super) uniform: super::super::definition::BufferHandle,
-    pub(super) tint: std::ops::Range<u64>,
-    pub(super) transform: std::ops::Range<u64>,
-    pub(super) material: super::super::definition::TextureHandle,
+    pub(super) materials: Vec<super::super::definition::TextureHandle>,
     pub(super) environment: Option<super::super::definition::TextureHandle>,
     pub(super) specular_radiance: Option<super::super::definition::TextureHandle>,
     pub(super) specular_brdf_lut: Option<super::super::definition::TextureHandle>,
@@ -70,11 +80,9 @@ pub(crate) struct DeferredGeometryPass<'pass, 'builder> {
     pass: &'pass mut super::super::definition::PassBuilder<'builder>,
     upload: GraphPass,
     streams: &'pass [super::super::definition::BufferHandle],
-    stream_reads: &'pass [Option<std::ops::Range<u64>>],
+    draws: &'pass [DeferredGraphDraw],
     uniform: super::super::definition::BufferHandle,
-    tint: std::ops::Range<u64>,
-    transform: std::ops::Range<u64>,
-    material: super::super::definition::TextureHandle,
+    materials: &'pass [super::super::definition::TextureHandle],
     gbuffer: [super::super::definition::TextureHandle; 3],
     effects: Option<super::super::definition::TextureHandle>,
     declared: u8,
@@ -146,7 +154,7 @@ impl DeferredPhaseDriver<'_> {
         }
         let upload = self.upload;
         let mut streams = self.streams.clone();
-        let stream_reads = self.stream_reads.clone();
+        let draws = self.draws.clone();
         if let Some(deformation) = self.deformation.as_ref() {
             let Some((_, product)) = self.deformation_pass else {
                 return Err(());
@@ -155,9 +163,7 @@ impl DeferredPhaseDriver<'_> {
             *stream = product;
         }
         let uniform = self.uniform;
-        let tint = self.tint.clone();
-        let transform = self.transform.clone();
-        let material = self.material;
+        let materials = self.materials.clone();
         let gbuffer = self.gbuffer;
         let effects = self.effects;
         let (pass, output) = self
@@ -167,11 +173,9 @@ impl DeferredPhaseDriver<'_> {
                     pass,
                     upload,
                     streams: &streams,
-                    stream_reads: &stream_reads,
+                    draws: &draws,
                     uniform,
-                    tint,
-                    transform,
-                    material,
+                    materials: &materials,
                     gbuffer,
                     effects,
                     declared: 0,
@@ -310,50 +314,56 @@ impl DeferredGeometryPass<'_, '_> {
     }
     pub(crate) fn read_vertex_streams(&mut self) -> std::result::Result<(), ()> {
         self.mark(VERTEX)?;
-        for (stream, range) in self.streams.iter().zip(self.stream_reads) {
-            if let Some(range) = range {
-                self.pass
-                    .read_with_use(
-                        *stream,
-                        range.clone(),
-                        vertex_read().uses,
-                        BufferUsage::VERTEX,
-                    )
-                    .map_err(|_| ())?;
+        for draw in self.draws {
+            if draw.streams.len() != draw.accesses.len() {
+                return Err(());
+            }
+            for (&index, range) in draw.streams.iter().zip(&draw.accesses) {
+                let stream = self.streams.get(index).ok_or(())?;
+                if let Some(range) = range {
+                    self.pass
+                        .read_with_use(
+                            *stream,
+                            range.clone(),
+                            vertex_read().uses,
+                            BufferUsage::VERTEX,
+                        )
+                        .map_err(|_| ())?;
+                }
             }
         }
         Ok(())
     }
     pub(crate) fn read_frame_uniforms(&mut self) -> std::result::Result<(), ()> {
         self.mark(UNIFORM)?;
-        self.pass
-            .read_with_use(
-                self.uniform,
-                self.tint.clone(),
-                uniform_read().uses,
-                BufferUsage::UNIFORM,
-            )
-            .map_err(|_| ())?;
-        self.pass
-            .read_with_use(
-                self.uniform,
-                self.transform.clone(),
-                uniform_read().uses,
-                BufferUsage::UNIFORM,
-            )
-            .map_err(|_| ())
+        for draw in self.draws {
+            for range in [&draw.tint, &draw.transform] {
+                self.pass
+                    .read_with_use(
+                        self.uniform,
+                        range.clone(),
+                        uniform_read().uses,
+                        BufferUsage::UNIFORM,
+                    )
+                    .map_err(|_| ())?;
+            }
+        }
+        Ok(())
     }
     pub(crate) fn read_sampled_textures(&mut self) -> std::result::Result<(), ()> {
         self.mark(MATERIAL)?;
-        self.pass
-            .read_texture_with_use(
-                self.material,
-                whole_color(),
-                sampled_read().uses,
-                ImageLayout::ShaderReadOnly,
-                TextureUsage::TEXTURE_BINDING,
-            )
-            .map_err(|_| ())
+        for draw in self.draws {
+            self.pass
+                .read_texture_with_use(
+                    *self.materials.get(draw.texture).ok_or(())?,
+                    whole_color(),
+                    sampled_read().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+                .map_err(|_| ())?;
+        }
+        Ok(())
     }
     pub(crate) fn write_gbuffer(&mut self) -> std::result::Result<(), ()> {
         self.mark(GBUFFER)?;

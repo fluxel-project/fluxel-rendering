@@ -125,13 +125,16 @@ impl<B: ResourceBackend> DeferredProgramCache<B> {
         self.lighting.get(key).cloned()
     }
 
-    /// Publishes only a fully realized G-buffer executable as the active one.
+    pub(super) fn retain_gbuffer(&mut self, active: &std::collections::HashSet<GbufferProgramKey>) {
+        self.gbuffer.retain(|key, _| active.contains(key));
+    }
+
+    /// Publishes a fully realized executable in the selected frame's set.
     pub(super) fn publish_gbuffer(
         &mut self,
         key: GbufferProgramKey,
         program: Arc<GbufferProgram<B>>,
     ) {
-        self.gbuffer.clear();
         self.gbuffer.insert(key, program);
     }
 
