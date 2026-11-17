@@ -41,16 +41,14 @@ fn deferred_background_and_alpha_remain_exact() {
     let foreground = stable_pixel(&expected, &mask, true);
     let mut background_changed = expected.clone();
     background_changed[background * 4] = 1;
-    assert!(
-        verify(
-            &background_changed,
-            &expected,
-            &mask,
-            "flat",
-            Route::Deferred
-        )
-        .is_err()
-    );
+    assert!(verify(
+        &background_changed,
+        &expected,
+        &mask,
+        "flat",
+        Route::Deferred
+    )
+    .is_err());
     let mut alpha_changed = expected.clone();
     alpha_changed[foreground * 4 + 3] = 254;
     assert!(verify(&alpha_changed, &expected, &mask, "flat", Route::Deferred).is_err());
@@ -73,16 +71,14 @@ fn deformation_parameter_replacement_is_not_oracle_equivalent() {
     let (first_expected, _) = image_for_positions(first, Route::Deferred);
     let (second_expected, second_mask) = image_for_positions(second, Route::Deferred);
     assert_ne!(first_expected, second_expected);
-    assert!(
-        verify(
-            &first_expected,
-            &second_expected,
-            &second_mask,
-            "bend parameter replacement",
-            Route::Deferred,
-        )
-        .is_err()
-    );
+    assert!(verify(
+        &first_expected,
+        &second_expected,
+        &second_mask,
+        "bend parameter replacement",
+        Route::Deferred,
+    )
+    .is_err());
 }
 
 #[test]
@@ -92,16 +88,14 @@ fn code_node_channel_variants_are_not_oracle_equivalent() {
     let (first_expected, _) = image_for_color(flat_positions(), Route::Deferred, first);
     let (second_expected, second_mask) = image_for_color(flat_positions(), Route::Deferred, second);
     assert_ne!(first_expected, second_expected);
-    assert!(
-        verify(
-            &first_expected,
-            &second_expected,
-            &second_mask,
-            "code node static variant",
-            Route::Deferred,
-        )
-        .is_err()
-    );
+    assert!(verify(
+        &first_expected,
+        &second_expected,
+        &second_mask,
+        "code node static variant",
+        Route::Deferred,
+    )
+    .is_err());
 }
 
 fn bend_positions(vertices: [[f32; 3]; 3], parameters: [f32; 4]) -> [[f32; 3]; 3] {

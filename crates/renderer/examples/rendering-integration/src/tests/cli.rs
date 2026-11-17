@@ -1,4 +1,4 @@
-use super::{Workload, parse_arguments};
+use super::{parse_arguments, Workload};
 use std::{ffi::OsString, path::PathBuf};
 
 fn arguments(values: &[&str]) -> impl Iterator<Item = OsString> {
@@ -12,6 +12,18 @@ fn arguments(values: &[&str]) -> impl Iterator<Item = OsString> {
 #[test]
 fn native_selectors_preserve_each_named_workload() {
     for (flag, expected) in [
+        (
+            "--m0-material-capabilities-only",
+            Workload::M0MaterialCapabilities,
+        ),
+        ("--m0-sampled-forward-only", Workload::M0SampledForward),
+        ("--m1-uv0-pbr-only", Workload::M1Uv0Pbr),
+        ("--m1-normal-pbr-only", Workload::M1NormalPbr),
+        ("--m1-surface-effects-only", Workload::M1SurfaceEffects),
+        (
+            "--m1-environment-irradiance-forward-only",
+            Workload::M1EnvironmentIrradianceForward,
+        ),
         ("--s3-only", Workload::S3Material),
         ("--s2-cache-only", Workload::S2Cache),
         ("--s5-only", Workload::S5Forward),

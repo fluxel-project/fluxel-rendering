@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "workload": "m1-uv0-node-texture-pbr-forward-deferred",
+  "extent": [64, 64],
+  "textureExtent": [2, 2],
+  "textureRgba": [32, 48, 80, 255, 224, 144, 48, 255, 48, 200, 160, 255, 196, 48, 210, 255],
+  "geometry": "POSITION,NORMAL,UV0 six-vertex quad",
+  "materialGraph": { "node": 17, "input": "Uv0", "output": 17 },
+  "properties": [0.0, 0.5],
+  "readbackOrigin": "top-left Core row zero",
+  "probes": [[8, 8], [40, 8], [8, 56], [40, 56]]
+}

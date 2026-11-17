@@ -49,10 +49,22 @@ use fluxel_rhi::{
 
 use shader_admission::json_string;
 
+mod m0_sampled_forward;
+mod m1_environment_irradiance;
+mod m1_environment_oracle;
+mod m1_normal_pbr;
+mod m1_surface_effects;
+mod m1_uv0_pbr;
 mod main_copy;
 mod main_demo;
 mod main_native;
 mod main_support;
+mod material_capabilities;
+mod named_texture;
+
+#[cfg(test)]
+#[path = "tests/surface_effects.rs"]
+mod surface_effects_tests;
 
 #[cfg(all(windows, feature = "dx12"))]
 use main_native::run_dx12;
@@ -70,7 +82,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(windows)]
     unsafe {
         use windows::Win32::UI::HiDpi::{
-            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         };
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)?;
     }

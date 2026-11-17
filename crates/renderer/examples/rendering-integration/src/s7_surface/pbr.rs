@@ -2,14 +2,14 @@
 
 use std::{error::Error, fs, path::Path};
 
-use external_renderer::{ExternalDeferredPipeline, PBR_PROPERTIES, pbr_definition};
+use external_renderer::{pbr_definition, ExternalDeferredPipeline, PBR_PROPERTIES};
 use fluxel_assets::{Acquire, AssetSnapshot, AssetStore, ResidentBytes};
 use fluxel_material::{MaterialAsset, MaterialDefinition};
 use fluxel_renderer::{
-    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardResources, FramePipeline,
-    GeometryAsset, GeometryAttribute, GeometryData, GeometryLayout, GeometryStream, RenderBounds,
-    RenderChange, RenderChangeSet, RenderRecord, RenderScene, RenderTransform, RenderView,
-    Renderer, SceneAssetRef, prepare_forward,
+    prepare_forward, ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardResources,
+    FramePipeline, GeometryAsset, GeometryAttribute, GeometryData, GeometryLayout, GeometryStream,
+    RenderBounds, RenderChange, RenderChangeSet, RenderRecord, RenderScene, RenderTransform,
+    RenderView, Renderer, SceneAssetRef,
 };
 use fluxel_rhi::{
     api::{Surface, VertexFormat, VertexStepMode},
@@ -25,7 +25,7 @@ use crate::{
     s7_deferred::pbr_oracle::{self, Input, Route},
 };
 
-use super::{COMPANION_EXTENT, asset_json};
+use super::{asset_json, COMPANION_EXTENT};
 
 const POSITIONS: [[f64; 3]; 3] = [[-0.4, -0.4, 0.5], [0.2, -0.4, 0.05], [-0.4, 0.35, 0.5]];
 const NORMALS: [[f64; 3]; 3] = [[0.6, 0.0, 0.8]; 3];
@@ -259,7 +259,7 @@ fn write_input(
             case.name,
             asset_json(record.resources.geometry),
             asset_json(record.resources.material),
-            asset_json(record.resources.texture),
+            asset_json(crate::named_texture::material_texture_reference(&record.resources)?),
         ),
     )?;
     fs::write(
@@ -332,7 +332,11 @@ impl Assets {
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&self.geometry),
                 material: SceneAssetRef::from_snapshot(&self.material),
-                texture: SceneAssetRef::from_snapshot(&self.texture),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(&self.texture),
+                )],
+                sampler: None,
                 tint: [1.0, 1.0, 1.0, case.roughness as f32],
             },
             transform: RenderTransform::identity(),
@@ -416,6 +420,8 @@ fn texture(
     match store.acquire(&handle)? {
         Acquire::Producer(producer) => Ok(producer.commit(
             ColorTextureData {
+                encoding: fluxel_renderer::TextureEncoding::Linear,
+                mip_levels: 1,
                 extent: [1, 1],
                 rgba8: METAL.to_vec(),
             },

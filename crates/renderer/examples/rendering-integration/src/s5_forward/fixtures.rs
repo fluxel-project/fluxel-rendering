@@ -48,6 +48,8 @@ pub(super) fn texture_snapshot(
 ) -> Result<AssetSnapshot<ColorTextureAsset, ColorTextureData>, Box<dyn Error>> {
     let handle = store.create()?;
     let data = ColorTextureData {
+        encoding: fluxel_renderer::TextureEncoding::Linear,
+        mip_levels: 1,
         extent: [1, 1],
         rgba8: rgba.to_vec(),
     };

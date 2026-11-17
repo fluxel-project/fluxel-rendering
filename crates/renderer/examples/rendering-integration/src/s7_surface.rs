@@ -296,7 +296,7 @@ fn write_inputs(
             record.transform.columns(),
             asset_json(record.resources.geometry),
             asset_json(record.resources.material),
-            asset_json(record.resources.texture),
+            asset_json(crate::named_texture::material_texture_reference(&record.resources)?),
         ),
     )?;
     fs::write(

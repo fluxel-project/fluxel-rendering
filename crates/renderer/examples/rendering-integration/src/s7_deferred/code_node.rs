@@ -4,9 +4,9 @@ use std::{error::Error, fs, path::Path};
 
 use external_renderer::{ChannelMapVariant, ExternalDeferredPipeline};
 use fluxel_renderer::{
-    BoundsVisibility, ForwardCpuPipeline, ForwardResources, FramePipeline, RenderBounds,
-    RenderChange, RenderChangeSet, RenderScene, RenderTransform, RenderView, Renderer,
-    prepare_forward,
+    prepare_forward, BoundsVisibility, ForwardCpuPipeline, ForwardResources, FramePipeline,
+    RenderBounds, RenderChange, RenderChangeSet, RenderScene, RenderTransform, RenderView,
+    Renderer,
 };
 use fluxel_rhi::backend::{
     ExecutionBackend, MappingBackend, PipelineBackend, RasterBackend, ReadbackBackend,
@@ -16,7 +16,7 @@ use fluxel_shader::ShaderComposer;
 
 use super::{
     asset_json,
-    fixtures::{ALBEDO, Assets, EXTENT, flat_positions},
+    fixtures::{flat_positions, Assets, ALBEDO, EXTENT},
     oracle, verify_facts, write_facts,
 };
 use crate::block_on;
@@ -263,7 +263,9 @@ fn write_inputs(
             record.resources.tint,
             asset_json(record.resources.geometry),
             asset_json(record.resources.material),
-            asset_json(record.resources.texture),
+            asset_json(crate::named_texture::material_texture_reference(
+                &record.resources
+            )?),
         ),
     )?;
     fs::write(output.join(format!("s7-{name}-expected.rgba")), expected)?;

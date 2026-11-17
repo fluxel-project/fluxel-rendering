@@ -396,7 +396,9 @@ fn input_json(
         mesh.transform.columns(),
         asset_json(mesh.resources.geometry),
         asset_json(mesh.resources.material),
-        asset_json(mesh.resources.texture),
+        asset_json(crate::named_texture::material_texture_reference(
+            &mesh.resources
+        )?),
         marker.id,
         marker.center,
         marker.half_extent,

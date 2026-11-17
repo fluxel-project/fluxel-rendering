@@ -27,7 +27,7 @@ use crate::{
 };
 
 mod layout;
-use layout::{VertexLayoutPreflightError, preflight_vertex_layout};
+use layout::{preflight_vertex_layout, VertexLayoutPreflightError};
 
 const EXTENT: [u32; 2] = [128, 128];
 const SOURCE: &str = include_str!("../assets/raster.wgsl");

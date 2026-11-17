@@ -4,8 +4,8 @@ use std::{error::Error, fs, path::Path};
 
 use external_renderer::ExternalDeferredPipeline;
 use fluxel_renderer::{
-    ForwardAssets, ForwardCpuPipeline, ForwardResources, FrameSnapshot, RenderBounds,
-    RenderViewId, Renderer,
+    ForwardAssets, ForwardCpuPipeline, ForwardResources, FrameSnapshot, RenderBounds, RenderViewId,
+    Renderer,
 };
 use fluxel_rhi::backend::{
     ExecutionBackend, MappingBackend, PipelineBackend, RasterBackend, ReadbackBackend,
@@ -73,12 +73,12 @@ where
         + ShaderBackend,
 {
     let submission = match route {
-        DemoRoute::Forward => block_on(renderer.submit_forward(
-            forward, snapshot, view, visibility, assets,
-        ))?,
-        DemoRoute::Deferred => block_on(renderer.submit_deferred(
-            deferred, snapshot, view, visibility, assets,
-        ))?,
+        DemoRoute::Forward => {
+            block_on(renderer.submit_forward(forward, snapshot, view, visibility, assets))?
+        }
+        DemoRoute::Deferred => {
+            block_on(renderer.submit_deferred(deferred, snapshot, view, visibility, assets))?
+        }
     };
     let raw = block_on(renderer.readback(&submission))?;
     fs::write(

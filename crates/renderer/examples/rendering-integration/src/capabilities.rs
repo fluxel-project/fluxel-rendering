@@ -185,17 +185,39 @@ pub(crate) fn write<B: Backend>(
 }
 
 fn cooperative_matrices(configurations: &[CooperativeMatrixConfiguration]) -> String {
-    format!("[{}]", configurations.iter().map(|config| {
-        let CooperativeMatrixConfiguration {
-            m, n, k, a_type, b_type, c_type, result_type, saturating_accumulation, scope,
-        } = config;
-        format!(
-        concat!("{{\"m\":{},\"n\":{},\"k\":{},\"a_type\":{},\"b_type\":{},",
+    format!(
+        "[{}]",
+        configurations
+            .iter()
+            .map(|config| {
+                let CooperativeMatrixConfiguration {
+                    m,
+                    n,
+                    k,
+                    a_type,
+                    b_type,
+                    c_type,
+                    result_type,
+                    saturating_accumulation,
+                    scope,
+                } = config;
+                format!(
+                    concat!("{{\"m\":{},\"n\":{},\"k\":{},\"a_type\":{},\"b_type\":{},",
                 "\"c_type\":{},\"result_type\":{},\"saturating_accumulation\":{},\"scope\":{}}}"),
-        m, n, k, json_string(component_name(*a_type)), json_string(component_name(*b_type)),
-        json_string(component_name(*c_type)), json_string(component_name(*result_type)),
-        saturating_accumulation, json_string(scope_name(*scope)),
-    )}).collect::<Vec<_>>().join(","))
+                    m,
+                    n,
+                    k,
+                    json_string(component_name(*a_type)),
+                    json_string(component_name(*b_type)),
+                    json_string(component_name(*c_type)),
+                    json_string(component_name(*result_type)),
+                    saturating_accumulation,
+                    json_string(scope_name(*scope)),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 fn lanes_json(lanes: &[LaneInfo]) -> String {

@@ -2,7 +2,7 @@
 
 use std::{error::Error, fs, path::Path};
 
-use external_renderer::{BEND_SOURCE, BendFeature, BendInput, ExternalDeferredPipeline};
+use external_renderer::{BendFeature, BendInput, ExternalDeferredPipeline, BEND_SOURCE};
 use fluxel_renderer::{
     CpuPhase, DeferredPositionDeformer, DeformationBinding, ForwardAssets, ForwardResources,
     FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet, RenderRecord, RenderScene,
@@ -181,7 +181,9 @@ fn write_input(
             parameters,
             super::asset_json(record.resources.geometry),
             super::asset_json(record.resources.material),
-            super::asset_json(record.resources.texture),
+            super::asset_json(crate::named_texture::material_texture_reference(
+                &record.resources
+            )?),
         ),
     )?;
     fs::write(

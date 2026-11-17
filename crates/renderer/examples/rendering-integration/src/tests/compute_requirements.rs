@@ -16,11 +16,9 @@ fn fixed_compute_checks_each_required_capability_before_pipeline_creation() {
         },
         ..DeviceCapabilities::default()
     };
-    assert!(
-        requirements(&baseline, true)
-            .iter()
-            .all(|(_, passed)| *passed)
-    );
+    assert!(requirements(&baseline, true)
+        .iter()
+        .all(|(_, passed)| *passed));
     assert!(!requirements(&baseline, false)[0].1);
     for case in 0..11 {
         let mut caps = baseline.clone();

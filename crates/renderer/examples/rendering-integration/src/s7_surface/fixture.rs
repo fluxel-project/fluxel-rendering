@@ -52,7 +52,11 @@ impl Assets {
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&self.geometry),
                 material: SceneAssetRef::from_snapshot(&self.material),
-                texture: SceneAssetRef::from_snapshot(&self.texture),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(&self.texture),
+                )],
+                sampler: None,
                 tint: [1.0; 4],
             },
             transform: RenderTransform::identity(),
@@ -141,6 +145,8 @@ fn texture(
 ) -> Result<AssetSnapshot<ColorTextureAsset, ColorTextureData>, Box<dyn Error>> {
     let handle = store.create()?;
     let value = ColorTextureData {
+        encoding: fluxel_renderer::TextureEncoding::Linear,
+        mip_levels: 1,
         extent: [1, 1],
         rgba8: vec![144, 80, 32, 255],
     };

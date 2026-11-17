@@ -15,6 +15,8 @@ use fluxel_rhi::{
 use std::{error::Error, fs, path::Path};
 mod evidence;
 mod fixtures;
+mod manifest;
+use manifest::manifest;
 mod observed;
 mod oracle;
 mod surface;
@@ -388,6 +390,8 @@ where
         &a.texture,
         &a.quad_t,
         fluxel_renderer::ColorTextureData {
+            encoding: fluxel_renderer::TextureEncoding::Linear,
+            mip_levels: 1,
             extent: [1, 1],
             rgba8: [255, 255, 0, 255].to_vec(),
         },
@@ -448,7 +452,11 @@ where
                 // into the feature's replacement quad product.
                 geometry: fluxel_renderer::SceneAssetRef::from_snapshot(&a.mesh_g),
                 material: fluxel_renderer::SceneAssetRef::from_snapshot(&a.mesh_m),
-                texture: fluxel_renderer::SceneAssetRef::from_snapshot(&a.mesh_t),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    fluxel_renderer::SceneAssetRef::from_snapshot(&a.mesh_t),
+                )],
+                sampler: None,
                 tint: [1.; 4],
             },
             transform: fluxel_renderer::RenderTransform::identity(),
@@ -565,31 +573,4 @@ where
     fs::write(o.join(format!("s6-{n}-actual.rgba")), &a)?;
     fs::write(o.join(format!("s6-{n}-actual.ppm")), oracle::ppm(&a)?)?;
     oracle::verify(&a, e, &oracle::mask(), n)
-}
-fn manifest() -> String {
-    let artifacts = |names: &[&str]| -> String {
-        names
-            .iter()
-            .flat_map(|name| {
-                [
-                    format!("\"s6-{name}-input.json\""),
-                    format!("\"s6-{name}-expected.rgba\""),
-                    format!("\"s6-{name}-expected.ppm\""),
-                    format!("\"s6-{name}-actual.rgba\""),
-                    format!("\"s6-{name}-actual.ppm\""),
-                ]
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    let original = format!(
-        "\"s6-initial-mesh-geometry.txt\",\"s6-initial-mesh-geometry-stream-0.bin\",\"s6-initial-mesh-material.txt\",\"s6-initial-mesh-texture.rgba\",\"s6-initial-quad-geometry.txt\",\"s6-initial-quad-geometry-stream-0.bin\",\"s6-initial-quad-material.txt\",\"s6-initial-quad-texture.rgba\",\"s6-stable-mask.bin\",\"s6-composed-cache.json\",\"s6-composed-measurements.json\",{}",
-        artifacts(&["frame-0", "frame-1", "frame-2"])
-    );
-    format!(
-        "{{\"schemaVersion\":1,\"workload\":\"s6-composed-offscreen-typed-quad\",\"cases\":[{{\"name\":\"original-three-frame-cache\",\"artifacts\":[{original}]}},{{\"name\":\"enabled-disabled-enabled\",\"artifacts\":[{}]}},{{\"name\":\"independent-providers\",\"artifacts\":[{}]}},{{\"name\":\"three-pending-replacements\",\"artifacts\":[\"s6-pending-assets.json\",\"s6-pending-lifecycle.json\",\"s6-pending-new-quad-geometry-stream-0.bin\",\"s6-pending-new-quad-geometry.txt\",\"s6-pending-new-quad-material.txt\",\"s6-pending-new-quad-texture.rgba\",{}]}}]}}\n",
-        artifacts(&["toggle-enabled", "toggle-disabled", "toggle-reenabled"]),
-        artifacts(&["provider-marker-only", "provider-mesh-only"]),
-        artifacts(&["pending-old", "pending-new", "pending-new-warm"])
-    )
 }

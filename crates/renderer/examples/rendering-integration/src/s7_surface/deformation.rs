@@ -268,7 +268,9 @@ fn write_inputs(
             name,
             asset_json(record.resources.geometry),
             asset_json(record.resources.material),
-            asset_json(record.resources.texture),
+            asset_json(crate::named_texture::material_texture_reference(
+                &record.resources
+            )?),
         ),
     )?;
     fs::write(
@@ -338,10 +340,13 @@ fn texture(
     assets: &ForwardAssets,
     record: &RenderRecord<ForwardResources>,
 ) -> Result<[u8; 4], Box<dyn Error>> {
+    let reference = crate::named_texture::material_texture_reference(&record.resources)?;
     assets
         .textures
         .iter()
-        .find(|snapshot| snapshot.id() == record.resources.texture.id())
+        .find(|snapshot| {
+            snapshot.id() == reference.id() && snapshot.generation() == reference.generation()
+        })
         .and_then(|snapshot| <[u8; 4]>::try_from(snapshot.value().rgba8.as_slice()).ok())
         .ok_or_else(|| "Surface deformation requires a 1x1 RGBA texture".into())
 }

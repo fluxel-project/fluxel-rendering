@@ -2,14 +2,14 @@
 
 use std::{error::Error, fs, path::Path};
 
-use external_renderer::{ExternalDeferredPipeline, PBR_PROPERTIES, pbr_definition};
+use external_renderer::{pbr_definition, ExternalDeferredPipeline, PBR_PROPERTIES};
 use fluxel_assets::{Acquire, AssetSnapshot, AssetStore, ResidentBytes};
 use fluxel_material::{MaterialAsset, MaterialDefinition};
 use fluxel_renderer::{
-    BoundsVisibility, ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardCpuPipeline,
-    ForwardResources, FramePipeline, GeometryAsset, GeometryAttribute, GeometryData,
-    GeometryLayout, GeometryStream, RenderBounds, RenderChange, RenderChangeSet, RenderRecord,
-    RenderScene, RenderTransform, RenderView, Renderer, SceneAssetRef, prepare_forward,
+    prepare_forward, BoundsVisibility, ColorTextureAsset, ColorTextureData, ForwardAssets,
+    ForwardCpuPipeline, ForwardResources, FramePipeline, GeometryAsset, GeometryAttribute,
+    GeometryData, GeometryLayout, GeometryStream, RenderBounds, RenderChange, RenderChangeSet,
+    RenderRecord, RenderScene, RenderTransform, RenderView, Renderer, SceneAssetRef,
 };
 use fluxel_rhi::{
     api::{VertexFormat, VertexStepMode},
@@ -318,7 +318,7 @@ fn write_inputs(
             input.transform,
             asset_json(record.resources.geometry),
             asset_json(record.resources.material),
-            asset_json(record.resources.texture)
+            asset_json(crate::named_texture::material_texture_reference(&record.resources)?)
         ),
     )?;
     for (suffix, value) in [
@@ -393,7 +393,11 @@ impl Assets {
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&self.geometry),
                 material: SceneAssetRef::from_snapshot(&self.material),
-                texture: SceneAssetRef::from_snapshot(self.texture(case.texture)),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(self.texture(case.texture)),
+                )],
+                sampler: None,
                 tint: [1.0, 1.0, 1.0, case.roughness as f32],
             },
             transform: RenderTransform::from_columns(
@@ -476,6 +480,8 @@ fn texture_snapshot(
 ) -> Result<AssetSnapshot<ColorTextureAsset, ColorTextureData>, Box<dyn Error>> {
     let handle = store.create()?;
     let value = ColorTextureData {
+        encoding: fluxel_renderer::TextureEncoding::Linear,
+        mip_levels: 1,
         extent: [1, 1],
         rgba8: texture.color().to_vec(),
     };

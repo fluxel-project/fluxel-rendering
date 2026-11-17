@@ -134,6 +134,8 @@ pub(super) fn texture_snapshot(
     match store.acquire(&handle)? {
         Acquire::Producer(permit) => Ok(permit.commit(
             ColorTextureData {
+                encoding: fluxel_renderer::TextureEncoding::Linear,
+                mip_levels: 1,
                 extent: [1, 1],
                 rgba8: rgba.to_vec(),
             },

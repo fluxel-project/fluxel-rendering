@@ -95,14 +95,12 @@ fn pbr_oracle_rejects_a_malformed_readback_shape() {
         input([180, 100, 40, 128], 0.45, identity()),
         Route::Deferred,
     );
-    assert!(
-        verify(
-            &expected[..expected.len() - 1],
-            &expected,
-            &mask,
-            "truncated",
-            Route::Deferred
-        )
-        .is_err()
-    );
+    assert!(verify(
+        &expected[..expected.len() - 1],
+        &expected,
+        &mask,
+        "truncated",
+        Route::Deferred
+    )
+    .is_err());
 }

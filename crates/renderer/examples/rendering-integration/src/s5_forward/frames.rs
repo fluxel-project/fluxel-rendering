@@ -332,6 +332,8 @@ where
         texture_store,
         &assets.textures[1],
         ColorTextureData {
+            encoding: fluxel_renderer::TextureEncoding::Linear,
+            mip_levels: 1,
             extent: [1, 1],
             rgba8: vec![255, 0, 0, 255],
         },
@@ -419,7 +421,11 @@ fn original_resources(
     Ok(ForwardResources {
         geometry: SceneAssetRef::from_snapshot(geometry),
         material: SceneAssetRef::from_snapshot(material),
-        texture: SceneAssetRef::from_snapshot(texture),
+        textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+            "material_texture",
+            SceneAssetRef::from_snapshot(texture),
+        )],
+        sampler: None,
         tint: [1.0; 4],
     })
 }

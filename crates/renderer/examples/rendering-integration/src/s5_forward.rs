@@ -96,7 +96,11 @@ where
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&geometry[index]),
                 material: SceneAssetRef::from_snapshot(&material[index]),
-                texture: SceneAssetRef::from_snapshot(&texture[index]),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(&texture[index]),
+                )],
+                sampler: None,
                 tint: [1.0; 4],
             },
             transform: RenderTransform::identity(),

@@ -370,7 +370,11 @@ impl Fixture {
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&self.geometry),
                 material: SceneAssetRef::from_snapshot(&self.materials[n % VARIANTS]),
-                texture: SceneAssetRef::from_snapshot(&t[n % t.len()]),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(&t[n % t.len()]),
+                )],
+                sampler: None,
                 tint: tint(n),
             },
             transform: tile_transform(n, self.draws),
@@ -390,6 +394,8 @@ impl Fixture {
                     match self.store.request_replacement(old.handle())? {
                         Production::Producer(p) => Ok(p.commit(
                             ColorTextureData {
+                                encoding: fluxel_renderer::TextureEncoding::Linear,
+                                mip_levels: 1,
                                 extent: [1, 1],
                                 rgba8: rgba(n, true).to_vec(),
                             },

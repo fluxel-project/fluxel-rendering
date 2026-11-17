@@ -68,24 +68,30 @@ class SmokeRunnerTests(unittest.TestCase):
             root = Path(temporary)
             for relative, content in {
                 "Cargo.toml": "[workspace]\n",
+                ".gitignore": "/private-evidence/\n",
                 "crates/shader/Cargo.toml": "[package]\nname='shader'\n",
                 "crates/shader/build.rs": "fn main() {}\n",
                 "crates/renderer/examples/rendering-integration/Cargo.toml": "[package]\nname='consumer'\n",
                 ".cargo/config.toml": "[build]\n",
                 "crates/renderer/examples/.cargo/config.toml": "[build]\n",
                 ".cargo/credentials.toml": "token = 'secret'\n",
-                "crates/shader/draft/private.rs": "secret\n",
                 "crates/shader/AGENTS.md": "local\n",
             }.items():
                 path = root / relative; path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
+            local_only_paths = [Path("crates/shader/private-evidence/private.rs")]
+            for relative in local_only_paths:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("local evidence\n", encoding="utf-8")
             resolved_root = root.resolve()
             paths = {path.relative_to(resolved_root).as_posix() for path in smoke.source_input_paths(root)}
             self.assertIn("crates/shader/build.rs", paths)
             self.assertIn(".cargo/config.toml", paths)
             self.assertIn("crates/renderer/examples/.cargo/config.toml", paths)
             self.assertNotIn(".cargo/credentials.toml", paths)
-            self.assertNotIn("crates/shader/draft/private.rs", paths)
+            for relative in local_only_paths:
+                self.assertNotIn(relative.as_posix(), paths)
             self.assertNotIn("crates/shader/AGENTS.md", paths)
             inputs = [{"path": name, "sha256": smoke.sha256(root / name)} for name in sorted(paths)]
             self.assertEqual(smoke.source_consistency(inputs, root)["status"], "stable")

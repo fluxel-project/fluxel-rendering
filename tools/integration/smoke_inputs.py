@@ -12,7 +12,6 @@ import zipfile
 from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT = ROOT / "crates/renderer/examples/rendering-integration"
-EXCLUDED_SOURCE_PARTS = {".git", "target", "draft"}
 SENSITIVE_SOURCE_NAMES = {".env", ".env.local", ".envrc"}
 SENSITIVE_SOURCE_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".token"}
 SENSITIVE_CONFIG_ASSIGNMENT = re.compile(r"(?im)^\s*(?:token|password|secret|api[-_]?key)\s*=")
@@ -26,6 +25,26 @@ CHILD_ENV_ALLOWLIST = (
     "VCToolsInstallDir", "VSINSTALLDIR", "WindowsSdkDir", "WindowsSDKVersion", "WINDIR",
     "CARGO_HOME",
 )
+
+
+def excluded_source_parts(root: Path) -> set[str]:
+    """Derive ignored directory names from the repository's ignore policy."""
+    policy = root / ".gitignore"
+    try:
+        lines = policy.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {".git", "target", "__pycache__"}
+    parts = {".git", "target", "__pycache__"}
+    for line in lines:
+        pattern = line.strip()
+        if not pattern or pattern.startswith(("#", "!")) or not pattern.endswith("/"):
+            continue
+        name = pattern.rstrip("/").split("/")[-1]
+        if name and not any(marker in name for marker in "*?["):
+            parts.add(name)
+    return parts
+
+
 def cargo_config_has_secret(path: Path) -> bool:
     try:
         return bool(SENSITIVE_CONFIG_ASSIGNMENT.search(path.read_text(encoding="utf-8", errors="replace")))
@@ -39,7 +58,7 @@ def source_path_is_safe(path: Path, root: Path) -> bool:
         relative = path.resolve().relative_to(root.resolve())
     except ValueError:
         return False
-    return (path.is_file() and not any(part in EXCLUDED_SOURCE_PARTS for part in relative.parts)
+    return (path.is_file() and not any(part in excluded_source_parts(root) for part in relative.parts)
             and path.name != "AGENTS.md" and path.name not in SENSITIVE_SOURCE_NAMES
             and not path.name.startswith("credentials") and path.suffix.lower() not in SENSITIVE_SOURCE_SUFFIXES)
 
@@ -60,7 +79,7 @@ def sensitive_build_inputs(root: Path) -> int:
             except ValueError:
                 continue
             config_secret = path.name in {"config", "config.toml"} and cargo_config_has_secret(path)
-            if (path.is_file() and not any(part in EXCLUDED_SOURCE_PARTS for part in relative.parts)
+            if (path.is_file() and not any(part in excluded_source_parts(root) for part in relative.parts)
                     and (path.name in SENSITIVE_SOURCE_NAMES or path.name.startswith("credentials")
                          or path.suffix.lower() in SENSITIVE_SOURCE_SUFFIXES or config_secret)):
                 count += 1
@@ -81,7 +100,7 @@ def closure_escape_count(root: Path) -> int:
                 relative = path.relative_to(root)
             except ValueError:
                 continue
-            if any(part in EXCLUDED_SOURCE_PARTS for part in relative.parts):
+            if any(part in excluded_source_parts(root) for part in relative.parts):
                 continue
             is_junction = getattr(path, "is_junction", lambda: False)()
             if (path.is_symlink() or is_junction) and not source_path_is_safe(path, root):
@@ -148,7 +167,7 @@ def source_input_paths(root: Path = ROOT) -> list[Path]:
     artifact = root / "crates/renderer/examples/rendering-integration"
     external = root / "crates/renderer/examples/external-renderer"
     paths: list[Path] = [
-        root / "Cargo.toml", root / "Cargo.lock", root / "build.rs",
+        root / "Cargo.toml", root / "Cargo.lock", root / "build.rs", root / ".gitignore",
         root / "tools/integration/README.md",
         root / "tools/integration/manifest.schema.json",
         root / "tools/integration/policy.md",

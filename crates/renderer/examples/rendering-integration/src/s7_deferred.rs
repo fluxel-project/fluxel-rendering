@@ -134,7 +134,7 @@ where
     let (forward_expected, forward_mask) = oracle::image(tilted, oracle::Route::Forward);
     fs::write(
         output.join(format!("s7-{name}-input.json")),
-        input_json(&snapshot, record, tilted),
+        input_json(&snapshot, record, tilted)?,
     )?;
     fs::write(output.join(format!("s7-{name}-expected.rgba")), &expected)?;
     fs::write(
@@ -258,8 +258,8 @@ fn input_json(
     snapshot: &FrameSnapshot<ForwardResources>,
     record: &RenderRecord<ForwardResources>,
     tilted: bool,
-) -> String {
-    format!(
+) -> Result<String, Box<dyn Error>> {
+    Ok(format!(
         concat!(
             "{{\"schemaVersion\":1,\"sceneVersion\":{},\"case\":\"{}\",\"extent\":{:?},",
             "\"positionOnly\":true,\"sameSnapshotForDeferredAndForward\":true,",
@@ -278,8 +278,10 @@ fn input_json(
         oracle::plane(tilted),
         asset_json(record.resources.geometry),
         asset_json(record.resources.material),
-        asset_json(record.resources.texture),
-    )
+        asset_json(crate::named_texture::material_texture_reference(
+            &record.resources
+        )?),
+    ))
 }
 
 pub(super) fn verify_facts(

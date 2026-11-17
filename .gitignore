@@ -1,5 +1,5 @@
-# Local planning and review drafts
-/draft/
+# Local planning, review and evidence
+/Temp/
 
 # Rust build output
 **/target/

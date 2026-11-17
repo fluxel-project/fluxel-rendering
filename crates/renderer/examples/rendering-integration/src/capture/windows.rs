@@ -128,6 +128,21 @@ pub(super) fn capture_window_client(
     let session = pool
         .CreateCaptureSession(&item)
         .map_err(|e| winerr("capture-session", before, e))?;
+    // The cursor is desktop input state, not rendered client content. Exclude
+    // it through WGC rather than moving the user's pointer or masking pixels.
+    session
+        .SetIsCursorCaptureEnabled(false)
+        .map_err(|e| winerr("disable-cursor-capture", before, e))?;
+    if session
+        .IsCursorCaptureEnabled()
+        .map_err(|e| winerr("query-cursor-capture", before, e))?
+    {
+        return Err(err(
+            "cursor-capture",
+            before,
+            "cursor capture remains enabled",
+        ));
+    }
     let (send, receive) = mpsc::sync_channel(1);
     let token = pool
         .FrameArrived(&TypedEventHandler::new(move |_, _| {

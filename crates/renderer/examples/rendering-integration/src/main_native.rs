@@ -22,6 +22,27 @@ pub(super) fn run_dx12(output: &Path, workload: Workload) -> Result<(), Box<dyn 
     }))?;
     diagnostics::record_dx12_device_open(output)?;
     write_capabilities(&device, "dx12", &adapter_name, output)?;
+    if workload == Workload::M0MaterialCapabilities {
+        return material_capabilities::run(&device, &output.join("m0-material-capabilities"));
+    }
+    if workload == Workload::M0SampledForward {
+        return m0_sampled_forward::run(device, &output.join("m0-sampled-forward"));
+    }
+    if workload == Workload::M1Uv0Pbr {
+        return m1_uv0_pbr::run(device, &output.join("m1-uv0-pbr"));
+    }
+    if workload == Workload::M1NormalPbr {
+        return m1_normal_pbr::run(device, &output.join("m1-normal-pbr"));
+    }
+    if workload == Workload::M1SurfaceEffects {
+        return m1_surface_effects::run(device, &output.join("m1-surface-effects"));
+    }
+    if workload == Workload::M1EnvironmentIrradianceForward {
+        return m1_environment_irradiance::run(
+            device,
+            &output.join("m1-environment-irradiance-forward"),
+        );
+    }
     if let Some(route) = main_demo::route(workload) {
         return main_demo::run_dx12(device, route, &output.join(main_demo::output_name(route)));
     }
@@ -191,6 +212,27 @@ pub(super) fn run_wgl(output: &Path, workload: Workload) -> Result<(), Box<dyn E
         required_features: Vec::new(),
     }))?;
     write_capabilities(&device, "native-gl-wgl", &adapter_name, output)?;
+    if workload == Workload::M0MaterialCapabilities {
+        return material_capabilities::run(&device, &output.join("m0-material-capabilities"));
+    }
+    if workload == Workload::M0SampledForward {
+        return m0_sampled_forward::run(device, &output.join("m0-sampled-forward"));
+    }
+    if workload == Workload::M1Uv0Pbr {
+        return m1_uv0_pbr::run(device, &output.join("m1-uv0-pbr"));
+    }
+    if workload == Workload::M1NormalPbr {
+        return m1_normal_pbr::run(device, &output.join("m1-normal-pbr"));
+    }
+    if workload == Workload::M1SurfaceEffects {
+        return m1_surface_effects::run(device, &output.join("m1-surface-effects"));
+    }
+    if workload == Workload::M1EnvironmentIrradianceForward {
+        return m1_environment_irradiance::run(
+            device,
+            &output.join("m1-environment-irradiance-forward"),
+        );
+    }
     let mut observer = diagnostics::WglObserver::install(&device)?;
     if let Some(route) = main_demo::route(workload) {
         let result = main_demo::run_wgl(

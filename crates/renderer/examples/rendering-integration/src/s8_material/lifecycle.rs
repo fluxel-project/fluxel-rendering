@@ -18,7 +18,7 @@ use fluxel_rhi::{
     },
 };
 
-use super::{Config, DRAWS, EXTENT, Fixture, Scenario, TEXTURES, json};
+use super::{json, Config, Fixture, Scenario, DRAWS, EXTENT, TEXTURES};
 
 const CASES: [&str; 5] = [
     "device-old-cold",

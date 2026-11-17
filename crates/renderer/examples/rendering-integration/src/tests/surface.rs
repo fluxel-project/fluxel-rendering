@@ -4,7 +4,7 @@ use std::{
 };
 
 use super::{
-    ResizeWaitOutcome, await_resize_confirmation, requested_resize_event, resize_is_confirmed,
+    await_resize_confirmation, requested_resize_event, resize_is_confirmed, ResizeWaitOutcome,
 };
 use fluxel_host::WindowEvent;
 

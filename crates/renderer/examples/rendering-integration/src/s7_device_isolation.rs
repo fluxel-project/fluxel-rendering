@@ -405,7 +405,11 @@ impl Inputs {
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&self.geometry),
                 material: SceneAssetRef::from_snapshot(&self.material),
-                texture: SceneAssetRef::from_snapshot(texture),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(texture),
+                )],
+                sampler: None,
                 tint: [1.0; 4],
             },
             transform: RenderTransform::identity(),
@@ -419,6 +423,8 @@ impl Inputs {
         match self.textures.request_replacement(self.texture.handle())? {
             Production::Producer(p) => Ok(p.commit(
                 ColorTextureData {
+                    encoding: fluxel_renderer::TextureEncoding::Linear,
+                    mip_levels: 1,
                     extent: [1, 1],
                     rgba8: REPLACED.to_vec(),
                 },
@@ -505,6 +511,8 @@ fn commit_texture(
     match store.acquire(&h)? {
         Acquire::Producer(p) => Ok(p.commit(
             ColorTextureData {
+                encoding: fluxel_renderer::TextureEncoding::Linear,
+                mip_levels: 1,
                 extent: [1, 1],
                 rgba8: rgba8.to_vec(),
             },
@@ -540,12 +548,13 @@ fn input_json(
                 && value.generation() == record.resources.geometry.generation()
         })
         .ok_or("Deferred input geometry is absent from supplied assets")?;
+    let texture_reference = crate::named_texture::material_texture_reference(&record.resources)?;
     let texture = assets
         .textures
         .iter()
         .find(|value| {
-            value.id() == record.resources.texture.id()
-                && value.generation() == record.resources.texture.generation()
+            value.id() == texture_reference.id()
+                && value.generation() == texture_reference.generation()
         })
         .ok_or("Deferred input texture is absent from supplied assets")?;
     Ok(format!(
@@ -559,7 +568,7 @@ fn input_json(
         json_string(&format!("{id:?}")),
         reference_identity(record.resources.geometry),
         reference_identity(record.resources.material),
-        reference_identity(record.resources.texture),
+        reference_identity(texture_reference),
         geometry.value().streams[0],
         texture.value().rgba8,
         record.resources.tint,

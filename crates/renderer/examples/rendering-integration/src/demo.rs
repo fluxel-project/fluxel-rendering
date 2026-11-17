@@ -201,7 +201,9 @@ where
         if evidence && frame == demo_evidence::LAST_FRAME {
             break;
         }
-        frame = frame.checked_add(1).ok_or("demo frame identifier overflow")?;
+        frame = frame
+            .checked_add(1)
+            .ok_or("demo frame identifier overflow")?;
         thread::sleep(FRAME_INTERVAL);
     }
     Ok(())
@@ -364,7 +366,11 @@ impl Assets {
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&self.geometry),
                 material: SceneAssetRef::from_snapshot(&self.material),
-                texture: SceneAssetRef::from_snapshot(&self.texture),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(&self.texture),
+                )],
+                sampler: None,
                 tint,
             },
             transform,
@@ -453,6 +459,8 @@ fn texture(
 ) -> Result<AssetSnapshot<ColorTextureAsset, ColorTextureData>, Box<dyn Error>> {
     let handle = store.create()?;
     let value = ColorTextureData {
+        encoding: fluxel_renderer::TextureEncoding::Linear,
+        mip_levels: 1,
         extent: [1, 1],
         rgba8: vec![232, 106, 44, 255],
     };

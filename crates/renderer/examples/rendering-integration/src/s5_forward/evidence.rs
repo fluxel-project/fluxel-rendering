@@ -5,7 +5,7 @@ use std::{error::Error, fs, path::Path};
 use fluxel_renderer::Renderer;
 use fluxel_rhi::backend::{ExecutionBackend, MappingBackend, ReadbackBackend, ResourceBackend};
 
-use super::super::{CLEAR, EXTENT, paint_triangle, ppm, triangle_pixels, verify_stable_image};
+use super::super::{paint_triangle, ppm, triangle_pixels, verify_stable_image, CLEAR, EXTENT};
 
 pub(super) fn frame_expected(visible: [bool; 4]) -> Vec<u8> {
     let mut bytes = vec![0; usize::try_from(EXTENT[0] * EXTENT[1] * 4).expect("fixed extent")];

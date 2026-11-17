@@ -69,6 +69,12 @@ pub(super) fn block_on<F: Future>(future: F) -> F::Output {
 pub(super) enum Workload {
     #[default]
     Foundation,
+    M0MaterialCapabilities,
+    M0SampledForward,
+    M1Uv0Pbr,
+    M1NormalPbr,
+    M1SurfaceEffects,
+    M1EnvironmentIrradianceForward,
     S3Material,
     S2Cache,
     S5Forward,
@@ -117,6 +123,14 @@ fn parse_arguments(
             continue;
         }
         let workload = match argument.to_str() {
+            Some("--m0-material-capabilities-only") => Workload::M0MaterialCapabilities,
+            Some("--m0-sampled-forward-only") => Workload::M0SampledForward,
+            Some("--m1-uv0-pbr-only") => Workload::M1Uv0Pbr,
+            Some("--m1-normal-pbr-only") => Workload::M1NormalPbr,
+            Some("--m1-surface-effects-only") => Workload::M1SurfaceEffects,
+            Some("--m1-environment-irradiance-forward-only") => {
+                Workload::M1EnvironmentIrradianceForward
+            }
             Some("--s3-only") => Workload::S3Material,
             Some("--s2-cache-only") => Workload::S2Cache,
             Some("--s5-only") => Workload::S5Forward,

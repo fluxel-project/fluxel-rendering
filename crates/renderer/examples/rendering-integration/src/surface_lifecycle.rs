@@ -321,7 +321,7 @@ pub(crate) fn resize_window(
     use windows::Win32::{
         Foundation::{HWND, RECT},
         UI::WindowsAndMessaging::{
-            GetClientRect, GetWindowRect, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos,
+            GetClientRect, GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
         },
     };
 

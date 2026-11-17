@@ -26,10 +26,9 @@ S5_SCHEMA_VERSION = 4
 S6_SCHEMA_VERSION = 5
 BACKENDS = ("dx12", "native-gl-wgl")
 WORKLOADS = ("s0-s3", "s5-forward", "s5-surface", "s5-device-isolation", "s6-composed", "s6-surface")
-RHI_REVISION = "b5d569feace548a6ed498901deaf31a5efcaca61"
+RHI_REVISION = "8400f8f35933a5d0464014a8671799890f67ff49"
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT = ROOT / "crates/renderer/examples/rendering-integration"
-EXCLUDED_SOURCE_PARTS = {".git", "target", "draft"}
 SENSITIVE_SOURCE_NAMES = {".env", ".env.local", ".envrc"}
 SENSITIVE_SOURCE_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".token"}
 SENSITIVE_CONFIG_ASSIGNMENT = re.compile(r"(?im)^\s*(?:token|password|secret|api[-_]?key)\s*=")

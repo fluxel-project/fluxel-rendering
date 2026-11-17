@@ -57,7 +57,11 @@ impl Assets {
             resources: ForwardResources {
                 geometry: SceneAssetRef::from_snapshot(&self.mesh_g),
                 material: SceneAssetRef::from_snapshot(&self.mesh_m),
-                texture: SceneAssetRef::from_snapshot(&self.mesh_t),
+                textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                    "material_texture",
+                    SceneAssetRef::from_snapshot(&self.mesh_t),
+                )],
+                sampler: None,
                 tint: [1.0; 4],
             },
             transform: if out {
@@ -203,6 +207,8 @@ fn texture_snapshot(
     match s.acquire(&h)? {
         Acquire::Producer(p) => Ok(p.commit(
             ColorTextureData {
+                encoding: fluxel_renderer::TextureEncoding::Linear,
+                mip_levels: 1,
                 extent: [1, 1],
                 rgba8: c.to_vec(),
             },

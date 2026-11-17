@@ -38,7 +38,7 @@ python tools/integration/smoke.py --backend native-gl-wgl
 ```
 
 The manifest pins RHI
-`b5d569feace548a6ed498901deaf31a5efcaca61`, Bases
+`8400f8f35933a5d0464014a8671799890f67ff49`, Bases
 `124e825f82e5cd0eb485c95fe1281b11c8dbc844`, and Host
 `8d101624c603a6c1e0badf729768c6b26e70fba8`. The root workspace excludes this
 consumer; its lockfile is part of the executable input.

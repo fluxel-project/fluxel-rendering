@@ -45,7 +45,7 @@ pub(super) fn write_frame_inputs(
     );
     let assets_json = format!(
         "{{\"mesh\":{},\"quad\":{}}}",
-        resources_json(&mesh.resources),
+        resources_json(&mesh.resources)?,
         quad_assets_json(marker)
     );
     let input_json = format!(
@@ -75,13 +75,13 @@ pub(super) fn write_frame_inputs(
     Ok(())
 }
 
-fn resources_json(resources: &ForwardResources) -> String {
-    format!(
+fn resources_json(resources: &ForwardResources) -> Result<String, Box<dyn Error>> {
+    Ok(format!(
         "{{\"geometry\":{},\"material\":{},\"texture\":{}}}",
         asset_json(resources.geometry),
         asset_json(resources.material),
-        asset_json(resources.texture)
-    )
+        asset_json(crate::named_texture::material_texture_reference(resources)?)
+    ))
 }
 fn quad_assets_json(marker: &QuadMarker) -> String {
     format!(

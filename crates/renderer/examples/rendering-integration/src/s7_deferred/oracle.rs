@@ -1,6 +1,6 @@
 //! Analytic S7 Deferred oracle; it derives triangle planes, not shader text.
 
-use super::fixtures::{ALBEDO, EXTENT, flat_positions, tilt_positions};
+use super::fixtures::{flat_positions, tilt_positions, ALBEDO, EXTENT};
 use std::error::Error;
 
 /// Two consumers share the same analytic raster plane but not final shading.

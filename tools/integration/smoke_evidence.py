@@ -17,7 +17,7 @@ else:
     import capture_contract
 ROOT = Path(__file__).resolve().parents[2]
 BACKENDS = ("dx12", "native-gl-wgl")
-RHI_REVISION = "b5d569feace548a6ed498901deaf31a5efcaca61"
+RHI_REVISION = "8400f8f35933a5d0464014a8671799890f67ff49"
 def s5_static_asset_raw_artifacts() -> tuple[str, ...]:
     """Return the immutable mesh, material, and texture inputs for S5."""
     artifacts = [

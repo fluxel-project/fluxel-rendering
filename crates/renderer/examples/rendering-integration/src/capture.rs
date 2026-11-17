@@ -106,6 +106,7 @@ fn write_snapshot(
             concat!(
                 "{{\n  \"schemaVersion\": 2,\n  \"frame\": {},\n  \"clientExtent\": [{}, {}],\n",
                 "  \"method\": \"windows-graphics-capture-window\",\n  \"pixelFormat\": \"BGRA8-top-down\",\n  \"image\": {:?},\n",
+                "  \"cursorCaptureEnabled\": false,\n",
                 "  \"captureContentExtent\": [{}, {}],\n  \"clientCrop\": [{}, {}, {}, {}],\n  \"captureTimeoutMs\": {},\n",
                 "  \"windowStateBefore\": {},\n  \"windowStateAfter\": {},\n  \"windowStateUnchanged\": {},\n",
                 "{}  \"automaticVisualPass\": false\n}}\n"
