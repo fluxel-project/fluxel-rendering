@@ -9,5 +9,5 @@ publish = false
 resolver = "2"
 
 [dependencies]
-fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "b5d569feace548a6ed498901deaf31a5efcaca61", version = "=0.1.0", default-features = false }
+fluxel-rhi = { git = "https://github.com/fluxel-project/fluxel-rhi", rev = "8400f8f35933a5d0464014a8671799890f67ff49", version = "=0.1.0", default-features = false }
 fluxel-renderer = { path = "../../../.." }
