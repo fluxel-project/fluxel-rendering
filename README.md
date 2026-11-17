@@ -18,9 +18,12 @@ actual-owner validation, caches and completion-based resource retirement.
 ## Current scope
 
 Forward supports multiple meshes, vertex layouts, materials and textures, plus a
-statically composed external quad Feature in the same opaque pass. Deferred is
-currently a one-mesh product with fixed lighting, selected metallic/roughness
-PBR and an optional external position producer. These are bounded products;
+statically composed external quad Feature in the same opaque pass. Deferred
+supports multiple UV0-normal metallic/roughness records with compatible
+G-buffer packing and selected lighting. Legacy single-mesh routes and optional
+position deformation retain their bounded scope. Both pipelines consume named
+asset textures; Forward can combine them with a same-frame GPU capture in one
+material. These are bounded products;
 there is no public general Graph API, arbitrary pass-chain interface, dynamic
 plugin registry or full PBR system. Runtime scene and material data remain
 ordinary values; concrete extension implementations use generics and traits.
@@ -38,6 +41,12 @@ crates/
   renderer/
     documents/design.md
     examples/
+      02-texture-material/     # same node material through both pipelines
+      04-dynamic-uniform-material/ # source cube grid, dynamic uniforms and depth
+      07-offscreen-material/   # captured image consumed by a material in one Graph
+      pbr-environment-material/ # isolated radiance, LUT and camera controls
+      pbr-sphere-material/     # perspective ORM/IBL sphere-grid consumer
+      pbr-four-texture-material/ # named image bindings and source controls
       external-renderer/       # independent public-API consumer and compile failures
       rendering-integration/   # native workloads and visible demos
     src/                      # unit tests grouped under src/tests/
@@ -55,11 +64,10 @@ tools/integration/            # runner, oracles, policy and manifest schema
 tools/bench/                  # workload measurement and comparison tools
 ```
 
-The two renderer consumers remain standalone Cargo workspaces with independent
+The renderer consumers remain standalone Cargo workspaces with independent
 lockfiles. Their location expresses ownership, not membership in the library
 workspace. Each library crate contains its README, design and dual-license
-texts. Local plans, reviews and historical evidence are kept under ignored
-`draft/`; they are not public design documents or current support claims.
+texts. Public contracts and current support claims are documented by their owners.
 
 ## Historical acceptance index
 
@@ -107,3 +115,11 @@ host windows hidden. See the [renderer examples](crates/renderer/examples/README
 The crates are currently unpublished (`publish = false`). Git consumers select
 exact revisions and retain their dependency locks. Licensed under
 `MIT OR Apache-2.0`.
+
+## Planned material expansion
+
+The next planned delivery is node-authored PBR on both Forward and Deferred,
+including transparency, refraction and thickness-based absorption, initially
+on DX12 and WGL. This is planned scope, not current support. See the
+[ecosystem roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
+and [Material direction](crates/material/documents/design.md#babylon-aligned-material-direction-planned).

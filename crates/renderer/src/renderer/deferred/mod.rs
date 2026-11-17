@@ -1,8 +1,8 @@
-//! Bounded Deferred consumers of immutable Scene and Material assets.
+//! Deferred lighting, transparency and capture for immutable Scene and Material assets.
 //!
-//! The fixed geometry and lighting passes prove real MRT, depth sampling and
-//! completion ownership before a wider public pipeline authority is chosen.
-//! No Forward Graph, independent scheduler or CPU G-buffer round-trip is used.
+//! Opaque geometry and lighting own the G-buffer prefix. Forward transparency
+//! and capture namespaces extend the same Graph and retain actual owners
+//! through the receiver terminal's covering completion.
 
 mod cache;
 mod capture_empty_prepare;
