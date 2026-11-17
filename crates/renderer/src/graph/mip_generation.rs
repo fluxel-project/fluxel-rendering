@@ -4,6 +4,13 @@
 //! blit and a CopySrc in the next.  That makes its state transition explicit
 //! to the shared Graph state planner rather than relying on encoder-local
 //! state tracking.
+//!
+//! Source and destination retain the immutable asset's exact format. For sRGB
+//! images the selected RHI blit samples decoded linear RGB and encodes the
+//! destination attachment again; alpha stays linear. A byte-space RGBA8
+//! average would not preserve this contract. Descriptor support is checked at
+//! allocation and an unsupported blit fails this Graph execution without
+//! publishing a completed chain.
 
 use fluxel_rhi::{
     api::{

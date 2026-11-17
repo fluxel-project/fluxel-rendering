@@ -146,9 +146,6 @@ pub(crate) fn require_filterable_material_texture_with_mip_levels<B: ResourceBac
     if mip_levels > max_mip_levels {
         return Err(Error::InvalidRange);
     }
-    if encoding == crate::TextureEncoding::Srgb && mip_levels > 1 {
-        return Err(Error::Unsupported("linear RGBA8 material mip generation"));
-    }
     let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
     if mip_levels > 1 {
         usage |= TextureUsage::COPY_SRC;

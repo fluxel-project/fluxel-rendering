@@ -280,10 +280,8 @@ pub(crate) fn plan_forward_resident(
             return Err(Error::InvalidRange);
         }
         let max_mip_levels = 1 + texture.extent[0].max(texture.extent[1]).ilog2();
-        if texture.mip_levels > max_mip_levels
-            || (texture.encoding == crate::TextureEncoding::Srgb && texture.mip_levels > 1)
-        {
-            return Err(Error::Unsupported("linear RGBA8 material mip generation"));
+        if texture.mip_levels > max_mip_levels {
+            return Err(Error::InvalidRange);
         }
         let texture_bytes = u64::from(texture.bytes_per_row)
             .checked_mul(u64::from(texture.extent[1]))
