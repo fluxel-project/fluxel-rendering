@@ -76,6 +76,10 @@ where
         }
         self.write_deferred_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(environment) = frame.environment.as_ref() {
+            self.write_deferred_upload(&environment.upload, &environment.upload_bytes)
+                .await?;
+        }
         if let Some(producer) = &frame.deformation {
             self.write_deferred_upload(&producer.upload.buffer, &producer.upload_bytes)
                 .await?;
@@ -234,6 +238,10 @@ where
         }
         self.write_deferred_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(environment) = frame.environment.as_ref() {
+            self.write_deferred_upload(&environment.upload, &environment.upload_bytes)
+                .await?;
+        }
         if let Some(producer) = &frame.deformation {
             self.write_deferred_upload(&producer.upload.buffer, &producer.upload_bytes)
                 .await?;

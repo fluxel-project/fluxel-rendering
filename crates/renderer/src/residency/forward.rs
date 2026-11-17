@@ -193,6 +193,9 @@ pub(crate) struct ForwardFrame<B: ResourceBackend> {
     pub(crate) frame: ForwardFrameBuffers<B>,
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
+    /// Optional scene-selected diffuse irradiance owner. This is deliberately
+    /// frame-local: selection may change while earlier submissions are pending.
+    pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
     pub(crate) draws: Vec<ForwardDraw<B>>,
     /// Contiguous draw ranges that share one raster program without changing
     /// the prepared candidate order.

@@ -65,6 +65,22 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             )?;
             pass.texture(slot, whole(), AccessKind::Write, texture_copy_write_uses())?;
         }
+        if let (Some(slot), Some(owner)) =
+            (self.environment_upload_slot, frame.environment.as_ref())
+        {
+            pass.buffer(
+                slot,
+                0..owner.upload_desc.size,
+                AccessKind::Read,
+                copy_read_uses(),
+            )?;
+            pass.texture(
+                self.environment_slot.ok_or(Error::InvalidState)?,
+                whole(),
+                AccessKind::Write,
+                texture_copy_write_uses(),
+            )?;
+        }
         pass.transition(encoder)?;
         for upload in &frame.resident_upload.vertices {
             let slot = *self
@@ -142,6 +158,37 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 },
             )?;
         }
+        if let (Some(slot), Some(owner)) =
+            (self.environment_upload_slot, frame.environment.as_ref())
+        {
+            let src = pass.buffer(
+                slot,
+                0..owner.upload_desc.size,
+                AccessKind::Read,
+                copy_read_uses(),
+            )?;
+            let texture = pass.texture(
+                self.environment_slot.ok_or(Error::InvalidState)?,
+                whole(),
+                AccessKind::Write,
+                texture_copy_write_uses(),
+            )?;
+            encoder.buffer_to_texture(
+                src,
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: owner.bytes_per_row,
+                    rows_per_image: owner.desc.extent[1],
+                },
+                TextureRegion {
+                    texture,
+                    mip: 0,
+                    origin: [0, 0, 0],
+                    extent: owner.desc.extent,
+                    aspect: TextureAspects::COLOR,
+                },
+            )?;
+        }
         Ok(())
     }
 
@@ -190,6 +237,14 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                     )?;
                 }
             }
+        }
+        if frame.environment.is_some() {
+            pass.texture(
+                self.environment_slot.ok_or(Error::InvalidState)?,
+                whole(),
+                AccessKind::Read,
+                texture_read_uses(),
+            )?;
         }
         for draw in &frame.draws {
             pass.texture(

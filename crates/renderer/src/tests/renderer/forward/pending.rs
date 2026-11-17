@@ -15,6 +15,7 @@ fn blank_frame(device: &Device<WitnessBackend>) -> ForwardFrame<WitnessBackend> 
         ForwardFrameBuffers::allocate(device, [1, 1], 16, uniform_bytes.clone(), 0..16, 256)
             .unwrap();
     ForwardFrame {
+        environment: None,
         resident,
         resident_upload,
         frame,

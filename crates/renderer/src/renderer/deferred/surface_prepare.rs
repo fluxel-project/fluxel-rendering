@@ -6,13 +6,13 @@ use fluxel_rhi::api::{
     BindGroupDesc, BindGroupEntry, BindingResource, Error, Support, TextureFormat,
 };
 
-use crate::frame_data::forward::{pack_forward_uniforms, ForwardUniformInput};
+use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
 use crate::residency::{
-    allocate_deferred_scene_color, plan_deferred_gbuffer, plan_forward_resident,
-    plan_surface_forward_frame, DeferredDraw, DeferredSurfaceFrame, ForwardResidentBuffers,
-    ForwardSampler, ForwardStreamInput, ForwardTextureInput, SurfaceForwardFrameBuffers,
+    DeferredDraw, DeferredSurfaceFrame, ForwardResidentBuffers, ForwardSampler, ForwardStreamInput,
+    ForwardTextureInput, SurfaceForwardFrameBuffers, allocate_deferred_scene_color,
+    plan_deferred_gbuffer, plan_forward_resident, plan_surface_forward_frame,
 };
-use crate::{prepare_material, ForwardDrawInput, PreparedMaterial};
+use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
 
 use super::prepare::aligned_row;
 use super::templates::gbuffer_request;
@@ -191,8 +191,22 @@ where
             }
         }
         let geometry_program = self.deferred_gbuffer_program(prepared, pbr).await?;
+        let environment = if pbr {
+            self.environment_irradiance
+                .as_ref()
+                .map(|snapshot| {
+                    crate::residency::EnvironmentFrameOwner::allocate(
+                        &self.device,
+                        snapshot.value(),
+                    )
+                })
+                .transpose()
+                .map_err(|error| self.observe_rhi_error(error))?
+        } else {
+            None
+        };
         let lighting_program = self
-            .deferred_lighting_program(pbr, TextureFormat::Rgba8Unorm)
+            .deferred_lighting_program(pbr, environment.is_some(), TextureFormat::Rgba8Unorm)
             .await?;
         let composite_program = self
             .deferred_scene_color_composite_program(color_format)
@@ -312,6 +326,34 @@ where
                 ],
             })
             .map_err(|error| self.observe_rhi_error(error))?;
+        if let Some(environment) = environment.as_ref() {
+            environment
+                .validate_for_sampling(self.device.id())
+                .map_err(|error| self.observe_rhi_error(error))?;
+        }
+        let lighting_environment_group = match (&lighting_program.environment_layout, &environment)
+        {
+            (Some(layout), Some(environment)) => Some(
+                self.device
+                    .create_bind_group(&BindGroupDesc {
+                        label: Some("Deferred surface environment irradiance"),
+                        layout,
+                        entries: &[
+                            BindGroupEntry {
+                                binding: 0,
+                                resource: BindingResource::TextureView(&environment.view),
+                            },
+                            BindGroupEntry {
+                                binding: 1,
+                                resource: BindingResource::Sampler(&environment.sampler),
+                            },
+                        ],
+                    })
+                    .map_err(|error| self.observe_rhi_error(error))?,
+            ),
+            (None, None) => None,
+            _ => return Err(Error::InvalidState.into()),
+        };
         let composite_group = self
             .device
             .create_bind_group(&BindGroupDesc {
@@ -369,6 +411,7 @@ where
             frame,
             uniform_upload,
             uniform_bytes: uniforms.bytes,
+            environment,
             gbuffer,
             scene_color,
             scene_color_sampler,
@@ -376,6 +419,7 @@ where
             draw,
             lighting_pipeline: lighting_program.pipeline.clone(),
             lighting_group,
+            lighting_environment_group,
             composite_pipeline: composite_program.pipeline,
             composite_group,
             extent: input.extent(),

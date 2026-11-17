@@ -10,6 +10,7 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) streams: Vec<crate::graph::definition::BufferHandle>,
     pub(super) uniform: Option<crate::graph::definition::BufferHandle>,
     pub(super) textures: Vec<crate::graph::definition::TextureHandle>,
+    pub(super) environment: Option<crate::graph::definition::TextureHandle>,
     // A surface target is an RHI lease, not a persistent Graph resource.  The
     // phase still declares its write on the real Graph transaction as a side
     // effect, but has no texture handle to version.
@@ -35,6 +36,7 @@ pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend>
     pub(super) surface_target: bool,
     pub(super) declared: u8,
     pub(super) reads: ForwardReadState,
+    pub(super) environment: Option<crate::graph::definition::TextureHandle>,
     pub(super) marker: PhantomData<&'frame ForwardFrame<B>>,
 }
 
@@ -102,6 +104,17 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
         }
         if self.target.is_none() && !self.surface_target {
             return Err(());
+        }
+        if let Some(environment) = self.environment {
+            self.pass
+                .read_texture_with_use(
+                    environment,
+                    whole(),
+                    texture_read_uses().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+                .map_err(|_| ())?;
         }
         self.pass.side_effect();
         Ok(self.target)
@@ -202,6 +215,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
             .uniform
             .ok_or(PipelineError::InvalidPhaseContribution)?;
         let textures = self.textures.clone();
+        let environment = self.environment;
         let target = self.target;
         if target.is_none() && !self.surface_target {
             return Err(PipelineError::InvalidPhaseContribution);
@@ -220,6 +234,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     surface_target: self.surface_target,
                     declared: 0,
                     reads: ForwardReadState::new(streams, uniform, textures, draws),
+                    environment,
                     marker: PhantomData,
                 };
                 declare(&mut opaque)

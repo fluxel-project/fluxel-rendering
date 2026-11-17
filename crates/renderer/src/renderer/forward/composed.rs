@@ -139,21 +139,39 @@ where
             .feature
             .prepare(&context, feature.input, &selected, visibility)
             .map_err(RendererError::ForwardFeature)?;
+        let environment_snapshot = self.environment_irradiance.clone();
         let mut composer = fluxel_shader::ShaderComposer::new();
-        let mut inputs = crate::prepare_forward(&selected, assets, &mut composer)
-            .map_err(RendererError::ForwardPreparation)?;
+        let mut inputs = crate::preparation::prepare_forward_with_environment(
+            &selected,
+            assets,
+            &mut composer,
+            environment_snapshot.is_some(),
+        )
+        .map_err(RendererError::ForwardPreparation)?;
         inputs.extend(
-            crate::preparation::prepare_feature_draws(
+            crate::preparation::prepare_feature_draws_with_environment(
                 &selected,
                 handle,
                 feature.feature.draws(&prepared),
                 assets,
                 &mut composer,
+                environment_snapshot.is_some(),
             )
             .map_err(RendererError::ForwardPreparation)?,
         );
         let inputs =
             order_draws(pipeline, &selected, inputs).map_err(RendererError::ForwardPipeline)?;
+        let environment_snapshot = environment_snapshot.filter(|_| {
+            inputs
+                .iter()
+                .any(|input| input.prepared().uses_environment_irradiance())
+        });
+        if environment_snapshot.is_some() && surface.is_some() {
+            return Err(Error::Unsupported(
+                "Forward surface diffuse irradiance is not implemented",
+            )
+            .into());
+        }
         let mut meshes = Vec::new();
         let mut feature_draws = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
@@ -173,6 +191,7 @@ where
             surface,
             color_format,
             preparation_started,
+            environment_snapshot,
             |phase| {
                 let mut context = crate::ForwardCompositionContext::new(
                     phase,

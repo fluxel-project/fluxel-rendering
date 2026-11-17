@@ -29,6 +29,78 @@ pub(crate) fn forward_request(layout: &GeometryLayout) -> Option<ShaderCompositi
     geometry_request(layout, false)
 }
 
+/// Builds the Forward PBR route with a scene-level diffuse irradiance input.
+///
+/// This is intentionally a diffuse-only IBL subset; it does not claim the
+/// prefiltered radiance or BRDF LUT required for specular IBL.
+pub(crate) fn forward_irradiance_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    let mut request = geometry_request(layout, false)?;
+    request.source_units.push(SourceUnit::new(
+        "pbr-diffuse-irradiance",
+        templates::DIFFUSE_IRRADIANCE,
+    ));
+    request
+        .source_units
+        .retain(|unit| unit.id.0 != "pbr-forward");
+    request.source_units.push(SourceUnit::new(
+        "pbr-forward-irradiance",
+        templates::FORWARD_IRRADIANCE,
+    ));
+    request = request
+        .with_binding(
+            BindingDeclaration::new(2, 0, BindingKind::Texture)
+                .with_visibility([ShaderStage::Fragment]),
+        )
+        .with_binding(
+            BindingDeclaration::new(2, 1, BindingKind::Sampler)
+                .with_visibility([ShaderStage::Fragment]),
+        )
+        .with_static_option("renderer.environment", "latlong-diffuse-irradiance-v1");
+    Some(request)
+}
+
+pub(crate) fn forward_uv0_irradiance_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    irradiance_forward_request(geometry_uv0_request(layout, false)?)
+}
+
+pub(crate) fn forward_uv0_normal_irradiance_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    irradiance_forward_request(geometry_uv0_normal_request(layout, false)?)
+}
+
+fn irradiance_forward_request(
+    mut request: ShaderCompositionRequest,
+) -> Option<ShaderCompositionRequest> {
+    request.source_units.push(SourceUnit::new(
+        "pbr-diffuse-irradiance",
+        templates::DIFFUSE_IRRADIANCE,
+    ));
+    request
+        .source_units
+        .retain(|unit| unit.id.0 != "pbr-forward");
+    request.source_units.push(SourceUnit::new(
+        "pbr-forward-irradiance",
+        templates::FORWARD_IRRADIANCE,
+    ));
+    Some(
+        request
+            .with_binding(
+                BindingDeclaration::new(2, 0, BindingKind::Texture)
+                    .with_visibility([ShaderStage::Fragment]),
+            )
+            .with_binding(
+                BindingDeclaration::new(2, 1, BindingKind::Sampler)
+                    .with_visibility([ShaderStage::Fragment]),
+            )
+            .with_static_option("renderer.environment", "latlong-diffuse-irradiance-v1"),
+    )
+}
+
 pub(crate) fn gbuffer_request(layout: &GeometryLayout) -> Option<ShaderCompositionRequest> {
     geometry_request(layout, true)
 }
@@ -257,6 +329,7 @@ pub(crate) fn lighting_request() -> ShaderCompositionRequest {
     let mut request = ShaderCompositionRequest::new(vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
         SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT),
+        SourceUnit::new("pbr-diffuse-irradiance", templates::DIFFUSE_IRRADIANCE),
         SourceUnit::new("pbr-deferred-lighting", templates::LIGHTING),
     ])
     .with_entry_point(EntryPoint::new("deferred_lighting_vs", ShaderStage::Vertex))
@@ -272,6 +345,42 @@ pub(crate) fn lighting_request() -> ShaderCompositionRequest {
         );
     }
     request
+}
+
+/// Builds the Deferred lighting route with the same diffuse irradiance input
+/// used by the Forward consumer.
+pub(crate) fn lighting_irradiance_request() -> ShaderCompositionRequest {
+    let mut request = ShaderCompositionRequest::new(vec![
+        SourceUnit::new("pbr-normal", templates::NORMAL),
+        SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT),
+        SourceUnit::new("pbr-diffuse-irradiance", templates::DIFFUSE_IRRADIANCE),
+        SourceUnit::new(
+            "pbr-deferred-lighting-irradiance",
+            templates::LIGHTING_IRRADIANCE,
+        ),
+    ])
+    .with_entry_point(EntryPoint::new("deferred_lighting_vs", ShaderStage::Vertex))
+    .with_entry_point(EntryPoint::new(
+        "deferred_lighting_fs",
+        ShaderStage::Fragment,
+    ))
+    .with_static_option("renderer.light", "world-directional-orthographic-v1")
+    .with_static_option("renderer.environment", "latlong-diffuse-irradiance-v1");
+    for binding in 0..3 {
+        request = request.with_binding(
+            BindingDeclaration::new(0, binding, BindingKind::Texture)
+                .with_visibility([ShaderStage::Fragment]),
+        );
+    }
+    request
+        .with_binding(
+            BindingDeclaration::new(1, 0, BindingKind::Texture)
+                .with_visibility([ShaderStage::Fragment]),
+        )
+        .with_binding(
+            BindingDeclaration::new(1, 1, BindingKind::Sampler)
+                .with_visibility([ShaderStage::Fragment]),
+        )
 }
 
 #[cfg(test)]

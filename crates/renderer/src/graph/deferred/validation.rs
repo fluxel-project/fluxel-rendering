@@ -1,11 +1,12 @@
 //! Concrete pre-recording checks for the offscreen Deferred frame.
 
 use super::{
+    DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
     declaration::{
         matches_final_target_template, matches_gbuffer_template, validate_deformation,
         validate_draw_uniforms, validate_uploads,
     },
-    draw_accesses, DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
+    draw_accesses,
 };
 
 pub(super) fn validate_frame_inputs<B: ResourceBackend>(
@@ -58,6 +59,31 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
         return Err(Error::Unsupported("filterable Deferred scene-color"));
     }
     crate::renderer::validate_ordinary_sampler(&frame.scene_color_sampler_desc)?;
+    match (&frame.environment, &frame.lighting_environment_group) {
+        (Some(environment), Some(group)) => {
+            if environment.validate_for_sampling(device.id()).is_err()
+                || group.device() != device.id()
+                || environment.desc.extent.contains(&0)
+                || environment.desc.format != TextureFormat::Rgba8Unorm
+                || !environment
+                    .desc
+                    .usage
+                    .contains(super::TextureUsage::COPY_DST | super::TextureUsage::TEXTURE_BINDING)
+                || !environment
+                    .upload_desc
+                    .usage
+                    .contains(super::BufferUsage::COPY_SRC)
+                || environment.upload_desc.size != environment.upload_bytes.len() as u64
+                || environment.bytes_per_row == 0
+                || !environment.bytes_per_row.is_multiple_of(256)
+                || u64::from(environment.bytes_per_row) < u64::from(environment.desc.extent[0]) * 4
+            {
+                return Err(Error::InvalidRange);
+            }
+        }
+        (None, None) => {}
+        _ => return Err(Error::InvalidState),
+    }
     if let Some(deformation) = &frame.deformation {
         if device.compute().is_none() {
             return Err(Error::Unsupported("compute"));

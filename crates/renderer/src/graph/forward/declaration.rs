@@ -194,6 +194,7 @@ where
             streams: streams.clone(),
             uniform: Some(uniform),
             textures: textures.clone(),
+            environment: None,
             target: None,
             surface_target: true,
             draws,

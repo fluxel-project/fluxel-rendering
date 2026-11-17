@@ -28,8 +28,14 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             || self.resident_upload_slot.resource != declaration.resident_upload_slot.resource
             || self.frame_upload_slot.resource != declaration.frame_upload_slot.resource
             || self.uniform_slot.resource != declaration.uniform_slot.resource
+            || self.environment_upload_slot.map(|slot| slot.resource)
+                != declaration
+                    .environment_upload_slot
+                    .map(|slot| slot.resource)
             || !same_buffer_slots(&self.stream_slots, &declaration.stream_slots)
             || !same_texture_slots(&self.texture_slots, &declaration.texture_slots)
+            || self.environment_slot.map(|slot| slot.resource)
+                != declaration.environment_slot.map(|slot| slot.resource)
             || self.target_slot.resource != declaration.target_slot.resource
             || self.readback_slot.resource != declaration.readback_slot.resource
             || self.draw_count != declaration.draw_count
@@ -76,8 +82,10 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             resident_upload_slot: declaration.resident_upload_slot,
             frame_upload_slot: declaration.frame_upload_slot,
             uniform_slot: declaration.uniform_slot,
+            environment_upload_slot: declaration.environment_upload_slot,
             stream_slots: declaration.stream_slots,
             texture_slots: declaration.texture_slots,
+            environment_slot: declaration.environment_slot,
             target_slot: declaration.target_slot,
             readback_slot: declaration.readback_slot,
             draw_count: declaration.draw_count,
@@ -123,6 +131,10 @@ impl<B: ResourceBackend> ForwardPlan<B> {
     /// validates each incoming owner independently.
     pub(crate) fn validate_frame(&self, frame: &ForwardFrame<B>) -> Result<()> {
         if frame.resident.device != self.id.device
+            || frame
+                .environment
+                .as_ref()
+                .is_some_and(|owner| owner.device != self.id.device)
             || frame.extent != self.extent
             || frame.draws.len() != self.draw_count
             || frame.resident.streams.len() != self.stream_count
@@ -134,6 +146,9 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 .any(|draw| validate_draw(draw, self.stream_count).is_err())
         {
             return Err(Error::InvalidState);
+        }
+        if let Some(environment) = frame.environment.as_ref() {
+            environment.validate_for_sampling(self.id.device)?;
         }
         validate_forward_topology(self.topology, frame.draws.len(), frame.draw_batches.len())?;
         validate_uploads(frame)?;
@@ -183,6 +198,17 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 &frame.resident.upload,
                 &frame.resident.upload_desc,
                 frame.resident.upload_incoming,
+            ));
+        }
+        if let (Some(slot), Some(owner)) =
+            (self.environment_upload_slot, frame.environment.as_ref())
+        {
+            buffers.push(BoundBuffer::new(
+                slot,
+                owner.upload_instance,
+                &owner.upload,
+                &owner.upload_desc,
+                owner.upload_incoming,
             ));
         }
         for (slot, stream) in self
@@ -235,6 +261,18 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                     frame.frame.target_incoming,
                     frame.frame.target_layout,
                 )))
+                .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
+                    |(slot, owner)| {
+                        BoundTexture::new(
+                            slot,
+                            owner.texture_instance,
+                            &owner.texture,
+                            &owner.desc,
+                            owner.incoming,
+                            owner.layout,
+                        )
+                    },
+                ))
                 .collect(),
         )
         .map_err(binding_error)

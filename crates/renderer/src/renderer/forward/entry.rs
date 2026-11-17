@@ -100,10 +100,16 @@ where
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
+        let use_environment = self.environment_irradiance.is_some();
         let prepared_inputs = match topology {
             crate::FrameTopology::OpaqueForward => {
-                crate::prepare_forward(&selected, assets, &mut fluxel_shader::ShaderComposer::new())
-                    .map_err(RendererError::ForwardPreparation)?
+                crate::preparation::prepare_forward_with_environment(
+                    &selected,
+                    assets,
+                    &mut fluxel_shader::ShaderComposer::new(),
+                    use_environment,
+                )
+                .map_err(RendererError::ForwardPreparation)?
             }
             crate::FrameTopology::ClearOnly => Vec::new(),
             crate::FrameTopology::Deferred => {
@@ -112,6 +118,17 @@ where
                 ));
             }
         };
+        let environment_snapshot = self.environment_irradiance.clone().filter(|_| {
+            prepared_inputs
+                .iter()
+                .any(|input| input.prepared().uses_environment_irradiance())
+        });
+        if environment_snapshot.is_some() && surface.is_some() {
+            return Err(Error::Unsupported(
+                "Forward surface diffuse irradiance is not implemented",
+            )
+            .into());
+        }
         self.submit_prepared_forward(
             snapshot.clone(),
             prepared_inputs,
@@ -121,6 +138,7 @@ where
             surface,
             color_format,
             preparation_started,
+            environment_snapshot,
             |context| pipeline.contribute(&selected, context),
         )
         .await

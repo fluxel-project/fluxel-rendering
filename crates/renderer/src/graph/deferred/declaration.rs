@@ -68,6 +68,18 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 frame.resident.textures[0].layout,
             )
             .map_err(|_| Error::InvalidState)?;
+        let environment_upload = frame
+            .environment
+            .map(|owner| graph.import_buffer_desc(owner.upload_desc.clone(), owner.upload_incoming))
+            .transpose()
+            .map_err(|_| Error::InvalidState)?;
+        let environment = frame
+            .environment
+            .map(|owner| {
+                graph.import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+            })
+            .transpose()
+            .map_err(|_| Error::InvalidState)?;
         let gbuffer = frame
             .gbuffer
             .iter()
@@ -178,7 +190,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .transpose()?;
 
-        let (upload_pass, (streams, uniform, material, deformation)) = graph
+        let (upload_pass, (streams, uniform, material, environment, deformation)) = graph
             .add_pass("deferred-upload", |pass| {
                 let mut output_streams = streams.clone();
                 for upload in &frame.resident_upload.vertices {
@@ -228,6 +240,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         TextureUsage::COPY_DST,
                     )?;
                 }
+                let environment = if let (Some(upload), Some(environment), Some(owner)) =
+                    (environment_upload, environment, frame.environment)
+                {
+                    pass.read_with_use(
+                        upload,
+                        0..owner.upload_desc.size,
+                        copy_read().uses,
+                        BufferUsage::COPY_SRC,
+                    )?;
+                    Some(pass.write_texture_with_use(
+                        environment,
+                        whole_color(),
+                        texture_copy_write().uses,
+                        ImageLayout::CopyDst,
+                        TextureUsage::COPY_DST,
+                    )?)
+                } else {
+                    None
+                };
                 let deformation = if let (Some(owners), Some(handles)) =
                     (frame.deformation.as_ref(), deformation_handles)
                 {
@@ -268,7 +299,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 } else {
                     None
                 };
-                Ok((output_streams, uniform, material, deformation))
+                Ok((output_streams, uniform, material, environment, deformation))
             })
             .map_err(|_| Error::InvalidState)?;
 
@@ -283,6 +314,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 tint: frame.draw.tint_range.clone(),
                 transform: frame.draw.transform_range.clone(),
                 material,
+                environment,
                 gbuffer: [gbuffer[0], gbuffer[1], gbuffer[2]],
                 target: scene_color,
                 deformation,
@@ -389,6 +421,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             uniform_slot: BufferSlot::from(uniform),
             stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
             texture_slot: TextureSlot::from(material),
+            environment_upload_slot: environment_upload.map(BufferSlot::from),
+            environment_slot: environment.map(TextureSlot::from),
             gbuffer_slots: std::array::from_fn(|index| TextureSlot::from(gbuffer[index])),
             scene_color_slot: scene_color.map(TextureSlot::from),
             surface_target_slot: surface_target.map(TextureSlot::from),
@@ -468,6 +502,71 @@ pub(super) fn validate_deformation<B: ResourceBackend>(
     Ok(())
 }
 
-#[path = "validation_inputs.rs"]
-mod validation_inputs;
-pub(super) use validation_inputs::*;
+pub(super) fn validate_draw_uniforms<B: ResourceBackend>(
+    frame: &DeferredFrame<B>,
+    alignment: u64,
+) -> Result<()> {
+    validate_draw_uniform_ranges(&frame.draw, frame.frame.uniform_desc.size, alignment)
+}
+
+pub(super) fn validate_draw_uniform_ranges<B: ResourceBackend>(
+    draw: &DeferredDraw<B>,
+    uniform_size: u64,
+    alignment: u64,
+) -> Result<()> {
+    if alignment == 0 {
+        return Err(Error::InvalidRange);
+    }
+    if !matches!(draw.transform_bytes, 64 | 192) {
+        return Err(Error::InvalidRange);
+    }
+    for (range, bytes) in [
+        (&draw.tint_range, 16_u64),
+        (&draw.transform_range, draw.transform_bytes),
+    ] {
+        if range.start >= range.end
+            || range.end - range.start != bytes
+            || range.end > uniform_size
+            || !range.start.is_multiple_of(alignment)
+            || u32::try_from(range.start).is_err()
+        {
+            return Err(Error::InvalidRange);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn matches_gbuffer_template(
+    desc: &fluxel_rhi::api::TextureDesc,
+    extent: [u32; 2],
+    format: TextureFormat,
+) -> bool {
+    desc.dimension == fluxel_rhi::api::TextureDimension::D2
+        && desc.extent == [extent[0], extent[1], 1]
+        && desc.array_layers == 1
+        && desc.samples == 1
+        && desc.format == format
+        && desc
+            .usage
+            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING)
+}
+
+pub(super) fn matches_final_target_template(
+    desc: &fluxel_rhi::api::TextureDesc,
+    extent: [u32; 2],
+) -> bool {
+    desc.dimension == fluxel_rhi::api::TextureDimension::D2
+        && desc.extent == [extent[0], extent[1], 1]
+        && desc.array_layers == 1
+        && desc.samples == 1
+        && desc.format == TextureFormat::Rgba8Unorm
+        && desc
+            .usage
+            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC)
+}
+
+pub(super) fn validate_uploads<B: ResourceBackend>(frame: &DeferredFrame<B>) -> Result<()> {
+    validate_resident_uploads(&frame.resident, &frame.resident_upload)
+}
+
+pub(super) use super::uploads::validate_resident_uploads;

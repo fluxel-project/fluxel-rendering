@@ -41,6 +41,7 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) tint: std::ops::Range<u64>,
     pub(super) transform: std::ops::Range<u64>,
     pub(super) material: super::super::definition::TextureHandle,
+    pub(super) environment: Option<super::super::definition::TextureHandle>,
     pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
     pub(super) target: Option<super::super::definition::TextureHandle>,
     pub(super) deformation: Option<DeferredDeformationGraph>,
@@ -77,6 +78,7 @@ pub(crate) struct DeferredLightingPass<'pass, 'builder> {
     pass: &'pass mut super::super::definition::PassBuilder<'builder>,
     gbuffer: [super::super::definition::TextureHandle; 3],
     target: Option<super::super::definition::TextureHandle>,
+    environment: Option<super::super::definition::TextureHandle>,
     declared: u8,
 }
 
@@ -182,6 +184,7 @@ impl DeferredPhaseDriver<'_> {
             return Err(());
         }
         let target = self.target;
+        let environment = self.environment;
         let (pass, output) = self
             .graph
             .add_pass("deferred-lighting", |pass| {
@@ -190,6 +193,7 @@ impl DeferredPhaseDriver<'_> {
                     pass,
                     gbuffer,
                     target,
+                    environment,
                     declared: 0,
                 };
                 declare(&mut lighting).map_err(|_| GraphError::InvalidRange)?;
@@ -419,6 +423,17 @@ impl DeferredLightingPass<'_, '_> {
     ) -> std::result::Result<Option<super::super::definition::TextureHandle>, ()> {
         if self.declared != GBUFFER_READ | COLOR {
             return Err(());
+        }
+        if let Some(environment) = self.environment {
+            self.pass
+                .read_texture_with_use(
+                    environment,
+                    whole_color(),
+                    sampled_read().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+                .map_err(|_| ())?;
         }
         self.pass.side_effect();
         Ok(self.target)

@@ -5,7 +5,7 @@
 //! the resulting immutable inputs. It does not allocate GPU objects, declare
 //! Graph access, or submit work.
 
-use std::{fmt, ops::Range};
+use std::ops::Range;
 
 use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_material::{MaterialAsset, MaterialDefinition};
@@ -15,8 +15,8 @@ use crate::{FeatureHandle, PreparedFrame, RenderId, RenderTransform, RenderView,
 
 use super::ForwardDrawSource;
 use super::{
-    prepare_material, vertex_layout_key, GeometryLayout, MaterialPreparationError,
-    PreparedMaterial, VertexLayoutKey,
+    GeometryLayout, MaterialPreparationError, PreparedMaterial, VertexLayoutKey, prepare_material,
+    vertex_layout_key,
 };
 
 #[path = "forward_pbr.rs"]
@@ -275,135 +275,9 @@ impl ForwardDrawInput {
     }
 }
 
-/// A structured refusal while preparing one built-in Forward draw.
-#[derive(Debug)]
-pub enum ForwardPreparationError {
-    /// A feature submitted the same local draw identity more than once.
-    DuplicateFeatureLocalId {
-        /// Feature whose request list was invalid.
-        feature: FeatureHandle,
-        /// Duplicate identity within that feature's request list.
-        local_id: u64,
-    },
-    /// An exact asset generation referenced by a scene record was unavailable.
-    MissingAsset {
-        /// Asset category.
-        asset: &'static str,
-        /// Draw requesting the asset.
-        source: ForwardDrawSource,
-    },
-    /// The supplied asset list contained one exact identity more than once.
-    DuplicateAsset {
-        /// Asset category.
-        asset: &'static str,
-        /// Draw requesting the asset.
-        source: ForwardDrawSource,
-    },
-    /// The per-record tint has a non-finite component.
-    InvalidTint {
-        /// Draw requesting the tint.
-        source: ForwardDrawSource,
-    },
-    /// A record transform has a non-finite component.
-    InvalidTransform {
-        /// Draw requesting the transform.
-        source: ForwardDrawSource,
-    },
-    /// A retained view has a non-finite component or empty extent.
-    InvalidView,
-    /// Geometry stream count differs from its declared runtime layout.
-    GeometryStreamCount {
-        /// Draw requesting the geometry.
-        source: ForwardDrawSource,
-        /// Declared stream count.
-        expected: usize,
-        /// Actual CPU stream count.
-        actual: usize,
-    },
-    /// Geometry declared an inverted vertex range.
-    InvalidVertexRange {
-        /// Draw requesting the geometry.
-        source: ForwardDrawSource,
-    },
-    /// The initial Forward path does not yet consume instanced streams.
-    InstanceStreamUnsupported {
-        /// Draw requesting the geometry.
-        source: ForwardDrawSource,
-        /// Stream index.
-        stream: usize,
-    },
-    /// A CPU stream cannot satisfy its selected draw's physical attribute footprint.
-    GeometryPayloadTooShort {
-        /// Draw requesting the geometry.
-        source: ForwardDrawSource,
-        /// Stream index.
-        stream: usize,
-    },
-    /// Geometry does not provide the required `POSITION` semantic.
-    MissingPosition {
-        /// Draw requesting the geometry.
-        source: ForwardDrawSource,
-    },
-    /// `UV` and `COLOR` must occur together for the first optional-attribute template.
-    IncompleteOptionalAttributes {
-        /// Draw requesting the geometry.
-        source: ForwardDrawSource,
-    },
-    /// PBR geometry did not expose the required `NORMAL` semantic.
-    MissingNormal {
-        /// Draw requesting the PBR normal.
-        source: ForwardDrawSource,
-    },
-    /// UV0-evaluated PBR geometry did not expose exactly one `UV0` vec2 semantic.
-    MissingUv0 {
-        /// Draw requesting the PBR UV0 evaluation context.
-        source: ForwardDrawSource,
-    },
-    /// A consumed PBR normal was non-finite or had zero length.
-    InvalidNormal {
-        /// Draw requesting the PBR normal.
-        source: ForwardDrawSource,
-        /// Stream containing the invalid normal.
-        stream: usize,
-    },
-    /// Normal-map PBR requires a finite non-zero tangent with a non-zero handedness.
-    InvalidTangent {
-        /// Draw requesting the tangent.
-        source: ForwardDrawSource,
-        /// Stream containing the invalid tangent.
-        stream: usize,
-    },
-    /// Normal-map PBR geometry did not expose `TANGENT` as Float32x4.
-    MissingTangent {
-        /// Draw requesting the tangent.
-        source: ForwardDrawSource,
-    },
-    /// PBR needs an affine world transform with an invertible linear part.
-    NonInvertibleNormalTransform {
-        /// Draw requesting the normal transform.
-        source: ForwardDrawSource,
-    },
-    /// A Material contribution is outside the initial Forward binding schema.
-    MaterialBindingSchema {
-        /// Draw requesting the Material.
-        source: ForwardDrawSource,
-    },
-    /// Material, Shader, or geometry logical validation failed.
-    Material(MaterialPreparationError),
-    /// Texture dimensions or payload length are invalid.
-    InvalidTexture {
-        /// Draw requesting the texture.
-        source: ForwardDrawSource,
-    },
-}
-
-impl fmt::Display for ForwardPreparationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Forward preparation refused: {self:?}")
-    }
-}
-
-impl std::error::Error for ForwardPreparationError {}
+#[path = "forward_errors.rs"]
+mod forward_errors;
+pub use forward_errors::ForwardPreparationError;
 
 /// Resolves every selected candidate into a retained logical Forward draw input.
 ///
@@ -415,6 +289,15 @@ pub fn prepare_forward(
     frame: &PreparedFrame<'_, ForwardResources>,
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
+) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
+    prepare_forward_with_environment(frame, assets, composer, false)
+}
+
+pub(crate) fn prepare_forward_with_environment(
+    frame: &PreparedFrame<'_, ForwardResources>,
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+    environment: bool,
 ) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
     let view = frame.view_record();
     if view.extent.contains(&0) || !finite_transform(view.transform) {
@@ -436,6 +319,7 @@ pub fn prepare_forward(
             record.transform,
             assets,
             composer,
+            environment,
         )?);
     }
     Ok(inputs)
@@ -447,12 +331,24 @@ pub fn prepare_forward(
 /// same path as scene-owned records. Their local identities are checked before
 /// any asset lookup or shader work so invalid feature payloads have no GPU-side
 /// effect.
+#[cfg(test)]
 pub(crate) fn prepare_feature_draws(
     frame: &PreparedFrame<'_, ForwardResources>,
     feature: FeatureHandle,
     requests: &[ForwardDrawRequest],
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
+) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
+    prepare_feature_draws_with_environment(frame, feature, requests, assets, composer, false)
+}
+
+pub(crate) fn prepare_feature_draws_with_environment(
+    frame: &PreparedFrame<'_, ForwardResources>,
+    feature: FeatureHandle,
+    requests: &[ForwardDrawRequest],
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+    environment: bool,
 ) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
     let view = frame.view_record();
     if view.extent.contains(&0) || !finite_transform(view.transform) {
@@ -481,6 +377,7 @@ pub(crate) fn prepare_feature_draws(
                 request.transform,
                 assets,
                 composer,
+                environment,
             )
         })
         .collect()
@@ -494,6 +391,7 @@ fn prepare_draw(
     transform: RenderTransform,
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
+    environment: bool,
 ) -> Result<ForwardDrawInput, ForwardPreparationError> {
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
@@ -503,24 +401,34 @@ fn prepare_draw(
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
+    let extensions = material.value().surface_extensions();
+    if extensions.occlusion.is_some() || extensions.emissive.is_some() {
+        return Err(ForwardPreparationError::UnsupportedSurfaceExtensions { source });
+    }
     let texture = resolve_asset(&assets.textures, resources.texture, "texture", source)?;
     validate_texture(texture.value(), source)?;
     let request = match material.value().output() {
         fluxel_material::SurfaceOutput::Color => {
             forward_template(&geometry.value().layout, source)?.request()
         }
-        fluxel_material::SurfaceOutput::MetallicRoughness { .. } => {
+        fluxel_material::SurfaceOutput::MetallicRoughness { .. } => (if environment {
+            crate::pbr::forward_irradiance_request(&geometry.value().layout)
+        } else {
             crate::pbr::forward_request(&geometry.value().layout)
-                .ok_or(ForwardPreparationError::MissingNormal { source })?
-        }
-        fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => {
+        })
+        .ok_or(ForwardPreparationError::MissingNormal { source })?,
+        fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => (if environment {
+            crate::pbr::forward_uv0_irradiance_request(&geometry.value().layout)
+        } else {
             crate::pbr::forward_uv0_request(&geometry.value().layout)
-                .ok_or(ForwardPreparationError::MissingUv0 { source })?
-        }
-        fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => {
+        })
+        .ok_or(ForwardPreparationError::MissingUv0 { source })?,
+        fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => (if environment {
+            crate::pbr::forward_uv0_normal_irradiance_request(&geometry.value().layout)
+        } else {
             crate::pbr::forward_uv0_normal_request(&geometry.value().layout)
-                .ok_or(ForwardPreparationError::MissingNormal { source })?
-        }
+        })
+        .ok_or(ForwardPreparationError::MissingNormal { source })?,
         fluxel_material::SurfaceOutput::ColorUv0 => {
             return Err(ForwardPreparationError::MaterialBindingSchema { source });
         }
@@ -569,6 +477,47 @@ fn prepare_draw(
 /// returned draws so a later device coordinator cannot accidentally apply the
 /// ranges to an un-ordered input vector. It preserves candidate order and only
 /// joins neighboring draws that select identical raster-program facts.
-#[path = "forward_batch.rs"]
-mod forward_batch;
-pub(crate) use forward_batch::batch_forward_draws;
+pub(crate) fn batch_forward_draws(draws: Vec<ForwardDrawInput>) -> ForwardPreparedBatches {
+    let runs = coalesce_adjacent(draws, ForwardCompatibilityKey::from_draw);
+    let mut ordered = Vec::new();
+    let mut batches = Vec::with_capacity(runs.len());
+    for (key, members) in runs {
+        let start = ordered.len();
+        ordered.extend(members);
+        batches.push(ForwardDrawBatch {
+            key,
+            draws: start..ordered.len(),
+        });
+    }
+    ForwardPreparedBatches {
+        draws: ordered,
+        batches,
+    }
+}
+
+fn coalesce_adjacent<T, K>(items: Vec<T>, key_for: impl Fn(&T) -> K) -> Vec<(K, Vec<T>)>
+where
+    K: Eq,
+{
+    let mut runs: Vec<(K, Vec<T>)> = Vec::new();
+    for item in items {
+        let key = key_for(&item);
+        match runs.last_mut() {
+            Some((last_key, members)) if *last_key == key => members.push(item),
+            _ => runs.push((key, vec![item])),
+        }
+    }
+    runs
+}
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_batches.rs"]
+mod forward_batches;
+
+#[cfg(test)]
+#[path = "../tests/preparation/feature_draws.rs"]
+mod feature_draws;
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_pbr.rs"]
+mod forward_pbr_tests;

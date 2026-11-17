@@ -163,9 +163,11 @@ fn partial_writes_do_not_define_the_rest_of_a_version() {
         graph.add_pass("bad-read", |pass| pass.read(partial, 0..8)),
         Err(GraphError::UndefinedRead)
     );
-    assert!(graph
-        .add_pass("good-read", |pass| pass.read(partial, 0..4))
-        .is_ok());
+    assert!(
+        graph
+            .add_pass("good-read", |pass| pass.read(partial, 0..4))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -178,9 +180,11 @@ fn adjacent_partial_writes_merge_definedness_but_holes_remain_rejected() {
     let (_, adjacent) = graph
         .add_pass("adjacent", |pass| pass.write(first, 4..8))
         .unwrap();
-    assert!(graph
-        .add_pass("merged-read", |pass| pass.read(adjacent, 0..8))
-        .is_ok());
+    assert!(
+        graph
+            .add_pass("merged-read", |pass| pass.read(adjacent, 0..8))
+            .is_ok()
+    );
     assert_eq!(
         graph.add_pass("hole-read", |pass| pass.read(adjacent, 0..12)),
         Err(GraphError::UndefinedRead)
@@ -497,13 +501,15 @@ fn texture_authoring_is_transactional_and_rejects_foreign_or_stale_handles() {
 fn imported_texture_is_defined_without_erasing_subresource_bounds() {
     let mut graph = GraphBuilder::default();
     let imported = graph.import_texture(texture_desc(2, 2)).unwrap();
-    assert!(graph
-        .add_pass("read-import", |pass| {
-            pass.read_texture(imported, subresource(1..2, 1..2))?;
-            pass.side_effect();
-            Ok(())
-        })
-        .is_ok());
+    assert!(
+        graph
+            .add_pass("read-import", |pass| {
+                pass.read_texture(imported, subresource(1..2, 1..2))?;
+                pass.side_effect();
+                Ok(())
+            })
+            .is_ok()
+    );
     assert_eq!(
         graph.add_pass("invalid-layer", |pass| {
             pass.read_texture(imported, subresource(0..1, 2..3))

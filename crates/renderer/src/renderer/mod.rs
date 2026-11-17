@@ -24,6 +24,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
+use fluxel_assets::AssetSnapshot;
 use fluxel_rhi::{
     api::{ComputePipeline, Device, Error, RasterPipeline, ReadbackTicket},
     backend::{
@@ -76,6 +77,12 @@ where
     B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend,
 {
     device: Device<B>,
+    /// Exact scene/view-selected environment generation for future submissions.
+    ///
+    /// Submission assembly copies its concrete GPU owner into pending work, so
+    /// replacing this selection cannot change an in-flight frame.
+    environment_irradiance:
+        Option<AssetSnapshot<crate::EnvironmentIrradianceAsset, crate::EnvironmentIrradianceData>>,
     owner: Arc<()>,
     plans: HashMap<cache::PlanKey, cache::CachedPlan<B>>,
     forward_programs: HashMap<forward::ForwardProgramKey, Arc<forward::ForwardPipelineObjects<B>>>,
@@ -200,6 +207,7 @@ where
     pub fn new(device: Device<B>) -> Result<Self, RendererError> {
         Ok(Self {
             device,
+            environment_irradiance: None,
             owner: Arc::new(()),
             plans: HashMap::new(),
             forward_programs: HashMap::new(),
@@ -222,6 +230,30 @@ where
             binding_refreshes: 0,
             lifecycle: Lifecycle::Active,
         })
+    }
+
+    /// Selects the exact linear lat-long diffuse-irradiance generation used by
+    /// subsequent PBR submissions.
+    ///
+    /// This is a scene/view input, not a material property. Passing `None`
+    /// explicitly removes indirect environment lighting; it does not select a
+    /// fabricated ambient color. Invalid payloads are rejected before device
+    /// allocation.
+    pub fn set_environment_irradiance(
+        &mut self,
+        environment: Option<
+            AssetSnapshot<crate::EnvironmentIrradianceAsset, crate::EnvironmentIrradianceData>,
+        >,
+    ) -> Result<(), RendererError> {
+        self.ensure_open()?;
+        if environment
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.value().is_valid())
+        {
+            return Err(Error::InvalidRange.into());
+        }
+        self.environment_irradiance = environment;
+        Ok(())
     }
 
     /// Returns the number of submissions whose owners remain retained.

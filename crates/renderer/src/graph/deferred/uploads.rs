@@ -1,74 +1,8 @@
-//! Validation of Deferred draw inputs and upload footprints.
+//! Validation of actual resident upload owners and ranges.
+
 use super::*;
 
-pub(in crate::graph::deferred) fn validate_draw_uniforms<B: ResourceBackend>(
-    frame: &DeferredFrame<B>,
-    alignment: u64,
-) -> Result<()> {
-    validate_draw_uniform_ranges(&frame.draw, frame.frame.uniform_desc.size, alignment)
-}
-
-pub(in crate::graph::deferred) fn validate_draw_uniform_ranges<B: ResourceBackend>(
-    draw: &DeferredDraw<B>,
-    uniform_size: u64,
-    alignment: u64,
-) -> Result<()> {
-    if alignment == 0 {
-        return Err(Error::InvalidRange);
-    }
-    if !matches!(draw.transform_bytes, 64 | 192) {
-        return Err(Error::InvalidRange);
-    }
-    for (range, bytes) in [
-        (&draw.tint_range, 16_u64),
-        (&draw.transform_range, draw.transform_bytes),
-    ] {
-        if range.start >= range.end
-            || range.end - range.start != bytes
-            || range.end > uniform_size
-            || !range.start.is_multiple_of(alignment)
-            || u32::try_from(range.start).is_err()
-        {
-            return Err(Error::InvalidRange);
-        }
-    }
-    Ok(())
-}
-
-pub(in crate::graph::deferred) fn matches_gbuffer_template(
-    desc: &fluxel_rhi::api::TextureDesc,
-    extent: [u32; 2],
-    format: TextureFormat,
-) -> bool {
-    desc.dimension == fluxel_rhi::api::TextureDimension::D2
-        && desc.extent == [extent[0], extent[1], 1]
-        && desc.array_layers == 1
-        && desc.samples == 1
-        && desc.format == format
-        && desc
-            .usage
-            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING)
-}
-
-pub(in crate::graph::deferred) fn matches_final_target_template(
-    desc: &fluxel_rhi::api::TextureDesc,
-    extent: [u32; 2],
-) -> bool {
-    desc.dimension == fluxel_rhi::api::TextureDimension::D2
-        && desc.extent == [extent[0], extent[1], 1]
-        && desc.array_layers == 1
-        && desc.samples == 1
-        && desc.format == TextureFormat::Rgba8Unorm
-        && desc
-            .usage
-            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC)
-}
-
-pub(in crate::graph::deferred) fn validate_uploads<B: ResourceBackend>(frame: &DeferredFrame<B>) -> Result<()> {
-    validate_resident_uploads(&frame.resident, &frame.resident_upload)
-}
-
-pub(in crate::graph::deferred) fn validate_resident_uploads<B: ResourceBackend>(
+pub(super) fn validate_resident_uploads<B: ResourceBackend>(
     resident: &crate::residency::ForwardResidentBuffers<B>,
     uploads: &crate::residency::ForwardResidentUpload,
 ) -> Result<()> {

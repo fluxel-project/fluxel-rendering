@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use fluxel_rhi::api::{BindGroupDesc, BindGroupEntry, BindingResource, Error, Support};
 
-use crate::frame_data::forward::{pack_forward_uniforms, ForwardUniformInput};
+use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
 use crate::residency::{
-    allocate_deferred_scene_color, plan_deferred_gbuffer, plan_forward_frame,
-    plan_forward_resident, DeferredDraw, DeferredFrame, ForwardFrameBuffers,
-    ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, ForwardTextureInput,
+    DeferredDraw, DeferredFrame, ForwardFrameBuffers, ForwardResidentBuffers, ForwardSampler,
+    ForwardStreamInput, ForwardTextureInput, allocate_deferred_scene_color, plan_deferred_gbuffer,
+    plan_forward_frame, plan_forward_resident,
 };
-use crate::{prepare_material, ForwardDrawInput, PreparedMaterial};
+use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
 
 use super::templates::gbuffer_request;
 use super::*;
@@ -210,8 +210,26 @@ where
         // Shader admission and descriptor selection must also complete before
         // allocating resident/frame/G-buffer resource owners.
         let geometry_program = self.deferred_gbuffer_program(prepared, pbr).await?;
+        let environment = if pbr {
+            self.environment_irradiance
+                .as_ref()
+                .map(|snapshot| {
+                    crate::residency::EnvironmentFrameOwner::allocate(
+                        &self.device,
+                        snapshot.value(),
+                    )
+                })
+                .transpose()
+                .map_err(|error| self.observe_rhi_error(error))?
+        } else {
+            None
+        };
         let lighting_program = self
-            .deferred_lighting_program(pbr, fluxel_rhi::api::TextureFormat::Rgba8Unorm)
+            .deferred_lighting_program(
+                pbr,
+                environment.is_some(),
+                fluxel_rhi::api::TextureFormat::Rgba8Unorm,
+            )
             .await?;
         let composite_program = self
             .deferred_scene_color_composite_program(fluxel_rhi::api::TextureFormat::Rgba8Unorm)
@@ -356,6 +374,34 @@ where
                 ],
             })
             .map_err(|error| self.observe_rhi_error(error))?;
+        if let Some(environment) = environment.as_ref() {
+            environment
+                .validate_for_sampling(self.device.id())
+                .map_err(|error| self.observe_rhi_error(error))?;
+        }
+        let lighting_environment_group = match (&lighting_program.environment_layout, &environment)
+        {
+            (Some(layout), Some(environment)) => Some(
+                self.device
+                    .create_bind_group(&BindGroupDesc {
+                        label: Some("Deferred environment irradiance"),
+                        layout,
+                        entries: &[
+                            BindGroupEntry {
+                                binding: 0,
+                                resource: BindingResource::TextureView(&environment.view),
+                            },
+                            BindGroupEntry {
+                                binding: 1,
+                                resource: BindingResource::Sampler(&environment.sampler),
+                            },
+                        ],
+                    })
+                    .map_err(|error| self.observe_rhi_error(error))?,
+            ),
+            (None, None) => None,
+            _ => return Err(Error::InvalidState.into()),
+        };
         let composite_group = self
             .device
             .create_bind_group(&BindGroupDesc {
@@ -421,6 +467,7 @@ where
             frame,
             uniform_upload,
             uniform_bytes: uniforms.bytes,
+            environment,
             gbuffer,
             scene_color,
             scene_color_sampler,
@@ -428,6 +475,7 @@ where
             draw,
             lighting_pipeline: lighting_program.pipeline.clone(),
             lighting_group,
+            lighting_environment_group,
             composite_pipeline: composite_program.pipeline,
             composite_group,
             extent: input.extent(),

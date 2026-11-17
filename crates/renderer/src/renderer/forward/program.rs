@@ -24,6 +24,9 @@ where
             return Ok(Arc::clone(objects));
         }
         let artifact = prepared.shader();
+        // This preparation fact originates in the renderer-owned composition
+        // request, so comments or material source cannot fabricate group two.
+        let uses_environment = prepared.uses_environment_irradiance();
         let vertex = artifact
             .entry_point(fluxel_shader::ShaderStage::Vertex)
             .ok_or(Error::InvalidState)?
@@ -158,11 +161,51 @@ where
                 }],
             })
             .map_err(|error| self.observe_forward_error("transform layout", error))?;
+        let environment_layout = if uses_environment {
+            Some(
+                self.device
+                    .create_bind_group_layout(&BindGroupLayoutDesc {
+                        label: Some("Forward environment irradiance bindings".into()),
+                        entries: vec![
+                            BindGroupLayoutEntry {
+                                binding: 0,
+                                visibility: vec![ShaderStage::Fragment],
+                                ty: BindingType::SampledTexture {
+                                    sample: TextureSampleType::Float,
+                                    dimension: TextureViewDimension::D2,
+                                    multisampled: false,
+                                },
+                                count: BindingCount::One,
+                                partially_bound: false,
+                                nonuniform_indexing: false,
+                            },
+                            BindGroupLayoutEntry {
+                                binding: 1,
+                                visibility: vec![ShaderStage::Fragment],
+                                ty: BindingType::Sampler {
+                                    filtering: true,
+                                    comparison: false,
+                                },
+                                count: BindingCount::One,
+                                partially_bound: false,
+                                nonuniform_indexing: false,
+                            },
+                        ],
+                    })
+                    .map_err(|error| self.observe_forward_error("environment layout", error))?,
+            )
+        } else {
+            None
+        };
+        let groups: Vec<_> = std::iter::once(&material_layout)
+            .chain(std::iter::once(&transform_layout))
+            .chain(environment_layout.iter())
+            .collect();
         let layout = self
             .device
             .create_pipeline_layout(&PipelineLayoutDesc {
                 label: Some("Forward pipeline layout"),
-                groups: &[&material_layout, &transform_layout],
+                groups: &groups,
                 push_constants: &[],
             })
             .map_err(|error| self.observe_forward_error("pipeline layout", error))?;
@@ -211,6 +254,7 @@ where
             pipeline,
             material_layout,
             transform_layout,
+            environment_layout,
         });
         self.forward_programs.insert(key, Arc::clone(&objects));
         Ok(objects)

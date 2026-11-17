@@ -88,6 +88,18 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 frame.resident.upload_incoming,
             ));
         }
+        if let (Some(slot), Some(environment)) = (self.environment_upload_slot, &frame.environment)
+        {
+            if uses(slot) {
+                buffers.push(BoundBuffer::new(
+                    slot,
+                    environment.upload_instance,
+                    &environment.upload,
+                    &environment.upload_desc,
+                    environment.upload_incoming,
+                ));
+            }
+        }
         for (slot, stream) in self
             .stream_slots
             .iter()
@@ -122,39 +134,52 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 }
             }
         }
-        let textures = std::iter::once(BoundTexture::new(
-            self.texture_slot,
-            frame.resident.textures[0].instance,
-            &frame.resident.textures[0].texture,
-            &frame.resident.textures[0].desc,
-            frame.resident.textures[0].incoming,
-            frame.resident.textures[0].layout,
-        ))
-        .chain(
-            self.gbuffer_slots
-                .iter()
-                .copied()
-                .zip(&frame.gbuffer)
-                .map(|(slot, texture)| {
+        let textures =
+            std::iter::once(BoundTexture::new(
+                self.texture_slot,
+                frame.resident.textures[0].instance,
+                &frame.resident.textures[0].texture,
+                &frame.resident.textures[0].desc,
+                frame.resident.textures[0].incoming,
+                frame.resident.textures[0].layout,
+            ))
+            .chain(
+                self.gbuffer_slots
+                    .iter()
+                    .copied()
+                    .zip(&frame.gbuffer)
+                    .map(|(slot, texture)| {
+                        BoundTexture::new(
+                            slot,
+                            texture.instance,
+                            &texture.texture,
+                            &texture.desc,
+                            texture.incoming,
+                            texture.layout,
+                        )
+                    }),
+            )
+            .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
+                |(slot, environment)| {
                     BoundTexture::new(
                         slot,
-                        texture.instance,
-                        &texture.texture,
-                        &texture.desc,
-                        texture.incoming,
-                        texture.layout,
+                        environment.texture_instance,
+                        &environment.texture,
+                        &environment.desc,
+                        environment.incoming,
+                        environment.layout,
                     )
-                }),
-        )
-        .chain(std::iter::once(BoundTexture::new(
-            self.scene_color_slot.ok_or(Error::InvalidState)?,
-            frame.scene_color.instance,
-            &frame.scene_color.texture,
-            &frame.scene_color.desc,
-            frame.scene_color.incoming,
-            frame.scene_color.layout,
-        )))
-        .collect();
+                },
+            ))
+            .chain(std::iter::once(BoundTexture::new(
+                self.scene_color_slot.ok_or(Error::InvalidState)?,
+                frame.scene_color.instance,
+                &frame.scene_color.texture,
+                &frame.scene_color.desc,
+                frame.scene_color.incoming,
+                frame.scene_color.layout,
+            )))
+            .collect();
         let surface_target = self.surface_target_slot.ok_or(Error::InvalidState)?;
         let lease = BoundSurfaceTexture::new(surface_target, image)?;
         FrameBindings::new_with_surface_textures(
@@ -200,6 +225,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             AccessKind::Write,
             color_write(),
         )?;
+        if let (Some(slot), Some(_)) = (self.environment_slot, frame.environment.as_ref()) {
+            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
+        }
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {
             view: AttachmentView::Texture(&frame.scene_color.view),
@@ -238,6 +266,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         })?;
         raster.set_pipeline(&frame.lighting_pipeline)?;
         raster.set_bind_group(0, &frame.lighting_group, &[])?;
+        if let Some(group) = &frame.lighting_environment_group {
+            raster.set_bind_group(1, group, &[])?;
+        }
         raster.draw(0..3, 0..1)?;
         raster.finish()
     }

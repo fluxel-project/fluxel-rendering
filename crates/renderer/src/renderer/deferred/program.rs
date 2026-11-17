@@ -9,8 +9,8 @@ use fluxel_shader::{
 };
 
 use crate::{
-    renderer::admission::{self, PipelineCapabilityFacts},
     PreparedMaterial,
+    renderer::admission::{self, PipelineCapabilityFacts},
 };
 
 use super::templates::{LIGHTING_TEMPLATE, SCENE_COLOR_COMPOSITE_TEMPLATE};
@@ -18,6 +18,10 @@ use super::*;
 
 #[path = "program_cache.rs"]
 mod program_cache;
+#[path = "program_layout.rs"]
+mod program_layout;
+
+use program_layout::{ordinary_sampler, sampled_texture, uniform};
 
 pub(crate) use program_cache::DeferredProgramCache;
 
@@ -30,6 +34,7 @@ pub(crate) struct GbufferProgram<B: ResourceBackend> {
 pub(crate) struct LightingProgram<B: ResourceBackend> {
     pub(super) pipeline: RasterPipeline<B>,
     pub(super) layout: BindGroupLayout<B>,
+    pub(super) environment_layout: Option<BindGroupLayout<B>>,
 }
 
 pub(crate) struct SceneColorCompositeProgram<B: ResourceBackend> {
@@ -162,11 +167,16 @@ where
     pub(super) async fn deferred_lighting_program(
         &mut self,
         pbr: bool,
+        use_environment: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<Arc<LightingProgram<B>>, RendererError> {
         self.ensure_open()?;
         let request = if pbr {
-            crate::pbr::lighting_request()
+            if use_environment {
+                crate::pbr::lighting_irradiance_request()
+            } else {
+                crate::pbr::lighting_request()
+            }
         } else {
             ShaderCompositionRequest::new(vec![SourceUnit::new(
                 "deferred-lighting",
@@ -258,11 +268,29 @@ where
                 ],
             })
             .map_err(|error| self.observe_rhi_error(error))?;
+        let environment_layout = if use_environment {
+            Some(
+                self.device
+                    .create_bind_group_layout(&BindGroupLayoutDesc {
+                        label: Some("Deferred environment irradiance bindings".into()),
+                        entries: vec![
+                            sampled_texture(0, TextureSampleType::Float),
+                            ordinary_sampler(1),
+                        ],
+                    })
+                    .map_err(|error| self.observe_rhi_error(error))?,
+            )
+        } else {
+            None
+        };
+        let groups: Vec<_> = std::iter::once(&layout)
+            .chain(environment_layout.iter())
+            .collect();
         let pipeline_layout = self
             .device
             .create_pipeline_layout(&PipelineLayoutDesc {
                 label: Some("Deferred lighting pipeline layout"),
-                groups: &[&layout],
+                groups: &groups,
                 push_constants: &[],
             })
             .map_err(|error| self.observe_rhi_error(error))?;
@@ -293,7 +321,11 @@ where
             .map_err(|error| self.observe_rhi_error(error))?;
         // As with G-buffer programs, compilation failures never replace a
         // usable cache entry. Submitted frames retain their own Arc owner.
-        let program = Arc::new(LightingProgram { pipeline, layout });
+        let program = Arc::new(LightingProgram {
+            pipeline,
+            layout,
+            environment_layout,
+        });
         self.deferred_programs
             .publish_lighting(key, Arc::clone(&program));
         Ok(program)
@@ -487,46 +519,6 @@ where
     }
 }
 
-fn uniform(binding: u32, min_size: u64, visibility: ShaderStage) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: vec![visibility],
-        ty: BindingType::UniformBuffer {
-            dynamic_offset: true,
-            min_size,
-        },
-        count: BindingCount::One,
-        partially_bound: false,
-        nonuniform_indexing: false,
-    }
-}
-fn sampled_texture(binding: u32, sample: TextureSampleType) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: vec![ShaderStage::Fragment],
-        ty: BindingType::SampledTexture {
-            sample,
-            dimension: TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: BindingCount::One,
-        partially_bound: false,
-        nonuniform_indexing: false,
-    }
-}
-fn ordinary_sampler(binding: u32) -> BindGroupLayoutEntry {
-    BindGroupLayoutEntry {
-        binding,
-        visibility: vec![ShaderStage::Fragment],
-        ty: BindingType::Sampler {
-            filtering: true,
-            comparison: false,
-        },
-        count: BindingCount::One,
-        partially_bound: false,
-        nonuniform_indexing: false,
-    }
-}
 fn color_target() -> ColorTargetState {
     color_target_with_format(TextureFormat::Rgba8Unorm)
 }

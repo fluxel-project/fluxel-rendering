@@ -1,5 +1,55 @@
-//! Deferred PBR transform, normal and tangent input validation coverage.
+//! PBR resource and input failure boundaries.
+
 use super::*;
+
+#[test]
+fn unsupported_surface_effects_are_rejected_before_backend_work() {
+    for extensions in [
+        fluxel_material::SurfaceExtensions {
+            occlusion: Some("ao".into()),
+            emissive: None,
+        },
+        fluxel_material::SurfaceExtensions {
+            occlusion: None,
+            emissive: Some("emission".into()),
+        },
+    ] {
+        let (device, native) = pbr_device(Script::AcceptedExact);
+        let mut renderer = Renderer::new(device).unwrap();
+        let (snapshot, view, assets) = scene_and_assets_with_material(
+            uv0_tangent_geometry([1.0, 0.0, 0.0, 1.0]),
+            RenderTransform::identity(),
+            uv0_normal_node_material().with_surface_extensions(extensions),
+        );
+        let before = counts(&native);
+        for deferred in [false, true] {
+            let result = if deferred {
+                block_on(renderer.submit_deferred(
+                    &DeferredCpuPipeline::new(BoundsVisibility),
+                    snapshot.clone(),
+                    view,
+                    bounds(),
+                    &assets,
+                ))
+            } else {
+                block_on(renderer.submit_forward(
+                    &ForwardCpuPipeline::new(BoundsVisibility),
+                    snapshot.clone(),
+                    view,
+                    bounds(),
+                    &assets,
+                ))
+            };
+            assert!(matches!(
+                result,
+                Err(RendererError::ForwardPreparation(
+                    crate::ForwardPreparationError::UnsupportedSurfaceExtensions { .. }
+                ))
+            ));
+            assert_eq!(counts(&native), before);
+        }
+    }
+}
 
 #[test]
 fn pbr_compiled_plan_refuses_short_or_retyped_transform_footprints_before_work() {

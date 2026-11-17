@@ -341,6 +341,10 @@ mod cache_tests;
 mod code_node_tests;
 #[path = "deferred_deformation.rs"]
 mod deformation_tests;
+#[path = "deferred_environment.rs"]
+mod environment_tests;
+#[path = "forward_environment_feature.rs"]
+mod forward_environment_feature_tests;
 #[path = "forward_sampler_owner.rs"]
 mod forward_sampler_owner_tests;
 #[path = "deferred_owners.rs"]

@@ -13,10 +13,11 @@ use fluxel_material::{
 use fluxel_rhi::api::{Device, Error, PlanId, VertexFormat, VertexStepMode};
 
 use crate::{
-    BoundsVisibility, ColorTextureAsset, ColorTextureData, DeferredCpuPipeline, ForwardAssets,
-    ForwardCpuPipeline, ForwardResources, FramePipeline, GeometryAsset, GeometryAttribute,
-    GeometryData, GeometryLayout, GeometryStream, RenderChange, RenderChangeSet, RenderRecord,
-    RenderScene, RenderTransform, RenderView, RendererError, SceneAssetRef, prepare_forward,
+    BoundsVisibility, ColorTextureAsset, ColorTextureData, DeferredCpuPipeline,
+    EnvironmentIrradianceAsset, EnvironmentIrradianceData, ForwardAssets, ForwardCpuPipeline,
+    ForwardResources, FramePipeline, GeometryAsset, GeometryAttribute, GeometryData,
+    GeometryLayout, GeometryStream, RenderChange, RenderChangeSet, RenderRecord, RenderScene,
+    RenderTransform, RenderView, RendererError, SceneAssetRef, prepare_forward,
 };
 
 fn pbr_device(script: Script) -> (Device<WitnessBackend>, Arc<Native>) {
@@ -27,6 +28,35 @@ fn pbr_device(script: Script) -> (Device<WitnessBackend>, Arc<Native>) {
         caps.limits.max_vertex_buffers = 2;
         caps.limits.max_vertex_attributes = 4;
     })
+}
+
+pub(super) fn environment_device(script: Script) -> (Device<WitnessBackend>, Arc<Native>) {
+    fixture_with_caps(script, |caps| {
+        caps.limits.max_color_attachments = 2;
+        caps.limits.max_bind_groups = 3;
+        caps.limits.max_bindings_per_group = 3;
+        caps.limits.max_vertex_buffers = 2;
+        caps.limits.max_vertex_attributes = 4;
+    })
+}
+
+pub(super) fn irradiance_snapshot(
+    bytes: [u8; 8],
+) -> fluxel_assets::AssetSnapshot<EnvironmentIrradianceAsset, EnvironmentIrradianceData> {
+    let store = AssetStore::<EnvironmentIrradianceAsset, EnvironmentIrradianceData, ()>::new();
+    let handle = store.create().unwrap();
+    match store.acquire(&handle).unwrap() {
+        Acquire::Producer(producer) => producer
+            .commit(
+                EnvironmentIrradianceData {
+                    extent: [2, 1],
+                    rgba8: bytes.to_vec(),
+                },
+                ResidentBytes::new(8),
+            )
+            .unwrap(),
+        _ => unreachable!(),
+    }
 }
 
 fn material() -> MaterialDefinition {
@@ -72,7 +102,7 @@ fn material() -> MaterialDefinition {
     )
 }
 
-fn geometry(include_normal: bool, normal: [f32; 3]) -> GeometryData {
+pub(super) fn geometry(include_normal: bool, normal: [f32; 3]) -> GeometryData {
     let mut bytes = Vec::new();
     for position in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
         for value in position {
@@ -116,7 +146,7 @@ fn geometry(include_normal: bool, normal: [f32; 3]) -> GeometryData {
     }
 }
 
-fn scene_and_assets(
+pub(super) fn scene_and_assets(
     geometry_data: GeometryData,
     transform: RenderTransform,
 ) -> (
@@ -553,5 +583,5 @@ fn pbr_deferred_surface_consumes_actual_lease_format_and_exact_transform_owner()
     );
 }
 
-#[path = "deferred_pbr_inputs.rs"]
-mod input_validation;
+#[path = "deferred_pbr_failures.rs"]
+mod failures;

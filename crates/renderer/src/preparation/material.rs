@@ -21,6 +21,7 @@ pub struct PreparedMaterial {
     material: CompiledMaterialVariant,
     shader: Arc<ShaderArtifact>,
     geometry: PreparedGeometry,
+    environment_irradiance: bool,
 }
 
 impl PreparedMaterial {
@@ -40,6 +41,10 @@ impl PreparedMaterial {
     #[must_use]
     pub fn geometry(&self) -> &PreparedGeometry {
         &self.geometry
+    }
+
+    pub(crate) fn uses_environment_irradiance(&self) -> bool {
+        self.environment_irradiance
     }
 }
 
@@ -62,6 +67,8 @@ pub enum MaterialPreparationError {
         /// Reflected Shader location.
         location: u32,
     },
+    /// The selected environment route does not match the reflected sampling bindings.
+    InvalidEnvironmentRoute,
 }
 
 impl fmt::Display for MaterialPreparationError {
@@ -81,6 +88,9 @@ impl fmt::Display for MaterialPreparationError {
                     formatter,
                     "Shader vertex location {location} has no geometry semantic"
                 )
+            }
+            Self::InvalidEnvironmentRoute => {
+                formatter.write_str("invalid renderer environment route")
             }
         }
     }
@@ -124,10 +134,44 @@ pub fn prepare_material(
     let geometry = geometry
         .prepare(&request.vertex_inputs)
         .map_err(MaterialPreparationError::Geometry)?;
+    let environment_irradiance = request
+        .static_options
+        .get("renderer.environment")
+        .is_some_and(|value| value == "latlong-diffuse-irradiance-v1");
+    if environment_irradiance {
+        let bindings = shader.interface().bindings();
+        let valid = [
+            (
+                0,
+                fluxel_shader::BindingKind::Texture,
+                fluxel_shader::BindingShape::Texture2dF32,
+            ),
+            (
+                1,
+                fluxel_shader::BindingKind::Sampler,
+                fluxel_shader::BindingShape::Sampler { comparison: false },
+            ),
+        ]
+        .into_iter()
+        .all(|(binding, kind, shape)| {
+            bindings.iter().any(|actual| {
+                actual.group == 2
+                    && actual.binding == binding
+                    && actual.kind == kind
+                    && actual.shape == Some(shape)
+                    && actual.read
+                    && !actual.write
+            })
+        });
+        if !valid {
+            return Err(MaterialPreparationError::InvalidEnvironmentRoute);
+        }
+    }
     Ok(PreparedMaterial {
         material,
         shader,
         geometry,
+        environment_irradiance,
     })
 }
 

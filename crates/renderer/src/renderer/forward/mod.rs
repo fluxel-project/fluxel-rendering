@@ -162,13 +162,16 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
     pub(super) pipeline: RasterPipeline<B>,
     pub(super) material_layout: BindGroupLayout<B>,
     pub(super) transform_layout: BindGroupLayout<B>,
+    /// Present only for the explicit lat-long diffuse-irradiance shader route.
+    pub(super) environment_layout: Option<BindGroupLayout<B>>,
 }
 
 mod composed;
 mod entry;
 mod execute;
 mod prepare;
-pub(crate) use prepare::{
+mod sampler;
+pub(crate) use sampler::{
     default_material_sampler, material_requires_ordinary_sampler,
     require_filterable_material_texture, validate_ordinary_sampler, validate_sampled_texture_owner,
 };

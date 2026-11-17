@@ -44,6 +44,21 @@ fn pbr_direct_light(base_input: vec3<f32>, properties: vec2<f32>, world_normal: 
 }
 "#;
 
+pub(super) const DIFFUSE_IRRADIANCE: &str = r#"
+fn pbr_latlong_uv(direction: vec3<f32>) -> vec2<f32> {
+    let unit = pbr_normal(direction);
+    let u = fract(atan2(unit.z, unit.x) / 6.283185307179586 + 0.5);
+    let v = acos(clamp(unit.y, -1.0, 1.0)) / 3.141592653589793;
+    return vec2<f32>(u, v);
+}
+fn pbr_diffuse_irradiance(base_input: vec3<f32>, metal_input: f32, world_normal: vec3<f32>, environment: texture_2d<f32>, environment_sampler: sampler) -> vec3<f32> {
+    let base = clamp(base_input, vec3<f32>(0.0), vec3<f32>(1.0));
+    let metal = clamp(metal_input, 0.0, 1.0);
+    let irradiance = textureSample(environment, environment_sampler, pbr_latlong_uv(world_normal)).rgb;
+    return irradiance * base * (1.0 - metal);
+}
+"#;
+
 pub(super) const TRANSFORMS: &str = r#"
 struct PbrTransforms {
     clip_from_local: mat4x4<f32>,
@@ -71,6 +86,23 @@ fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) 
 @fragment
 fn forward_fs(input: PbrVertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(pbr_direct_light(evaluate_material().rgb, evaluate_metallic_roughness(), input.world_normal), 1.0);
+}
+"#;
+
+pub(super) const FORWARD_IRRADIANCE: &str = r#"
+@group(2) @binding(0) var pbr_environment_irradiance: texture_2d<f32>;
+@group(2) @binding(1) var pbr_environment_sampler: sampler;
+@vertex
+fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) -> PbrVertexOutput {
+    return pbr_vertex(position, normal);
+}
+@fragment
+fn forward_fs(input: PbrVertexOutput) -> @location(0) vec4<f32> {
+    let base = evaluate_material().rgb;
+    let properties = evaluate_metallic_roughness();
+    let direct = pbr_direct_light(base, properties, input.world_normal);
+    let indirect = pbr_diffuse_irradiance(base, properties.x, input.world_normal, pbr_environment_irradiance, pbr_environment_sampler);
+    return vec4<f32>(direct + indirect, 1.0);
 }
 "#;
 
@@ -177,5 +209,29 @@ fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) 
     let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0);
     let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0);
     return vec4<f32>(pbr_direct_light(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal), 1.0);
+}
+"#;
+
+pub(super) const LIGHTING_IRRADIANCE: &str = r#"
+@group(0) @binding(0) var pbr_base_metal: texture_2d<f32>;
+@group(0) @binding(1) var pbr_normal_roughness: texture_2d<f32>;
+@group(0) @binding(2) var pbr_depth: texture_depth_2d;
+@group(1) @binding(0) var pbr_environment_irradiance: texture_2d<f32>;
+@group(1) @binding(1) var pbr_environment_sampler: sampler;
+@vertex
+fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    return vec4<f32>(positions[index], 0.0, 1.0);
+}
+@fragment
+fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let coordinate = vec2<i32>(position.xy);
+    if textureLoad(pbr_depth, coordinate, 0) >= 1.0 { return vec4<f32>(0.0); }
+    let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
+    let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0);
+    let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0);
+    let direct = pbr_direct_light(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal);
+    let indirect = pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler);
+    return vec4<f32>(direct + indirect, 1.0);
 }
 "#;

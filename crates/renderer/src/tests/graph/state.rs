@@ -96,28 +96,32 @@ fn rhi_managed_surface_rejects_sampling_copy_and_a_second_write() {
         })
         .unwrap();
     let range = TextureRange::new(TextureAspects::COLOR, 0..1, 0..1);
-    assert!(graph
-        .add_pass("sample", |pass| {
-            pass.read_texture_with_use(
-                surface,
-                range.clone(),
-                texture_read(),
-                ImageLayout::ShaderReadOnly,
-                TextureUsage::TEXTURE_BINDING,
-            )
-        })
-        .is_err());
-    assert!(graph
-        .add_pass("copy", |pass| {
-            pass.write_texture_with_use(
-                surface,
-                range.clone(),
-                texture_copy_write(),
-                ImageLayout::CopyDst,
-                TextureUsage::COPY_DST,
-            )
-        })
-        .is_err());
+    assert!(
+        graph
+            .add_pass("sample", |pass| {
+                pass.read_texture_with_use(
+                    surface,
+                    range.clone(),
+                    texture_read(),
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+            })
+            .is_err()
+    );
+    assert!(
+        graph
+            .add_pass("copy", |pass| {
+                pass.write_texture_with_use(
+                    surface,
+                    range.clone(),
+                    texture_copy_write(),
+                    ImageLayout::CopyDst,
+                    TextureUsage::COPY_DST,
+                )
+            })
+            .is_err()
+    );
     let (_, written) = graph
         .add_pass("surface", |pass| {
             pass.write_texture_with_use(
@@ -129,17 +133,19 @@ fn rhi_managed_surface_rejects_sampling_copy_and_a_second_write() {
             )
         })
         .unwrap();
-    assert!(graph
-        .add_pass("second", |pass| {
-            pass.write_texture_with_use(
-                written,
-                range,
-                color_write(),
-                ImageLayout::ColorAttachment,
-                TextureUsage::RENDER_ATTACHMENT,
-            )
-        })
-        .is_err());
+    assert!(
+        graph
+            .add_pass("second", |pass| {
+                pass.write_texture_with_use(
+                    written,
+                    range,
+                    color_write(),
+                    ImageLayout::ColorAttachment,
+                    TextureUsage::RENDER_ATTACHMENT,
+                )
+            })
+            .is_err()
+    );
 }
 
 #[test]
@@ -176,12 +182,16 @@ fn rhi_managed_surface_has_no_barrier_without_affecting_regular_texture() {
         .unwrap();
     let plan = StatePlan::compile(&graph, &[pass]).unwrap();
     let transitions = &plan.pass(pass).unwrap().textures;
-    assert!(transitions
-        .iter()
-        .any(|transition| transition.slot == regular.into()));
-    assert!(transitions
-        .iter()
-        .all(|transition| transition.slot != surface.into()));
+    assert!(
+        transitions
+            .iter()
+            .any(|transition| transition.slot == regular.into())
+    );
+    assert!(
+        transitions
+            .iter()
+            .all(|transition| transition.slot != surface.into())
+    );
 }
 
 #[test]
@@ -232,10 +242,12 @@ fn same_pass_compute_read_write_merges_the_declared_uses() {
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].to.stages, StageMask::COMPUTE);
     assert!(transitions[0].to.accesses.contains(AccessMask::SHADER_READ));
-    assert!(transitions[0]
-        .to
-        .accesses
-        .contains(AccessMask::SHADER_WRITE));
+    assert!(
+        transitions[0]
+            .to
+            .accesses
+            .contains(AccessMask::SHADER_WRITE)
+    );
 }
 
 #[test]

@@ -23,6 +23,12 @@ where
         surface: Option<(SurfaceImage<B>, [u32; 2])>,
         color_format: TextureFormat,
         preparation_started: Instant,
+        environment_snapshot: Option<
+            fluxel_assets::AssetSnapshot<
+                crate::EnvironmentIrradianceAsset,
+                crate::EnvironmentIrradianceData,
+            >,
+        >,
         contribute: F,
     ) -> std::result::Result<super::Submission, RendererError>
     where
@@ -30,13 +36,19 @@ where
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
-        use crate::frame_data::forward::{pack_forward_uniforms, ForwardUniformInput};
+        use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
         use crate::residency::{
-            ForwardBindGroup, ForwardDraw, ForwardFrame, ForwardFrameBuffers,
-            ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, ForwardTextureInput,
-            SurfaceForwardFrame, SurfaceForwardFrameBuffers,
+            EnvironmentFrameOwner, ForwardBindGroup, ForwardDraw, ForwardFrame,
+            ForwardFrameBuffers, ForwardResidentBuffers, ForwardSampler, ForwardStreamInput,
+            ForwardTextureInput, SurfaceForwardFrame, SurfaceForwardFrameBuffers,
         };
         self.ensure_open()?;
+        if surface.is_some() && environment_snapshot.is_some() {
+            return Err(Error::Unsupported(
+                "Forward surface diffuse irradiance is not implemented",
+            )
+            .into());
+        }
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
         let batched = crate::preparation::batch_forward_draws(prepared_inputs);
         let batch_stats = batched.stats();
@@ -321,6 +333,20 @@ where
             (None, Some(buffers)) => &buffers.uniform,
             _ => return Err(Error::InvalidState.into()),
         };
+        let environment = environment_snapshot
+            .as_ref()
+            .map(|snapshot| EnvironmentFrameOwner::allocate(&self.device, snapshot.value()))
+            .transpose()
+            .map_err(|error| {
+                self.observe_forward_error("environment irradiance allocation", error)
+            })?;
+        if let Some(owner) = environment.as_ref() {
+            owner
+                .validate_for_sampling(self.device.id())
+                .map_err(|error| {
+                    self.observe_forward_error("environment irradiance owner", error)
+                })?;
+        }
         let mut draws = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
             let objects = self
@@ -377,6 +403,30 @@ where
                     }],
                 })
                 .map_err(|error| self.observe_forward_error("transform bind group", error))?;
+            let environment_group = match (&objects.environment_layout, &environment) {
+                (Some(layout), Some(owner)) => Some(
+                    self.device
+                        .create_bind_group(&BindGroupDesc {
+                            label: Some("Forward environment irradiance"),
+                            layout,
+                            entries: &[
+                                BindGroupEntry {
+                                    binding: 0,
+                                    resource: BindingResource::TextureView(&owner.view),
+                                },
+                                BindGroupEntry {
+                                    binding: 1,
+                                    resource: BindingResource::Sampler(&owner.sampler),
+                                },
+                            ],
+                        })
+                        .map_err(|error| {
+                            self.observe_forward_error("environment bind group", error)
+                        })?,
+                ),
+                (None, None) => None,
+                _ => return Err(Error::InvalidState.into()),
+            };
             let transform_range = uniforms.transforms[index].clone();
             let tint_range = uniforms.tints[index].clone();
             let vertex_ranges = mappings[index]
@@ -393,23 +443,36 @@ where
                 vertex_ranges,
                 vertices: input.geometry().value().vertices.clone(),
                 instances: 0..1,
-                bind_groups: vec![
-                    ForwardBindGroup {
-                        slot: 0,
-                        group: material_group,
-                        dynamic_offsets: vec![
-                            u32::try_from(tint_range.start).map_err(|_| Error::InvalidRange)?
-                        ],
-                        uniform_ranges: vec![tint_range],
-                    },
-                    ForwardBindGroup {
-                        slot: 1,
-                        group: transform_group,
-                        dynamic_offsets: vec![u32::try_from(transform_range.start)
-                            .map_err(|_| Error::InvalidRange)?],
-                        uniform_ranges: vec![transform_range],
-                    },
-                ],
+                bind_groups: {
+                    let mut groups = vec![
+                        ForwardBindGroup {
+                            slot: 0,
+                            group: material_group,
+                            dynamic_offsets: vec![
+                                u32::try_from(tint_range.start).map_err(|_| Error::InvalidRange)?,
+                            ],
+                            uniform_ranges: vec![tint_range],
+                        },
+                        ForwardBindGroup {
+                            slot: 1,
+                            group: transform_group,
+                            dynamic_offsets: vec![
+                                u32::try_from(transform_range.start)
+                                    .map_err(|_| Error::InvalidRange)?,
+                            ],
+                            uniform_ranges: vec![transform_range],
+                        },
+                    ];
+                    if let Some(group) = environment_group {
+                        groups.push(ForwardBindGroup {
+                            slot: 2,
+                            group,
+                            dynamic_offsets: Vec::new(),
+                            uniform_ranges: Vec::new(),
+                        });
+                    }
+                    groups
+                },
             });
         }
         let retained = PendingInputs::Frame {
@@ -448,6 +511,7 @@ where
                     frame,
                     uniform_upload,
                     uniform_bytes: uniforms.bytes,
+                    environment,
                     draws,
                     draw_batches,
                     extent,
@@ -488,89 +552,4 @@ where
         }
         result
     }
-}
-
-pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
-    prepared
-        .material()
-        .contribution()
-        .bindings
-        .iter()
-        .any(|binding| {
-            binding.location.group == 0
-                && binding.location.binding == 2
-                && binding.kind
-                    == fluxel_material::MaterialResourceKind::Sampler { comparison: false }
-        })
-}
-
-pub(crate) fn default_material_sampler() -> SamplerDesc {
-    SamplerDesc {
-        label: Some("Fluxel material sampler".into()),
-        address: [AddressMode::ClampToEdge; 3],
-        mag_filter: FilterMode::Linear,
-        min_filter: FilterMode::Linear,
-        mip_filter: FilterMode::Nearest,
-        lod: 0.0..0.0,
-        anisotropy: 1,
-        compare: None,
-        border: None,
-    }
-}
-
-pub(crate) fn validate_ordinary_sampler(desc: &SamplerDesc) -> std::result::Result<(), Error> {
-    if desc.compare.is_some()
-        || desc.mag_filter != FilterMode::Linear
-        || desc.min_filter != FilterMode::Linear
-        || !desc.lod.start.is_finite()
-        || !desc.lod.end.is_finite()
-        || desc.lod.start > desc.lod.end
-    {
-        return Err(Error::InvalidState);
-    }
-    Ok(())
-}
-
-pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
-    device: &Device<B>,
-    extent: [u32; 2],
-) -> std::result::Result<(), Error> {
-    let desc = TextureDesc {
-        label: Some("Fluxel Forward sampled material texture".into()),
-        dimension: TextureDimension::D2,
-        extent: [extent[0], extent[1], 1],
-        array_layers: 1,
-        format: TextureFormat::Rgba8Unorm,
-        mip_levels: 1,
-        samples: 1,
-        usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
-        view_formats: Vec::new(),
-    };
-    match device.texture_support(&desc) {
-        Support::Supported(support) if support.filterable => Ok(()),
-        Support::Supported(_) => Err(Error::Unsupported("filterable material texture")),
-        Support::Unsupported(reason) => Err(Error::Unsupported(reason)),
-    }
-}
-
-pub(crate) fn validate_sampled_texture_owner<B: ResourceBackend>(
-    resident: &crate::residency::ForwardResidentBuffers<B>,
-    texture: usize,
-    selected_device: DeviceId,
-) -> std::result::Result<(), Error> {
-    let owner = resident.textures.get(texture).ok_or(Error::InvalidRange)?;
-    if resident.device != selected_device
-        || owner.device != selected_device
-        || owner.desc.dimension != TextureDimension::D2
-        || owner.desc.format != TextureFormat::Rgba8Unorm
-        || owner.desc.extent.contains(&0)
-        || owner.desc.array_layers != 1
-        || owner.desc.mip_levels != 1
-        || owner.desc.samples != 1
-        || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
-        || !owner.filterable
-    {
-        return Err(Error::InvalidState);
-    }
-    Ok(())
 }

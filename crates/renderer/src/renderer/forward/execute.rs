@@ -208,6 +208,10 @@ where
             .await?;
         self.write_forward_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(environment) = frame.environment.as_ref() {
+            self.write_forward_upload(&environment.upload, &environment.upload_bytes)
+                .await?;
+        }
         let serial = self.next_serial()?;
         let mut execution = unsafe {
             self.device

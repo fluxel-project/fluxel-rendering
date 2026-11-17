@@ -83,6 +83,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             uniform_slot: declaration.uniform_slot,
             stream_slots: declaration.stream_slots,
             texture_slot: declaration.texture_slot,
+            environment_upload_slot: declaration.environment_upload_slot,
+            environment_slot: declaration.environment_slot,
             gbuffer_slots: declaration.gbuffer_slots,
             scene_color_slot: declaration.scene_color_slot,
             surface_target_slot: declaration.surface_target_slot,
@@ -139,6 +141,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.uniform_slot.resource != declaration.uniform_slot.resource
             || !same_buffer_slots(&self.stream_slots, &declaration.stream_slots)
             || self.texture_slot.resource != declaration.texture_slot.resource
+            || self.environment_upload_slot.map(|slot| slot.resource)
+                != declaration
+                    .environment_upload_slot
+                    .map(|slot| slot.resource)
+            || self.environment_slot.map(|slot| slot.resource)
+                != declaration.environment_slot.map(|slot| slot.resource)
             || self.gbuffer_slots.map(|slot| slot.resource)
                 != declaration.gbuffer_slots.map(|slot| slot.resource)
             || self.scene_color_slot.map(|slot| slot.resource)
@@ -444,6 +452,18 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 frame.resident.upload_incoming,
             ));
         }
+        if let (Some(slot), Some(environment)) = (self.environment_upload_slot, &frame.environment)
+        {
+            if uses_buffer(slot) {
+                buffers.push(BoundBuffer::new(
+                    slot,
+                    environment.upload_instance,
+                    &environment.upload,
+                    &environment.upload_desc,
+                    environment.upload_incoming,
+                ));
+            }
+        }
         for (slot, stream) in self
             .stream_slots
             .iter()
@@ -478,47 +498,60 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 }
             }
         }
-        let textures = std::iter::once(BoundTexture::new(
-            self.texture_slot,
-            frame.resident.textures[0].instance,
-            &frame.resident.textures[0].texture,
-            &frame.resident.textures[0].desc,
-            frame.resident.textures[0].incoming,
-            frame.resident.textures[0].layout,
-        ))
-        .chain(
-            self.gbuffer_slots
-                .iter()
-                .copied()
-                .zip(&frame.gbuffer)
-                .map(|(slot, texture)| {
+        let textures =
+            std::iter::once(BoundTexture::new(
+                self.texture_slot,
+                frame.resident.textures[0].instance,
+                &frame.resident.textures[0].texture,
+                &frame.resident.textures[0].desc,
+                frame.resident.textures[0].incoming,
+                frame.resident.textures[0].layout,
+            ))
+            .chain(
+                self.gbuffer_slots
+                    .iter()
+                    .copied()
+                    .zip(&frame.gbuffer)
+                    .map(|(slot, texture)| {
+                        BoundTexture::new(
+                            slot,
+                            texture.instance,
+                            &texture.texture,
+                            &texture.desc,
+                            texture.incoming,
+                            texture.layout,
+                        )
+                    }),
+            )
+            .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
+                |(slot, environment)| {
                     BoundTexture::new(
                         slot,
-                        texture.instance,
-                        &texture.texture,
-                        &texture.desc,
-                        texture.incoming,
-                        texture.layout,
+                        environment.texture_instance,
+                        &environment.texture,
+                        &environment.desc,
+                        environment.incoming,
+                        environment.layout,
                     )
-                }),
-        )
-        .chain(std::iter::once(BoundTexture::new(
-            self.scene_color_slot.ok_or(Error::InvalidState)?,
-            frame.scene_color.instance,
-            &frame.scene_color.texture,
-            &frame.scene_color.desc,
-            frame.scene_color.incoming,
-            frame.scene_color.layout,
-        )))
-        .chain(std::iter::once(BoundTexture::new(
-            self.target_slot.ok_or(Error::InvalidState)?,
-            frame.frame.target_instance,
-            &frame.frame.target,
-            &frame.frame.target_desc,
-            frame.frame.target_incoming,
-            frame.frame.target_layout,
-        )))
-        .collect();
+                },
+            ))
+            .chain(std::iter::once(BoundTexture::new(
+                self.scene_color_slot.ok_or(Error::InvalidState)?,
+                frame.scene_color.instance,
+                &frame.scene_color.texture,
+                &frame.scene_color.desc,
+                frame.scene_color.incoming,
+                frame.scene_color.layout,
+            )))
+            .chain(std::iter::once(BoundTexture::new(
+                self.target_slot.ok_or(Error::InvalidState)?,
+                frame.frame.target_instance,
+                &frame.frame.target,
+                &frame.frame.target_desc,
+                frame.frame.target_incoming,
+                frame.frame.target_layout,
+            )))
+            .collect();
         FrameBindings::new(&self.execution, self.id.device, buffers, textures)
             .map_err(binding_error)
     }

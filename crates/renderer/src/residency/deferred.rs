@@ -53,6 +53,7 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) frame: ForwardFrameBuffers<B>,
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
+    pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     /// Frame-local lighting output. It is sampled by the composite pass before
     /// the final readback target is written.
@@ -62,6 +63,7 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) draw: DeferredDraw<B>,
     pub(crate) lighting_pipeline: RasterPipeline<B>,
     pub(crate) lighting_group: BindGroup<B>,
+    pub(crate) lighting_environment_group: Option<BindGroup<B>>,
     pub(crate) composite_pipeline: RasterPipeline<B>,
     pub(crate) composite_group: BindGroup<B>,
     pub(crate) extent: [u32; 2],
@@ -80,6 +82,7 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) frame: SurfaceForwardFrameBuffers<B>,
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
+    pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) scene_color: ForwardTexture<B>,
     pub(crate) scene_color_sampler: fluxel_rhi::api::Sampler<B>,
@@ -87,6 +90,7 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) draw: DeferredDraw<B>,
     pub(crate) lighting_pipeline: RasterPipeline<B>,
     pub(crate) lighting_group: BindGroup<B>,
+    pub(crate) lighting_environment_group: Option<BindGroup<B>>,
     pub(crate) composite_pipeline: RasterPipeline<B>,
     pub(crate) composite_group: BindGroup<B>,
     pub(crate) extent: [u32; 2],

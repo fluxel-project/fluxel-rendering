@@ -4,11 +4,13 @@ mod declaration;
 mod diagnostic;
 mod phase;
 mod plan;
+mod raster;
 mod record;
 mod record_view;
 mod surface;
 mod surface_record;
 mod surface_validate;
+mod uploads;
 mod validation;
 
 use fluxel_rhi::{
@@ -38,8 +40,8 @@ use super::{
         TextureAccessContract, TextureRange,
     },
     execution::{
-        binding_error, BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution,
-        FrameBindings,
+        BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution, FrameBindings,
+        binding_error,
     },
 };
 
@@ -65,6 +67,8 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     uniform_slot: BufferSlot,
     stream_slots: Vec<BufferSlot>,
     texture_slot: TextureSlot,
+    environment_upload_slot: Option<BufferSlot>,
+    environment_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
@@ -94,6 +98,8 @@ pub(crate) struct DeferredDeclaration {
     uniform_slot: BufferSlot,
     stream_slots: Vec<BufferSlot>,
     texture_slot: TextureSlot,
+    environment_upload_slot: Option<BufferSlot>,
+    environment_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
@@ -123,6 +129,7 @@ use phase::DeferredDeformationGraph;
 pub(crate) use phase::{
     DeferredDeformationPass, DeferredGeometryPass, DeferredLightingPass, DeferredPhaseDriver,
 };
+pub(super) use raster::{configure_raster, render_area};
 
 fn whole_color() -> TextureRange {
     TextureRange::new(TextureAspects::COLOR, 0..1, 0..1)

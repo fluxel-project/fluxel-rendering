@@ -11,7 +11,7 @@ use fluxel_rhi::{
     backend::ResourceBackend,
 };
 
-use crate::{preparation::VertexLayoutKey, PreparedMaterial};
+use crate::{PreparedMaterial, preparation::VertexLayoutKey};
 
 use super::{GbufferProgram, LightingProgram};
 

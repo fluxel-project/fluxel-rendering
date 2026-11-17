@@ -52,6 +52,17 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
         return Err(Error::Unsupported("filterable Deferred scene-color"));
     }
     crate::renderer::validate_ordinary_sampler(&frame.scene_color_sampler_desc)?;
+    match (&frame.environment, &frame.lighting_environment_group) {
+        (Some(environment), Some(group)) => {
+            if environment.validate_for_sampling(device.id()).is_err()
+                || group.device() != device.id()
+            {
+                return Err(Error::InvalidState);
+            }
+        }
+        (None, None) => {}
+        _ => return Err(Error::InvalidState),
+    }
     for (texture, format) in frame.gbuffer.iter().zip([
         TextureFormat::Rgba8Unorm,
         TextureFormat::Rgba8Unorm,

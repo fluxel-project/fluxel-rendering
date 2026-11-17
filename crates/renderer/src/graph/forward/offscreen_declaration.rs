@@ -28,8 +28,10 @@ pub(crate) struct OffscreenForwardDeclaration {
     pub(super) resident_upload_slot: BufferSlot,
     pub(super) frame_upload_slot: BufferSlot,
     pub(super) uniform_slot: BufferSlot,
+    pub(super) environment_upload_slot: Option<BufferSlot>,
     pub(super) stream_slots: Vec<BufferSlot>,
     pub(super) texture_slots: Vec<TextureSlot>,
+    pub(super) environment_slot: Option<TextureSlot>,
     pub(super) target_slot: TextureSlot,
     pub(super) readback_slot: BufferSlot,
     pub(super) draw_count: usize,
@@ -103,6 +105,15 @@ where
     let uniform = graph
         .import_buffer_desc(spec.uniform.desc.clone(), spec.uniform.incoming)
         .map_err(|_| Error::InvalidState)?;
+    let environment_upload = spec
+        .environment_upload
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_buffer_desc(owner.desc.clone(), owner.incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let streams = spec
         .streams
         .iter()
@@ -121,6 +132,15 @@ where
                 .map_err(|_| Error::InvalidState)
         })
         .collect::<Result<Vec<_>>>()?;
+    let environment = spec
+        .environment
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let target = graph
         .import_texture_with_state(
             spec.target.desc.clone(),
@@ -136,7 +156,7 @@ where
         .iter()
         .map(graph_texture_copy_end)
         .collect::<Result<Vec<_>>>()?;
-    let (upload_pass, (streams, uniform, textures)) = graph
+    let (upload_pass, (streams, uniform, textures, environment)) = graph
         .add_pass("forward-upload", |pass| {
             let mut outputs = streams.clone();
             for upload in &spec.vertex_uploads {
@@ -194,7 +214,26 @@ where
                     TextureUsage::COPY_DST,
                 )?;
             }
-            Ok((outputs, uniform, outputs_textures))
+            let environment = match (environment, environment_upload, &spec.environment_copy) {
+                (Some(texture), Some(upload), Some(copy)) => {
+                    pass.read_with_use(
+                        upload,
+                        0..copy.bytes_per_row as u64 * copy.rows_per_image as u64,
+                        copy_read_uses().uses,
+                        BufferUsage::COPY_SRC,
+                    )?;
+                    Some(pass.write_texture_with_use(
+                        texture,
+                        whole(),
+                        texture_copy_write_uses().uses,
+                        ImageLayout::CopyDst,
+                        TextureUsage::COPY_DST,
+                    )?)
+                }
+                (None, None, None) => None,
+                _ => return Err(super::super::definition::GraphError::InvalidRange),
+            };
+            Ok((outputs, uniform, outputs_textures, environment))
         })
         .map_err(|_| Error::InvalidState)?;
     let (raster_pass, target) = {
@@ -206,6 +245,7 @@ where
             streams: streams.clone(),
             uniform: Some(uniform),
             textures: textures.clone(),
+            environment,
             target: Some(target),
             surface_target: false,
             draws: spec.draws.clone(),
@@ -249,8 +289,10 @@ where
         resident_upload_slot: BufferSlot::from(resident_upload),
         frame_upload_slot: BufferSlot::from(frame_upload),
         uniform_slot: BufferSlot::from(uniform),
+        environment_upload_slot: environment_upload.map(BufferSlot::from),
         stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
         texture_slots: textures.into_iter().map(TextureSlot::from).collect(),
+        environment_slot: environment.map(TextureSlot::from),
         target_slot: TextureSlot::from(target),
         readback_slot: BufferSlot::from(readback),
         draw_count: spec.draws.len(),

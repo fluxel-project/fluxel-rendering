@@ -3,16 +3,21 @@
 //! Preparation resolves Material and Shader products without taking ownership
 //! of their semantics. Concrete buffer and texture uses must reach Graph.
 
+mod environment;
 mod forward;
 mod forward_sources;
 mod geometry;
 mod geometry_key;
+pub use environment::{EnvironmentIrradianceAsset, EnvironmentIrradianceData};
+#[cfg(test)]
+pub(crate) use forward::prepare_feature_draws;
 pub use forward::{
     ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, ForwardDrawRequest,
     ForwardPreparationError, ForwardResources, GeometryAsset, GeometryData, prepare_forward,
 };
 pub(crate) use forward::{
-    ForwardBatchStats, ForwardCompatibilityKey, batch_forward_draws, prepare_feature_draws,
+    ForwardBatchStats, ForwardCompatibilityKey, batch_forward_draws,
+    prepare_feature_draws_with_environment, prepare_forward_with_environment,
 };
 pub use forward_sources::{ForwardDrawOrder, ForwardDrawSource};
 pub(crate) use geometry_key::{VertexLayoutKey, vertex_layout_key};

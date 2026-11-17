@@ -71,6 +71,24 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 texture_copy_write(),
             )?;
         }
+        if let (Some(upload_slot), Some(texture_slot), Some(environment)) = (
+            self.environment_upload_slot,
+            self.environment_slot,
+            frame.environment.as_ref(),
+        ) {
+            pass.buffer(
+                upload_slot,
+                0..environment.upload_desc.size,
+                AccessKind::Read,
+                copy_read(),
+            )?;
+            pass.texture(
+                texture_slot,
+                whole_color(),
+                AccessKind::Write,
+                texture_copy_write(),
+            )?;
+        }
         if let (Some(slots), Some(deformation)) = (self.deformation_slots, &frame.deformation) {
             pass.buffer(
                 slots[0],
@@ -162,6 +180,39 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     mip: 0,
                     origin: [0, 0, 0],
                     extent: copy.extent,
+                    aspect: TextureAspects::COLOR,
+                },
+            )?;
+        }
+        if let (Some(upload_slot), Some(texture_slot), Some(environment)) = (
+            self.environment_upload_slot,
+            self.environment_slot,
+            frame.environment.as_ref(),
+        ) {
+            let upload = pass.buffer(
+                upload_slot,
+                0..environment.upload_desc.size,
+                AccessKind::Read,
+                copy_read(),
+            )?;
+            let texture = pass.texture(
+                texture_slot,
+                whole_color(),
+                AccessKind::Write,
+                texture_copy_write(),
+            )?;
+            encoder.buffer_to_texture(
+                upload,
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: environment.bytes_per_row,
+                    rows_per_image: environment.desc.extent[1],
+                },
+                TextureRegion {
+                    texture,
+                    mip: 0,
+                    origin: [0, 0, 0],
+                    extent: environment.desc.extent,
                     aspect: TextureAspects::COLOR,
                 },
             )?;
@@ -426,6 +477,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             AccessKind::Write,
             color_write(),
         )?;
+        if let (Some(slot), Some(_)) = (self.environment_slot, frame.environment.as_ref()) {
+            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
+        }
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {
             view: AttachmentView::Texture(&frame.scene_color.view),
@@ -446,6 +500,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         configure_raster(&mut raster, frame.extent)?;
         raster.set_pipeline(&frame.lighting_pipeline)?;
         raster.set_bind_group(0, &frame.lighting_group, &[])?;
+        if let Some(group) = &frame.lighting_environment_group {
+            raster.set_bind_group(1, group, &[])?;
+        }
         raster.draw(0..3, 0..1)?;
         raster.finish()
     }
@@ -538,28 +595,4 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         )?;
         encoder.readback_buffer(readback, 0..length)
     }
-}
-
-fn render_area(extent: [u32; 2]) -> Rect {
-    Rect {
-        x: 0,
-        y: 0,
-        width: extent[0],
-        height: extent[1],
-    }
-}
-
-fn configure_raster<B: RasterBackend>(
-    raster: &mut fluxel_rhi::api::RasterPass<'_, B>,
-    extent: [u32; 2],
-) -> Result<()> {
-    raster.viewport(Viewport {
-        x: 0.0,
-        y: 0.0,
-        width: extent[0] as f32,
-        height: extent[1] as f32,
-        min_depth: 0.0,
-        max_depth: 1.0,
-    })?;
-    raster.scissor(render_area(extent))
 }

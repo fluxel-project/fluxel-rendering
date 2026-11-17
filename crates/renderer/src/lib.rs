@@ -32,12 +32,12 @@ pub use pipeline::{
     VisibilityProvider,
 };
 pub use preparation::{
-    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, ForwardDrawOrder,
-    ForwardDrawRequest, ForwardDrawSource, ForwardPreparationError, ForwardResources,
-    GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData, GeometryDraw,
-    GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding, MaterialPreparationError,
-    PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, prepare_forward,
-    prepare_material,
+    ColorTextureAsset, ColorTextureData, EnvironmentIrradianceAsset, EnvironmentIrradianceData,
+    ForwardAssets, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest, ForwardDrawSource,
+    ForwardPreparationError, ForwardResources, GeometryAsset, GeometryAttribute,
+    GeometryBufferOwner, GeometryData, GeometryDraw, GeometryError, GeometryLayout, GeometryStream,
+    GeometryStreamBinding, MaterialPreparationError, PreparedGeometry, PreparedGeometryBindings,
+    PreparedMaterial, prepare_forward, prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,

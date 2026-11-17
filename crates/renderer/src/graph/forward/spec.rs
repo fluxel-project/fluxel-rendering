@@ -7,6 +7,7 @@ pub(crate) struct ForwardShape {
     pub(crate) vertex_uploads: Vec<(usize, std::ops::Range<u64>, std::ops::Range<u64>)>,
     pub(crate) texture_uploads: Vec<(usize, u64, u32, u32, [u32; 3])>,
     pub(crate) uniform_upload: (std::ops::Range<u64>, std::ops::Range<u64>),
+    pub(crate) environment: Option<(u64, u32, u32, [u32; 3])>,
     /// Batch boundaries affect pipeline binding and therefore are part of the
     /// compiled recording shape even though the batches contain no resources.
     pub(crate) batches: Vec<std::ops::Range<usize>>,
@@ -36,13 +37,16 @@ pub(crate) struct ForwardGraphSpec {
     pub(crate) resident_upload: BufferGraphFact,
     pub(crate) frame_upload: BufferGraphFact,
     pub(crate) uniform: BufferGraphFact,
+    pub(crate) environment_upload: Option<BufferGraphFact>,
     pub(crate) streams: Vec<BufferGraphFact>,
     pub(crate) textures: Vec<TextureGraphFact>,
+    pub(crate) environment: Option<TextureGraphFact>,
     pub(crate) target: TextureGraphFact,
     pub(crate) readback: BufferGraphFact,
     pub(crate) vertex_uploads: Vec<ForwardGraphVertexUpload>,
     pub(crate) texture_uploads: Vec<ForwardGraphTextureUpload>,
     pub(crate) uniform_upload: ForwardGraphUniformUpload,
+    pub(crate) environment_copy: Option<ForwardGraphTextureUpload>,
     pub(crate) draws: Vec<ForwardGraphDraw>,
     pub(crate) shape: ForwardShape,
 }
@@ -151,8 +155,17 @@ impl ForwardGraphSpec {
                 desc: frame.frame.uniform_desc.clone(),
                 incoming: frame.frame.uniform_incoming,
             },
+            environment_upload: frame.environment.as_ref().map(|owner| BufferGraphFact {
+                desc: owner.upload_desc.clone(),
+                incoming: owner.upload_incoming,
+            }),
             streams,
             textures,
+            environment: frame.environment.as_ref().map(|owner| TextureGraphFact {
+                desc: owner.desc.clone(),
+                incoming: owner.incoming,
+                layout: owner.layout,
+            }),
             target: TextureGraphFact {
                 desc: frame.frame.target_desc.clone(),
                 incoming: frame.frame.target_incoming,
@@ -187,6 +200,15 @@ impl ForwardGraphSpec {
                 source: frame.uniform_upload.source.clone(),
                 destination: frame.uniform_upload.destination.clone(),
             },
+            environment_copy: frame
+                .environment
+                .as_ref()
+                .map(|owner| ForwardGraphTextureUpload {
+                    texture: 0,
+                    source_offset: 0,
+                    bytes_per_row: owner.bytes_per_row,
+                    rows_per_image: owner.desc.extent[1],
+                }),
             draws,
             shape: forward_shape(frame),
         })
@@ -242,6 +264,14 @@ pub(super) fn forward_shape<B: ResourceBackend>(frame: &ForwardFrame<B>) -> Forw
             frame.uniform_upload.source.clone(),
             frame.uniform_upload.destination.clone(),
         ),
+        environment: frame.environment.as_ref().map(|owner| {
+            (
+                owner.upload_desc.size,
+                owner.bytes_per_row,
+                owner.desc.extent[1],
+                owner.desc.extent,
+            )
+        }),
         batches: frame.draw_batches.clone(),
         draws: frame
             .draws
