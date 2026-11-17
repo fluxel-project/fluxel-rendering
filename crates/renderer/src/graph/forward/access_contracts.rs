@@ -129,11 +129,38 @@ pub(super) fn color_write_uses() -> TextureAccessContract {
         TextureUsage::RENDER_ATTACHMENT,
     )
 }
+
+/// The attachment contract for the one real sorted Forward pass. The raster
+/// load/clear establishes its first contents, then blend draws read the current
+/// attachment value and write the composed value in the same pass.
+pub(super) fn color_read_write_uses() -> TextureAccessContract {
+    texture(
+        TextureUses {
+            stages: StageMask::COLOR_OUTPUT,
+            accesses: AccessMask::COLOR_READ | AccessMask::COLOR_WRITE,
+        },
+        ImageLayout::ColorAttachment,
+        TextureUsage::RENDER_ATTACHMENT,
+    )
+}
 pub(super) fn depth_write_uses() -> TextureAccessContract {
     texture(
         TextureUses {
             stages: StageMask::FRAGMENT,
             accesses: AccessMask::DEPTH_WRITE,
+        },
+        ImageLayout::DepthStencilAttachment,
+        TextureUsage::RENDER_ATTACHMENT,
+    )
+}
+
+/// Opaque draws write depth before transparent draws test it in the same sorted
+/// pass, so the declared physical footprint is read and write.
+pub(super) fn depth_read_write_uses() -> TextureAccessContract {
+    texture(
+        TextureUses {
+            stages: StageMask::FRAGMENT,
+            accesses: AccessMask::DEPTH_READ | AccessMask::DEPTH_WRITE,
         },
         ImageLayout::DepthStencilAttachment,
         TextureUsage::RENDER_ATTACHMENT,

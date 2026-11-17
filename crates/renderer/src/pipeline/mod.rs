@@ -2,11 +2,19 @@
 
 mod composition;
 pub use composition::{ForwardCompositionContext, ForwardCompositionPass, ForwardFeaturePass};
+mod composition_pair;
+pub use composition_pair::{ForwardPairCompositionContext, ForwardPairCompositionPass};
+mod policy;
+pub use policy::FramePipeline;
+mod sorted_phase;
+pub use sorted_phase::SortedForwardPass;
 mod deferred;
 pub use deferred::{
     DeferredCpuPipeline, DeferredDeformationPass, DeferredGeometryPass, DeferredLightingPass,
     DeferredPhaseContext,
 };
+mod forward_topology;
+pub use forward_topology::FrameTopology;
 
 use std::{collections::HashSet, fmt};
 
@@ -108,6 +116,13 @@ impl<'context, 'graph, 'frame, B: ResourceBackend>
         Self { driver }
     }
 
+    /// The renderer-selected topology for this one real declaration. Default
+    /// policy methods must consume this fact rather than evaluate selection a
+    /// second time.
+    pub(crate) const fn topology(&self) -> FrameTopology {
+        self.driver.expected
+    }
+
     /// Declares the opaque Forward phase directly on the private Graph.
     ///
     /// The callback must declare each supplied access exactly once. On return,
@@ -121,6 +136,20 @@ impl<'context, 'graph, 'frame, B: ResourceBackend>
     {
         self.driver.declare_opaque(|pass| {
             let mut pass = OpaqueForwardPass { pass };
+            declare(&mut pass)
+        })
+    }
+
+    /// Declares the selected sorted Forward phase on the same real Graph
+    /// transaction. Calling `opaque` for this topology is rejected.
+    pub fn sorted<F>(&mut self, declare: F) -> Result<(), PipelineError>
+    where
+        F: for<'callback, 'pass, 'builder> FnOnce(
+            &'callback mut SortedForwardPass<'callback, 'pass, 'builder, 'frame, B>,
+        ) -> Result<(), PipelineError>,
+    {
+        self.driver.declare_sorted(|pass| {
+            let mut pass = SortedForwardPass { pass };
             declare(&mut pass)
         })
     }
@@ -154,21 +183,6 @@ pub trait VisibilityProvider<R> {
     ) -> Result<Vec<RenderId>, PipelineError>;
 }
 
-/// The fixed set of GPU products that the first Forward consumer can build.
-///
-/// This is deliberately smaller than a Graph API: a pipeline may select an
-/// existing product, while the renderer retains the declarations, resources,
-/// recording, submission and completion ownership for that product.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum FrameTopology {
-    /// Upload the prepared opaque draws, rasterize them, then read the target.
-    OpaqueForward,
-    /// Clear and read the target without resolving scene assets or recording draws.
-    ClearOnly,
-    /// Produce albedo/normal/depth, shade them, then read the offscreen target.
-    Deferred,
-}
-
 /// The depth contract selected for one Forward frame.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum ForwardDepthMode {
@@ -179,115 +193,12 @@ pub enum ForwardDepthMode {
     Depth32LessEqualWrite,
 }
 
-/// The minimal public frame-policy seam exercised by the first Forward consumer.
-///
-/// Implementations are selected statically.  They prepare candidates and choose
-/// one concrete GPU product.  They cannot obtain Graph state, command encoders,
-/// allocators, or submission authority.
-pub trait FramePipeline<R> {
-    /// Selects depth once for the already validated frame.
-    fn forward_depth_mode(&self, _frame: &PreparedFrame<'_, R>) -> ForwardDepthMode {
-        ForwardDepthMode::Disabled
-    }
-    /// Declares a typed GPU producer before the Deferred geometry consumer.
-    ///
-    /// Both callbacks operate on the same actual Graph. The Feature can declare
-    /// only its source/parameter reads and vertex-product write.
-    fn contribute_deformed<F: crate::DeferredPositionDeformer>(
-        &self,
-        frame: &PreparedFrame<'_, R>,
-        feature: &F,
-        context: &mut DeferredPhaseContext<'_, '_>,
-    ) -> Result<(), PipelineError> {
-        context.deformation(|pass| feature.contribute(pass))?;
-        self.contribute_deferred(frame, context)
-    }
-
-    /// Declares the bounded Deferred geometry and lighting passes on the real Graph.
-    ///
-    /// Forward policies refuse this route by default. Selecting Deferred topology
-    /// does not implicitly authorize any access; its contribution must declare it.
-    fn contribute_deferred(
-        &self,
-        _frame: &PreparedFrame<'_, R>,
-        _context: &mut DeferredPhaseContext<'_, '_>,
-    ) -> Result<(), PipelineError> {
-        Err(PipelineError::InvalidPhaseContribution)
-    }
-
-    /// Defines the final order across built-in and feature-owned opaque draws.
-    ///
-    /// The renderer checks that this is a permutation of the supplied draws.
-    /// The default orders explicit layer keys, then stable source identities;
-    /// compatible batching runs only after this global ordering decision.
-    fn order_forward(
-        &self,
-        _frame: &PreparedFrame<'_, R>,
-        draws: &mut [crate::ForwardDrawOrder],
-    ) -> Result<(), PipelineError> {
-        draws.sort_by_key(|draw| draw.sort_key());
-        Ok(())
-    }
-
-    /// Declares one shared opaque pass for mesh and typed-feature products.
-    fn contribute_composed<B: ResourceBackend, F: crate::RenderFeature>(
-        &self,
-        _frame: &PreparedFrame<'_, R>,
-        context: &mut ForwardCompositionContext<'_, '_, '_, B, F>,
-    ) -> Result<(), PipelineError> {
-        context.opaque(|pass| {
-            pass.depends_on_uploads()?;
-            pass.meshes(|meshes| {
-                meshes.read_vertex_streams()?;
-                meshes.read_frame_uniforms()?;
-                meshes.read_sampled_textures()
-            })?;
-            pass.feature()?;
-            pass.write_selected_depth()?;
-            pass.write_main_color()
-        })
-    }
-
-    /// Prepares the records visible to an existing scene view.
-    fn prepare<'a>(
-        &self,
-        snapshot: &'a FrameSnapshot<R>,
-        view: RenderViewId,
-        visibility: RenderBounds,
-    ) -> Result<PreparedFrame<'a, R>, PipelineError>;
-
-    /// Selects the GPU product contributed for this already-validated frame.
-    ///
-    /// The renderer calls this before resolving assets or issuing backend work.
-    /// The returned value participates in the concrete Forward plan shape.
-    fn topology(&self, _frame: &PreparedFrame<'_, R>) -> Result<FrameTopology, PipelineError> {
-        Ok(FrameTopology::OpaqueForward)
-    }
-
-    /// Declares the selected phase directly on the renderer-owned private Graph.
-    /// The default contributes the complete opaque Forward access set; a
-    /// clear-only pipeline must override it with [`ForwardPhaseContext::clear`].
-    fn contribute<B: ResourceBackend>(
-        &self,
-        _frame: &PreparedFrame<'_, R>,
-        context: &mut ForwardPhaseContext<'_, '_, '_, B>,
-    ) -> Result<(), PipelineError> {
-        context.opaque(|pass| {
-            pass.depends_on_uploads()?;
-            pass.read_vertex_streams()?;
-            pass.read_frame_uniforms()?;
-            pass.read_sampled_textures()?;
-            pass.write_selected_depth()?;
-            pass.write_main_color()
-        })
-    }
-}
-
 /// A controlled CPU Forward pipeline with a concrete visibility provider.
 #[derive(Clone, Debug, Default)]
 pub struct ForwardCpuPipeline<V = BoundsVisibility> {
     visibility: V,
     depth_mode: ForwardDepthMode,
+    sorted_transparency: bool,
 }
 
 impl<V> ForwardCpuPipeline<V> {
@@ -296,12 +207,21 @@ impl<V> ForwardCpuPipeline<V> {
         Self {
             visibility,
             depth_mode: ForwardDepthMode::Disabled,
+            sorted_transparency: false,
         }
     }
 
     /// Selects the bounded opaque depth product.
     pub const fn with_depth32_less_equal(mut self) -> Self {
         self.depth_mode = ForwardDepthMode::Depth32LessEqualWrite;
+        self
+    }
+
+    /// Selects the Forward product with globally merged sorted transparency.
+    /// It owns the depth attachment required to depth-test blend draws.
+    pub const fn with_sorted_transparency(mut self) -> Self {
+        self.depth_mode = ForwardDepthMode::Depth32LessEqualWrite;
+        self.sorted_transparency = true;
         self
     }
 }
@@ -312,6 +232,13 @@ where
 {
     fn forward_depth_mode(&self, _frame: &PreparedFrame<'_, R>) -> ForwardDepthMode {
         self.depth_mode
+    }
+    fn topology(&self, _frame: &PreparedFrame<'_, R>) -> Result<FrameTopology, PipelineError> {
+        Ok(if self.sorted_transparency {
+            FrameTopology::SortedForward
+        } else {
+            FrameTopology::OpaqueForward
+        })
     }
     fn prepare<'a>(
         &self,
@@ -430,7 +357,7 @@ impl<'a, R> PreparedFrame<'a, R> {
 /// A structured refusal while preparing a CPU frame.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PipelineError {
-    /// The bounded typed-feature product requires an opaque Forward phase.
+    /// The bounded typed-feature product requires an opaque or sorted Forward phase.
     FeatureRequiresOpaque,
     /// The final ordering was not a permutation of this frame's exact draws.
     InvalidDrawOrder,
@@ -438,6 +365,16 @@ pub enum PipelineError {
     PreparedFrameMismatch,
     /// The contribution did not match the requested topology or phase order.
     InvalidPhaseContribution,
+    /// Sorted transparency requires an eye position for the selected view.
+    MissingTransparencyCamera {
+        /// Transparent draw whose distance cannot be derived.
+        source: crate::ForwardDrawSource,
+    },
+    /// A transparent draw has no finite world-space centre for sorting.
+    InvalidTransparencyGeometry {
+        /// Transparent draw with invalid geometry facts.
+        source: crate::ForwardDrawSource,
+    },
     /// The scene snapshot rejected an input identity.
     Scene(SceneError),
     /// A provider returned an ID more than once.
@@ -459,9 +396,8 @@ pub enum PipelineError {
 impl fmt::Display for PipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FeatureRequiresOpaque => {
-                formatter.write_str("typed Forward features require the opaque phase")
-            }
+            Self::FeatureRequiresOpaque => formatter
+                .write_str("typed Forward features require an opaque or sorted Forward phase"),
             Self::InvalidDrawOrder => {
                 formatter.write_str("pipeline ordering changed or duplicated a prepared draw")
             }
@@ -469,6 +405,18 @@ impl fmt::Display for PipelineError {
                 .write_str("pipeline returned a different scene, snapshot version, or view"),
             Self::InvalidPhaseContribution => {
                 formatter.write_str("pipeline made an invalid phase contribution")
+            }
+            Self::MissingTransparencyCamera { source } => {
+                write!(
+                    formatter,
+                    "transparent draw {source:?} needs a camera position"
+                )
+            }
+            Self::InvalidTransparencyGeometry { source } => {
+                write!(
+                    formatter,
+                    "transparent draw {source:?} has invalid geometry for sorting"
+                )
             }
             Self::Scene(error) => error.fmt(formatter),
             Self::DuplicateCandidate { slot, generation } => {

@@ -77,7 +77,7 @@ where
             self.environment_specular.is_some(),
         )
         .map_err(RendererError::ForwardPreparation)?;
-        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs)
+        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs, topology)
             .map_err(RendererError::ForwardPipeline)?;
         let environment = self.environment_irradiance.clone().filter(|_| {
             capture_inputs
@@ -157,7 +157,7 @@ where
         if receiver_input.extent() != extent {
             return Err(Error::InvalidRange.into());
         }
-        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs)
+        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs, topology)
             .map_err(RendererError::ForwardPipeline)?;
         let capture_environment = self.environment_irradiance.clone().filter(|_| {
             capture_inputs

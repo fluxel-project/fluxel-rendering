@@ -82,21 +82,7 @@ where
             return Err(Error::InvalidState.into());
         }
 
-        let active_programs: std::collections::HashSet<_> = inputs
-            .iter()
-            .map(|input| {
-                ForwardProgramKey::for_material(
-                    input.prepared(),
-                    color_format,
-                    input.transform_uniform_bytes(),
-                    depth_mode,
-                )
-            })
-            .collect();
-        // Submitted frames retain their own executable handles. Cache residency
-        // is bounded by this frame's concrete program/layout set.
-        self.forward_programs
-            .retain(|key, _| active_programs.contains(key));
+        self.retain_programs_for(&inputs, color_format, depth_mode);
         let uniform_inputs: Vec<_> = inputs
             .iter()
             .map(|input| ForwardUniformInput {
@@ -410,6 +396,7 @@ where
                     color_format,
                     input.transform_uniform_bytes(),
                     depth_mode,
+                    crate::renderer::raster_surface_state(input),
                 )
                 .await?;
             let mut material_entries = vec![BindGroupEntry {

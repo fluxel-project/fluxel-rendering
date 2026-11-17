@@ -17,7 +17,13 @@ mod read_set;
 mod readback;
 mod shutdown;
 mod submission;
+mod surface_policy;
 mod validation;
+
+pub(crate) use surface_policy::{
+    RasterSurfaceState, raster_surface_state, require_blendable_target, require_opaque_or_mask,
+    require_supported_surface_modes,
+};
 
 use std::{
     collections::HashMap,

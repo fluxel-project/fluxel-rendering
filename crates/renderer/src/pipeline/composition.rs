@@ -9,7 +9,10 @@ pub struct ForwardFeaturePass<'scope, 'builder> {
     scope: crate::graph::ForwardReadScope<'scope, 'builder>,
 }
 
-impl ForwardFeaturePass<'_, '_> {
+impl<'scope, 'builder> ForwardFeaturePass<'scope, 'builder> {
+    pub(super) fn new(scope: crate::graph::ForwardReadScope<'scope, 'builder>) -> Self {
+        Self { scope }
+    }
     /// Declares every physical vertex footprint in this batch.
     pub fn read_vertex_streams(&mut self) -> Result<(), PipelineError> {
         self.scope
@@ -28,11 +31,23 @@ impl ForwardFeaturePass<'_, '_> {
             .read_sampled_textures()
             .map_err(|_| PipelineError::InvalidPhaseContribution)
     }
-    fn finish(self) -> Result<(), PipelineError> {
+    pub(super) fn finish(self) -> Result<(), PipelineError> {
         self.scope
             .finish()
             .map_err(|_| PipelineError::InvalidPhaseContribution)
     }
+}
+
+/// Runs one typed feature against an already-authorized real Graph scope.
+/// OIT uses this bridge after it has intersected a feature's full-frame
+/// namespace with its current stage; features never receive stage indices.
+pub(crate) fn with_forward_feature_scope(
+    scope: crate::graph::ForwardReadScope<'_, '_>,
+    declare: impl FnOnce(&mut ForwardFeaturePass<'_, '_>) -> Result<(), PipelineError>,
+) -> Result<(), PipelineError> {
+    let mut pass = ForwardFeaturePass::new(scope);
+    declare(&mut pass)?;
+    pass.finish()
 }
 
 /// Controlled frame context for an opaque mesh and one concrete typed feature.
@@ -67,6 +82,10 @@ impl<'context, 'graph, 'frame, B: ResourceBackend, F: RenderFeature>
         }
     }
 
+    pub(crate) const fn topology(&self) -> crate::FrameTopology {
+        self.phase.topology()
+    }
+
     /// Declares the single opaque pass and both of its required read scopes.
     pub fn opaque<D>(&mut self, declare: D) -> Result<(), PipelineError>
     where
@@ -79,6 +98,36 @@ impl<'context, 'graph, 'frame, B: ResourceBackend, F: RenderFeature>
         let meshes = self.meshes;
         let feature_draws = self.feature_draws;
         self.phase.driver.declare_opaque(|pass| {
+            let mut composed = ForwardCompositionPass {
+                pass,
+                feature,
+                prepared,
+                meshes,
+                feature_draws,
+                meshes_declared: false,
+                feature_declared: false,
+            };
+            declare(&mut composed)?;
+            if !composed.meshes_declared || !composed.feature_declared {
+                return Err(PipelineError::InvalidPhaseContribution);
+            }
+            Ok(())
+        })
+    }
+
+    /// Declares the single real sorted Forward pass. The renderer records the
+    /// opaque/mask prefix and the globally merged blend suffix in this pass.
+    pub fn sorted<D>(&mut self, declare: D) -> Result<(), PipelineError>
+    where
+        D: for<'access, 'callback, 'pass, 'builder> FnOnce(
+            &'access mut ForwardCompositionPass<'callback, 'pass, 'builder, 'frame, B, F>,
+        ) -> Result<(), PipelineError>,
+    {
+        let feature = self.feature;
+        let prepared = self.prepared;
+        let meshes = self.meshes;
+        let feature_draws = self.feature_draws;
+        self.phase.driver.declare_sorted(|pass| {
             let mut composed = ForwardCompositionPass {
                 pass,
                 feature,
@@ -136,7 +185,7 @@ impl<B: ResourceBackend, F: RenderFeature> ForwardCompositionPass<'_, '_, '_, '_
             .pass
             .read_scope(self.meshes)
             .map_err(|_| PipelineError::InvalidPhaseContribution)?;
-        let mut pass = ForwardFeaturePass { scope };
+        let mut pass = ForwardFeaturePass::new(scope);
         declare(&mut pass)?;
         pass.finish()
     }
@@ -151,7 +200,7 @@ impl<B: ResourceBackend, F: RenderFeature> ForwardCompositionPass<'_, '_, '_, '_
             .pass
             .read_scope(self.feature_draws)
             .map_err(|_| PipelineError::InvalidPhaseContribution)?;
-        let mut pass = ForwardFeaturePass { scope };
+        let mut pass = ForwardFeaturePass::new(scope);
         self.feature.contribute(self.prepared, &mut pass)?;
         pass.finish()
     }
@@ -168,5 +217,10 @@ impl<B: ResourceBackend, F: RenderFeature> ForwardCompositionPass<'_, '_, '_, '_
         self.pass
             .write_main_color()
             .map_err(|_| PipelineError::InvalidPhaseContribution)
+    }
+
+    /// Declares the sorted pass's read/write color attachment contract.
+    pub fn read_write_main_color(&mut self) -> Result<(), PipelineError> {
+        self.write_main_color()
     }
 }

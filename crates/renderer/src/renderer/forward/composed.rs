@@ -7,6 +7,9 @@ use crate::{
 };
 use std::{collections::HashMap, time::Instant};
 
+#[path = "transparent_order.rs"]
+mod transparent_order;
+
 impl<B> Renderer<B>
 where
     B: ExecutionBackend
@@ -116,7 +119,10 @@ where
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
-        if topology != crate::FrameTopology::OpaqueForward {
+        if !matches!(
+            topology,
+            crate::FrameTopology::OpaqueForward | crate::FrameTopology::SortedForward
+        ) {
             return Err(RendererError::ForwardPipeline(
                 crate::PipelineError::FeatureRequiresOpaque,
             ));
@@ -162,8 +168,8 @@ where
             )
             .map_err(RendererError::ForwardPreparation)?,
         );
-        let inputs =
-            order_draws(pipeline, &selected, inputs).map_err(RendererError::ForwardPipeline)?;
+        let inputs = order_draws(pipeline, &selected, inputs, topology)
+            .map_err(RendererError::ForwardPipeline)?;
         let environment_snapshot = environment_snapshot.filter(|_| {
             inputs
                 .iter()
@@ -207,7 +213,48 @@ where
 
 type Result<T> = std::result::Result<T, RendererError>;
 
-pub(super) fn order_draws<P: FramePipeline<crate::ForwardResources>>(
+pub(in crate::renderer) fn order_draws<P: FramePipeline<crate::ForwardResources>>(
+    pipeline: &P,
+    frame: &crate::PreparedFrame<'_, crate::ForwardResources>,
+    inputs: Vec<ForwardDrawInput>,
+    topology: crate::FrameTopology,
+) -> std::result::Result<Vec<ForwardDrawInput>, crate::PipelineError> {
+    if topology != crate::FrameTopology::SortedForward {
+        return order_opaque(pipeline, frame, inputs);
+    }
+    validate_draw_sources(&inputs)?;
+    let (transparent, opaque): (Vec<_>, Vec<_>) = inputs
+        .into_iter()
+        .partition(transparent_order::is_transparent);
+    let mut ordered = order_opaque(pipeline, frame, opaque)?;
+    ordered.extend(transparent_order::sort(transparent, |input| {
+        pipeline
+            .transparent_alpha_index(frame, ForwardDrawOrder::new(input.source(), input.order()))
+    })?);
+    Ok(ordered)
+}
+
+/// Refuses a frame whose source identity cannot map every draw exactly once.
+pub(super) fn validate_draw_sources(
+    inputs: &[ForwardDrawInput],
+) -> std::result::Result<(), crate::PipelineError> {
+    let mut sources = std::collections::HashSet::with_capacity(inputs.len());
+    for input in inputs {
+        if !sources.insert(input.source()) {
+            return Err(crate::PipelineError::InvalidDrawOrder);
+        }
+    }
+    Ok(())
+}
+
+/// Capture receivers also use the sorted material contract, even for one draw.
+pub(super) fn validate_transparent_input(
+    input: &ForwardDrawInput,
+) -> std::result::Result<(), crate::PipelineError> {
+    transparent_order::validate(input)
+}
+
+fn order_opaque<P: FramePipeline<crate::ForwardResources>>(
     pipeline: &P,
     frame: &crate::PreparedFrame<'_, crate::ForwardResources>,
     inputs: Vec<ForwardDrawInput>,

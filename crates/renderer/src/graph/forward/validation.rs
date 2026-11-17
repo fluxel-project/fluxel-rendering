@@ -27,6 +27,20 @@ pub(super) fn validate_depth_spec(spec: &ForwardGraphSpec) -> Result<()> {
     Ok(())
 }
 
+/// Validates the topology's depth requirement independently of allocation.
+///
+/// Sorted Forward always needs the shared depth attachment: opaque draws write
+/// it and transparent draws test it in the same raster pass. Keeping this
+/// check separate from owner validation ensures cached plans and direct record
+/// paths reject a subsequently mutated frame instead of trusting allocation.
+pub(super) fn validate_depth_topology(topology: FrameTopology, has_depth: bool) -> Result<()> {
+    match (topology, has_depth) {
+        (FrameTopology::SortedForward, false) => Err(Error::InvalidState),
+        (FrameTopology::OpaqueForward | FrameTopology::SortedForward, _) | (_, false) => Ok(()),
+        _ => Err(Error::InvalidState),
+    }
+}
+
 pub(super) fn validate_surface_depth<B: ResourceBackend>(
     frame: &SurfaceForwardFrame<B>,
 ) -> Result<()> {
@@ -152,7 +166,7 @@ pub(super) fn validate_graph_draw(draw: &ForwardGraphDraw, stream_count: usize) 
 /// Derives the declared vertex fetches from owner facts rather than trusting a
 /// coordinator-provided access range. The RHI binding range remains unchanged;
 /// only the Graph access narrows to the bytes the draw can actually consume.
-pub(super) fn draw_accesses<B: ResourceBackend>(
+pub(crate) fn draw_accesses<B: ResourceBackend>(
     frame: &ForwardFrame<B>,
     draw: &crate::residency::ForwardDraw<B>,
 ) -> Result<Vec<Option<std::ops::Range<u64>>>> {

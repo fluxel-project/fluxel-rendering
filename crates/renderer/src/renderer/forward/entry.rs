@@ -103,7 +103,7 @@ where
             .map_err(RendererError::ForwardPipeline)?;
         let use_environment = self.environment_irradiance.is_some();
         let prepared_inputs = match topology {
-            crate::FrameTopology::OpaqueForward => {
+            crate::FrameTopology::OpaqueForward | crate::FrameTopology::SortedForward => {
                 crate::preparation::prepare_forward_with_lighting(
                     &selected,
                     assets,
@@ -120,8 +120,9 @@ where
                 ));
             }
         };
-        let prepared_inputs = super::composed::order_draws(pipeline, &selected, prepared_inputs)
-            .map_err(RendererError::ForwardPipeline)?;
+        let prepared_inputs =
+            super::composed::order_draws(pipeline, &selected, prepared_inputs, topology)
+                .map_err(RendererError::ForwardPipeline)?;
         let environment_snapshot = self.environment_irradiance.clone().filter(|_| {
             prepared_inputs
                 .iter()

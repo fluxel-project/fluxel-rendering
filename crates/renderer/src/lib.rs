@@ -28,7 +28,8 @@ pub use pipeline::{
     BoundsVisibility, ClearForwardPass, DeferredCpuPipeline, DeferredDeformationPass,
     DeferredGeometryPass, DeferredLightingPass, DeferredPhaseContext, ForwardCompositionContext,
     ForwardCompositionPass, ForwardCpuPipeline, ForwardDepthMode, ForwardFeaturePass,
-    ForwardPhaseContext, FramePipeline, FrameTopology, OpaqueForwardPass, PipelineError,
+    ForwardPairCompositionContext, ForwardPairCompositionPass, ForwardPhaseContext, FramePipeline,
+    FrameTopology, OpaqueForwardPass, PipelineError,
     PreparedFrame, VisibilityProvider,
 };
 pub use preparation::{

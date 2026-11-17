@@ -9,9 +9,18 @@ pub(super) fn allocate_depth<B: ResourceBackend>(
     extent: [u32; 2],
 ) -> Result<Option<crate::residency::ForwardDepthAttachment<B>>> {
     match mode {
-        crate::ForwardDepthMode::Disabled => Ok(None),
+        crate::ForwardDepthMode::Disabled => {
+            if topology == crate::FrameTopology::SortedForward {
+                Err(Error::InvalidState)
+            } else {
+                Ok(None)
+            }
+        }
         crate::ForwardDepthMode::Depth32LessEqualWrite => {
-            if topology != crate::FrameTopology::OpaqueForward {
+            if !matches!(
+                topology,
+                crate::FrameTopology::OpaqueForward | crate::FrameTopology::SortedForward
+            ) {
                 return Err(Error::InvalidState);
             }
             crate::residency::ForwardDepthAttachment::allocate(device, extent).map(Some)
@@ -19,7 +28,10 @@ pub(super) fn allocate_depth<B: ResourceBackend>(
     }
 }
 
-pub(super) fn pipeline_depth(mode: crate::ForwardDepthMode) -> Option<DepthStencilState> {
+pub(super) fn pipeline_depth(
+    mode: crate::ForwardDepthMode,
+    surface: crate::renderer::RasterSurfaceState,
+) -> Option<DepthStencilState> {
     if mode == crate::ForwardDepthMode::Disabled {
         return None;
     }
@@ -31,7 +43,7 @@ pub(super) fn pipeline_depth(mode: crate::ForwardDepthMode) -> Option<DepthStenc
     };
     Some(DepthStencilState {
         format: TextureFormat::Depth32Float,
-        depth_write_enabled: true,
+        depth_write_enabled: surface.depth_write_enabled(),
         depth_compare: CompareFunction::LessEqual,
         stencil_front: stencil,
         stencil_back: stencil,

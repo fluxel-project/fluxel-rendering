@@ -36,6 +36,8 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             return Err(Error::InvalidRange);
         }
         validate_surface_topology(self.topology, frame.draws.len(), frame.draw_batches.len())?;
+        validate_surface_depth(frame)?;
+        validate_depth_topology(self.topology, frame.frame.depth.is_some())?;
         validate_surface_batches(frame)?;
         let bindings = self.bindings(frame, image)?;
         let pass = bindings.pass(self.raster_pass)?;
@@ -120,7 +122,11 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             self.surface_target_slot,
             whole(),
             AccessKind::Write,
-            color_write_uses(),
+            if self.topology == FrameTopology::SortedForward {
+                color_read_write_uses()
+            } else {
+                color_write_uses()
+            },
         )?;
         let depth_stencil = match (self.depth_slot, frame.frame.depth.as_ref()) {
             (None, None) => None,
@@ -131,7 +137,16 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 {
                     return Err(Error::WrongDevice);
                 }
-                pass.texture(slot, whole_depth(), AccessKind::Write, depth_write_uses())?;
+                pass.texture(
+                    slot,
+                    whole_depth(),
+                    AccessKind::Write,
+                    if self.topology == FrameTopology::SortedForward {
+                        depth_read_write_uses()
+                    } else {
+                        depth_write_uses()
+                    },
+                )?;
                 Some(DepthStencilAttachment {
                     view: AttachmentView::Texture(&owner.view),
                     depth: Some((LoadOp::Clear(1.0), StoreOp::Discard)),
@@ -150,7 +165,11 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             store: StoreOp::Store,
         })];
         let mut raster = encoder.begin_raster(&RasterPassDesc {
-            label: Some("fluxel forward surface"),
+            label: Some(if self.topology == FrameTopology::SortedForward {
+                "fluxel forward sorted surface"
+            } else {
+                "fluxel forward surface"
+            }),
             colors: &colors,
             depth_stencil,
             render_area: Rect {

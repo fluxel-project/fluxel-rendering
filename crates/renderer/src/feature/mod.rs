@@ -251,6 +251,11 @@ impl<'a, R> FeatureContext<'a, R> {
 /// Structured refusal from CPU feature preparation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FeatureError {
+    /// A pair submission bound the same concrete feature identity twice.
+    DuplicateFeatureBinding {
+        /// Repeated feature handle.
+        feature: FeatureHandle,
+    },
     /// Typed data belongs to another scene.
     ForeignScene,
     /// Typed data belongs to another issuer in this scene.

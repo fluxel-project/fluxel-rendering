@@ -10,6 +10,7 @@ use super::SceneError;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadingCamera {
     encoded: [f32; 4],
+    sort_position: Option<[f32; 3]>,
 }
 
 impl ShadingCamera {
@@ -20,11 +21,14 @@ impl ShadingCamera {
         }
         Ok(Self {
             encoded: [position[0], position[1], position[2], 1.0],
+            sort_position: Some(position),
         })
     }
 
     /// Creates a parallel camera from a nonzero world-space direction toward the eye.
     /// The direction is normalized without overflowing on large finite inputs.
+    /// Sorted transparency also needs an eye position; use
+    /// [`Self::orthographic_at`] when drawing transparent materials.
     pub fn orthographic(direction_to_eye: [f32; 3]) -> Result<Self, SceneError> {
         if !direction_to_eye.iter().all(|x| x.is_finite()) {
             return Err(SceneError::InvalidView);
@@ -37,7 +41,23 @@ impl ShadingCamera {
         let v = v.map(|x| (x / length) as f32);
         Ok(Self {
             encoded: [v[0], v[1], v[2], 0.0],
+            sort_position: None,
         })
+    }
+
+    /// Creates a parallel lighting camera with an explicit world-space eye
+    /// used for transparent-object distance sorting. The eye does not change
+    /// the parallel lighting direction or the shader camera ABI.
+    pub fn orthographic_at(
+        position: [f32; 3],
+        direction_to_eye: [f32; 3],
+    ) -> Result<Self, SceneError> {
+        if !position.iter().all(|value| value.is_finite()) {
+            return Err(SceneError::InvalidView);
+        }
+        let mut camera = Self::orthographic(direction_to_eye)?;
+        camera.sort_position = Some(position);
+        Ok(camera)
     }
 
     /// Returns the perspective world-space eye, if this is a perspective camera.
@@ -52,5 +72,9 @@ impl ShadingCamera {
 
     pub(crate) fn uniform(self) -> [f32; 4] {
         self.encoded
+    }
+
+    pub(crate) fn sorting_position(self) -> Option<[f32; 3]> {
+        self.sort_position
     }
 }

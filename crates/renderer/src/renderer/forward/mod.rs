@@ -165,6 +165,7 @@ pub(super) struct ForwardProgramKey {
     color_format: TextureFormat,
     transform_uniform_bytes: u64,
     depth_mode: crate::ForwardDepthMode,
+    surface: crate::renderer::RasterSurfaceState,
 }
 impl ForwardProgramKey {
     fn for_material(
@@ -172,6 +173,7 @@ impl ForwardProgramKey {
         color_format: TextureFormat,
         transform_uniform_bytes: u64,
         depth_mode: crate::ForwardDepthMode,
+        surface: crate::renderer::RasterSurfaceState,
     ) -> Self {
         Self {
             program: prepared.shader().cache_key().clone(),
@@ -184,10 +186,12 @@ impl ForwardProgramKey {
             color_format,
             transform_uniform_bytes,
             depth_mode,
+            surface,
         }
     }
 }
 pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
+    pub(super) key: ForwardProgramKey,
     pub(super) pipeline: RasterPipeline<B>,
     pub(super) material_layout: BindGroupLayout<B>,
     pub(super) transform_layout: BindGroupLayout<B>,
@@ -200,13 +204,16 @@ mod capture_entry;
 mod capture_execute;
 mod captured;
 mod composed;
+mod composed_pair;
 mod depth;
 mod entry;
 mod execute;
 mod prepare;
+mod prepare_programs;
 mod sampler;
 mod surface_composite;
 mod texture_upload;
+mod target_admission;
 #[cfg(test)]
 pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{

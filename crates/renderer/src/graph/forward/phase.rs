@@ -5,7 +5,7 @@ use super::*;
 pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) graph: Option<&'graph mut GraphBuilder>,
     pub(super) marker: PhantomData<&'frame ForwardFrame<B>>,
-    pub(super) expected: FrameTopology,
+    pub(crate) expected: FrameTopology,
     pub(super) upload: Option<GraphPass>,
     pub(super) streams: Vec<crate::graph::definition::BufferHandle>,
     pub(super) uniform: Option<crate::graph::definition::BufferHandle>,
@@ -45,6 +45,8 @@ pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend>
     pub(super) specular_brdf_lut: Option<crate::graph::definition::TextureHandle>,
     pub(super) specular_view_uniform: Option<crate::graph::definition::BufferHandle>,
     pub(super) specular_mip_levels: Option<u32>,
+    /// The sorted product needs read/write attachment footprints for blending.
+    pub(super) sorted: bool,
     pub(super) marker: PhantomData<&'frame ForwardFrame<B>>,
 }
 
@@ -91,7 +93,11 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
             .write_texture_with_use(
                 self.target,
                 whole(),
-                color_write_uses().uses,
+                if self.sorted {
+                    color_read_write_uses().uses
+                } else {
+                    color_write_uses().uses
+                },
                 ImageLayout::ColorAttachment,
                 TextureUsage::RENDER_ATTACHMENT,
             )
@@ -112,7 +118,11 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
                 .write_texture_with_use(
                     depth,
                     whole_depth(),
-                    depth_write_uses().uses,
+                    if self.sorted {
+                        depth_read_write_uses().uses
+                    } else {
+                        depth_write_uses().uses
+                    },
                     ImageLayout::DepthStencilAttachment,
                     TextureUsage::RENDER_ATTACHMENT,
                 )
@@ -252,7 +262,45 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         )
             -> std::result::Result<(), PipelineError>,
     {
-        self.require(FrameTopology::OpaqueForward)
+        self.declare_draw_phase(
+            FrameTopology::OpaqueForward,
+            "forward-opaque",
+            false,
+            declare,
+        )
+    }
+
+    /// Declares the single actual Forward pass that contains opaque/masked
+    /// draws followed by the renderer's globally ordered blend draws.
+    pub(crate) fn declare_sorted<F>(&mut self, declare: F) -> std::result::Result<(), PipelineError>
+    where
+        F: for<'callback, 'pass, 'builder> FnOnce(
+            &'callback mut OpaqueForwardPass<'pass, 'builder, 'frame, B>,
+        )
+            -> std::result::Result<(), PipelineError>,
+    {
+        self.declare_draw_phase(
+            FrameTopology::SortedForward,
+            "forward-sorted",
+            true,
+            declare,
+        )
+    }
+
+    fn declare_draw_phase<F>(
+        &mut self,
+        expected: FrameTopology,
+        label: &'static str,
+        sorted: bool,
+        declare: F,
+    ) -> std::result::Result<(), PipelineError>
+    where
+        F: for<'callback, 'pass, 'builder> FnOnce(
+            &'callback mut OpaqueForwardPass<'pass, 'builder, 'frame, B>,
+        )
+            -> std::result::Result<(), PipelineError>,
+    {
+        self.require(expected)
             .map_err(|_| PipelineError::InvalidPhaseContribution)?;
         if self.graph.is_none() {
             // A phase declaration is only meaningful while it directly
@@ -279,7 +327,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
             .graph
             .as_deref_mut()
             .ok_or(PipelineError::InvalidPhaseContribution)?
-            .add_pass("forward-opaque", |pass| {
+            .add_pass(label, |pass| {
                 let mut opaque = OpaqueForwardPass {
                     pass,
                     upload,
@@ -292,6 +340,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     specular_brdf_lut,
                     specular_view_uniform,
                     specular_mip_levels,
+                    sorted,
                     marker: PhantomData,
                 };
                 declare(&mut opaque)

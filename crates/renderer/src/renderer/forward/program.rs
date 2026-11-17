@@ -17,6 +17,7 @@ where
         color_format: TextureFormat,
         transform_uniform_bytes: u64,
         depth_mode: crate::ForwardDepthMode,
+        surface: crate::renderer::RasterSurfaceState,
     ) -> std::result::Result<Arc<ForwardPipelineObjects<B>>, RendererError> {
         self.ensure_open()?;
         let key = ForwardProgramKey::for_material(
@@ -24,6 +25,7 @@ where
             color_format,
             transform_uniform_bytes,
             depth_mode,
+            surface,
         );
         if let Some(objects) = self.forward_programs.get(&key) {
             return Ok(Arc::clone(objects));
@@ -187,7 +189,7 @@ where
         let pipeline = self
             .device
             .raster_pipeline(RasterPipelineDesc {
-                label: Some("Forward opaque pipeline".into()),
+                label: Some("Forward raster pipeline".into()),
                 layout,
                 vertex: PipelineStage {
                     module: shader.clone(),
@@ -202,19 +204,23 @@ where
                 vertex_buffers: prepared.geometry().streams.clone(),
                 color_targets: vec![Some(ColorTargetState {
                     format: color_format,
-                    blend: None,
+                    blend: surface.blend_state(),
                     write_mask: 0xf,
                 })],
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: FrontFace::Ccw,
-                    cull_mode: CullMode::None,
-                    unclipped_depth: false,
-                    polygon_mode: PolygonMode::Fill,
-                    conservative: false,
+                primitive: {
+                    let mut primitive = PrimitiveState {
+                        topology: PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: FrontFace::Ccw,
+                        cull_mode: CullMode::None,
+                        unclipped_depth: false,
+                        polygon_mode: PolygonMode::Fill,
+                        conservative: false,
+                    };
+                    surface.apply_to(&mut primitive);
+                    primitive
                 },
-                depth_stencil: super::depth::pipeline_depth(depth_mode),
+                depth_stencil: super::depth::pipeline_depth(depth_mode, surface),
                 multisample: MultisampleState {
                     count: 1,
                     mask: u64::from(u32::MAX),
@@ -226,6 +232,7 @@ where
             .await
             .map_err(|error| self.observe_forward_error("raster pipeline", error))?;
         let objects = Arc::new(ForwardPipelineObjects {
+            key: key.clone(),
             pipeline,
             material_layout,
             transform_layout,
