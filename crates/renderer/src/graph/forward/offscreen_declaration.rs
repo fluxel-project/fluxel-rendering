@@ -6,16 +6,16 @@ use fluxel_rhi::{
 };
 
 use crate::{
-    FrameTopology,
     pipeline::{ForwardPhaseContext, PipelineError},
     residency::ForwardFrame,
+    FrameTopology,
 };
 
 use super::{
-    BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, ForwardShape,
-    GraphBuilder, GraphPass, TextureSlot, copy_read_uses, copy_write_uses, graph_texture_copy_end,
-    one_color_mip, texture_copy_read_uses, texture_copy_write_uses, validate_depth_spec,
-    validate_forward_topology, validate_graph_draw, validate_resident_texture_devices, whole,
+    copy_read_uses, copy_write_uses, graph_texture_copy_end, one_color_mip, texture_copy_read_uses,
+    texture_copy_write_uses, validate_depth_spec, validate_forward_topology, validate_graph_draw,
+    validate_resident_texture_devices, whole, BufferSlot, ForwardGraphSpec, ForwardPhaseDriver,
+    ForwardPlanBuildError, ForwardShape, GraphBuilder, GraphPass, TextureSlot,
 };
 
 /// A complete, uncompiled offscreen Forward declaration.
@@ -88,6 +88,7 @@ where
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
         if draw.textures.is_empty()
+            || draw.capture_textures.iter().any(|capture| *capture)
             || draw
                 .textures
                 .iter()

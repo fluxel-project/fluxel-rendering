@@ -1,8 +1,8 @@
 //! Forward scoped-read state-machine tests using a real Graph transaction.
 
 use super::super::phase::{
-    COLOR_WRITE, DEPTH_WRITE, TEXTURE_READS, UNIFORM_READS, UPLOAD_DEPENDENCY, VERTEX_READS,
-    opaque_requirements_met,
+    opaque_requirements_met, COLOR_WRITE, DEPTH_WRITE, TEXTURE_READS, UNIFORM_READS,
+    UPLOAD_DEPENDENCY, VERTEX_READS,
 };
 use super::super::{depth_write_uses, whole_depth};
 use super::*;
@@ -52,6 +52,7 @@ fn nonempty_reads(graph: &mut GraphBuilder) -> ForwardReadState {
             instances: 0..1,
             uniform_ranges: vec![uniform_range],
             textures: vec![texture],
+            capture_textures: vec![false],
             accesses: vec![Some(access)],
         }
     };

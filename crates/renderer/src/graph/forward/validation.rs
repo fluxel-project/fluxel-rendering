@@ -104,6 +104,7 @@ pub(super) fn validate_draw<B: ResourceBackend>(
 ) -> Result<()> {
     if draw.vertex_streams.len() != draw.vertex_layouts.len()
         || draw.vertex_streams.len() != draw.vertex_ranges.len()
+        || draw.textures.len() != draw.capture_textures.len()
         || draw
             .vertex_streams
             .iter()
@@ -131,6 +132,7 @@ pub(super) fn validate_graph_draw(draw: &ForwardGraphDraw, stream_count: usize) 
     if draw.vertex_streams.len() != draw.vertex_layouts.len()
         || draw.vertex_streams.len() != draw.vertex_ranges.len()
         || draw.vertex_streams.len() != draw.accesses.len()
+        || draw.textures.len() != draw.capture_textures.len()
         || draw
             .vertex_streams
             .iter()

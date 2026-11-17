@@ -116,6 +116,7 @@ pub(crate) fn validate_material_texture_owner<B: ResourceBackend>(
 pub(crate) fn validate_capture_material_texture<B: ResourceBackend>(
     capture: Option<&super::captured::CaptureTextureOwner<B>>,
     input: &crate::ForwardDrawInput,
+    texture_index: usize,
     device: DeviceId,
 ) -> std::result::Result<(), crate::RendererError> {
     let capture = capture.ok_or_else(|| {
@@ -125,7 +126,9 @@ pub(crate) fn validate_capture_material_texture<B: ResourceBackend>(
             },
         )
     })?;
-    let slot = input.capture_texture_slot(0).ok_or(Error::InvalidState)?;
-    capture.validate_for_receiver(device, slot)?;
+    let slot = input
+        .capture_texture_slot(texture_index)
+        .ok_or(Error::InvalidState)?;
+    capture.validate_for_receiver(device, slot, true)?;
     Ok(())
 }

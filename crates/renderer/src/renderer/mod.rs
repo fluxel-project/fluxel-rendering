@@ -165,6 +165,8 @@ where
     CaptureForwardSurface {
         _capture: Box<crate::residency::ForwardFrame<B>>,
         _receiver: Box<crate::residency::ForwardFrame<B>>,
+        capture_publication: forward::ForwardPublication,
+        receiver_publication: forward::ForwardPublication,
         _composite: SurfaceCompositeOwner<B>,
         /// Unconsumed lease returned by a failed present handoff. It remains
         /// owned until completion/idle proves the preceding scopes are safe.
@@ -193,6 +195,8 @@ where
     CaptureForward {
         _capture: Box<crate::residency::ForwardFrame<B>>,
         _receiver: Box<crate::residency::ForwardFrame<B>>,
+        capture_publication: forward::ForwardPublication,
+        receiver_publication: forward::ForwardPublication,
         plan: Arc<crate::graph::CaptureForwardPlan<B>>,
         extent: [u32; 2],
         row_pitch: u32,

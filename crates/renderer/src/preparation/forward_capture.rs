@@ -40,6 +40,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) transform: RenderTransform,
     pub(crate) view: RenderView,
     pub(crate) clip_from_local: [[f32; 4]; 4],
+    pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
 }
 
 impl PreparedCaptureReceiver {
@@ -56,8 +57,52 @@ impl PreparedCaptureReceiver {
             transform: self.transform,
             view: self.view,
             clip_from_local: self.clip_from_local,
-            normal_from_local: None,
+            normal_from_local: self.normal_from_local,
         }
+    }
+
+    /// Re-prepares this retained receiver for the selected lighting route.
+    pub(crate) fn with_lighting(
+        mut self,
+        composer: &mut ShaderComposer,
+        environment: bool,
+        specular: bool,
+    ) -> Result<Self, ForwardPreparationError> {
+        let request = material_request(
+            self.material.value(),
+            &self.geometry.value().layout,
+            &self.view,
+            self.source,
+            environment,
+            specular,
+        )?;
+        let prepared = prepare_material(
+            &self.material,
+            &self.geometry.value().layout,
+            composer,
+            request,
+        )
+        .map_err(ForwardPreparationError::Material)?;
+        let schema = validate_material_schema(&prepared, self.source)?;
+        if self.prepared.binding_schema() != Some(&schema) {
+            return Err(ForwardPreparationError::MaterialBindingSchema {
+                source: self.source,
+            });
+        }
+        validate_cpu_geometry(self.geometry.value(), prepared.geometry(), self.source)?;
+        self.normal_from_local = normal_from_local(
+            self.geometry.value(),
+            prepared.geometry(),
+            self.transform,
+            crate::pbr::is_pbr(self.material.value().output()),
+            matches!(
+                self.material.value().output(),
+                fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+            ),
+            self.source,
+        )?;
+        self.prepared = prepared.with_binding_schema(schema);
+        Ok(self)
     }
 }
 
@@ -83,43 +128,32 @@ pub fn prepare_forward_capture_receiver(
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
-    let request = match material.value().output() {
-        fluxel_material::SurfaceOutput::Color => {
-            forward_template(&geometry.value().layout, source)?.request()
-        }
-        fluxel_material::SurfaceOutput::ColorUv0 => {
-            color_uv0_template(&geometry.value().layout, source)?.request()
-        }
-        _ => return Err(ForwardPreparationError::MaterialBindingSchema { source }),
-    };
+    let request = material_request(
+        material.value(),
+        &geometry.value().layout,
+        view,
+        source,
+        false,
+        false,
+    )?;
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
     let schema = validate_material_schema(&prepared, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
-    if textures.len() != 1 {
-        return Err(ForwardPreparationError::CaptureReceiverRequiresSlot { source });
-    }
-    let texture = textures[0];
-    let ForwardTextureSource::CaptureSlot(capture_slot) = &texture.source else {
-        return Err(ForwardPreparationError::CaptureReceiverRequiresSlot { source });
-    };
-    if capture_slot.is_empty() {
-        return Err(ForwardPreparationError::MissingCaptureSlot {
-            source,
-            slot: capture_slot.clone(),
-        });
-    }
-    // The current capture entry names one product and one receiver binding
-    // with the same slot. General product-to-binding aliases belong to the
-    // mixed-source capture consumer, rather than silently widening this path.
-    if capture_slot != &texture.resource {
-        return Err(ForwardPreparationError::InvalidCaptureSlot {
-            source,
-            slot: capture_slot.clone(),
-        });
-    }
+    let textures = resolve_capture_textures(textures, assets, source)?;
     let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
+    let normal_from_local = normal_from_local(
+        geometry.value(),
+        prepared.geometry(),
+        transform,
+        crate::pbr::is_pbr(material.value().output()),
+        matches!(
+            material.value().output(),
+            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+        ),
+        source,
+    )?;
     let clip_from_local = multiply_columns(view.transform, transform);
     if !clip_from_local
         .iter()
@@ -134,10 +168,43 @@ pub fn prepare_forward_capture_receiver(
         geometry,
         material,
         prepared,
-        textures: vec![ResolvedForwardTexture::CaptureSlot(capture_slot.clone())],
+        textures,
         tint: resources.tint,
         transform,
         view: view.clone(),
         clip_from_local,
+        normal_from_local,
     })
+}
+
+fn resolve_capture_textures(
+    textures: Vec<&ForwardTextureBinding>,
+    assets: &ForwardAssets,
+    source: ForwardDrawSource,
+) -> Result<Vec<ResolvedForwardTexture>, ForwardPreparationError> {
+    let mut captures = 0;
+    let resolved = textures
+        .into_iter()
+        .map(|texture| match &texture.source {
+            ForwardTextureSource::Asset(reference) => {
+                let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
+                validate_texture(asset.value(), source)?;
+                Ok(ResolvedForwardTexture::Asset(asset))
+            }
+            ForwardTextureSource::CaptureSlot(slot) => {
+                if slot.is_empty() {
+                    return Err(ForwardPreparationError::MissingCaptureSlot {
+                        source,
+                        slot: slot.clone(),
+                    });
+                }
+                captures += 1;
+                Ok(ResolvedForwardTexture::CaptureSlot(slot.clone()))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if captures == 0 {
+        return Err(ForwardPreparationError::CaptureReceiverRequiresSlot { source });
+    }
+    Ok(resolved)
 }

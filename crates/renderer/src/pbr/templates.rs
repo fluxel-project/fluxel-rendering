@@ -281,3 +281,50 @@ pub(super) const LIGHTING_EFFECT_IRRADIANCE: &str = r#"
 @vertex fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> { var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0)); return vec4<f32>(positions[index], 0.0, 1.0); }
 @fragment fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> { let coordinate = vec2<i32>(position.xy); if textureLoad(pbr_depth, coordinate, 0) >= 1.0 { return vec4<f32>(0.0); } let base_metal = textureLoad(pbr_base_metal, coordinate, 0); let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0); let effect = textureLoad(pbr_emissive_ao, coordinate, 0); let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0); let direct = pbr_direct_light(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal); let indirect = pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler) * effect.a; return vec4<f32>(direct + indirect + effect.rgb, 1.0); }
 "#;
+
+pub(super) const FORWARD_UV0_IRRADIANCE: &str = r#"
+@group(2) @binding(0) var pbr_environment_irradiance: texture_2d<f32>;
+@group(2) @binding(1) var pbr_environment_sampler: sampler;
+
+struct PbrUv0VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_normal: vec3<f32>,
+    @location(1) uv0: vec2<f32>,
+};
+@vertex
+fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>) -> PbrUv0VertexOutput {
+    let base = pbr_vertex(position, normal);
+    var output: PbrUv0VertexOutput;
+    output.position = base.position;
+    output.world_normal = base.world_normal;
+    output.uv0 = uv0;
+    return output;
+}
+@fragment
+fn forward_fs(input: PbrUv0VertexOutput) -> @location(0) vec4<f32> {
+    let base = evaluate_material_uv0(input.uv0).rgb;
+    let properties = evaluate_metallic_roughness_uv0(input.uv0);
+    let normal = pbr_normal(input.world_normal);
+    let direct = pbr_direct_light(base, properties, normal);
+    let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler);
+    return vec4<f32>(direct + indirect, 1.0);
+}
+"#;
+
+pub(super) const FORWARD_UV0_NORMAL_IRRADIANCE: &str = r#"
+@group(2) @binding(0) var pbr_environment_irradiance: texture_2d<f32>;
+@group(2) @binding(1) var pbr_environment_sampler: sampler;
+
+struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) local_normal: vec3<f32>, @location(1) tangent: vec4<f32>, @location(2) uv0: vec2<f32>, };
+@vertex fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); o.local_normal = normal; o.tangent = tangent; o.uv0 = uv0; return o; }
+fn pbr_world_normal(local_normal: vec3<f32>, tangent: vec4<f32>, sampled: vec3<f32>) -> vec3<f32> { let n = pbr_normal((pbr_transforms.normal_from_local * vec4<f32>(local_normal, 0.0)).xyz); let raw_t = (pbr_transforms.world_from_local * vec4<f32>(tangent.xyz, 0.0)).xyz; let orthogonal = raw_t - n * dot(n, raw_t); let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9); let t = select(pbr_normal(cross(n, axis)), pbr_normal(orthogonal), dot(orthogonal, orthogonal) > 1e-12); let tangent_sign = select(1.0, -1.0, tangent.w < 0.0); let handedness = tangent_sign * pbr_transforms.normal_from_local[3].x; let b = cross(n, t) * handedness; return pbr_normal(mat3x3<f32>(t, b, n) * sampled); }
+@fragment
+fn forward_fs(input: PbrNormalVertexOutput) -> @location(0) vec4<f32> {
+    let base = evaluate_material_uv0(input.uv0).rgb;
+    let properties = evaluate_metallic_roughness_uv0(input.uv0);
+    let normal = pbr_world_normal(input.local_normal, input.tangent, evaluate_normal_uv0(input.uv0));
+    let direct = pbr_direct_light(base, properties, normal);
+    let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler);
+    return vec4<f32>(direct + indirect, 1.0);
+}
+"#;

@@ -24,6 +24,7 @@ where
         view: crate::RenderViewId,
         visibility: crate::RenderBounds,
         assets: &crate::ForwardAssets,
+        producer_slot: CaptureTextureSlot,
         receiver: crate::PreparedCaptureReceiver,
         image: SurfaceImage<B>,
     ) -> std::result::Result<super::Submission, RendererError> {
@@ -55,7 +56,16 @@ where
         if extent != image.extent() {
             return Err(Error::InvalidRange.into());
         }
-        let receiver_input = receiver.into_draw_input();
+        let receiver_input = receiver
+            .with_lighting(
+                &mut fluxel_shader::ShaderComposer::new(),
+                self.environment_irradiance.is_some(),
+                self.environment_specular.is_some(),
+            )
+            .map_err(RendererError::ForwardPreparation)?
+            .into_draw_input();
+        validate_receiver_sources(&receiver_input, &producer_slot)?;
+        let retained_assets = capture_assets(assets, &receiver_input);
         if receiver_input.extent() != extent {
             return Err(Error::InvalidRange.into());
         }
@@ -78,10 +88,11 @@ where
             snapshot.clone(),
             capture_inputs,
             receiver_input,
+            producer_slot,
             extent,
             topology,
             depth_mode,
-            assets,
+            &retained_assets,
             Some(image),
             preparation_started,
             environment,
@@ -93,8 +104,8 @@ where
     /// Submits a capture producer and its material receiver in one Graph.
     ///
     /// The receiver has already resolved its exact geometry and material
-    /// generations. Its texture binding is replaced only with the producer
-    /// frame's target owner; no CPU texture is synthesized or uploaded.
+    /// generations. Capture bindings consume the independently named producer's
+    /// target, alongside asset bindings; no CPU capture texture is synthesized.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_forward_capture<P: crate::FramePipeline<crate::ForwardResources>>(
         &mut self,
@@ -103,6 +114,7 @@ where
         view: crate::RenderViewId,
         visibility: crate::RenderBounds,
         assets: &crate::ForwardAssets,
+        producer_slot: CaptureTextureSlot,
         receiver: crate::PreparedCaptureReceiver,
     ) -> std::result::Result<super::Submission, RendererError> {
         self.ensure_open()?;
@@ -132,7 +144,16 @@ where
         )
         .map_err(RendererError::ForwardPreparation)?;
         let extent = selected.view_record().extent;
-        let receiver_input = receiver.into_draw_input();
+        let receiver_input = receiver
+            .with_lighting(
+                &mut fluxel_shader::ShaderComposer::new(),
+                self.environment_irradiance.is_some(),
+                self.environment_specular.is_some(),
+            )
+            .map_err(RendererError::ForwardPreparation)?
+            .into_draw_input();
+        validate_receiver_sources(&receiver_input, &producer_slot)?;
+        let retained_assets = capture_assets(assets, &receiver_input);
         if receiver_input.extent() != extent {
             return Err(Error::InvalidRange.into());
         }
@@ -147,10 +168,11 @@ where
             snapshot.clone(),
             capture_inputs,
             receiver_input,
+            producer_slot,
             extent,
             topology,
             depth_mode,
-            assets,
+            &retained_assets,
             None,
             preparation_started,
             capture_environment,
@@ -158,4 +180,61 @@ where
         )
         .await
     }
+}
+
+/// Resolves receiver references against an independently named producer before
+/// allocation or upload. Logical material names may alias the same product.
+fn validate_receiver_sources(
+    receiver: &crate::ForwardDrawInput,
+    producer: &CaptureTextureSlot,
+) -> std::result::Result<(), RendererError> {
+    let mut captures = 0;
+    for index in 0..receiver.resolved_textures().len() {
+        if let Some(slot) = receiver.capture_texture_slot(index) {
+            if slot != producer.name() {
+                return Err(RendererError::ForwardPreparation(
+                    crate::ForwardPreparationError::MissingCaptureSlot {
+                        source: receiver.source(),
+                        slot: slot.to_owned(),
+                    },
+                ));
+            }
+            captures += 1;
+        }
+    }
+    if captures == 0 {
+        return Err(RendererError::ForwardPreparation(
+            crate::ForwardPreparationError::CaptureReceiverRequiresSlot {
+                source: receiver.source(),
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// Cache retention includes the receiver's immutable snapshots even when the
+/// producer scene did not select them. Pending owners remain independent.
+fn capture_assets(
+    producer: &crate::ForwardAssets,
+    receiver: &crate::ForwardDrawInput,
+) -> crate::ForwardAssets {
+    let mut assets = producer.clone();
+    let geometry = receiver.geometry();
+    if !assets
+        .geometry
+        .iter()
+        .any(|entry| entry.id() == geometry.id() && entry.generation() == geometry.generation())
+    {
+        assets.geometry.push(geometry.clone());
+    }
+    for index in 0..receiver.resolved_textures().len() {
+        if let Some(texture) = receiver.asset_texture(index) {
+            if !assets.textures.iter().any(|entry| {
+                entry.id() == texture.id() && entry.generation() == texture.generation()
+            }) {
+                assets.textures.push(texture.clone());
+            }
+        }
+    }
+    assets
 }

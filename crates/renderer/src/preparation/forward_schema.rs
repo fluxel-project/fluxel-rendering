@@ -5,7 +5,7 @@ use fluxel_shader::{BindingKind, BindingShape, ShaderStage};
 
 use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MaterialBindingSchema {
     pub(crate) tint: u32,
     pub(crate) textures: Vec<MaterialTextureBinding>,
@@ -13,7 +13,7 @@ pub(crate) struct MaterialBindingSchema {
 }
 
 /// One material-declared texture location, ordered by its actual binding.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MaterialTextureBinding {
     pub(crate) binding: u32,
     pub(crate) name: String,

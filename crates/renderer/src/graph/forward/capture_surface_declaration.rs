@@ -1,6 +1,6 @@
 //! Surface terminal declaration for same-Graph Forward capture.
 use super::capture_declaration::{
-    FrameHandles, declare_raster, declare_upload, import_frame, same_texture_owner_desc,
+    capture_texture_slots, declare_raster, declare_upload, import_frame, same_texture_owner_desc,
     validate_spec,
 };
 use super::*;
@@ -67,19 +67,14 @@ where
             .target_desc
             .usage
             .contains(TextureUsage::TEXTURE_BINDING)
-        || receiver_spec.textures.len() != 1
-        || !receiver_spec.texture_uploads.is_empty()
-        || receiver_spec
-            .draws
-            .iter()
-            .any(|draw| draw.textures.as_slice() != [0])
     {
         return Err(Error::InvalidState.into());
     }
-    let alias = receiver
-        .resident
-        .textures
-        .first()
+    let receiver_capture = capture_texture_slots(&receiver_spec)?;
+    let alias = receiver_capture
+        .iter()
+        .position(|capture| *capture)
+        .and_then(|index| receiver.resident.textures.get(index))
         .ok_or(Error::InvalidState)?;
     if alias.instance != capture.frame.target_instance
         || alias.texture.device() != capture.frame.target.device()
@@ -99,9 +94,9 @@ where
         .map(|lane| lane.id)
         .ok_or(Error::WrongLane)?;
     let mut graph = GraphBuilder::default();
-    let (capture_slots, capture_handles) = import_frame(&mut graph, &capture_spec, true)?;
-    let (mut receiver_slots, mut receiver_handles) =
-        import_frame(&mut graph, &receiver_spec, false)?;
+    let mut shared = super::capture_declaration::SharedResidentImports::default();
+    let (capture_slots, capture_handles) =
+        import_frame(&mut graph, &capture_spec, None, &mut shared)?;
     let (capture_upload, capture_handles) =
         declare_upload(&mut graph, &capture_spec, capture_handles)?;
     let (capture_raster, capture_target) = declare_raster(
@@ -112,8 +107,12 @@ where
         &capture_handles,
         capture_contribute,
     )?;
-    receiver_slots.textures = vec![TextureSlot::from(capture_target)];
-    receiver_handles.textures = vec![capture_target];
+    let aliases = receiver_capture
+        .iter()
+        .map(|capture| capture.then_some(capture_target))
+        .collect::<Vec<_>>();
+    let (receiver_slots, receiver_handles) =
+        import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
     let (receiver_raster, receiver_target) = declare_raster(
@@ -121,10 +120,7 @@ where
         &receiver_spec,
         receiver_topology,
         receiver_upload,
-        &FrameHandles {
-            textures: vec![capture_target],
-            ..receiver_handles.clone()
-        },
+        &receiver_handles,
         receiver_contribute,
     )?;
     let surface_target = graph

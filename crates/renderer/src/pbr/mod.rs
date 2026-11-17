@@ -65,17 +65,30 @@ pub(crate) fn forward_irradiance_request(
 pub(crate) fn forward_uv0_irradiance_request(
     layout: &GeometryLayout,
 ) -> Option<ShaderCompositionRequest> {
-    irradiance_forward_request(geometry_uv0_request(layout, false)?)
+    irradiance_forward_request(
+        geometry_uv0_request(layout, false)?,
+        "pbr-forward-uv0",
+        "pbr-forward-uv0-irradiance",
+        templates::FORWARD_UV0_IRRADIANCE,
+    )
 }
 
 pub(crate) fn forward_uv0_normal_irradiance_request(
     layout: &GeometryLayout,
 ) -> Option<ShaderCompositionRequest> {
-    irradiance_forward_request(geometry_uv0_normal_request(layout, false)?)
+    irradiance_forward_request(
+        geometry_uv0_normal_request(layout, false)?,
+        "pbr-forward-uv0-normal",
+        "pbr-forward-uv0-normal-irradiance",
+        templates::FORWARD_UV0_NORMAL_IRRADIANCE,
+    )
 }
 
 fn irradiance_forward_request(
     mut request: ShaderCompositionRequest,
+    previous_entry: &str,
+    identity: &str,
+    body: &str,
 ) -> Option<ShaderCompositionRequest> {
     request.source_units.push(SourceUnit::new(
         "pbr-diffuse-irradiance",
@@ -83,11 +96,8 @@ fn irradiance_forward_request(
     ));
     request
         .source_units
-        .retain(|unit| unit.id.0 != "pbr-forward");
-    request.source_units.push(SourceUnit::new(
-        "pbr-forward-irradiance",
-        templates::FORWARD_IRRADIANCE,
-    ));
+        .retain(|unit| unit.id.0 != previous_entry);
+    request.source_units.push(SourceUnit::new(identity, body));
     Some(
         request
             .with_binding(

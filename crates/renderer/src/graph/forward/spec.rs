@@ -1,5 +1,6 @@
 //! Owner-derived facts and recording shapes for Forward declarations.
 use super::*;
+use crate::graph::ResourceInstanceId;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ForwardShape {
@@ -75,6 +76,7 @@ pub(crate) struct ForwardDrawShape {
     pub(crate) vertices: std::ops::Range<u32>,
     pub(crate) instances: std::ops::Range<u32>,
     pub(crate) textures: Vec<usize>,
+    pub(crate) capture_textures: Vec<bool>,
     pub(crate) groups: Vec<(u32, Vec<u32>, Vec<std::ops::Range<u64>>)>,
 }
 
@@ -91,7 +93,9 @@ pub(crate) struct ForwardGraphSpec {
     pub(crate) uniform: BufferGraphFact,
     pub(crate) environment_upload: Option<BufferGraphFact>,
     pub(crate) streams: Vec<BufferGraphFact>,
+    pub(crate) stream_instances: Vec<ResourceInstanceId>,
     pub(crate) textures: Vec<TextureGraphFact>,
+    pub(crate) texture_instances: Vec<ResourceInstanceId>,
     pub(crate) environment: Option<TextureGraphFact>,
     pub(crate) specular_upload: Option<BufferGraphFact>,
     pub(crate) specular_radiance: Option<TextureGraphFact>,
@@ -138,6 +142,7 @@ pub(crate) struct ForwardGraphDraw {
     pub(crate) instances: Range<u32>,
     pub(crate) uniform_ranges: Vec<Range<u64>>,
     pub(crate) textures: Vec<usize>,
+    pub(crate) capture_textures: Vec<bool>,
     pub(crate) accesses: Vec<Option<Range<u64>>>,
 }
 
@@ -174,6 +179,12 @@ impl ForwardGraphSpec {
                 incoming: stream.incoming,
             })
             .collect();
+        let stream_instances = frame
+            .resident
+            .streams
+            .iter()
+            .map(|stream| stream.instance)
+            .collect();
         let textures = frame
             .resident
             .textures
@@ -183,6 +194,12 @@ impl ForwardGraphSpec {
                 incoming: texture.incoming,
                 layout: texture.layout,
             })
+            .collect();
+        let texture_instances = frame
+            .resident
+            .textures
+            .iter()
+            .map(|texture| texture.instance)
             .collect();
         let draws = frame
             .draws
@@ -200,6 +217,7 @@ impl ForwardGraphSpec {
                         .flat_map(|group| group.uniform_ranges.iter().cloned())
                         .collect(),
                     textures: draw.textures.clone(),
+                    capture_textures: draw.capture_textures.clone(),
                     accesses: draw_accesses(frame, draw)?,
                 })
             })
@@ -225,7 +243,9 @@ impl ForwardGraphSpec {
                 incoming: owner.upload_incoming,
             }),
             streams,
+            stream_instances,
             textures,
+            texture_instances,
             environment: frame.environment.as_ref().map(|owner| TextureGraphFact {
                 desc: owner.desc.clone(),
                 incoming: owner.incoming,
@@ -393,6 +413,7 @@ pub(super) fn forward_shape<B: ResourceBackend>(frame: &ForwardFrame<B>) -> Forw
                 vertices: draw.vertices.clone(),
                 instances: draw.instances.clone(),
                 textures: draw.textures.clone(),
+                capture_textures: draw.capture_textures.clone(),
                 groups: draw
                     .bind_groups
                     .iter()
@@ -470,6 +491,7 @@ pub(super) fn surface_forward_shape<B: ResourceBackend>(
                 vertices: draw.vertices.clone(),
                 instances: draw.instances.clone(),
                 textures: draw.textures.clone(),
+                capture_textures: draw.capture_textures.clone(),
                 groups: draw
                     .bind_groups
                     .iter()

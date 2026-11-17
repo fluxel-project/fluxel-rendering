@@ -135,8 +135,10 @@ where
         let mut fresh_texture_slots = Vec::new();
         let mut geometry_slots = std::collections::HashMap::new();
         let mut texture_slots = std::collections::HashMap::new();
+        let mut capture_slots = std::collections::HashMap::new();
         let mut mappings = Vec::new();
         let mut draw_textures = Vec::new();
+        let mut draw_capture_textures = Vec::new();
         for input in &inputs {
             let geometry_key =
                 crate::residency::ForwardResidentCache::<B>::geometry_key(input, self.device.id());
@@ -174,6 +176,7 @@ where
             };
             mappings.push(mapping);
             let mut input_texture_slots = Vec::new();
+            let mut input_capture_slots = Vec::new();
             for texture_index in 0..input.resolved_textures().len() {
                 let texture = input.asset_texture(texture_index);
                 if material_requires_ordinary_sampler(input.prepared()) {
@@ -190,19 +193,20 @@ where
                             validate_capture_material_texture(
                                 capture_texture,
                                 input,
+                                texture_index,
                                 self.device.id(),
                             )?;
                         }
                     }
                 }
-                let texture_slot = if let Some(texture) = texture {
+                let (texture_slot, is_capture) = if let Some(texture) = texture {
                     let texture_key = crate::residency::ForwardResidentCache::<B>::texture_key(
                         input,
                         texture_index,
                         self.device.id(),
                     )
                     .ok_or(Error::InvalidState)?;
-                    if let Some(slot) = texture_slots.get(&texture_key) {
+                    let slot = if let Some(slot) = texture_slots.get(&texture_key) {
                         *slot
                     } else {
                         let slot = final_textures.len();
@@ -219,33 +223,33 @@ where
                         }
                         texture_slots.insert(texture_key, slot);
                         slot
-                    }
+                    };
+                    (slot, false)
                 } else {
                     let capture = capture_texture.ok_or(Error::InvalidState)?;
-                    if input.resolved_textures().len() != 1 {
-                        return Err(Error::Unsupported(
-                            "mixed capture and asset material textures",
-                        )
-                        .into());
-                    }
-                    let slot = input.capture_texture_slot(0).ok_or(Error::InvalidState)?;
-                    capture.validate_for_receiver(self.device.id(), slot)?;
-                    let texture_slot = final_textures.len();
-                    final_textures.push(Some(crate::residency::ForwardTexture {
-                        texture: capture.texture.clone(),
-                        view: capture.view.clone(),
-                        desc: capture.desc.clone(),
-                        instance: capture.instance,
-                        incoming: capture.incoming,
-                        layout: capture.layout,
-                        device: capture.device,
-                        filterable: capture.filterable,
-                    }));
-                    texture_slot
+                    let capture_name = input
+                        .capture_texture_slot(texture_index)
+                        .ok_or(Error::InvalidState)?;
+                    capture.validate_for_receiver(
+                        self.device.id(),
+                        capture_name,
+                        material_requires_ordinary_sampler(input.prepared()),
+                    )?;
+                    let texture_slot = if let Some(slot) = capture_slots.get(capture_name) {
+                        *slot
+                    } else {
+                        let slot = final_textures.len();
+                        final_textures.push(Some(capture.resident()));
+                        capture_slots.insert(capture_name.to_owned(), slot);
+                        slot
+                    };
+                    (texture_slot, true)
                 };
                 input_texture_slots.push(texture_slot);
+                input_capture_slots.push(is_capture);
             }
             draw_textures.push(input_texture_slots);
+            draw_capture_textures.push(input_capture_slots);
         }
         let resident_plan = crate::residency::plan_forward_resident(stream_inputs, texture_inputs)
             .map_err(|error| self.observe_forward_error("resident planning", error))?;
@@ -494,6 +498,7 @@ where
                 compatibility: draw_compatibility[index].clone(),
                 pipeline: objects.pipeline.clone(),
                 textures: draw_textures[index].clone(),
+                capture_textures: draw_capture_textures[index].clone(),
                 vertex_streams: mappings[index].clone(),
                 vertex_layouts: input.prepared().geometry().streams.clone(),
                 vertex_ranges,

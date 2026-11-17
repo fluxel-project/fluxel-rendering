@@ -7,7 +7,7 @@ use fluxel_rhi::{
 
 use super::super::RendererError;
 
-/// The logical material resource supplied by a same-frame capture product.
+/// The independent producer name supplied by a same-frame capture product.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CaptureTextureSlot(String);
 
@@ -47,6 +47,18 @@ pub(crate) struct CaptureTextureOwner<B: ResourceBackend> {
 }
 
 impl<B: ResourceBackend> CaptureTextureOwner<B> {
+    pub(crate) fn resident(&self) -> crate::residency::ForwardTexture<B> {
+        crate::residency::ForwardTexture {
+            texture: self.texture.clone(),
+            view: self.view.clone(),
+            desc: self.desc.clone(),
+            instance: self.instance,
+            incoming: self.incoming,
+            layout: self.layout,
+            device: self.device,
+            filterable: self.filterable,
+        }
+    }
     pub(crate) fn from_capture_frame(
         device: &fluxel_rhi::api::Device<B>,
         slot: CaptureTextureSlot,
@@ -86,6 +98,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
         &self,
         device: DeviceId,
         expected_slot: &str,
+        require_filterable: bool,
     ) -> Result<(), Error> {
         if self.device != device || self.texture.device() != device || self.view.device() != device
         {
@@ -93,7 +106,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
         }
         if self.slot.name() != expected_slot
             || self.desc.format != fluxel_rhi::api::TextureFormat::Rgba8Unorm
-            || !self.filterable
+            || (require_filterable && !self.filterable)
             || !self.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         {
             return Err(Error::InvalidState);

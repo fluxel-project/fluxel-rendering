@@ -62,6 +62,7 @@ where
         validate_offsets(draw, uniform_alignment)?;
         surface_draw_accesses(frame, draw)?;
         if draw.textures.is_empty()
+            || draw.capture_textures.iter().any(|capture| *capture)
             || draw
                 .textures
                 .iter()
@@ -387,6 +388,7 @@ where
                         .flat_map(|group| group.uniform_ranges.iter().cloned())
                         .collect(),
                     textures: draw.textures.clone(),
+                    capture_textures: draw.capture_textures.clone(),
                     accesses: surface_draw_accesses(frame, draw)?,
                 })
             })

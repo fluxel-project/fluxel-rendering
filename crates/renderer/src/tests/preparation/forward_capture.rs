@@ -5,8 +5,9 @@ use crate::{FeatureIssuer, ForwardDrawSource, RenderTransform, RenderView, Scene
 use fluxel_assets::{Acquire, AssetKind, AssetSnapshot, AssetStore, ResidentBytes};
 use fluxel_material::{
     BindingLocation, FragmentInput, MaterialAsset, MaterialCodeNode, MaterialDefinition,
-    MaterialNode, MaterialNodeGraph, MaterialNodeId, MaterialNodeInput, MaterialNodeInputSource,
-    MaterialParameter, MaterialResource, MaterialResourceKind, MaterialType, SurfaceOutput,
+    MaterialFragment, MaterialNode, MaterialNodeGraph, MaterialNodeId, MaterialNodeInput,
+    MaterialNodeInputSource, MaterialParameter, MaterialResource, MaterialResourceKind,
+    MaterialType, SurfaceOutput,
 };
 use fluxel_rhi::api::{VertexFormat, VertexStepMode};
 use fluxel_shader::{ShaderComposer, SourceUnit};
@@ -121,6 +122,135 @@ fn prepare(
     )
 }
 
+fn mixed_material() -> MaterialDefinition {
+    MaterialDefinition::new(
+        Vec::new(),
+        "unused",
+        vec![MaterialParameter { name: "tint".into(), ty: MaterialType::Vec4, resource: "tint".into() }],
+        vec![
+            MaterialResource { name: "tint".into(), kind: MaterialResourceKind::UniformVec4, location: BindingLocation { group: 0, binding: 0 } },
+            MaterialResource { name: "capture_a".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 1 } },
+            MaterialResource { name: "capture_b".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 2 } },
+            MaterialResource { name: "asset_image".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 3 } },
+            MaterialResource { name: "image_sampler".into(), kind: MaterialResourceKind::Sampler { comparison: false }, location: BindingLocation { group: 0, binding: 4 } },
+        ],
+        BTreeMap::new(),
+        SurfaceOutput::ColorUv0,
+    )
+    .with_code_node(MaterialCodeNode {
+        name: "mixed".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec4, calls: Vec::new(), resources: Vec::new(),
+        source: SourceUnit::new("mixed-capture", "fn mixed(uv: vec2<f32>) -> vec4<f32> { return (textureSample(capture_a, image_sampler, uv) + textureSample(capture_b, image_sampler, uv) + textureSample(asset_image, image_sampler, uv)) * tint; }"),
+    })
+    .with_node_graph(MaterialNodeGraph {
+        nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "mixed".into(), inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }], output: MaterialNodeId(1),
+    })
+}
+
+#[test]
+fn capture_receiver_mixes_asset_and_two_logical_aliases_of_one_producer() {
+    let (mut resources, mut assets) = fixture(true);
+    let material = snapshot::<MaterialAsset, _>(mixed_material());
+    let asset = snapshot::<ColorTextureAsset, _>(ColorTextureData {
+        extent: [1, 1],
+        encoding: crate::TextureEncoding::Linear,
+        rgba8: vec![1, 2, 3, 255],
+    });
+    resources.material = SceneAssetRef::from_snapshot(&material);
+    resources.textures = vec![
+        crate::ForwardTextureBinding::capture("capture_b", "producer"),
+        crate::ForwardTextureBinding::asset("asset_image", SceneAssetRef::from_snapshot(&asset)),
+        crate::ForwardTextureBinding::capture("capture_a", "producer"),
+    ];
+    assets.materials = vec![material];
+    assets.textures = vec![asset];
+    let draw = prepare(&resources, &assets).unwrap().into_draw_input();
+    assert_eq!(draw.resolved_textures().len(), 3);
+    assert_eq!(draw.capture_texture_slot(0), Some("producer"));
+    assert_eq!(draw.capture_texture_slot(1), Some("producer"));
+    assert!(draw.asset_texture(2).is_some());
+}
+
+fn pbr_capture_material() -> MaterialDefinition {
+    MaterialDefinition::new(
+        vec![
+            MaterialFragment { name: "base".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec4, calls: Vec::new(), wgsl: "fn base(uv: vec2<f32>) -> vec4<f32> { return textureSample(base_image, image_sampler, uv) * tint; }".into() },
+            MaterialFragment { name: "properties".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec2, calls: Vec::new(), wgsl: "fn properties(uv: vec2<f32>) -> vec2<f32> { return textureSample(orm, image_sampler, uv).gb; }".into() },
+        ], "unused", vec![MaterialParameter { name: "tint".into(), ty: MaterialType::Vec4, resource: "tint_resource".into() }],
+        vec![
+            MaterialResource { name: "base_image".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 0 } },
+            MaterialResource { name: "normal_image".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 1 } },
+            MaterialResource { name: "orm".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 2 } },
+            MaterialResource { name: "tint_resource".into(), kind: MaterialResourceKind::UniformVec4, location: BindingLocation { group: 0, binding: 3 } },
+            MaterialResource { name: "image_sampler".into(), kind: MaterialResourceKind::Sampler { comparison: false }, location: BindingLocation { group: 0, binding: 4 } },
+        ], BTreeMap::new(), SurfaceOutput::MetallicRoughnessUv0Normal { properties: "properties".into(), normal: "normal".into() },
+    ).with_code_node(MaterialCodeNode { name: "normal".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec3, calls: Vec::new(), resources: Vec::new(), source: SourceUnit::new("pbr-capture-normal", "fn normal(uv: vec2<f32>) -> vec3<f32> { return textureSample(normal_image, image_sampler, uv).xyz; }") })
+    .with_node_graph(MaterialNodeGraph { nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "base".into(), inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }], output: MaterialNodeId(1) })
+}
+
+#[test]
+fn pbr_uv0_normal_capture_receiver_keeps_normal_transform_and_lighting_contract() {
+    let (mut resources, mut assets) = fixture(true);
+    let mut geometry = assets.geometry[0].value().clone();
+    geometry.layout.streams[0].stride = 48;
+    geometry.layout.streams[0].attributes.extend([
+        GeometryAttribute {
+            semantic: "NORMAL".into(),
+            offset: 20,
+            format: VertexFormat::Float32(3),
+        },
+        GeometryAttribute {
+            semantic: "TANGENT".into(),
+            offset: 32,
+            format: VertexFormat::Float32(4),
+        },
+    ]);
+    let bytes = [
+        [-1.0, -1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+        [1.0, -1.0, 0.5, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.5, 0.5, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(f32::to_le_bytes)
+    .collect();
+    geometry.streams = vec![bytes];
+    let geometry = snapshot::<GeometryAsset, _>(geometry);
+    let material = snapshot::<MaterialAsset, _>(pbr_capture_material());
+    let asset = snapshot::<ColorTextureAsset, _>(ColorTextureData {
+        extent: [1, 1],
+        encoding: crate::TextureEncoding::Linear,
+        rgba8: vec![1, 2, 3, 255],
+    });
+    resources.geometry = SceneAssetRef::from_snapshot(&geometry);
+    resources.material = SceneAssetRef::from_snapshot(&material);
+    resources.textures = vec![
+        crate::ForwardTextureBinding::capture("base_image", "base"),
+        crate::ForwardTextureBinding::capture("normal_image", "normal"),
+        crate::ForwardTextureBinding::asset("orm", SceneAssetRef::from_snapshot(&asset)),
+    ];
+    assets.geometry = vec![geometry];
+    assets.materials = vec![material];
+    assets.textures = vec![asset];
+    let receiver = prepare(&resources, &assets).unwrap();
+    assert!(receiver.normal_from_local.is_some());
+    let draw = receiver
+        .clone()
+        .with_lighting(&mut ShaderComposer::new(), false, false)
+        .unwrap()
+        .into_draw_input();
+    assert_eq!(draw.transform_uniform_bytes(), 192);
+    let diffuse = receiver
+        .clone()
+        .with_lighting(&mut ShaderComposer::new(), true, false)
+        .expect("PBR capture receiver accepts the diffuse-lighting request")
+        .into_draw_input();
+    assert!(diffuse.normal_from_local().is_some());
+    assert!(matches!(
+        receiver.with_lighting(&mut ShaderComposer::new(), false, true),
+        Err(ForwardPreparationError::InvalidView)
+    ));
+}
+
 #[test]
 fn capture_receiver_prepares_without_any_cpu_texture_asset() {
     let (resources, assets) = fixture(true);
@@ -136,13 +266,14 @@ fn capture_receiver_prepares_without_any_cpu_texture_asset() {
 }
 
 #[test]
-fn capture_receiver_rejects_asset_substitution_and_wrong_logical_slot() {
-    let (mut resources, assets) = fixture(true);
+fn capture_receiver_rejects_asset_only_but_accepts_logical_binding_to_producer_alias() {
+    let (mut resources, mut assets) = fixture(true);
     let texture = snapshot::<ColorTextureAsset, _>(ColorTextureData {
         extent: [1, 1],
         encoding: crate::TextureEncoding::Linear,
         rgba8: vec![255; 4],
     });
+    assets.textures = vec![texture.clone()];
     resources.textures[0].source =
         ForwardTextureSource::Asset(SceneAssetRef::from_snapshot(&texture));
     assert!(matches!(
@@ -150,10 +281,10 @@ fn capture_receiver_rejects_asset_substitution_and_wrong_logical_slot() {
         Err(ForwardPreparationError::CaptureReceiverRequiresSlot { .. })
     ));
     resources.textures[0].source = ForwardTextureSource::CaptureSlot("another_image".into());
-    assert!(matches!(
-        prepare(&resources, &assets),
-        Err(ForwardPreparationError::InvalidCaptureSlot { .. })
-    ));
+    let draw = prepare(&resources, &assets)
+        .expect("logical resource names may differ from producer slots")
+        .into_draw_input();
+    assert_eq!(draw.capture_texture_slot(0), Some("another_image"));
 }
 
 #[test]

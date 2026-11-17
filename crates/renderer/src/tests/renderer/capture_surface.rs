@@ -16,6 +16,7 @@ fn capture_surface_presents_after_one_six_scope_execution_and_retires_on_complet
         view,
         bounds(),
         &assets,
+        crate::CaptureTextureSlot::new("captured").unwrap(),
         receiver,
         block_on(surface.acquire()).unwrap(),
     ))
@@ -43,6 +44,7 @@ fn capture_surface_rejected_present_after_composite_retains_returned_lease() {
             view,
             bounds(),
             &assets,
+            crate::CaptureTextureSlot::new("captured").unwrap(),
             receiver,
             block_on(surface.acquire()).unwrap(),
         )),
@@ -74,6 +76,7 @@ fn capture_surface_present_loss_retains_both_frames_and_composite_owner() {
             view,
             bounds(),
             &assets,
+            crate::CaptureTextureSlot::new("captured").unwrap(),
             receiver,
             block_on(surface.acquire()).unwrap(),
         )),
@@ -92,4 +95,26 @@ fn capture_surface_present_loss_retains_both_frames_and_composite_owner() {
     assert!(!_capture.draws.is_empty());
     assert!(!_receiver.draws.is_empty());
     assert_eq!(renderer.pending(), 1);
+}
+
+#[test]
+fn mixed_capture_surface_accepts_asset_and_nonfirst_capture_bindings() {
+    let (device, _) = capture_forward_tests::capture_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).unwrap();
+    let mut surface = super::surface_tests::surface(&device, [8, 8]);
+    let (snapshot, view, mut assets) = scene_and_assets();
+    let receiver = capture_forward_tests::mixed_fixture::receiver(&mut assets, false);
+    let submission = block_on(renderer.submit_forward_capture_surface(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        crate::CaptureTextureSlot::new("producer_capture").unwrap(),
+        receiver,
+        block_on(surface.acquire()).unwrap(),
+    ))
+    .unwrap();
+    block_on(renderer.complete(&submission)).unwrap();
+    assert_eq!(renderer.pending(), 0);
 }

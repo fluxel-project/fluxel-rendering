@@ -84,11 +84,14 @@ impl TextureEncoding {
 
 #[path = "forward_capture.rs"]
 mod forward_capture;
+#[path = "forward_material_request.rs"]
+mod forward_material_request;
 pub(crate) use forward_capture::ResolvedForwardTexture;
 pub use forward_capture::{
     ForwardCaptureResources, ForwardTextureSource, PreparedCaptureReceiver,
     prepare_forward_capture_receiver,
 };
+use forward_material_request::material_request;
 
 /// Logical asset references and dynamic tint owned by one Forward scene record.
 #[derive(Clone, Debug)]
@@ -385,52 +388,14 @@ fn prepare_draw(
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
-    let extensions = material.value().surface_extensions();
-    let has_surface_effects = extensions.occlusion.is_some() || extensions.emissive.is_some();
-    let request = match material.value().output() {
-        fluxel_material::SurfaceOutput::Color => {
-            forward_template(&geometry.value().layout, source)?.request()
-        }
-        fluxel_material::SurfaceOutput::ColorUv0 => {
-            color_uv0_template(&geometry.value().layout, source)?.request()
-        }
-        fluxel_material::SurfaceOutput::MetallicRoughness { .. } => (if environment {
-            crate::pbr::forward_irradiance_request(&geometry.value().layout)
-        } else {
-            crate::pbr::forward_request(&geometry.value().layout)
-        })
-        .ok_or(ForwardPreparationError::MissingNormal { source })?,
-        fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => (if environment {
-            crate::pbr::forward_uv0_irradiance_request(&geometry.value().layout)
-        } else {
-            crate::pbr::forward_uv0_request(&geometry.value().layout)
-        })
-        .ok_or(ForwardPreparationError::MissingUv0 { source })?,
-        fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
-            if has_surface_effects =>
-        {
-            (if environment {
-                crate::pbr::forward_uv0_normal_effect_irradiance_request(&geometry.value().layout)
-            } else {
-                crate::pbr::forward_uv0_normal_effect_request(&geometry.value().layout)
-            })
-            .ok_or(ForwardPreparationError::MissingNormal { source })?
-        }
-        fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => (if environment {
-            crate::pbr::forward_uv0_normal_irradiance_request(&geometry.value().layout)
-        } else {
-            crate::pbr::forward_uv0_normal_request(&geometry.value().layout)
-        })
-        .ok_or(ForwardPreparationError::MissingNormal { source })?,
-    };
-    let request = if specular && crate::pbr::is_pbr(material.value().output()) {
-        if view.shading_camera.is_none() {
-            return Err(ForwardPreparationError::InvalidView);
-        }
-        crate::pbr::specular::forward_specular_request(request)
-    } else {
-        request
-    };
+    let request = material_request(
+        material.value(),
+        &geometry.value().layout,
+        view,
+        source,
+        environment,
+        specular,
+    )?;
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
     let schema = validate_material_schema(&prepared, source)?;

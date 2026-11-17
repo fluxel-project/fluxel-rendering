@@ -4,17 +4,19 @@ use fluxel_rhi::{
     api::{BufferUsage, Device, Error, ImageLayout, LaneClass, LaneId, Result, TextureUsage},
     backend::ResourceBackend,
 };
+use std::collections::HashMap;
 
 use crate::{
-    FrameTopology,
     pipeline::{ForwardPhaseContext, PipelineError},
     residency::ForwardFrame,
+    FrameTopology,
 };
 
 use super::{
-    BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, GraphBuilder,
-    GraphPass, TextureSlot, copy_write_uses, texture_copy_read_uses, validate_depth_spec,
-    validate_forward_topology, validate_graph_draw, validate_resident_texture_devices, whole,
+    copy_write_uses, texture_copy_read_uses, validate_depth_spec, validate_forward_topology,
+    validate_graph_draw, validate_resident_texture_devices, whole, BufferGraphFact, BufferSlot,
+    ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, GraphBuilder, GraphPass,
+    TextureGraphFact, TextureSlot,
 };
 
 /// All Graph slots imported for one Forward frame namespace.
@@ -33,6 +35,18 @@ pub(super) struct CaptureFrameSlots {
     pub(super) depth: Option<TextureSlot>,
     pub(super) target: TextureSlot,
     pub(super) readback: BufferSlot,
+}
+
+#[derive(Default)]
+pub(super) struct SharedResidentImports {
+    streams: HashMap<
+        crate::graph::ResourceInstanceId,
+        (crate::graph::definition::BufferHandle, BufferGraphFact),
+    >,
+    textures: HashMap<
+        crate::graph::ResourceInstanceId,
+        (crate::graph::definition::TextureHandle, TextureGraphFact),
+    >,
 }
 
 /// The five-pass same-submission capture contract.
@@ -86,19 +100,14 @@ where
             .target_desc
             .usage
             .contains(TextureUsage::TEXTURE_BINDING)
-        || receiver_spec.textures.len() != 1
-        || !receiver_spec.texture_uploads.is_empty()
-        || receiver_spec
-            .draws
-            .iter()
-            .any(|draw| draw.textures.as_slice() != [0])
     {
         return Err(Error::InvalidState.into());
     }
-    let receiver_texture = receiver
-        .resident
-        .textures
-        .first()
+    let receiver_capture = capture_texture_slots(&receiver_spec)?;
+    let receiver_texture = receiver_capture
+        .iter()
+        .position(|capture| *capture)
+        .and_then(|index| receiver.resident.textures.get(index))
         .ok_or(Error::InvalidState)?;
     // The sampled receiver binding must be the exact producer allocation;
     // matching declarations alone cannot establish resource identity.
@@ -120,12 +129,9 @@ where
         .map(|lane| lane.id)
         .ok_or(Error::WrongLane)?;
     let mut graph = GraphBuilder::default();
-    let (capture_slots, capture_handles) = import_frame(&mut graph, &capture_spec, true)?;
-    // The receiver's prepared texture is an owner alias for capture.target,
-    // not a second physical Graph import. Its actual owner facts are checked
-    // by the submission path before this declaration is reached.
-    let (mut receiver_slots, mut receiver_handles) =
-        import_frame(&mut graph, &receiver_spec, false)?;
+    let mut shared = SharedResidentImports::default();
+    let (capture_slots, capture_handles) =
+        import_frame(&mut graph, &capture_spec, None, &mut shared)?;
     let (capture_upload, capture_handles) =
         declare_upload(&mut graph, &capture_spec, capture_handles)?;
     let (capture_raster, capture_target) = declare_raster(
@@ -136,8 +142,12 @@ where
         &capture_handles,
         capture_contribute,
     )?;
-    receiver_slots.textures = vec![TextureSlot::from(capture_target)];
-    receiver_handles.textures = vec![capture_target];
+    let aliases = receiver_capture
+        .iter()
+        .map(|capture| capture.then_some(capture_target))
+        .collect::<Vec<_>>();
+    let (receiver_slots, receiver_handles) =
+        import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
     let (receiver_raster, receiver_target) = declare_raster(
@@ -145,10 +155,7 @@ where
         &receiver_spec,
         receiver_topology,
         receiver_upload,
-        &FrameHandles {
-            textures: vec![capture_target],
-            ..receiver_handles.clone()
-        },
+        &receiver_handles,
         receiver_contribute,
     )?;
     let receiver_readback = declare_readback(
@@ -189,6 +196,36 @@ pub(super) fn same_texture_owner_desc(
         && left.view_formats == right.view_formats
 }
 
+pub(super) fn same_buffer_owner_desc(
+    left: &fluxel_rhi::api::BufferDesc,
+    right: &fluxel_rhi::api::BufferDesc,
+) -> bool {
+    left.size == right.size && left.usage == right.usage && left.memory == right.memory
+}
+
+pub(super) fn capture_texture_slots(spec: &ForwardGraphSpec) -> Result<Vec<bool>> {
+    let mut slots = vec![false; spec.textures.len()];
+    let mut seen = vec![false; spec.textures.len()];
+    for draw in &spec.draws {
+        if draw.textures.len() != draw.capture_textures.len() {
+            return Err(Error::InvalidRange);
+        }
+        for (&texture, &capture) in draw.textures.iter().zip(&draw.capture_textures) {
+            let slot = slots.get_mut(texture).ok_or(Error::InvalidRange)?;
+            if seen[texture] && *slot != capture {
+                return Err(Error::InvalidState);
+            }
+            *slot = capture;
+            seen[texture] = true;
+        }
+    }
+    slots
+        .iter()
+        .any(|capture| *capture)
+        .then_some(slots)
+        .ok_or(Error::InvalidState)
+}
+
 #[derive(Clone)]
 pub(super) struct FrameHandles {
     pub(super) resident_upload: crate::graph::definition::BufferHandle,
@@ -226,11 +263,18 @@ pub(super) fn validate_spec<B: ResourceBackend>(
         validate_graph_draw(draw, spec.streams.len())?;
         if (!receiver
             && (draw.textures.is_empty()
+                || draw.capture_textures.iter().any(|capture| *capture)
                 || draw
                     .textures
                     .iter()
                     .any(|texture| *texture >= spec.textures.len())))
-            || (receiver && draw.textures.as_slice() != [0])
+            || (receiver
+                && (draw.textures.is_empty()
+                    || draw.textures.len() != draw.capture_textures.len()
+                    || draw
+                        .textures
+                        .iter()
+                        .any(|texture| *texture >= spec.textures.len())))
             || draw
                 .uniform_ranges
                 .iter()
@@ -245,7 +289,8 @@ pub(super) fn validate_spec<B: ResourceBackend>(
 pub(super) fn import_frame(
     graph: &mut GraphBuilder,
     spec: &ForwardGraphSpec,
-    import_textures: bool,
+    aliases: Option<&[Option<crate::graph::definition::TextureHandle>]>,
+    shared: &mut SharedResidentImports,
 ) -> std::result::Result<(CaptureFrameSlots, FrameHandles), ForwardPlanBuildError> {
     let resident_upload = graph
         .import_buffer_desc(
@@ -304,27 +349,62 @@ pub(super) fn import_frame(
                 .map_err(|_| Error::InvalidState)
         })
         .transpose()?;
+    if spec.streams.len() != spec.stream_instances.len()
+        || spec.textures.len() != spec.texture_instances.len()
+    {
+        return Err(Error::InvalidRange.into());
+    }
     let streams = spec
         .streams
         .iter()
-        .map(|owner| {
-            graph
+        .cloned()
+        .zip(&spec.stream_instances)
+        .map(|(owner, instance)| {
+            if let Some((handle, saved)) = shared.streams.get(instance) {
+                if !same_buffer_owner_desc(&saved.desc, &owner.desc)
+                    || saved.incoming != owner.incoming
+                {
+                    return Err(Error::InvalidState);
+                }
+                return Ok(*handle);
+            }
+            let handle = graph
                 .import_buffer_desc(owner.desc.clone(), owner.incoming)
-                .map_err(|_| Error::InvalidState)
+                .map_err(|_| Error::InvalidState)?;
+            shared.streams.insert(*instance, (handle, owner));
+            Ok(handle)
         })
         .collect::<Result<Vec<_>>>()?;
-    let textures = if import_textures {
-        spec.textures
-            .iter()
-            .map(|owner| {
-                graph
-                    .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
-                    .map_err(|_| Error::InvalidState)
-            })
-            .collect::<Result<Vec<_>>>()?
-    } else {
-        Vec::new()
-    };
+    if aliases.is_some_and(|aliases| aliases.len() != spec.textures.len()) {
+        return Err(Error::InvalidRange.into());
+    }
+    let textures = spec
+        .textures
+        .iter()
+        .enumerate()
+        .map(|(index, owner)| {
+            aliases
+                .and_then(|aliases| aliases[index])
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    let instance = spec.texture_instances[index];
+                    if let Some((handle, saved)) = shared.textures.get(&instance) {
+                        if !same_texture_owner_desc(&saved.desc, &owner.desc)
+                            || saved.incoming != owner.incoming
+                            || saved.layout != owner.layout
+                        {
+                            return Err(Error::InvalidState);
+                        }
+                        return Ok(*handle);
+                    }
+                    let handle = graph
+                        .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                        .map_err(|_| Error::InvalidState)?;
+                    shared.textures.insert(instance, (handle, owner.clone()));
+                    Ok(handle)
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let environment = spec
         .environment
         .as_ref()

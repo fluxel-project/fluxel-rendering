@@ -20,6 +20,7 @@ where
         snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         capture_inputs: Vec<crate::ForwardDrawInput>,
         receiver_input: crate::ForwardDrawInput,
+        producer_slot: CaptureTextureSlot,
         extent: [u32; 2],
         capture_topology: crate::FrameTopology,
         depth_mode: crate::ForwardDepthMode,
@@ -65,7 +66,7 @@ where
                 AssembledForwardTarget::Offscreen {
                     frame: capture_frame,
                 },
-            publication: _,
+            publication: capture_publication,
             topology: _,
             batch_stats: _,
             preparation_elapsed_ns: _,
@@ -76,15 +77,16 @@ where
         else {
             return Err(Error::InvalidState.into());
         };
-        let slot_name = receiver_input
-            .capture_texture_slot(0)
-            .ok_or(Error::InvalidState)?;
         let capture_owner = super::captured::CaptureTextureOwner::from_capture_frame(
             &self.device,
-            CaptureTextureSlot::new(slot_name)?,
+            producer_slot,
             &capture_frame,
         )
         .map_err(|error| self.observe_forward_error("capture owner admission", error))?;
+        let receiver_environment = self
+            .environment_irradiance
+            .clone()
+            .filter(|_| receiver_input.prepared().uses_environment_irradiance());
         let receiver = self
             .assemble_prepared_forward(
                 snapshot,
@@ -98,7 +100,7 @@ where
                 preparation_started,
                 Some(&capture_owner),
                 surface.is_some(),
-                None,
+                receiver_environment,
             )
             .await?;
         let AssembledForward {
@@ -111,7 +113,7 @@ where
                 AssembledForwardTarget::Offscreen {
                     frame: receiver_frame,
                 },
-            publication: _,
+            publication: receiver_publication,
             topology: receiver_topology,
             batch_stats: _,
             preparation_elapsed_ns,
@@ -122,6 +124,22 @@ where
         else {
             return Err(Error::InvalidState.into());
         };
+        let resident_copy_bytes = [&capture_frame, &receiver_frame]
+            .into_iter()
+            .map(|frame| u64::try_from(frame.resident_upload.bytes.len()).unwrap_or(u64::MAX))
+            .fold(0_u64, u64::saturating_add);
+        let frame_upload_bytes = [&capture_frame, &receiver_frame]
+            .into_iter()
+            .map(|frame| u64::try_from(frame.uniform_bytes.len()).unwrap_or(u64::MAX))
+            .fold(0_u64, u64::saturating_add);
+        let draws = capture_frame
+            .draws
+            .len()
+            .saturating_add(receiver_frame.draws.len());
+        let batches = capture_frame
+            .draw_batches
+            .len()
+            .saturating_add(receiver_frame.draw_batches.len());
         let receiver_input = _inputs.pop().ok_or(Error::InvalidState)?;
         if !_inputs.is_empty() {
             return Err(Error::InvalidState.into());
@@ -139,6 +157,7 @@ where
                 },
                 capture_frame,
                 receiver_frame,
+                (capture_publication, receiver_publication),
                 composite,
                 image,
                 capture_topology,
@@ -155,6 +174,7 @@ where
                 },
                 capture_frame,
                 receiver_frame,
+                (capture_publication, receiver_publication),
                 capture_topology,
                 receiver_topology,
                 capture_contribute,
@@ -162,6 +182,30 @@ where
             .await
         };
         result.map(|submission| {
+            self.forward_stats.resident_copy_bytes = self
+                .forward_stats
+                .resident_copy_bytes
+                .saturating_add(resident_copy_bytes);
+            self.forward_stats.frame_upload_bytes = self
+                .forward_stats
+                .frame_upload_bytes
+                .saturating_add(frame_upload_bytes);
+            self.forward_stats.opaque_candidates = self
+                .forward_stats
+                .opaque_candidates
+                .saturating_add(u64::try_from(draws).unwrap_or(u64::MAX));
+            self.forward_stats.opaque_draws = self
+                .forward_stats
+                .opaque_draws
+                .saturating_add(u64::try_from(draws).unwrap_or(u64::MAX));
+            self.forward_stats.opaque_batches = self
+                .forward_stats
+                .opaque_batches
+                .saturating_add(u64::try_from(batches).unwrap_or(u64::MAX));
+            self.forward_stats.pending_peak = self
+                .forward_stats
+                .pending_peak
+                .max(u64::try_from(self.pending()).unwrap_or(u64::MAX));
             self.forward_stats.preparation_elapsed_ns = self
                 .forward_stats
                 .preparation_elapsed_ns
@@ -190,6 +234,7 @@ where
         retained: PendingInputs,
         capture: crate::residency::ForwardFrame<B>,
         receiver: crate::residency::ForwardFrame<B>,
+        publications: (ForwardPublication, ForwardPublication),
         capture_topology: crate::FrameTopology,
         receiver_topology: crate::FrameTopology,
         capture_contribute: C,
@@ -216,6 +261,7 @@ where
                     pass.read_vertex_streams()?;
                     pass.read_frame_uniforms()?;
                     pass.read_sampled_textures()?;
+                    pass.write_selected_depth()?;
                     pass.write_main_color()
                 })
             },
@@ -240,7 +286,10 @@ where
             self.write_forward_upload(&specular.upload, &specular.upload_bytes)
                 .await?;
         }
-        if let Some(environment) = capture.environment.as_ref() {
+        for environment in [capture.environment.as_ref(), receiver.environment.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;
         }
@@ -289,6 +338,8 @@ where
             super::PendingWork::CaptureForward {
                 _capture: Box::new(capture),
                 _receiver: Box::new(receiver),
+                capture_publication: publications.0,
+                receiver_publication: publications.1,
                 plan,
                 extent,
                 row_pitch,
@@ -302,6 +353,7 @@ where
         retained: PendingInputs,
         capture: crate::residency::ForwardFrame<B>,
         receiver: crate::residency::ForwardFrame<B>,
+        publications: (ForwardPublication, ForwardPublication),
         composite: super::SurfaceCompositeOwner<B>,
         image: SurfaceImage<B>,
         capture_topology: crate::FrameTopology,
@@ -329,6 +381,7 @@ where
                     pass.read_vertex_streams()?;
                     pass.read_frame_uniforms()?;
                     pass.read_sampled_textures()?;
+                    pass.write_selected_depth()?;
                     pass.write_main_color()
                 })
             },
@@ -359,7 +412,10 @@ where
             self.write_forward_upload(&specular.upload, &specular.upload_bytes)
                 .await?;
         }
-        if let Some(environment) = capture.environment.as_ref() {
+        for environment in [capture.environment.as_ref(), receiver.environment.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;
         }
@@ -423,6 +479,8 @@ where
             super::PendingWork::CaptureForwardSurface {
                 _capture: Box::new(capture),
                 _receiver: Box::new(receiver),
+                capture_publication: publications.0,
+                receiver_publication: publications.1,
                 _composite: composite,
                 _present: returned_present,
                 plan,

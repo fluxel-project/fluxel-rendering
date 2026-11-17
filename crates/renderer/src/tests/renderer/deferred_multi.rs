@@ -133,17 +133,26 @@ fn material_at(effects: bool, locations: [u32; 3]) -> MaterialDefinition {
         MaterialResource {
             name: "normal_texture".into(),
             kind: MaterialResourceKind::Texture2dF32,
-            location: BindingLocation { group: 0, binding: 3 },
+            location: BindingLocation {
+                group: 0,
+                binding: 3,
+            },
         },
         MaterialResource {
             name: "orm".into(),
             kind: MaterialResourceKind::Texture2dF32,
-            location: BindingLocation { group: 0, binding: 4 },
+            location: BindingLocation {
+                group: 0,
+                binding: 4,
+            },
         },
         MaterialResource {
             name: "emissive".into(),
             kind: MaterialResourceKind::Texture2dF32,
-            location: BindingLocation { group: 0, binding: 5 },
+            location: BindingLocation {
+                group: 0,
+                binding: 5,
+            },
         },
         MaterialResource {
             name: "material_sampler".into(),

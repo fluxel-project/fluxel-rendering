@@ -223,122 +223,14 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
         validate_resident_texture_devices(&capture.resident, self.id.device)?;
         validate_resident_texture_devices(&receiver.resident, self.id.device)?;
         validate_capture_alias(capture, receiver)?;
-        let mut buffers = Vec::new();
-        let mut textures = Vec::new();
-        for (slots, frame, capture_side) in [
-            (&self.capture, capture, true),
-            (&self.receiver, receiver, false),
-        ] {
-            super::capture_specular_bindings::append(
-                slots,
-                frame.specular.as_ref(),
-                self.id.device,
-                &mut buffers,
-                &mut textures,
-            )?;
-            let uses = |slot| {
-                self.execution
-                    .logical()
-                    .buffer_bindings()
-                    .requirements()
-                    .iter()
-                    .any(|item| item.slot == slot)
-            };
-            let mut add = |slot, instance, buffer, desc, incoming| {
-                if uses(slot) {
-                    buffers.push(BoundBuffer::new(slot, instance, buffer, desc, incoming));
-                }
-            };
-            add(
-                slots.resident_upload,
-                frame.resident.upload_instance,
-                &frame.resident.upload,
-                &frame.resident.upload_desc,
-                frame.resident.upload_incoming,
-            );
-            add(
-                slots.frame_upload,
-                frame.frame.upload_instance,
-                &frame.frame.upload,
-                &frame.frame.upload_desc,
-                frame.frame.upload_incoming,
-            );
-            add(
-                slots.uniform,
-                frame.frame.uniform_instance,
-                &frame.frame.uniform,
-                &frame.frame.uniform_desc,
-                frame.frame.uniform_incoming,
-            );
-            add(
-                slots.readback,
-                frame.frame.readback_instance,
-                &frame.frame.readback,
-                &frame.frame.readback_desc,
-                frame.frame.readback_incoming,
-            );
-            for (slot, stream) in slots.streams.iter().copied().zip(&frame.resident.streams) {
-                add(
-                    slot,
-                    stream.instance,
-                    &stream.buffer,
-                    &stream.desc,
-                    stream.incoming,
-                );
-            }
-            if let (Some(slot), Some(owner)) =
-                (slots.environment_upload, frame.environment.as_ref())
-            {
-                add(
-                    slot,
-                    owner.upload_instance,
-                    &owner.upload,
-                    &owner.upload_desc,
-                    owner.upload_incoming,
-                );
-            }
-            if capture_side {
-                for (slot, texture) in slots.textures.iter().copied().zip(&frame.resident.textures)
-                {
-                    textures.push(BoundTexture::new(
-                        slot,
-                        texture.instance,
-                        &texture.texture,
-                        &texture.desc,
-                        texture.incoming,
-                        texture.layout,
-                    ));
-                }
-            }
-            textures.push(BoundTexture::new(
-                slots.target,
-                frame.frame.target_instance,
-                &frame.frame.target,
-                &frame.frame.target_desc,
-                frame.frame.target_incoming,
-                frame.frame.target_layout,
-            ));
-            if let (Some(slot), Some(owner)) = (slots.environment, frame.environment.as_ref()) {
-                textures.push(BoundTexture::new(
-                    slot,
-                    owner.texture_instance,
-                    &owner.texture,
-                    &owner.desc,
-                    owner.incoming,
-                    owner.layout,
-                ));
-            }
-            if let (Some(slot), Some(owner)) = (slots.depth, frame.frame.depth.as_ref()) {
-                textures.push(BoundTexture::new(
-                    slot,
-                    owner.instance,
-                    &owner.texture,
-                    &owner.desc,
-                    owner.incoming,
-                    owner.layout,
-                ));
-            }
-        }
+        let (buffers, textures) = super::capture_binding_collection::collect(
+            &self.execution,
+            self.id.device,
+            &self.capture,
+            capture,
+            &self.receiver,
+            receiver,
+        )?;
         FrameBindings::new_with_surface_textures(
             &self.execution,
             self.id.device,

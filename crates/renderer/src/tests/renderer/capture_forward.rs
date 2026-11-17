@@ -9,6 +9,9 @@ use fluxel_material::{
 };
 use fluxel_shader::{ShaderComposer, SourceUnit};
 
+#[path = "capture_mixed_fixture.rs"]
+pub(crate) mod mixed_fixture;
+
 pub(super) fn receiver() -> (crate::PreparedCaptureReceiver, ForwardAssets) {
     receiver_at([0, 1, 2])
 }
@@ -60,7 +63,9 @@ fn receiver_at(locations: [u32; 3]) -> (crate::PreparedCaptureReceiver, ForwardA
     let resources = crate::ForwardCaptureResources {
         geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
         material: SceneAssetRef::from_snapshot(&assets.materials[0]),
-        textures: vec![crate::ForwardTextureBinding::capture("captured", "captured")],
+        textures: vec![crate::ForwardTextureBinding::capture(
+            "captured", "captured",
+        )],
         tint: [1.0; 4],
     };
     let prepared = crate::prepare_forward_capture_receiver(
@@ -82,7 +87,7 @@ fn receiver_at(locations: [u32; 3]) -> (crate::PreparedCaptureReceiver, ForwardA
 pub(super) fn capture_device(script: Script) -> (Device<WitnessBackend>, Arc<Native>) {
     fixture_with_caps(script, |caps| {
         caps.limits.max_bind_groups = 2;
-        caps.limits.max_bindings_per_group = 3;
+        caps.limits.max_bindings_per_group = 7;
         caps.limits.max_vertex_attributes = 2;
     })
 }
@@ -99,6 +104,7 @@ fn capture_submission_records_five_scopes_and_retains_until_receiver_readback() 
         view,
         bounds(),
         &assets,
+        crate::CaptureTextureSlot::new("captured").unwrap(),
         receiver,
     ))
     .unwrap();
@@ -113,14 +119,15 @@ fn capture_submission_records_five_scopes_and_retains_until_receiver_readback() 
 fn capture_completion_failure_keeps_both_frames_pending() {
     let (device, _) = capture_device(Script::AcceptedCompletionDeviceLost);
     let mut renderer = Renderer::new(device).unwrap();
-    let (snapshot, view, assets) = scene_and_assets();
-    let (receiver, _) = receiver();
+    let (snapshot, view, mut assets) = scene_and_assets();
+    let receiver = mixed_fixture::receiver(&mut assets, false);
     let submission = block_on(renderer.submit_forward_capture(
         &ForwardCpuPipeline::new(BoundsVisibility),
         snapshot,
         view,
         bounds(),
         &assets,
+        crate::CaptureTextureSlot::new("producer_capture").unwrap(),
         receiver,
     ))
     .unwrap();
@@ -141,10 +148,187 @@ fn capture_receiver_consumes_permuted_material_locations_without_a_cpu_asset() {
         view,
         bounds(),
         &assets,
+        crate::CaptureTextureSlot::new("captured").unwrap(),
         receiver,
     ))
     .expect("permuted capture receiver bindings");
     assert_eq!(native.command_calls.load(Ordering::SeqCst), 5);
     block_on(renderer.readback(&submission)).expect("combined completion");
     assert_eq!(renderer.pending(), 0);
+}
+
+#[test]
+fn mixed_receiver_keeps_nonfirst_capture_and_asset_slots_in_schema_order() {
+    let (device, _) = capture_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (snapshot, view, mut assets) = scene_and_assets();
+    let receiver = mixed_fixture::receiver(&mut assets, true);
+    let submission = block_on(renderer.submit_forward_capture(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        crate::CaptureTextureSlot::new("producer_capture").unwrap(),
+        receiver,
+    ))
+    .expect("mixed capture submission");
+    let pending = renderer.pending_for(&submission).unwrap();
+    let crate::renderer::PendingWork::CaptureForward { _receiver, .. } = &pending.workload else {
+        panic!("capture pending work")
+    };
+    let draw = _receiver.draws.first().unwrap();
+    assert_eq!(draw.textures.len(), 5);
+    assert_eq!(draw.capture_textures, vec![false, false, false, true, true]);
+    assert_eq!(draw.textures[3], draw.textures[4]);
+    block_on(renderer.readback(&submission)).unwrap();
+}
+
+#[test]
+fn mixed_capture_rejects_a_missing_explicit_producer_before_backend_work() {
+    let (device, native) = capture_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (snapshot, view, mut assets) = scene_and_assets();
+    let receiver = mixed_fixture::receiver(&mut assets, false);
+    let before = (
+        native.created_buffers.load(Ordering::SeqCst),
+        native.created_textures.load(Ordering::SeqCst),
+        native.created_samplers.load(Ordering::SeqCst),
+        native.pipeline_color_formats.lock().unwrap().len(),
+    );
+    assert!(matches!(
+        block_on(renderer.submit_forward_capture(
+            &ForwardCpuPipeline::new(BoundsVisibility),
+            snapshot,
+            view,
+            bounds(),
+            &assets,
+            crate::CaptureTextureSlot::new("wrong_producer").unwrap(),
+            receiver,
+        )),
+        Err(RendererError::ForwardPreparation(
+            crate::ForwardPreparationError::MissingCaptureSlot { .. }
+        ))
+    ));
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        (
+            native.created_buffers.load(Ordering::SeqCst),
+            native.created_textures.load(Ordering::SeqCst),
+            native.created_samplers.load(Ordering::SeqCst),
+            native.pipeline_color_formats.lock().unwrap().len(),
+        ),
+        before,
+        "missing producer is rejected before backend allocation or pipeline creation"
+    );
+    assert_eq!(renderer.pending(), 0);
+}
+
+#[test]
+fn mixed_capture_allows_a_nonfilterable_texture_load_receiver() {
+    let (device, native) = capture_device(Script::AcceptedExact);
+    native.texture_filterable.store(false, Ordering::SeqCst);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (snapshot, view, mut assets) = scene_and_assets();
+    let receiver = mixed_fixture::texture_load_receiver(&mut assets);
+    let submission = block_on(renderer.submit_forward_capture(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        crate::CaptureTextureSlot::new("producer_capture").unwrap(),
+        receiver,
+    ))
+    .expect("textureLoad capture does not require filtering");
+    block_on(renderer.readback(&submission)).unwrap();
+}
+
+#[test]
+fn mixed_capture_publishes_shared_assets_only_after_completion_then_warms() {
+    let (device, _) = capture_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (snapshot, view, mut assets) = scene_and_assets();
+    let receiver = mixed_fixture::receiver(&mut assets, false);
+    let cold = block_on(renderer.submit_forward_capture(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot.clone(),
+        view,
+        bounds(),
+        &assets,
+        crate::CaptureTextureSlot::new("producer_capture").unwrap(),
+        receiver.clone(),
+    ))
+    .unwrap();
+    assert_eq!(renderer.forward_cache_stats().texture_hits, 0);
+    block_on(renderer.readback(&cold)).unwrap();
+    let before_warm = renderer.forward_cache_stats().texture_hits;
+    let warm = block_on(renderer.submit_forward_capture(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        crate::CaptureTextureSlot::new("producer_capture").unwrap(),
+        receiver,
+    ))
+    .unwrap();
+    assert!(renderer.forward_cache_stats().texture_hits > before_warm);
+    let pending = renderer.pending_for(&warm).unwrap();
+    let crate::renderer::PendingWork::CaptureForward {
+        _capture,
+        _receiver,
+        ..
+    } = &pending.workload
+    else {
+        panic!("capture pending work")
+    };
+    assert_eq!(
+        _capture.resident.streams[0].instance, _receiver.resident.streams[0].instance,
+        "warm capture and receiver share the published geometry owner"
+    );
+    assert_eq!(
+        _capture.resident.textures[_capture.draws[0].textures[0]].instance,
+        _receiver.resident.textures[_receiver.draws[0].textures[0]].instance,
+        "warm capture and receiver share the published immutable texture owner"
+    );
+    block_on(renderer.readback(&warm)).unwrap();
+}
+
+#[test]
+fn mixed_capture_declares_depth_for_both_producer_and_receiver() {
+    let (device, native) = capture_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (snapshot, view, mut assets) = scene_and_assets();
+    let receiver = mixed_fixture::receiver(&mut assets, false);
+    let submission = block_on(renderer.submit_forward_capture(
+        &ForwardCpuPipeline::new(BoundsVisibility).with_depth32_less_equal(),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        crate::CaptureTextureSlot::new("producer_capture").unwrap(),
+        receiver,
+    ))
+    .expect("capture receiver contributes the selected depth attachment");
+    let pending = renderer.pending_for(&submission).unwrap();
+    let crate::renderer::PendingWork::CaptureForward {
+        _capture,
+        _receiver,
+        ..
+    } = &pending.workload
+    else {
+        panic!("capture")
+    };
+    assert!(_capture.frame.depth.is_some());
+    assert!(_receiver.frame.depth.is_some());
+    assert!(
+        native
+            .pipeline_depth_states
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|state| state.is_some())
+    );
+    block_on(renderer.readback(&submission)).unwrap();
 }

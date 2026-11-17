@@ -156,23 +156,23 @@ pub enum ForwardPreparationError {
         /// Material resource requested from the capture product.
         resource: String,
     },
-    /// A capture receiver supplied an ordinary CPU texture source.
+    /// A capture receiver supplied no same-frame capture source.
     CaptureReceiverRequiresSlot {
         /// Draw requesting the capture product.
         source: ForwardDrawSource,
     },
-    /// The named capture slot is absent from the compiled material contribution.
+    /// A capture source named an empty producer slot.
     MissingCaptureSlot {
         /// Draw requesting the capture product.
         source: ForwardDrawSource,
-        /// Requested logical resource name.
+        /// Requested producer slot name.
         slot: String,
     },
-    /// The named capture slot is not a sampled float texture at the Forward location.
+    /// Reserved for a renderer-owned capture-slot validation failure.
     InvalidCaptureSlot {
         /// Draw requesting the capture product.
         source: ForwardDrawSource,
-        /// Requested logical resource name.
+        /// Requested producer slot name.
         slot: String,
     },
 }

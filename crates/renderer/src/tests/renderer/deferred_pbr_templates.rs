@@ -173,3 +173,22 @@ fn forward_effect_requests_preserve_direct_light_and_route_ao_only_through_irrad
         .compose(&request)
         .expect("effect irradiance shader composes");
 }
+
+#[test]
+fn uv0_irradiance_requests_compose_with_and_without_tangent_space_normals() {
+    for (layout, normal) in [(pbr_uv0_layout(), false), (pbr_uv0_normal_layout(), true)] {
+        let mut request = if normal {
+            crate::pbr::forward_uv0_normal_irradiance_request(&layout)
+        } else {
+            crate::pbr::forward_uv0_irradiance_request(&layout)
+        }
+        .unwrap();
+        request.source_units.push(SourceUnit::new("uv-irradiance-evaluators",
+            "fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.3, 1.0); } fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.2, 0.6) + uv * 0.01; } fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(uv * 0.1, 1.0); }"));
+        let shader = ShaderComposer::new()
+            .compose(&request)
+            .expect("one UV-aware irradiance entry");
+        assert!(shader.entry_point(ShaderStage::Fragment).is_some());
+        assert_eq!(request.vertex_inputs.len(), if normal { 4 } else { 3 });
+    }
+}

@@ -100,7 +100,31 @@ where
             } => {
                 publish(&_frame.resident, publication, &mut self.forward_residency);
             }
-            super::PendingWork::CaptureForward { .. } => {}
+            super::PendingWork::CaptureForward {
+                _capture,
+                _receiver,
+                capture_publication,
+                receiver_publication,
+                ..
+            }
+            | super::PendingWork::CaptureForwardSurface {
+                _capture,
+                _receiver,
+                capture_publication,
+                receiver_publication,
+                ..
+            } => {
+                publish(
+                    &_capture.resident,
+                    capture_publication,
+                    &mut self.forward_residency,
+                );
+                publish(
+                    &_receiver.resident,
+                    receiver_publication,
+                    &mut self.forward_residency,
+                );
+            }
             _ => {}
         }
     }
