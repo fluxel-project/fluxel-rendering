@@ -137,6 +137,7 @@ fn capture_receiver_rejects_asset_substitution_and_wrong_logical_slot() {
     let (mut resources, assets) = fixture(true);
     let texture = snapshot::<ColorTextureAsset, _>(ColorTextureData {
         extent: [1, 1],
+        encoding: crate::TextureEncoding::Linear,
         rgba8: vec![255; 4],
     });
     resources.texture = ForwardTextureSource::Asset(SceneAssetRef::from_snapshot(&texture));

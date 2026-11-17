@@ -133,6 +133,7 @@ fn assets_and_resources() -> (ForwardAssets, ForwardResources) {
             .commit(
                 crate::ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: vec![255; 4],
                 },
                 ResidentBytes::new(4),

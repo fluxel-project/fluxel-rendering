@@ -133,6 +133,7 @@ fn pbr_scene() -> (
             .commit(
                 ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: vec![128, 96, 64, 255],
                 },
                 ResidentBytes::new(4),

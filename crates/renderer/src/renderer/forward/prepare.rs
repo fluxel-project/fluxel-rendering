@@ -141,29 +141,20 @@ where
             let texture = input.asset_texture();
             if material_requires_ordinary_sampler(input.prepared()) {
                 match texture {
-                    Some(texture) => {
-                        require_filterable_material_texture(&self.device, texture.value().extent)
-                            .map_err(|error| {
-                                self.observe_forward_error(
-                                    "sampled material texture admission",
-                                    error,
-                                )
-                            })?
-                    }
+                    Some(texture) => require_filterable_material_texture(
+                        &self.device,
+                        texture.value().extent,
+                        texture.value().encoding,
+                    )
+                    .map_err(|error| {
+                        self.observe_forward_error("sampled material texture admission", error)
+                    })?,
                     None => {
-                        let capture = capture_texture.ok_or_else(|| {
-                            RendererError::ForwardPreparation(
-                                crate::ForwardPreparationError::CaptureReceiverRequiresSlot {
-                                    source: input.source(),
-                                },
-                            )
-                        })?;
-                        let slot = input.capture_texture_slot().ok_or(Error::InvalidState)?;
-                        capture
-                            .validate_for_receiver(self.device.id(), slot)
-                            .map_err(|error| {
-                                self.observe_forward_error("capture texture admission", error)
-                            })?;
+                        validate_capture_material_texture(
+                            capture_texture,
+                            input,
+                            self.device.id(),
+                        )?;
                     }
                 }
             }
@@ -242,6 +233,7 @@ where
                             bytes,
                             extent: data.extent,
                             bytes_per_row: pitch,
+                            encoding: data.encoding,
                         });
                         fresh_texture_slots.push(slot);
                         final_textures.push(None);
@@ -443,9 +435,15 @@ where
                     ),
                 },
             ];
+            validate_material_texture_owner(
+                &resident,
+                draw_textures[index],
+                self.device.id(),
+                input,
+                material_requires_ordinary_sampler(input.prepared()),
+            )
+            .map_err(|error| self.observe_forward_error("sampled material owner", error))?;
             if material_requires_ordinary_sampler(input.prepared()) {
-                validate_sampled_texture_owner(&resident, draw_textures[index], self.device.id())
-                    .map_err(|error| self.observe_forward_error("sampled material owner", error))?;
                 let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
                 validate_ordinary_sampler(&sampler.desc)?;
                 material_entries.push(BindGroupEntry {

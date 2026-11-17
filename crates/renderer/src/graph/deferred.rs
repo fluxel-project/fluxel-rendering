@@ -45,8 +45,8 @@ use super::{
         TextureAccessContract, TextureRange,
     },
     execution::{
-        binding_error, BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution,
-        FrameBindings,
+        BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution, FrameBindings,
+        binding_error,
     },
 };
 

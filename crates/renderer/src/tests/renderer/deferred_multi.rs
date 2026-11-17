@@ -11,7 +11,7 @@ use fluxel_material::{
     MaterialNodeInputSource, MaterialParameter, MaterialResource, MaterialResourceKind,
     MaterialType, SurfaceExtensions, SurfaceOutput,
 };
-use fluxel_rhi::api::{Device, Error, ImageLayout, VertexFormat, VertexStepMode};
+use fluxel_rhi::api::{Device, Error, VertexFormat, VertexStepMode};
 
 use crate::{
     BoundsVisibility, ColorTextureAsset, ColorTextureData, DeferredCpuPipeline,
@@ -26,8 +26,12 @@ fn bounds() -> RenderBounds {
 }
 
 fn device(script: Script) -> (Device<WitnessBackend>, Arc<Native>) {
+    device_with_colors(script, 3)
+}
+
+fn device_with_colors(script: Script, colors: u32) -> (Device<WitnessBackend>, Arc<Native>) {
     fixture_with_caps(script, |caps| {
-        caps.limits.max_color_attachments = 3;
+        caps.limits.max_color_attachments = colors;
         caps.limits.max_bind_groups = 3;
         caps.limits.max_bindings_per_group = 7;
         caps.limits.max_vertex_buffers = 2;
@@ -93,18 +97,68 @@ fn geometry(offset: f32, tangent: bool) -> GeometryData {
 }
 
 fn material(effects: bool) -> MaterialDefinition {
+    let fragments = vec![
+        MaterialFragment {
+            name: "sampled".into(),
+            inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            wgsl: "fn sampled(uv: vec2<f32>) -> vec4<f32> { return textureSample(material_texture, material_sampler, uv) * tint; }".into(),
+        },
+        MaterialFragment {
+            name: "properties".into(),
+            inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+            output: MaterialType::Vec2,
+            calls: Vec::new(),
+            wgsl: "fn properties(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.2, 0.7); }".into(),
+        },
+    ];
+    let resources = vec![
+        MaterialResource {
+            name: "material_tint".into(),
+            kind: MaterialResourceKind::UniformVec4,
+            location: BindingLocation {
+                group: 0,
+                binding: 0,
+            },
+        },
+        MaterialResource {
+            name: "material_texture".into(),
+            kind: MaterialResourceKind::Texture2dF32,
+            location: BindingLocation {
+                group: 0,
+                binding: 1,
+            },
+        },
+        MaterialResource {
+            name: "material_sampler".into(),
+            kind: MaterialResourceKind::Sampler { comparison: false },
+            location: BindingLocation {
+                group: 0,
+                binding: 2,
+            },
+        },
+    ];
     let definition = MaterialDefinition::new(
-        vec![
-            MaterialFragment { name: "sampled".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec4, calls: vec![], wgsl: "fn sampled(uv: vec2<f32>) -> vec4<f32> { return textureSample(material_texture, material_sampler, uv) * tint; }".into() },
-            MaterialFragment { name: "properties".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec2, calls: vec![], wgsl: "fn properties(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.2, 0.7); }".into() },
-        ], "unused", vec![MaterialParameter { name: "tint".into(), ty: MaterialType::Vec4, resource: "material_tint".into() }],
-        vec![
-            MaterialResource { name: "material_tint".into(), kind: MaterialResourceKind::UniformVec4, location: BindingLocation { group: 0, binding: 0 } },
-            MaterialResource { name: "material_texture".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 1 } },
-            MaterialResource { name: "material_sampler".into(), kind: MaterialResourceKind::Sampler { comparison: false }, location: BindingLocation { group: 0, binding: 2 } },
-        ], BTreeMap::new(), SurfaceOutput::MetallicRoughnessUv0Normal { properties: "properties".into(), normal: "sample_normal".into() },
-    ).with_code_node(MaterialCodeNode { name: "sample_normal".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec3, calls: vec![], source: fluxel_shader::SourceUnit::new("multi:normal", "fn sample_normal(uv: vec2<f32>) -> vec3<f32> { return textureSample(material_texture, material_sampler, uv).xyz; }"), resources: vec![] })
-    .with_node_graph(MaterialNodeGraph { nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "sampled".into(), inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }], output: MaterialNodeId(1) });
+        fragments, "unused",
+        vec![MaterialParameter { name: "tint".into(), ty: MaterialType::Vec4, resource: "material_tint".into() }],
+        resources, BTreeMap::new(),
+        SurfaceOutput::MetallicRoughnessUv0Normal { properties: "properties".into(), normal: "sample_normal".into() },
+    )
+    .with_code_node(MaterialCodeNode {
+        name: "sample_normal".into(),
+        inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+        output: MaterialType::Vec3,
+        calls: Vec::new(),
+        source: fluxel_shader::SourceUnit::new("multi:normal",
+            "fn sample_normal(uv: vec2<f32>) -> vec3<f32> { return textureSample(material_texture, material_sampler, uv).xyz; }"),
+        resources: Vec::new(),
+    })
+    .with_node_graph(MaterialNodeGraph {
+        nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "sampled".into(),
+            inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }],
+        output: MaterialNodeId(1),
+    });
     if effects {
         definition
             .with_code_node(MaterialCodeNode {
@@ -137,6 +191,29 @@ fn multi_scene(
     crate::RenderViewId,
     ForwardAssets,
 ) {
+    multi_scene_with_effects(second_tangent, true)
+}
+
+fn multi_scene_with_effects(
+    second_tangent: bool,
+    effects: bool,
+) -> (
+    crate::FrameSnapshot<ForwardResources>,
+    crate::RenderViewId,
+    ForwardAssets,
+) {
+    multi_scene_with_effects_and_encoding(second_tangent, effects, crate::TextureEncoding::Linear)
+}
+
+fn multi_scene_with_effects_and_encoding(
+    second_tangent: bool,
+    effects: bool,
+    encoding: crate::TextureEncoding,
+) -> (
+    crate::FrameSnapshot<ForwardResources>,
+    crate::RenderViewId,
+    ForwardAssets,
+) {
     let geometries = AssetStore::<GeometryAsset, GeometryData, ()>::new();
     let materials = AssetStore::<MaterialAsset, MaterialDefinition, ()>::new();
     let textures = AssetStore::<ColorTextureAsset, ColorTextureData, ()>::new();
@@ -144,7 +221,7 @@ fn multi_scene(
     let mut ms = Vec::new();
     let mut ts = Vec::new();
     for (index, (g, m, rgba)) in [
-        (geometry(0.0, true), material(true), [240, 80, 40, 255]),
+        (geometry(0.0, true), material(effects), [240, 80, 40, 255]),
         (
             geometry(0.75, second_tangent),
             material(false),
@@ -171,6 +248,7 @@ fn multi_scene(
                 .commit(
                     ColorTextureData {
                         extent: [1, 1],
+                        encoding,
                         rgba8: rgba.to_vec(),
                     },
                     ResidentBytes::new(4),
@@ -210,6 +288,9 @@ fn multi_scene(
         },
     )
 }
+
+#[path = "encoding_lifecycle.rs"]
+mod encoding_tests;
 
 struct Counting {
     calls: Cell<usize>,
@@ -251,6 +332,29 @@ impl FramePipeline<ForwardResources> for Counting {
             p.write_main_color()
         })
     }
+}
+
+#[test]
+fn deferred_multi_record_without_effects_requires_only_two_color_attachments() {
+    let (device, native) = device_with_colors(Script::AcceptedExact, 2);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (scene, view, assets) = multi_scene_with_effects(true, false);
+    let submission = block_on(renderer.submit_deferred(
+        &DeferredCpuPipeline::new(BoundsVisibility),
+        scene,
+        view,
+        bounds(),
+        &assets,
+    ))
+    .unwrap();
+    let pending = renderer.pending_for(&submission).unwrap();
+    let crate::renderer::PendingWork::Deferred { _frame, .. } = &pending.workload else {
+        panic!("Deferred work")
+    };
+    assert_eq!(_frame.draws.len(), 2);
+    assert!(_frame.effects.is_none());
+    assert!(native.command_calls.load(Ordering::SeqCst) > 0);
+    block_on(renderer.readback(&submission)).unwrap();
 }
 
 #[test]
@@ -365,7 +469,8 @@ fn deferred_multi_record_rejects_missing_inputs_and_mutated_actual_texture_befor
     let crate::renderer::PendingWork::Deferred { _frame, .. } = &mut pending.workload else {
         panic!()
     };
-    Arc::get_mut(&mut _frame.resident).unwrap().textures[1].layout = ImageLayout::General;
+    Arc::get_mut(&mut _frame.resident).unwrap().textures[1].layout =
+        fluxel_rhi::api::ImageLayout::ShaderReadOnly;
     let pending = renderer.pending_for(&submission).unwrap();
     let crate::renderer::PendingWork::Deferred { _frame, plan, .. } = &pending.workload else {
         panic!()

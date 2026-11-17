@@ -1,4 +1,4 @@
-//! Provisional one-mesh Deferred consumer of the existing Scene/Material assets.
+//! Bounded Deferred consumers of immutable Scene and Material assets.
 //!
 //! The fixed geometry and lighting passes prove real MRT, depth sampling and
 //! completion ownership before a wider public pipeline authority is chosen.
@@ -37,7 +37,7 @@ use fluxel_rhi::{
 
 /// Observed owner and compiled-Graph facts for the last accepted Deferred probe.
 ///
-/// This is diagnostic evidence for the provisional one-mesh path, not permission
+/// This is diagnostic evidence for the selected Deferred path, not permission
 /// to name or mutate internal Graph resources.
 #[derive(Clone, Copy, Debug)]
 pub struct DeferredProbeFacts {
@@ -122,13 +122,15 @@ where
         .await
     }
 
-    /// Submits one mesh using a concrete Deferred frame policy.
+    /// Submits compatible scene draws using a concrete Deferred frame policy.
     ///
     /// The policy selects from the same immutable scene/material inputs as
     /// Forward and declares geometry/lighting accesses on the actual private
     /// Graph. Resources remain owned by this renderer through completion.
     /// Color consumes position-only geometry; MetallicRoughness requires
     /// POSITION/NORMAL geometry and uses the selected fixed world-space light.
+    /// Multiple draws currently require the shared UV0-normal metallic/roughness
+    /// G-buffer family. Incompatible lighting families fail before allocation.
     /// This entry does not accept external GPU products or Surface; position
     /// deformation has a separate entry and remains restricted to Color.
     pub async fn submit_deferred<P: FramePipeline<ForwardResources>>(

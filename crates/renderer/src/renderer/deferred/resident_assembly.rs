@@ -90,6 +90,7 @@ where
                 crate::renderer::forward::require_filterable_material_texture(
                     &self.device,
                     data.extent,
+                    data.encoding,
                 )
                 .map_err(|error| self.observe_rhi_error(error))?;
             }
@@ -123,6 +124,7 @@ where
                         bytes,
                         extent: data.extent,
                         bytes_per_row: pitch,
+                        encoding: data.encoding,
                     });
                     fresh_texture_slots.push(slot);
                     final_textures.push(None);

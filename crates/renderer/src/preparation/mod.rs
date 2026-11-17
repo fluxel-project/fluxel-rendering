@@ -19,7 +19,7 @@ pub(crate) use forward::prepare_feature_draws;
 pub use forward::{
     ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardCaptureResources, ForwardDrawInput,
     ForwardDrawRequest, ForwardPreparationError, ForwardResources, ForwardTextureSource,
-    GeometryAsset, GeometryData, PreparedCaptureReceiver, prepare_forward,
+    GeometryAsset, GeometryData, PreparedCaptureReceiver, TextureEncoding, prepare_forward,
     prepare_forward_capture_receiver,
 };
 pub(crate) use forward::{

@@ -126,6 +126,7 @@ fn scene_and_assets() -> (
             .commit(
                 ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: vec![192, 96, 48, 255],
                 },
                 ResidentBytes::new(4),

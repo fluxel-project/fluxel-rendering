@@ -164,8 +164,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             let _ = writeln!(
                 output,
                 "draw[{index}]={{streams:{:?}, texture:{}, vertices:{:?}, vertex_ranges:{:?}, tint:{:?}, transform:{:?}}}",
-                draw.vertex_streams, draw.texture, draw.vertices, draw.vertex_ranges,
-                draw.tint_range, draw.transform_range,
+                draw.vertex_streams,
+                draw.texture,
+                draw.vertices,
+                draw.vertex_ranges,
+                draw.tint_range,
+                draw.transform_range,
             );
         }
         output

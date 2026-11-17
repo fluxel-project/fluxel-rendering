@@ -40,6 +40,7 @@ pub(crate) struct ForwardTextureInput {
     pub(crate) bytes: Vec<u8>,
     pub(crate) extent: [u32; 2],
     pub(crate) bytes_per_row: u32,
+    pub(crate) encoding: crate::preparation::TextureEncoding,
 }
 
 /// One device-local vertex stream and its allocation facts.
@@ -316,7 +317,7 @@ pub(crate) fn plan_forward_resident(
             dimension: TextureDimension::D2,
             extent: [texture.extent[0], texture.extent[1], 1],
             array_layers: 1,
-            format: TextureFormat::Rgba8Unorm,
+            format: texture.encoding.rgba8_format(),
             mip_levels: 1,
             samples: 1,
             usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
@@ -371,7 +372,7 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
             let view = device.create_view(
                 &texture_handle,
                 &TextureViewDesc {
-                    format: TextureFormat::Rgba8Unorm,
+                    format: texture_desc.format,
                     dimension: TextureViewDimension::D2,
                     aspects: fluxel_rhi::api::TextureAspects::COLOR,
                     mips: 0..1,

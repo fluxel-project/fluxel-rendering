@@ -1,6 +1,6 @@
 //! Renderer-local executable Deferred program cache.
 //!
-//! The cache keeps only the currently selected G-buffer and lighting variants.
+//! The cache keeps the selected frame's G-buffer set and one lighting variant.
 //! Submitted frames retain cloned RHI pipeline and binding handles, so replacing
 //! a cache entry does not release the executable handles held by pending work.
 

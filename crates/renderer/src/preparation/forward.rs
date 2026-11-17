@@ -55,8 +55,31 @@ impl AssetKind for ColorTextureAsset {}
 pub struct ColorTextureData {
     /// Nonzero texture width and height.
     pub extent: [u32; 2],
+    /// Transfer encoding of the supplied RGBA8 payload.
+    pub encoding: TextureEncoding,
     /// Exactly four bytes per texel in row-major order.
     pub rgba8: Vec<u8>,
+}
+
+/// Transfer encoding carried by an RGBA8 color-texture asset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextureEncoding {
+    /// Bytes are already linear RGBA values.
+    Linear,
+    /// RGB bytes are sRGB values decoded by the sampled texture format; alpha
+    /// remains linear as required by the RGBA8 sRGB format contract.
+    Srgb,
+}
+
+impl TextureEncoding {
+    /// The exact RHI format that preserves this payload's sampling semantics.
+    #[must_use]
+    pub fn rgba8_format(self) -> fluxel_rhi::api::TextureFormat {
+        match self {
+            Self::Linear => fluxel_rhi::api::TextureFormat::Rgba8Unorm,
+            Self::Srgb => fluxel_rhi::api::TextureFormat::Rgba8UnormSrgb,
+        }
+    }
 }
 
 #[path = "forward_capture.rs"]

@@ -182,9 +182,12 @@ mod execute;
 mod prepare;
 mod sampler;
 mod surface_composite;
+#[cfg(test)]
+pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{
     default_material_sampler, material_requires_ordinary_sampler,
-    require_filterable_material_texture, validate_ordinary_sampler, validate_sampled_texture_owner,
+    require_filterable_material_texture, validate_capture_material_texture,
+    validate_material_texture_owner, validate_ordinary_sampler,
 };
 mod program;
 pub use captured::CaptureTextureSlot;

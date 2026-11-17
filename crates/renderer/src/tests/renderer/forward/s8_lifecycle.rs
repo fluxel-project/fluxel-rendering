@@ -126,6 +126,7 @@ fn assets() -> Assets {
                 .commit(
                     ColorTextureData {
                         extent: [1, 1],
+                        encoding: crate::TextureEncoding::Linear,
                         rgba8: vec![index as u8 + 1, 64, 192, 255],
                     },
                     ResidentBytes::new(4),
@@ -142,6 +143,7 @@ fn assets() -> Assets {
             .commit(
                 ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: vec![250, 31, 53, 255],
                 },
                 ResidentBytes::new(4),

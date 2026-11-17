@@ -52,6 +52,7 @@ fn resources() -> ForwardResources {
             .commit(
                 ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: vec![0; 4],
                 },
                 ResidentBytes::new(4),

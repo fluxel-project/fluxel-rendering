@@ -89,6 +89,7 @@ fn scene(
             .commit(
                 ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: vec![255; 4],
                 },
                 ResidentBytes::new(4),

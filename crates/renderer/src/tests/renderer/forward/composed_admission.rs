@@ -143,6 +143,7 @@ fn unavailable_resources() -> ForwardResources {
             .commit(
                 crate::ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: vec![0; 4],
                 },
                 ResidentBytes::new(4),
@@ -225,6 +226,7 @@ fn assets_with_texture_payload(bytes: Vec<u8>) -> (ForwardResources, crate::Forw
             .commit(
                 crate::ColorTextureData {
                     extent: [1, 1],
+                    encoding: crate::TextureEncoding::Linear,
                     rgba8: bytes,
                 },
                 ResidentBytes::new(byte_len),

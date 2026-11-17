@@ -92,6 +92,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
             return Err(Error::WrongDevice);
         }
         if self.slot.name() != expected_slot
+            || self.desc.format != fluxel_rhi::api::TextureFormat::Rgba8Unorm
             || !self.filterable
             || !self.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         {

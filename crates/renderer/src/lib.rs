@@ -39,7 +39,7 @@ pub use preparation::{
     GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData, GeometryDraw,
     GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding, LinearSpecularLod,
     MaterialPreparationError, PreparedCaptureReceiver, PreparedGeometry, PreparedGeometryBindings,
-    PreparedMaterial, SpecularIblImage, SpecularIblMip, prepare_forward,
+    PreparedMaterial, SpecularIblImage, SpecularIblMip, TextureEncoding, prepare_forward,
     prepare_forward_capture_receiver, prepare_material,
 };
 pub use render_scene::{

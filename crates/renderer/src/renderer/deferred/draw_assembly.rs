@@ -54,12 +54,14 @@ pub(super) fn draws<B: ResourceBackend>(
                 resource: BindingResource::TextureView(&texture.view),
             },
         ];
+        crate::renderer::forward::validate_material_texture_owner(
+            resident,
+            textures[index],
+            device.id(),
+            &inputs[index],
+            crate::renderer::forward::material_requires_ordinary_sampler(&prepared[index]),
+        )?;
         if crate::renderer::forward::material_requires_ordinary_sampler(&prepared[index]) {
-            crate::renderer::forward::validate_sampled_texture_owner(
-                resident,
-                textures[index],
-                device.id(),
-            )?;
             let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
             crate::renderer::forward::validate_ordinary_sampler(&sampler.desc)?;
             entries.push(BindGroupEntry {

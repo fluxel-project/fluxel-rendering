@@ -10,8 +10,8 @@ pub(crate) use deformation::{DeferredDeformation, DeformationAllocationPlan};
 pub(crate) use specular_environment::{SpecularEnvironmentFrameOwner, SpecularIblCopyFootprint};
 mod forward;
 pub(crate) use deferred::{
-    DeferredDraw, DeferredFrame, DeferredPublication, DeferredSurfaceFrame, allocate_deferred_scene_color,
-    plan_deferred_gbuffer_with_effects,
+    DeferredDraw, DeferredFrame, DeferredPublication, DeferredSurfaceFrame,
+    allocate_deferred_scene_color, plan_deferred_gbuffer_with_effects,
 };
 pub(crate) use environment::EnvironmentFrameOwner;
 mod forward_cache;
