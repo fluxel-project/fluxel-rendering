@@ -16,7 +16,7 @@ pub(in crate::graph::deferred) fn validate_draw_uniform_ranges<B: ResourceBacken
     if alignment == 0 {
         return Err(Error::InvalidRange);
     }
-    if !matches!(draw.transform_bytes, 64 | 128) {
+    if !matches!(draw.transform_bytes, 64 | 192) {
         return Err(Error::InvalidRange);
     }
     for (range, bytes) in [

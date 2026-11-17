@@ -37,6 +37,17 @@ fn pbr_uv0_layout() -> GeometryLayout {
     layout
 }
 
+fn pbr_uv0_normal_layout() -> GeometryLayout {
+    let mut layout = pbr_uv0_layout();
+    layout.streams[0].stride = 48;
+    layout.streams[0].attributes.push(GeometryAttribute {
+        semantic: "TANGENT".into(),
+        offset: 32,
+        format: VertexFormat::Float32(4),
+    });
+    layout
+}
+
 fn add_material_evaluators(
     mut request: fluxel_shader::ShaderCompositionRequest,
 ) -> fluxel_shader::ShaderCompositionRequest {
@@ -97,4 +108,29 @@ fn pbr_uv0_request_refuses_missing_or_wrong_uv0_semantic() {
     let mut wrong = pbr_uv0_layout();
     wrong.streams[0].attributes[2].format = VertexFormat::Float32(3);
     assert!(crate::pbr::gbuffer_uv0_request(&wrong).is_none());
+}
+
+#[test]
+fn pbr_uv0_normal_requests_require_tangent_and_compose_tbn_path() {
+    for request in [
+        crate::pbr::forward_uv0_normal_request(&pbr_uv0_normal_layout()),
+        crate::pbr::gbuffer_uv0_normal_request(&pbr_uv0_normal_layout()),
+    ] {
+        let mut request = request.expect("POSITION/NORMAL/UV0/TANGENT layout");
+        request.source_units.push(SourceUnit::new(
+            "pbr-uv0-normal-material",
+            "fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.5, 1.0); }\nfn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; }\nfn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(uv, 1.0); }",
+        ));
+        ShaderComposer::new()
+            .compose(&request)
+            .expect("normal-map PBR composes");
+        assert_eq!(request.vertex_inputs[3].semantic, "TANGENT");
+        assert_eq!(request.vertex_inputs[3].location, 3);
+    }
+    let mut missing = pbr_uv0_normal_layout();
+    missing.streams[0].attributes.pop();
+    assert!(crate::pbr::forward_uv0_normal_request(&missing).is_none());
+    let mut wrong = pbr_uv0_normal_layout();
+    wrong.streams[0].attributes[3].format = VertexFormat::Float32(3);
+    assert!(crate::pbr::gbuffer_uv0_normal_request(&wrong).is_none());
 }

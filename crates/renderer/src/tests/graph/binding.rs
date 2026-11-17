@@ -4,6 +4,7 @@ use fluxel_rhi::api::{
     TextureUsage,
 };
 
+use crate::graph::binding::TextureBindingKind;
 use crate::graph::{compiler::GraphCompiler, definition::GraphBuilder};
 
 fn descriptor() -> BufferDesc {
@@ -42,6 +43,37 @@ fn texture_manifest() -> TextureBindingManifest {
     graph
         .add_pass("draw", |pass| {
             let _ = pass.write_texture_with_use(
+                texture,
+                TextureRange::new(TextureAspects::COLOR, 0..1, 0..1),
+                TextureUses {
+                    stages: StageMask::COLOR_OUTPUT,
+                    accesses: AccessMask::COLOR_WRITE,
+                },
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )?;
+            pass.side_effect();
+            Ok(())
+        })
+        .unwrap();
+    GraphCompiler
+        .compile(&graph)
+        .unwrap()
+        .texture_bindings()
+        .clone()
+}
+
+fn managed_surface_manifest() -> TextureBindingManifest {
+    let mut graph = GraphBuilder::default();
+    let texture = graph
+        .import_surface_texture(TextureDesc {
+            usage: TextureUsage::RENDER_ATTACHMENT,
+            ..texture_desc()
+        })
+        .unwrap();
+    graph
+        .add_pass("surface", |pass| {
+            pass.write_texture_with_use(
                 texture,
                 TextureRange::new(TextureAspects::COLOR, 0..1, 0..1),
                 TextureUses {
@@ -369,6 +401,42 @@ fn texture_manifest_checks_description_ranges_device_and_incoming_layout() {
     assert_eq!(
         manifest.validate(device, &wrong_layout),
         Err(BindingError::IncompatibleIncomingState)
+    );
+}
+
+#[test]
+fn texture_binding_kind_cannot_forge_surface_or_ordinary_provenance() {
+    let device = DeviceId::allocate().unwrap();
+    let ordinary = texture_manifest();
+    let mut forged_surface = texture_bindings(&ordinary, device);
+    forged_surface[0].kind = TextureBindingKind::RhiManagedSurface;
+    forged_surface[0].initial = TextureUses {
+        stages: StageMask::EMPTY,
+        accesses: AccessMask::EMPTY,
+    };
+    forged_surface[0].layout = ImageLayout::Undefined;
+    assert_eq!(
+        ordinary.validate(device, &forged_surface),
+        Err(BindingError::IncompatibleDescriptor)
+    );
+
+    let managed = managed_surface_manifest();
+    let requirement = &managed.requirements()[0];
+    let forged_ordinary = TextureBinding {
+        slot: requirement.slot,
+        instance: ResourceInstanceId::fresh().unwrap(),
+        device,
+        desc: requirement.desc.clone(),
+        initial: TextureUses {
+            stages: StageMask::EMPTY,
+            accesses: AccessMask::EMPTY,
+        },
+        layout: ImageLayout::Undefined,
+        kind: TextureBindingKind::Ordinary,
+    };
+    assert_eq!(
+        managed.validate(device, &[forged_ordinary]),
+        Err(BindingError::IncompatibleDescriptor)
     );
 }
 

@@ -48,6 +48,7 @@ pub(super) const TRANSFORMS: &str = r#"
 struct PbrTransforms {
     clip_from_local: mat4x4<f32>,
     normal_from_local: mat4x4<f32>,
+    world_from_local: mat4x4<f32>,
 };
 @group(1) @binding(0) var<uniform> pbr_transforms: PbrTransforms;
 struct PbrVertexOutput {
@@ -142,6 +143,21 @@ fn deferred_gbuffer_fs(input: PbrUv0VertexOutput) -> PbrGbufferUv0Output {
     output.normal_roughness = vec4<f32>(pbr_normal(input.world_normal) * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.04, 1.0));
     return output;
 }
+"#;
+
+pub(super) const FORWARD_UV0_NORMAL: &str = r#"
+struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) local_normal: vec3<f32>, @location(1) tangent: vec4<f32>, @location(2) uv0: vec2<f32>, };
+@vertex fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); o.local_normal = normal; o.tangent = tangent; o.uv0 = uv0; return o; }
+fn pbr_world_normal(local_normal: vec3<f32>, tangent: vec4<f32>, sampled: vec3<f32>) -> vec3<f32> { let n = pbr_normal((pbr_transforms.normal_from_local * vec4<f32>(local_normal, 0.0)).xyz); let raw_t = (pbr_transforms.world_from_local * vec4<f32>(tangent.xyz, 0.0)).xyz; let orthogonal = raw_t - n * dot(n, raw_t); let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9); let t = select(pbr_normal(cross(n, axis)), pbr_normal(orthogonal), dot(orthogonal, orthogonal) > 1e-12); let tangent_sign = select(1.0, -1.0, tangent.w < 0.0); let handedness = tangent_sign * pbr_transforms.normal_from_local[3].x; let b = cross(n, t) * handedness; return pbr_normal(mat3x3<f32>(t, b, n) * sampled); }
+@fragment fn forward_fs(input: PbrNormalVertexOutput) -> @location(0) vec4<f32> { return vec4<f32>(pbr_direct_light(evaluate_material_uv0(input.uv0).rgb, evaluate_metallic_roughness_uv0(input.uv0), pbr_world_normal(input.local_normal, input.tangent, evaluate_normal_uv0(input.uv0))), 1.0); }
+"#;
+
+pub(super) const GBUFFER_UV0_NORMAL: &str = r#"
+struct PbrNormalGbufferOutput { @location(0) base_metal: vec4<f32>, @location(1) normal_roughness: vec4<f32>, };
+struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) local_normal: vec3<f32>, @location(1) tangent: vec4<f32>, @location(2) uv0: vec2<f32>, };
+@vertex fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); o.local_normal = normal; o.tangent = tangent; o.uv0 = uv0; return o; }
+fn pbr_world_normal(local_normal: vec3<f32>, tangent: vec4<f32>, sampled: vec3<f32>) -> vec3<f32> { let n = pbr_normal((pbr_transforms.normal_from_local * vec4<f32>(local_normal, 0.0)).xyz); let raw_t = (pbr_transforms.world_from_local * vec4<f32>(tangent.xyz, 0.0)).xyz; let orthogonal = raw_t - n * dot(n, raw_t); let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9); let t = select(pbr_normal(cross(n, axis)), pbr_normal(orthogonal), dot(orthogonal, orthogonal) > 1e-12); let tangent_sign = select(1.0, -1.0, tangent.w < 0.0); let handedness = tangent_sign * pbr_transforms.normal_from_local[3].x; let b = cross(n, t) * handedness; return pbr_normal(mat3x3<f32>(t, b, n) * sampled); }
+@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput) -> PbrNormalGbufferOutput { let base = clamp(evaluate_material_uv0(input.uv0).rgb, vec3<f32>(0.0), vec3<f32>(1.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); var o: PbrNormalGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(pbr_normal(pbr_world_normal(input.local_normal, input.tangent, evaluate_normal_uv0(input.uv0))) * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.04, 1.0)); return o; }
 "#;
 
 pub(super) const LIGHTING: &str = r#"

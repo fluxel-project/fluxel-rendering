@@ -8,10 +8,10 @@ fn pbr_compiled_plan_refuses_short_or_retyped_transform_footprints_before_work()
     let (snapshot, view, assets) =
         scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
     let mut frame = pbr_frame(&mut renderer, &snapshot, view, &assets);
-    assert_eq!(frame.draw.transform_bytes, 128);
+    assert_eq!(frame.draw.transform_bytes, 192);
     assert_eq!(
         frame.draw.transform_range.end - frame.draw.transform_range.start,
-        128
+        192
     );
     let plan = crate::graph::DeferredPlan::compile(
         &device,
@@ -135,5 +135,59 @@ fn pbr_missing_invalid_or_singular_normals_refuse_before_backend_allocation() {
             Err(RendererError::ForwardPreparation(_))
         ));
         assert_eq!(counts(&native), before);
+    }
+}
+
+#[test]
+fn normal_map_tangent_payloads_refuse_before_backend_work_in_both_consumers() {
+    let overflowing_world = RenderTransform::from_columns([
+        [2.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+    .expect("finite affine world transform");
+    let cases = [
+        ([f32::NAN, 0.0, 0.0, 1.0], RenderTransform::identity()),
+        ([0.0, 0.0, 0.0, 1.0], RenderTransform::identity()),
+        ([1.0, 0.0, 0.0, 0.0], RenderTransform::identity()),
+        ([0.0, 0.0, 1.0, 1.0], RenderTransform::identity()),
+        ([f32::MAX, 0.0, 0.0, 1.0], overflowing_world),
+    ];
+    for (tangent, transform) in cases {
+        let (device, native) = pbr_device(Script::AcceptedExact);
+        let mut renderer = Renderer::new(device).expect("renderer");
+        let (snapshot, view, assets) = scene_and_assets_with_material(
+            uv0_tangent_geometry(tangent),
+            transform,
+            uv0_normal_node_material(),
+        );
+        let before = counts(&native);
+        for deferred in [false, true] {
+            let result = if deferred {
+                block_on(renderer.submit_deferred(
+                    &DeferredCpuPipeline::new(BoundsVisibility),
+                    snapshot.clone(),
+                    view,
+                    bounds(),
+                    &assets,
+                ))
+            } else {
+                block_on(renderer.submit_forward(
+                    &ForwardCpuPipeline::new(BoundsVisibility),
+                    snapshot.clone(),
+                    view,
+                    bounds(),
+                    &assets,
+                ))
+            };
+            assert!(matches!(
+                result,
+                Err(RendererError::ForwardPreparation(
+                    crate::ForwardPreparationError::InvalidTangent { .. }
+                ))
+            ));
+            assert_eq!(counts(&native), before);
+        }
     }
 }

@@ -13,10 +13,10 @@ use fluxel_material::{
 use fluxel_rhi::api::{Device, Error, PlanId, VertexFormat, VertexStepMode};
 
 use crate::{
-    prepare_forward, BoundsVisibility, ColorTextureAsset, ColorTextureData, DeferredCpuPipeline,
-    ForwardAssets, ForwardCpuPipeline, ForwardResources, FramePipeline, GeometryAsset,
-    GeometryAttribute, GeometryData, GeometryLayout, GeometryStream, RenderChange, RenderChangeSet,
-    RenderRecord, RenderScene, RenderTransform, RenderView, RendererError, SceneAssetRef,
+    BoundsVisibility, ColorTextureAsset, ColorTextureData, DeferredCpuPipeline, ForwardAssets,
+    ForwardCpuPipeline, ForwardResources, FramePipeline, GeometryAsset, GeometryAttribute,
+    GeometryData, GeometryLayout, GeometryStream, RenderChange, RenderChangeSet, RenderRecord,
+    RenderScene, RenderTransform, RenderView, RendererError, SceneAssetRef, prepare_forward,
 };
 
 fn pbr_device(script: Script) -> (Device<WitnessBackend>, Arc<Native>) {
@@ -25,7 +25,7 @@ fn pbr_device(script: Script) -> (Device<WitnessBackend>, Arc<Native>) {
         caps.limits.max_bind_groups = 2;
         caps.limits.max_bindings_per_group = 3;
         caps.limits.max_vertex_buffers = 2;
-        caps.limits.max_vertex_attributes = 3;
+        caps.limits.max_vertex_attributes = 4;
     })
 }
 
@@ -281,6 +281,94 @@ fn uv0_node_material() -> MaterialDefinition {
     ).with_node_graph(MaterialNodeGraph { nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "sampled".into(), inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }], output: MaterialNodeId(1) })
 }
 
+fn uv0_normal_node_material() -> MaterialDefinition {
+    MaterialDefinition::new(
+        vec![
+            MaterialFragment {
+                name: "sampled".into(),
+                inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+                output: MaterialType::Vec4,
+                calls: Vec::new(),
+                wgsl: "fn sampled(uv: vec2<f32>) -> vec4<f32> { return textureSample(material_texture, material_sampler, uv) * tint; }".into(),
+            },
+            MaterialFragment {
+                name: "properties".into(),
+                inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+                output: MaterialType::Vec2,
+                calls: Vec::new(),
+                wgsl: "fn properties(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.25, 0.6); }".into(),
+            },
+        ],
+        "unused",
+        vec![MaterialParameter { name: "tint".into(), ty: MaterialType::Vec4, resource: "material_tint".into() }],
+        vec![
+            MaterialResource { name: "material_tint".into(), kind: MaterialResourceKind::UniformVec4, location: BindingLocation { group: 0, binding: 0 } },
+            MaterialResource { name: "material_texture".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 1 } },
+            MaterialResource { name: "material_sampler".into(), kind: MaterialResourceKind::Sampler { comparison: false }, location: BindingLocation { group: 0, binding: 2 } },
+        ],
+        BTreeMap::new(),
+        SurfaceOutput::MetallicRoughnessUv0Normal { properties: "properties".into(), normal: "sample_normal".into() },
+    )
+    .with_code_node(fluxel_material::MaterialCodeNode {
+        name: "sample_normal".into(),
+        inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+        output: MaterialType::Vec3,
+        calls: Vec::new(),
+        source: fluxel_shader::SourceUnit::new(
+            "renderer-test:sample-normal",
+            "fn sample_normal(uv: vec2<f32>) -> vec3<f32> { return textureSample(material_texture, material_sampler, uv).xyz; }",
+        ),
+        resources: Vec::new(),
+    })
+    .with_node_graph(MaterialNodeGraph { nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "sampled".into(), inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }], output: MaterialNodeId(1) })
+}
+
+fn uv0_tangent_geometry(tangent: [f32; 4]) -> GeometryData {
+    let mut bytes = Vec::new();
+    for position in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+        for value in position
+            .into_iter()
+            .chain([0.0, 0.0, 1.0])
+            .chain([0.0, 0.0])
+            .chain(tangent)
+        {
+            bytes.extend(value.to_le_bytes());
+        }
+    }
+    GeometryData {
+        layout: GeometryLayout {
+            streams: vec![GeometryStream {
+                stride: 48,
+                step_mode: VertexStepMode::Vertex,
+                attributes: vec![
+                    GeometryAttribute {
+                        semantic: "POSITION".into(),
+                        offset: 0,
+                        format: VertexFormat::Float32(3),
+                    },
+                    GeometryAttribute {
+                        semantic: "NORMAL".into(),
+                        offset: 12,
+                        format: VertexFormat::Float32(3),
+                    },
+                    GeometryAttribute {
+                        semantic: "UV0".into(),
+                        offset: 24,
+                        format: VertexFormat::Float32(2),
+                    },
+                    GeometryAttribute {
+                        semantic: "TANGENT".into(),
+                        offset: 32,
+                        format: VertexFormat::Float32(4),
+                    },
+                ],
+            }],
+        },
+        streams: vec![bytes],
+        vertices: 0..3,
+    }
+}
+
 fn pbr_frame(
     renderer: &mut Renderer<WitnessBackend>,
     snapshot: &crate::FrameSnapshot<ForwardResources>,
@@ -299,7 +387,7 @@ fn pbr_frame(
 }
 
 #[test]
-fn pbr_material_submits_through_forward_and_deferred_with_128_byte_transform() {
+fn pbr_material_submits_through_forward_and_deferred_with_192_byte_transform() {
     let (device, native) = pbr_device(Script::AcceptedExact);
     let mut renderer = Renderer::new(device).unwrap();
     let (snapshot, view, assets) =
@@ -441,10 +529,10 @@ fn pbr_deferred_surface_consumes_actual_lease_format_and_exact_transform_owner()
         let crate::renderer::PendingWork::DeferredSurface { _frame, .. } = &pending.workload else {
             panic!("must retain an actual Deferred Surface owner");
         };
-        assert_eq!(_frame.draw.transform_bytes, 128);
+        assert_eq!(_frame.draw.transform_bytes, 192);
         assert_eq!(
             _frame.draw.transform_range.end - _frame.draw.transform_range.start,
-            128
+            192
         );
         assert_eq!(_frame.color_format, format);
         block_on(renderer.complete(&submission)).expect("Surface completion");

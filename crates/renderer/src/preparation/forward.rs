@@ -15,8 +15,8 @@ use crate::{FeatureHandle, PreparedFrame, RenderId, RenderTransform, RenderView,
 
 use super::ForwardDrawSource;
 use super::{
-    GeometryLayout, MaterialPreparationError, PreparedMaterial, VertexLayoutKey, prepare_material,
-    vertex_layout_key,
+    prepare_material, vertex_layout_key, GeometryLayout, MaterialPreparationError,
+    PreparedMaterial, VertexLayoutKey,
 };
 
 #[path = "forward_pbr.rs"]
@@ -263,7 +263,7 @@ impl ForwardDrawInput {
     /// Returns the exact transform-uniform payload size selected for this draw.
     pub const fn transform_uniform_bytes(&self) -> u64 {
         if self.normal_from_local.is_some() {
-            128
+            192
         } else {
             64
         }
@@ -365,6 +365,18 @@ pub enum ForwardPreparationError {
         source: ForwardDrawSource,
         /// Stream containing the invalid normal.
         stream: usize,
+    },
+    /// Normal-map PBR requires a finite non-zero tangent with a non-zero handedness.
+    InvalidTangent {
+        /// Draw requesting the tangent.
+        source: ForwardDrawSource,
+        /// Stream containing the invalid tangent.
+        stream: usize,
+    },
+    /// Normal-map PBR geometry did not expose `TANGENT` as Float32x4.
+    MissingTangent {
+        /// Draw requesting the tangent.
+        source: ForwardDrawSource,
     },
     /// PBR needs an affine world transform with an invertible linear part.
     NonInvertibleNormalTransform {
@@ -505,7 +517,11 @@ fn prepare_draw(
             crate::pbr::forward_uv0_request(&geometry.value().layout)
                 .ok_or(ForwardPreparationError::MissingUv0 { source })?
         }
-        fluxel_material::SurfaceOutput::ColorUv0 | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => {
+        fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => {
+            crate::pbr::forward_uv0_normal_request(&geometry.value().layout)
+                .ok_or(ForwardPreparationError::MissingNormal { source })?
+        }
+        fluxel_material::SurfaceOutput::ColorUv0 => {
             return Err(ForwardPreparationError::MaterialBindingSchema { source });
         }
     };
@@ -518,6 +534,10 @@ fn prepare_draw(
         prepared.geometry(),
         transform,
         crate::pbr::is_pbr(material.value().output()),
+        matches!(
+            material.value().output(),
+            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+        ),
         source,
     )?;
     let clip_from_local = multiply_columns(view.transform, transform);
@@ -549,47 +569,6 @@ fn prepare_draw(
 /// returned draws so a later device coordinator cannot accidentally apply the
 /// ranges to an un-ordered input vector. It preserves candidate order and only
 /// joins neighboring draws that select identical raster-program facts.
-pub(crate) fn batch_forward_draws(draws: Vec<ForwardDrawInput>) -> ForwardPreparedBatches {
-    let runs = coalesce_adjacent(draws, ForwardCompatibilityKey::from_draw);
-    let mut ordered = Vec::new();
-    let mut batches = Vec::with_capacity(runs.len());
-    for (key, members) in runs {
-        let start = ordered.len();
-        ordered.extend(members);
-        batches.push(ForwardDrawBatch {
-            key,
-            draws: start..ordered.len(),
-        });
-    }
-    ForwardPreparedBatches {
-        draws: ordered,
-        batches,
-    }
-}
-
-fn coalesce_adjacent<T, K>(items: Vec<T>, key_for: impl Fn(&T) -> K) -> Vec<(K, Vec<T>)>
-where
-    K: Eq,
-{
-    let mut runs: Vec<(K, Vec<T>)> = Vec::new();
-    for item in items {
-        let key = key_for(&item);
-        match runs.last_mut() {
-            Some((last_key, members)) if *last_key == key => members.push(item),
-            _ => runs.push((key, vec![item])),
-        }
-    }
-    runs
-}
-
-#[cfg(test)]
-#[path = "../tests/preparation/forward_batches.rs"]
-mod forward_batches;
-
-#[cfg(test)]
-#[path = "../tests/preparation/feature_draws.rs"]
-mod feature_draws;
-
-#[cfg(test)]
-#[path = "../tests/preparation/forward_pbr.rs"]
-mod forward_pbr_tests;
+#[path = "forward_batch.rs"]
+mod forward_batch;
+pub(crate) use forward_batch::batch_forward_draws;

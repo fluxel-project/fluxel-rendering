@@ -9,8 +9,8 @@ use fluxel_shader::{
 };
 
 use crate::{
-    PreparedMaterial,
     renderer::admission::{self, PipelineCapabilityFacts},
+    PreparedMaterial,
 };
 
 use super::templates::{LIGHTING_TEMPLATE, SCENE_COLOR_COMPOSITE_TEMPLATE};
@@ -53,7 +53,7 @@ where
         pbr: bool,
     ) -> std::result::Result<Arc<GbufferProgram<B>>, RendererError> {
         self.ensure_open()?;
-        let transform_uniform_bytes = if pbr { 128 } else { 64 };
+        let transform_uniform_bytes = if pbr { 192 } else { 64 };
         let key = program_cache::GbufferProgramKey::for_material(
             self.device.id(),
             prepared,
@@ -467,7 +467,21 @@ where
         self.device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some(label.into()),
-                entries: vec![uniform(0, bytes, ShaderStage::Vertex)],
+                entries: vec![BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: if bytes == 192 {
+                        vec![ShaderStage::Vertex, ShaderStage::Fragment]
+                    } else {
+                        vec![ShaderStage::Vertex]
+                    },
+                    ty: BindingType::UniformBuffer {
+                        dynamic_offset: true,
+                        min_size: bytes,
+                    },
+                    count: BindingCount::One,
+                    partially_bound: false,
+                    nonuniform_indexing: false,
+                }],
             })
             .map_err(|error| self.observe_rhi_error(error))
     }

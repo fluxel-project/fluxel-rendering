@@ -141,11 +141,21 @@ where
             .device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some("Forward transform bindings".into()),
-                entries: vec![uniform_entry(
-                    0,
-                    transform_uniform_bytes,
-                    ShaderStage::Vertex,
-                )],
+                entries: vec![BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: if transform_uniform_bytes == 192 {
+                        vec![ShaderStage::Vertex, ShaderStage::Fragment]
+                    } else {
+                        vec![ShaderStage::Vertex]
+                    },
+                    ty: BindingType::UniformBuffer {
+                        dynamic_offset: true,
+                        min_size: transform_uniform_bytes,
+                    },
+                    count: BindingCount::One,
+                    partially_bound: false,
+                    nonuniform_indexing: false,
+                }],
             })
             .map_err(|error| self.observe_forward_error("transform layout", error))?;
         let layout = self

@@ -5,6 +5,7 @@ fn transform_and_tint_have_distinct_aligned_physical_ranges() {
     let input = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: None,
+        world_from_local: None,
         tint: [0.25, 0.5, 0.75, 1.0],
     };
     let packed = pack_forward_uniforms(&[input], 256, 512).unwrap();
@@ -27,6 +28,7 @@ fn empty_input_and_capacity_failures_remain_bounded() {
     let input = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: None,
+        world_from_local: None,
         tint: [1.0; 4],
     };
     assert!(matches!(
@@ -40,6 +42,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
     let color = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: None,
+        world_from_local: None,
         tint: [0.25, 0.5, 0.75, 1.0],
     };
     let normal = ForwardUniformInput {
@@ -50,6 +53,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
             [0.0, 0.0, 4.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ]),
+        world_from_local: Some(crate::RenderTransform::identity().columns()),
         tint: [1.0; 4],
     };
     let packed = pack_forward_uniforms(&[color, normal], 256, 1024).unwrap();
@@ -63,6 +67,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
             &[ForwardUniformInput {
                 transform: crate::RenderTransform::identity().columns(),
                 normal_from_local: Some(crate::RenderTransform::identity().columns()),
+                world_from_local: Some(crate::RenderTransform::identity().columns()),
                 tint: [1.0; 4],
             }],
             256,
@@ -77,10 +82,31 @@ fn non_finite_normal_matrix_is_rejected_before_byte_allocation() {
     let input = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: Some([[f32::NAN, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]]),
+        world_from_local: Some(crate::RenderTransform::identity().columns()),
         tint: [1.0; 4],
     };
     assert!(matches!(
         pack_forward_uniforms(&[input], 256, 1024),
         Err(Error::InvalidRange)
     ));
+}
+
+#[test]
+fn pbr_normal_and_world_matrices_must_be_paired() {
+    let matrix = crate::RenderTransform::identity().columns();
+    for (normal_from_local, world_from_local) in [(Some(matrix), None), (None, Some(matrix))] {
+        assert!(matches!(
+            pack_forward_uniforms(
+                &[ForwardUniformInput {
+                    transform: matrix,
+                    normal_from_local,
+                    world_from_local,
+                    tint: [1.0; 4]
+                }],
+                256,
+                1024
+            ),
+            Err(Error::InvalidRange)
+        ));
+    }
 }

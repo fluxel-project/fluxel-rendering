@@ -1,6 +1,6 @@
 //! PBR Forward normal-transform tests.
 
-use super::forward_pbr::normal_matrix;
+use super::forward_pbr::{max_component, normal_matrix};
 
 #[test]
 fn affine_inverse_transpose_uses_world_from_local_not_clip_space() {
@@ -68,4 +68,19 @@ fn pbr_representable_normal_matrix_survives_large_finite_model_scale() {
     .unwrap();
     let normal = normal_matrix(world).unwrap();
     assert!((normal[0][0] / 1e-20 - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn tangent_angle_scaling_keeps_large_finite_components_representable() {
+    let normal = [1.0e30_f32, 0.0, 0.0];
+    let tangent = [1.0e29_f32, 1.0e30_f32, 0.0];
+    let normal_scale = max_component(normal);
+    let tangent_scale = max_component(tangent);
+    let n = normal.map(|value| value / normal_scale);
+    let t = tangent.map(|value| value / tangent_scale);
+    let dot = n[0] * t[0] + n[1] * t[1] + n[2] * t[2];
+    assert!(
+        dot * dot < 0.999_999,
+        "finite nonparallel tangent remains valid without f32 overflow"
+    );
 }

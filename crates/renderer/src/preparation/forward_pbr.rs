@@ -11,13 +11,14 @@ pub(super) fn normal_from_local(
     prepared: &PreparedGeometry,
     transform: RenderTransform,
     pbr: bool,
+    normal_map: bool,
     source: ForwardDrawSource,
 ) -> Result<Option<[[f32; 4]; 4]>, ForwardPreparationError> {
     if !pbr {
         return Ok(None);
     }
     let normal = inverse_transpose(transform, source)?;
-    validate_normals(geometry, prepared, normal, source)?;
+    validate_normals(geometry, prepared, normal, transform, normal_map, source)?;
     Ok(Some(normal))
 }
 
@@ -25,6 +26,8 @@ fn validate_normals(
     geometry: &GeometryData,
     prepared: &PreparedGeometry,
     normal_from_local: [[f32; 4]; 4],
+    world_from_local: RenderTransform,
+    normal_map: bool,
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     let mut found = false;
@@ -83,9 +86,155 @@ fn validate_normals(
             }
         }
     }
+    if !found {
+        return Err(ForwardPreparationError::MissingNormal { source });
+    }
+    if normal_map {
+        validate_tangents(
+            geometry,
+            prepared,
+            normal_from_local,
+            world_from_local,
+            source,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_tangents(
+    geometry: &GeometryData,
+    prepared: &PreparedGeometry,
+    normal_from_local: [[f32; 4]; 4],
+    world_from_local: RenderTransform,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    let mut found = false;
+    for (stream_index, (layout, bytes)) in
+        prepared.streams.iter().zip(&geometry.streams).enumerate()
+    {
+        for attribute in &layout.attributes {
+            if attribute.location != 3 {
+                continue;
+            }
+            if !matches!(attribute.format, VertexFormat::Float32(4)) {
+                return Err(ForwardPreparationError::MissingTangent { source });
+            }
+            found = true;
+            for vertex in geometry.vertices.clone() {
+                let start = usize::try_from(u64::from(vertex) * layout.stride + attribute.offset)
+                    .map_err(|_| ForwardPreparationError::InvalidTangent {
+                    source,
+                    stream: stream_index,
+                })?;
+                let values: [f32; 4] = std::array::from_fn(|component| {
+                    bytes
+                        .get(start + component * 4..start + component * 4 + 4)
+                        .and_then(|value| value.try_into().ok())
+                        .map(f32::from_le_bytes)
+                        .unwrap_or(f32::NAN)
+                });
+                let length_squared =
+                    values[0] * values[0] + values[1] * values[1] + values[2] * values[2];
+                if !values.iter().all(|value| value.is_finite())
+                    || length_squared == 0.0
+                    || !matches!(values[3], 1.0 | -1.0)
+                {
+                    return Err(ForwardPreparationError::InvalidTangent {
+                        source,
+                        stream: stream_index,
+                    });
+                }
+                let normal = normal_for_vertex(geometry, prepared, vertex).ok_or(
+                    ForwardPreparationError::InvalidTangent {
+                        source,
+                        stream: stream_index,
+                    },
+                )?;
+                let world_normal = transform3(normal_from_local, normal);
+                let world_tangent = transform3(
+                    world_from_local.columns(),
+                    [values[0], values[1], values[2]],
+                );
+                if !world_normal
+                    .iter()
+                    .chain(world_tangent.iter())
+                    .all(|value| value.is_finite())
+                {
+                    return Err(ForwardPreparationError::InvalidTangent {
+                        source,
+                        stream: stream_index,
+                    });
+                }
+                let normal_scale = max_component(world_normal);
+                let tangent_scale = max_component(world_tangent);
+                if normal_scale == 0.0 || tangent_scale == 0.0 {
+                    return Err(ForwardPreparationError::InvalidTangent {
+                        source,
+                        stream: stream_index,
+                    });
+                }
+                let normal = world_normal.map(|value| value / normal_scale);
+                let tangent = world_tangent.map(|value| value / tangent_scale);
+                let normal_length = normal.iter().map(|value| value * value).sum::<f32>();
+                let tangent_length = tangent.iter().map(|value| value * value).sum::<f32>();
+                let dot = tangent[0] * normal[0] + tangent[1] * normal[1] + tangent[2] * normal[2];
+                // A cross product close to zero leaves no stable bitangent;
+                // reject before interpolation rather than selecting a view-dependent fallback.
+                if tangent_length == 0.0
+                    || normal_length == 0.0
+                    || dot * dot >= tangent_length * normal_length * 0.999_999
+                {
+                    return Err(ForwardPreparationError::InvalidTangent {
+                        source,
+                        stream: stream_index,
+                    });
+                }
+            }
+        }
+    }
     found
         .then_some(())
-        .ok_or(ForwardPreparationError::MissingNormal { source })
+        .ok_or(ForwardPreparationError::MissingTangent { source })
+}
+
+pub(super) fn max_component(value: [f32; 3]) -> f32 {
+    value.into_iter().map(f32::abs).fold(0.0_f32, f32::max)
+}
+
+fn transform3(matrix: [[f32; 4]; 4], value: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| {
+        matrix[0][row] * value[0] + matrix[1][row] * value[1] + matrix[2][row] * value[2]
+    })
+}
+
+fn normal_for_vertex(
+    geometry: &GeometryData,
+    prepared: &PreparedGeometry,
+    vertex: u32,
+) -> Option<[f32; 3]> {
+    prepared
+        .streams
+        .iter()
+        .zip(&geometry.streams)
+        .find_map(|(layout, bytes)| {
+            layout
+                .attributes
+                .iter()
+                .find(|attribute| attribute.location == 1)
+                .and_then(|attribute| {
+                    (matches!(attribute.format, VertexFormat::Float32(3))).then_some(())?;
+                    let start =
+                        usize::try_from(u64::from(vertex) * layout.stride + attribute.offset)
+                            .ok()?;
+                    let values: [Option<f32>; 3] = std::array::from_fn(|component| {
+                        bytes
+                            .get(start + component * 4..start + component * 4 + 4)
+                            .and_then(|value| value.try_into().ok())
+                            .map(f32::from_le_bytes)
+                    });
+                    Some([values[0]?, values[1]?, values[2]?])
+                })
+        })
 }
 
 fn inverse_transpose(

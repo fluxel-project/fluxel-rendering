@@ -6,13 +6,13 @@ use fluxel_rhi::api::{
     BindGroupDesc, BindGroupEntry, BindingResource, Error, Support, TextureFormat,
 };
 
-use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
+use crate::frame_data::forward::{pack_forward_uniforms, ForwardUniformInput};
 use crate::residency::{
-    DeferredDraw, DeferredSurfaceFrame, ForwardResidentBuffers, ForwardSampler, ForwardStreamInput,
-    ForwardTextureInput, SurfaceForwardFrameBuffers, allocate_deferred_scene_color,
-    plan_deferred_gbuffer, plan_forward_resident, plan_surface_forward_frame,
+    allocate_deferred_scene_color, plan_deferred_gbuffer, plan_forward_resident,
+    plan_surface_forward_frame, DeferredDraw, DeferredSurfaceFrame, ForwardResidentBuffers,
+    ForwardSampler, ForwardStreamInput, ForwardTextureInput, SurfaceForwardFrameBuffers,
 };
-use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
+use crate::{prepare_material, ForwardDrawInput, PreparedMaterial};
 
 use super::prepare::aligned_row;
 use super::templates::gbuffer_request;
@@ -39,6 +39,9 @@ where
             match input.material().value().output() {
                 fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => {
                     crate::pbr::gbuffer_uv0_request(&input.geometry().value().layout)
+                }
+                fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => {
+                    crate::pbr::gbuffer_uv0_normal_request(&input.geometry().value().layout)
                 }
                 _ => crate::pbr::gbuffer_request(&input.geometry().value().layout),
             }
@@ -74,7 +77,7 @@ where
                 self.observe_rhi_error(Error::Unsupported("three Deferred material bindings"))
             );
         }
-        let transform_bytes = if pbr { 128 } else { 64 };
+        let transform_bytes = if pbr { 192 } else { 64 };
         if input.transform_uniform_bytes() != transform_bytes {
             return Err(Error::InvalidRange.into());
         }
@@ -87,6 +90,7 @@ where
             &[ForwardUniformInput {
                 transform: input.clip_from_local(),
                 normal_from_local,
+                world_from_local: pbr.then(|| input.transform().columns()),
                 tint: input.tint(),
             }],
             limits.uniform_offset_alignment,

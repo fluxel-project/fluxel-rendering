@@ -19,7 +19,9 @@ mod templates;
 pub(crate) fn is_pbr(output: &SurfaceOutput) -> bool {
     matches!(
         output,
-        SurfaceOutput::MetallicRoughness { .. } | SurfaceOutput::MetallicRoughnessUv0 { .. }
+        SurfaceOutput::MetallicRoughness { .. }
+            | SurfaceOutput::MetallicRoughnessUv0 { .. }
+            | SurfaceOutput::MetallicRoughnessUv0Normal { .. }
     )
 }
 
@@ -37,6 +39,18 @@ pub(crate) fn forward_uv0_request(layout: &GeometryLayout) -> Option<ShaderCompo
 
 pub(crate) fn gbuffer_uv0_request(layout: &GeometryLayout) -> Option<ShaderCompositionRequest> {
     geometry_uv0_request(layout, true)
+}
+
+pub(crate) fn forward_uv0_normal_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    geometry_uv0_normal_request(layout, false)
+}
+
+pub(crate) fn gbuffer_uv0_normal_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    geometry_uv0_normal_request(layout, true)
 }
 
 fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCompositionRequest> {
@@ -170,6 +184,75 @@ fn geometry_uv0_request(
     Some(request)
 }
 
+fn geometry_uv0_normal_request(
+    layout: &GeometryLayout,
+    deferred: bool,
+) -> Option<ShaderCompositionRequest> {
+    let mut base = layout.clone();
+    for stream in &mut base.streams {
+        stream
+            .attributes
+            .retain(|attribute| attribute.semantic != "UV0" && attribute.semantic != "TANGENT");
+    }
+    base.streams.retain(|stream| !stream.attributes.is_empty());
+    let mut request = geometry_request(&base, deferred)?;
+    let attributes: Vec<_> = layout
+        .streams
+        .iter()
+        .flat_map(|stream| &stream.attributes)
+        .collect();
+    if attributes.len() != 4
+        || attributes
+            .iter()
+            .filter(|a| a.semantic == "UV0" && matches!(a.format, VertexFormat::Float32(2)))
+            .count()
+            != 1
+        || attributes
+            .iter()
+            .filter(|a| a.semantic == "TANGENT" && matches!(a.format, VertexFormat::Float32(4)))
+            .count()
+            != 1
+    {
+        return None;
+    }
+    request.source_units.retain(|unit| {
+        unit.id.0
+            != if deferred {
+                "pbr-gbuffer"
+            } else {
+                "pbr-forward"
+            }
+    });
+    request.source_units.push(SourceUnit::new(
+        if deferred {
+            "pbr-gbuffer-uv0-normal"
+        } else {
+            "pbr-forward-uv0-normal"
+        },
+        if deferred {
+            templates::GBUFFER_UV0_NORMAL
+        } else {
+            templates::FORWARD_UV0_NORMAL
+        },
+    ));
+    request.vertex_inputs.push(VertexInputDeclaration::new(
+        "UV0",
+        2,
+        VertexType::Vec2(ScalarType::F32),
+    ));
+    request.vertex_inputs.push(VertexInputDeclaration::new(
+        "TANGENT",
+        3,
+        VertexType::Vec4(ScalarType::F32),
+    ));
+    request.bindings[0] = BindingDeclaration::new(1, 0, BindingKind::Uniform)
+        .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
+    request
+        .static_options
+        .insert("renderer.material_context".into(), "uv0-normal".into());
+    Some(request)
+}
+
 pub(crate) fn lighting_request() -> ShaderCompositionRequest {
     let mut request = ShaderCompositionRequest::new(vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
@@ -190,3 +273,7 @@ pub(crate) fn lighting_request() -> ShaderCompositionRequest {
     }
     request
 }
+
+#[cfg(test)]
+#[path = "../tests/renderer/pbr_tbn_handedness.rs"]
+mod tbn_handedness_tests;

@@ -5,6 +5,7 @@ use std::ops::Range;
 pub(crate) struct ForwardUniformInput {
     pub(crate) transform: [[f32; 4]; 4],
     pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
+    pub(crate) world_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) tint: [f32; 4],
 }
 
@@ -12,6 +13,29 @@ pub(crate) struct ForwardUniformData {
     pub(crate) bytes: Vec<u8>,
     pub(crate) transforms: Vec<Range<u64>>,
     pub(crate) tints: Vec<Range<u64>>,
+}
+
+// `PbrTransforms::normal_from_local` is only ever multiplied by directions
+// with w=0.  Its fourth column is consequently outside the normal transform
+// itself.  Keep the world orientation fact beside the two matrices so the
+// fragment TBN path need not recompute a determinant in f32 (which can
+// underflow for an otherwise representable inverse-transpose matrix).
+const PBR_WORLD_HANDEDNESS_OFFSET: usize = 64 + 12 * 4;
+
+fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
+    let world = world.map(|column| column.map(f64::from));
+    let (a, b, c) = (world[0][0], world[1][0], world[2][0]);
+    let (d, e, f) = (world[0][1], world[1][1], world[2][1]);
+    let (g, h, i) = (world[0][2], world[1][2], world[2][2]);
+    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if !determinant.is_finite() || determinant == 0.0 {
+        return Err(Error::InvalidRange);
+    }
+    Ok(if determinant.is_sign_negative() {
+        -1.0
+    } else {
+        1.0
+    })
 }
 
 /// Both dynamic bindings use individually aligned physical starts.
@@ -23,6 +47,12 @@ pub(crate) fn pack_forward_uniforms(
     if alignment == 0 {
         return Err(Error::InvalidRange);
     }
+    if inputs
+        .iter()
+        .any(|input| input.normal_from_local.is_some() != input.world_from_local.is_some())
+    {
+        return Err(Error::InvalidRange);
+    }
     let align = |value: u64| {
         value
             .checked_add(alignment - 1)
@@ -30,7 +60,7 @@ pub(crate) fn pack_forward_uniforms(
             .ok_or(Error::InvalidRange)
     };
     let transform_bytes = if inputs.iter().any(|input| input.normal_from_local.is_some()) {
-        128
+        192
     } else {
         64
     };
@@ -52,6 +82,12 @@ pub(crate) fn pack_forward_uniforms(
             .chain(
                 input
                     .normal_from_local
+                    .iter()
+                    .flat_map(|matrix| matrix.iter().flatten()),
+            )
+            .chain(
+                input
+                    .world_from_local
                     .iter()
                     .flat_map(|matrix| matrix.iter().flatten()),
             )
@@ -85,6 +121,15 @@ pub(crate) fn pack_forward_uniforms(
                 let offset = start as usize + 64 + component * 4;
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
+            let world = input.world_from_local.ok_or(Error::InvalidRange)?;
+            let offset = start as usize + PBR_WORLD_HANDEDNESS_OFFSET;
+            bytes[offset..offset + 4].copy_from_slice(&world_handedness(world)?.to_le_bytes());
+        }
+        if let Some(world) = input.world_from_local {
+            for (component, value) in world.iter().flatten().enumerate() {
+                let offset = start as usize + 128 + component * 4;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
         }
         for (component, value) in input.tint.iter().enumerate() {
             let offset = tint as usize + component * 4;
@@ -92,7 +137,7 @@ pub(crate) fn pack_forward_uniforms(
         }
         let transform_end = start
             + if input.normal_from_local.is_some() {
-                128
+                192
             } else {
                 64
             };
@@ -109,3 +154,7 @@ pub(crate) fn pack_forward_uniforms(
 #[cfg(test)]
 #[path = "../tests/frame_data/forward.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/frame_data/forward_handedness.rs"]
+mod handedness_tests;

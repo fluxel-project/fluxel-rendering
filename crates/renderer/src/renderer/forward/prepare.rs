@@ -30,7 +30,7 @@ where
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
-        use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
+        use crate::frame_data::forward::{pack_forward_uniforms, ForwardUniformInput};
         use crate::residency::{
             ForwardBindGroup, ForwardDraw, ForwardFrame, ForwardFrameBuffers,
             ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, ForwardTextureInput,
@@ -74,6 +74,9 @@ where
             .map(|input| ForwardUniformInput {
                 transform: input.clip_from_local(),
                 normal_from_local: input.normal_from_local(),
+                world_from_local: input
+                    .normal_from_local()
+                    .map(|_| input.transform().columns()),
                 tint: input.tint(),
             })
             .collect();
@@ -395,17 +398,15 @@ where
                         slot: 0,
                         group: material_group,
                         dynamic_offsets: vec![
-                            u32::try_from(tint_range.start).map_err(|_| Error::InvalidRange)?,
+                            u32::try_from(tint_range.start).map_err(|_| Error::InvalidRange)?
                         ],
                         uniform_ranges: vec![tint_range],
                     },
                     ForwardBindGroup {
                         slot: 1,
                         group: transform_group,
-                        dynamic_offsets: vec![
-                            u32::try_from(transform_range.start)
-                                .map_err(|_| Error::InvalidRange)?,
-                        ],
+                        dynamic_offsets: vec![u32::try_from(transform_range.start)
+                            .map_err(|_| Error::InvalidRange)?],
                         uniform_ranges: vec![transform_range],
                     },
                 ],

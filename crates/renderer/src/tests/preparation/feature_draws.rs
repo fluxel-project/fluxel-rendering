@@ -125,5 +125,5 @@ fn feature_draw_order_keeps_feature_identity_in_its_own_namespace() {
     assert_eq!(order.source(), source);
     assert_eq!(order.order(), -3);
     assert_eq!(order.sort_key().0, -3);
-    assert_eq!(order.sort_key().1.0, 1);
+    assert_eq!(order.sort_key().1 .0, 1);
 }
