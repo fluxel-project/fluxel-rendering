@@ -10,6 +10,8 @@ pub use specular_environment::{
     SpecularIblMip,
 };
 mod forward;
+mod forward_schema;
+pub(crate) use forward_schema::{MaterialBindingSchema, material_binding_schema};
 mod forward_sources;
 mod geometry;
 mod geometry_key;

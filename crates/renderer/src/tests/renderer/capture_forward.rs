@@ -10,6 +10,10 @@ use fluxel_material::{
 use fluxel_shader::{ShaderComposer, SourceUnit};
 
 pub(super) fn receiver() -> (crate::PreparedCaptureReceiver, ForwardAssets) {
+    receiver_at([0, 1, 2])
+}
+
+fn receiver_at(locations: [u32; 3]) -> (crate::PreparedCaptureReceiver, ForwardAssets) {
     let geometry_store = AssetStore::<GeometryAsset, GeometryData, ()>::new();
     let geometry = match geometry_store
         .acquire(&geometry_store.create().unwrap())
@@ -46,7 +50,7 @@ pub(super) fn receiver() -> (crate::PreparedCaptureReceiver, ForwardAssets) {
     };
     let material_store = AssetStore::<MaterialAsset, MaterialDefinition, ()>::new();
     let material = match material_store.acquire(&material_store.create().unwrap()).unwrap() {
-        Acquire::Producer(p) => p.commit(MaterialDefinition::new(Vec::new(), "unused", vec![MaterialParameter { name: "tint".into(), ty: MaterialType::Vec4, resource: "tint".into() }], vec![MaterialResource { name: "tint".into(), kind: MaterialResourceKind::UniformVec4, location: BindingLocation { group: 0, binding: 0 } }, MaterialResource { name: "captured".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: 1 } }, MaterialResource { name: "capture_sampler".into(), kind: MaterialResourceKind::Sampler { comparison: false }, location: BindingLocation { group: 0, binding: 2 } }], BTreeMap::new(), SurfaceOutput::ColorUv0).with_code_node(MaterialCodeNode { name: "sample".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec4, calls: Vec::new(), resources: Vec::new(), source: SourceUnit::new("capture", "fn sample(uv: vec2<f32>) -> vec4<f32> { return textureSample(captured, capture_sampler, uv) * tint; }") }).with_node_graph(MaterialNodeGraph { nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "sample".into(), inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }], output: MaterialNodeId(1) }), ResidentBytes::new(0)).unwrap(), _ => unreachable!(),
+        Acquire::Producer(p) => p.commit(MaterialDefinition::new(Vec::new(), "unused", vec![MaterialParameter { name: "tint".into(), ty: MaterialType::Vec4, resource: "tint".into() }], vec![MaterialResource { name: "tint".into(), kind: MaterialResourceKind::UniformVec4, location: BindingLocation { group: 0, binding: locations[0] } }, MaterialResource { name: "captured".into(), kind: MaterialResourceKind::Texture2dF32, location: BindingLocation { group: 0, binding: locations[1] } }, MaterialResource { name: "capture_sampler".into(), kind: MaterialResourceKind::Sampler { comparison: false }, location: BindingLocation { group: 0, binding: locations[2] } }], BTreeMap::new(), SurfaceOutput::ColorUv0).with_code_node(MaterialCodeNode { name: "sample".into(), inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }], output: MaterialType::Vec4, calls: Vec::new(), resources: Vec::new(), source: SourceUnit::new("capture", "fn sample(uv: vec2<f32>) -> vec4<f32> { return textureSample(captured, capture_sampler, uv) * tint; }") }).with_node_graph(MaterialNodeGraph { nodes: vec![MaterialNode { id: MaterialNodeId(1), callable: "sample".into(), inputs: vec![MaterialNodeInput { input: "uv".into(), source: MaterialNodeInputSource::Uv0 }] }], output: MaterialNodeId(1) }), ResidentBytes::new(0)).unwrap(), _ => unreachable!(),
     };
     let assets = ForwardAssets {
         geometry: vec![geometry],
@@ -122,4 +126,25 @@ fn capture_completion_failure_keeps_both_frames_pending() {
     .unwrap();
     assert!(block_on(renderer.readback(&submission)).is_err());
     assert_eq!(renderer.pending(), 1);
+}
+
+#[test]
+fn capture_receiver_consumes_permuted_material_locations_without_a_cpu_asset() {
+    let (device, native) = capture_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (snapshot, view, assets) = scene_and_assets();
+    let (receiver, receiver_assets) = receiver_at([2, 0, 1]);
+    assert!(receiver_assets.textures.is_empty());
+    let submission = block_on(renderer.submit_forward_capture(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        receiver,
+    ))
+    .expect("permuted capture receiver bindings");
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 5);
+    block_on(renderer.readback(&submission)).expect("combined completion");
+    assert_eq!(renderer.pending(), 0);
 }

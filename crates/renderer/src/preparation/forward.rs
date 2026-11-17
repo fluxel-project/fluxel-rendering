@@ -399,7 +399,8 @@ fn prepare_draw(
     };
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
-    validate_material_schema(&prepared, source)?;
+    let schema = validate_material_schema(&prepared, source)?;
+    let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
     let normal_from_local = normal_from_local(
         geometry.value(),

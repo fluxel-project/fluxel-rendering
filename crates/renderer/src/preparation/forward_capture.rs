@@ -114,24 +114,14 @@ pub fn prepare_forward_capture_receiver(
     };
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
-    validate_material_schema(&prepared, source)?;
-    let valid_slot = prepared
-        .material()
-        .contribution()
-        .bindings
-        .iter()
-        .any(|binding| {
-            binding.name == *capture_slot
-                && binding.kind == fluxel_material::MaterialResourceKind::Texture2dF32
-                && binding.location.group == 0
-                && binding.location.binding == 1
-        });
-    if !valid_slot {
+    let schema = validate_material_schema(&prepared, source)?;
+    if schema.texture_name != *capture_slot {
         return Err(ForwardPreparationError::InvalidCaptureSlot {
             source,
             slot: capture_slot.clone(),
         });
     }
+    let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
     let clip_from_local = multiply_columns(view.transform, transform);
     if !clip_from_local

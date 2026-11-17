@@ -1,6 +1,5 @@
 //! Device pipeline realization for prepared Forward materials.
 use super::*;
-use fluxel_material::MaterialResourceKind;
 
 impl<B> Renderer<B>
 where
@@ -102,10 +101,11 @@ where
             partially_bound: false,
             nonuniform_indexing: false,
         };
+        let schema = prepared.binding_schema().ok_or(Error::InvalidState)?;
         let mut material_entries = vec![
-            uniform_entry(0, 16, ShaderStage::Fragment),
+            uniform_entry(schema.tint, 16, ShaderStage::Fragment),
             BindGroupLayoutEntry {
-                binding: 1,
+                binding: schema.texture,
                 visibility: vec![ShaderStage::Fragment],
                 ty: BindingType::SampledTexture {
                     sample: TextureSampleType::Float,
@@ -117,19 +117,9 @@ where
                 nonuniform_indexing: false,
             },
         ];
-        let ordinary_sampler = prepared
-            .material()
-            .contribution()
-            .bindings
-            .iter()
-            .any(|binding| {
-                binding.location.group == 0
-                    && binding.location.binding == 2
-                    && binding.kind == MaterialResourceKind::Sampler { comparison: false }
-            });
-        if ordinary_sampler {
+        if let Some(binding) = schema.sampler {
             material_entries.push(BindGroupLayoutEntry {
-                binding: 2,
+                binding,
                 visibility: vec![ShaderStage::Fragment],
                 ty: BindingType::Sampler {
                     filtering: true,
@@ -140,6 +130,7 @@ where
                 nonuniform_indexing: false,
             });
         }
+        material_entries.sort_by_key(|entry| entry.binding);
         let material_layout = self
             .device
             .create_bind_group_layout(&BindGroupLayoutDesc {

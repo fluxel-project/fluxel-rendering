@@ -1,11 +1,9 @@
 //! Forward material sampler admission and owner checks.
 use super::*;
 pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
-    prepared.material().contribution().bindings.iter().any(|b| {
-        b.location.group == 0
-            && b.location.binding == 2
-            && b.kind == fluxel_material::MaterialResourceKind::Sampler { comparison: false }
-    })
+    prepared
+        .binding_schema()
+        .is_some_and(|schema| schema.sampler.is_some())
 }
 pub(crate) fn default_material_sampler() -> SamplerDesc {
     SamplerDesc {

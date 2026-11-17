@@ -141,7 +141,7 @@ where
             .map_err(|error| self.observe_rhi_error(error))?;
         let material_layout = self.deferred_material_layout(
             "Deferred G-buffer material bindings",
-            crate::renderer::forward::material_requires_ordinary_sampler(prepared),
+            prepared.binding_schema().ok_or(Error::InvalidState)?,
         )?;
         let transform_layout = self.deferred_transform_layout(
             "Deferred G-buffer transform bindings",
@@ -528,15 +528,16 @@ where
     fn deferred_material_layout(
         &mut self,
         label: &str,
-        has_ordinary_sampler: bool,
+        schema: &crate::preparation::MaterialBindingSchema,
     ) -> std::result::Result<BindGroupLayout<B>, RendererError> {
         let mut entries = vec![
-            uniform(0, 16, ShaderStage::Fragment),
-            sampled_texture(1, TextureSampleType::Float),
+            uniform(schema.tint, 16, ShaderStage::Fragment),
+            sampled_texture(schema.texture, TextureSampleType::Float),
         ];
-        if has_ordinary_sampler {
-            entries.push(ordinary_sampler(2));
+        if let Some(binding) = schema.sampler {
+            entries.push(ordinary_sampler(binding));
         }
+        entries.sort_by_key(|entry| entry.binding);
         self.device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some(label.into()),

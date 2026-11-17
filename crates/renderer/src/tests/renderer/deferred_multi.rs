@@ -96,7 +96,7 @@ fn geometry(offset: f32, tangent: bool) -> GeometryData {
     }
 }
 
-fn material(effects: bool) -> MaterialDefinition {
+fn material_at(effects: bool, locations: [u32; 3]) -> MaterialDefinition {
     let fragments = vec![
         MaterialFragment {
             name: "sampled".into(),
@@ -119,7 +119,7 @@ fn material(effects: bool) -> MaterialDefinition {
             kind: MaterialResourceKind::UniformVec4,
             location: BindingLocation {
                 group: 0,
-                binding: 0,
+                binding: locations[0],
             },
         },
         MaterialResource {
@@ -127,7 +127,7 @@ fn material(effects: bool) -> MaterialDefinition {
             kind: MaterialResourceKind::Texture2dF32,
             location: BindingLocation {
                 group: 0,
-                binding: 1,
+                binding: locations[1],
             },
         },
         MaterialResource {
@@ -135,7 +135,7 @@ fn material(effects: bool) -> MaterialDefinition {
             kind: MaterialResourceKind::Sampler { comparison: false },
             location: BindingLocation {
                 group: 0,
-                binding: 2,
+                binding: locations[2],
             },
         },
     ];
@@ -214,6 +214,19 @@ fn multi_scene_with_effects_and_encoding(
     crate::RenderViewId,
     ForwardAssets,
 ) {
+    multi_scene_at(second_tangent, effects, encoding, [0, 1, 2])
+}
+
+fn multi_scene_at(
+    second_tangent: bool,
+    effects: bool,
+    encoding: crate::TextureEncoding,
+    locations: [u32; 3],
+) -> (
+    crate::FrameSnapshot<ForwardResources>,
+    crate::RenderViewId,
+    ForwardAssets,
+) {
     let geometries = AssetStore::<GeometryAsset, GeometryData, ()>::new();
     let materials = AssetStore::<MaterialAsset, MaterialDefinition, ()>::new();
     let textures = AssetStore::<ColorTextureAsset, ColorTextureData, ()>::new();
@@ -221,10 +234,14 @@ fn multi_scene_with_effects_and_encoding(
     let mut ms = Vec::new();
     let mut ts = Vec::new();
     for (index, (g, m, rgba)) in [
-        (geometry(0.0, true), material(effects), [240, 80, 40, 255]),
+        (
+            geometry(0.0, true),
+            material_at(effects, locations),
+            [240, 80, 40, 255],
+        ),
         (
             geometry(0.75, second_tangent),
-            material(false),
+            material_at(false, locations),
             [40, 120, 240, 255],
         ),
     ]
@@ -288,6 +305,9 @@ fn multi_scene_with_effects_and_encoding(
         },
     )
 }
+
+#[path = "schema_bindings.rs"]
+mod schema_binding_tests;
 
 #[path = "encoding_lifecycle.rs"]
 mod encoding_tests;

@@ -58,15 +58,16 @@ pub(super) fn materials(
         .ok_or(Error::Unsupported(
             "Deferred material cannot consume this geometry layout",
         ))?;
-        prepared.push(
-            prepare_material(
-                input.material(),
-                layout,
-                &mut fluxel_shader::ShaderComposer::new(),
-                request,
-            )
-            .map_err(RendererError::DeferredMaterial)?,
-        );
+        let material = prepare_material(
+            input.material(),
+            layout,
+            &mut fluxel_shader::ShaderComposer::new(),
+            request,
+        )
+        .map_err(RendererError::DeferredMaterial)?;
+        let schema = crate::preparation::material_binding_schema(&material, input.source())
+            .map_err(RendererError::ForwardPreparation)?;
+        prepared.push(material.with_binding_schema(schema));
     }
     Ok((prepared, pbr, effects))
 }

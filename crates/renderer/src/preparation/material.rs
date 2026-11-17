@@ -13,7 +13,9 @@ use fluxel_shader::{
     ShaderArtifact, ShaderComposer, ShaderCompositionRequest, ShaderError, VertexInputDeclaration,
 };
 
-use super::{GeometryError, GeometryLayout, PreparedGeometry};
+use super::{
+    GeometryError, GeometryLayout, PreparedGeometry, forward_schema::MaterialBindingSchema,
+};
 
 /// The mutually validated logical products needed by a later Forward draw.
 #[derive(Clone, Debug)]
@@ -23,6 +25,7 @@ pub struct PreparedMaterial {
     geometry: PreparedGeometry,
     environment_irradiance: bool,
     specular_ibl: bool,
+    binding_schema: Option<MaterialBindingSchema>,
 }
 
 impl PreparedMaterial {
@@ -50,6 +53,15 @@ impl PreparedMaterial {
 
     pub(crate) fn uses_environment_irradiance(&self) -> bool {
         self.environment_irradiance
+    }
+
+    pub(crate) fn binding_schema(&self) -> Option<&MaterialBindingSchema> {
+        self.binding_schema.as_ref()
+    }
+
+    pub(crate) fn with_binding_schema(mut self, schema: MaterialBindingSchema) -> Self {
+        self.binding_schema = Some(schema);
+        self
     }
 }
 
@@ -211,6 +223,7 @@ pub fn prepare_material(
         geometry,
         environment_irradiance,
         specular_ibl,
+        binding_schema: None,
     })
 }
 

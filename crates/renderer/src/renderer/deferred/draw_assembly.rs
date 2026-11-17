@@ -37,20 +37,23 @@ pub(super) fn draws<B: ResourceBackend>(
     let transform_bytes = if pbr { 192 } else { 64 };
     let mut result = Vec::with_capacity(count);
     for index in 0..count {
+        let schema = prepared[index]
+            .binding_schema()
+            .ok_or(Error::InvalidState)?;
         let texture = resident
             .textures
             .get(textures[index])
             .ok_or(Error::InvalidRange)?;
         let mut entries = vec![
             BindGroupEntry {
-                binding: 0,
+                binding: schema.tint,
                 resource: BindingResource::Buffer {
                     buffer: uniform,
                     range: 0..16,
                 },
             },
             BindGroupEntry {
-                binding: 1,
+                binding: schema.texture,
                 resource: BindingResource::TextureView(&texture.view),
             },
         ];
@@ -61,14 +64,15 @@ pub(super) fn draws<B: ResourceBackend>(
             &inputs[index],
             crate::renderer::forward::material_requires_ordinary_sampler(&prepared[index]),
         )?;
-        if crate::renderer::forward::material_requires_ordinary_sampler(&prepared[index]) {
+        if let Some(binding) = schema.sampler {
             let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
             crate::renderer::forward::validate_ordinary_sampler(&sampler.desc)?;
             entries.push(BindGroupEntry {
-                binding: 2,
+                binding,
                 resource: BindingResource::Sampler(&sampler.sampler),
             });
         }
+        entries.sort_by_key(|entry| entry.binding);
         let material_group = device.create_bind_group(&BindGroupDesc {
             label: Some("Deferred G-buffer material"),
             layout: &programs[index].material_layout,

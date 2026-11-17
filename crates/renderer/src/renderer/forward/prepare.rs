@@ -412,6 +412,10 @@ where
         }
         let mut draws = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
+            let schema = input
+                .prepared()
+                .binding_schema()
+                .ok_or(Error::InvalidState)?;
             let objects = self
                 .forward_pipeline(
                     input.prepared(),
@@ -422,14 +426,14 @@ where
                 .await?;
             let mut material_entries = vec![
                 BindGroupEntry {
-                    binding: 0,
+                    binding: schema.tint,
                     resource: BindingResource::Buffer {
                         buffer: frame_uniform,
                         range: 0..16,
                     },
                 },
                 BindGroupEntry {
-                    binding: 1,
+                    binding: schema.texture,
                     resource: BindingResource::TextureView(
                         &resident.textures[draw_textures[index]].view,
                     ),
@@ -443,14 +447,15 @@ where
                 material_requires_ordinary_sampler(input.prepared()),
             )
             .map_err(|error| self.observe_forward_error("sampled material owner", error))?;
-            if material_requires_ordinary_sampler(input.prepared()) {
+            if let Some(binding) = schema.sampler {
                 let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
                 validate_ordinary_sampler(&sampler.desc)?;
                 material_entries.push(BindGroupEntry {
-                    binding: 2,
+                    binding,
                     resource: BindingResource::Sampler(&sampler.sampler),
                 });
             }
+            material_entries.sort_by_key(|entry| entry.binding);
             let material_group = self
                 .device
                 .create_bind_group(&BindGroupDesc {
