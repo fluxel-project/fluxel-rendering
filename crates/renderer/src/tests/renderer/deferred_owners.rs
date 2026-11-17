@@ -81,6 +81,43 @@ fn deferred_plan_rejects_foreign_actual_gbuffer_owner_before_mapping_or_recordin
 }
 
 #[test]
+fn deferred_plan_rejects_foreign_scene_color_before_composite_recording() {
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).expect("renderer");
+    let (snapshot, view, assets) = scene_and_assets();
+    let mut frame = deferred_frame(&mut renderer, &snapshot, view, &assets);
+    let plan = plan(&device, 71_006, &frame);
+    let (other_device, _) = deferred_device(Script::AcceptedExact);
+    frame.scene_color =
+        crate::residency::allocate_deferred_scene_color(&other_device, frame.extent)
+            .expect("other-device scene-color allocation");
+
+    let before = execution_counts(&native);
+    assert!(matches!(
+        plan.validate_frame(&frame),
+        Err(Error::WrongDevice)
+    ));
+    assert_eq!(execution_counts(&native), before);
+}
+
+#[test]
+fn deferred_plan_rejects_unfilterable_actual_scene_color_before_composite_recording() {
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).expect("renderer");
+    let (snapshot, view, assets) = scene_and_assets();
+    let mut frame = deferred_frame(&mut renderer, &snapshot, view, &assets);
+    let plan = plan(&device, 71_007, &frame);
+    frame.scene_color.filterable = false;
+
+    let before = execution_counts(&native);
+    assert!(matches!(
+        plan.validate_frame(&frame),
+        Err(Error::Unsupported("filterable Deferred scene-color"))
+    ));
+    assert_eq!(execution_counts(&native), before);
+}
+
+#[test]
 fn deferred_plan_rejects_actual_gbuffer_format_and_extent_owners_before_execution() {
     let (device, native) = deferred_device(Script::AcceptedExact);
     let mut renderer = Renderer::new(device.clone()).expect("renderer");

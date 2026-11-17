@@ -1,5 +1,6 @@
 //! Device pipeline realization for prepared Forward materials.
 use super::*;
+use fluxel_material::MaterialResourceKind;
 
 impl<B> Renderer<B>
 where
@@ -91,25 +92,49 @@ where
             partially_bound: false,
             nonuniform_indexing: false,
         };
+        let mut material_entries = vec![
+            uniform_entry(0, 16, ShaderStage::Fragment),
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: vec![ShaderStage::Fragment],
+                ty: BindingType::SampledTexture {
+                    sample: TextureSampleType::Float,
+                    dimension: TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: BindingCount::One,
+                partially_bound: false,
+                nonuniform_indexing: false,
+            },
+        ];
+        let ordinary_sampler = prepared
+            .material()
+            .contribution()
+            .bindings
+            .iter()
+            .any(|binding| {
+                binding.location.group == 0
+                    && binding.location.binding == 2
+                    && binding.kind == MaterialResourceKind::Sampler { comparison: false }
+            });
+        if ordinary_sampler {
+            material_entries.push(BindGroupLayoutEntry {
+                binding: 2,
+                visibility: vec![ShaderStage::Fragment],
+                ty: BindingType::Sampler {
+                    filtering: true,
+                    comparison: false,
+                },
+                count: BindingCount::One,
+                partially_bound: false,
+                nonuniform_indexing: false,
+            });
+        }
         let material_layout = self
             .device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some("Forward material bindings".into()),
-                entries: vec![
-                    uniform_entry(0, 16, ShaderStage::Fragment),
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: vec![ShaderStage::Fragment],
-                        ty: BindingType::SampledTexture {
-                            sample: TextureSampleType::Float,
-                            dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: BindingCount::One,
-                        partially_bound: false,
-                        nonuniform_indexing: false,
-                    },
-                ],
+                entries: material_entries,
             })
             .map_err(|error| self.observe_forward_error("material layout", error))?;
         let transform_layout = self

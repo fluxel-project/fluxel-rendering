@@ -168,6 +168,10 @@ mod composed;
 mod entry;
 mod execute;
 mod prepare;
+pub(crate) use prepare::{
+    default_material_sampler, material_requires_ordinary_sampler,
+    require_filterable_material_texture, validate_ordinary_sampler, validate_sampled_texture_owner,
+};
 mod program;
 
 fn aligned_forward_row(width: u32) -> std::result::Result<u32, RendererError> {

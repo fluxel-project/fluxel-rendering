@@ -6,8 +6,9 @@ use fluxel_rhi::api::{BindGroupDesc, BindGroupEntry, BindingResource, Error, Sup
 
 use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
 use crate::residency::{
-    DeferredDraw, DeferredFrame, ForwardFrameBuffers, ForwardResidentBuffers, ForwardStreamInput,
-    ForwardTextureInput, plan_deferred_gbuffer, plan_forward_frame, plan_forward_resident,
+    DeferredDraw, DeferredFrame, ForwardFrameBuffers, ForwardResidentBuffers, ForwardSampler,
+    ForwardStreamInput, ForwardTextureInput, allocate_deferred_scene_color, plan_deferred_gbuffer,
+    plan_forward_frame, plan_forward_resident,
 };
 use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
 
@@ -37,7 +38,12 @@ where
         self.ensure_open()?;
         let pbr = crate::pbr::is_pbr(input.material().value().output());
         let request = if pbr {
-            crate::pbr::gbuffer_request(&input.geometry().value().layout)
+            match input.material().value().output() {
+                fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => {
+                    crate::pbr::gbuffer_uv0_request(&input.geometry().value().layout)
+                }
+                _ => crate::pbr::gbuffer_request(&input.geometry().value().layout),
+            }
         } else {
             gbuffer_request(&input.geometry().value().layout)
         }
@@ -61,6 +67,13 @@ where
         pbr: bool,
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
         let limits = self.device.capabilities().limits;
+        let ordinary_sampler =
+            crate::renderer::forward::material_requires_ordinary_sampler(prepared);
+        if ordinary_sampler && limits.max_bindings_per_group < 3 {
+            return Err(
+                self.observe_rhi_error(Error::Unsupported("three Deferred material bindings"))
+            );
+        }
         let transform_bytes = if pbr { 128 } else { 64 };
         if input.transform_uniform_bytes() != transform_bytes {
             return Err(Error::InvalidRange.into());
@@ -82,6 +95,15 @@ where
         let uniform_len = u64::try_from(uniforms.bytes.len()).map_err(|_| Error::InvalidRange)?;
         let row_pitch = aligned_row(input.extent()[0])?;
         let texture = input.texture().value();
+        if ordinary_sampler {
+            // This is only early capability admission. The owner selected from
+            // allocation or cache is revalidated immediately before binding.
+            crate::renderer::forward::require_filterable_material_texture(
+                &self.device,
+                texture.extent,
+            )
+            .map_err(|error| self.observe_rhi_error(error))?;
+        }
         let texture_pitch = aligned_row(texture.extent[0])?;
         let texture_bytes = u64::from(texture_pitch)
             .checked_mul(u64::from(texture.extent[1]))
@@ -187,6 +209,9 @@ where
         let lighting_program = self
             .deferred_lighting_program(pbr, fluxel_rhi::api::TextureFormat::Rgba8Unorm)
             .await?;
+        let composite_program = self
+            .deferred_scene_color_composite_program(fluxel_rhi::api::TextureFormat::Rgba8Unorm)
+            .await?;
         let frame_slot = self.free_slot().ok_or(RendererError::Backpressure)?;
 
         let resident_buffers = resident_plan.stream_descs.len() as u64 + 1;
@@ -203,6 +228,14 @@ where
         }
         if resident_upload.vertices.is_empty() && resident_upload.textures.is_empty() {
             resident_upload.bytes.clear();
+        }
+        if ordinary_sampler {
+            let desc = crate::renderer::forward::default_material_sampler();
+            let sampler = self
+                .device
+                .create_sampler(&desc)
+                .map_err(|error| self.observe_rhi_error(error))?;
+            resident.samplers.push(ForwardSampler { sampler, desc });
         }
         let resident = Arc::new(resident);
         // Reuse only owners that were retained after both GPU completion and
@@ -234,24 +267,54 @@ where
                 .map_err(|error| self.observe_rhi_error(error))?;
             (frame, uniform_upload, gbuffer)
         };
+        let scene_color = allocate_deferred_scene_color(&self.device, input.extent())
+            .map_err(|error| self.observe_rhi_error(error))?;
+        let scene_color_sampler_desc = crate::renderer::forward::default_material_sampler();
+        let scene_color_sampler = self
+            .device
+            .create_sampler(&scene_color_sampler_desc)
+            .map_err(|error| self.observe_rhi_error(error))?;
+        if !scene_color.filterable {
+            return Err(
+                self.observe_rhi_error(Error::Unsupported("filterable Deferred scene-color"))
+            );
+        }
+        crate::renderer::forward::validate_ordinary_sampler(&scene_color_sampler_desc)
+            .map_err(|error| self.observe_rhi_error(error))?;
+        let mut material_entries = vec![
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: &frame.uniform,
+                    range: 0..16,
+                },
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::TextureView(&resident.textures[0].view),
+            },
+        ];
+        if ordinary_sampler {
+            crate::renderer::forward::validate_sampled_texture_owner(
+                &resident,
+                0,
+                self.device.id(),
+            )
+            .map_err(|error| self.observe_rhi_error(error))?;
+            let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
+            crate::renderer::forward::validate_ordinary_sampler(&sampler.desc)
+                .map_err(|error| self.observe_rhi_error(error))?;
+            material_entries.push(BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::Sampler(&sampler.sampler),
+            });
+        }
         let material_group = self
             .device
             .create_bind_group(&BindGroupDesc {
                 label: Some("Deferred G-buffer material"),
                 layout: &geometry_program.material_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::Buffer {
-                            buffer: &frame.uniform,
-                            range: 0..16,
-                        },
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: BindingResource::TextureView(&resident.textures[0].view),
-                    },
-                ],
+                entries: &material_entries,
             })
             .map_err(|error| self.observe_rhi_error(error))?;
         let transform_group = self
@@ -289,6 +352,23 @@ where
                 ],
             })
             .map_err(|error| self.observe_rhi_error(error))?;
+        let composite_group = self
+            .device
+            .create_bind_group(&BindGroupDesc {
+                label: Some("Deferred scene-color composite"),
+                layout: &composite_program.layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(&scene_color.view),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: BindingResource::Sampler(&scene_color_sampler),
+                    },
+                ],
+            })
+            .map_err(|error| self.observe_rhi_error(error))?;
         let draw = DeferredDraw {
             pipeline: geometry_program.pipeline.clone(),
             material_group,
@@ -310,7 +390,7 @@ where
             self.deferred_stats.buffer_allocations =
                 self.deferred_stats.buffer_allocations.saturating_add(3);
             self.deferred_stats.texture_allocations =
-                self.deferred_stats.texture_allocations.saturating_add(4);
+                self.deferred_stats.texture_allocations.saturating_add(5);
         }
         self.deferred_stats.buffer_allocations = self
             .deferred_stats
@@ -338,9 +418,14 @@ where
             uniform_upload,
             uniform_bytes: uniforms.bytes,
             gbuffer,
+            scene_color,
+            scene_color_sampler,
+            scene_color_sampler_desc,
             draw,
             lighting_pipeline: lighting_program.pipeline.clone(),
             lighting_group,
+            composite_pipeline: composite_program.pipeline,
+            composite_group,
             extent: input.extent(),
             readback_row_pitch: row_pitch,
         })

@@ -9,8 +9,9 @@ use std::{ops::Range, sync::Arc};
 use fluxel_rhi::{
     api::{
         Buffer, BufferDesc, BufferUsage, BufferUses, Device, DeviceId, Error, ImageLayout,
-        MemoryClass, Result, Texture, TextureDesc, TextureDimension, TextureFormat, TextureUsage,
-        TextureUses, TextureView, TextureViewDesc, TextureViewDimension, VertexBufferLayout,
+        MemoryClass, Result, Sampler, SamplerDesc, Support, Texture, TextureDesc, TextureDimension,
+        TextureFormat, TextureUsage, TextureUses, TextureView, TextureViewDesc,
+        TextureViewDimension, VertexBufferLayout,
     },
     backend::ResourceBackend,
 };
@@ -53,6 +54,20 @@ pub(crate) struct ForwardTexture<B: ResourceBackend> {
     pub(crate) instance: ResourceInstanceId,
     pub(crate) incoming: TextureUses,
     pub(crate) layout: ImageLayout,
+    /// Device that allocated this owner, retained for binding provenance checks.
+    pub(crate) device: DeviceId,
+    /// Filterability reported for this exact allocation descriptor.
+    pub(crate) filterable: bool,
+}
+
+/// A concrete sampler retained with the texture owners it can bind.
+///
+/// Samplers carry no memory access range, so they are deliberately absent from
+/// RenderGraph declarations. Retaining them in the resident owner still keeps
+/// their native handle alive through the completion of every submitted frame.
+pub(crate) struct ForwardSampler<B: ResourceBackend> {
+    pub(crate) sampler: Sampler<B>,
+    pub(crate) desc: SamplerDesc,
 }
 
 /// Persistent logical geometry/material realization for one device.
@@ -68,6 +83,7 @@ pub(crate) struct ForwardResidentBuffers<B: ResourceBackend> {
     pub(crate) upload_incoming: BufferUses,
     pub(crate) streams: Vec<ForwardVertexStream<B>>,
     pub(crate) textures: Vec<ForwardTexture<B>>,
+    pub(crate) samplers: Vec<ForwardSampler<B>>,
 }
 
 /// One source-to-device vertex copy, with physical byte offsets.
@@ -331,7 +347,10 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
         }
         let mut resident_textures = Vec::with_capacity(plan.texture_descs.len());
         for texture_desc in plan.texture_descs {
-            require_texture(device, &texture_desc)?;
+            let filterable = match device.texture_support(&texture_desc) {
+                Support::Supported(support) => support.filterable,
+                Support::Unsupported(reason) => return Err(Error::Unsupported(reason)),
+            };
             let texture_handle = device.create_texture(&texture_desc)?;
             let view = device.create_view(
                 &texture_handle,
@@ -350,6 +369,8 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
                 instance: ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
                 incoming: empty_texture_uses(),
                 layout: ImageLayout::Undefined,
+                device: device.id(),
+                filterable,
             });
         }
         let upload_desc = plan.upload_desc;
@@ -363,6 +384,7 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
             upload_incoming: empty_buffer_uses(),
             streams: resident_streams,
             textures: resident_textures,
+            samplers: Vec::new(),
         });
         Ok((
             resident,

@@ -107,6 +107,11 @@ where
                 plan.record_lighting(encoder, &frame)
             });
         }
+        if recorded.is_ok() {
+            recorded = execution.commands(plan.composite_step(), |encoder| {
+                plan.record_composite(encoder, &frame)
+            });
+        }
         let mut ticket = None;
         if recorded.is_ok() {
             recorded = execution.commands(plan.readback_step(), |encoder| {
@@ -187,7 +192,9 @@ where
         })?;
         let plan = if let Some(cached) = self.deferred_surface_plans.iter().find(|candidate| {
             candidate.validate_declaration(&declaration).is_ok()
-                && candidate.validate_surface_frame(&frame).is_ok()
+                && candidate
+                    .validate_surface_frame_with_image(&frame, &image)
+                    .is_ok()
         }) {
             self.deferred_stats.graph_hits = self.deferred_stats.graph_hits.saturating_add(1);
             Arc::clone(cached)
@@ -209,7 +216,7 @@ where
             self.deferred_surface_plans.push(Arc::clone(&plan));
             plan
         };
-        plan.validate_surface_frame(&frame)
+        plan.validate_surface_frame_with_image(&frame, &image)
             .map_err(|error| self.observe_rhi_error(error))?;
         self.bindings_validated();
         let (buffer_bindings, texture_bindings) = plan.binding_counts();
@@ -238,23 +245,28 @@ where
         }
         .map_err(|error| self.observe_rhi_error(error))?;
         let mut recorded = execution.commands(plan.upload_step(), |encoder| {
-            plan.surface_record_upload(encoder, &frame)
+            plan.surface_record_upload(encoder, &frame, &image)
         });
         if recorded.is_ok() {
             if let Some(step) = plan.deformation_step() {
                 recorded = execution.commands(step, |encoder| {
-                    plan.surface_record_deformation(encoder, &frame)
+                    plan.surface_record_deformation(encoder, &frame, &image)
                 });
             }
         }
         if recorded.is_ok() {
             recorded = execution.commands(plan.geometry_step(), |encoder| {
-                plan.surface_record_geometry(encoder, &frame)
+                plan.surface_record_geometry(encoder, &frame, &image)
             });
         }
         if recorded.is_ok() {
             recorded = execution.commands(plan.lighting_step(), |encoder| {
                 plan.surface_record_lighting(encoder, &frame, &image)
+            });
+        }
+        if recorded.is_ok() {
+            recorded = execution.commands(plan.composite_step(), |encoder| {
+                plan.surface_record_composite(encoder, &frame, &image)
             });
         }
         if recorded.is_ok() {

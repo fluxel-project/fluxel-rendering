@@ -151,7 +151,10 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         key: ForwardTextureCacheKey,
         texture: &ForwardTexture<B>,
     ) -> bool {
-        if texture.texture.device() != key.device || self.textures.contains_key(&key) {
+        if texture.texture.device() != key.device
+            || texture.device != key.device
+            || self.textures.contains_key(&key)
+        {
             return false;
         }
         self.textures.insert(
@@ -163,6 +166,8 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
                 instance: texture.instance,
                 incoming: shader_read_uses(),
                 layout: ImageLayout::ShaderReadOnly,
+                device: texture.device,
+                filterable: texture.filterable,
             },
         );
         true
@@ -223,6 +228,8 @@ impl<B: ResourceBackend> Clone for ForwardTexture<B> {
             instance: self.instance,
             incoming: self.incoming,
             layout: self.layout,
+            device: self.device,
+            filterable: self.filterable,
         }
     }
 }

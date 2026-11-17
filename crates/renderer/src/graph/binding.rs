@@ -108,6 +108,15 @@ pub(crate) struct TextureBinding {
     pub(crate) desc: TextureDesc,
     pub(crate) initial: TextureUses,
     pub(crate) layout: ImageLayout,
+    /// Surface leases have no public incoming state. Their backend performs
+    /// the acquire-to-attachment transition when the raster pass begins.
+    pub(crate) kind: TextureBindingKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TextureBindingKind {
+    Ordinary,
+    RhiManagedSurface,
 }
 
 impl TextureBinding {
@@ -126,6 +135,7 @@ impl TextureBinding {
             desc: desc.clone(),
             initial,
             layout,
+            kind: TextureBindingKind::Ordinary,
         }
     }
 }
@@ -156,6 +166,7 @@ pub(crate) struct TextureRequirement {
     pub(crate) slot: TextureSlot,
     pub(crate) desc: TextureDesc,
     pub(crate) initial: Option<(TextureUses, ImageLayout)>,
+    pub(crate) rhi_managed_initial: bool,
     pub(crate) ranges: Vec<TextureRange>,
     pub(crate) accesses: Vec<(TextureRange, AccessKind, Option<TextureAccessContract>)>,
     pub(crate) first_pass: usize,
@@ -230,7 +241,14 @@ impl TextureBindingManifest {
                     return Err(BindingError::IncompatibleDescriptor);
                 }
             }
-            if requirement.initial != Some((binding.initial, binding.layout)) {
+            if matches!(binding.kind, TextureBindingKind::RhiManagedSurface)
+                != requirement.rhi_managed_initial
+            {
+                return Err(BindingError::IncompatibleDescriptor);
+            }
+            if !requirement.rhi_managed_initial
+                && requirement.initial != Some((binding.initial, binding.layout))
+            {
                 return Err(BindingError::IncompatibleIncomingState);
             }
         }

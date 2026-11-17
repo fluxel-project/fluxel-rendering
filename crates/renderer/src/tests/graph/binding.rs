@@ -144,6 +144,7 @@ fn texture_bindings(manifest: &TextureBindingManifest, device: DeviceId) -> Vec<
             instance: ResourceInstanceId::fresh().unwrap(),
             device,
             desc: requirement.desc.clone(),
+            kind: super::super::binding::TextureBindingKind::Ordinary,
         })
         .collect()
 }

@@ -195,7 +195,8 @@ impl ExecutionMode<WitnessBackend> for WitnessMode {
             | Script::AllocationDeviceLost
             | Script::MapDeviceLost
             | Script::FlushDeviceLost
-            | Script::BeginDeviceLost => {
+            | Script::BeginDeviceLost
+            | Script::SamplerBindGroupRejected => {
                 let frontier = if matches!(state.native.script, Script::AcceptedWrongFrontier) {
                     state.steps[0]
                 } else {

@@ -176,7 +176,7 @@ fn counters(native: &Native) -> (usize, usize, usize) {
 }
 
 #[test]
-fn deferred_probe_records_four_graph_passes_and_retires_after_readback() {
+fn deferred_probe_composites_scene_color_before_readback_and_retires_after_completion() {
     let (device, native) = deferred_device(Script::AcceptedExact);
     let mut renderer = Renderer::new(device).expect("renderer");
     let (snapshot, view, assets) = scene_and_assets();
@@ -185,7 +185,7 @@ fn deferred_probe_records_four_graph_passes_and_retires_after_readback() {
     let facts = renderer.deferred_probe_facts().expect("deferred facts");
     assert_eq!(renderer.compilations(), 1);
     assert_eq!(renderer.plan_id(), Some(facts.plan));
-    assert_eq!(facts.passes, 4);
+    assert_eq!(facts.passes, 5);
     assert_eq!(
         facts.gbuffer_formats,
         [
@@ -194,7 +194,7 @@ fn deferred_probe_records_four_graph_passes_and_retires_after_readback() {
             TextureFormat::Depth32Float,
         ]
     );
-    assert_eq!(native.command_calls.load(Ordering::SeqCst), 4);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 5);
     assert_eq!(renderer.pending(), 1);
 
     let readback = block_on(renderer.readback(&submission)).expect("readback");
@@ -341,6 +341,8 @@ mod cache_tests;
 mod code_node_tests;
 #[path = "deferred_deformation.rs"]
 mod deformation_tests;
+#[path = "forward_sampler_owner.rs"]
+mod forward_sampler_owner_tests;
 #[path = "deferred_owners.rs"]
 mod owner_tests;
 #[path = "deferred_pbr.rs"]

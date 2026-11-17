@@ -8,7 +8,10 @@ use crate::residency::{
 
 pub(super) enum RecordSource<'a, B: ResourceBackend> {
     Offscreen(&'a DeferredFrame<B>),
-    Surface(&'a DeferredSurfaceFrame<B>),
+    Surface {
+        frame: &'a DeferredSurfaceFrame<B>,
+        image: Option<&'a fluxel_rhi::api::SurfaceImage<B>>,
+    },
 }
 
 pub(super) struct DeferredRecordView<'a, B: ResourceBackend> {
@@ -52,7 +55,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
 
     pub(super) fn surface(frame: &'a DeferredSurfaceFrame<B>) -> Self {
         Self {
-            source: RecordSource::Surface(frame),
+            source: RecordSource::Surface { frame, image: None },
             frame: UniformFacts {
                 upload_desc: &frame.frame.upload_desc,
                 upload_incoming: frame.frame.upload_incoming,
@@ -69,10 +72,22 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
         }
     }
 
+    pub(super) fn surface_with_image(
+        frame: &'a DeferredSurfaceFrame<B>,
+        image: &'a fluxel_rhi::api::SurfaceImage<B>,
+    ) -> Self {
+        let mut view = Self::surface(frame);
+        view.source = RecordSource::Surface {
+            frame,
+            image: Some(image),
+        };
+        view
+    }
+
     pub(super) fn draw_accesses(&self) -> Result<Vec<Option<Range<u64>>>> {
         match self.source {
             RecordSource::Offscreen(frame) => draw_accesses(frame, &frame.draw),
-            RecordSource::Surface(frame) => {
+            RecordSource::Surface { frame, .. } => {
                 super::surface_validate::surface_draw_accesses(frame, &frame.draw)
             }
         }
@@ -86,7 +101,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     ) -> Result<FrameBindings<'a, B>> {
         match view.source {
             RecordSource::Offscreen(frame) => self.bindings(frame),
-            RecordSource::Surface(frame) => self.surface_bindings(frame),
+            RecordSource::Surface { frame, image } => {
+                self.surface_bindings(frame, image.ok_or(fluxel_rhi::api::Error::InvalidState)?)
+            }
         }
     }
 }

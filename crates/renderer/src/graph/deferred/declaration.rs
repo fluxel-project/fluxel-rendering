@@ -1,5 +1,6 @@
 //! Logical resource declaration for the bounded Deferred probe.
 
+use super::validation::validate_frame_inputs;
 use super::*;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
@@ -79,7 +80,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|_| Error::InvalidState)?;
-        let (target, readback, row_pitch) = match frame.source {
+        let (target, scene_color, surface_target, readback, row_pitch) = match frame.source {
             super::record_view::RecordSource::Offscreen(owner) => (
                 Some(
                     graph
@@ -92,6 +93,16 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 ),
                 Some(
                     graph
+                        .import_texture_with_state(
+                            owner.scene_color.desc.clone(),
+                            owner.scene_color.incoming,
+                            owner.scene_color.layout,
+                        )
+                        .map_err(|_| Error::InvalidState)?,
+                ),
+                None,
+                Some(
+                    graph
                         .import_buffer_desc(
                             owner.frame.readback_desc.clone(),
                             owner.frame.readback_incoming,
@@ -100,7 +111,38 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 ),
                 Some(owner.readback_row_pitch),
             ),
-            super::record_view::RecordSource::Surface(_) => (None, None, None),
+            super::record_view::RecordSource::Surface { frame: owner, .. } => {
+                let desc = fluxel_rhi::api::TextureDesc {
+                    label: Some("fluxel deferred surface lease".into()),
+                    dimension: fluxel_rhi::api::TextureDimension::D2,
+                    extent: [owner.extent[0], owner.extent[1], 1],
+                    array_layers: 1,
+                    format: owner.color_format,
+                    mip_levels: 1,
+                    samples: 1,
+                    usage: TextureUsage::RENDER_ATTACHMENT,
+                    view_formats: Vec::new(),
+                };
+                (
+                    None,
+                    Some(
+                        graph
+                            .import_texture_with_state(
+                                owner.scene_color.desc.clone(),
+                                owner.scene_color.incoming,
+                                owner.scene_color.layout,
+                            )
+                            .map_err(|_| Error::InvalidState)?,
+                    ),
+                    Some(
+                        graph
+                            .import_surface_texture(desc)
+                            .map_err(|_| Error::InvalidState)?,
+                    ),
+                    None,
+                    None,
+                )
+            }
         };
 
         let deformation_handles = frame
@@ -231,7 +273,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             .map_err(|_| Error::InvalidState)?;
 
         let accesses = frame.draw_accesses()?;
-        let (deformation_pass, geometry_pass, gbuffer, lighting_pass, target) = {
+        let (deformation_pass, geometry_pass, gbuffer, lighting_pass, scene_color) = {
             let mut driver = DeferredPhaseDriver {
                 graph: &mut graph,
                 upload: upload_pass,
@@ -242,7 +284,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 transform: frame.draw.transform_range.clone(),
                 material,
                 gbuffer: [gbuffer[0], gbuffer[1], gbuffer[2]],
-                target,
+                target: scene_color,
                 deformation,
                 deformation_pass: None,
                 geometry: None,
@@ -253,8 +295,29 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             driver.finish().map_err(|_| Error::InvalidState)?
         };
 
-        let output = if let Some(readback) = readback {
+        let (composite_pass, output) = if let Some(readback) = readback {
             let target = target.ok_or(Error::InvalidState)?;
+            let scene_color = scene_color.ok_or(Error::InvalidState)?;
+            let (composite_pass, target) = graph
+                .add_pass("deferred-scene-color-composite", |pass| {
+                    pass.depends_on(lighting_pass)?;
+                    pass.read_texture_with_use(
+                        scene_color,
+                        whole_color(),
+                        sampled_read().uses,
+                        ImageLayout::ShaderReadOnly,
+                        TextureUsage::TEXTURE_BINDING,
+                    )?;
+                    let target = pass.write_texture_with_use(
+                        target,
+                        whole_color(),
+                        color_write().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )?;
+                    Ok(target)
+                })
+                .map_err(|_| Error::InvalidState)?;
             let (readback_pass, ()) = graph
                 .add_pass("deferred-readback", |pass| {
                     let length = u64::from(row_pitch.ok_or(GraphError::InvalidRange)?)
@@ -277,9 +340,39 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     Ok(())
                 })
                 .map_err(|_| Error::InvalidState)?;
-            DeferredOutputDeclaration::Offscreen { readback_pass }
+            (
+                Some(composite_pass),
+                DeferredOutputDeclaration::Offscreen { readback_pass },
+            )
         } else {
-            DeferredOutputDeclaration::Surface
+            let scene_color = scene_color.ok_or(Error::InvalidState)?;
+            let surface_target = surface_target.ok_or(Error::InvalidState)?;
+            let (composite_pass, ()) = graph
+                .add_pass("deferred-surface-scene-color-composite", |pass| {
+                    pass.depends_on(lighting_pass)?;
+                    pass.read_texture_with_use(
+                        scene_color,
+                        whole_color(),
+                        sampled_read().uses,
+                        ImageLayout::ShaderReadOnly,
+                        TextureUsage::TEXTURE_BINDING,
+                    )?;
+                    pass.write_texture_with_use(
+                        surface_target,
+                        whole_color(),
+                        color_write().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )?;
+                    // Presentation consumes this lease after the Graph's
+                    // command steps; retain the terminal write in the live
+                    // Graph rather than treating it as an untracked side
+                    // effect at recording time.
+                    pass.side_effect();
+                    Ok(())
+                })
+                .map_err(|_| Error::InvalidState)?;
+            (Some(composite_pass), DeferredOutputDeclaration::Surface)
         };
 
         Ok(DeferredDeclaration {
@@ -289,6 +382,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             deformation_pass,
             geometry_pass,
             lighting_pass,
+            composite_pass,
             output,
             resident_upload_slot: BufferSlot::from(resident_upload),
             frame_upload_slot: BufferSlot::from(frame_upload),
@@ -296,6 +390,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
             texture_slot: TextureSlot::from(material),
             gbuffer_slots: std::array::from_fn(|index| TextureSlot::from(gbuffer[index])),
+            scene_color_slot: scene_color.map(TextureSlot::from),
+            surface_target_slot: surface_target.map(TextureSlot::from),
             target_slot: target.map(TextureSlot::from),
             readback_slot: readback.map(BufferSlot::from),
             deformation_slots: deformation_handles.map(|(upload, source, product, parameters)| {
@@ -311,68 +407,6 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             transform_bytes: frame.draw.transform_bytes,
         })
     }
-}
-
-fn validate_frame_inputs<B: ResourceBackend>(
-    device: &Device<B>,
-    frame: &DeferredFrame<B>,
-) -> Result<()> {
-    let required_gbuffer = [
-        TextureFormat::Rgba8Unorm,
-        TextureFormat::Rgba8Unorm,
-        TextureFormat::Depth32Float,
-    ];
-    if frame.resident.device != device.id()
-        || frame.extent.contains(&0)
-        || device.capabilities().limits.max_color_attachments < 2
-        || device.capabilities().limits.uniform_offset_alignment == 0
-        || frame.resident.streams.is_empty()
-        || frame.resident.textures.is_empty()
-        || frame.draw.vertex_layouts.len() != frame.resident.streams.len()
-        || frame.draw.vertex_ranges.len() != frame.resident.streams.len()
-        || frame.uniform_upload.source.start >= frame.uniform_upload.source.end
-        || frame.uniform_upload.destination.start >= frame.uniform_upload.destination.end
-        || frame.uniform_upload.source.end - frame.uniform_upload.source.start
-            != frame.uniform_upload.destination.end - frame.uniform_upload.destination.start
-        || usize::try_from(frame.uniform_upload.source.end).ok() != Some(frame.uniform_bytes.len())
-        || !frame
-            .uniform_upload
-            .destination
-            .start
-            .is_multiple_of(device.capabilities().limits.uniform_offset_alignment)
-        || validate_draw_uniforms(frame, device.capabilities().limits.uniform_offset_alignment)
-            .is_err()
-        || frame.readback_row_pitch == 0
-        || !frame.readback_row_pitch.is_multiple_of(256)
-        || u64::from(frame.readback_row_pitch) < u64::from(frame.extent[0]) * 4
-        || !matches_final_target_template(&frame.frame.target_desc, frame.extent)
-        || frame.frame.readback_desc.size
-            != u64::from(frame.readback_row_pitch) * u64::from(frame.extent[1])
-    {
-        return Err(Error::InvalidRange);
-    }
-    if frame.draw.pipeline.device() != device.id()
-        || frame.draw.material_group.device() != device.id()
-        || frame.draw.transform_group.device() != device.id()
-        || frame.lighting_pipeline.device() != device.id()
-        || frame.lighting_group.device() != device.id()
-    {
-        return Err(Error::WrongDevice);
-    }
-    if let Some(deformation) = &frame.deformation {
-        if device.compute().is_none() {
-            return Err(Error::Unsupported("compute"));
-        }
-        validate_deformation(device, &frame.draw, deformation)?;
-    }
-    for (texture, format) in frame.gbuffer.iter().zip(required_gbuffer) {
-        if !matches_gbuffer_template(&texture.desc, frame.extent, format) {
-            return Err(Error::InvalidRange);
-        }
-    }
-    validate_uploads(frame)?;
-    draw_accesses(frame, &frame.draw)?;
-    Ok(())
 }
 
 pub(super) fn validate_deformation<B: ResourceBackend>(
@@ -434,142 +468,6 @@ pub(super) fn validate_deformation<B: ResourceBackend>(
     Ok(())
 }
 
-pub(super) fn validate_draw_uniforms<B: ResourceBackend>(
-    frame: &DeferredFrame<B>,
-    alignment: u64,
-) -> Result<()> {
-    validate_draw_uniform_ranges(&frame.draw, frame.frame.uniform_desc.size, alignment)
-}
-
-pub(super) fn validate_draw_uniform_ranges<B: ResourceBackend>(
-    draw: &DeferredDraw<B>,
-    uniform_size: u64,
-    alignment: u64,
-) -> Result<()> {
-    if alignment == 0 {
-        return Err(Error::InvalidRange);
-    }
-    if !matches!(draw.transform_bytes, 64 | 128) {
-        return Err(Error::InvalidRange);
-    }
-    for (range, bytes) in [
-        (&draw.tint_range, 16_u64),
-        (&draw.transform_range, draw.transform_bytes),
-    ] {
-        if range.start >= range.end
-            || range.end - range.start != bytes
-            || range.end > uniform_size
-            || !range.start.is_multiple_of(alignment)
-            || u32::try_from(range.start).is_err()
-        {
-            return Err(Error::InvalidRange);
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn matches_gbuffer_template(
-    desc: &fluxel_rhi::api::TextureDesc,
-    extent: [u32; 2],
-    format: TextureFormat,
-) -> bool {
-    desc.dimension == fluxel_rhi::api::TextureDimension::D2
-        && desc.extent == [extent[0], extent[1], 1]
-        && desc.array_layers == 1
-        && desc.samples == 1
-        && desc.format == format
-        && desc
-            .usage
-            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING)
-}
-
-pub(super) fn matches_final_target_template(
-    desc: &fluxel_rhi::api::TextureDesc,
-    extent: [u32; 2],
-) -> bool {
-    desc.dimension == fluxel_rhi::api::TextureDimension::D2
-        && desc.extent == [extent[0], extent[1], 1]
-        && desc.array_layers == 1
-        && desc.samples == 1
-        && desc.format == TextureFormat::Rgba8Unorm
-        && desc
-            .usage
-            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC)
-}
-
-pub(super) fn validate_uploads<B: ResourceBackend>(frame: &DeferredFrame<B>) -> Result<()> {
-    validate_resident_uploads(&frame.resident, &frame.resident_upload)
-}
-
-pub(super) fn validate_resident_uploads<B: ResourceBackend>(
-    resident: &crate::residency::ForwardResidentBuffers<B>,
-    uploads: &crate::residency::ForwardResidentUpload,
-) -> Result<()> {
-    // A resident cache hit imports the already initialized stream and texture
-    // owners in their post-upload incoming states. It deliberately has no
-    // static copy declarations and therefore no resident staging bytes.
-    if uploads.bytes.is_empty() && (!uploads.vertices.is_empty() || !uploads.textures.is_empty()) {
-        return Err(Error::InvalidRange);
-    }
-    let mut streams = vec![false; resident.streams.len()];
-    for upload in &uploads.vertices {
-        let owner = resident
-            .streams
-            .get(upload.stream)
-            .ok_or(Error::InvalidRange)?;
-        let seen = std::mem::replace(
-            streams.get_mut(upload.stream).ok_or(Error::InvalidRange)?,
-            true,
-        );
-        if seen
-            || upload.source.start >= upload.source.end
-            || upload.destination.start >= upload.destination.end
-            || upload.source.end > resident.upload_desc.size
-            || upload.source.end > uploads.bytes.len() as u64
-            || upload.destination.end > owner.desc.size
-            || upload.source.end - upload.source.start
-                != upload.destination.end - upload.destination.start
-        {
-            return Err(Error::InvalidRange);
-        }
-    }
-    let mut texture_uploaded = false;
-    for copy in &uploads.textures {
-        if texture_uploaded
-            || copy.texture != 0
-            || !copy.source_offset.is_multiple_of(512)
-            || copy.extent != resident.textures[0].desc.extent
-            || copy.rows_per_image != copy.extent[1]
-            || copy.bytes_per_row == 0
-            || !copy.bytes_per_row.is_multiple_of(256)
-            || u64::from(copy.bytes_per_row) < u64::from(copy.extent[0]) * 4
-            || texture_copy_end(copy)? > resident.upload_desc.size
-            || texture_copy_end(copy)? > uploads.bytes.len() as u64
-        {
-            return Err(Error::InvalidRange);
-        }
-        texture_uploaded = true;
-    }
-    let texture = &resident.textures[0];
-    let texture_ready = texture.incoming
-        == TextureUses {
-            stages: StageMask::FRAGMENT,
-            accesses: AccessMask::SHADER_READ,
-        }
-        && texture.layout == ImageLayout::ShaderReadOnly;
-    let streams_ready = streams
-        .iter()
-        .zip(&resident.streams)
-        .all(|(uploaded, owner)| {
-            *uploaded
-                || owner.incoming
-                    == BufferUses {
-                        stages: StageMask::VERTEX_INPUT,
-                        accesses: AccessMask::VERTEX_READ,
-                    }
-        });
-    if (!texture_uploaded && !texture_ready) || !streams_ready {
-        return Err(Error::InvalidRange);
-    }
-    Ok(())
-}
+#[path = "validation_inputs.rs"]
+mod validation_inputs;
+pub(super) use validation_inputs::*;

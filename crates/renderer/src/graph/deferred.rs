@@ -9,6 +9,7 @@ mod record_view;
 mod surface;
 mod surface_record;
 mod surface_validate;
+mod validation;
 
 use fluxel_rhi::{
     api::{
@@ -36,12 +37,16 @@ use super::{
         AccessKind, BufferAccessContract, GraphBuilder, GraphError, GraphPass,
         TextureAccessContract, TextureRange,
     },
-    execution::{BoundBuffer, BoundTexture, CompiledExecution, FrameBindings, binding_error},
+    execution::{
+        binding_error, BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution,
+        FrameBindings,
+    },
 };
 
 type Outcome<B> = <<B as ExecutionBackend>::Mode as ExecutionMode<B>>::Outcome;
 
-/// A compiled four-pass graph: upload, G-buffer geometry, lighting, readback.
+/// A compiled Deferred graph: upload, G-buffer geometry, lighting, composite,
+/// and (for offscreen work) readback.
 pub(crate) struct DeferredPlan<B: ResourceBackend> {
     device: Device<B>,
     id: PlanId,
@@ -53,6 +58,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     deformation_pass: Option<GraphPass>,
     geometry_pass: GraphPass,
     lighting_pass: GraphPass,
+    composite_pass: Option<GraphPass>,
     output: DeferredOutputPlan,
     resident_upload_slot: BufferSlot,
     frame_upload_slot: BufferSlot,
@@ -60,6 +66,8 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     stream_slots: Vec<BufferSlot>,
     texture_slot: TextureSlot,
     gbuffer_slots: [TextureSlot; 3],
+    scene_color_slot: Option<TextureSlot>,
+    surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,
     readback_slot: Option<BufferSlot>,
     deformation_slots: Option<[BufferSlot; 4]>,
@@ -79,6 +87,7 @@ pub(crate) struct DeferredDeclaration {
     deformation_pass: Option<GraphPass>,
     geometry_pass: GraphPass,
     lighting_pass: GraphPass,
+    composite_pass: Option<GraphPass>,
     output: DeferredOutputDeclaration,
     resident_upload_slot: BufferSlot,
     frame_upload_slot: BufferSlot,
@@ -86,6 +95,8 @@ pub(crate) struct DeferredDeclaration {
     stream_slots: Vec<BufferSlot>,
     texture_slot: TextureSlot,
     gbuffer_slots: [TextureSlot; 3],
+    scene_color_slot: Option<TextureSlot>,
+    surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,
     readback_slot: Option<BufferSlot>,
     deformation_slots: Option<[BufferSlot; 4]>,

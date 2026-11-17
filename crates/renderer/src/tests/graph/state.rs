@@ -55,6 +55,13 @@ fn texture_compute_read_write() -> TextureUses {
     }
 }
 
+fn color_write() -> TextureUses {
+    TextureUses {
+        stages: StageMask::COLOR_OUTPUT,
+        accesses: AccessMask::COLOR_WRITE,
+    }
+}
+
 fn device_buffer(size: u64) -> BufferDesc {
     BufferDesc {
         label: None,
@@ -76,6 +83,105 @@ fn texture_desc() -> TextureDesc {
         usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
         view_formats: Vec::new(),
     }
+}
+
+#[test]
+fn rhi_managed_surface_rejects_sampling_copy_and_a_second_write() {
+    let mut graph = GraphBuilder::default();
+    let surface = graph
+        .import_surface_texture(TextureDesc {
+            usage: TextureUsage::RENDER_ATTACHMENT,
+            mip_levels: 1,
+            ..texture_desc()
+        })
+        .unwrap();
+    let range = TextureRange::new(TextureAspects::COLOR, 0..1, 0..1);
+    assert!(graph
+        .add_pass("sample", |pass| {
+            pass.read_texture_with_use(
+                surface,
+                range.clone(),
+                texture_read(),
+                ImageLayout::ShaderReadOnly,
+                TextureUsage::TEXTURE_BINDING,
+            )
+        })
+        .is_err());
+    assert!(graph
+        .add_pass("copy", |pass| {
+            pass.write_texture_with_use(
+                surface,
+                range.clone(),
+                texture_copy_write(),
+                ImageLayout::CopyDst,
+                TextureUsage::COPY_DST,
+            )
+        })
+        .is_err());
+    let (_, written) = graph
+        .add_pass("surface", |pass| {
+            pass.write_texture_with_use(
+                surface,
+                range.clone(),
+                color_write(),
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )
+        })
+        .unwrap();
+    assert!(graph
+        .add_pass("second", |pass| {
+            pass.write_texture_with_use(
+                written,
+                range,
+                color_write(),
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )
+        })
+        .is_err());
+}
+
+#[test]
+fn rhi_managed_surface_has_no_barrier_without_affecting_regular_texture() {
+    let mut graph = GraphBuilder::default();
+    let surface = graph
+        .import_surface_texture(TextureDesc {
+            usage: TextureUsage::RENDER_ATTACHMENT,
+            mip_levels: 1,
+            ..texture_desc()
+        })
+        .unwrap();
+    let regular = graph
+        .import_texture_with_state(texture_desc(), texture_read(), ImageLayout::ShaderReadOnly)
+        .unwrap();
+    let range = TextureRange::new(TextureAspects::COLOR, 0..1, 0..1);
+    let (pass, _) = graph
+        .add_pass("attachments", |pass| {
+            pass.write_texture_with_use(
+                surface,
+                range.clone(),
+                color_write(),
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )?;
+            pass.write_texture_with_use(
+                regular,
+                range,
+                texture_copy_write(),
+                ImageLayout::CopyDst,
+                TextureUsage::COPY_DST,
+            )
+        })
+        .unwrap();
+    let plan = StatePlan::compile(&graph, &[pass]).unwrap();
+    let transitions = &plan.pass(pass).unwrap().textures;
+    assert!(transitions
+        .iter()
+        .any(|transition| transition.slot == regular.into()));
+    assert!(transitions
+        .iter()
+        .all(|transition| transition.slot != surface.into()));
 }
 
 #[test]
@@ -126,12 +232,10 @@ fn same_pass_compute_read_write_merges_the_declared_uses() {
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].to.stages, StageMask::COMPUTE);
     assert!(transitions[0].to.accesses.contains(AccessMask::SHADER_READ));
-    assert!(
-        transitions[0]
-            .to
-            .accesses
-            .contains(AccessMask::SHADER_WRITE)
-    );
+    assert!(transitions[0]
+        .to
+        .accesses
+        .contains(AccessMask::SHADER_WRITE));
 }
 
 #[test]

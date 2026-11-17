@@ -172,8 +172,8 @@ fn external_deferred_pipeline_declares_both_real_passes_and_retires() {
         .expect("Deferred submission");
     assert_eq!(pipeline.callbacks.get(), 1);
     assert_eq!(renderer.pending(), 1);
-    assert_eq!(native.command_calls.load(Ordering::SeqCst), 4);
-    assert_eq!(renderer.deferred_probe_facts().expect("facts").passes, 4);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 5);
+    assert_eq!(renderer.deferred_probe_facts().expect("facts").passes, 5);
     block_on(renderer.readback(&submission)).expect("readback");
     assert_eq!(renderer.pending(), 0);
 }

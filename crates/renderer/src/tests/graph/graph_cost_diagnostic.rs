@@ -16,6 +16,7 @@ use super::{
     compiler::GraphCompiler,
     definition::{AccessKind, BufferAccessContract, GraphBuilder, TextureRange},
 };
+use crate::graph::binding::TextureBindingKind;
 
 const MANIFEST_SIZES: &[usize] = &[100, 500, 1_000];
 const ACCESS_SIZES: &[usize] = &[100, 1_000, 10_000];
@@ -105,6 +106,7 @@ fn texture_bindings(manifest: &TextureBindingManifest, device: DeviceId) -> Vec<
                 desc: requirement.desc.clone(),
                 initial,
                 layout,
+                kind: TextureBindingKind::Ordinary,
             }
         })
         .collect()

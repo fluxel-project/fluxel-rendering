@@ -33,8 +33,8 @@ where
         use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
         use crate::residency::{
             ForwardBindGroup, ForwardDraw, ForwardFrame, ForwardFrameBuffers,
-            ForwardResidentBuffers, ForwardStreamInput, ForwardTextureInput, SurfaceForwardFrame,
-            SurfaceForwardFrameBuffers,
+            ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, ForwardTextureInput,
+            SurfaceForwardFrame, SurfaceForwardFrameBuffers,
         };
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
@@ -78,6 +78,16 @@ where
             })
             .collect();
         let limits = self.device.capabilities().limits;
+        if inputs
+            .iter()
+            .any(|input| material_requires_ordinary_sampler(input.prepared()))
+            && limits.max_bindings_per_group < 3
+        {
+            return Err(self.observe_forward_error(
+                "ordinary sampler binding admission",
+                Error::Unsupported("three Forward material bindings"),
+            ));
+        }
         let uniforms = pack_forward_uniforms(
             &uniform_inputs,
             limits.uniform_offset_alignment,
@@ -97,6 +107,12 @@ where
         let mut mappings = Vec::new();
         let mut draw_textures = Vec::new();
         for input in &inputs {
+            if material_requires_ordinary_sampler(input.prepared()) {
+                require_filterable_material_texture(&self.device, input.texture().value().extent)
+                    .map_err(|error| {
+                    self.observe_forward_error("sampled material texture admission", error)
+                })?;
+            }
             let geometry_key =
                 crate::residency::ForwardResidentCache::<B>::geometry_key(input, self.device.id());
             let mapping = if let Some(mapping) = geometry_slots.get(&geometry_key) {
@@ -194,6 +210,20 @@ where
             ForwardResidentBuffers::allocate_planned(&self.device, resident_plan)
                 .map_err(|error| self.observe_forward_error("resident allocation", error))?;
         let mut fresh = Arc::try_unwrap(fresh).map_err(|_| Error::InvalidState)?;
+        // An ordinary sampler is a concrete device object rather than a Graph
+        // resource. The resident owner below is retained by PendingWork, so a
+        // native sampler cannot disappear while its bind group is in flight.
+        if inputs
+            .iter()
+            .any(|input| material_requires_ordinary_sampler(input.prepared()))
+        {
+            let desc = default_material_sampler();
+            let sampler = self
+                .device
+                .create_sampler(&desc)
+                .map_err(|error| self.observe_forward_error("material sampler", error))?;
+            fresh.samplers.push(ForwardSampler { sampler, desc });
+        }
         for (index, stream) in std::mem::take(&mut fresh.streams).into_iter().enumerate() {
             final_streams[fresh_stream_slots[index]] = Some(stream);
         }
@@ -297,26 +327,37 @@ where
                     input.transform_uniform_bytes(),
                 )
                 .await?;
+            let mut material_entries = vec![
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: frame_uniform,
+                        range: 0..16,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(
+                        &resident.textures[draw_textures[index]].view,
+                    ),
+                },
+            ];
+            if material_requires_ordinary_sampler(input.prepared()) {
+                validate_sampled_texture_owner(&resident, draw_textures[index], self.device.id())
+                    .map_err(|error| self.observe_forward_error("sampled material owner", error))?;
+                let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
+                validate_ordinary_sampler(&sampler.desc)?;
+                material_entries.push(BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Sampler(&sampler.sampler),
+                });
+            }
             let material_group = self
                 .device
                 .create_bind_group(&BindGroupDesc {
                     label: Some("Forward material"),
                     layout: &objects.material_layout,
-                    entries: &[
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: BindingResource::Buffer {
-                                buffer: frame_uniform,
-                                range: 0..16,
-                            },
-                        },
-                        BindGroupEntry {
-                            binding: 1,
-                            resource: BindingResource::TextureView(
-                                &resident.textures[draw_textures[index]].view,
-                            ),
-                        },
-                    ],
+                    entries: &material_entries,
                 })
                 .map_err(|error| self.observe_forward_error("material bind group", error))?;
             let transform_group = self
@@ -446,4 +487,89 @@ where
         }
         result
     }
+}
+
+pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
+    prepared
+        .material()
+        .contribution()
+        .bindings
+        .iter()
+        .any(|binding| {
+            binding.location.group == 0
+                && binding.location.binding == 2
+                && binding.kind
+                    == fluxel_material::MaterialResourceKind::Sampler { comparison: false }
+        })
+}
+
+pub(crate) fn default_material_sampler() -> SamplerDesc {
+    SamplerDesc {
+        label: Some("Fluxel material sampler".into()),
+        address: [AddressMode::ClampToEdge; 3],
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        mip_filter: FilterMode::Nearest,
+        lod: 0.0..0.0,
+        anisotropy: 1,
+        compare: None,
+        border: None,
+    }
+}
+
+pub(crate) fn validate_ordinary_sampler(desc: &SamplerDesc) -> std::result::Result<(), Error> {
+    if desc.compare.is_some()
+        || desc.mag_filter != FilterMode::Linear
+        || desc.min_filter != FilterMode::Linear
+        || !desc.lod.start.is_finite()
+        || !desc.lod.end.is_finite()
+        || desc.lod.start > desc.lod.end
+    {
+        return Err(Error::InvalidState);
+    }
+    Ok(())
+}
+
+pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
+    device: &Device<B>,
+    extent: [u32; 2],
+) -> std::result::Result<(), Error> {
+    let desc = TextureDesc {
+        label: Some("Fluxel Forward sampled material texture".into()),
+        dimension: TextureDimension::D2,
+        extent: [extent[0], extent[1], 1],
+        array_layers: 1,
+        format: TextureFormat::Rgba8Unorm,
+        mip_levels: 1,
+        samples: 1,
+        usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
+        view_formats: Vec::new(),
+    };
+    match device.texture_support(&desc) {
+        Support::Supported(support) if support.filterable => Ok(()),
+        Support::Supported(_) => Err(Error::Unsupported("filterable material texture")),
+        Support::Unsupported(reason) => Err(Error::Unsupported(reason)),
+    }
+}
+
+pub(crate) fn validate_sampled_texture_owner<B: ResourceBackend>(
+    resident: &crate::residency::ForwardResidentBuffers<B>,
+    texture: usize,
+    selected_device: DeviceId,
+) -> std::result::Result<(), Error> {
+    let owner = resident.textures.get(texture).ok_or(Error::InvalidRange)?;
+    if resident.device != selected_device
+        || owner.device != selected_device
+        || owner.desc.dimension != TextureDimension::D2
+        || owner.desc.format != TextureFormat::Rgba8Unorm
+        || owner.desc.extent.contains(&0)
+        || owner.desc.array_layers != 1
+        || owner.desc.mip_levels != 1
+        || owner.desc.samples != 1
+        || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+        || !owner.filterable
+    {
+        return Err(Error::InvalidState);
+    }
+    Ok(())
 }

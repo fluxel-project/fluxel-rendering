@@ -7,8 +7,8 @@ use std::{ops::Range, sync::Arc};
 
 use fluxel_rhi::{
     api::{
-        BindGroup, Device, DeviceId, Error, ImageLayout, RasterPipeline, Result, Support,
-        TextureDesc, TextureDimension, TextureFormat, TextureUsage, TextureViewDesc,
+        BindGroup, Device, DeviceId, Error, ImageLayout, RasterPipeline, Result, SamplerDesc,
+        Support, TextureDesc, TextureDimension, TextureFormat, TextureUsage, TextureViewDesc,
         TextureViewDimension, VertexBufferLayout,
     },
     backend::ResourceBackend,
@@ -54,9 +54,16 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
+    /// Frame-local lighting output. It is sampled by the composite pass before
+    /// the final readback target is written.
+    pub(crate) scene_color: ForwardTexture<B>,
+    pub(crate) scene_color_sampler: fluxel_rhi::api::Sampler<B>,
+    pub(crate) scene_color_sampler_desc: SamplerDesc,
     pub(crate) draw: DeferredDraw<B>,
     pub(crate) lighting_pipeline: RasterPipeline<B>,
     pub(crate) lighting_group: BindGroup<B>,
+    pub(crate) composite_pipeline: RasterPipeline<B>,
+    pub(crate) composite_group: BindGroup<B>,
     pub(crate) extent: [u32; 2],
     pub(crate) readback_row_pitch: u32,
 }
@@ -74,9 +81,14 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
+    pub(crate) scene_color: ForwardTexture<B>,
+    pub(crate) scene_color_sampler: fluxel_rhi::api::Sampler<B>,
+    pub(crate) scene_color_sampler_desc: SamplerDesc,
     pub(crate) draw: DeferredDraw<B>,
     pub(crate) lighting_pipeline: RasterPipeline<B>,
     pub(crate) lighting_group: BindGroup<B>,
+    pub(crate) composite_pipeline: RasterPipeline<B>,
+    pub(crate) composite_group: BindGroup<B>,
     pub(crate) extent: [u32; 2],
     pub(crate) color_format: TextureFormat,
 }
@@ -133,6 +145,29 @@ pub(crate) fn plan_deferred_gbuffer<B: ResourceBackend>(
     })
 }
 
+/// Allocates the private Deferred lighting result that the later composite
+/// pass samples. This owner is intentionally frame-local: it must remain alive
+/// through the completion that covers both lighting and compositing.
+pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
+    device: &Device<B>,
+    extent: [u32; 2],
+) -> Result<ForwardTexture<B>> {
+    validate_request(extent, device.capabilities().limits.max_color_attachments)?;
+    let desc = gbuffer_desc(
+        "fluxel deferred scene color",
+        extent,
+        TextureFormat::Rgba8Unorm,
+    );
+    let support = match device.texture_support(&desc) {
+        Support::Supported(support) => support,
+        Support::Unsupported(reason) => return Err(Error::Unsupported(reason)),
+    };
+    if !support.filterable {
+        return Err(Error::Unsupported("filterable Deferred scene-color"));
+    }
+    allocate_texture(device, desc, fluxel_rhi::api::TextureAspects::COLOR)
+}
+
 fn validate_request(extent: [u32; 2], max_color_attachments: u32) -> Result<()> {
     if extent.contains(&0) {
         return Err(Error::InvalidRange);
@@ -179,6 +214,10 @@ fn allocate_texture<B: ResourceBackend>(
     desc: TextureDesc,
     aspects: fluxel_rhi::api::TextureAspects,
 ) -> Result<ForwardTexture<B>> {
+    let filterable = match device.texture_support(&desc) {
+        Support::Supported(support) => support.filterable,
+        Support::Unsupported(reason) => return Err(Error::Unsupported(reason)),
+    };
     let texture = device.create_texture(&desc)?;
     let view = device.create_view(
         &texture,
@@ -200,6 +239,8 @@ fn allocate_texture<B: ResourceBackend>(
             accesses: fluxel_rhi::api::AccessMask::EMPTY,
         },
         layout: ImageLayout::Undefined,
+        device: device.id(),
+        filterable,
     })
 }
 

@@ -307,6 +307,7 @@ fn texture_requirements(graph: &GraphBuilder, order: &[GraphPass]) -> Vec<Textur
                 slot,
                 desc: node.desc.clone(),
                 initial: node.initial,
+                rhi_managed_initial: node.rhi_managed_initial,
                 ranges: vec![access.range.clone()],
                 accesses: vec![(access.range.clone(), access.kind, access.contract)],
                 first_pass: position,

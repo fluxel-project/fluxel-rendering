@@ -157,17 +157,41 @@ impl StatePlan {
 
             for desired in desired_textures {
                 let texture = &graph.textures[desired.slot.resource];
-                let (initial_uses, initial_layout) = texture
-                    .initial
-                    .ok_or(StateError::MissingTextureIncomingState { slot: desired.slot })?;
+                if !texture.rhi_managed_initial && texture.initial.is_none() {
+                    return Err(StateError::MissingTextureIncomingState { slot: desired.slot });
+                }
                 for aspect in selected_aspects(desired.range.aspects) {
                     for mip in desired.range.mips.clone() {
                         for layer in desired.range.layers.clone() {
                             let key = (desired.slot, aspect, mip, layer);
-                            let state = textures.entry(key).or_insert(TextureState {
-                                uses: initial_uses,
-                                layout: initial_layout,
-                                wrote: texture_use_writes(initial_uses),
+                            if texture.rhi_managed_initial && !textures.contains_key(&key) {
+                                // The first surface attachment use is lowered
+                                // by the RHI, not as a TextureBarrier.
+                                textures.insert(
+                                    key,
+                                    TextureState {
+                                        uses: desired.uses,
+                                        layout: desired.layout,
+                                        wrote: desired.write,
+                                    },
+                                );
+                                continue;
+                            }
+                            let state = textures.entry(key).or_insert_with(|| {
+                                let (uses, layout, wrote) = if texture.rhi_managed_initial {
+                                    // No external state is invented for an acquired
+                                    // SurfaceImage. Its first attachment access is
+                                    // transitioned internally by the RHI.
+                                    (desired.uses, desired.layout, false)
+                                } else {
+                                    let (uses, layout) = texture.initial.expect("checked below");
+                                    (uses, layout, texture_use_writes(uses))
+                                };
+                                TextureState {
+                                    uses,
+                                    layout,
+                                    wrote,
+                                }
                             });
                             let changed =
                                 state.uses != desired.uses || state.layout != desired.layout;

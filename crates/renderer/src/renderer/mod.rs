@@ -46,6 +46,7 @@ pub use admission::AdmissionError as ShaderAdmissionError;
 pub use deferred::{DeferredCacheStats, DeferredProbeFacts};
 pub use error::RendererError;
 pub use forward::ForwardCacheStats;
+pub(crate) use forward::validate_ordinary_sampler;
 pub use shutdown::ShutdownReport;
 pub use submission::Submission;
 

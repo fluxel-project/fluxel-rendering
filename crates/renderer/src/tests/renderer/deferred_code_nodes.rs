@@ -7,8 +7,9 @@ use std::{collections::BTreeMap, sync::atomic::Ordering};
 use fluxel_assets::{Acquire, AssetStore, ResidentBytes};
 use fluxel_material::{
     BindingLocation, FragmentCall, MaterialAsset, MaterialCodeNode, MaterialDefinition,
-    MaterialFragment, MaterialParameter, MaterialResource, MaterialResourceKind, MaterialType,
-    SurfaceOutput,
+    MaterialError, MaterialFragment, MaterialNode, MaterialNodeGraph, MaterialNodeId,
+    MaterialNodeInput, MaterialNodeInputSource, MaterialParameter, MaterialResource,
+    MaterialResourceKind, MaterialType, SurfaceOutput,
 };
 use fluxel_rhi::api::{VertexFormat, VertexStepMode};
 use fluxel_shader::{ShaderComposer, ShaderError, SourceUnit};
@@ -83,7 +84,130 @@ fn material_with_root(node: MaterialCodeNode, root_source: &str) -> MaterialDefi
     .with_code_node(node)
 }
 
-fn scene_and_assets(
+fn node_graph_material() -> MaterialDefinition {
+    MaterialDefinition::new(
+        vec![MaterialFragment {
+            name: "combine_nodes".into(),
+            inputs: vec![
+                fluxel_material::FragmentInput {
+                    name: "left".into(),
+                    ty: MaterialType::Vec4,
+                },
+                fluxel_material::FragmentInput {
+                    name: "right".into(),
+                    ty: MaterialType::Vec4,
+                },
+            ],
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            wgsl: "fn combine_nodes(left: vec4<f32>, right: vec4<f32>) -> vec4<f32> { return (left + right) * 0.5; }".into(),
+        }],
+        "unused_legacy_root",
+        vec![MaterialParameter {
+            name: "tint".into(),
+            ty: MaterialType::Vec4,
+            resource: "material_tint".into(),
+        }],
+        vec![
+            MaterialResource {
+                name: "material_tint".into(),
+                kind: MaterialResourceKind::UniformVec4,
+                location: BindingLocation { group: 0, binding: 0 },
+            },
+            MaterialResource {
+                name: "material_texture".into(),
+                kind: MaterialResourceKind::Texture2dF32,
+                location: BindingLocation { group: 0, binding: 1 },
+            },
+        ],
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    )
+    .with_code_node(code_node(VALID_NODE, "node_color"))
+    .with_node_graph(MaterialNodeGraph {
+        nodes: vec![
+            MaterialNode {
+                id: MaterialNodeId(1),
+                callable: "node_color".into(),
+                inputs: Vec::new(),
+            },
+            MaterialNode {
+                id: MaterialNodeId(2),
+                callable: "combine_nodes".into(),
+                inputs: vec![
+                    MaterialNodeInput {
+                        input: "left".into(),
+                        source: MaterialNodeInputSource::Node(MaterialNodeId(1)),
+                    },
+                    MaterialNodeInput {
+                        input: "right".into(),
+                        source: MaterialNodeInputSource::Node(MaterialNodeId(1)),
+                    },
+                ],
+            },
+        ],
+        output: MaterialNodeId(2),
+    })
+}
+
+fn cyclic_node_graph_material() -> MaterialDefinition {
+    node_graph_material().with_node_graph(MaterialNodeGraph {
+        nodes: vec![MaterialNode {
+            id: MaterialNodeId(1),
+            callable: "combine_nodes".into(),
+            inputs: vec![
+                MaterialNodeInput {
+                    input: "left".into(),
+                    source: MaterialNodeInputSource::Node(MaterialNodeId(1)),
+                },
+                MaterialNodeInput {
+                    input: "right".into(),
+                    source: MaterialNodeInputSource::Node(MaterialNodeId(1)),
+                },
+            ],
+        }],
+        output: MaterialNodeId(1),
+    })
+}
+
+pub(super) fn sampled_material() -> MaterialDefinition {
+    MaterialDefinition::new(
+        vec![MaterialFragment {
+            name: "sampled_color".into(),
+            inputs: Vec::new(),
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            wgsl: "fn sampled_color() -> vec4<f32> { return textureSample(material_texture, material_sampler, vec2<f32>(0.5, 0.5)) * tint; }".into(),
+        }],
+        "sampled_color",
+        vec![MaterialParameter {
+            name: "tint".into(),
+            ty: MaterialType::Vec4,
+            resource: "material_tint".into(),
+        }],
+        vec![
+            MaterialResource {
+                name: "material_tint".into(),
+                kind: MaterialResourceKind::UniformVec4,
+                location: BindingLocation { group: 0, binding: 0 },
+            },
+            MaterialResource {
+                name: "material_texture".into(),
+                kind: MaterialResourceKind::Texture2dF32,
+                location: BindingLocation { group: 0, binding: 1 },
+            },
+            MaterialResource {
+                name: "material_sampler".into(),
+                kind: MaterialResourceKind::Sampler { comparison: false },
+                location: BindingLocation { group: 0, binding: 2 },
+            },
+        ],
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    )
+}
+
+pub(super) fn scene_and_assets(
     definition: MaterialDefinition,
 ) -> (
     crate::FrameSnapshot<ForwardResources>,
@@ -261,8 +385,192 @@ fn valid_code_node_is_source_mapped_and_runs_forward_and_deferred() {
     .unwrap();
     let deferred =
         block_on(renderer.submit_deferred_probe(snapshot, view, bounds(), &assets)).unwrap();
-    assert_eq!(renderer.deferred_probe_facts().unwrap().passes, 4);
-    assert_eq!(native.command_calls.load(Ordering::SeqCst), 7);
+    assert_eq!(renderer.deferred_probe_facts().unwrap().passes, 5);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 8);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 1);
     block_on(renderer.readback(&forward)).unwrap();
     block_on(renderer.readback(&deferred)).unwrap();
+}
+
+#[test]
+fn node_graph_material_runs_forward_and_deferred_through_the_same_definition() {
+    let (snapshot, view, assets) = scene_and_assets(node_graph_material());
+    let selected = ForwardCpuPipeline::new(BoundsVisibility)
+        .prepare(&snapshot, view, bounds())
+        .unwrap();
+    let prepared = prepare_forward(&selected, &assets, &mut ShaderComposer::new()).unwrap();
+    let source = prepared[0].prepared().shader().source();
+    assert!(source.contains("fluxel_material_node_1"));
+    assert!(source.contains("fluxel_material_node_2"));
+
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let forward = block_on(renderer.submit_forward(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot.clone(),
+        view,
+        bounds(),
+        &assets,
+    ))
+    .unwrap();
+    let deferred =
+        block_on(renderer.submit_deferred_probe(snapshot, view, bounds(), &assets)).unwrap();
+    block_on(renderer.readback(&forward)).unwrap();
+    block_on(renderer.readback(&deferred)).unwrap();
+    assert_eq!(renderer.deferred_probe_facts().unwrap().passes, 5);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 8);
+}
+
+#[test]
+fn cyclic_node_graph_is_refused_before_backend_work() {
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let (snapshot, view, assets) = scene_and_assets(cyclic_node_graph_material());
+    let before = counters(&native);
+    let error = block_on(renderer.submit_deferred_probe(snapshot, view, bounds(), &assets))
+        .expect_err("cyclic author graph must be refused before backend work");
+    assert!(matches!(
+        error,
+        RendererError::ForwardPreparation(crate::ForwardPreparationError::Material(
+            crate::MaterialPreparationError::Material(MaterialError::NodeCycle {
+                node: MaterialNodeId(1)
+            })
+        ))
+    ));
+    assert_eq!(counters(&native), before);
+}
+
+#[test]
+fn ordinary_sampler_is_bound_and_retained_for_forward_submission() {
+    let (snapshot, view, assets) = scene_and_assets(sampled_material());
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let submission = block_on(renderer.submit_forward(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+    ))
+    .expect("ordinary sampled material must submit");
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 1);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 0);
+    block_on(renderer.readback(&submission)).unwrap();
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn ordinary_sampler_is_bound_and_retained_for_deferred_submission() {
+    let (snapshot, view, assets) = scene_and_assets(sampled_material());
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).unwrap();
+    let submission = block_on(renderer.submit_deferred_probe(snapshot, view, bounds(), &assets))
+        .expect("ordinary sampled material must submit through Deferred");
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 2);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 0);
+    block_on(renderer.readback(&submission)).unwrap();
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn unfilterable_texture_refuses_sampler_before_backend_allocation() {
+    let (snapshot, view, assets) = scene_and_assets(sampled_material());
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    native.texture_filterable.store(false, Ordering::SeqCst);
+    let mut renderer = Renderer::new(device).unwrap();
+    let before = counters(&native);
+    let error = block_on(renderer.submit_forward(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+    ))
+    .expect_err("unfilterable texture must refuse an ordinary sampler");
+    assert!(matches!(
+        error,
+        RendererError::ForwardOperation {
+            operation: "sampled material texture admission",
+            error: fluxel_rhi::api::Error::Unsupported("filterable material texture"),
+        }
+    ));
+    assert_eq!(counters(&native), before);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unfilterable_texture_refuses_deferred_sampler_before_backend_allocation() {
+    let (snapshot, view, assets) = scene_and_assets(sampled_material());
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    native.texture_filterable.store(false, Ordering::SeqCst);
+    let mut renderer = Renderer::new(device).unwrap();
+    let before = counters(&native);
+    let error = block_on(renderer.submit_deferred_probe(snapshot, view, bounds(), &assets))
+        .expect_err("unfilterable texture must refuse an ordinary Deferred sampler");
+    assert!(matches!(
+        error,
+        RendererError::Rhi(fluxel_rhi::api::Error::Unsupported(
+            "filterable material texture"
+        ))
+    ));
+    assert_eq!(counters(&native), before);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unfilterable_scene_color_refuses_deferred_composite_before_sampler_allocation() {
+    let (snapshot, view, assets) = scene_and_assets(material(code_node(VALID_NODE, "node_color")));
+    let (device, native) = deferred_device(Script::AcceptedExact);
+    native.texture_filterable.store(false, Ordering::SeqCst);
+    let mut renderer = Renderer::new(device).unwrap();
+    let error = block_on(renderer.submit_deferred_probe(snapshot, view, bounds(), &assets))
+        .expect_err("unfilterable scene-color must refuse composite allocation");
+    assert!(matches!(
+        error,
+        RendererError::Rhi(fluxel_rhi::api::Error::Unsupported(
+            "filterable Deferred scene-color"
+        ))
+    ));
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn sampler_owner_is_released_when_its_bind_group_is_rejected() {
+    let (snapshot, view, assets) = scene_and_assets(sampled_material());
+    let (device, native) = deferred_device(Script::SamplerBindGroupRejected);
+    let mut renderer = Renderer::new(device).unwrap();
+    let error = block_on(renderer.submit_forward(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+    ))
+    .expect_err("sampler bind group rejection must fail the submission");
+    assert!(matches!(
+        error,
+        RendererError::ForwardOperation {
+            operation: "material bind group",
+            error: fluxel_rhi::api::Error::InvalidState,
+        }
+    ));
+    assert_eq!(renderer.pending(), 0);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 1);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn deferred_sampler_owner_is_released_when_its_bind_group_is_rejected() {
+    let (snapshot, view, assets) = scene_and_assets(sampled_material());
+    let (device, native) = deferred_device(Script::SamplerBindGroupRejected);
+    let mut renderer = Renderer::new(device).unwrap();
+    let error = block_on(renderer.submit_deferred_probe(snapshot, view, bounds(), &assets))
+        .expect_err("Deferred sampler bind group rejection must fail the submission");
+    assert!(matches!(
+        error,
+        RendererError::Rhi(fluxel_rhi::api::Error::InvalidState)
+    ));
+    assert_eq!(renderer.pending(), 0);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 2);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 2);
 }

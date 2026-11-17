@@ -15,6 +15,7 @@ pub(super) fn fixture_with_caps(
     let native = Arc::new(Native {
         script,
         fault_enabled: AtomicBool::new(true),
+        texture_filterable: AtomicBool::new(true),
         finishes: AtomicUsize::new(0),
         next_completion: AtomicUsize::new(0),
         command_calls: AtomicUsize::new(0),
@@ -29,6 +30,8 @@ pub(super) fn fixture_with_caps(
         idle_waits: AtomicUsize::new(0),
         waited_completions: Mutex::new(Vec::new()),
         created_buffers: AtomicUsize::new(0),
+        created_samplers: AtomicUsize::new(0),
+        dropped_samplers: AtomicUsize::new(0),
         pipeline_color_formats: Mutex::new(Vec::new()),
         dropped_buffers: AtomicUsize::new(0),
         outcome: Mutex::new(Weak::new()),
@@ -42,7 +45,7 @@ pub(super) fn fixture_with_caps(
             max_vertex_buffers: 1,
             max_vertex_attributes: 2,
             max_bind_groups: 1,
-            max_bindings_per_group: 2,
+            max_bindings_per_group: 3,
             uniform_offset_alignment: 256,
             ..DeviceLimits::default()
         },

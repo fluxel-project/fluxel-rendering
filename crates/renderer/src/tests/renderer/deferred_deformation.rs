@@ -264,8 +264,8 @@ fn deformation_records_real_five_pass_graph_and_retires_two_parameter_owners() {
         &second_input,
     )
     .unwrap();
-    assert_eq!(renderer.deferred_probe_facts().unwrap().passes, 5);
-    assert_eq!(native.command_calls.load(Ordering::SeqCst), 10);
+    assert_eq!(renderer.deferred_probe_facts().unwrap().passes, 6);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 12);
     assert_eq!(renderer.pending(), 2);
     block_on(renderer.readback(&first)).unwrap();
     assert_eq!(renderer.pending(), 1);
@@ -312,8 +312,8 @@ fn surface_deformation_records_compute_before_geometry_and_keeps_pending_owners(
         block_on(surface.acquire()).unwrap(),
     ))
     .expect("second Surface producer/consumer frame");
-    assert_eq!(renderer.deferred_probe_facts().unwrap().passes, 4);
-    assert_eq!(native.command_calls.load(Ordering::SeqCst), 8);
+    assert_eq!(renderer.deferred_probe_facts().unwrap().passes, 5);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 10);
     assert_eq!(renderer.pending(), 2);
     block_on(renderer.complete(&first)).expect("first present completion");
     assert_eq!(renderer.pending(), 1);

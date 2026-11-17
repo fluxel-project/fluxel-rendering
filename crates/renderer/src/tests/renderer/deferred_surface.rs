@@ -8,6 +8,8 @@ use fluxel_rhi::api::{
 
 #[path = "deferred_surface_failures.rs"]
 mod failure_tests;
+#[path = "deferred_surface_sampler.rs"]
+mod sampler_tests;
 use std::cell::Cell;
 
 pub(super) fn config(extent: [u32; 2]) -> SurfaceConfig {

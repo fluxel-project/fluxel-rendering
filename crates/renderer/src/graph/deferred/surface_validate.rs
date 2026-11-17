@@ -40,9 +40,18 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
         || frame.draw.transform_group.device() != device.id()
         || frame.lighting_pipeline.device() != device.id()
         || frame.lighting_group.device() != device.id()
+        || frame.composite_pipeline.device() != device.id()
+        || frame.composite_group.device() != device.id()
+        || frame.scene_color.texture.device() != device.id()
+        || frame.scene_color.view.device() != device.id()
+        || frame.scene_color_sampler.device() != device.id()
     {
         return Err(Error::WrongDevice);
     }
+    if !frame.scene_color.filterable {
+        return Err(Error::Unsupported("filterable Deferred scene-color"));
+    }
+    crate::renderer::validate_ordinary_sampler(&frame.scene_color_sampler_desc)?;
     for (texture, format) in frame.gbuffer.iter().zip([
         TextureFormat::Rgba8Unorm,
         TextureFormat::Rgba8Unorm,
@@ -51,6 +60,13 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
         if !matches_gbuffer_template(&texture.desc, frame.extent, format) {
             return Err(Error::InvalidRange);
         }
+    }
+    if !matches_gbuffer_template(
+        &frame.scene_color.desc,
+        frame.extent,
+        TextureFormat::Rgba8Unorm,
+    ) {
+        return Err(Error::InvalidRange);
     }
     validate_resident_uploads(&frame.resident, &frame.resident_upload)?;
     if let Some(deformation) = &frame.deformation {

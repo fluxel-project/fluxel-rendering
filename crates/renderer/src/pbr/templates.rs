@@ -93,6 +93,57 @@ fn deferred_gbuffer_fs(input: PbrVertexOutput) -> PbrGbufferOutput {
 }
 "#;
 
+pub(super) const FORWARD_UV0: &str = r#"
+struct PbrUv0VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_normal: vec3<f32>,
+    @location(1) uv0: vec2<f32>,
+};
+@vertex
+fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>) -> PbrUv0VertexOutput {
+    let base = pbr_vertex(position, normal);
+    var output: PbrUv0VertexOutput;
+    output.position = base.position;
+    output.world_normal = base.world_normal;
+    output.uv0 = uv0;
+    return output;
+}
+@fragment
+fn forward_fs(input: PbrUv0VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(pbr_direct_light(evaluate_material_uv0(input.uv0).rgb, evaluate_metallic_roughness_uv0(input.uv0), input.world_normal), 1.0);
+}
+"#;
+
+pub(super) const GBUFFER_UV0: &str = r#"
+struct PbrGbufferUv0Output {
+    @location(0) base_metal: vec4<f32>,
+    @location(1) normal_roughness: vec4<f32>,
+};
+struct PbrUv0VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_normal: vec3<f32>,
+    @location(1) uv0: vec2<f32>,
+};
+@vertex
+fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>) -> PbrUv0VertexOutput {
+    let base = pbr_vertex(position, normal);
+    var output: PbrUv0VertexOutput;
+    output.position = base.position;
+    output.world_normal = base.world_normal;
+    output.uv0 = uv0;
+    return output;
+}
+@fragment
+fn deferred_gbuffer_fs(input: PbrUv0VertexOutput) -> PbrGbufferUv0Output {
+    let base = clamp(evaluate_material_uv0(input.uv0).rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let properties = evaluate_metallic_roughness_uv0(input.uv0);
+    var output: PbrGbufferUv0Output;
+    output.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0));
+    output.normal_roughness = vec4<f32>(pbr_normal(input.world_normal) * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.04, 1.0));
+    return output;
+}
+"#;
+
 pub(super) const LIGHTING: &str = r#"
 @group(0) @binding(0) var pbr_base_metal: texture_2d<f32>;
 @group(0) @binding(1) var pbr_normal_roughness: texture_2d<f32>;

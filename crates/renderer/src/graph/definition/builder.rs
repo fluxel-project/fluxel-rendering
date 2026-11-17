@@ -55,6 +55,7 @@ impl GraphBuilder {
             desc,
             false,
             Some((empty_texture_uses(), ImageLayout::Undefined)),
+            false,
         )
     }
     /// Imports a texture whose complete subresource set is defined externally.
@@ -63,7 +64,7 @@ impl GraphBuilder {
         &mut self,
         desc: TextureDesc,
     ) -> Result<TextureHandle, GraphError> {
-        self.add_texture(desc, true, None)
+        self.add_texture(desc, true, None, false)
     }
     /// Imports a fully-defined texture and its exact RHI incoming state.
     #[allow(dead_code)] // Surface graph lowering will supply its acquired-image state here.
@@ -73,7 +74,15 @@ impl GraphBuilder {
         initial: TextureUses,
         layout: ImageLayout,
     ) -> Result<TextureHandle, GraphError> {
-        self.add_texture(desc, true, Some((initial, layout)))
+        self.add_texture(desc, true, Some((initial, layout)), false)
+    }
+    /// Imports an acquired surface lease. Its initial native state is owned
+    /// by the selected RHI and becomes attachment-ready in begin_raster.
+    pub(crate) fn import_surface_texture(
+        &mut self,
+        desc: TextureDesc,
+    ) -> Result<TextureHandle, GraphError> {
+        self.add_texture(desc, true, None, true)
     }
     /// Declares a pass and records its local accesses.
     pub(crate) fn add_pass<T>(
@@ -176,6 +185,7 @@ impl GraphBuilder {
         desc: TextureDesc,
         defined: bool,
         initial: Option<(TextureUses, ImageLayout)>,
+        rhi_managed_initial: bool,
     ) -> Result<TextureHandle, GraphError> {
         validate_texture_desc(&desc)?;
         let resource = self.textures.len();
@@ -188,6 +198,7 @@ impl GraphBuilder {
         self.textures.push(TextureNode {
             desc,
             initial,
+            rhi_managed_initial,
             versions: vec![TextureVersionNode {
                 nonce,
                 producer: None,

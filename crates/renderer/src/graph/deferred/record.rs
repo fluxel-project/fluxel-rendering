@@ -399,7 +399,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     where
         B: RasterBackend,
     {
-        let target_slot = self.target_slot.ok_or(Error::InvalidState)?;
+        let scene_color_slot = self.scene_color_slot.ok_or(Error::InvalidState)?;
         let bindings = self.bindings(frame)?;
         let pass = bindings.pass(self.lighting_pass)?;
         pass.texture(
@@ -420,10 +420,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             AccessKind::Read,
             sampled_read(),
         )?;
-        pass.texture(target_slot, whole_color(), AccessKind::Write, color_write())?;
+        pass.texture(
+            scene_color_slot,
+            whole_color(),
+            AccessKind::Write,
+            color_write(),
+        )?;
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {
-            view: AttachmentView::Texture(&frame.frame.target_view),
+            view: AttachmentView::Texture(&frame.scene_color.view),
             resolve_target: None,
             load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
             store: StoreOp::Store,
@@ -441,6 +446,50 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         configure_raster(&mut raster, frame.extent)?;
         raster.set_pipeline(&frame.lighting_pipeline)?;
         raster.set_bind_group(0, &frame.lighting_group, &[])?;
+        raster.draw(0..3, 0..1)?;
+        raster.finish()
+    }
+
+    pub(crate) fn record_composite(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredFrame<B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        let composite_pass = self.composite_pass.ok_or(Error::InvalidState)?;
+        let scene_color_slot = self.scene_color_slot.ok_or(Error::InvalidState)?;
+        let target_slot = self.target_slot.ok_or(Error::InvalidState)?;
+        let bindings = self.bindings(frame)?;
+        let pass = bindings.pass(composite_pass)?;
+        pass.texture(
+            scene_color_slot,
+            whole_color(),
+            AccessKind::Read,
+            sampled_read(),
+        )?;
+        pass.texture(target_slot, whole_color(), AccessKind::Write, color_write())?;
+        pass.transition(encoder)?;
+        let colors = [Some(ColorAttachment {
+            view: AttachmentView::Texture(&frame.frame.target_view),
+            resolve_target: None,
+            load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+            store: StoreOp::Store,
+        })];
+        let mut raster = encoder.begin_raster(&RasterPassDesc {
+            label: Some("fluxel deferred scene-color composite"),
+            colors: &colors,
+            depth_stencil: None,
+            render_area: render_area(frame.extent),
+            multiview_mask: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            secondary_inheritance: None,
+        })?;
+        configure_raster(&mut raster, frame.extent)?;
+        raster.set_pipeline(&frame.composite_pipeline)?;
+        raster.set_bind_group(0, &frame.composite_group, &[])?;
         raster.draw(0..3, 0..1)?;
         raster.finish()
     }

@@ -86,6 +86,32 @@ fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) 
 }
 "#;
 
+pub(super) const SCENE_COLOR_COMPOSITE_TEMPLATE: &str = r#"
+@group(0) @binding(0) var deferred_scene_color: texture_2d<f32>;
+@group(0) @binding(1) var deferred_scene_sampler: sampler;
+
+struct CompositeVertexOutput {
+    @builtin(position) position: vec4<f32>,
+};
+
+@vertex
+fn deferred_composite_vs(@builtin(vertex_index) index: u32) -> CompositeVertexOutput {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0),
+    );
+    var output: CompositeVertexOutput;
+    output.position = vec4<f32>(positions[index], 0.0, 1.0);
+    return output;
+}
+
+@fragment
+fn deferred_composite_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(textureDimensions(deferred_scene_color, 0));
+    let uv = (position.xy + vec2<f32>(0.5)) / size;
+    return textureSampleLevel(deferred_scene_color, deferred_scene_sampler, uv, 0.0);
+}
+"#;
+
 const GBUFFER_TEMPLATE: &str = r#"
 @group(1) @binding(0) var<uniform> deferred_clip_from_local: mat4x4<f32>;
 

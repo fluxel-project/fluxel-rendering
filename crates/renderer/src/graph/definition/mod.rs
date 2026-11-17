@@ -141,6 +141,9 @@ pub(crate) struct TextureVersionNode {
 pub(crate) struct TextureNode {
     pub(crate) desc: TextureDesc,
     pub(crate) initial: Option<(TextureUses, ImageLayout)>,
+    /// The RHI owns the acquire-to-attachment transition; no public incoming
+    /// texture state exists for this resource.
+    pub(crate) rhi_managed_initial: bool,
     pub(crate) versions: Vec<TextureVersionNode>,
     pub(crate) current: u32,
 }

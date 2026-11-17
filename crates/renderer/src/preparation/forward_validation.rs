@@ -123,7 +123,19 @@ pub(super) fn validate_material_schema(
             && binding.location.binding == 1
             && binding.kind == MaterialResourceKind::Texture2dF32
     });
-    if bindings.len() != 2 || tint.count() != 1 || texture.count() != 1 {
+    let sampler = bindings.iter().filter(|binding| {
+        binding.location.group == 0
+            && binding.location.binding == 2
+            && binding.kind == MaterialResourceKind::Sampler { comparison: false }
+    });
+    // The original tint/texture pair remains the compatibility ABI. A material
+    // may add exactly one ordinary sampler for the first textureSample path;
+    // comparison samplers and arbitrary layouts need their own consumer.
+    if !(bindings.len() == 2 || bindings.len() == 3)
+        || tint.count() != 1
+        || texture.count() != 1
+        || sampler.count() != bindings.len() - 2
+    {
         return Err(ForwardPreparationError::MaterialBindingSchema { source });
     }
     Ok(())

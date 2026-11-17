@@ -354,6 +354,11 @@ pub enum ForwardPreparationError {
         /// Draw requesting the PBR normal.
         source: ForwardDrawSource,
     },
+    /// UV0-evaluated PBR geometry did not expose exactly one `UV0` vec2 semantic.
+    MissingUv0 {
+        /// Draw requesting the PBR UV0 evaluation context.
+        source: ForwardDrawSource,
+    },
     /// A consumed PBR normal was non-finite or had zero length.
     InvalidNormal {
         /// Draw requesting the PBR normal.
@@ -496,6 +501,13 @@ fn prepare_draw(
             crate::pbr::forward_request(&geometry.value().layout)
                 .ok_or(ForwardPreparationError::MissingNormal { source })?
         }
+        fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => {
+            crate::pbr::forward_uv0_request(&geometry.value().layout)
+                .ok_or(ForwardPreparationError::MissingUv0 { source })?
+        }
+        fluxel_material::SurfaceOutput::ColorUv0 | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => {
+            return Err(ForwardPreparationError::MaterialBindingSchema { source });
+        }
     };
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
@@ -505,10 +517,7 @@ fn prepare_draw(
         geometry.value(),
         prepared.geometry(),
         transform,
-        matches!(
-            material.value().output(),
-            fluxel_material::SurfaceOutput::MetallicRoughness { .. }
-        ),
+        crate::pbr::is_pbr(material.value().output()),
         source,
     )?;
     let clip_from_local = multiply_columns(view.transform, transform);

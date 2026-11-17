@@ -17,7 +17,10 @@ use crate::GeometryLayout;
 mod templates;
 
 pub(crate) fn is_pbr(output: &SurfaceOutput) -> bool {
-    matches!(output, SurfaceOutput::MetallicRoughness { .. })
+    matches!(
+        output,
+        SurfaceOutput::MetallicRoughness { .. } | SurfaceOutput::MetallicRoughnessUv0 { .. }
+    )
 }
 
 pub(crate) fn forward_request(layout: &GeometryLayout) -> Option<ShaderCompositionRequest> {
@@ -26,6 +29,14 @@ pub(crate) fn forward_request(layout: &GeometryLayout) -> Option<ShaderCompositi
 
 pub(crate) fn gbuffer_request(layout: &GeometryLayout) -> Option<ShaderCompositionRequest> {
     geometry_request(layout, true)
+}
+
+pub(crate) fn forward_uv0_request(layout: &GeometryLayout) -> Option<ShaderCompositionRequest> {
+    geometry_uv0_request(layout, false)
+}
+
+pub(crate) fn gbuffer_uv0_request(layout: &GeometryLayout) -> Option<ShaderCompositionRequest> {
+    geometry_uv0_request(layout, true)
 }
 
 fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCompositionRequest> {
@@ -92,6 +103,71 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
             .with_static_option("renderer.surface", "opaque-metallic-roughness")
             .with_static_option("renderer.light", "world-directional-orthographic-v1"),
     )
+}
+
+fn geometry_uv0_request(
+    layout: &GeometryLayout,
+    deferred: bool,
+) -> Option<ShaderCompositionRequest> {
+    let mut base_layout = layout.clone();
+    for stream in &mut base_layout.streams {
+        stream
+            .attributes
+            .retain(|attribute| attribute.semantic != "UV0");
+    }
+    // UV0 may be supplied by its own stream.  The legacy PBR request only
+    // needs POSITION/NORMAL, so omit a stream made empty solely by removing
+    // the UV0 attribute rather than treating that legal physical layout as an
+    // invalid zero-attribute vertex stream.
+    base_layout
+        .streams
+        .retain(|stream| !stream.attributes.is_empty());
+    let mut request = geometry_request(&base_layout, deferred)?;
+    let attributes: Vec<_> = layout
+        .streams
+        .iter()
+        .flat_map(|stream| &stream.attributes)
+        .collect();
+    if attributes.len() != 3
+        || attributes
+            .iter()
+            .filter(|attribute| {
+                attribute.semantic == "UV0" && matches!(attribute.format, VertexFormat::Float32(2))
+            })
+            .count()
+            != 1
+    {
+        return None;
+    }
+    request.source_units.retain(|unit| {
+        unit.id.0
+            != if deferred {
+                "pbr-gbuffer"
+            } else {
+                "pbr-forward"
+            }
+    });
+    request.source_units.push(SourceUnit::new(
+        if deferred {
+            "pbr-gbuffer-uv0"
+        } else {
+            "pbr-forward-uv0"
+        },
+        if deferred {
+            templates::GBUFFER_UV0
+        } else {
+            templates::FORWARD_UV0
+        },
+    ));
+    request.vertex_inputs.push(VertexInputDeclaration::new(
+        "UV0",
+        2,
+        VertexType::Vec2(ScalarType::F32),
+    ));
+    request
+        .static_options
+        .insert("renderer.material_context".into(), "uv0".into());
+    Some(request)
 }
 
 pub(crate) fn lighting_request() -> ShaderCompositionRequest {

@@ -25,6 +25,7 @@ impl AssetKind for Bytes {}
 pub(super) enum Script {
     CleanRejected,
     AllocationDeviceLost,
+    SamplerBindGroupRejected,
     MapDeviceLost,
     FlushDeviceLost,
     BeginDeviceLost,
@@ -50,6 +51,7 @@ pub(super) enum Script {
 pub(super) struct Native {
     pub(super) script: Script,
     pub(super) fault_enabled: AtomicBool,
+    pub(super) texture_filterable: AtomicBool,
     pub(super) finishes: AtomicUsize,
     pub(super) next_completion: AtomicUsize,
     pub(super) command_calls: AtomicUsize,
@@ -64,6 +66,8 @@ pub(super) struct Native {
     pub(super) idle_waits: AtomicUsize,
     pub(super) waited_completions: Mutex<Vec<usize>>,
     pub(super) created_buffers: AtomicUsize,
+    pub(super) created_samplers: AtomicUsize,
+    pub(super) dropped_samplers: AtomicUsize,
     pub(super) pipeline_color_formats: Mutex<Vec<Vec<TextureFormat>>>,
     pub(super) dropped_buffers: AtomicUsize,
     pub(super) outcome: Mutex<Weak<OutcomeGuard>>,
@@ -75,9 +79,19 @@ pub(super) struct NativeBuffer {
 
 pub(super) struct NativeTexture;
 
+pub(super) struct NativeSampler {
+    native: Arc<Native>,
+}
+
 impl Drop for NativeBuffer {
     fn drop(&mut self) {
         self.native.dropped_buffers.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl Drop for NativeSampler {
+    fn drop(&mut self) {
+        self.native.dropped_samplers.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -118,7 +132,7 @@ impl Backend for WitnessBackend {
     type NativeTexture = Arc<NativeTexture>;
     type NativeTextureView = ();
     type NativeVideoFrame = ();
-    type NativeSampler = ();
+    type NativeSampler = Arc<NativeSampler>;
     type NativeBindGroupLayout = ();
     type NativePipelineLayout = ();
     type NativeBindGroup = Arc<Native>;
@@ -176,14 +190,14 @@ impl ResourceBackend for WitnessBackend {
             max_size: u64::MAX,
         })
     }
-    fn texture_support(_: &Arc<Native>, _: &TextureDesc) -> Support<TextureSupport> {
+    fn texture_support(device: &Arc<Native>, _: &TextureDesc) -> Support<TextureSupport> {
         Support::Supported(TextureSupport {
             max_extent: [u32::MAX; 3],
             max_array_layers: u32::MAX,
             max_mips: u32::MAX,
             sample_counts: vec![1],
             compatible_view_formats: Vec::new(),
-            filterable: true,
+            filterable: device.texture_filterable.load(Ordering::SeqCst),
             blendable: true,
             storage: true,
         })
@@ -205,13 +219,26 @@ impl ResourceBackend for WitnessBackend {
     fn create_view(_: &Arc<Native>, _: &Arc<NativeTexture>, _: &TextureViewDesc) -> Result<()> {
         Ok(())
     }
-    fn create_sampler(_: &Arc<Native>, _: &SamplerDesc) -> Result<()> {
-        Err(Error::Unsupported("sampler"))
+    fn create_sampler(device: &Arc<Native>, _: &SamplerDesc) -> Result<Arc<NativeSampler>> {
+        device.created_samplers.fetch_add(1, Ordering::SeqCst);
+        Ok(Arc::new(NativeSampler {
+            native: Arc::clone(device),
+        }))
     }
     fn create_bind_group_layout(_: &Arc<Native>, _: &BindGroupLayoutDesc) -> Result<()> {
         Ok(())
     }
-    fn create_bind_group(device: &Arc<Native>, _: &BindGroupDesc<'_, Self>) -> Result<Arc<Native>> {
+    fn create_bind_group(
+        device: &Arc<Native>,
+        desc: &BindGroupDesc<'_, Self>,
+    ) -> Result<Arc<Native>> {
+        if matches!(device.script, Script::SamplerBindGroupRejected)
+            && desc.entries.iter().any(|entry| {
+                entry.binding == 2 && matches!(entry.resource, BindingResource::Sampler(_))
+            })
+        {
+            return Err(Error::InvalidState);
+        }
         Ok(Arc::clone(device))
     }
     fn create_pipeline_layout(_: &Arc<Native>, _: &PipelineLayoutDesc<'_, Self>) -> Result<()> {

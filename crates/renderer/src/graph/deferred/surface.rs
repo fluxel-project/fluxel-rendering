@@ -33,15 +33,27 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || frame.draw.transform_bytes != self.transform_bytes
             || self.stream_slots.len() != frame.resident.streams.len()
             || self.deformation_pass.is_some() != frame.deformation.is_some()
+            || self.composite_pass.is_none()
+            || self.scene_color_slot.is_none()
         {
             return Err(Error::InvalidState);
         }
-        self.surface_bindings(frame).map(|_| ())
+        Ok(())
+    }
+
+    pub(crate) fn validate_surface_frame_with_image(
+        &self,
+        frame: &DeferredSurfaceFrame<B>,
+        image: &fluxel_rhi::api::SurfaceImage<B>,
+    ) -> Result<()> {
+        self.validate_surface_frame(frame)?;
+        self.surface_bindings(frame, image).map(|_| ())
     }
 
     pub(super) fn surface_bindings<'a>(
         &'a self,
         frame: &'a DeferredSurfaceFrame<B>,
+        image: &'a fluxel_rhi::api::SurfaceImage<B>,
     ) -> Result<FrameBindings<'a, B>> {
         let uses = |slot| {
             self.execution
@@ -134,9 +146,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     )
                 }),
         )
+        .chain(std::iter::once(BoundTexture::new(
+            self.scene_color_slot.ok_or(Error::InvalidState)?,
+            frame.scene_color.instance,
+            &frame.scene_color.texture,
+            &frame.scene_color.desc,
+            frame.scene_color.incoming,
+            frame.scene_color.layout,
+        )))
         .collect();
-        FrameBindings::new(&self.execution, self.id.device, buffers, textures)
-            .map_err(binding_error)
+        let surface_target = self.surface_target_slot.ok_or(Error::InvalidState)?;
+        let lease = BoundSurfaceTexture::new(surface_target, image)?;
+        FrameBindings::new_with_surface_textures(
+            &self.execution,
+            self.id.device,
+            buffers,
+            textures,
+            vec![lease],
+        )
+        .map_err(binding_error)
     }
 
     pub(crate) fn surface_record_lighting(
@@ -157,7 +185,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if image.extent() != frame.extent || image.format() != frame.color_format {
             return Err(Error::InvalidRange);
         }
-        let bindings = self.surface_bindings(frame)?;
+        let bindings = self.surface_bindings(frame, image)?;
         let pass = bindings.pass(self.lighting_pass)?;
         for (slot, range) in [
             (self.gbuffer_slots[0], whole_color()),
@@ -166,9 +194,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         ] {
             pass.texture(slot, range, AccessKind::Read, sampled_read())?;
         }
+        pass.texture(
+            self.scene_color_slot.ok_or(Error::InvalidState)?,
+            whole_color(),
+            AccessKind::Write,
+            color_write(),
+        )?;
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {
-            view: AttachmentView::Surface(image),
+            view: AttachmentView::Texture(&frame.scene_color.view),
             resolve_target: None,
             load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
             store: StoreOp::Store,
@@ -208,6 +242,80 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         raster.finish()
     }
 
+    pub(crate) fn surface_record_composite(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredSurfaceFrame<B>,
+        image: &fluxel_rhi::api::SurfaceImage<B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        if image.device() != self.id.device {
+            return Err(Error::WrongDevice);
+        }
+        if !image.is_current() {
+            return Err(Error::SurfaceOutdated);
+        }
+        if image.extent() != frame.extent || image.format() != frame.color_format {
+            return Err(Error::InvalidRange);
+        }
+        let bindings = self.surface_bindings(frame, image)?;
+        let pass = bindings.pass(self.composite_pass.ok_or(Error::InvalidState)?)?;
+        pass.texture(
+            self.scene_color_slot.ok_or(Error::InvalidState)?,
+            whole_color(),
+            AccessKind::Read,
+            sampled_read(),
+        )?;
+        pass.surface_texture(
+            self.surface_target_slot.ok_or(Error::InvalidState)?,
+            whole_color(),
+            AccessKind::Write,
+            color_write(),
+        )?;
+        pass.transition(encoder)?;
+        let colors = [Some(ColorAttachment {
+            view: AttachmentView::Surface(image),
+            resolve_target: None,
+            load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+            store: StoreOp::Store,
+        })];
+        let mut raster = encoder.begin_raster(&RasterPassDesc {
+            label: Some("fluxel deferred surface scene-color composite"),
+            colors: &colors,
+            depth_stencil: None,
+            render_area: Rect {
+                x: 0,
+                y: 0,
+                width: frame.extent[0],
+                height: frame.extent[1],
+            },
+            multiview_mask: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            secondary_inheritance: None,
+        })?;
+        raster.viewport(Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: frame.extent[0] as f32,
+            height: frame.extent[1] as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        })?;
+        raster.scissor(Rect {
+            x: 0,
+            y: 0,
+            width: frame.extent[0],
+            height: frame.extent[1],
+        })?;
+        raster.set_pipeline(&frame.composite_pipeline)?;
+        raster.set_bind_group(0, &frame.composite_group, &[])?;
+        raster.draw(0..3, 0..1)?;
+        raster.finish()
+    }
+
     // These entry points deliberately remain separate from the output route:
     // their Graph passes are shared with offscreen Deferred.  The Surface
     // recorder supplies the same concrete owners, so an absent deformation is
@@ -216,13 +324,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         &self,
         encoder: &mut CommandEncoder<B>,
         frame: &DeferredSurfaceFrame<B>,
+        image: &fluxel_rhi::api::SurfaceImage<B>,
     ) -> Result<()>
     where
         B: CommandBackend,
     {
         self.record_body_deformation(
             encoder,
-            super::record_view::DeferredRecordView::surface(frame),
+            super::record_view::DeferredRecordView::surface_with_image(frame, image),
         )
     }
 
@@ -230,26 +339,28 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         &self,
         encoder: &mut CommandEncoder<B>,
         frame: &DeferredSurfaceFrame<B>,
+        image: &fluxel_rhi::api::SurfaceImage<B>,
     ) -> Result<()>
     where
         B: CommandBackend,
     {
         self.record_body_upload(
             encoder,
-            super::record_view::DeferredRecordView::surface(frame),
+            super::record_view::DeferredRecordView::surface_with_image(frame, image),
         )
     }
     pub(crate) fn surface_record_geometry(
         &self,
         encoder: &mut CommandEncoder<B>,
         frame: &DeferredSurfaceFrame<B>,
+        image: &fluxel_rhi::api::SurfaceImage<B>,
     ) -> Result<()>
     where
         B: RasterBackend,
     {
         self.record_body_geometry(
             encoder,
-            super::record_view::DeferredRecordView::surface(frame),
+            super::record_view::DeferredRecordView::surface_with_image(frame, image),
         )
     }
 }

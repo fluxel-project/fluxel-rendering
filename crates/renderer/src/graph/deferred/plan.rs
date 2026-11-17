@@ -25,6 +25,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             expected.push(pass);
         }
         expected.extend([declaration.geometry_pass, declaration.lighting_pass]);
+        if let Some(pass) = declaration.composite_pass {
+            expected.push(pass);
+        }
         if let DeferredOutputDeclaration::Offscreen { readback_pass } = declaration.output {
             expected.push(readback_pass);
         }
@@ -73,6 +76,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             deformation_pass: declaration.deformation_pass,
             geometry_pass: declaration.geometry_pass,
             lighting_pass: declaration.lighting_pass,
+            composite_pass: declaration.composite_pass,
             output,
             resident_upload_slot: declaration.resident_upload_slot,
             frame_upload_slot: declaration.frame_upload_slot,
@@ -80,6 +84,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             stream_slots: declaration.stream_slots,
             texture_slot: declaration.texture_slot,
             gbuffer_slots: declaration.gbuffer_slots,
+            scene_color_slot: declaration.scene_color_slot,
+            surface_target_slot: declaration.surface_target_slot,
             target_slot: declaration.target_slot,
             readback_slot: declaration.readback_slot,
             deformation_slots: declaration.deformation_slots,
@@ -114,6 +120,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 != declaration.deformation_pass.map(|pass| pass.1)
             || self.geometry_pass.1 != declaration.geometry_pass.1
             || self.lighting_pass.1 != declaration.lighting_pass.1
+            || self.composite_pass.map(|pass| pass.1)
+                != declaration.composite_pass.map(|pass| pass.1)
             || !match (self.output, declaration.output) {
                 (
                     DeferredOutputPlan::Offscreen {
@@ -133,6 +141,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.texture_slot.resource != declaration.texture_slot.resource
             || self.gbuffer_slots.map(|slot| slot.resource)
                 != declaration.gbuffer_slots.map(|slot| slot.resource)
+            || self.scene_color_slot.map(|slot| slot.resource)
+                != declaration.scene_color_slot.map(|slot| slot.resource)
+            || self.surface_target_slot.map(|slot| slot.resource)
+                != declaration.surface_target_slot.map(|slot| slot.resource)
             || self.target_slot.map(|slot| slot.resource)
                 != declaration.target_slot.map(|slot| slot.resource)
             || self.readback_slot.map(|slot| slot.resource)
@@ -197,11 +209,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         }
         StepId {
             plan: self.id,
-            index: if self.deformation_pass.is_some() {
-                4
-            } else {
-                3
-            },
+            index: self.composite_step().index + 1,
+        }
+    }
+
+    pub(crate) fn composite_step(&self) -> StepId {
+        StepId {
+            plan: self.id,
+            index: self.lighting_step().index + u32::from(self.composite_pass.is_some()),
         }
     }
 
@@ -252,12 +267,21 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || frame.draw.transform_group.device() != self.id.device
             || frame.lighting_pipeline.device() != self.id.device
             || frame.lighting_group.device() != self.id.device
+            || frame.composite_pipeline.device() != self.id.device
+            || frame.composite_group.device() != self.id.device
+            || frame.scene_color.texture.device() != self.id.device
+            || frame.scene_color.view.device() != self.id.device
+            || frame.scene_color_sampler.device() != self.id.device
         {
             return Err(Error::WrongDevice);
         }
         if self.deformation_pass.is_some() != frame.deformation.is_some() {
             return Err(Error::InvalidState);
         }
+        if !frame.scene_color.filterable {
+            return Err(Error::Unsupported("filterable Deferred scene-color"));
+        }
+        crate::renderer::validate_ordinary_sampler(&frame.scene_color_sampler_desc)?;
         if let Some(deformation) = &frame.deformation {
             validate_deformation(&self.device, &frame.draw, deformation)?;
             if self.deformation_slots.is_none() {
@@ -285,6 +309,13 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 fluxel_rhi::api::TextureFormat::Depth32Float,
             )
             || !matches_final_target_template(&frame.frame.target_desc, self.extent)
+            || !matches_gbuffer_template(
+                &frame.scene_color.desc,
+                self.extent,
+                fluxel_rhi::api::TextureFormat::Rgba8Unorm,
+            )
+            || self.composite_pass.is_none()
+            || self.scene_color_slot.is_none()
         {
             return Err(Error::InvalidState);
         }
@@ -303,6 +334,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             expected.push(step);
         }
         expected.extend([self.geometry_step(), self.lighting_step()]);
+        if self.composite_pass.is_some() {
+            expected.push(self.composite_step());
+        }
         if matches!(self.output, DeferredOutputPlan::Offscreen { .. }) {
             expected.push(self.readback_step());
         }
@@ -335,7 +369,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(step) = self.deformation_step() {
             expected.push(step);
         }
-        expected.extend([self.geometry_step(), self.lighting_step(), present]);
+        expected.extend([
+            self.geometry_step(),
+            self.lighting_step(),
+            self.composite_step(),
+            present,
+        ]);
         let facts = outcome.facts();
         if facts.status != ExecutionStatus::Accepted
             || facts.accepted != Some(&expected)
@@ -463,6 +502,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     )
                 }),
         )
+        .chain(std::iter::once(BoundTexture::new(
+            self.scene_color_slot.ok_or(Error::InvalidState)?,
+            frame.scene_color.instance,
+            &frame.scene_color.texture,
+            &frame.scene_color.desc,
+            frame.scene_color.incoming,
+            frame.scene_color.layout,
+        )))
         .chain(std::iter::once(BoundTexture::new(
             self.target_slot.ok_or(Error::InvalidState)?,
             frame.frame.target_instance,

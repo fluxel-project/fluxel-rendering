@@ -46,7 +46,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 &owner.frame.uniform_desc,
                 owner.frame.uniform_incoming,
             ),
-            super::record_view::RecordSource::Surface(owner) => (
+            super::record_view::RecordSource::Surface { frame: owner, .. } => (
                 &owner.frame.upload,
                 owner.frame.upload_instance,
                 &owner.frame.upload_desc,
@@ -148,7 +148,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 owner.frame.target_incoming,
                 owner.frame.target_layout,
             ),
-            super::record_view::RecordSource::Surface(owner) => {
+            super::record_view::RecordSource::Surface { frame: owner, .. } => {
                 let _ = writeln!(
                     output,
                     "surface={{format:{:?}, extent:{:?}, present_step:{:?}}}",

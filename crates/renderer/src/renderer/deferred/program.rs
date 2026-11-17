@@ -13,7 +13,7 @@ use crate::{
     renderer::admission::{self, PipelineCapabilityFacts},
 };
 
-use super::templates::LIGHTING_TEMPLATE;
+use super::templates::{LIGHTING_TEMPLATE, SCENE_COLOR_COMPOSITE_TEMPLATE};
 use super::*;
 
 #[path = "program_cache.rs"]
@@ -28,6 +28,11 @@ pub(crate) struct GbufferProgram<B: ResourceBackend> {
 }
 
 pub(crate) struct LightingProgram<B: ResourceBackend> {
+    pub(super) pipeline: RasterPipeline<B>,
+    pub(super) layout: BindGroupLayout<B>,
+}
+
+pub(crate) struct SceneColorCompositeProgram<B: ResourceBackend> {
     pub(super) pipeline: RasterPipeline<B>,
     pub(super) layout: BindGroupLayout<B>,
 }
@@ -101,8 +106,10 @@ where
             .shader(descriptor)
             .await
             .map_err(|error| self.observe_rhi_error(error))?;
-        let material_layout =
-            self.deferred_material_layout("Deferred G-buffer material bindings")?;
+        let material_layout = self.deferred_material_layout(
+            "Deferred G-buffer material bindings",
+            crate::renderer::forward::material_requires_ordinary_sampler(prepared),
+        )?;
         let transform_layout = self.deferred_transform_layout(
             "Deferred G-buffer transform bindings",
             transform_uniform_bytes,
@@ -292,6 +299,121 @@ where
         Ok(program)
     }
 
+    pub(super) async fn deferred_scene_color_composite_program(
+        &mut self,
+        color_format: TextureFormat,
+    ) -> std::result::Result<SceneColorCompositeProgram<B>, RendererError> {
+        self.ensure_open()?;
+        let request = ShaderCompositionRequest::new(vec![SourceUnit::new(
+            "deferred-scene-color-composite",
+            SCENE_COLOR_COMPOSITE_TEMPLATE,
+        )])
+        .with_entry_point(EntryPoint::new(
+            "deferred_composite_vs",
+            LogicalShaderStage::Vertex,
+        ))
+        .with_entry_point(EntryPoint::new(
+            "deferred_composite_fs",
+            LogicalShaderStage::Fragment,
+        ))
+        .with_binding(
+            BindingDeclaration::new(0, 0, BindingKind::Texture)
+                .with_visibility([LogicalShaderStage::Fragment]),
+        )
+        .with_binding(
+            BindingDeclaration::new(0, 1, BindingKind::Sampler)
+                .with_visibility([LogicalShaderStage::Fragment]),
+        );
+        let artifact = fluxel_shader::ShaderComposer::new()
+            .compose(&request)
+            .map_err(|_| Error::InvalidState)?;
+        let vertex = artifact
+            .entry_point(LogicalShaderStage::Vertex)
+            .ok_or(Error::InvalidState)?
+            .name
+            .clone();
+        let fragment = artifact
+            .entry_point(LogicalShaderStage::Fragment)
+            .ok_or(Error::InvalidState)?
+            .name
+            .clone();
+        let descriptor = ShaderDesc {
+            label: Some("Fluxel Deferred scene-color composite program".into()),
+            format: ShaderFormat::Wgsl,
+            bytes: Arc::from(artifact.source().as_bytes()),
+            entries: vec![
+                ShaderEntryPoint {
+                    name: vertex.clone(),
+                    stage: ShaderStage::Vertex,
+                    workgroup_size: None,
+                },
+                ShaderEntryPoint {
+                    name: fragment.clone(),
+                    stage: ShaderStage::Fragment,
+                    workgroup_size: None,
+                },
+            ],
+            required_features: artifact.requirements().names.iter().cloned().collect(),
+        };
+        self.admit_deferred_shader(
+            &descriptor,
+            artifact
+                .requirements()
+                .naga_capabilities
+                .iter()
+                .map(|capability| capability.name()),
+        )?;
+        let shader = self
+            .device
+            .shader(descriptor)
+            .await
+            .map_err(|error| self.observe_rhi_error(error))?;
+        let layout = self
+            .device
+            .create_bind_group_layout(&BindGroupLayoutDesc {
+                label: Some("Deferred scene-color composite bindings".into()),
+                entries: vec![
+                    sampled_texture(0, TextureSampleType::Float),
+                    ordinary_sampler(1),
+                ],
+            })
+            .map_err(|error| self.observe_rhi_error(error))?;
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&PipelineLayoutDesc {
+                label: Some("Deferred scene-color composite pipeline layout"),
+                groups: &[&layout],
+                push_constants: &[],
+            })
+            .map_err(|error| self.observe_rhi_error(error))?;
+        let pipeline = self
+            .device
+            .raster_pipeline(RasterPipelineDesc {
+                label: Some("Deferred scene-color composite pipeline".into()),
+                layout: pipeline_layout,
+                vertex: PipelineStage {
+                    module: shader.clone(),
+                    entry: vertex,
+                    constants: vec![],
+                },
+                fragment: Some(PipelineStage {
+                    module: shader,
+                    entry: fragment,
+                    constants: vec![],
+                }),
+                vertex_buffers: vec![],
+                color_targets: vec![Some(color_target_with_format(color_format))],
+                primitive: opaque_triangles(),
+                depth_stencil: None,
+                multisample: single_sample(),
+                multiview: None,
+                cache: None,
+            })
+            .await
+            .map_err(|error| self.observe_rhi_error(error))?;
+        Ok(SceneColorCompositeProgram { pipeline, layout })
+    }
+
     fn admit_deferred_shader<'a>(
         &self,
         descriptor: &ShaderDesc,
@@ -320,14 +442,19 @@ where
     fn deferred_material_layout(
         &mut self,
         label: &str,
+        has_ordinary_sampler: bool,
     ) -> std::result::Result<BindGroupLayout<B>, RendererError> {
+        let mut entries = vec![
+            uniform(0, 16, ShaderStage::Fragment),
+            sampled_texture(1, TextureSampleType::Float),
+        ];
+        if has_ordinary_sampler {
+            entries.push(ordinary_sampler(2));
+        }
         self.device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some(label.into()),
-                entries: vec![
-                    uniform(0, 16, ShaderStage::Fragment),
-                    sampled_texture(1, TextureSampleType::Float),
-                ],
+                entries,
             })
             .map_err(|error| self.observe_rhi_error(error))
     }
@@ -367,6 +494,19 @@ fn sampled_texture(binding: u32, sample: TextureSampleType) -> BindGroupLayoutEn
             sample,
             dimension: TextureViewDimension::D2,
             multisampled: false,
+        },
+        count: BindingCount::One,
+        partially_bound: false,
+        nonuniform_indexing: false,
+    }
+}
+fn ordinary_sampler(binding: u32) -> BindGroupLayoutEntry {
+    BindGroupLayoutEntry {
+        binding,
+        visibility: vec![ShaderStage::Fragment],
+        ty: BindingType::Sampler {
+            filtering: true,
+            comparison: false,
         },
         count: BindingCount::One,
         partially_bound: false,

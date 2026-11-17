@@ -70,6 +70,14 @@ impl PassBuilder<'_> {
         texture: TextureHandle,
         range: TextureRange,
     ) -> Result<(), GraphError> {
+        if self
+            .graph
+            .textures
+            .get(texture.resource)
+            .is_some_and(|node| node.rhi_managed_initial)
+        {
+            return Err(GraphError::InvalidRange);
+        }
         self.validate_texture_current(texture, &range)?;
         let version = self.graph.texture_version(texture)?;
         if !texture_range_defined(&version.defined, &range) {
@@ -196,6 +204,14 @@ impl PassBuilder<'_> {
         texture: TextureHandle,
         range: TextureRange,
     ) -> Result<TextureHandle, GraphError> {
+        if self
+            .graph
+            .textures
+            .get(texture.resource)
+            .is_some_and(|node| node.rhi_managed_initial)
+        {
+            return Err(GraphError::InvalidRange);
+        }
         self.validate_texture_current(texture, &range)?;
         let prior = self.graph.texture_version(texture)?.clone();
         if let Some(producer) = prior.producer {
@@ -245,6 +261,23 @@ impl PassBuilder<'_> {
         layout: ImageLayout,
         descriptor_usage: TextureUsage,
     ) -> Result<TextureHandle, GraphError> {
+        let managed = self
+            .graph
+            .textures
+            .get(texture.resource)
+            .is_some_and(|node| node.rhi_managed_initial);
+        if managed {
+            let prior = self.graph.texture_version(texture)?;
+            if prior.producer.is_some()
+                || layout != ImageLayout::ColorAttachment
+                || descriptor_usage != TextureUsage::RENDER_ATTACHMENT
+            {
+                return Err(GraphError::InvalidRange);
+            }
+            // Inline the guarded write because the untyped helper rejects
+            // RHI-managed leases to prevent contract-less use.
+            return self.write_surface_texture(texture, range, uses, layout, descriptor_usage);
+        }
         let output = self.write_texture(texture, range)?;
         self.graph.passes[self.pass.1]
             .texture_accesses
@@ -256,6 +289,22 @@ impl PassBuilder<'_> {
             descriptor_usage,
         });
         Ok(output)
+    }
+
+    fn write_surface_texture(
+        &mut self,
+        texture: TextureHandle,
+        range: TextureRange,
+        uses: TextureUses,
+        layout: ImageLayout,
+        descriptor_usage: TextureUsage,
+    ) -> Result<TextureHandle, GraphError> {
+        // Temporarily use the normal versioning path after its explicit guard.
+        // Surface leases only reach here with one checked attachment write.
+        self.graph.textures[texture.resource].rhi_managed_initial = false;
+        let output = self.write_texture_with_use(texture, range, uses, layout, descriptor_usage);
+        self.graph.textures[texture.resource].rhi_managed_initial = true;
+        output
     }
     /// Adds an explicit ordering edge to an already authored pass.
     #[allow(dead_code)] // Kept for the next multi-pass graph consumer.
