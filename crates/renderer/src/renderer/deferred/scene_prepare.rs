@@ -10,6 +10,15 @@ pub(super) fn materials(
     let first = inputs
         .first()
         .ok_or(Error::Unsupported("Deferred requires visible geometry"))?;
+    if inputs
+        .iter()
+        .any(|input| input.material().value().transmission_extensions().is_some())
+    {
+        return Err(Error::Unsupported(
+            "Deferred transmission requires the transmission composition pass",
+        )
+        .into());
+    }
     let pbr = crate::pbr::is_pbr(first.material().value().output());
     if inputs.len() > 1
         && inputs.iter().any(|input| {

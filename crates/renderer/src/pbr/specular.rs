@@ -7,9 +7,17 @@
 //! owner supplies the validated equivalent maximum LOD rather than treating a
 //! lat-long width as a cube-map dimension.
 
+use crate::preparation::forward_fragment::{
+    ForwardFragmentInterface, with_ordinary_forward_fragment,
+};
 use fluxel_shader::{
     BindingDeclaration, BindingKind, ShaderCompositionRequest, ShaderStage, SourceUnit,
 };
+
+#[path = "specular/forward_standard.rs"]
+mod forward_standard;
+#[path = "specular/transmission.rs"]
+mod transmission;
 
 /// The additional group-two bindings for the first specular-IBL product.
 ///
@@ -102,33 +110,6 @@ fn pbr_specular_base_f0(metallic: f32, dielectric_f0: f32) -> f32 {
     return mix(clamp(dielectric_f0, 0.0, 1.0), 1.0, clamp(metallic, 0.0, 1.0));
 }
 
-fn pbr_direct_light_view(
-    base_input: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>,
-) -> vec3<f32> {
-    let base = clamp(base_input, vec3<f32>(0.0), vec3<f32>(1.0));
-    let metal = clamp(properties.x, 0.0, 1.0);
-    let roughness = clamp(properties.y, 0.04, 1.0);
-    let normal = pbr_normal(world_normal);
-    let light = vec3<f32>(0.6, 0.0, 0.8);
-    let half_direction = normalize(light + view);
-    let no_l = clamp(dot(normal, light), 0.0, 1.0);
-    let no_v = clamp(dot(normal, view), 0.0, 1.0);
-    if no_l <= 0.0 || no_v <= 0.0 { return vec3<f32>(0.0); }
-    let no_h = clamp(dot(normal, half_direction), 0.0, 1.0);
-    let vo_h = clamp(dot(view, half_direction), 0.0, 1.0);
-    let alpha = roughness * roughness;
-    let alpha_squared = alpha * alpha;
-    let distribution_term = no_h * no_h * (alpha_squared - 1.0) + 1.0;
-    let distribution = alpha_squared / (3.141592653589793 * distribution_term * distribution_term);
-    let visibility = 0.5 / (
-        no_l * sqrt(no_v * no_v * (1.0 - alpha_squared) + alpha_squared) +
-        no_v * sqrt(no_l * no_l * (1.0 - alpha_squared) + alpha_squared));
-    let f0 = mix(vec3<f32>(0.04), base, vec3<f32>(metal));
-    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vo_h, 5.0);
-    let diffuse = (vec3<f32>(1.0) - fresnel) * (1.0 - metal) * base / 3.141592653589793;
-    return (diffuse + distribution * visibility * fresnel) * no_l * 3.0;
-}
-
 fn pbr_specular_ibl(
     world_position: vec3<f32>,
     world_normal: vec3<f32>,
@@ -200,6 +181,10 @@ pub(crate) fn with_specular_ibl(mut request: ShaderCompositionRequest) -> Shader
     request
         .source_units
         .push(SourceUnit::new("pbr-specular-ibl", WGSL));
+    request.source_units.push(SourceUnit::new(
+        "pbr-specular-direct-light",
+        transmission::DIRECT_LIGHT,
+    ));
     for (binding, kind) in [
         (2, BindingKind::Texture),
         (3, BindingKind::Sampler),
@@ -221,7 +206,22 @@ pub(crate) fn with_specular_ibl(mut request: ShaderCompositionRequest) -> Shader
 /// specular-IBL consumer. The request must originate from one of the four
 /// standard metallic/roughness Forward builders.
 pub(crate) fn forward_specular_request(
+    request: ShaderCompositionRequest,
+) -> ShaderCompositionRequest {
+    forward_specular_request_inner(request, false)
+}
+
+/// Selects environment refraction from the same prefiltered radiance chain as
+/// specular IBL. It intentionally has no scene-color or capture binding.
+pub(crate) fn forward_transmission_request(
+    request: ShaderCompositionRequest,
+) -> ShaderCompositionRequest {
+    forward_specular_request_inner(request, true)
+}
+
+fn forward_specular_request_inner(
     mut request: ShaderCompositionRequest,
+    transmission: bool,
 ) -> ShaderCompositionRequest {
     let diffuse_irradiance = has_static_option(
         &request,
@@ -236,15 +236,15 @@ pub(crate) fn forward_specular_request(
     let uv0 = has_vertex_semantic(&request, "UV0");
     let normal_map = uv0 && has_vertex_semantic(&request, "TANGENT");
     let source = if uv0 {
-        forward_source(normal_map, effects, diffuse_irradiance)
+        forward_source(normal_map, effects, diffuse_irradiance, transmission)
     } else {
-        forward_standard_source(diffuse_irradiance)
+        forward_standard::source(diffuse_irradiance, transmission)
     };
-    // The selected entry source is identified by its actual fragment entry,
-    // not by one of the builder's incidental source-unit IDs.
+    // Only renderer-owned bodies are replaceable; Material source is never
+    // inspected or rewritten.
     request
         .source_units
-        .retain(|unit| !unit.source.contains("fn forward_fs"));
+        .retain(|unit| !unit.id.0.starts_with("pbr-forward"));
     request
         .source_units
         .push(SourceUnit::new("pbr-forward-specular", source));
@@ -276,46 +276,20 @@ pub(crate) fn forward_specular_request(
             }
         }
     }
-    with_specular_ibl(request)
-}
-
-fn forward_standard_source(diffuse: bool) -> String {
-    let indirect = if diffuse {
-        " + pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy"
+    let mut request = with_specular_ibl(request);
+    let request = if transmission {
+        request.source_units.push(SourceUnit::new(
+            "pbr-specular-transmission",
+            transmission::TRANSMISSION,
+        ));
+        request.with_static_option(
+            "renderer.transmission",
+            "environment-refraction-beer-lambert-v1",
+        )
     } else {
-        ""
+        request
     };
-    format!(
-        r#"
-struct PbrSpecularVertexOutput {{
-    @builtin(position) position: vec4<f32>,
-    @location(0) world_position: vec3<f32>,
-    @location(1) world_normal: vec3<f32>,
-}};
-@vertex fn forward_vs(
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-) -> PbrSpecularVertexOutput {{
-    var output: PbrSpecularVertexOutput;
-    output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
-    output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
-    output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
-    return output;
-}}
-@fragment fn forward_fs(input: PbrSpecularVertexOutput) -> @location(0) vec4<f32> {{
-    let base = evaluate_material().rgb;
-    let properties = evaluate_metallic_roughness();
-    let normal = input.world_normal;
-    let view = pbr_specular_view_direction(input.world_position,
-        pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz,
-        pbr_specular_camera.camera.w == 0.0);
-    let direct = pbr_direct_light_view(base, properties, normal, view);
-    let spec = pbr_specular_ibl_bound(input.world_position, normal, base,
-        properties.x, properties.y, vec3<f32>(0.04));
-    return vec4<f32>(direct + spec.radiance{indirect}, 1.0);
-}}
-"#
-    )
+    with_ordinary_forward_fragment(request, ForwardFragmentInterface::PbrSpecular)
 }
 
 /// Replaces the actual Deferred lighting body. Deferred keeps its established
@@ -347,6 +321,10 @@ pub(crate) fn deferred_specular_request(
     request
         .source_units
         .push(SourceUnit::new("pbr-specular-ibl-deferred", remapped));
+    request.source_units.push(SourceUnit::new(
+        "pbr-specular-direct-light",
+        transmission::DIRECT_LIGHT,
+    ));
     for (binding, kind) in [
         (2, BindingKind::Texture),
         (3, BindingKind::Sampler),
@@ -427,7 +405,7 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
     let normal = nr.xyz * 2.0 - vec3(1.0);
     let view = pbr_specular_view_direction(world, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.w == 0.0);
-    let direct = pbr_direct_light_view(base_metal.rgb, vec2(base_metal.a, nr.a), normal, view);
+    let direct = pbr_direct_light_view(base_metal.rgb, vec2(base_metal.a, nr.a), normal, view, vec3(0.04));
     let spec = pbr_specular_ibl_bound(world, normal, base_metal.rgb, base_metal.a, nr.a, vec3(0.04));
     return vec4(direct + spec.radiance{indirect}{effect}, 1.0);
 }}
@@ -435,7 +413,7 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
     )
 }
 
-fn forward_source(normal_map: bool, effects: bool, diffuse: bool) -> String {
+fn forward_source(normal_map: bool, effects: bool, diffuse: bool, transmission: bool) -> String {
     let input = if normal_map {
         r#"
 struct PbrSpecularVertexOutput {
@@ -500,32 +478,69 @@ struct PbrSpecularVertexOutput {
     } else {
         "input.world_normal"
     };
-    let base = "evaluate_material_uv0(input.uv0).rgb";
-    let indirect = if diffuse && effects {
-        " + pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"
-    } else if diffuse {
-        " + pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy"
+    let base = "material.rgb";
+    let dielectric_f0 = if transmission {
+        "vec3<f32>(pbr_surface_dielectric_f0(material_surface_ior()))"
+    } else {
+        "vec3<f32>(0.04)"
+    };
+    let transmission_values = "let transmission_intensity = evaluate_transmission_uv0(input.uv0);\n    let transmission_thickness = evaluate_thickness_uv0(input.uv0);";
+    let transmission_values = if transmission {
+        transmission_values
+    } else {
+        "let transmission_intensity = 0.0;\n    let transmission_thickness = 0.0;"
+    };
+    let direct = if transmission {
+        "let direct_terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = direct_terms.specular + direct_terms.diffuse * (1.0 - transmission_intensity);"
+    } else {
+        "let direct = pbr_direct_light_view(base, properties, normal, view, dielectric_f0);"
+    };
+    let diffuse_weight = if transmission {
+        " * (1.0 - transmission_intensity)"
     } else {
         ""
     };
-    let emissive = if effects {
-        " + max(evaluate_emissive_uv0(input.uv0), vec3<f32>(0.0))"
+    let indirect = if diffuse && effects {
+        format!(
+            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0){diffuse_weight};"
+        )
+    } else if diffuse {
+        format!(
+            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy{diffuse_weight};"
+        )
     } else {
-        ""
+        String::from("let indirect = vec3<f32>(0.0);")
+    };
+    let emissive = if effects {
+        "let emissive = max(evaluate_emissive_uv0(input.uv0), vec3<f32>(0.0));"
+    } else {
+        "let emissive = vec3<f32>(0.0);"
+    };
+    let refraction = if transmission {
+        "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.diffuse_energy;"
+    } else {
+        "let refraction = vec3<f32>(0.0);"
     };
     format!(
         r#"{input}
-@fragment fn forward_fs(input: PbrSpecularVertexOutput) -> @location(0) vec4<f32> {{
+fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) -> vec4<f32> {{
+    let material = evaluate_material_uv0(input.uv0);
     let base = {base};
     let properties = evaluate_metallic_roughness_uv0(input.uv0);
-    let normal = {normal};
+    let normal = pbr_surface_normal({normal}, front_facing);
+    let dielectric_f0 = {dielectric_f0};
+    {transmission_values}
     let view = pbr_specular_view_direction(input.world_position,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.w == 0.0);
-    let direct = pbr_direct_light_view(base, properties, normal, view);
+    {direct}
     let spec = pbr_specular_ibl_bound(input.world_position, normal, base,
-        properties.x, properties.y, vec3<f32>(0.04));
-    return vec4<f32>(direct + spec.radiance{indirect}{emissive}, 1.0);
+        properties.x, properties.y, {dielectric_f0});
+    {indirect}
+    {refraction}
+    {emissive}
+    if material_alpha_rejected(material.a) {{ discard; }}
+    return vec4<f32>(direct + spec.radiance + indirect + refraction + emissive, material_output_alpha(material.a));
 }}
 "#
     )

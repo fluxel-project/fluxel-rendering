@@ -39,7 +39,7 @@ impl<'scope, 'builder> ForwardFeaturePass<'scope, 'builder> {
 }
 
 /// Runs one typed feature against an already-authorized real Graph scope.
-/// OIT uses this bridge after it has intersected a feature's full-frame
+/// A later composition route may intersect a feature's full-frame
 /// namespace with its current stage; features never receive stage indices.
 pub(crate) fn with_forward_feature_scope(
     scope: crate::graph::ForwardReadScope<'_, '_>,

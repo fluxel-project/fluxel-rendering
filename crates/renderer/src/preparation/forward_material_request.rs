@@ -18,6 +18,7 @@ pub(super) fn material_request(
 ) -> Result<ShaderCompositionRequest, ForwardPreparationError> {
     let effects = material.surface_extensions();
     let has_effects = effects.occlusion.is_some() || effects.emissive.is_some();
+    let transmission = material.transmission_extensions().is_some();
     let request = match material.output() {
         SurfaceOutput::Color => forward_template(geometry, source)?.request(),
         SurfaceOutput::ColorUv0 => color_uv0_template(geometry, source)?.request(),
@@ -46,7 +47,17 @@ pub(super) fn material_request(
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
     };
-    if specular && crate::pbr::is_pbr(material.output()) {
+    if transmission {
+        if !specular {
+            return Err(
+                ForwardPreparationError::TransmissionRequiresSpecularEnvironment { source },
+            );
+        }
+        if view.shading_camera.is_none() {
+            return Err(ForwardPreparationError::InvalidView);
+        }
+        Ok(crate::pbr::specular::forward_transmission_request(request))
+    } else if specular && crate::pbr::is_pbr(material.output()) {
         if view.shading_camera.is_none() {
             return Err(ForwardPreparationError::InvalidView);
         }

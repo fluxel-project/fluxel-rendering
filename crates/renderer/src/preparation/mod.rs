@@ -10,6 +10,7 @@ pub use specular_environment::{
     SpecularIblMip,
 };
 mod forward;
+pub(crate) mod forward_fragment;
 mod forward_sampler;
 mod forward_schema;
 pub(crate) use forward_schema::{

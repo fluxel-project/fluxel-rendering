@@ -13,6 +13,9 @@ use fluxel_shader::{
 };
 
 use crate::GeometryLayout;
+use crate::preparation::forward_fragment::{
+    ForwardFragmentInterface, with_ordinary_forward_fragment,
+};
 
 pub(crate) mod specular;
 mod templates;
@@ -241,33 +244,37 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
     };
     let mut units = vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
+        SourceUnit::new("pbr-surface-normal", templates::SURFACE_NORMAL),
         SourceUnit::new("pbr-transforms", templates::TRANSFORMS),
         SourceUnit::new(identity, body),
     ];
     if !deferred {
         units.push(SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT));
     }
-    Some(
-        ShaderCompositionRequest::new(units)
-            .with_entry_point(EntryPoint::new(vertex, ShaderStage::Vertex))
-            .with_entry_point(EntryPoint::new(fragment, ShaderStage::Fragment))
-            .with_binding(
-                BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                    .with_visibility([ShaderStage::Vertex]),
-            )
-            .with_vertex_input(VertexInputDeclaration::new(
-                "POSITION",
-                0,
-                VertexType::Vec3(ScalarType::F32),
-            ))
-            .with_vertex_input(VertexInputDeclaration::new(
-                "NORMAL",
-                1,
-                VertexType::Vec3(ScalarType::F32),
-            ))
-            .with_static_option("renderer.surface", "opaque-metallic-roughness")
-            .with_static_option("renderer.light", "world-directional-orthographic-v1"),
-    )
+    let request = ShaderCompositionRequest::new(units)
+        .with_entry_point(EntryPoint::new(vertex, ShaderStage::Vertex))
+        .with_entry_point(EntryPoint::new(fragment, ShaderStage::Fragment))
+        .with_binding(
+            BindingDeclaration::new(1, 0, BindingKind::Uniform)
+                .with_visibility([ShaderStage::Vertex]),
+        )
+        .with_vertex_input(VertexInputDeclaration::new(
+            "POSITION",
+            0,
+            VertexType::Vec3(ScalarType::F32),
+        ))
+        .with_vertex_input(VertexInputDeclaration::new(
+            "NORMAL",
+            1,
+            VertexType::Vec3(ScalarType::F32),
+        ))
+        .with_static_option("renderer.surface", "opaque-metallic-roughness")
+        .with_static_option("renderer.light", "world-directional-orthographic-v1");
+    Some(if deferred {
+        request
+    } else {
+        with_ordinary_forward_fragment(request, ForwardFragmentInterface::Pbr)
+    })
 }
 
 fn geometry_uv0_request(
@@ -332,6 +339,9 @@ fn geometry_uv0_request(
     request
         .static_options
         .insert("renderer.material_context".into(), "uv0".into());
+    if !deferred {
+        request = with_ordinary_forward_fragment(request, ForwardFragmentInterface::PbrUv0);
+    }
     Some(request)
 }
 
@@ -401,6 +411,9 @@ fn geometry_uv0_normal_request(
     request
         .static_options
         .insert("renderer.material_context".into(), "uv0-normal".into());
+    if !deferred {
+        request = with_ordinary_forward_fragment(request, ForwardFragmentInterface::PbrUv0Normal);
+    }
     Some(request)
 }
 

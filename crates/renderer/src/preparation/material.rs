@@ -25,6 +25,7 @@ pub struct PreparedMaterial {
     geometry: PreparedGeometry,
     environment_irradiance: bool,
     specular_ibl: bool,
+    transmission: bool,
     binding_schema: Option<MaterialBindingSchema>,
 }
 
@@ -49,6 +50,10 @@ impl PreparedMaterial {
 
     pub(crate) fn uses_specular_ibl(&self) -> bool {
         self.specular_ibl
+    }
+
+    pub(crate) fn uses_transmission(&self) -> bool {
+        self.transmission
     }
 
     pub(crate) fn uses_environment_irradiance(&self) -> bool {
@@ -188,6 +193,13 @@ pub fn prepare_material(
         .static_options
         .get("renderer.specular_ibl")
         .is_some_and(|value| value == "latlong-linear-roughness-lod-height-correlated-v1");
+    let transmission = request
+        .static_options
+        .get("renderer.transmission")
+        .is_some_and(|value| value == "environment-refraction-beer-lambert-v1");
+    if transmission && !specular_ibl {
+        return Err(MaterialPreparationError::InvalidEnvironmentRoute);
+    }
     if specular_ibl {
         use fluxel_shader::{BindingKind, BindingShape};
         for (binding, kind, shape) in [
@@ -223,6 +235,7 @@ pub fn prepare_material(
         geometry,
         environment_irradiance,
         specular_ibl,
+        transmission,
         binding_schema: None,
     })
 }

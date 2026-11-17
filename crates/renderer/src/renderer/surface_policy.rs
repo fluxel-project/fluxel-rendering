@@ -122,6 +122,17 @@ pub(crate) fn require_supported_surface_modes(
     inputs: &[ForwardDrawInput],
     topology: FrameTopology,
 ) -> Result<(), Error> {
+    for input in inputs {
+        let prepared = input.prepared();
+        let requested = prepared.material().transmission_extensions().is_some();
+        if requested != prepared.uses_transmission()
+            || (prepared.uses_transmission() && !prepared.uses_specular_ibl())
+        {
+            return Err(Error::Unsupported(
+                "Forward transmission requires its environment-refraction shader route",
+            ));
+        }
+    }
     if topology == FrameTopology::SortedForward {
         return Ok(());
     }

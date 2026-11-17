@@ -21,6 +21,8 @@ use super::{
 
 #[path = "forward_pbr.rs"]
 mod forward_pbr;
+#[path = "forward_transmission.rs"]
+mod forward_transmission;
 #[path = "forward_validation.rs"]
 mod forward_validation;
 use forward_pbr::normal_from_local;
@@ -440,6 +442,7 @@ fn prepare_draw(
     )?;
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
+    forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
     let textures = resolve_asset_textures(resources, &schema, assets, source)?;
     let sampler = super::forward_sampler::resolve_sampler_binding(

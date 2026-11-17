@@ -92,6 +92,11 @@ impl PreparedCaptureReceiver {
             });
         }
         validate_cpu_geometry(self.geometry.value(), prepared.geometry(), self.source)?;
+        super::forward_transmission::validate_transform(
+            self.material.value(),
+            self.transform,
+            self.source,
+        )?;
         self.normal_from_local = normal_from_local(
             self.geometry.value(),
             prepared.geometry(),
@@ -136,10 +141,14 @@ pub fn prepare_forward_capture_receiver(
         view,
         source,
         false,
-        false,
+        // This constructor prepares a logical receiver before a Renderer is
+        // available. Declare its required environment route here; with_lighting
+        // must still admit the actual selected environment before allocation.
+        material.value().transmission_extensions().is_some(),
     )?;
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
+    super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
     let textures = resolve_capture_textures(textures, assets, source)?;

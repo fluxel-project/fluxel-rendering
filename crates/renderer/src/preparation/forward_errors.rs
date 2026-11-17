@@ -37,6 +37,12 @@ pub enum ForwardPreparationError {
         /// Draw requesting the transform.
         source: ForwardDrawSource,
     },
+    /// Transmission thickness cannot be represented safely after the validated
+    /// world-scale conversion.
+    InvalidTransmissionTransform {
+        /// Draw requesting volume transmission.
+        source: ForwardDrawSource,
+    },
     /// A retained view has a non-finite component or empty extent.
     InvalidView,
     /// Geometry stream count differs from its declared runtime layout.
@@ -121,6 +127,11 @@ pub enum ForwardPreparationError {
         /// Draw requesting the unsupported effect.
         source: ForwardDrawSource,
     },
+    /// Environment transmission needs the selected radiance chain and BRDF LUT.
+    TransmissionRequiresSpecularEnvironment {
+        /// Draw requesting environment refraction.
+        source: ForwardDrawSource,
+    },
     /// Material, Shader, or geometry logical validation failed.
     Material(MaterialPreparationError),
     /// Texture dimensions or payload length are invalid.
@@ -128,7 +139,9 @@ pub enum ForwardPreparationError {
         /// Draw requesting the texture.
         source: ForwardDrawSource,
     },
-    /// The initial GPU mip-generation path only implements linear RGBA8.
+    /// A legacy CPU refusal retained for callers that classify preparation
+    /// errors. Linear and sRGB RGBA8 now use the same format-preserving Graph
+    /// generation path; device-specific refusals originate from RHI instead.
     UnsupportedTextureMipGeneration {
         /// Draw requesting the texture.
         source: ForwardDrawSource,
