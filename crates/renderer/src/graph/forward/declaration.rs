@@ -16,9 +16,14 @@ pub(crate) struct SurfaceForwardDeclaration {
     pub(super) frame_upload_slot: BufferSlot,
     pub(super) uniform_slot: BufferSlot,
     pub(super) environment_upload_slot: Option<BufferSlot>,
+    pub(super) specular_upload_slot: Option<BufferSlot>,
+    pub(super) specular_view_uniform_slot: Option<BufferSlot>,
     pub(super) stream_slots: Vec<BufferSlot>,
     pub(super) texture_slots: Vec<TextureSlot>,
     pub(super) environment_slot: Option<TextureSlot>,
+    pub(super) specular_radiance_slot: Option<TextureSlot>,
+    pub(super) specular_brdf_lut_slot: Option<TextureSlot>,
+    pub(super) depth_slot: Option<TextureSlot>,
     pub(super) surface_target_slot: TextureSlot,
     pub(super) extent: [u32; 2],
     pub(super) draw_count: usize,
@@ -48,6 +53,10 @@ where
         return Err(Error::InvalidRange.into());
     }
     validate_surface_topology(expected, frame.draws.len(), frame.draw_batches.len())?;
+    validate_surface_depth(frame)?;
+    if frame.frame.depth.is_some() && expected != FrameTopology::OpaqueForward {
+        return Err(Error::InvalidState.into());
+    }
     validate_surface_uploads(frame)?;
     validate_surface_batches(frame)?;
     for draw in &frame.draws {
@@ -89,6 +98,24 @@ where
                 .map_err(|_| Error::InvalidState)
         })
         .transpose()?;
+    let specular_upload = frame
+        .specular
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_buffer_desc(owner.upload_desc.clone(), owner.upload_incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let specular_view_uniform = frame
+        .specular
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_buffer_desc(owner.view_uniform_desc.clone(), owner.view_uniform_incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let streams = frame
         .resident
         .streams
@@ -118,6 +145,32 @@ where
                 .map_err(|_| Error::InvalidState)
         })
         .transpose()?;
+    let specular_radiance = frame
+        .specular
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(
+                    owner.radiance.desc.clone(),
+                    owner.radiance.incoming,
+                    owner.radiance.layout,
+                )
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let specular_brdf_lut = frame
+        .specular
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(
+                    owner.brdf_lut.desc.clone(),
+                    owner.brdf_lut.incoming,
+                    owner.brdf_lut.layout,
+                )
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let surface_target = graph
         .import_surface_texture(TextureDesc {
             label: Some("fluxel forward surface lease".into()),
@@ -131,13 +184,34 @@ where
             view_formats: Vec::new(),
         })
         .map_err(|_| Error::InvalidState)?;
+    let depth = frame
+        .frame
+        .depth
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let texture_ends = frame
         .resident_upload
         .textures
         .iter()
         .map(texture_copy_end)
         .collect::<Result<Vec<_>>>()?;
-    let (upload_pass, (streams, uniform, textures, environment)) = graph
+    let (
+        upload_pass,
+        (
+            streams,
+            uniform,
+            textures,
+            environment,
+            specular_radiance,
+            specular_brdf_lut,
+            specular_view_uniform,
+        ),
+    ) = graph
         .add_pass("forward-surface-upload", |pass| {
             let mut output_streams = streams.clone();
             for upload in &frame.resident_upload.vertices {
@@ -215,7 +289,82 @@ where
                 (None, None, None) => None,
                 _ => return Err(super::super::definition::GraphError::InvalidRange),
             };
-            Ok((output_streams, uniform, output_textures, environment))
+            let (radiance, lut, view_uniform) = match (
+                specular_radiance,
+                specular_brdf_lut,
+                specular_view_uniform,
+                specular_upload,
+                frame.specular.as_ref(),
+            ) {
+                (Some(radiance), Some(lut), Some(view_uniform), Some(upload), Some(owner)) => {
+                    for copy in &owner.radiance_copies {
+                        let end = copy
+                            .source_offset
+                            .checked_add(
+                                u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image),
+                            )
+                            .ok_or(super::super::definition::GraphError::InvalidRange)?;
+                        pass.read_with_use(
+                            upload,
+                            copy.source_offset..end,
+                            copy_read_uses().uses,
+                            BufferUsage::COPY_SRC,
+                        )?;
+                    }
+                    let copy = &owner.brdf_lut_copy;
+                    let end = copy
+                        .source_offset
+                        .checked_add(u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image))
+                        .ok_or(super::super::definition::GraphError::InvalidRange)?;
+                    pass.read_with_use(
+                        upload,
+                        copy.source_offset..end,
+                        copy_read_uses().uses,
+                        BufferUsage::COPY_SRC,
+                    )?;
+                    pass.read_with_use(
+                        upload,
+                        owner.view_uniform_copy.clone(),
+                        copy_read_uses().uses,
+                        BufferUsage::COPY_SRC,
+                    )?;
+                    let mut radiance = radiance;
+                    for copy in &owner.radiance_copies {
+                        radiance = pass.write_texture_with_use(
+                            radiance,
+                            one_color_mip(copy.mip),
+                            texture_copy_write_uses().uses,
+                            ImageLayout::CopyDst,
+                            TextureUsage::COPY_DST,
+                        )?;
+                    }
+                    let lut = pass.write_texture_with_use(
+                        lut,
+                        whole(),
+                        texture_copy_write_uses().uses,
+                        ImageLayout::CopyDst,
+                        TextureUsage::COPY_DST,
+                    )?;
+                    let view_uniform = pass.write_with_use(
+                        view_uniform,
+                        0..112,
+                        copy_write_uses().uses,
+                        BufferUsage::COPY_DST,
+                    )?;
+                    (Some(radiance), Some(lut), Some(view_uniform))
+                }
+                (None, None, None, None, None) => (None, None, None),
+                _ => return Err(super::super::definition::GraphError::InvalidRange),
+            };
+            Ok((
+                output_streams,
+                uniform,
+                output_textures,
+                environment,
+                radiance,
+                lut,
+                view_uniform,
+            ))
         })
         .map_err(|_| Error::InvalidState)?;
     let raster_pass = {
@@ -248,7 +397,15 @@ where
             uniform: Some(uniform),
             textures: textures.clone(),
             environment,
+            specular_radiance,
+            specular_brdf_lut,
+            specular_view_uniform,
+            specular_mip_levels: frame
+                .specular
+                .as_ref()
+                .map(|owner| owner.radiance.desc.mip_levels),
             target: surface_target,
+            depth,
             draws,
             declared: false,
             output: None,
@@ -269,9 +426,14 @@ where
         frame_upload_slot: BufferSlot::from(frame_upload),
         uniform_slot: BufferSlot::from(uniform),
         environment_upload_slot: environment_upload.map(BufferSlot::from),
+        specular_upload_slot: specular_upload.map(BufferSlot::from),
+        specular_view_uniform_slot: specular_view_uniform.map(BufferSlot::from),
         stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
         texture_slots: textures.into_iter().map(TextureSlot::from).collect(),
         environment_slot: environment.map(TextureSlot::from),
+        specular_radiance_slot: specular_radiance.map(TextureSlot::from),
+        specular_brdf_lut_slot: specular_brdf_lut.map(TextureSlot::from),
+        depth_slot: depth.map(TextureSlot::from),
         surface_target_slot: TextureSlot::from(surface_target),
         extent: frame.extent,
         draw_count: frame.draws.len(),

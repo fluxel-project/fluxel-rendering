@@ -2,7 +2,7 @@
 
 use super::{
     DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
-    declaration::{
+    declaration_validation::{
         matches_final_target_template, matches_gbuffer_template, validate_deformation,
         validate_draw_uniforms, validate_uploads,
     },
@@ -83,7 +83,14 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
             }
         }
         (None, None) => {}
+        // The lighting group can be present solely for specular IBL: it owns
+        // the specular texture/sampler/uniform bindings even without the
+        // legacy diffuse environment texture.
+        (None, Some(group)) if frame.specular.is_some() && group.device() == device.id() => {}
         _ => return Err(Error::InvalidState),
+    }
+    if let Some(specular) = &frame.specular {
+        specular.validate_for_sampling(device.id())?;
     }
     if let Some(deformation) = &frame.deformation {
         if device.compute().is_none() {

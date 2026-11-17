@@ -59,6 +59,14 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, '_, B> {
             .map_err(|_| PipelineError::InvalidPhaseContribution)
     }
 
+    /// Declares the depth attachment selected once during frame preparation.
+    /// Disabled depth performs no resource access; enabled depth must be declared.
+    pub fn write_selected_depth(&mut self) -> Result<(), PipelineError> {
+        self.pass
+            .write_selected_depth()
+            .map_err(|_| PipelineError::InvalidPhaseContribution)
+    }
+
     /// Declares the main color attachment write.
     pub fn write_main_color(&mut self) -> Result<(), PipelineError> {
         self.pass
@@ -161,12 +169,26 @@ pub enum FrameTopology {
     Deferred,
 }
 
+/// The depth contract selected for one Forward frame.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum ForwardDepthMode {
+    /// Preserve the existing color-only Forward product.
+    #[default]
+    Disabled,
+    /// Own `Depth32Float` and rasterize with write + `LessEqual`.
+    Depth32LessEqualWrite,
+}
+
 /// The minimal public frame-policy seam exercised by the first Forward consumer.
 ///
 /// Implementations are selected statically.  They prepare candidates and choose
 /// one concrete GPU product.  They cannot obtain Graph state, command encoders,
 /// allocators, or submission authority.
 pub trait FramePipeline<R> {
+    /// Selects depth once for the already validated frame.
+    fn forward_depth_mode(&self, _frame: &PreparedFrame<'_, R>) -> ForwardDepthMode {
+        ForwardDepthMode::Disabled
+    }
     /// Declares a typed GPU producer before the Deferred geometry consumer.
     ///
     /// Both callbacks operate on the same actual Graph. The Feature can declare
@@ -221,6 +243,7 @@ pub trait FramePipeline<R> {
                 meshes.read_sampled_textures()
             })?;
             pass.feature()?;
+            pass.write_selected_depth()?;
             pass.write_main_color()
         })
     }
@@ -254,6 +277,7 @@ pub trait FramePipeline<R> {
             pass.read_vertex_streams()?;
             pass.read_frame_uniforms()?;
             pass.read_sampled_textures()?;
+            pass.write_selected_depth()?;
             pass.write_main_color()
         })
     }
@@ -263,12 +287,22 @@ pub trait FramePipeline<R> {
 #[derive(Clone, Debug, Default)]
 pub struct ForwardCpuPipeline<V = BoundsVisibility> {
     visibility: V,
+    depth_mode: ForwardDepthMode,
 }
 
 impl<V> ForwardCpuPipeline<V> {
     /// Creates a pipeline from one concrete, statically dispatched provider.
     pub const fn new(visibility: V) -> Self {
-        Self { visibility }
+        Self {
+            visibility,
+            depth_mode: ForwardDepthMode::Disabled,
+        }
+    }
+
+    /// Selects the bounded opaque depth product.
+    pub const fn with_depth32_less_equal(mut self) -> Self {
+        self.depth_mode = ForwardDepthMode::Depth32LessEqualWrite;
+        self
     }
 }
 
@@ -276,6 +310,9 @@ impl<R, V> FramePipeline<R> for ForwardCpuPipeline<V>
 where
     V: VisibilityProvider<R>,
 {
+    fn forward_depth_mode(&self, _frame: &PreparedFrame<'_, R>) -> ForwardDepthMode {
+        self.depth_mode
+    }
     fn prepare<'a>(
         &self,
         snapshot: &'a FrameSnapshot<R>,

@@ -80,6 +80,43 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .transpose()
             .map_err(|_| Error::InvalidState)?;
+        let specular_upload = frame
+            .specular
+            .map(|owner| graph.import_buffer_desc(owner.upload_desc.clone(), owner.upload_incoming))
+            .transpose()
+            .map_err(|_| Error::InvalidState)?;
+        let specular_view_uniform = frame
+            .specular
+            .map(|owner| {
+                graph.import_buffer_desc(
+                    owner.view_uniform_desc.clone(),
+                    owner.view_uniform_incoming,
+                )
+            })
+            .transpose()
+            .map_err(|_| Error::InvalidState)?;
+        let specular_radiance = frame
+            .specular
+            .map(|owner| {
+                graph.import_texture_with_state(
+                    owner.radiance.desc.clone(),
+                    owner.radiance.incoming,
+                    owner.radiance.layout,
+                )
+            })
+            .transpose()
+            .map_err(|_| Error::InvalidState)?;
+        let specular_brdf_lut = frame
+            .specular
+            .map(|owner| {
+                graph.import_texture_with_state(
+                    owner.brdf_lut.desc.clone(),
+                    owner.brdf_lut.incoming,
+                    owner.brdf_lut.layout,
+                )
+            })
+            .transpose()
+            .map_err(|_| Error::InvalidState)?;
         let gbuffer = frame
             .gbuffer
             .iter()
@@ -201,7 +238,19 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .transpose()?;
 
-        let (upload_pass, (streams, uniform, material, environment, deformation)) = graph
+        let (
+            upload_pass,
+            (
+                streams,
+                uniform,
+                material,
+                environment,
+                specular_radiance,
+                specular_brdf_lut,
+                specular_view_uniform,
+                deformation,
+            ),
+        ) = graph
             .add_pass("deferred-upload", |pass| {
                 let mut output_streams = streams.clone();
                 for upload in &frame.resident_upload.vertices {
@@ -270,6 +319,79 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 } else {
                     None
                 };
+                let (specular_radiance, specular_brdf_lut, specular_view_uniform) = match (
+                    specular_upload,
+                    specular_radiance,
+                    specular_brdf_lut,
+                    specular_view_uniform,
+                    frame.specular,
+                ) {
+                    (
+                        Some(upload),
+                        Some(radiance),
+                        Some(brdf_lut),
+                        Some(view_uniform),
+                        Some(owner),
+                    ) => {
+                        let mut radiance = radiance;
+                        for copy in &owner.radiance_copies {
+                            let end = copy
+                                .source_offset
+                                .checked_add(
+                                    u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image),
+                                )
+                                .ok_or(GraphError::InvalidRange)?;
+                            pass.read_with_use(
+                                upload,
+                                copy.source_offset..end,
+                                copy_read().uses,
+                                BufferUsage::COPY_SRC,
+                            )?;
+                            radiance = pass.write_texture_with_use(
+                                radiance,
+                                one_color_mip(copy.mip),
+                                texture_copy_write().uses,
+                                ImageLayout::CopyDst,
+                                TextureUsage::COPY_DST,
+                            )?;
+                        }
+                        let copy = &owner.brdf_lut_copy;
+                        let end = copy
+                            .source_offset
+                            .checked_add(
+                                u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image),
+                            )
+                            .ok_or(GraphError::InvalidRange)?;
+                        pass.read_with_use(
+                            upload,
+                            copy.source_offset..end,
+                            copy_read().uses,
+                            BufferUsage::COPY_SRC,
+                        )?;
+                        let brdf_lut = pass.write_texture_with_use(
+                            brdf_lut,
+                            one_color_mip(0),
+                            texture_copy_write().uses,
+                            ImageLayout::CopyDst,
+                            TextureUsage::COPY_DST,
+                        )?;
+                        pass.read_with_use(
+                            upload,
+                            owner.view_uniform_copy.clone(),
+                            copy_read().uses,
+                            BufferUsage::COPY_SRC,
+                        )?;
+                        let view_uniform = pass.write_with_use(
+                            view_uniform,
+                            0..112,
+                            copy_write().uses,
+                            BufferUsage::COPY_DST,
+                        )?;
+                        (Some(radiance), Some(brdf_lut), Some(view_uniform))
+                    }
+                    (None, None, None, None, None) => (None, None, None),
+                    _ => return Err(GraphError::InvalidRange),
+                };
                 let deformation = if let (Some(owners), Some(handles)) =
                     (frame.deformation.as_ref(), deformation_handles)
                 {
@@ -310,7 +432,16 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 } else {
                     None
                 };
-                Ok((output_streams, uniform, material, environment, deformation))
+                Ok((
+                    output_streams,
+                    uniform,
+                    material,
+                    environment,
+                    specular_radiance,
+                    specular_brdf_lut,
+                    specular_view_uniform,
+                    deformation,
+                ))
             })
             .map_err(|_| Error::InvalidState)?;
 
@@ -326,6 +457,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 transform: frame.draw.transform_range.clone(),
                 material,
                 environment,
+                specular_radiance,
+                specular_brdf_lut,
+                specular_view_uniform,
+                specular_mip_levels: frame.specular.map(|owner| owner.radiance.desc.mip_levels),
                 gbuffer: [gbuffer[0], gbuffer[1], gbuffer[2]],
                 effects,
                 target: scene_color,
@@ -435,6 +570,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             texture_slot: TextureSlot::from(material),
             environment_upload_slot: environment_upload.map(BufferSlot::from),
             environment_slot: environment.map(TextureSlot::from),
+            specular_upload_slot: specular_upload.map(BufferSlot::from),
+            specular_view_uniform_slot: specular_view_uniform.map(BufferSlot::from),
+            specular_radiance_slot: specular_radiance.map(TextureSlot::from),
+            specular_brdf_lut_slot: specular_brdf_lut.map(TextureSlot::from),
             gbuffer_slots: std::array::from_fn(|index| TextureSlot::from(gbuffer[index])),
             effects_slot: effects.map(TextureSlot::from),
             scene_color_slot: scene_color.map(TextureSlot::from),
@@ -455,131 +594,3 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         })
     }
 }
-
-pub(super) fn validate_deformation<B: ResourceBackend>(
-    device: &Device<B>,
-    draw: &DeferredDraw<B>,
-    deformation: &crate::residency::DeferredDeformation<B>,
-) -> Result<()> {
-    if deformation.upload.buffer.device() != device.id()
-        || deformation.source.buffer.device() != device.id()
-        || deformation.product.buffer.device() != device.id()
-        || deformation.parameters.buffer.device() != device.id()
-        || deformation.pipeline.device() != device.id()
-        || deformation.group.device() != device.id()
-    {
-        return Err(Error::WrongDevice);
-    }
-    if deformation.source.instance != deformation.source_instance
-        || deformation.product.instance != deformation.product_instance
-        || deformation.parameters.instance != deformation.parameter_instance
-        || deformation.source_bytes == 0
-        || deformation.source.desc.size != deformation.source_bytes
-        || deformation.product.desc.size != deformation.source_bytes
-        || deformation
-            .parameter_source
-            .end
-            .checked_sub(deformation.parameter_source.start)
-            != Some(16)
-        || deformation.parameter_source.end > deformation.upload.desc.size
-        || deformation.parameters.desc.size != 16
-        || !deformation
-            .upload
-            .desc
-            .usage
-            .contains(BufferUsage::COPY_SRC)
-        || !deformation
-            .source
-            .desc
-            .usage
-            .contains(BufferUsage::COPY_DST | BufferUsage::STORAGE)
-        || !deformation
-            .product
-            .desc
-            .usage
-            .contains(BufferUsage::STORAGE | BufferUsage::VERTEX)
-        || !deformation
-            .parameters
-            .desc
-            .usage
-            .contains(BufferUsage::COPY_DST | BufferUsage::UNIFORM)
-        || deformation.upload_bytes.len()
-            != usize::try_from(deformation.upload.desc.size).unwrap_or(usize::MAX)
-        || draw.vertex_layouts.len() != 1
-        || draw.vertex_ranges.len() != 1
-        || u64::from(deformation.vertex_count).checked_mul(12) != Some(deformation.source_bytes)
-        || deformation.groups != [deformation.vertex_count.div_ceil(64), 1, 1]
-    {
-        return Err(Error::InvalidRange);
-    }
-    Ok(())
-}
-
-pub(super) fn validate_draw_uniforms<B: ResourceBackend>(
-    frame: &DeferredFrame<B>,
-    alignment: u64,
-) -> Result<()> {
-    validate_draw_uniform_ranges(&frame.draw, frame.frame.uniform_desc.size, alignment)
-}
-
-pub(super) fn validate_draw_uniform_ranges<B: ResourceBackend>(
-    draw: &DeferredDraw<B>,
-    uniform_size: u64,
-    alignment: u64,
-) -> Result<()> {
-    if alignment == 0 {
-        return Err(Error::InvalidRange);
-    }
-    if !matches!(draw.transform_bytes, 64 | 192) {
-        return Err(Error::InvalidRange);
-    }
-    for (range, bytes) in [
-        (&draw.tint_range, 16_u64),
-        (&draw.transform_range, draw.transform_bytes),
-    ] {
-        if range.start >= range.end
-            || range.end - range.start != bytes
-            || range.end > uniform_size
-            || !range.start.is_multiple_of(alignment)
-            || u32::try_from(range.start).is_err()
-        {
-            return Err(Error::InvalidRange);
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn matches_gbuffer_template(
-    desc: &fluxel_rhi::api::TextureDesc,
-    extent: [u32; 2],
-    format: TextureFormat,
-) -> bool {
-    desc.dimension == fluxel_rhi::api::TextureDimension::D2
-        && desc.extent == [extent[0], extent[1], 1]
-        && desc.array_layers == 1
-        && desc.samples == 1
-        && desc.format == format
-        && desc
-            .usage
-            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING)
-}
-
-pub(super) fn matches_final_target_template(
-    desc: &fluxel_rhi::api::TextureDesc,
-    extent: [u32; 2],
-) -> bool {
-    desc.dimension == fluxel_rhi::api::TextureDimension::D2
-        && desc.extent == [extent[0], extent[1], 1]
-        && desc.array_layers == 1
-        && desc.samples == 1
-        && desc.format == TextureFormat::Rgba8Unorm
-        && desc
-            .usage
-            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC)
-}
-
-pub(super) fn validate_uploads<B: ResourceBackend>(frame: &DeferredFrame<B>) -> Result<()> {
-    validate_resident_uploads(&frame.resident, &frame.resident_upload)
-}
-
-pub(super) use super::uploads::validate_resident_uploads;

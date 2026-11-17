@@ -156,6 +156,13 @@ impl<B: ResourceBackend, F: RenderFeature> ForwardCompositionPass<'_, '_, '_, '_
         pass.finish()
     }
 
+    /// Declares the depth attachment selected once for this shared opaque pass.
+    pub fn write_selected_depth(&mut self) -> Result<(), PipelineError> {
+        self.pass
+            .write_selected_depth()
+            .map_err(|_| PipelineError::InvalidPhaseContribution)
+    }
+
     /// Declares the shared output attachment write.
     pub fn write_main_color(&mut self) -> Result<(), PipelineError> {
         self.pass

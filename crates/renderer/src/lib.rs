@@ -27,23 +27,25 @@ pub use feature::{
 pub use pipeline::{
     BoundsVisibility, ClearForwardPass, DeferredCpuPipeline, DeferredDeformationPass,
     DeferredGeometryPass, DeferredLightingPass, DeferredPhaseContext, ForwardCompositionContext,
-    ForwardCompositionPass, ForwardCpuPipeline, ForwardFeaturePass, ForwardPhaseContext,
-    FramePipeline, FrameTopology, OpaqueForwardPass, PipelineError, PreparedFrame,
-    VisibilityProvider,
+    ForwardCompositionPass, ForwardCpuPipeline, ForwardDepthMode, ForwardFeaturePass,
+    ForwardPhaseContext, FramePipeline, FrameTopology, OpaqueForwardPass, PipelineError,
+    PreparedFrame, VisibilityProvider,
 };
 pub use preparation::{
     ColorTextureAsset, ColorTextureData, EnvironmentIrradianceAsset, EnvironmentIrradianceData,
-    ForwardAssets, ForwardCaptureResources, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
+    EnvironmentSpecularIblAsset, EnvironmentSpecularIblData, ForwardAssets,
+    ForwardCaptureResources, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
     ForwardDrawSource, ForwardPreparationError, ForwardResources, ForwardTextureSource,
     GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData, GeometryDraw,
-    GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding, MaterialPreparationError,
-    PreparedCaptureReceiver, PreparedGeometry, PreparedGeometryBindings, PreparedMaterial,
-    prepare_forward, prepare_forward_capture_receiver, prepare_material,
+    GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding, LinearSpecularLod,
+    MaterialPreparationError, PreparedCaptureReceiver, PreparedGeometry, PreparedGeometryBindings,
+    PreparedMaterial, SpecularIblImage, SpecularIblMip, prepare_forward,
+    prepare_forward_capture_receiver, prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,
     RenderId, RenderRecord, RenderResources, RenderScene, RenderTransform, RenderView,
-    RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError,
+    RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError, ShadingCamera,
 };
 pub use renderer::{
     CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, Renderer,

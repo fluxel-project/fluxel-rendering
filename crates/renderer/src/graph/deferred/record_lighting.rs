@@ -33,6 +33,21 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let (Some(slot), Some(_)) = (self.environment_slot, frame.environment.as_ref()) {
             pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
         }
+        if let (Some(radiance), Some(lut), Some(view_uniform), Some(owner)) = (
+            self.specular_radiance_slot,
+            self.specular_brdf_lut_slot,
+            self.specular_view_uniform_slot,
+            frame.specular.as_ref(),
+        ) {
+            pass.texture(
+                radiance,
+                all_color_mips(owner.radiance.desc.mip_levels),
+                AccessKind::Read,
+                sampled_read(),
+            )?;
+            pass.texture(lut, one_color_mip(0), AccessKind::Read, sampled_read())?;
+            pass.buffer(view_uniform, 0..112, AccessKind::Read, uniform_read())?;
+        }
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {
             view: AttachmentView::Texture(&frame.scene_color.view),

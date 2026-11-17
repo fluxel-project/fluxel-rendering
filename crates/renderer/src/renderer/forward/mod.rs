@@ -140,12 +140,14 @@ pub(super) struct ForwardProgramKey {
     layout: Vec<crate::preparation::VertexLayoutKey>,
     color_format: TextureFormat,
     transform_uniform_bytes: u64,
+    depth_mode: crate::ForwardDepthMode,
 }
 impl ForwardProgramKey {
     fn for_material(
         prepared: &PreparedMaterial,
         color_format: TextureFormat,
         transform_uniform_bytes: u64,
+        depth_mode: crate::ForwardDepthMode,
     ) -> Self {
         Self {
             program: prepared.shader().cache_key().clone(),
@@ -157,6 +159,7 @@ impl ForwardProgramKey {
                 .collect(),
             color_format,
             transform_uniform_bytes,
+            depth_mode,
         }
     }
 }
@@ -173,6 +176,7 @@ mod capture_entry;
 mod capture_execute;
 mod captured;
 mod composed;
+mod depth;
 mod entry;
 mod execute;
 mod prepare;

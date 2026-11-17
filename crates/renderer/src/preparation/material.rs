@@ -22,6 +22,7 @@ pub struct PreparedMaterial {
     shader: Arc<ShaderArtifact>,
     geometry: PreparedGeometry,
     environment_irradiance: bool,
+    specular_ibl: bool,
 }
 
 impl PreparedMaterial {
@@ -41,6 +42,10 @@ impl PreparedMaterial {
     #[must_use]
     pub fn geometry(&self) -> &PreparedGeometry {
         &self.geometry
+    }
+
+    pub(crate) fn uses_specular_ibl(&self) -> bool {
+        self.specular_ibl
     }
 
     pub(crate) fn uses_environment_irradiance(&self) -> bool {
@@ -167,11 +172,45 @@ pub fn prepare_material(
             return Err(MaterialPreparationError::InvalidEnvironmentRoute);
         }
     }
+    let specular_ibl = request
+        .static_options
+        .get("renderer.specular_ibl")
+        .is_some_and(|value| value == "latlong-linear-roughness-lod-height-correlated-v1");
+    if specular_ibl {
+        use fluxel_shader::{BindingKind, BindingShape};
+        for (binding, kind, shape) in [
+            (2, BindingKind::Texture, Some(BindingShape::Texture2dF32)),
+            (
+                3,
+                BindingKind::Sampler,
+                Some(BindingShape::Sampler { comparison: false }),
+            ),
+            (4, BindingKind::Texture, Some(BindingShape::Texture2dF32)),
+            (
+                5,
+                BindingKind::Sampler,
+                Some(BindingShape::Sampler { comparison: false }),
+            ),
+            (6, BindingKind::Uniform, None),
+        ] {
+            if !shader.interface().bindings().iter().any(|actual| {
+                actual.group == 2
+                    && actual.binding == binding
+                    && actual.kind == kind
+                    && shape.is_none_or(|shape| actual.shape == Some(shape))
+                    && actual.read
+                    && !actual.write
+            }) {
+                return Err(MaterialPreparationError::InvalidEnvironmentRoute);
+            }
+        }
+    }
     Ok(PreparedMaterial {
         material,
         shader,
         geometry,
         environment_irradiance,
+        specular_ibl,
     })
 }
 

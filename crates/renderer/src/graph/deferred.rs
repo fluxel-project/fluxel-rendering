@@ -1,9 +1,11 @@
 //! Private two-pass Deferred graph for the first bounded offscreen probe.
 
 mod declaration;
+mod declaration_validation;
 mod diagnostic;
 mod phase;
 mod plan;
+mod plan_bindings;
 mod raster;
 mod record;
 mod record_lighting;
@@ -11,6 +13,7 @@ mod record_view;
 mod surface;
 mod surface_record;
 mod surface_validate;
+mod upload_record;
 mod uploads;
 mod validation;
 
@@ -70,6 +73,10 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     texture_slot: TextureSlot,
     environment_upload_slot: Option<BufferSlot>,
     environment_slot: Option<TextureSlot>,
+    specular_upload_slot: Option<BufferSlot>,
+    specular_view_uniform_slot: Option<BufferSlot>,
+    specular_radiance_slot: Option<TextureSlot>,
+    specular_brdf_lut_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
@@ -102,6 +109,10 @@ pub(crate) struct DeferredDeclaration {
     texture_slot: TextureSlot,
     environment_upload_slot: Option<BufferSlot>,
     environment_slot: Option<TextureSlot>,
+    specular_upload_slot: Option<BufferSlot>,
+    specular_view_uniform_slot: Option<BufferSlot>,
+    specular_radiance_slot: Option<TextureSlot>,
+    specular_brdf_lut_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
@@ -136,6 +147,14 @@ pub(super) use raster::{configure_raster, render_area};
 
 fn whole_color() -> TextureRange {
     TextureRange::new(TextureAspects::COLOR, 0..1, 0..1)
+}
+
+fn one_color_mip(mip: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, mip..mip + 1, 0..1)
+}
+
+fn all_color_mips(mips: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, 0..mips, 0..1)
 }
 
 fn whole_depth() -> TextureRange {

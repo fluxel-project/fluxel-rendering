@@ -14,6 +14,7 @@ use fluxel_shader::{
 
 use crate::GeometryLayout;
 
+pub(crate) mod specular;
 mod templates;
 
 pub(crate) fn is_pbr(output: &SurfaceOutput) -> bool {

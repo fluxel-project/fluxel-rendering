@@ -112,6 +112,7 @@ where
         selected
             .validate_for(&snapshot, view)
             .map_err(RendererError::ForwardPipeline)?;
+        let depth_mode = pipeline.forward_depth_mode(&selected);
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
@@ -141,21 +142,23 @@ where
             .map_err(RendererError::ForwardFeature)?;
         let environment_snapshot = self.environment_irradiance.clone();
         let mut composer = fluxel_shader::ShaderComposer::new();
-        let mut inputs = crate::preparation::prepare_forward_with_environment(
+        let mut inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             assets,
             &mut composer,
             environment_snapshot.is_some(),
+            self.environment_specular.is_some(),
         )
         .map_err(RendererError::ForwardPreparation)?;
         inputs.extend(
-            crate::preparation::prepare_feature_draws_with_environment(
+            crate::preparation::prepare_feature_draws_with_lighting(
                 &selected,
                 handle,
                 feature.feature.draws(&prepared),
                 assets,
                 &mut composer,
                 environment_snapshot.is_some(),
+                self.environment_specular.is_some(),
             )
             .map_err(RendererError::ForwardPreparation)?,
         );
@@ -181,6 +184,7 @@ where
             inputs,
             extent,
             topology,
+            depth_mode,
             assets,
             surface,
             color_format,
@@ -203,7 +207,7 @@ where
 
 type Result<T> = std::result::Result<T, RendererError>;
 
-fn order_draws<P: FramePipeline<crate::ForwardResources>>(
+pub(super) fn order_draws<P: FramePipeline<crate::ForwardResources>>(
     pipeline: &P,
     frame: &crate::PreparedFrame<'_, crate::ForwardResources>,
     inputs: Vec<ForwardDrawInput>,

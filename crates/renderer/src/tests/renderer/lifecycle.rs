@@ -20,5 +20,9 @@ use super::*;
 mod backend;
 #[path = "lifecycle/execution.rs"]
 mod execution;
+#[path = "forward/depth_binding_failures.rs"]
+mod forward_depth_binding_failure_tests;
+#[path = "forward/depth_selection.rs"]
+mod forward_depth_selection_tests;
 #[path = "lifecycle/support.rs"]
 mod support;

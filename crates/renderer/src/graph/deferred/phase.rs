@@ -42,6 +42,10 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) transform: std::ops::Range<u64>,
     pub(super) material: super::super::definition::TextureHandle,
     pub(super) environment: Option<super::super::definition::TextureHandle>,
+    pub(super) specular_radiance: Option<super::super::definition::TextureHandle>,
+    pub(super) specular_brdf_lut: Option<super::super::definition::TextureHandle>,
+    pub(super) specular_view_uniform: Option<super::super::definition::BufferHandle>,
+    pub(super) specular_mip_levels: Option<u32>,
     pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
     pub(super) effects: Option<super::super::definition::TextureHandle>,
     pub(super) target: Option<super::super::definition::TextureHandle>,
@@ -82,6 +86,10 @@ pub(crate) struct DeferredLightingPass<'pass, 'builder> {
     effects: Option<super::super::definition::TextureHandle>,
     target: Option<super::super::definition::TextureHandle>,
     environment: Option<super::super::definition::TextureHandle>,
+    specular_radiance: Option<super::super::definition::TextureHandle>,
+    specular_brdf_lut: Option<super::super::definition::TextureHandle>,
+    specular_view_uniform: Option<super::super::definition::BufferHandle>,
+    specular_mip_levels: Option<u32>,
     declared: u8,
 }
 
@@ -191,6 +199,10 @@ impl DeferredPhaseDriver<'_> {
         }
         let target = self.target;
         let environment = self.environment;
+        let specular_radiance = self.specular_radiance;
+        let specular_brdf_lut = self.specular_brdf_lut;
+        let specular_view_uniform = self.specular_view_uniform;
+        let specular_mip_levels = self.specular_mip_levels;
         let effects = self.effects;
         let (pass, output) = self
             .graph
@@ -202,6 +214,10 @@ impl DeferredPhaseDriver<'_> {
                     effects,
                     target,
                     environment,
+                    specular_radiance,
+                    specular_brdf_lut,
+                    specular_view_uniform,
+                    specular_mip_levels,
                     declared: 0,
                 };
                 declare(&mut lighting).map_err(|_| GraphError::InvalidRange)?;
@@ -474,6 +490,42 @@ impl DeferredLightingPass<'_, '_> {
                     TextureUsage::TEXTURE_BINDING,
                 )
                 .map_err(|_| ())?;
+        }
+        match (
+            self.specular_radiance,
+            self.specular_brdf_lut,
+            self.specular_view_uniform,
+        ) {
+            (Some(radiance), Some(brdf_lut), Some(view_uniform)) => {
+                self.pass
+                    .read_texture_with_use(
+                        radiance,
+                        all_color_mips(self.specular_mip_levels.ok_or(())?),
+                        sampled_read().uses,
+                        ImageLayout::ShaderReadOnly,
+                        TextureUsage::TEXTURE_BINDING,
+                    )
+                    .map_err(|_| ())?;
+                self.pass
+                    .read_texture_with_use(
+                        brdf_lut,
+                        one_color_mip(0),
+                        sampled_read().uses,
+                        ImageLayout::ShaderReadOnly,
+                        TextureUsage::TEXTURE_BINDING,
+                    )
+                    .map_err(|_| ())?;
+                self.pass
+                    .read_with_use(
+                        view_uniform,
+                        0..112,
+                        uniform_read().uses,
+                        BufferUsage::UNIFORM,
+                    )
+                    .map_err(|_| ())?;
+            }
+            (None, None, None) => {}
+            _ => return Err(()),
         }
         self.pass.side_effect();
         Ok(self.target)

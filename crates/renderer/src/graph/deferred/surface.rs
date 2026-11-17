@@ -38,6 +38,16 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         {
             return Err(Error::InvalidState);
         }
+        if self.specular_upload_slot.is_some() != frame.specular.is_some()
+            || self.specular_view_uniform_slot.is_some() != frame.specular.is_some()
+            || self.specular_radiance_slot.is_some() != frame.specular.is_some()
+            || self.specular_brdf_lut_slot.is_some() != frame.specular.is_some()
+        {
+            return Err(Error::InvalidState);
+        }
+        if let Some(specular) = &frame.specular {
+            specular.validate_for_sampling(self.id.device)?;
+        }
         Ok(())
     }
 
@@ -97,6 +107,30 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     &environment.upload,
                     &environment.upload_desc,
                     environment.upload_incoming,
+                ));
+            }
+        }
+        if let (Some(upload_slot), Some(uniform_slot), Some(specular)) = (
+            self.specular_upload_slot,
+            self.specular_view_uniform_slot,
+            &frame.specular,
+        ) {
+            if uses(upload_slot) {
+                buffers.push(BoundBuffer::new(
+                    upload_slot,
+                    specular.upload_instance,
+                    &specular.upload,
+                    &specular.upload_desc,
+                    specular.upload_incoming,
+                ));
+            }
+            if uses(uniform_slot) {
+                buffers.push(BoundBuffer::new(
+                    uniform_slot,
+                    specular.view_uniform_instance,
+                    &specular.view_uniform,
+                    &specular.view_uniform_desc,
+                    specular.view_uniform_incoming,
                 ));
             }
         }
@@ -185,6 +219,34 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     )
                 },
             ))
+            .chain(
+                self.specular_radiance_slot
+                    .zip(frame.specular.as_ref())
+                    .map(|(slot, owner)| {
+                        BoundTexture::new(
+                            slot,
+                            owner.radiance.instance,
+                            &owner.radiance.texture,
+                            &owner.radiance.desc,
+                            owner.radiance.incoming,
+                            owner.radiance.layout,
+                        )
+                    }),
+            )
+            .chain(
+                self.specular_brdf_lut_slot
+                    .zip(frame.specular.as_ref())
+                    .map(|(slot, owner)| {
+                        BoundTexture::new(
+                            slot,
+                            owner.brdf_lut.instance,
+                            &owner.brdf_lut.texture,
+                            &owner.brdf_lut.desc,
+                            owner.brdf_lut.incoming,
+                            owner.brdf_lut.layout,
+                        )
+                    }),
+            )
             .chain(std::iter::once(BoundTexture::new(
                 self.scene_color_slot.ok_or(Error::InvalidState)?,
                 frame.scene_color.instance,
@@ -244,6 +306,21 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         )?;
         if let (Some(slot), Some(_)) = (self.environment_slot, frame.environment.as_ref()) {
             pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
+        }
+        if let (Some(radiance), Some(lut), Some(view_uniform), Some(owner)) = (
+            self.specular_radiance_slot,
+            self.specular_brdf_lut_slot,
+            self.specular_view_uniform_slot,
+            frame.specular.as_ref(),
+        ) {
+            pass.texture(
+                radiance,
+                all_color_mips(owner.radiance.desc.mip_levels),
+                AccessKind::Read,
+                sampled_read(),
+            )?;
+            pass.texture(lut, one_color_mip(0), AccessKind::Read, sampled_read())?;
+            pass.buffer(view_uniform, 0..112, AccessKind::Read, uniform_read())?;
         }
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {

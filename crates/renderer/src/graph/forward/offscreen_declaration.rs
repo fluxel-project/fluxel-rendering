@@ -14,8 +14,8 @@ use crate::{
 use super::{
     BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, ForwardShape,
     GraphBuilder, GraphPass, TextureSlot, copy_read_uses, copy_write_uses, graph_texture_copy_end,
-    texture_copy_read_uses, texture_copy_write_uses, validate_forward_topology,
-    validate_graph_draw, whole,
+    one_color_mip, texture_copy_read_uses, texture_copy_write_uses, validate_depth_spec,
+    validate_forward_topology, validate_graph_draw, whole,
 };
 
 /// A complete, uncompiled offscreen Forward declaration.
@@ -29,9 +29,14 @@ pub(crate) struct OffscreenForwardDeclaration {
     pub(super) frame_upload_slot: BufferSlot,
     pub(super) uniform_slot: BufferSlot,
     pub(super) environment_upload_slot: Option<BufferSlot>,
+    pub(super) specular_upload_slot: Option<BufferSlot>,
+    pub(super) specular_view_uniform_slot: Option<BufferSlot>,
     pub(super) stream_slots: Vec<BufferSlot>,
     pub(super) texture_slots: Vec<TextureSlot>,
     pub(super) environment_slot: Option<TextureSlot>,
+    pub(super) specular_radiance_slot: Option<TextureSlot>,
+    pub(super) specular_brdf_lut_slot: Option<TextureSlot>,
+    pub(super) depth_slot: Option<TextureSlot>,
     pub(super) target_slot: TextureSlot,
     pub(super) readback_slot: BufferSlot,
     pub(super) draw_count: usize,
@@ -75,6 +80,10 @@ where
         return Err(Error::InvalidRange.into());
     }
     validate_forward_topology(expected, spec.draws.len(), spec.shape.batches.len())?;
+    validate_depth_spec(spec)?;
+    if spec.depth.is_some() && expected != FrameTopology::OpaqueForward {
+        return Err(Error::InvalidState.into());
+    }
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
         if draw.texture >= spec.textures.len()
@@ -114,6 +123,24 @@ where
                 .map_err(|_| Error::InvalidState)
         })
         .transpose()?;
+    let specular_upload = spec
+        .specular_upload
+        .as_ref()
+        .map(|fact| {
+            graph
+                .import_buffer_desc(fact.desc.clone(), fact.incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let specular_view_uniform = spec
+        .specular_view_uniform
+        .as_ref()
+        .map(|fact| {
+            graph
+                .import_buffer_desc(fact.desc.clone(), fact.incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let streams = spec
         .streams
         .iter()
@@ -141,6 +168,24 @@ where
                 .map_err(|_| Error::InvalidState)
         })
         .transpose()?;
+    let specular_radiance = spec
+        .specular_radiance
+        .as_ref()
+        .map(|fact| {
+            graph
+                .import_texture_with_state(fact.desc.clone(), fact.incoming, fact.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let specular_brdf_lut = spec
+        .specular_brdf_lut
+        .as_ref()
+        .map(|fact| {
+            graph
+                .import_texture_with_state(fact.desc.clone(), fact.incoming, fact.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let target = graph
         .import_texture_with_state(
             spec.target.desc.clone(),
@@ -148,6 +193,15 @@ where
             spec.target.layout,
         )
         .map_err(|_| Error::InvalidState)?;
+    let depth = spec
+        .depth
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let readback = graph
         .import_buffer_desc(spec.readback.desc.clone(), spec.readback.incoming)
         .map_err(|_| Error::InvalidState)?;
@@ -156,7 +210,18 @@ where
         .iter()
         .map(graph_texture_copy_end)
         .collect::<Result<Vec<_>>>()?;
-    let (upload_pass, (streams, uniform, textures, environment)) = graph
+    let (
+        upload_pass,
+        (
+            streams,
+            uniform,
+            textures,
+            environment,
+            specular_radiance,
+            specular_brdf_lut,
+            specular_view_uniform,
+        ),
+    ) = graph
         .add_pass("forward-upload", |pass| {
             let mut outputs = streams.clone();
             for upload in &spec.vertex_uploads {
@@ -233,7 +298,88 @@ where
                 (None, None, None) => None,
                 _ => return Err(super::super::definition::GraphError::InvalidRange),
             };
-            Ok((outputs, uniform, outputs_textures, environment))
+            let (radiance, brdf_lut, view_uniform) = match (
+                specular_radiance,
+                specular_brdf_lut,
+                specular_view_uniform,
+                specular_upload,
+                &spec.specular,
+            ) {
+                (
+                    Some(radiance),
+                    Some(brdf_lut),
+                    Some(view_uniform),
+                    Some(upload),
+                    Some(contract),
+                ) => {
+                    for copy in &contract.radiance_copies {
+                        let end = copy
+                            .source_offset
+                            .checked_add(
+                                u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image),
+                            )
+                            .ok_or(super::super::definition::GraphError::InvalidRange)?;
+                        pass.read_with_use(
+                            upload,
+                            copy.source_offset..end,
+                            copy_read_uses().uses,
+                            BufferUsage::COPY_SRC,
+                        )?;
+                    }
+                    let copy = &contract.brdf_lut_copy;
+                    let end = copy
+                        .source_offset
+                        .checked_add(u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image))
+                        .ok_or(super::super::definition::GraphError::InvalidRange)?;
+                    pass.read_with_use(
+                        upload,
+                        copy.source_offset..end,
+                        copy_read_uses().uses,
+                        BufferUsage::COPY_SRC,
+                    )?;
+                    pass.read_with_use(
+                        upload,
+                        contract.view_uniform_copy.clone(),
+                        copy_read_uses().uses,
+                        BufferUsage::COPY_SRC,
+                    )?;
+                    let mut radiance = radiance;
+                    for copy in &contract.radiance_copies {
+                        radiance = pass.write_texture_with_use(
+                            radiance,
+                            one_color_mip(copy.mip),
+                            texture_copy_write_uses().uses,
+                            ImageLayout::CopyDst,
+                            TextureUsage::COPY_DST,
+                        )?;
+                    }
+                    let brdf_lut = pass.write_texture_with_use(
+                        brdf_lut,
+                        whole(),
+                        texture_copy_write_uses().uses,
+                        ImageLayout::CopyDst,
+                        TextureUsage::COPY_DST,
+                    )?;
+                    let view_uniform = pass.write_with_use(
+                        view_uniform,
+                        0..112,
+                        copy_write_uses().uses,
+                        BufferUsage::COPY_DST,
+                    )?;
+                    (Some(radiance), Some(brdf_lut), Some(view_uniform))
+                }
+                (None, None, None, None, None) => (None, None, None),
+                _ => return Err(super::super::definition::GraphError::InvalidRange),
+            };
+            Ok((
+                outputs,
+                uniform,
+                outputs_textures,
+                environment,
+                radiance,
+                brdf_lut,
+                view_uniform,
+            ))
         })
         .map_err(|_| Error::InvalidState)?;
     let (raster_pass, target) = {
@@ -246,7 +392,15 @@ where
             uniform: Some(uniform),
             textures: textures.clone(),
             environment,
+            specular_radiance,
+            specular_brdf_lut,
+            specular_view_uniform,
+            specular_mip_levels: spec
+                .specular_radiance
+                .as_ref()
+                .map(|value| value.desc.mip_levels),
             target,
+            depth,
             draws: spec.draws.clone(),
             declared: false,
             output: None,
@@ -289,9 +443,14 @@ where
         frame_upload_slot: BufferSlot::from(frame_upload),
         uniform_slot: BufferSlot::from(uniform),
         environment_upload_slot: environment_upload.map(BufferSlot::from),
+        specular_upload_slot: specular_upload.map(BufferSlot::from),
+        specular_view_uniform_slot: specular_view_uniform.map(BufferSlot::from),
         stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
         texture_slots: textures.into_iter().map(TextureSlot::from).collect(),
         environment_slot: environment.map(TextureSlot::from),
+        specular_radiance_slot: specular_radiance.map(TextureSlot::from),
+        specular_brdf_lut_slot: specular_brdf_lut.map(TextureSlot::from),
+        depth_slot: depth.map(TextureSlot::from),
         target_slot: TextureSlot::from(target),
         readback_slot: BufferSlot::from(readback),
         draw_count: spec.draws.len(),

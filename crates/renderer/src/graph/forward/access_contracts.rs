@@ -4,6 +4,20 @@ use super::*;
 pub(super) fn whole() -> TextureRange {
     TextureRange::new(TextureAspects::COLOR, 0..1, 0..1)
 }
+
+/// The complete sampled radiance mip chain. This deliberately does not reuse
+/// `whole()`: most Forward resources are one mip, while IBL's shader may
+/// select every supplied level through `textureSampleLevel`.
+pub(super) fn all_color_mips(mips: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, 0..mips, 0..1)
+}
+
+pub(super) fn one_color_mip(mip: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, mip..mip + 1, 0..1)
+}
+pub(super) fn whole_depth() -> TextureRange {
+    TextureRange::new(TextureAspects::DEPTH, 0..1, 0..1)
+}
 pub(super) fn texture_copy_end(copy: &crate::residency::ForwardTextureUpload) -> Result<u64> {
     copy.source_offset
         .checked_add(
@@ -112,6 +126,16 @@ pub(super) fn color_write_uses() -> TextureAccessContract {
             accesses: AccessMask::COLOR_WRITE,
         },
         ImageLayout::ColorAttachment,
+        TextureUsage::RENDER_ATTACHMENT,
+    )
+}
+pub(super) fn depth_write_uses() -> TextureAccessContract {
+    texture(
+        TextureUses {
+            stages: StageMask::FRAGMENT,
+            accesses: AccessMask::DEPTH_WRITE,
+        },
+        ImageLayout::DepthStencilAttachment,
         TextureUsage::RENDER_ATTACHMENT,
     )
 }

@@ -53,6 +53,7 @@ pub(super) struct Native {
     pub(super) script: Script,
     pub(super) fault_enabled: AtomicBool,
     pub(super) texture_filterable: AtomicBool,
+    pub(super) depth_supported: AtomicBool,
     pub(super) finishes: AtomicUsize,
     pub(super) next_completion: AtomicUsize,
     pub(super) command_calls: AtomicUsize,
@@ -67,9 +68,11 @@ pub(super) struct Native {
     pub(super) idle_waits: AtomicUsize,
     pub(super) waited_completions: Mutex<Vec<usize>>,
     pub(super) created_buffers: AtomicUsize,
+    pub(super) created_textures: AtomicUsize,
     pub(super) created_samplers: AtomicUsize,
     pub(super) dropped_samplers: AtomicUsize,
     pub(super) pipeline_color_formats: Mutex<Vec<Vec<TextureFormat>>>,
+    pub(super) pipeline_depth_states: Mutex<Vec<Option<(TextureFormat, bool, CompareFunction)>>>,
     pub(super) dropped_buffers: AtomicUsize,
     pub(super) outcome: Mutex<Weak<OutcomeGuard>>,
 }
@@ -191,7 +194,12 @@ impl ResourceBackend for WitnessBackend {
             max_size: u64::MAX,
         })
     }
-    fn texture_support(device: &Arc<Native>, _: &TextureDesc) -> Support<TextureSupport> {
+    fn texture_support(device: &Arc<Native>, desc: &TextureDesc) -> Support<TextureSupport> {
+        if desc.format == TextureFormat::Depth32Float
+            && !device.depth_supported.load(Ordering::SeqCst)
+        {
+            return Support::Unsupported("witness depth attachment");
+        }
         Support::Supported(TextureSupport {
             max_extent: [u32::MAX; 3],
             max_array_layers: u32::MAX,
@@ -214,7 +222,8 @@ impl ResourceBackend for WitnessBackend {
             native: Arc::clone(device),
         }))
     }
-    fn create_texture(_: &Arc<Native>, _: &TextureDesc) -> Result<Arc<NativeTexture>> {
+    fn create_texture(device: &Arc<Native>, _: &TextureDesc) -> Result<Arc<NativeTexture>> {
+        device.created_textures.fetch_add(1, Ordering::SeqCst);
         Ok(Arc::new(NativeTexture))
     }
     fn create_view(_: &Arc<Native>, _: &Arc<NativeTexture>, _: &TextureViewDesc) -> Result<()> {
@@ -291,6 +300,12 @@ impl PipelineBackend for WitnessBackend {
                 .flatten()
                 .map(|target| target.format)
                 .collect(),
+        );
+        device.pipeline_depth_states.lock().unwrap().push(
+            descriptor
+                .depth_stencil
+                .as_ref()
+                .map(|state| (state.format, state.depth_write_enabled, state.depth_compare)),
         );
         ready(Ok(()))
     }

@@ -14,6 +14,7 @@ fn blank_frame(device: &Device<WitnessBackend>) -> ForwardFrame<WitnessBackend> 
             .unwrap();
     ForwardFrame {
         environment: None,
+        specular: None,
         resident,
         resident_upload,
         frame,

@@ -16,6 +16,7 @@ pub(super) fn fixture_with_caps(
         script,
         fault_enabled: AtomicBool::new(true),
         texture_filterable: AtomicBool::new(true),
+        depth_supported: AtomicBool::new(true),
         finishes: AtomicUsize::new(0),
         next_completion: AtomicUsize::new(0),
         command_calls: AtomicUsize::new(0),
@@ -30,9 +31,11 @@ pub(super) fn fixture_with_caps(
         idle_waits: AtomicUsize::new(0),
         waited_completions: Mutex::new(Vec::new()),
         created_buffers: AtomicUsize::new(0),
+        created_textures: AtomicUsize::new(0),
         created_samplers: AtomicUsize::new(0),
         dropped_samplers: AtomicUsize::new(0),
         pipeline_color_formats: Mutex::new(Vec::new()),
+        pipeline_depth_states: Mutex::new(Vec::new()),
         dropped_buffers: AtomicUsize::new(0),
         outcome: Mutex::new(Weak::new()),
     });
@@ -130,6 +133,7 @@ pub(super) fn blank_surface_frame(
         uniform_upload,
         uniform_bytes,
         environment: None,
+        specular: None,
         draws: Vec::new(),
         draw_batches: Vec::new(),
         extent: [1, 1],
@@ -206,6 +210,10 @@ mod raster_tests;
 mod read_set_raster_tests;
 #[path = "../shutdown.rs"]
 mod shutdown_tests;
+#[path = "../../residency/specular_environment.rs"]
+mod specular_environment_tests;
+#[path = "../specular_lighting_submit.rs"]
+mod specular_lighting_submit_tests;
 #[path = "submission.rs"]
 mod submission_tests;
 #[path = "../surface.rs"]

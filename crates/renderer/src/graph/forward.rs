@@ -5,9 +5,11 @@ mod capture_bindings;
 mod capture_declaration;
 mod capture_plan;
 mod capture_record;
+mod capture_specular_bindings;
 mod capture_surface_declaration;
 mod capture_surface_plan;
 mod capture_surface_record;
+mod capture_upload;
 mod declaration;
 mod offscreen_declaration;
 mod offscreen_plan;
@@ -34,11 +36,11 @@ use validation::*;
 use fluxel_rhi::{
     api::{
         AccessMask, AccessScope, AttachmentView, BufferDesc, BufferUsage, BufferUses, ClearColor,
-        ColorAttachment, CommandEncoder, CompletionPoint, Device, DeviceId, Error, ExecutionStatus,
-        ImageLayout, LaneClass, LaneId, LoadOp, PlanId, RasterPassDesc, Rect, Result, StageMask,
-        StepDesc, StepId, StepKind, StepWait, StoreOp, SubmissionPlan, SurfaceImage,
-        TexelCopyBufferLayout, TextureAspects, TextureDesc, TextureFormat, TextureRegion,
-        TextureUsage, TextureUses, Viewport,
+        ColorAttachment, CommandEncoder, CompletionPoint, DepthStencilAttachment, Device, DeviceId,
+        Error, ExecutionStatus, ImageLayout, LaneClass, LaneId, LoadOp, PlanId, RasterPassDesc,
+        Rect, Result, StageMask, StepDesc, StepId, StepKind, StepWait, StoreOp, SubmissionPlan,
+        SurfaceImage, TexelCopyBufferLayout, TextureAspects, TextureDesc, TextureFormat,
+        TextureRegion, TextureUsage, TextureUses, Viewport,
     },
     backend::{
         CommandBackend, ExecutionBackend, ExecutionMode, ExecutionOutcome, RasterBackend,
@@ -117,9 +119,14 @@ pub(crate) struct ForwardPlan<B: ResourceBackend> {
     frame_upload_slot: BufferSlot,
     uniform_slot: BufferSlot,
     environment_upload_slot: Option<BufferSlot>,
+    specular_upload_slot: Option<BufferSlot>,
+    specular_view_uniform_slot: Option<BufferSlot>,
     stream_slots: Vec<BufferSlot>,
     texture_slots: Vec<TextureSlot>,
     environment_slot: Option<TextureSlot>,
+    specular_radiance_slot: Option<TextureSlot>,
+    specular_brdf_lut_slot: Option<TextureSlot>,
+    depth_slot: Option<TextureSlot>,
     target_slot: TextureSlot,
     readback_slot: BufferSlot,
     draw_count: usize,
@@ -146,9 +153,14 @@ pub(crate) struct SurfaceForwardPlan<B: ResourceBackend> {
     frame_upload_slot: BufferSlot,
     uniform_slot: BufferSlot,
     environment_upload_slot: Option<BufferSlot>,
+    specular_upload_slot: Option<BufferSlot>,
+    specular_view_uniform_slot: Option<BufferSlot>,
     stream_slots: Vec<BufferSlot>,
     texture_slots: Vec<TextureSlot>,
     environment_slot: Option<TextureSlot>,
+    specular_radiance_slot: Option<TextureSlot>,
+    specular_brdf_lut_slot: Option<TextureSlot>,
+    depth_slot: Option<TextureSlot>,
     surface_target_slot: TextureSlot,
     extent: [u32; 2],
     draw_count: usize,

@@ -26,6 +26,7 @@ where
         prepared_inputs: Vec<crate::ForwardDrawInput>,
         extent: [u32; 2],
         topology: crate::FrameTopology,
+        depth_mode: crate::ForwardDepthMode,
         assets: &crate::ForwardAssets,
         surface: Option<(SurfaceImage<B>, [u32; 2])>,
         color_format: TextureFormat,
@@ -47,6 +48,23 @@ where
         };
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
+        let depth = super::depth::allocate_depth(&self.device, depth_mode, topology, extent)?;
+        let specular = if let Some(input) = prepared_inputs
+            .iter()
+            .find(|input| input.prepared().uses_specular_ibl())
+        {
+            let snapshot = self
+                .environment_specular
+                .as_ref()
+                .ok_or(Error::InvalidState)?;
+            Some(crate::renderer::lighting::allocate_specular(
+                &self.device,
+                snapshot,
+                input.view(),
+            )?)
+        } else {
+            None
+        };
         let batched = crate::preparation::batch_forward_draws(prepared_inputs);
         let batch_stats = batched.stats();
         let (inputs, batches) = batched.into_draws_and_batches();
@@ -71,6 +89,7 @@ where
                     input.prepared(),
                     color_format,
                     input.transform_uniform_bytes(),
+                    depth_mode,
                 )
             })
             .collect();
@@ -375,6 +394,11 @@ where
                 .map_err(|error| self.observe_forward_error("frame allocation", error))?;
             (Some(buffers), None, upload, 3, allocation_bytes, 1)
         };
+        match (&mut offscreen_frame, &mut surface_frame) {
+            (Some(frame), None) => frame.depth = depth,
+            (None, Some(frame)) => frame.depth = depth,
+            _ => return Err(Error::InvalidState.into()),
+        }
         let frame_uniform = match (&offscreen_frame, &surface_frame) {
             (Some(buffers), None) => &buffers.uniform,
             (None, Some(buffers)) => &buffers.uniform,
@@ -401,6 +425,7 @@ where
                     input.prepared(),
                     color_format,
                     input.transform_uniform_bytes(),
+                    depth_mode,
                 )
                 .await?;
             let mut material_entries = vec![
@@ -450,30 +475,21 @@ where
                     }],
                 })
                 .map_err(|error| self.observe_forward_error("transform bind group", error))?;
-            let environment_group = match (&objects.environment_layout, &environment) {
-                (Some(layout), Some(owner)) => Some(
-                    self.device
-                        .create_bind_group(&BindGroupDesc {
-                            label: Some("Forward environment irradiance"),
-                            layout,
-                            entries: &[
-                                BindGroupEntry {
-                                    binding: 0,
-                                    resource: BindingResource::TextureView(&owner.view),
-                                },
-                                BindGroupEntry {
-                                    binding: 1,
-                                    resource: BindingResource::Sampler(&owner.sampler),
-                                },
-                            ],
-                        })
-                        .map_err(|error| {
-                            self.observe_forward_error("environment bind group", error)
-                        })?,
-                ),
-                (None, _) => None,
-                _ => return Err(Error::InvalidState.into()),
-            };
+            let environment_group = objects
+                .environment_layout
+                .as_ref()
+                .map(|layout| {
+                    crate::renderer::lighting::bind_group(
+                        &self.device,
+                        layout,
+                        environment.as_ref(),
+                        specular.as_ref(),
+                        input.prepared().uses_environment_irradiance(),
+                        input.prepared().uses_specular_ibl(),
+                    )
+                })
+                .transpose()
+                .map_err(|error| self.observe_forward_error("environment bind group", error))?;
             let transform_range = uniforms.transforms[index].clone();
             let tint_range = uniforms.tints[index].clone();
             let vertex_ranges = mappings[index]
@@ -536,6 +552,7 @@ where
                     uniform_upload,
                     uniform_bytes: uniforms.bytes,
                     environment,
+                    specular,
                     draws,
                     draw_batches,
                     extent,
@@ -551,6 +568,7 @@ where
                     uniform_upload,
                     uniform_bytes: uniforms.bytes,
                     environment,
+                    specular,
                     draws,
                     draw_batches,
                     extent,
@@ -572,7 +590,8 @@ where
             buffer_allocation_bytes: resident_buffer_allocation_bytes
                 .saturating_add(frame_buffer_allocation_bytes),
             texture_allocations: resident_texture_allocations
-                .saturating_add(frame_texture_allocations),
+                .saturating_add(frame_texture_allocations)
+                .saturating_add(u64::from(depth_mode != crate::ForwardDepthMode::Disabled)),
         })
     }
 }

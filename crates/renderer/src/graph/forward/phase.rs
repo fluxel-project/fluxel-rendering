@@ -11,9 +11,14 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) uniform: Option<crate::graph::definition::BufferHandle>,
     pub(super) textures: Vec<crate::graph::definition::TextureHandle>,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_radiance: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_brdf_lut: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_view_uniform: Option<crate::graph::definition::BufferHandle>,
+    pub(super) specular_mip_levels: Option<u32>,
     /// Either a persistent target or an RHI-managed surface lease. Both are
     /// real Graph resources and must receive the terminal color write.
     pub(super) target: crate::graph::definition::TextureHandle,
+    pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) draws: Vec<ForwardGraphDraw>,
     pub(super) declared: bool,
     pub(super) output: Option<(GraphPass, crate::graph::definition::TextureHandle)>,
@@ -24,6 +29,7 @@ pub(super) const VERTEX_READS: u8 = 2;
 pub(super) const UNIFORM_READS: u8 = 4;
 pub(super) const TEXTURE_READS: u8 = 8;
 pub(super) const COLOR_WRITE: u8 = 16;
+pub(super) const DEPTH_WRITE: u8 = 32;
 
 /// Graph-private opaque pass capability, exposed only through the public
 /// policy wrapper for the duration of a real `GraphBuilder::add_pass` call.
@@ -31,9 +37,14 @@ pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend>
     pub(super) pass: &'pass mut crate::graph::definition::PassBuilder<'builder>,
     pub(super) upload: GraphPass,
     pub(super) target: crate::graph::definition::TextureHandle,
+    pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) declared: u8,
     pub(super) reads: ForwardReadState,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_radiance: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_brdf_lut: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_view_uniform: Option<crate::graph::definition::BufferHandle>,
+    pub(super) specular_mip_levels: Option<u32>,
     pub(super) marker: PhantomData<&'frame ForwardFrame<B>>,
 }
 
@@ -88,8 +99,30 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
         Ok(())
     }
 
+    /// Declares the optional owner-selected depth attachment. With depth
+    /// disabled this is intentionally a no-op; with it enabled the exact
+    /// depth-aspect write is mandatory before the pass can finish.
+    pub(crate) fn write_selected_depth(&mut self) -> std::result::Result<(), ()> {
+        let Some(depth) = self.depth else {
+            return Ok(());
+        };
+        self.mark(DEPTH_WRITE)?;
+        self.depth = Some(
+            self.pass
+                .write_texture_with_use(
+                    depth,
+                    whole_depth(),
+                    depth_write_uses().uses,
+                    ImageLayout::DepthStencilAttachment,
+                    TextureUsage::RENDER_ATTACHMENT,
+                )
+                .map_err(|_| ())?,
+        );
+        Ok(())
+    }
+
     fn finish(&mut self) -> std::result::Result<crate::graph::definition::TextureHandle, ()> {
-        if !opaque_requirements_met(self.declared, &self.reads) {
+        if !opaque_requirements_met(self.declared, &self.reads, self.depth.is_some()) {
             return Err(());
         }
         if let Some(environment) = self.environment {
@@ -103,12 +136,53 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
                 )
                 .map_err(|_| ())?;
         }
+        if let (Some(radiance), Some(brdf_lut), Some(view_uniform)) = (
+            self.specular_radiance,
+            self.specular_brdf_lut,
+            self.specular_view_uniform,
+        ) {
+            self.pass
+                .read_texture_with_use(
+                    radiance,
+                    all_color_mips(self.specular_mip_levels.ok_or(())?),
+                    texture_read_uses().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+                .map_err(|_| ())?;
+            self.pass
+                .read_texture_with_use(
+                    brdf_lut,
+                    whole(),
+                    texture_read_uses().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+                .map_err(|_| ())?;
+            self.pass
+                .read_with_use(
+                    view_uniform,
+                    0..112,
+                    shader_read_uses().uses,
+                    BufferUsage::UNIFORM,
+                )
+                .map_err(|_| ())?;
+        } else if self.specular_radiance.is_some()
+            || self.specular_brdf_lut.is_some()
+            || self.specular_view_uniform.is_some()
+        {
+            return Err(());
+        }
         self.pass.side_effect();
         Ok(self.target)
     }
 }
 
-pub(super) fn opaque_requirements_met(declared: u8, reads: &ForwardReadState) -> bool {
+pub(super) fn opaque_requirements_met(
+    declared: u8,
+    reads: &ForwardReadState,
+    depth_enabled: bool,
+) -> bool {
     declared & (UPLOAD_DEPENDENCY | COLOR_WRITE) == UPLOAD_DEPENDENCY | COLOR_WRITE
         && reads.complete()
         && if reads.scopes_started() {
@@ -117,6 +191,7 @@ pub(super) fn opaque_requirements_met(declared: u8, reads: &ForwardReadState) ->
             declared & (VERTEX_READS | UNIFORM_READS | TEXTURE_READS)
                 == VERTEX_READS | UNIFORM_READS | TEXTURE_READS
         }
+        && (declared & DEPTH_WRITE != 0) == depth_enabled
 }
 
 pub(crate) struct ClearForwardPass<'pass, 'builder, 'frame, B: ResourceBackend> {
@@ -192,7 +267,12 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
             .ok_or(PipelineError::InvalidPhaseContribution)?;
         let textures = self.textures.clone();
         let environment = self.environment;
+        let specular_radiance = self.specular_radiance;
+        let specular_brdf_lut = self.specular_brdf_lut;
+        let specular_view_uniform = self.specular_view_uniform;
+        let specular_mip_levels = self.specular_mip_levels;
         let target = self.target;
+        let depth = self.depth;
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let draws = self.draws.clone();
         let (pass, target) = self
@@ -204,9 +284,14 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     pass,
                     upload,
                     target,
+                    depth,
                     declared: 0,
                     reads: ForwardReadState::new(streams, uniform, textures, draws),
                     environment,
+                    specular_radiance,
+                    specular_brdf_lut,
+                    specular_view_uniform,
+                    specular_mip_levels,
                     marker: PhantomData,
                 };
                 declare(&mut opaque)

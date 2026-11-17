@@ -1,6 +1,60 @@
 //! Concrete Forward ranges, uploads, and batch validation.
 use super::*;
 
+/// Depth is an owner-selected optional attachment, but when selected its
+/// allocation contract is fixed: one Depth32Float 2D render target covering
+/// the frame and still in its saved incoming state.
+pub(super) fn validate_depth_spec(spec: &ForwardGraphSpec) -> Result<()> {
+    let Some(depth) = spec.depth.as_ref() else {
+        return Ok(());
+    };
+    if depth.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+        || depth.desc.extent != [spec.extent[0], spec.extent[1], 1]
+        || depth.desc.array_layers != 1
+        || depth.desc.format != TextureFormat::Depth32Float
+        || depth.desc.mip_levels != 1
+        || depth.desc.samples != 1
+        || !depth.desc.usage.contains(TextureUsage::RENDER_ATTACHMENT)
+        || depth.incoming
+            != (TextureUses {
+                stages: StageMask::EMPTY,
+                accesses: AccessMask::EMPTY,
+            })
+        || depth.layout != ImageLayout::Undefined
+    {
+        return Err(Error::InvalidState);
+    }
+    Ok(())
+}
+
+pub(super) fn validate_surface_depth<B: ResourceBackend>(
+    frame: &SurfaceForwardFrame<B>,
+) -> Result<()> {
+    let Some(depth) = frame.frame.depth.as_ref() else {
+        return Ok(());
+    };
+    if depth.device != frame.resident.device
+        || depth.texture.device() != frame.resident.device
+        || depth.view.device() != frame.resident.device
+        || depth.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+        || depth.desc.extent != [frame.extent[0], frame.extent[1], 1]
+        || depth.desc.array_layers != 1
+        || depth.desc.format != TextureFormat::Depth32Float
+        || depth.desc.mip_levels != 1
+        || depth.desc.samples != 1
+        || !depth.desc.usage.contains(TextureUsage::RENDER_ATTACHMENT)
+        || depth.incoming
+            != (TextureUses {
+                stages: StageMask::EMPTY,
+                accesses: AccessMask::EMPTY,
+            })
+        || depth.layout != ImageLayout::Undefined
+    {
+        return Err(Error::InvalidState);
+    }
+    Ok(())
+}
+
 pub(super) fn validate_offsets<B: ResourceBackend>(
     draw: &crate::residency::ForwardDraw<B>,
     alignment: u64,

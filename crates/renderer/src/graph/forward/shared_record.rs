@@ -8,9 +8,14 @@ pub(super) struct RecordSlots<'a> {
     pub(super) frame_upload_slot: BufferSlot,
     pub(super) uniform_slot: BufferSlot,
     pub(super) environment_upload_slot: Option<BufferSlot>,
+    pub(super) specular_upload_slot: Option<BufferSlot>,
+    pub(super) specular_view_uniform_slot: Option<BufferSlot>,
     pub(super) stream_slots: &'a [BufferSlot],
     pub(super) texture_slots: &'a [TextureSlot],
     pub(super) environment_slot: Option<TextureSlot>,
+    pub(super) specular_radiance_slot: Option<TextureSlot>,
+    pub(super) specular_brdf_lut_slot: Option<TextureSlot>,
+    pub(super) depth_slot: Option<TextureSlot>,
     pub(super) target_slot: TextureSlot,
     pub(super) readback_slot: BufferSlot,
 }
@@ -92,6 +97,52 @@ where
             AccessKind::Write,
             texture_copy_write_uses(),
         )?;
+    }
+    if let (Some(upload), Some(uniform), Some(radiance), Some(lut), Some(owner)) = (
+        slots.specular_upload_slot,
+        slots.specular_view_uniform_slot,
+        slots.specular_radiance_slot,
+        slots.specular_brdf_lut_slot,
+        frame.specular.as_ref(),
+    ) {
+        owner.validate_for_sampling(slots.device)?;
+        for copy in &owner.radiance_copies {
+            let end = copy
+                .source_offset
+                .checked_add(u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image))
+                .ok_or(Error::InvalidRange)?;
+            pass.buffer(
+                upload,
+                copy.source_offset..end,
+                AccessKind::Read,
+                copy_read_uses(),
+            )?;
+            pass.texture(
+                radiance,
+                one_color_mip(copy.mip),
+                AccessKind::Write,
+                texture_copy_write_uses(),
+            )?;
+        }
+        let copy = &owner.brdf_lut_copy;
+        let end = copy
+            .source_offset
+            .checked_add(u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image))
+            .ok_or(Error::InvalidRange)?;
+        pass.buffer(
+            upload,
+            copy.source_offset..end,
+            AccessKind::Read,
+            copy_read_uses(),
+        )?;
+        pass.texture(lut, whole(), AccessKind::Write, texture_copy_write_uses())?;
+        pass.buffer(
+            upload,
+            owner.view_uniform_copy.clone(),
+            AccessKind::Read,
+            copy_read_uses(),
+        )?;
+        pass.buffer(uniform, 0..112, AccessKind::Write, copy_write_uses())?;
     }
     pass.transition(encoder)?;
     for upload in &frame.resident_upload.vertices {
@@ -199,6 +250,87 @@ where
             },
         )?;
     }
+    if let (Some(upload), Some(uniform), Some(radiance_slot), Some(lut_slot), Some(owner)) = (
+        slots.specular_upload_slot,
+        slots.specular_view_uniform_slot,
+        slots.specular_radiance_slot,
+        slots.specular_brdf_lut_slot,
+        frame.specular.as_ref(),
+    ) {
+        for copy in &owner.radiance_copies {
+            let src = pass.buffer(
+                upload,
+                copy.source_offset
+                    ..copy
+                        .source_offset
+                        .checked_add(u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image))
+                        .ok_or(Error::InvalidRange)?,
+                AccessKind::Read,
+                copy_read_uses(),
+            )?;
+            let texture = pass.texture(
+                radiance_slot,
+                one_color_mip(copy.mip),
+                AccessKind::Write,
+                texture_copy_write_uses(),
+            )?;
+            encoder.buffer_to_texture(
+                src,
+                TexelCopyBufferLayout {
+                    offset: copy.source_offset,
+                    bytes_per_row: copy.bytes_per_row,
+                    rows_per_image: copy.rows_per_image,
+                },
+                TextureRegion {
+                    texture,
+                    mip: copy.mip,
+                    origin: [0, 0, 0],
+                    extent: copy.extent,
+                    aspect: TextureAspects::COLOR,
+                },
+            )?;
+        }
+        let copy = &owner.brdf_lut_copy;
+        let src = pass.buffer(
+            upload,
+            copy.source_offset
+                ..copy
+                    .source_offset
+                    .checked_add(u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image))
+                    .ok_or(Error::InvalidRange)?,
+            AccessKind::Read,
+            copy_read_uses(),
+        )?;
+        let texture = pass.texture(
+            lut_slot,
+            whole(),
+            AccessKind::Write,
+            texture_copy_write_uses(),
+        )?;
+        encoder.buffer_to_texture(
+            src,
+            TexelCopyBufferLayout {
+                offset: copy.source_offset,
+                bytes_per_row: copy.bytes_per_row,
+                rows_per_image: copy.rows_per_image,
+            },
+            TextureRegion {
+                texture,
+                mip: 0,
+                origin: [0, 0, 0],
+                extent: copy.extent,
+                aspect: TextureAspects::COLOR,
+            },
+        )?;
+        let src = pass.buffer(
+            upload,
+            owner.view_uniform_copy.clone(),
+            AccessKind::Read,
+            copy_read_uses(),
+        )?;
+        let dst = pass.buffer(uniform, 0..112, AccessKind::Write, copy_write_uses())?;
+        encoder.copy_buffer(src, owner.view_uniform_copy.start, dst, 0, 112)?;
+    }
     Ok(())
 }
 
@@ -256,6 +388,29 @@ where
             texture_read_uses(),
         )?;
     }
+    if let Some(owner) = frame.specular.as_ref() {
+        owner.validate_for_sampling(slots.device)?;
+        pass.texture(
+            slots.specular_radiance_slot.ok_or(Error::InvalidState)?,
+            all_color_mips(owner.radiance.desc.mip_levels),
+            AccessKind::Read,
+            texture_read_uses(),
+        )?;
+        pass.texture(
+            slots.specular_brdf_lut_slot.ok_or(Error::InvalidState)?,
+            whole(),
+            AccessKind::Read,
+            texture_read_uses(),
+        )?;
+        pass.buffer(
+            slots
+                .specular_view_uniform_slot
+                .ok_or(Error::InvalidState)?,
+            0..112,
+            AccessKind::Read,
+            shader_read_uses(),
+        )?;
+    }
     for draw in &frame.draws {
         pass.texture(
             *slots
@@ -273,6 +428,26 @@ where
         AccessKind::Write,
         color_write_uses(),
     )?;
+    let depth_stencil = match (slots.depth_slot, frame.frame.depth.as_ref()) {
+        (None, None) => None,
+        (Some(slot), Some(owner)) => {
+            if owner.device != slots.device
+                || owner.texture.device() != slots.device
+                || owner.view.device() != slots.device
+            {
+                return Err(Error::WrongDevice);
+            }
+            pass.texture(slot, whole_depth(), AccessKind::Write, depth_write_uses())?;
+            Some(DepthStencilAttachment {
+                view: AttachmentView::Texture(&owner.view),
+                depth: Some((LoadOp::Clear(1.0), StoreOp::Discard)),
+                stencil: None,
+                depth_read_only: false,
+                stencil_read_only: true,
+            })
+        }
+        _ => return Err(Error::InvalidState),
+    };
     pass.transition(encoder)?;
     let colors = [Some(ColorAttachment {
         view: AttachmentView::Texture(&frame.frame.target_view),
@@ -283,7 +458,7 @@ where
     let mut raster = encoder.begin_raster(&RasterPassDesc {
         label: Some("fluxel forward opaque"),
         colors: &colors,
-        depth_stencil: None,
+        depth_stencil,
         render_area: Rect {
             x: 0,
             y: 0,

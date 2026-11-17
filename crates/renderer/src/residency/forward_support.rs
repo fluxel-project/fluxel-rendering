@@ -36,7 +36,7 @@ pub(super) fn require_buffer<B: ResourceBackend>(
     }
 }
 
-pub(super) fn require_texture<B: ResourceBackend>(
+pub(crate) fn require_texture<B: ResourceBackend>(
     device: &Device<B>,
     desc: &TextureDesc,
 ) -> Result<()> {

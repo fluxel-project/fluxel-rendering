@@ -54,6 +54,8 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
     pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
+    /// Concrete per-frame specular resources and camera upload.
+    pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
     /// Frame-local lighting output. It is sampled by the composite pass before
@@ -84,6 +86,8 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
     pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
+    /// Concrete per-frame specular resources and camera upload.
+    pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
     pub(crate) scene_color: ForwardTexture<B>,

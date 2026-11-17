@@ -42,6 +42,7 @@ where
         selected
             .validate_for(&snapshot, view)
             .map_err(RendererError::ForwardPipeline)?;
+        let depth_mode = pipeline.forward_depth_mode(&selected);
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
@@ -58,13 +59,16 @@ where
         if receiver_input.extent() != extent {
             return Err(Error::InvalidRange.into());
         }
-        let capture_inputs = crate::preparation::prepare_forward_with_environment(
+        let capture_inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             assets,
             &mut fluxel_shader::ShaderComposer::new(),
             self.environment_irradiance.is_some(),
+            self.environment_specular.is_some(),
         )
         .map_err(RendererError::ForwardPreparation)?;
+        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs)
+            .map_err(RendererError::ForwardPipeline)?;
         let environment = self.environment_irradiance.clone().filter(|_| {
             capture_inputs
                 .iter()
@@ -76,6 +80,7 @@ where
             receiver_input,
             extent,
             topology,
+            depth_mode,
             assets,
             Some(image),
             preparation_started,
@@ -109,6 +114,7 @@ where
         selected
             .validate_for(&snapshot, view)
             .map_err(RendererError::ForwardPipeline)?;
+        let depth_mode = pipeline.forward_depth_mode(&selected);
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
@@ -117,11 +123,12 @@ where
                 crate::PipelineError::InvalidPhaseContribution,
             ));
         }
-        let capture_inputs = crate::preparation::prepare_forward_with_environment(
+        let capture_inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             assets,
             &mut fluxel_shader::ShaderComposer::new(),
             self.environment_irradiance.is_some(),
+            self.environment_specular.is_some(),
         )
         .map_err(RendererError::ForwardPreparation)?;
         let extent = selected.view_record().extent;
@@ -129,6 +136,8 @@ where
         if receiver_input.extent() != extent {
             return Err(Error::InvalidRange.into());
         }
+        let capture_inputs = super::composed::order_draws(pipeline, &selected, capture_inputs)
+            .map_err(RendererError::ForwardPipeline)?;
         let capture_environment = self.environment_irradiance.clone().filter(|_| {
             capture_inputs
                 .iter()
@@ -140,6 +149,7 @@ where
             receiver_input,
             extent,
             topology,
+            depth_mode,
             assets,
             None,
             preparation_started,

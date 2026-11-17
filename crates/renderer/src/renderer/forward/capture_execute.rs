@@ -22,6 +22,7 @@ where
         receiver_input: crate::ForwardDrawInput,
         extent: [u32; 2],
         capture_topology: crate::FrameTopology,
+        depth_mode: crate::ForwardDepthMode,
         assets: &crate::ForwardAssets,
         surface: Option<SurfaceImage<B>>,
         preparation_started: Instant,
@@ -44,6 +45,7 @@ where
                 capture_inputs,
                 extent,
                 capture_topology,
+                depth_mode,
                 assets,
                 None,
                 TextureFormat::Rgba8Unorm,
@@ -89,6 +91,7 @@ where
                 vec![receiver_input],
                 extent,
                 crate::FrameTopology::OpaqueForward,
+                depth_mode,
                 assets,
                 None,
                 TextureFormat::Rgba8Unorm,
@@ -230,6 +233,13 @@ where
             .await?;
         self.write_forward_upload(&capture.frame.upload, &capture.uniform_bytes)
             .await?;
+        for specular in [capture.specular.as_ref(), receiver.specular.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            self.write_forward_upload(&specular.upload, &specular.upload_bytes)
+                .await?;
+        }
         if let Some(environment) = capture.environment.as_ref() {
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;
@@ -342,6 +352,13 @@ where
             .await?;
         self.write_forward_upload(&capture.frame.upload, &capture.uniform_bytes)
             .await?;
+        for specular in [capture.specular.as_ref(), receiver.specular.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            self.write_forward_upload(&specular.upload, &specular.upload_bytes)
+                .await?;
+        }
         if let Some(environment) = capture.environment.as_ref() {
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;

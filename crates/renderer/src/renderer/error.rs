@@ -50,6 +50,8 @@ pub enum RendererError {
     ForwardPreparation(crate::ForwardPreparationError),
     /// Shared Material composition failed for the provisional Deferred target.
     DeferredMaterial(crate::MaterialPreparationError),
+    /// A renderer-owned Deferred lighting or composite shader failed logical composition.
+    DeferredShader(fluxel_shader::ShaderError),
     /// Deferred scene selection or real Graph phase contribution was rejected.
     DeferredPipeline(crate::PipelineError),
     /// Typed GPU deformation input did not belong to this frame or was rejected.
@@ -61,6 +63,13 @@ pub enum RendererError {
         /// The device operation being performed.
         operation: &'static str,
         /// The unmodified RHI failure.
+        error: Error,
+    },
+    /// A Deferred device or Graph operation failed with its original RHI error.
+    DeferredOperation {
+        /// The protected operation that failed.
+        operation: &'static str,
+        /// The unmodified RHI error.
         error: Error,
     },
     /// A capture receiver did not declare the explicitly requested texture slot.
@@ -124,11 +133,15 @@ impl fmt::Display for RendererError {
             Self::ForwardFeature(error) => error.fmt(formatter),
             Self::ForwardPreparation(error) => error.fmt(formatter),
             Self::DeferredMaterial(error) => error.fmt(formatter),
+            Self::DeferredShader(error) => error.fmt(formatter),
             Self::DeferredPipeline(error) => error.fmt(formatter),
             Self::DeferredFeature(error) => error.fmt(formatter),
             Self::DeformationShader(error) => error.fmt(formatter),
             Self::ForwardOperation { operation, error } => {
                 write!(formatter, "Forward {operation}: {error}")
+            }
+            Self::DeferredOperation { operation, error } => {
+                write!(formatter, "Deferred {operation}: {error}")
             }
             Self::MissingCaptureTextureSlot { name } => {
                 write!(formatter, "capture receiver is missing texture slot {name}")

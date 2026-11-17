@@ -5,3 +5,5 @@
 pub(crate) mod deferred_pool;
 pub(crate) mod forward;
 pub(crate) mod pool;
+
+pub(crate) mod specular_view;

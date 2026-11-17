@@ -21,6 +21,7 @@ pub(super) struct DeferredRecordView<'a, B: ResourceBackend> {
     pub(super) resident_upload: &'a ForwardResidentUpload,
     pub(super) uniform_upload: &'a ForwardUniformUpload,
     pub(super) environment: Option<&'a crate::residency::EnvironmentFrameOwner<B>>,
+    pub(super) specular: Option<&'a crate::residency::SpecularEnvironmentFrameOwner<B>>,
     pub(super) deformation: Option<&'a DeferredDeformation<B>>,
     pub(super) gbuffer: &'a [ForwardTexture<B>; 3],
     pub(super) effects: Option<&'a ForwardTexture<B>>,
@@ -49,6 +50,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             resident_upload: &frame.resident_upload,
             uniform_upload: &frame.uniform_upload,
             environment: frame.environment.as_ref(),
+            specular: frame.specular.as_ref(),
             deformation: frame.deformation.as_ref(),
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
@@ -70,6 +72,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             resident_upload: &frame.resident_upload,
             uniform_upload: &frame.uniform_upload,
             environment: frame.environment.as_ref(),
+            specular: frame.specular.as_ref(),
             deformation: frame.deformation.as_ref(),
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
@@ -105,6 +108,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         &'a self,
         view: &DeferredRecordView<'a, B>,
     ) -> Result<FrameBindings<'a, B>> {
+        if let Some(specular) = view.specular {
+            // Recheck the concrete owner immediately before converting Graph
+            // accesses into backend commands; declarations carry no identity.
+            specular.validate_for_sampling(self.id.device)?;
+        }
         match view.source {
             RecordSource::Offscreen(frame) => self.bindings(frame),
             RecordSource::Surface { frame, image } => {

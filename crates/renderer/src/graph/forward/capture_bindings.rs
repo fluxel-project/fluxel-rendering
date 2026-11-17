@@ -11,6 +11,9 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             (capture, &self.capture_shape, self.capture_topology),
             (receiver, &self.receiver_shape, self.receiver_topology),
         ] {
+            if let Some(owner) = frame.specular.as_ref() {
+                owner.validate_for_sampling(self.id.device)?;
+            }
             if frame.resident.device != self.id.device || forward_shape(frame) != *shape {
                 return Err(Error::InvalidState);
             }
@@ -42,6 +45,13 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             (&self.capture, capture, true),
             (&self.receiver, receiver, false),
         ] {
+            super::capture_specular_bindings::append(
+                slots,
+                frame.specular.as_ref(),
+                self.id.device,
+                &mut buffers,
+                &mut textures,
+            )?;
             let mut push_buffer = |slot, instance, buffer, desc, incoming| {
                 if self
                     .execution
@@ -127,6 +137,16 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
                 textures.push(BoundTexture::new(
                     slot,
                     owner.texture_instance,
+                    &owner.texture,
+                    &owner.desc,
+                    owner.incoming,
+                    owner.layout,
+                ));
+            }
+            if let (Some(slot), Some(owner)) = (slots.depth, frame.frame.depth.as_ref()) {
+                textures.push(BoundTexture::new(
+                    slot,
+                    owner.instance,
                     &owner.texture,
                     &owner.desc,
                     owner.incoming,

@@ -5,7 +5,9 @@
 mod deferred;
 mod deformation;
 mod environment;
+mod specular_environment;
 pub(crate) use deformation::{DeferredDeformation, DeformationAllocationPlan};
+pub(crate) use specular_environment::{SpecularEnvironmentFrameOwner, SpecularIblCopyFootprint};
 mod forward;
 pub(crate) use deferred::{
     DeferredDraw, DeferredFrame, DeferredSurfaceFrame, allocate_deferred_scene_color,
@@ -18,11 +20,11 @@ pub(crate) use forward_cache::{
 };
 mod upload;
 pub(crate) use forward::{
-    ForwardBindGroup, ForwardDraw, ForwardFrame, ForwardFrameBuffers, ForwardResidentBuffers,
-    ForwardResidentUpload, ForwardSampler, ForwardStreamInput, ForwardTexture, ForwardTextureInput,
-    ForwardTextureUpload, ForwardUniformUpload, ForwardVertexStream, SurfaceForwardFrame,
-    SurfaceForwardFrameBuffers, plan_forward_frame, plan_forward_resident,
-    plan_surface_forward_frame,
+    ForwardBindGroup, ForwardDepthAttachment, ForwardDraw, ForwardFrame, ForwardFrameBuffers,
+    ForwardResidentBuffers, ForwardResidentUpload, ForwardSampler, ForwardStreamInput,
+    ForwardTexture, ForwardTextureInput, ForwardTextureUpload, ForwardUniformUpload,
+    ForwardVertexStream, SurfaceForwardFrame, SurfaceForwardFrameBuffers, plan_forward_frame,
+    plan_forward_resident, plan_surface_forward_frame,
 };
 
 pub(crate) use upload::{

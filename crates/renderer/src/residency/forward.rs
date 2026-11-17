@@ -18,6 +18,10 @@ use fluxel_rhi::{
 
 use crate::graph::ResourceInstanceId;
 
+#[path = "forward_depth.rs"]
+mod forward_depth;
+pub(crate) use forward_depth::ForwardDepthAttachment;
+
 #[path = "forward_support.rs"]
 mod forward_support;
 pub(crate) use forward_support::{ForwardFramePlan, SurfaceForwardFramePlan};
@@ -127,6 +131,7 @@ pub(crate) struct ForwardFrameBuffers<B: ResourceBackend> {
     pub(crate) target_view: TextureView<B>,
     pub(crate) target_incoming: TextureUses,
     pub(crate) target_layout: ImageLayout,
+    pub(crate) depth: Option<ForwardDepthAttachment<B>>,
     pub(crate) readback: Buffer<B>,
     pub(crate) readback_desc: BufferDesc,
     pub(crate) readback_instance: ResourceInstanceId,
@@ -144,6 +149,7 @@ pub(crate) struct SurfaceForwardFrameBuffers<B: ResourceBackend> {
     pub(crate) uniform_desc: BufferDesc,
     pub(crate) uniform_instance: ResourceInstanceId,
     pub(crate) uniform_incoming: BufferUses,
+    pub(crate) depth: Option<ForwardDepthAttachment<B>>,
 }
 
 /// One source-to-device dynamic-uniform copy.
@@ -196,6 +202,8 @@ pub(crate) struct ForwardFrame<B: ResourceBackend> {
     /// Optional scene-selected diffuse irradiance owner. This is deliberately
     /// frame-local: selection may change while earlier submissions are pending.
     pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
+    /// Concrete per-frame specular resources and camera upload.
+    pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) draws: Vec<ForwardDraw<B>>,
     /// Contiguous draw ranges that share one raster program without changing
     /// the prepared candidate order.
@@ -214,6 +222,8 @@ pub(crate) struct SurfaceForwardFrame<B: ResourceBackend> {
     /// Optional scene-selected diffuse irradiance owner retained until the
     /// submission's presentation completion covers its final use.
     pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
+    /// Concrete per-frame specular resources and camera upload.
+    pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) draws: Vec<ForwardDraw<B>>,
     pub(crate) draw_batches: Vec<Range<usize>>,
     pub(crate) extent: [u32; 2],
@@ -442,6 +452,7 @@ impl<B: ResourceBackend> ForwardFrameBuffers<B> {
                 target_view,
                 target_incoming: empty_texture_uses(),
                 target_layout: ImageLayout::Undefined,
+                depth: None,
                 readback,
                 readback_desc: plan.readback_desc,
                 readback_instance: ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
@@ -539,6 +550,7 @@ impl<B: ResourceBackend> SurfaceForwardFrameBuffers<B> {
                 uniform_desc: plan.uniform_desc,
                 uniform_instance: ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
                 uniform_incoming: empty_buffer_uses(),
+                depth: None,
             },
             plan.uniform_upload,
         ))

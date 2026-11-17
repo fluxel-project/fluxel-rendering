@@ -17,9 +17,15 @@ where
         prepared: &PreparedMaterial,
         color_format: TextureFormat,
         transform_uniform_bytes: u64,
+        depth_mode: crate::ForwardDepthMode,
     ) -> std::result::Result<Arc<ForwardPipelineObjects<B>>, RendererError> {
         self.ensure_open()?;
-        let key = ForwardProgramKey::for_material(prepared, color_format, transform_uniform_bytes);
+        let key = ForwardProgramKey::for_material(
+            prepared,
+            color_format,
+            transform_uniform_bytes,
+            depth_mode,
+        );
         if let Some(objects) = self.forward_programs.get(&key) {
             return Ok(Arc::clone(objects));
         }
@@ -27,6 +33,7 @@ where
         // This preparation fact originates in the renderer-owned composition
         // request, so comments or material source cannot fabricate group two.
         let uses_environment = prepared.uses_environment_irradiance();
+        let uses_specular = prepared.uses_specular_ibl();
         let vertex = artifact
             .entry_point(fluxel_shader::ShaderStage::Vertex)
             .ok_or(Error::InvalidState)?
@@ -161,36 +168,15 @@ where
                 }],
             })
             .map_err(|error| self.observe_forward_error("transform layout", error))?;
-        let environment_layout = if uses_environment {
+        let environment_layout = if uses_environment || uses_specular {
             Some(
                 self.device
                     .create_bind_group_layout(&BindGroupLayoutDesc {
-                        label: Some("Forward environment irradiance bindings".into()),
-                        entries: vec![
-                            BindGroupLayoutEntry {
-                                binding: 0,
-                                visibility: vec![ShaderStage::Fragment],
-                                ty: BindingType::SampledTexture {
-                                    sample: TextureSampleType::Float,
-                                    dimension: TextureViewDimension::D2,
-                                    multisampled: false,
-                                },
-                                count: BindingCount::One,
-                                partially_bound: false,
-                                nonuniform_indexing: false,
-                            },
-                            BindGroupLayoutEntry {
-                                binding: 1,
-                                visibility: vec![ShaderStage::Fragment],
-                                ty: BindingType::Sampler {
-                                    filtering: true,
-                                    comparison: false,
-                                },
-                                count: BindingCount::One,
-                                partially_bound: false,
-                                nonuniform_indexing: false,
-                            },
-                        ],
+                        label: Some("Forward PBR environment bindings".into()),
+                        entries: crate::renderer::lighting::layout_entries(
+                            uses_environment,
+                            uses_specular,
+                        ),
                     })
                     .map_err(|error| self.observe_forward_error("environment layout", error))?,
             )
@@ -239,7 +225,7 @@ where
                     polygon_mode: PolygonMode::Fill,
                     conservative: false,
                 },
-                depth_stencil: None,
+                depth_stencil: super::depth::pipeline_depth(depth_mode),
                 multisample: MultisampleState {
                     count: 1,
                     mask: u64::from(u32::MAX),

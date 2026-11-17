@@ -1,6 +1,6 @@
 //! Compiled-plan and concrete-owner validation for the Deferred probe.
 
-use super::declaration::{
+use super::declaration_validation::{
     matches_final_target_template, matches_gbuffer_template, validate_deformation,
     validate_draw_uniforms, validate_uploads,
 };
@@ -85,6 +85,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             texture_slot: declaration.texture_slot,
             environment_upload_slot: declaration.environment_upload_slot,
             environment_slot: declaration.environment_slot,
+            specular_upload_slot: declaration.specular_upload_slot,
+            specular_view_uniform_slot: declaration.specular_view_uniform_slot,
+            specular_radiance_slot: declaration.specular_radiance_slot,
+            specular_brdf_lut_slot: declaration.specular_brdf_lut_slot,
             gbuffer_slots: declaration.gbuffer_slots,
             effects_slot: declaration.effects_slot,
             scene_color_slot: declaration.scene_color_slot,
@@ -148,6 +152,16 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .map(|slot| slot.resource)
             || self.environment_slot.map(|slot| slot.resource)
                 != declaration.environment_slot.map(|slot| slot.resource)
+            || self.specular_upload_slot.map(|slot| slot.resource)
+                != declaration.specular_upload_slot.map(|slot| slot.resource)
+            || self.specular_view_uniform_slot.map(|slot| slot.resource)
+                != declaration
+                    .specular_view_uniform_slot
+                    .map(|slot| slot.resource)
+            || self.specular_radiance_slot.map(|slot| slot.resource)
+                != declaration.specular_radiance_slot.map(|slot| slot.resource)
+            || self.specular_brdf_lut_slot.map(|slot| slot.resource)
+                != declaration.specular_brdf_lut_slot.map(|slot| slot.resource)
             || self.gbuffer_slots.map(|slot| slot.resource)
                 != declaration.gbuffer_slots.map(|slot| slot.resource)
             || self.effects_slot.map(|slot| slot.resource)
@@ -293,6 +307,16 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if self.deformation_pass.is_some() != frame.deformation.is_some() {
             return Err(Error::InvalidState);
         }
+        if self.specular_upload_slot.is_some() != frame.specular.is_some()
+            || self.specular_view_uniform_slot.is_some() != frame.specular.is_some()
+            || self.specular_radiance_slot.is_some() != frame.specular.is_some()
+            || self.specular_brdf_lut_slot.is_some() != frame.specular.is_some()
+        {
+            return Err(Error::InvalidState);
+        }
+        if let Some(specular) = &frame.specular {
+            specular.validate_for_sampling(self.id.device)?;
+        }
         if !frame.scene_color.filterable {
             return Err(Error::Unsupported("filterable Deferred scene-color"));
         }
@@ -421,168 +445,6 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .map(|point| point.point.clone())
             .ok_or(Error::InvalidState)
-    }
-
-    pub(super) fn bindings<'a>(
-        &'a self,
-        frame: &'a DeferredFrame<B>,
-    ) -> Result<FrameBindings<'a, B>> {
-        let uses_buffer = |slot| {
-            self.execution
-                .logical()
-                .buffer_bindings()
-                .requirements()
-                .iter()
-                .any(|requirement| requirement.slot == slot)
-        };
-        let mut buffers = vec![
-            BoundBuffer::new(
-                self.frame_upload_slot,
-                frame.frame.upload_instance,
-                &frame.frame.upload,
-                &frame.frame.upload_desc,
-                frame.frame.upload_incoming,
-            ),
-            BoundBuffer::new(
-                self.uniform_slot,
-                frame.frame.uniform_instance,
-                &frame.frame.uniform,
-                &frame.frame.uniform_desc,
-                frame.frame.uniform_incoming,
-            ),
-            BoundBuffer::new(
-                self.readback_slot.ok_or(Error::InvalidState)?,
-                frame.frame.readback_instance,
-                &frame.frame.readback,
-                &frame.frame.readback_desc,
-                frame.frame.readback_incoming,
-            ),
-        ];
-        if uses_buffer(self.resident_upload_slot) {
-            buffers.push(BoundBuffer::new(
-                self.resident_upload_slot,
-                frame.resident.upload_instance,
-                &frame.resident.upload,
-                &frame.resident.upload_desc,
-                frame.resident.upload_incoming,
-            ));
-        }
-        if let (Some(slot), Some(environment)) = (self.environment_upload_slot, &frame.environment)
-        {
-            if uses_buffer(slot) {
-                buffers.push(BoundBuffer::new(
-                    slot,
-                    environment.upload_instance,
-                    &environment.upload,
-                    &environment.upload_desc,
-                    environment.upload_incoming,
-                ));
-            }
-        }
-        for (slot, stream) in self
-            .stream_slots
-            .iter()
-            .copied()
-            .zip(&frame.resident.streams)
-        {
-            if uses_buffer(slot) {
-                buffers.push(BoundBuffer::new(
-                    slot,
-                    stream.instance,
-                    &stream.buffer,
-                    &stream.desc,
-                    stream.incoming,
-                ));
-            }
-        }
-        if let (Some(slots), Some(deformation)) = (self.deformation_slots, &frame.deformation) {
-            for (slot, owner) in [
-                (slots[0], &deformation.upload),
-                (slots[1], &deformation.source),
-                (slots[2], &deformation.product),
-                (slots[3], &deformation.parameters),
-            ] {
-                if uses_buffer(slot) {
-                    buffers.push(BoundBuffer::new(
-                        slot,
-                        owner.instance,
-                        &owner.buffer,
-                        &owner.desc,
-                        owner.incoming,
-                    ));
-                }
-            }
-        }
-        let textures =
-            std::iter::once(BoundTexture::new(
-                self.texture_slot,
-                frame.resident.textures[0].instance,
-                &frame.resident.textures[0].texture,
-                &frame.resident.textures[0].desc,
-                frame.resident.textures[0].incoming,
-                frame.resident.textures[0].layout,
-            ))
-            .chain(
-                self.gbuffer_slots
-                    .iter()
-                    .copied()
-                    .zip(&frame.gbuffer)
-                    .map(|(slot, texture)| {
-                        BoundTexture::new(
-                            slot,
-                            texture.instance,
-                            &texture.texture,
-                            &texture.desc,
-                            texture.incoming,
-                            texture.layout,
-                        )
-                    }),
-            )
-            .chain(
-                self.effects_slot
-                    .zip(frame.effects.as_ref())
-                    .map(|(slot, texture)| {
-                        BoundTexture::new(
-                            slot,
-                            texture.instance,
-                            &texture.texture,
-                            &texture.desc,
-                            texture.incoming,
-                            texture.layout,
-                        )
-                    }),
-            )
-            .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
-                |(slot, environment)| {
-                    BoundTexture::new(
-                        slot,
-                        environment.texture_instance,
-                        &environment.texture,
-                        &environment.desc,
-                        environment.incoming,
-                        environment.layout,
-                    )
-                },
-            ))
-            .chain(std::iter::once(BoundTexture::new(
-                self.scene_color_slot.ok_or(Error::InvalidState)?,
-                frame.scene_color.instance,
-                &frame.scene_color.texture,
-                &frame.scene_color.desc,
-                frame.scene_color.incoming,
-                frame.scene_color.layout,
-            )))
-            .chain(std::iter::once(BoundTexture::new(
-                self.target_slot.ok_or(Error::InvalidState)?,
-                frame.frame.target_instance,
-                &frame.frame.target,
-                &frame.frame.target_desc,
-                frame.frame.target_incoming,
-                frame.frame.target_layout,
-            )))
-            .collect();
-        FrameBindings::new(&self.execution, self.id.device, buffers, textures)
-            .map_err(binding_error)
     }
 }
 

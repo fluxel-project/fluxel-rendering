@@ -31,10 +31,22 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 != declaration
                     .environment_upload_slot
                     .map(|slot| slot.resource)
+            || self.specular_upload_slot.map(|slot| slot.resource)
+                != declaration.specular_upload_slot.map(|slot| slot.resource)
+            || self.specular_view_uniform_slot.map(|slot| slot.resource)
+                != declaration
+                    .specular_view_uniform_slot
+                    .map(|slot| slot.resource)
             || !same_buffer_slots(&self.stream_slots, &declaration.stream_slots)
             || !same_texture_slots(&self.texture_slots, &declaration.texture_slots)
             || self.environment_slot.map(|slot| slot.resource)
                 != declaration.environment_slot.map(|slot| slot.resource)
+            || self.specular_radiance_slot.map(|slot| slot.resource)
+                != declaration.specular_radiance_slot.map(|slot| slot.resource)
+            || self.specular_brdf_lut_slot.map(|slot| slot.resource)
+                != declaration.specular_brdf_lut_slot.map(|slot| slot.resource)
+            || self.depth_slot.map(|slot| slot.resource)
+                != declaration.depth_slot.map(|slot| slot.resource)
             || self.surface_target_slot.resource != declaration.surface_target_slot.resource
             || self.extent != declaration.extent
             || self.draw_count != declaration.draw_count
@@ -90,9 +102,14 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             frame_upload_slot: declaration.frame_upload_slot,
             uniform_slot: declaration.uniform_slot,
             environment_upload_slot: declaration.environment_upload_slot,
+            specular_upload_slot: declaration.specular_upload_slot,
+            specular_view_uniform_slot: declaration.specular_view_uniform_slot,
             stream_slots: declaration.stream_slots,
             texture_slots: declaration.texture_slots,
             environment_slot: declaration.environment_slot,
+            specular_radiance_slot: declaration.specular_radiance_slot,
+            specular_brdf_lut_slot: declaration.specular_brdf_lut_slot,
+            depth_slot: declaration.depth_slot,
             surface_target_slot: declaration.surface_target_slot,
             extent: declaration.extent,
             draw_count: declaration.draw_count,
@@ -145,6 +162,9 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         validate_surface_uploads(frame)?;
         if let Some(environment) = frame.environment.as_ref() {
             environment.validate_for_sampling(self.id.device)?;
+        }
+        if let Some(specular) = frame.specular.as_ref() {
+            specular.validate_for_sampling(self.id.device)?;
         }
         validate_surface_batches(frame)?;
         for draw in &frame.draws {
@@ -216,6 +236,26 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 owner.upload_incoming,
             ));
         }
+        if let (Some(upload_slot), Some(uniform_slot), Some(owner)) = (
+            self.specular_upload_slot,
+            self.specular_view_uniform_slot,
+            frame.specular.as_ref(),
+        ) {
+            buffers.push(BoundBuffer::new(
+                upload_slot,
+                owner.upload_instance,
+                &owner.upload,
+                &owner.upload_desc,
+                owner.upload_incoming,
+            ));
+            buffers.push(BoundBuffer::new(
+                uniform_slot,
+                owner.view_uniform_instance,
+                &owner.view_uniform,
+                &owner.view_uniform_desc,
+                owner.view_uniform_incoming,
+            ));
+        }
         for (slot, stream) in self
             .stream_slots
             .iter()
@@ -263,6 +303,48 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                         )
                     },
                 ))
+                .chain(
+                    self.specular_radiance_slot
+                        .zip(frame.specular.as_ref())
+                        .map(|(slot, owner)| {
+                            BoundTexture::new(
+                                slot,
+                                owner.radiance.instance,
+                                &owner.radiance.texture,
+                                &owner.radiance.desc,
+                                owner.radiance.incoming,
+                                owner.radiance.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.specular_brdf_lut_slot
+                        .zip(frame.specular.as_ref())
+                        .map(|(slot, owner)| {
+                            BoundTexture::new(
+                                slot,
+                                owner.brdf_lut.instance,
+                                &owner.brdf_lut.texture,
+                                &owner.brdf_lut.desc,
+                                owner.brdf_lut.incoming,
+                                owner.brdf_lut.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.depth_slot
+                        .zip(frame.frame.depth.as_ref())
+                        .map(|(slot, owner)| {
+                            BoundTexture::new(
+                                slot,
+                                owner.instance,
+                                &owner.texture,
+                                &owner.desc,
+                                owner.incoming,
+                                owner.layout,
+                            )
+                        }),
+                )
                 .collect(),
             vec![lease],
         )

@@ -178,6 +178,7 @@ where
         &mut self,
         pbr: bool,
         use_environment: bool,
+        use_specular: bool,
         effects: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<Arc<LightingProgram<B>>, RendererError> {
@@ -218,9 +219,14 @@ where
                     .with_visibility([LogicalShaderStage::Fragment]),
             )
         };
+        let request = if use_specular {
+            crate::pbr::specular::deferred_specular_request(request)
+        } else {
+            request
+        };
         let artifact = fluxel_shader::ShaderComposer::new()
             .compose(&request)
-            .map_err(|_| Error::InvalidState)?;
+            .map_err(RendererError::DeferredShader)?;
         let key = program_cache::LightingProgramKey::for_artifact(
             self.device.id(),
             artifact.cache_key().clone(),
@@ -290,15 +296,15 @@ where
                 },
             })
             .map_err(|error| self.observe_rhi_error(error))?;
-        let environment_layout = if use_environment {
+        let environment_layout = if use_environment || use_specular {
             Some(
                 self.device
                     .create_bind_group_layout(&BindGroupLayoutDesc {
-                        label: Some("Deferred environment irradiance bindings".into()),
-                        entries: vec![
-                            sampled_texture(0, TextureSampleType::Float),
-                            ordinary_sampler(1),
-                        ],
+                        label: Some("Deferred PBR environment bindings".into()),
+                        entries: crate::renderer::lighting::layout_entries(
+                            use_environment,
+                            use_specular,
+                        ),
                     })
                     .map_err(|error| self.observe_rhi_error(error))?,
             )
@@ -380,7 +386,7 @@ where
         );
         let artifact = fluxel_shader::ShaderComposer::new()
             .compose(&request)
-            .map_err(|_| Error::InvalidState)?;
+            .map_err(RendererError::DeferredShader)?;
         let vertex = artifact
             .entry_point(LogicalShaderStage::Vertex)
             .ok_or(Error::InvalidState)?

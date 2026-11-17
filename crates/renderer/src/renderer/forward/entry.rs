@@ -97,17 +97,19 @@ where
                 return Err(Error::InvalidRange.into());
             }
         }
+        let depth_mode = pipeline.forward_depth_mode(&selected);
         let topology = pipeline
             .topology(&selected)
             .map_err(RendererError::ForwardPipeline)?;
         let use_environment = self.environment_irradiance.is_some();
         let prepared_inputs = match topology {
             crate::FrameTopology::OpaqueForward => {
-                crate::preparation::prepare_forward_with_environment(
+                crate::preparation::prepare_forward_with_lighting(
                     &selected,
                     assets,
                     &mut fluxel_shader::ShaderComposer::new(),
                     use_environment,
+                    self.environment_specular.is_some(),
                 )
                 .map_err(RendererError::ForwardPreparation)?
             }
@@ -118,6 +120,8 @@ where
                 ));
             }
         };
+        let prepared_inputs = super::composed::order_draws(pipeline, &selected, prepared_inputs)
+            .map_err(RendererError::ForwardPipeline)?;
         let environment_snapshot = self.environment_irradiance.clone().filter(|_| {
             prepared_inputs
                 .iter()
@@ -128,6 +132,7 @@ where
             prepared_inputs,
             extent,
             topology,
+            depth_mode,
             assets,
             surface,
             color_format,

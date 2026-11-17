@@ -90,6 +90,21 @@ where
         effects: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<DeferredSurfaceFrame<B>, RendererError> {
+        let specular = if pbr {
+            self.environment_specular
+                .as_ref()
+                .map(|snapshot| {
+                    crate::renderer::lighting::allocate_specular(
+                        &self.device,
+                        snapshot,
+                        input.view(),
+                    )
+                })
+                .transpose()
+                .map_err(|error| self.observe_rhi_error(error))?
+        } else {
+            None
+        };
         let limits = self.device.capabilities().limits;
         let ordinary_sampler =
             crate::renderer::forward::material_requires_ordinary_sampler(prepared);
@@ -239,6 +254,7 @@ where
             .deferred_lighting_program(
                 pbr,
                 environment.is_some(),
+                specular.is_some(),
                 effects,
                 TextureFormat::Rgba8Unorm,
             )
@@ -373,29 +389,21 @@ where
                 .validate_for_sampling(self.device.id())
                 .map_err(|error| self.observe_rhi_error(error))?;
         }
-        let lighting_environment_group = match (&lighting_program.environment_layout, &environment)
-        {
-            (Some(layout), Some(environment)) => Some(
-                self.device
-                    .create_bind_group(&BindGroupDesc {
-                        label: Some("Deferred surface environment irradiance"),
-                        layout,
-                        entries: &[
-                            BindGroupEntry {
-                                binding: 0,
-                                resource: BindingResource::TextureView(&environment.view),
-                            },
-                            BindGroupEntry {
-                                binding: 1,
-                                resource: BindingResource::Sampler(&environment.sampler),
-                            },
-                        ],
-                    })
-                    .map_err(|error| self.observe_rhi_error(error))?,
-            ),
-            (None, None) => None,
-            _ => return Err(Error::InvalidState.into()),
-        };
+        let lighting_environment_group = lighting_program
+            .environment_layout
+            .as_ref()
+            .map(|layout| {
+                crate::renderer::lighting::bind_group(
+                    &self.device,
+                    layout,
+                    environment.as_ref(),
+                    specular.as_ref(),
+                    environment.is_some(),
+                    specular.is_some(),
+                )
+            })
+            .transpose()
+            .map_err(|error| self.observe_rhi_error(error))?;
         let composite_group = self
             .device
             .create_bind_group(&BindGroupDesc {
@@ -454,6 +462,7 @@ where
             uniform_upload,
             uniform_bytes: uniforms.bytes,
             environment,
+            specular,
             gbuffer,
             effects: effects_attachment,
             scene_color,

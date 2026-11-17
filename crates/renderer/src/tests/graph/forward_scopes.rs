@@ -1,13 +1,15 @@
 //! Forward scoped-read state-machine tests using a real Graph transaction.
 
 use super::super::phase::{
-    COLOR_WRITE, TEXTURE_READS, UNIFORM_READS, UPLOAD_DEPENDENCY, VERTEX_READS,
+    COLOR_WRITE, DEPTH_WRITE, TEXTURE_READS, UNIFORM_READS, UPLOAD_DEPENDENCY, VERTEX_READS,
     opaque_requirements_met,
 };
+use super::super::{depth_write_uses, whole_depth};
 use super::*;
 use crate::graph::definition::GraphBuilder;
 use fluxel_rhi::api::{
-    TextureDesc, TextureDimension, TextureFormat, TextureUsage, VertexBufferLayout, VertexStepMode,
+    AccessMask, ImageLayout, StageMask, TextureDesc, TextureDimension, TextureFormat, TextureUsage,
+    TextureUses, VertexBufferLayout, VertexStepMode,
 };
 
 fn empty_reads(graph: &mut GraphBuilder) -> ForwardReadState {
@@ -73,11 +75,13 @@ fn empty_legacy_opaque_rejects_omitted_read_declarations() {
     let reads = empty_reads(&mut graph);
     assert!(!opaque_requirements_met(
         UPLOAD_DEPENDENCY | COLOR_WRITE,
-        &reads
+        &reads,
+        false,
     ));
     assert!(opaque_requirements_met(
         UPLOAD_DEPENDENCY | COLOR_WRITE | VERTEX_READS | UNIFORM_READS | TEXTURE_READS,
-        &reads
+        &reads,
+        false,
     ));
 }
 
@@ -102,7 +106,8 @@ fn completed_reads_without_scope_finish_are_rejected() {
             assert!(!reads.complete());
             assert!(!opaque_requirements_met(
                 UPLOAD_DEPENDENCY | COLOR_WRITE,
-                &reads
+                &reads,
+                false,
             ));
             Ok(())
         })
@@ -137,11 +142,74 @@ fn finished_empty_scope_satisfies_scoped_opaque_reads() {
             assert!(reads.complete());
             assert!(opaque_requirements_met(
                 UPLOAD_DEPENDENCY | COLOR_WRITE,
-                &reads
+                &reads,
+                false,
             ));
             Ok(())
         })
         .expect("real Graph transaction remains valid");
+}
+
+#[test]
+fn enabled_depth_rejects_omitted_write_and_accepts_the_depth_declaration() {
+    let mut graph = GraphBuilder::default();
+    let reads = empty_reads(&mut graph);
+    let common = UPLOAD_DEPENDENCY | COLOR_WRITE | VERTEX_READS | UNIFORM_READS | TEXTURE_READS;
+
+    assert!(
+        !opaque_requirements_met(common, &reads, true),
+        "a selected depth owner must not silently omit its Graph write"
+    );
+    assert!(
+        opaque_requirements_met(common | DEPTH_WRITE, &reads, true),
+        "the selected depth write is the sole additional opaque requirement"
+    );
+    assert!(
+        !opaque_requirements_met(common | DEPTH_WRITE, &reads, false),
+        "disabled depth rejects an extra undeclared attachment access"
+    );
+}
+
+#[test]
+fn selected_depth_write_is_a_real_depth_aspect_graph_access() {
+    let mut graph = GraphBuilder::default();
+    let depth = graph
+        .import_texture_with_state(
+            TextureDesc {
+                label: None,
+                dimension: TextureDimension::D2,
+                extent: [1, 1, 1],
+                array_layers: 1,
+                format: TextureFormat::Depth32Float,
+                mip_levels: 1,
+                samples: 1,
+                usage: TextureUsage::RENDER_ATTACHMENT,
+                view_formats: Vec::new(),
+            },
+            TextureUses {
+                stages: StageMask::EMPTY,
+                accesses: AccessMask::EMPTY,
+            },
+            ImageLayout::Undefined,
+        )
+        .expect("depth owner import");
+    let (pass, _) = graph
+        .add_pass("forward-selected-depth", |pass| {
+            pass.write_texture_with_use(
+                depth,
+                whole_depth(),
+                depth_write_uses().uses,
+                ImageLayout::DepthStencilAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )
+        })
+        .expect("depth declaration");
+    let access = graph.passes[pass.1]
+        .texture_accesses
+        .first()
+        .expect("exactly one depth access");
+    assert_eq!(access.range, whole_depth());
+    assert_eq!(access.contract, Some(depth_write_uses()));
 }
 
 #[test]

@@ -360,6 +360,7 @@ fn invalid_adapter_values_are_refused() {
             &[RenderChange::InsertView(RenderView {
                 transform: RenderTransform::identity(),
                 extent: [0, 1],
+                shading_camera: None,
             })]
             .into_iter()
             .collect(),

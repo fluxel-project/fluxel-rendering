@@ -13,9 +13,8 @@ use crate::{
 
 use super::{
     BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError, GraphBuilder,
-    GraphPass, TextureSlot, copy_read_uses, copy_write_uses, graph_texture_copy_end,
-    texture_copy_read_uses, texture_copy_write_uses, validate_forward_topology,
-    validate_graph_draw, whole,
+    GraphPass, TextureSlot, copy_write_uses, texture_copy_read_uses, validate_depth_spec,
+    validate_forward_topology, validate_graph_draw, whole,
 };
 
 /// All Graph slots imported for one Forward frame namespace.
@@ -24,9 +23,14 @@ pub(super) struct CaptureFrameSlots {
     pub(super) frame_upload: BufferSlot,
     pub(super) uniform: BufferSlot,
     pub(super) environment_upload: Option<BufferSlot>,
+    pub(super) specular_upload: Option<BufferSlot>,
+    pub(super) specular_view_uniform: Option<BufferSlot>,
     pub(super) streams: Vec<BufferSlot>,
     pub(super) textures: Vec<TextureSlot>,
     pub(super) environment: Option<TextureSlot>,
+    pub(super) specular_radiance: Option<TextureSlot>,
+    pub(super) specular_brdf_lut: Option<TextureSlot>,
+    pub(super) depth: Option<TextureSlot>,
     pub(super) target: TextureSlot,
     pub(super) readback: BufferSlot,
 }
@@ -186,9 +190,14 @@ pub(super) struct FrameHandles {
     pub(super) frame_upload: crate::graph::definition::BufferHandle,
     pub(super) uniform: crate::graph::definition::BufferHandle,
     pub(super) environment_upload: Option<crate::graph::definition::BufferHandle>,
+    pub(super) specular_upload: Option<crate::graph::definition::BufferHandle>,
+    pub(super) specular_view_uniform: Option<crate::graph::definition::BufferHandle>,
     pub(super) streams: Vec<crate::graph::definition::BufferHandle>,
     pub(super) textures: Vec<crate::graph::definition::TextureHandle>,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_radiance: Option<crate::graph::definition::TextureHandle>,
+    pub(super) specular_brdf_lut: Option<crate::graph::definition::TextureHandle>,
+    pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) target: crate::graph::definition::TextureHandle,
     pub(super) readback: crate::graph::definition::BufferHandle,
 }
@@ -204,6 +213,10 @@ pub(super) fn validate_spec<B: ResourceBackend>(
         return Err(Error::InvalidRange.into());
     }
     validate_forward_topology(topology, spec.draws.len(), spec.shape.batches.len())?;
+    validate_depth_spec(spec)?;
+    if spec.depth.is_some() && topology != FrameTopology::OpaqueForward {
+        return Err(Error::InvalidState.into());
+    }
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
         if (!receiver && draw.texture >= spec.textures.len())
@@ -245,6 +258,42 @@ pub(super) fn import_frame(
                 .map_err(|_| Error::InvalidState)
         })
         .transpose()?;
+    let specular_upload = spec
+        .specular_upload
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_buffer_desc(owner.desc.clone(), owner.incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let specular_view_uniform = spec
+        .specular_view_uniform
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_buffer_desc(owner.desc.clone(), owner.incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let specular_radiance = spec
+        .specular_radiance
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let specular_brdf_lut = spec
+        .specular_brdf_lut
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let streams = spec
         .streams
         .iter()
@@ -282,6 +331,15 @@ pub(super) fn import_frame(
             spec.target.layout,
         )
         .map_err(|_| Error::InvalidState)?;
+    let depth = spec
+        .depth
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let readback = graph
         .import_buffer_desc(spec.readback.desc.clone(), spec.readback.incoming)
         .map_err(|_| Error::InvalidState)?;
@@ -290,9 +348,14 @@ pub(super) fn import_frame(
         frame_upload: BufferSlot::from(frame_upload),
         uniform: BufferSlot::from(uniform),
         environment_upload: environment_upload.map(BufferSlot::from),
+        specular_upload: specular_upload.map(BufferSlot::from),
+        specular_view_uniform: specular_view_uniform.map(BufferSlot::from),
         streams: streams.iter().copied().map(BufferSlot::from).collect(),
         textures: textures.iter().copied().map(TextureSlot::from).collect(),
         environment: environment.map(TextureSlot::from),
+        specular_radiance: specular_radiance.map(TextureSlot::from),
+        specular_brdf_lut: specular_brdf_lut.map(TextureSlot::from),
+        depth: depth.map(TextureSlot::from),
         target: TextureSlot::from(target),
         readback: BufferSlot::from(readback),
     };
@@ -303,113 +366,21 @@ pub(super) fn import_frame(
             frame_upload,
             uniform,
             environment_upload,
+            specular_upload,
+            specular_view_uniform,
+            specular_radiance,
+            specular_brdf_lut,
             streams,
             textures,
             environment,
+            depth,
             target,
             readback,
         },
     ))
 }
 
-pub(super) fn declare_upload(
-    graph: &mut GraphBuilder,
-    spec: &ForwardGraphSpec,
-    handles: FrameHandles,
-) -> std::result::Result<(GraphPass, FrameHandles), ForwardPlanBuildError> {
-    let ends = spec
-        .texture_uploads
-        .iter()
-        .map(graph_texture_copy_end)
-        .collect::<Result<Vec<_>>>()?;
-    let (pass, (streams, uniform, textures, environment)) = graph
-        .add_pass("forward-capture-upload", |pass| {
-            let mut streams = handles.streams.clone();
-            for upload in &spec.vertex_uploads {
-                let stream = *streams
-                    .get(upload.stream)
-                    .ok_or(crate::graph::definition::GraphError::InvalidRange)?;
-                pass.read_with_use(
-                    handles.resident_upload,
-                    upload.source.clone(),
-                    copy_read_uses().uses,
-                    BufferUsage::COPY_SRC,
-                )?;
-                streams[upload.stream] = pass.write_with_use(
-                    stream,
-                    upload.destination.clone(),
-                    copy_write_uses().uses,
-                    BufferUsage::COPY_DST,
-                )?;
-            }
-            pass.read_with_use(
-                handles.frame_upload,
-                spec.uniform_upload.source.clone(),
-                copy_read_uses().uses,
-                BufferUsage::COPY_SRC,
-            )?;
-            let uniform = pass.write_with_use(
-                handles.uniform,
-                spec.uniform_upload.destination.clone(),
-                copy_write_uses().uses,
-                BufferUsage::COPY_DST,
-            )?;
-            let mut textures = handles.textures.clone();
-            for (upload, end) in spec.texture_uploads.iter().zip(ends) {
-                let texture = *textures
-                    .get(upload.texture)
-                    .ok_or(crate::graph::definition::GraphError::InvalidRange)?;
-                pass.read_with_use(
-                    handles.resident_upload,
-                    upload.source_offset..end,
-                    copy_read_uses().uses,
-                    BufferUsage::COPY_SRC,
-                )?;
-                textures[upload.texture] = pass.write_texture_with_use(
-                    texture,
-                    whole(),
-                    texture_copy_write_uses().uses,
-                    ImageLayout::CopyDst,
-                    TextureUsage::COPY_DST,
-                )?;
-            }
-            let environment = match (
-                handles.environment,
-                handles.environment_upload,
-                &spec.environment_copy,
-            ) {
-                (Some(texture), Some(upload), Some(copy)) => {
-                    pass.read_with_use(
-                        upload,
-                        0..u64::from(copy.bytes_per_row) * u64::from(copy.rows_per_image),
-                        copy_read_uses().uses,
-                        BufferUsage::COPY_SRC,
-                    )?;
-                    Some(pass.write_texture_with_use(
-                        texture,
-                        whole(),
-                        texture_copy_write_uses().uses,
-                        ImageLayout::CopyDst,
-                        TextureUsage::COPY_DST,
-                    )?)
-                }
-                (None, None, None) => None,
-                _ => return Err(crate::graph::definition::GraphError::InvalidRange),
-            };
-            Ok((streams, uniform, textures, environment))
-        })
-        .map_err(|_| Error::InvalidState)?;
-    Ok((
-        pass,
-        FrameHandles {
-            streams,
-            uniform,
-            textures,
-            environment,
-            ..handles
-        },
-    ))
-}
+pub(super) use super::capture_upload::declare_upload;
 
 pub(super) fn declare_raster<B, F>(
     graph: &mut GraphBuilder,
@@ -432,6 +403,14 @@ where
         uniform: Some(handles.uniform),
         textures: handles.textures.clone(),
         environment: handles.environment,
+        specular_radiance: handles.specular_radiance,
+        specular_brdf_lut: handles.specular_brdf_lut,
+        specular_view_uniform: handles.specular_view_uniform,
+        specular_mip_levels: spec
+            .specular_radiance
+            .as_ref()
+            .map(|owner| owner.desc.mip_levels),
+        depth: handles.depth,
         target: handles.target,
         draws: spec.draws.clone(),
         declared: false,

@@ -21,6 +21,10 @@ pub(crate) fn recycle<B: ResourceBackend>(
     mut buffers: ForwardFrameBuffers<B>,
     had_draws: bool,
 ) -> ForwardFrameBuffers<B> {
+    // A selected depth attachment has no established post-use state or reuse
+    // contract yet. Drop it at retirement rather than publishing it through
+    // the color-only frame pool.
+    buffers.depth = None;
     buffers.upload_incoming = copy_read_uses();
     buffers.uniform_incoming = if had_draws {
         uniform_read_uses()
@@ -49,6 +53,7 @@ pub(crate) fn compatible<B: ResourceBackend>(
         return false;
     };
     if extent.contains(&0)
+        || buffers.depth.is_some()
         || uniform_bytes == 0
         || row_pitch == 0
         || !row_pitch.is_multiple_of(256)

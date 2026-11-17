@@ -80,6 +80,10 @@ where
             .await?;
         self.write_forward_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(specular) = frame.specular.as_ref() {
+            self.write_forward_upload(&specular.upload, &specular.upload_bytes)
+                .await?;
+        }
         if let Some(environment) = frame.environment.as_ref() {
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;
@@ -221,6 +225,10 @@ where
             .await?;
         self.write_forward_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(specular) = frame.specular.as_ref() {
+            self.write_forward_upload(&specular.upload, &specular.upload_bytes)
+                .await?;
+        }
         if let Some(environment) = frame.environment.as_ref() {
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;

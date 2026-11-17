@@ -11,6 +11,7 @@ mod copy;
 mod deferred;
 mod error;
 mod forward;
+mod lighting;
 mod raster;
 mod read_set;
 mod readback;
@@ -83,6 +84,9 @@ where
     ///
     /// Submission assembly copies its concrete GPU owner into pending work, so
     /// replacing this selection cannot change an in-flight frame.
+    environment_specular: Option<
+        AssetSnapshot<crate::EnvironmentSpecularIblAsset, crate::EnvironmentSpecularIblData>,
+    >,
     environment_irradiance:
         Option<AssetSnapshot<crate::EnvironmentIrradianceAsset, crate::EnvironmentIrradianceData>>,
     owner: Arc<()>,
@@ -237,6 +241,7 @@ where
         Ok(Self {
             device,
             environment_irradiance: None,
+            environment_specular: None,
             owner: Arc::new(()),
             plans: HashMap::new(),
             forward_programs: HashMap::new(),
@@ -282,6 +287,26 @@ where
             return Err(Error::InvalidRange.into());
         }
         self.environment_irradiance = environment;
+        Ok(())
+    }
+
+    /// Selects an exact immutable prefiltered radiance and BRDF integration LUT.
+    /// The asset contains no GPU state or camera. Selected PBR views must supply
+    /// explicit shading-camera information before their dependent allocations.
+    pub fn set_environment_specular_ibl(
+        &mut self,
+        environment: Option<
+            AssetSnapshot<crate::EnvironmentSpecularIblAsset, crate::EnvironmentSpecularIblData>,
+        >,
+    ) -> Result<(), RendererError> {
+        self.ensure_open()?;
+        if environment
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.value().is_valid())
+        {
+            return Err(Error::InvalidRange.into());
+        }
+        self.environment_specular = environment;
         Ok(())
     }
 
@@ -355,6 +380,15 @@ where
             .and_then(Option::as_ref)
             .filter(|pending| pending.serial == submission.serial)
             .ok_or(RendererError::StaleSubmission)
+    }
+
+    pub(super) fn observe_deferred_error(
+        &mut self,
+        operation: &'static str,
+        error: Error,
+    ) -> RendererError {
+        self.note_device_loss(&error);
+        RendererError::DeferredOperation { operation, error }
     }
 
     /// Converts an RHI error while making a terminal device failure sticky.

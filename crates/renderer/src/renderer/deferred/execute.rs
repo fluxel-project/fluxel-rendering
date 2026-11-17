@@ -32,7 +32,7 @@ where
         });
         let declaration = declaration.map_err(|error| match contribution_error {
             Some(error) => RendererError::DeferredPipeline(error),
-            None => self.observe_rhi_error(error),
+            None => self.observe_deferred_error("Graph declaration", error),
         })?;
         let plan = if let Some(cached) = self.deferred_plans.iter().find(|candidate| {
             candidate.validate_declaration(&declaration).is_ok()
@@ -49,7 +49,7 @@ where
             };
             let plan = Arc::new(
                 DeferredPlan::compile_declared(&self.device, id, declaration)
-                    .map_err(|error| self.observe_rhi_error(error))?,
+                    .map_err(|error| self.observe_deferred_error("Graph compilation", error))?,
             );
             self.deferred_plan_compilations = self.deferred_plan_compilations.saturating_add(1);
             if self.deferred_plans.len() == super::super::SLOT_COUNT {
@@ -59,7 +59,7 @@ where
             plan
         };
         plan.validate_frame(&frame)
-            .map_err(|error| self.observe_rhi_error(error))?;
+            .map_err(|error| self.observe_deferred_error("frame binding validation", error))?;
         self.bindings_validated();
         let (buffer_bindings, texture_bindings) = plan.binding_counts();
         let facts = DeferredProbeFacts {
@@ -76,6 +76,10 @@ where
         }
         self.write_deferred_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(specular) = frame.specular.as_ref() {
+            self.write_deferred_upload(&specular.upload, &specular.upload_bytes)
+                .await?;
+        }
         if let Some(environment) = frame.environment.as_ref() {
             self.write_deferred_upload(&environment.upload, &environment.upload_bytes)
                 .await?;
@@ -192,7 +196,7 @@ where
         });
         let declaration = declaration.map_err(|error| match contribution_error {
             Some(error) => RendererError::DeferredPipeline(error),
-            None => self.observe_rhi_error(error),
+            None => self.observe_deferred_error("Graph declaration", error),
         })?;
         let plan = if let Some(cached) = self.deferred_surface_plans.iter().find(|candidate| {
             candidate.validate_declaration(&declaration).is_ok()
@@ -211,7 +215,7 @@ where
             };
             let plan = Arc::new(
                 DeferredPlan::compile_declared(&self.device, id, declaration)
-                    .map_err(|error| self.observe_rhi_error(error))?,
+                    .map_err(|error| self.observe_deferred_error("Graph compilation", error))?,
             );
             self.deferred_plan_compilations = self.deferred_plan_compilations.saturating_add(1);
             if self.deferred_surface_plans.len() == super::super::SLOT_COUNT {
@@ -238,6 +242,10 @@ where
         }
         self.write_deferred_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(specular) = frame.specular.as_ref() {
+            self.write_deferred_upload(&specular.upload, &specular.upload_bytes)
+                .await?;
+        }
         if let Some(environment) = frame.environment.as_ref() {
             self.write_deferred_upload(&environment.upload, &environment.upload_bytes)
                 .await?;

@@ -1,5 +1,5 @@
 //! Actual Surface owner validation and geometry footprints.
-use super::declaration::{
+use super::declaration_validation::{
     matches_gbuffer_template, validate_deformation, validate_draw_uniform_ranges,
     validate_resident_uploads,
 };
@@ -62,7 +62,11 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
             }
         }
         (None, None) => {}
+        (None, Some(group)) if frame.specular.is_some() && group.device() == device.id() => {}
         _ => return Err(Error::InvalidState),
+    }
+    if let Some(specular) = &frame.specular {
+        specular.validate_for_sampling(device.id())?;
     }
     for (texture, format) in frame.gbuffer.iter().zip([
         TextureFormat::Rgba8Unorm,

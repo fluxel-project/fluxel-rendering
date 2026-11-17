@@ -192,7 +192,13 @@ fn deferred_cache_does_not_replay_a_missing_declaration() {
     let before = counters(&native);
     let result = submit_with_counting_pipeline(&mut renderer, &missing, snapshot, view, &assets);
     assert!(
-        matches!(result, Err(RendererError::Rhi(Error::InvalidState))),
+        matches!(
+            result,
+            Err(RendererError::DeferredOperation {
+                operation: "Graph declaration",
+                error: Error::InvalidState,
+            })
+        ),
         "cached declaration must be refused before mapping or recording: {result:?}"
     );
     assert_eq!(missing.callbacks.get(), 1);

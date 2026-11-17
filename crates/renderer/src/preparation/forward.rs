@@ -164,10 +164,9 @@ pub(crate) struct ForwardDrawBatch {
 /// Deterministic Forward opaque ordering and its program-compatible ranges.
 ///
 /// Batches only merge adjacent compatible draws. The initial Forward product
-/// has no depth attachment, so moving a later compatible draw ahead of an
-/// intervening incompatible draw could change the result for overlapping
-/// geometry. Preserving prepared candidate order is the safe opaque baseline
-/// until a depth-tested product has independent evidence.
+/// can run without depth, so moving a later compatible draw ahead of an
+/// intervening incompatible draw could change overlapping geometry. Preserve
+/// the pipeline's selected global order regardless of depth selection.
 #[derive(Clone)]
 pub(crate) struct ForwardPreparedBatches {
     draws: Vec<ForwardDrawInput>,
@@ -301,109 +300,12 @@ impl ForwardDrawInput {
 mod forward_errors;
 pub use forward_errors::ForwardPreparationError;
 
-/// Resolves every selected candidate into a retained logical Forward draw input.
-///
-/// The supplied [`PreparedFrame`] already binds candidate identities to one
-/// immutable scene version. This function resolves the exact asset generations
-/// named by those records and keeps cloned snapshots in its output so later GPU
-/// preparation cannot accidentally switch to newer content.
-pub fn prepare_forward(
-    frame: &PreparedFrame<'_, ForwardResources>,
-    assets: &ForwardAssets,
-    composer: &mut ShaderComposer,
-) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
-    prepare_forward_with_environment(frame, assets, composer, false)
-}
-
-pub(crate) fn prepare_forward_with_environment(
-    frame: &PreparedFrame<'_, ForwardResources>,
-    assets: &ForwardAssets,
-    composer: &mut ShaderComposer,
-    environment: bool,
-) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
-    let view = frame.view_record();
-    if view.extent.contains(&0) || !finite_transform(view.transform) {
-        return Err(ForwardPreparationError::InvalidView);
-    }
-    let mut inputs = Vec::with_capacity(frame.candidates().len());
-    for &record_id in frame.candidates() {
-        let record =
-            frame
-                .record(record_id)
-                .map_err(|_| ForwardPreparationError::InvalidTransform {
-                    source: ForwardDrawSource::Scene(record_id),
-                })?;
-        inputs.push(prepare_draw(
-            view,
-            ForwardDrawSource::Scene(record_id),
-            0,
-            &record.resources,
-            record.transform,
-            assets,
-            composer,
-            environment,
-        )?);
-    }
-    Ok(inputs)
-}
-
-/// Resolves feature-owned Forward requests against the selected frame view.
-///
-/// The requests retain exact asset generations and are validated through the
-/// same path as scene-owned records. Their local identities are checked before
-/// any asset lookup or shader work so invalid feature payloads have no GPU-side
-/// effect.
+#[path = "forward_lighting.rs"]
+mod lighting;
 #[cfg(test)]
-pub(crate) fn prepare_feature_draws(
-    frame: &PreparedFrame<'_, ForwardResources>,
-    feature: FeatureHandle,
-    requests: &[ForwardDrawRequest],
-    assets: &ForwardAssets,
-    composer: &mut ShaderComposer,
-) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
-    prepare_feature_draws_with_environment(frame, feature, requests, assets, composer, false)
-}
-
-pub(crate) fn prepare_feature_draws_with_environment(
-    frame: &PreparedFrame<'_, ForwardResources>,
-    feature: FeatureHandle,
-    requests: &[ForwardDrawRequest],
-    assets: &ForwardAssets,
-    composer: &mut ShaderComposer,
-    environment: bool,
-) -> Result<Vec<ForwardDrawInput>, ForwardPreparationError> {
-    let view = frame.view_record();
-    if view.extent.contains(&0) || !finite_transform(view.transform) {
-        return Err(ForwardPreparationError::InvalidView);
-    }
-    let mut local_ids = std::collections::HashSet::with_capacity(requests.len());
-    for request in requests {
-        if !local_ids.insert(request.local_id) {
-            return Err(ForwardPreparationError::DuplicateFeatureLocalId {
-                feature,
-                local_id: request.local_id,
-            });
-        }
-    }
-    requests
-        .iter()
-        .map(|request| {
-            prepare_draw(
-                view,
-                ForwardDrawSource::Feature {
-                    feature,
-                    local_id: request.local_id,
-                },
-                request.order,
-                &request.resources,
-                request.transform,
-                assets,
-                composer,
-                environment,
-            )
-        })
-        .collect()
-}
+pub(crate) use lighting::prepare_feature_draws;
+pub use lighting::prepare_forward;
+pub(crate) use lighting::{prepare_feature_draws_with_lighting, prepare_forward_with_lighting};
 
 fn prepare_draw(
     view: &RenderView,
@@ -414,6 +316,7 @@ fn prepare_draw(
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
     environment: bool,
+    specular: bool,
 ) -> Result<ForwardDrawInput, ForwardPreparationError> {
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
@@ -462,6 +365,14 @@ fn prepare_draw(
             crate::pbr::forward_uv0_normal_request(&geometry.value().layout)
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
+    };
+    let request = if specular && crate::pbr::is_pbr(material.value().output()) {
+        if view.shading_camera.is_none() {
+            return Err(ForwardPreparationError::InvalidView);
+        }
+        crate::pbr::specular::forward_specular_request(request)
+    } else {
+        request
     };
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;

@@ -249,15 +249,27 @@ pub struct RenderView {
     pub transform: RenderTransform,
     /// The nonempty output extent.
     pub extent: [u32; 2],
+    /// Explicit eye information for lighting routes that require world-space view direction.
+    pub shading_camera: Option<super::ShadingCamera>,
 }
 
 impl RenderView {
+    /// Associates validated world-space eye information with this view.
+    pub fn with_shading_camera(mut self, camera: super::ShadingCamera) -> Self {
+        self.shading_camera = Some(camera);
+        self
+    }
+
     /// Creates a view with a nonempty extent.
     pub fn new(transform: RenderTransform, extent: [u32; 2]) -> Result<Self, SceneError> {
         if extent.contains(&0) {
             Err(SceneError::InvalidView)
         } else {
-            Ok(Self { transform, extent })
+            Ok(Self {
+                transform,
+                extent,
+                shading_camera: None,
+            })
         }
     }
 }
