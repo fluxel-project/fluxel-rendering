@@ -7,6 +7,18 @@
 
 #![deny(missing_docs)]
 
-mod model;
+mod authoring;
+mod compiler;
+mod diagnostic;
+mod runtime;
 
-pub use model::*;
+pub use authoring::*;
+pub use compiler::{
+    MaterialBindingDeclaration, MaterialCompiler, MaterialParameterBinding,
+    MaterialShaderContribution,
+};
+pub use diagnostic::MaterialError;
+pub use runtime::*;
+
+#[cfg(test)]
+mod tests;

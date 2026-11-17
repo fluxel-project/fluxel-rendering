@@ -1,6 +1,10 @@
 //! Material compilation entry points.
 
+use super::validation::NormalizedMaterialIr;
 use super::*;
+
+/// Compiles a validated authoring definition into one static material variant.
+pub struct MaterialCompiler;
 
 impl MaterialCompiler {
     /// Validates a definition, normalizes its private graph, and emits a generic contribution.
@@ -8,14 +12,15 @@ impl MaterialCompiler {
         definition: &MaterialDefinition,
     ) -> Result<CompiledMaterialVariant, MaterialError> {
         let ir = NormalizedMaterialIr::from_definition(definition)?;
-        Ok(CompiledMaterialVariant {
-            material: None,
-            variant_key: ir.variant_key(),
-            contribution: ir.contribution(),
-            parameters: ir.parameters,
-            resources: ir.resources,
-            output: ir.output,
-        })
+        Ok(CompiledMaterialVariant::new(
+            ir.variant_key(),
+            ir.contribution(),
+            ir.parameters,
+            ir.resources,
+            ir.output,
+            ir.surface_policy,
+            ir.transmission_extensions,
+        ))
     }
 
     /// Compiles the definition owned by one exact immutable asset snapshot.
@@ -24,8 +29,7 @@ impl MaterialCompiler {
     ) -> Result<CompiledMaterialVariant, MaterialError> {
         let material = MaterialAssetRef::from_snapshot(snapshot);
         let mut compiled = Self::compile(snapshot.value())?;
-        compiled.material = Some(material);
-        compiled.variant_key.material = Some(material);
+        compiled.bind_material(material);
         Ok(compiled)
     }
 }

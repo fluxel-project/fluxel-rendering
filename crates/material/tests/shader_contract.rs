@@ -8,8 +8,8 @@ use fluxel_material::{
     StaticValue, SurfaceOutput,
 };
 use fluxel_shader::{
-    BindingKind, EntryPoint, ShaderComposer, ShaderCompositionRequest, ShaderError, ShaderStage,
-    SourceUnit,
+    BindingKind, BindingShape, EntryPoint, ShaderComposer, ShaderCompositionRequest, ShaderError,
+    ShaderStage, SourceUnit,
 };
 
 const FRAGMENT_TEMPLATE: &str = r#"
@@ -108,6 +108,105 @@ fn multi_fragment_dynamic_uniform_and_texture_contribution_reflects_through_shad
     assert!(artifact.interface().bindings().iter().any(|binding| {
         binding.group == 0 && binding.binding == 1 && binding.kind == BindingKind::Texture
     }));
+}
+
+#[test]
+fn ordinary_sampler_is_a_logical_material_resource_with_exact_shader_shape() {
+    let definition = MaterialDefinition::new(
+        vec![MaterialFragment {
+            name: "sampled_color".into(),
+            inputs: Vec::new(),
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            wgsl: "fn sampled_color() -> vec4<f32> { return textureSample(material_texture, material_sampler, vec2<f32>(0.5)); }".into(),
+        }],
+        "sampled_color",
+        Vec::new(),
+        vec![
+            MaterialResource {
+                name: "material_texture".into(),
+                kind: MaterialResourceKind::Texture2dF32,
+                location: BindingLocation { group: 0, binding: 0 },
+            },
+            MaterialResource {
+                name: "material_sampler".into(),
+                kind: MaterialResourceKind::Sampler { comparison: false },
+                location: BindingLocation { group: 0, binding: 1 },
+            },
+        ],
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    let variant = MaterialCompiler::compile(&definition).unwrap();
+    let contribution = variant.contribution();
+    assert!(
+        contribution
+            .source()
+            .contains("var material_sampler: sampler;")
+    );
+    let artifact = compose(contribution).expect("ordinary sampler matches textureSample WGSL");
+    assert!(artifact.interface().bindings().iter().any(|binding| {
+        binding.group == 0
+            && binding.binding == 1
+            && binding.kind == BindingKind::Sampler
+            && binding.shape == Some(BindingShape::Sampler { comparison: false })
+    }));
+
+    let mut wrong_mode = contribution.clone();
+    wrong_mode
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.location.group == 0 && binding.location.binding == 1)
+        .unwrap()
+        .kind = MaterialResourceKind::Sampler { comparison: true };
+    assert!(matches!(
+        compose(&wrong_mode),
+        Err(ShaderError::BindingMismatch {
+            group: 0,
+            binding: 1
+        })
+    ));
+}
+
+#[test]
+fn comparison_sampler_preserves_only_the_wgsl_comparison_fact() {
+    let definition = MaterialDefinition::new(
+        vec![MaterialFragment {
+            name: "root".into(),
+            inputs: Vec::new(),
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            wgsl: "fn root() -> vec4<f32> { return vec4<f32>(1.0); }".into(),
+        }],
+        "root",
+        Vec::new(),
+        vec![MaterialResource {
+            name: "shadow_sampler".into(),
+            kind: MaterialResourceKind::Sampler { comparison: true },
+            location: BindingLocation {
+                group: 0,
+                binding: 4,
+            },
+        }],
+        BTreeMap::new(),
+        SurfaceOutput::Color,
+    );
+    let contribution = MaterialCompiler::compile(&definition)
+        .unwrap()
+        .contribution()
+        .clone();
+    assert!(
+        contribution
+            .source()
+            .contains("var shadow_sampler: sampler_comparison;")
+    );
+    assert_eq!(
+        contribution.binding_declarations(),
+        vec![
+            fluxel_shader::BindingDeclaration::new(0, 4, BindingKind::Sampler)
+                .with_shape(BindingShape::Sampler { comparison: true }),
+        ]
+    );
 }
 
 #[test]

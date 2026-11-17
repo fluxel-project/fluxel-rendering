@@ -21,6 +21,21 @@ Material depends on `fluxel-assets` for durable asset identity and on
 Renderer or RHI. See [Shader design](../../shader/documents/design.md) and
 [Renderer design](../../renderer/documents/design.md).
 
+## Implementation boundaries
+
+The source tree mirrors the durable ownership model. `authoring/` owns asset
+identity, definitions, typed values, callable metadata, and typed node topology.
+`compiler/` owns normalization, authoring validation, canonical identity,
+generated evaluators, source-name scanning, and generic Shader contributions.
+`runtime/` owns compiled variants and validated dynamic instances. `lib.rs`
+only assembles these modules and re-exports the stable public API.
+
+Fields that represent authoring or compiled state remain private to their
+owner. Compiler and runtime coordination uses narrow crate-private constructors
+and read-only accessors; it must not expose fields merely because two sibling
+modules currently need the same representation. This keeps representation
+changes local while preserving the public Material contract.
+
 ## Scope and non-goals
 
 Material describes what a surface or another material domain means. A consuming
@@ -33,6 +48,18 @@ The author-facing executable language is WGSL. Naga is the executable logical
 IR and validation authority used by Shader. Material's normalized representation
 is a typed composition/link manifest, never a second instruction language that
 duplicates WGSL or Naga.
+
+UV0 normal surfaces can declare occlusion and emissive evaluators. The selected
+Forward and Deferred consumers clamp scalar occlusion to [0, 1] and apply it to
+diffuse irradiance, leaving direct light unchanged; nonnegative linear emission
+is additive with or without an environment. This subset does not implement the
+reference's analytical-light AO control or bent-normal specular occlusion.
+Deferred transports emission RGB and occlusion alpha in an optional RGBA16F
+attachment, subject to binary16 quantization and range. Current final RGBA8
+outputs clamp the composed result; this is not HDR output acceptance. Logical
+WGSL validation does not establish finite runtime evaluator results. Authors
+must supply finite, representable effect values; arbitrary Code Node arithmetic
+can still exceed those resource-format limits.
 
 The public API currently implements a compact, selected subset. The broader
 authoring model in this document remains target direction until a real consumer
@@ -87,8 +114,8 @@ not translate WGSL into a backend language, allocate GPU resources or submit wor
 The material compiler validates deterministic graph facts before asking Shader
 to compose a whole program:
 
-- fragment and Code Node names, parameter names, resource names, source-unit
-  identities, and binding locations are unique;
+- fragment and Code Node names, callable input-port names, parameter names,
+  resource names, source-unit identities, and binding locations are unique;
 - every declared call resolves, has matching argument types, and the call graph
   has no cycle;
 - dynamic parameters refer to declared compatible uniform resources, with one
@@ -97,6 +124,15 @@ to compose a whole program:
 - the selected root and domain output have the required types and inputs;
 - generated declarations, parameters, resources, fragments, Code Nodes, and
   static options share one WGSL top-level namespace.
+
+When a typed node topology is lowered, its generated wrappers are Material
+implementation details. The Color and legacy metallic-roughness contexts use
+zero-argument wrappers; ColorUv0 and the UV0 metallic-roughness contexts give every wrapper
+one `uv: vec2<f32>` argument. `MaterialNodeInputSource::Uv0` is the only
+external graph input and is legal only in those UV0 contexts. Author source and
+declared callable edges may not reference generated wrappers: every
+author-to-node edge must be represented by a typed port connection. This
+prevents hidden cross-graph recursion before a variant is published.
 
 The top-level namespace check scans actual emitted declarations, including
 functions, types, globals, overrides and generated names. Metadata-only name
@@ -143,30 +179,121 @@ The current surface subset has:
 
 ```rust
 SurfaceOutput::Color
+SurfaceOutput::ColorUv0
 SurfaceOutput::MetallicRoughness { properties }
+SurfaceOutput::MetallicRoughnessUv0 { properties }
+SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal }
 ```
 
-Both require a zero-argument `vec4<f32>` root and generate
+Every surface also has a static `SurfacePolicy`. Its alpha mode is `Opaque`,
+`Mask`, `Blend`, or `MaskBlend`; its default cutoff is Babylon's `0.4`.
+Cutoffs must be finite but are not clamped to `[0, 1]`, matching Babylon's
+direct comparison behavior. The policy separately records back-face culling
+and two-sided lighting. Defaults follow Babylon: opaque, back-face culling, and
+no two-sided normal reversal. `SurfacePolicy::double_sided()` explicitly turns
+off culling and turns on two-sided lighting together. Material emits pure WGSL
+helpers for alpha rejection, output alpha, and two-sided-lighting selection;
+the Renderer applies `discard` only after all material evaluations that can use
+texture derivatives, and it owns culling, blending, ordering, and Graph work.
+
+`TransmissionExtensions` is a separate optional contract for
+`MetallicRoughnessUv0Normal`. Its optional UV0 scalar callables provide
+transmission intensity and normalized thickness. Static fields carry surface
+and optional volume IOR, attenuation color and distance, and a non-negative
+thickness interval. A missing extension emits neutral helpers: zero
+transmission and thickness, IOR 1.5, and white attenuation at distance one.
+With an extension, a missing intensity callable evaluates to one and a missing
+thickness callable evaluates to `maximum_thickness - minimum_thickness`, as in
+Babylon's no-thickness-map path. Material validates finite IORs of at least one,
+strictly positive finite attenuation color/distance for `-log(color)/distance`,
+and a finite non-negative ordered thickness interval. It does not allocate a
+refraction source or select environment versus scene capture; those are
+Renderer/Graph choices.
+
+When present, the thickness callable is used directly in
+`minimum + (maximum - minimum) * sample`. Material does not clamp it to
+`[0, 1]`: imported texture data is conventionally normalized, while a Code Node
+may intentionally extend that range. Renderer may validate only static bounds
+and transforms known before recording; dynamic callable output remains a
+milestone-end behavior-validation boundary.
+
+`Color` and `MetallicRoughness` require a zero-argument `vec4<f32>` root and generate
 `evaluate_material()`. `MetallicRoughness` additionally requires a named,
 zero-argument `vec2<f32>` callable that returns metallic then perceptual
 roughness and generates `evaluate_metallic_roughness()`. Those generated names
 are reserved. Missing, wrongly typed, argument-taking, or colliding roots fail
 structural validation before Shader composition.
 
+`ColorUv0` requires a `vec2<f32> -> vec4<f32>` root and generates
+`evaluate_material_uv0(uv)`. Its typed graph can consume UV0 without requiring
+metallic/roughness or normal evaluators. The same authored definition serves
+the Forward and Deferred textured-color consumers and captured-color receivers.
+Its output domain does not select lighting or render-target topology; alpha and
+raster intent are carried separately by `SurfacePolicy`.
+
+`MetallicRoughnessUv0` supplies the scoped PBR evaluator context: its root and
+named property callable each take exactly one `vec2<f32>` UV0 argument. It
+generates `evaluate_material_uv0(uv)` and
+`evaluate_metallic_roughness_uv0(uv)`. Its graph wrappers carry the same UV0
+argument through typed node connections, so a Code Node can feed a real
+`textureSample` without bypassing the graph. Renderer owns the mesh ABI and
+must provide UV0 at its documented vertex location; Material does not invent
+normal, view, tangent, or filtering facts.
+
+`MetallicRoughnessUv0Normal` keeps that UV0 base/property contract and adds a
+named `normal` callable with the exact signature `vec2<f32> -> vec3<f32>`. It
+generates `evaluate_normal_uv0(uv)`. The returned value is an author-defined
+tangent-space direction: Material intentionally does not prescribe a texture
+binding name, sampling operation, `[0, 1]` decoding, green-channel convention,
+strength, or default normal. A consumer must require and validate a compatible
+mesh tangent basis, build the TBN frame, and apply its actual normal transform.
+The neutral returned direction is `(0, 0, 1)`. An author sampling an encoded
+`(0.5, 0.5, 1)` texel must perform its intended decoding in that callable;
+neither the compiler nor the Renderer applies an implicit texture decode.
+Derivative fallback, normal blending, parallax, and layered normal policy are
+not part of this first contract.
+
 This expresses material semantics, not a general PBR implementation. Lighting,
 normal transformation, G-buffer layout, fixed-function state, and the decision
 to consume surface semantics in Forward or Deferred remain Renderer policy.
-The current subset does not imply full PBR, arbitrary domains, normal mapping,
-IBL, shadows, transparency, or an editor graph.
+The current subset does not imply full PBR, arbitrary domains, derivative
+normal fallback, normal blending, general environment generation, shadows, transparency, or an editor
+graph.
+
+The Renderer `pbr-sphere-material` consumer maps a single linear RGBA8 image
+to packed ORM: R is occlusion, G is perceptual roughness, and B is metallic.
+Its authored properties and occlusion evaluators sample the same physical
+resource; this does not add a special ORM surface type or a general multi-texture
+binding API. Renderer applies the selected AO semantic to diffuse irradiance,
+including its specular-energy conservation factor, independently of direct
+and specular lighting.
+
+The Renderer four-texture consumer uses the same surface contracts with
+independent base-color, normal, ORM, and emissive image resources. Material
+declares their logical names and locations; Renderer resolves named sources,
+physical residency, actual transfer formats, and Graph access. Two logical
+names may reference one physical image without changing the authored shader
+interface. Image color roles remain explicit consumer facts, rather than
+special resource kinds inferred from names.
 
 ## Resources, parameters, and instances
 
+RGB transfer encoding is an image-source fact resolved by Renderer, rather than
+a different Material resource kind. A `Texture2dF32` can sample an sRGB-format
+color source or a linear-format data source. Authored functions consume the
+resulting linear values and must not decode an already decoded color sample.
+Normal-map unpacking remains an independent authored operation. Renderer owns
+actual format support, source-generation changes, view creation, and binding
+validation; the material compiler does not infer color roles from resource names.
+
 Material resources describe generic shader-visible requirements. The current
-public subset has `UniformVec4` and read-only `Texture2dF32`, each with a stable
-name and bind-group location. Future kinds must carry equally explicit logical
-semantics and must be proven by a consumer before their public contract freezes.
-The retained resource direction includes samplers, uniform data and read-only
-storage alongside textures, without granting Material GPU ownership.
+public subset has `UniformVec4`, read-only `Texture2dF32`, and `Sampler {
+comparison }`, each with a stable name and bind-group location. `comparison` is
+a WGSL fact; filtering is not, so Renderer validates it from the actual sampler
+and texture descriptors before recording. Future kinds must carry equally
+explicit logical semantics and must be proven by a consumer before their public
+contract freezes. The retained resource direction includes uniform data and
+read-only storage alongside textures, without granting Material GPU ownership.
 
 Parameters divide into two lifetimes:
 
@@ -267,3 +394,90 @@ bindings/accesses are validated before recording.
 Tests establish the contracts they execute. GPU presentation or a new backend
 claim requires an independently retained real-target attempt; successful logical
 composition or Naga validation alone is not such evidence.
+
+## Babylon-aligned material direction (planned)
+
+The target is Babylon-style material functionality with an authoring boundary
+suitable for a future Blender adapter. This section is a target contract, not a
+claim that the current compact API implements it. Delivery order and milestone
+acceptance belong to the [ecosystem roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md).
+No material editor, Blender plugin, serialized file format, or file parser is
+part of this work. A future framework adapter maps external authoring semantics
+into ordinary Rust material data; glTF fields do not define the internal model.
+
+Functional equivalence means explicit parameter meanings, supported feature
+combinations and reproducible rendering behavior. It does not require Babylon
+API compatibility or pixel-identical output. Compare scenes under recorded
+geometry, lighting, environment, exposure, transfer functions and reference
+versions; define tolerances before examining results. Blender compatibility
+classifies mappings as exact, approximate, bake-required or unsupported, with
+named reasons. Do not promise arbitrary Blender graphs or a specific Principled
+version before its semantics have been checked.
+
+### Authoring and consumer contract
+
+The first real consumer must construct a representative PBR material through
+typed node/function connections, including a Code Node, and execute the same
+material definition in both Forward and Deferred pipelines. Node topology,
+material values and resource selections remain runtime data. Extension
+implementation types remain statically dispatched. Reuse the existing compiler,
+WGSL callable composition, source provenance and Naga validation; a second
+instruction IR or runtime node interpreter is not required.
+
+A candidate design adds named typed surface channels and material evaluation
+context for UVs, normal/tangent basis and view-dependent inputs. Exact Rust
+signatures, packing and optional-channel defaults remain provisional until both
+consumers work. Start with base color, metallic/perceptual roughness, normal,
+emission, occlusion, opacity/cutoff, IOR, transmission and thickness/attenuation
+requirements exercised by those consumers. Specify attenuation color, its reference distance, units, texture interpretation
+and no-absorption defaults before freezing the contract. Distinguish spaces, linear
+versus encoded colors, and geometric versus shading normals. An unused channel
+may be omitted only according to an explicit default; a consumer must not silently
+drop a required effect. Keep current Color and MetallicRoughness entry points
+working through the transition or document and test any deliberate migration.
+
+Texture semantics include UV selection/transform, sampler behavior, channel
+selection, color-space interpretation and normal conventions. Material owns the
+logical meaning and instance values; Shader owns declarations/reflection;
+Renderer resolves actual image/sampler owners and matching binding requirements.
+Dynamic values and resource replacement must not create structural variants;
+source, static choices, required channels and binding layout must invalidate
+incompatible artifacts. Variant growth and cache lifetime require bounded,
+measured policies rather than an eager Cartesian product of feature switches.
+
+### Effects and failure boundaries
+
+Transparent blending, refraction/transmission and thickness-based volume
+absorption are required in the first full PBR delivery. The Deferred consumer
+may combine opaque G-buffer lighting with dedicated transparent/refraction
+passes. Material requests these effects without selecting pass topology or
+owning scene-color textures. See [Renderer execution design](../../renderer/documents/design.md#planned-material-effects-and-composition).
+
+Babylon's PBR thickness/attenuation model is the reference for volume absorption;
+it does not imply a general heterogeneous volume or arbitrary nested-media
+solver. OIT is a rendering policy with finite quality/cost, not a material node
+or a guarantee of unlimited transparent layers. Geometry, lights, environment
+capture/filtering and final compositing remain Renderer or Feature concerns.
+
+Reject malformed connections, cycles, incompatible port types, missing required
+inputs, non-finite/invalid physical parameters and conflicting declarations
+before publishing a compiled variant. Whole-program failures preserve author
+source identity and do not mutate a usable prior variant. Device-specific
+unsupported resources or sampling requirements are rejected by the consumer
+before the operation they protect. Reference-specific defaults and rendering
+approximations must not disguise allocation failure, device loss or unsafe
+resource lifetime as a successful degraded frame.
+
+### Reproducible reference
+
+The inspected Babylon checkout is `daae8d9483dcbb6308ebd0f6ca5b218783614771`.
+Its source is Apache-2.0 licensed; direct code adaptation requires preserving
+applicable notices and reviewing translated algorithms. It is a reference, not
+a new runtime dependency. Primary entry points under `packages/dev/core/src/`
+are `Materials/PBR/pbrBaseMaterial.pure.ts`,
+`Materials/PBR/pbrSubSurfaceConfiguration.ts`, `Materials/Node/nodeMaterial.pure.ts`,
+`Materials/shaderMaterial.pure.ts` and `Materials/standardMaterial.pure.ts`.
+Surface contracts and static extension constraints take precedence over copying
+Babylon's class or plugin organization. Broader node catalogs, advanced PBR,
+Standard/SpecGloss and specialized effects require separate executable cases;
+this reference inventory is not proof of complete parity.

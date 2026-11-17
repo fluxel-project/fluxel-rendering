@@ -46,6 +46,35 @@ pub(super) fn wgsl_top_level_names(source: &str) -> Result<Vec<String>, Material
         .ok_or(MaterialError::TopLevelWgslUnparseable)
 }
 
+/// Returns whether a non-comment, non-string WGSL identifier occurs in source.
+///
+/// This deliberately performs lexical matching only. It is used to reserve the
+/// generated node-wrapper namespace before a whole-program Shader validation
+/// happens, so author source cannot form an untracked edge into that graph.
+pub(super) fn contains_identifier(source: &str, wanted: &str) -> Result<bool, MaterialError> {
+    let mut position = 0;
+    while position < source.len() {
+        position = skip_trivia(source, position)?;
+        let Some(character) = next_char(source, position) else {
+            break;
+        };
+        if character == '"' {
+            position = skip_string(source, position)?;
+            continue;
+        }
+        if is_identifier_start(character) {
+            let (identifier, after_identifier) = read_identifier(source, position);
+            if identifier == wanted {
+                return Ok(true);
+            }
+            position = after_identifier;
+        } else {
+            position += character.len_utf8();
+        }
+    }
+    Ok(false)
+}
+
 fn next_variable_name(
     source: &str,
     mut position: usize,

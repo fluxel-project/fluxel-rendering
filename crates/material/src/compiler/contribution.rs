@@ -7,9 +7,31 @@ use fluxel_shader::{
     ValueType,
 };
 
-use crate::{
-    MaterialBindingDeclaration, MaterialParameterBinding, MaterialResourceKind, StaticValue,
-};
+use crate::{BindingLocation, MaterialResourceKind, MaterialType, StaticValue};
+
+/// A generic shader binding declaration emitted by Material.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialBindingDeclaration {
+    /// Resource name.
+    pub name: String,
+    /// Bind-group location.
+    pub location: BindingLocation,
+    /// Declared resource kind.
+    pub kind: MaterialResourceKind,
+}
+
+/// The concrete uniform binding that receives one dynamic material parameter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialParameterBinding {
+    /// Dynamic parameter name accepted by `MaterialInstance`.
+    pub parameter: String,
+    /// Logical resource name used to resolve the concrete binding owner.
+    pub resource: String,
+    /// Shader-visible bind-group location of the uniform.
+    pub location: BindingLocation,
+    /// Type expected from the dynamic parameter value.
+    pub ty: MaterialType,
+}
 
 /// Generic source and interface data for a Shader composition request.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,6 +123,7 @@ impl MaterialShaderContribution {
                     match binding.kind {
                         MaterialResourceKind::UniformVec4 => BindingKind::Uniform,
                         MaterialResourceKind::Texture2dF32 => BindingKind::Texture,
+                        MaterialResourceKind::Sampler { .. } => BindingKind::Sampler,
                     },
                 )
                 .with_shape(match binding.kind {
@@ -108,6 +131,9 @@ impl MaterialShaderContribution {
                         BindingShape::Uniform(ValueType::Vec4(ScalarType::F32))
                     }
                     MaterialResourceKind::Texture2dF32 => BindingShape::Texture2dF32,
+                    MaterialResourceKind::Sampler { comparison } => {
+                        BindingShape::Sampler { comparison }
+                    }
                 })
             })
             .collect()

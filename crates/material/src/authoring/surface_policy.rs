@@ -1,0 +1,76 @@
+//! Static raster and alpha facts for a material surface.
+
+/// The alpha handling selected for a material surface.
+///
+/// This is a material fact. Consumers select the actual raster pipeline and
+/// must still reject modes for which their pass has no correct composition.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SurfaceAlphaMode {
+    /// Write an opaque surface alpha of one.
+    Opaque,
+    /// Reject fragments below [`SurfacePolicy::alpha_cutoff`] and write alpha one.
+    Mask,
+    /// Preserve authored alpha for a transparency-capable consumer.
+    Blend,
+    /// Reject fragments below the cutoff and preserve accepted authored alpha.
+    MaskBlend,
+}
+
+/// Static alpha, culling, and two-sided-lighting choices for one surface.
+///
+/// Defaults follow Babylon's opaque, back-face-culling policy. They are
+/// deliberately independent choices: enabling two-sided lighting does not by
+/// itself disable culling, and a blend mode does not promise a transparent pass.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfacePolicy {
+    /// Alpha mode selected by the author.
+    pub alpha_mode: SurfaceAlphaMode,
+    /// The threshold used by mask modes.
+    pub alpha_cutoff: f32,
+    /// Whether a consumer should cull back-facing primitives.
+    pub back_face_culling: bool,
+    /// Whether a consumer should reverse the final shading normal on back faces.
+    pub two_sided_lighting: bool,
+}
+
+impl SurfacePolicy {
+    /// Babylon-compatible default cutoff used when a mask mode is selected.
+    pub const DEFAULT_ALPHA_CUTOFF: f32 = 0.4;
+
+    /// Returns a policy that accepts both faces and reverses lighting normals
+    /// for the back face.
+    #[must_use]
+    pub fn double_sided() -> Self {
+        Self::default().with_double_sided(true)
+    }
+
+    /// Selects whether this surface is rendered and lit as double-sided.
+    #[must_use]
+    pub fn with_double_sided(mut self, enabled: bool) -> Self {
+        self.back_face_culling = !enabled;
+        self.two_sided_lighting = enabled;
+        self
+    }
+}
+
+impl Default for SurfacePolicy {
+    fn default() -> Self {
+        Self {
+            alpha_mode: SurfaceAlphaMode::Opaque,
+            alpha_cutoff: Self::DEFAULT_ALPHA_CUTOFF,
+            back_face_culling: true,
+            two_sided_lighting: false,
+        }
+    }
+}
+
+impl PartialEq for SurfacePolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.alpha_mode == other.alpha_mode
+            && self.alpha_cutoff.to_bits() == other.alpha_cutoff.to_bits()
+            && self.back_face_culling == other.back_face_culling
+            && self.two_sided_lighting == other.two_sided_lighting
+    }
+}
+
+impl Eq for SurfacePolicy {}

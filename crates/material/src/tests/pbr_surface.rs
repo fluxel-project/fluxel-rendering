@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    FragmentInput, MaterialCodeNode, MaterialCompiler, MaterialDefinition, MaterialError,
-    MaterialFragment, MaterialType, SurfaceOutput,
+    BindingLocation, FragmentInput, MaterialCodeNode, MaterialCompiler, MaterialDefinition,
+    MaterialError, MaterialFragment, MaterialNode, MaterialNodeGraph, MaterialNodeId,
+    MaterialNodeInput, MaterialNodeInputSource, MaterialResource, MaterialResourceKind,
+    MaterialType, SurfaceOutput,
 };
 use fluxel_shader::{
     EntryPoint, ShaderComposer, ShaderCompositionRequest, ShaderError, ShaderStage, SourceUnit,
@@ -14,6 +16,17 @@ fn pbr_fragment() -> @location(0) vec4<f32> {
     let base = evaluate_material();
     let properties = evaluate_metallic_roughness();
     return vec4<f32>(base.rgb * properties.x, base.a * properties.y);
+}
+"#;
+
+const UV0_PBR_TEMPLATE: &str = r#"
+@fragment
+fn pbr_uv0_fragment() -> @location(0) vec4<f32> {
+    let uv = vec2<f32>(0.25, 0.75);
+    let base = evaluate_material_uv0(uv);
+    let properties = evaluate_metallic_roughness_uv0(uv);
+    let normal = evaluate_normal_uv0(uv);
+    return vec4<f32>(base.rgb * properties.x * normal.z, base.a * properties.y);
 }
 "#;
 
@@ -93,6 +106,295 @@ fn metallic_roughness_emits_and_composes_both_evaluation_wrappers() {
         "fn surface_properties() -> vec2<f32> { return vec2<f32>(0.2, 0.7); }"
     );
     compose(&variant);
+}
+
+#[test]
+fn uv0_graph_lowers_texture_sample_and_composes_both_pbr_evaluators() {
+    let definition = MaterialDefinition::new(
+        Vec::new(),
+        "legacy_unused_root",
+        Vec::new(),
+        vec![
+            MaterialResource {
+                name: "base_texture".into(),
+                kind: MaterialResourceKind::Texture2dF32,
+                location: BindingLocation { group: 0, binding: 0 },
+            },
+            MaterialResource {
+                name: "base_sampler".into(),
+                kind: MaterialResourceKind::Sampler { comparison: false },
+                location: BindingLocation { group: 0, binding: 1 },
+            },
+        ],
+        BTreeMap::new(),
+        SurfaceOutput::MetallicRoughnessUv0Normal {
+            properties: "surface_properties_uv0".into(),
+            normal: "sample_normal".into(),
+        },
+    )
+    .with_code_node(MaterialCodeNode {
+        name: "scale_uv".into(),
+        inputs: vec![FragmentInput {
+            name: "uv".into(),
+            ty: MaterialType::Vec2,
+        }],
+        output: MaterialType::Vec2,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:scale-uv",
+            "fn scale_uv(uv: vec2<f32>) -> vec2<f32> { return uv * 0.5; }",
+        ),
+        resources: Vec::new(),
+    })
+    .with_code_node(MaterialCodeNode {
+        name: "sample_base".into(),
+        inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+        output: MaterialType::Vec4,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:sample-base-uv0",
+            "fn sample_base(uv: vec2<f32>) -> vec4<f32> { return textureSample(base_texture, base_sampler, uv); }",
+        ),
+        resources: Vec::new(),
+    })
+    .with_code_node(MaterialCodeNode {
+        name: "surface_properties_uv0".into(),
+        inputs: vec![FragmentInput { name: "uv".into(), ty: MaterialType::Vec2 }],
+        output: MaterialType::Vec2,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:properties-uv0",
+            "fn surface_properties_uv0(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(uv.x, uv.y); }",
+        ),
+        resources: Vec::new(),
+    })
+    .with_code_node(MaterialCodeNode {
+        name: "sample_normal".into(),
+        inputs: vec![FragmentInput {
+            name: "uv".into(),
+            ty: MaterialType::Vec2,
+        }],
+        output: MaterialType::Vec3,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:sample-normal",
+            "fn sample_normal(uv: vec2<f32>) -> vec3<f32> { return textureSample(base_texture, base_sampler, uv).xyz; }",
+        ),
+        resources: Vec::new(),
+    })
+    .with_node_graph(MaterialNodeGraph {
+        nodes: vec![
+            MaterialNode {
+                id: MaterialNodeId(6),
+                callable: "scale_uv".into(),
+                inputs: vec![MaterialNodeInput {
+                    input: "uv".into(),
+                    source: MaterialNodeInputSource::Uv0,
+                }],
+            },
+            MaterialNode {
+                id: MaterialNodeId(7),
+                callable: "sample_base".into(),
+                inputs: vec![MaterialNodeInput {
+                    input: "uv".into(),
+                    source: MaterialNodeInputSource::Node(MaterialNodeId(6)),
+                }],
+            },
+        ],
+        output: MaterialNodeId(7),
+    });
+    let variant = MaterialCompiler::compile(&definition).expect("valid UV0 sampled PBR graph");
+    let contribution = variant.contribution();
+    assert!(
+        contribution
+            .source()
+            .contains("fn fluxel_material_node_7(uv: vec2<f32>)")
+    );
+    assert!(contribution.source().contains("return scale_uv(uv);"));
+    assert!(
+        contribution
+            .source()
+            .contains("return sample_base(fluxel_material_node_6(uv));")
+    );
+    assert!(
+        contribution
+            .source()
+            .contains("fn evaluate_material_uv0(uv: vec2<f32>)")
+    );
+    assert!(
+        contribution
+            .source()
+            .contains("fn evaluate_normal_uv0(uv: vec2<f32>)")
+    );
+
+    let mut units = contribution.source_units();
+    units.push(SourceUnit::new(
+        "pbr-uv0-fragment-template",
+        UV0_PBR_TEMPLATE,
+    ));
+    let mut request = ShaderCompositionRequest::new(units)
+        .with_entry_point(EntryPoint::new("pbr_uv0_fragment", ShaderStage::Fragment));
+    request.bindings = contribution.binding_declarations();
+    request.callables = contribution.callable_declarations();
+    ShaderComposer::new()
+        .compose(&request)
+        .expect("UV0 node graph and texture sample compose");
+}
+
+#[test]
+fn tangent_space_normal_surface_rejects_wrong_and_argument_normal_callables() {
+    let output = SurfaceOutput::MetallicRoughnessUv0Normal {
+        properties: "properties".into(),
+        normal: "normal".into(),
+    };
+    let definition = |normal: MaterialCodeNode| {
+        MaterialDefinition::new(
+            Vec::new(),
+            "base",
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+            output.clone(),
+        )
+        .with_code_node(MaterialCodeNode {
+            name: "base".into(),
+            inputs: vec![FragmentInput {
+                name: "uv".into(),
+                ty: MaterialType::Vec2,
+            }],
+            output: MaterialType::Vec4,
+            calls: Vec::new(),
+            source: SourceUnit::new(
+                "author:normal-base",
+                "fn base(uv: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.0, 1.0); }",
+            ),
+            resources: Vec::new(),
+        })
+        .with_code_node(MaterialCodeNode {
+            name: "properties".into(),
+            inputs: vec![FragmentInput {
+                name: "uv".into(),
+                ty: MaterialType::Vec2,
+            }],
+            output: MaterialType::Vec2,
+            calls: Vec::new(),
+            source: SourceUnit::new(
+                "author:normal-properties",
+                "fn properties(uv: vec2<f32>) -> vec2<f32> { return uv; }",
+            ),
+            resources: Vec::new(),
+        })
+        .with_code_node(normal)
+    };
+    let wrong_type = definition(MaterialCodeNode {
+        name: "normal".into(),
+        inputs: vec![FragmentInput {
+            name: "uv".into(),
+            ty: MaterialType::Vec2,
+        }],
+        output: MaterialType::Vec4,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:normal-wrong-type",
+            "fn normal(uv: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.0, 1.0); }",
+        ),
+        resources: Vec::new(),
+    });
+    assert!(matches!(
+        MaterialCompiler::compile(&wrong_type),
+        Err(MaterialError::SurfaceNormalTypeMismatch { normal, actual: MaterialType::Vec4 }) if normal == "normal"
+    ));
+    let without_uv = definition(MaterialCodeNode {
+        name: "normal".into(),
+        inputs: Vec::new(),
+        output: MaterialType::Vec3,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:normal-without-uv",
+            "fn normal() -> vec3<f32> { return vec3<f32>(0.0, 0.0, 1.0); }",
+        ),
+        resources: Vec::new(),
+    });
+    assert!(matches!(
+        MaterialCompiler::compile(&without_uv),
+        Err(MaterialError::SurfaceNormalInputsUnsupported { normal }) if normal == "normal"
+    ));
+}
+
+#[test]
+fn uv0_surface_rejects_roots_and_properties_without_exactly_one_vec2_input() {
+    let root_without_uv = MaterialDefinition::new(
+        vec![fragment(
+            "base",
+            MaterialType::Vec4,
+            "fn base() -> vec4<f32> { return vec4<f32>(1.0); }",
+        )],
+        "base",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        SurfaceOutput::MetallicRoughnessUv0 {
+            properties: "properties".into(),
+        },
+    )
+    .with_code_node(MaterialCodeNode {
+        name: "properties".into(),
+        inputs: vec![FragmentInput {
+            name: "uv".into(),
+            ty: MaterialType::Vec2,
+        }],
+        output: MaterialType::Vec2,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:valid-properties",
+            "fn properties(uv: vec2<f32>) -> vec2<f32> { return uv; }",
+        ),
+        resources: Vec::new(),
+    });
+    assert!(matches!(
+        MaterialCompiler::compile(&root_without_uv),
+        Err(MaterialError::RootInputsUnsupported { fragment }) if fragment == "base"
+    ));
+
+    let properties_without_uv = MaterialDefinition::new(
+        Vec::new(),
+        "base",
+        Vec::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        SurfaceOutput::MetallicRoughnessUv0 {
+            properties: "properties".into(),
+        },
+    )
+    .with_code_node(MaterialCodeNode {
+        name: "base".into(),
+        inputs: vec![FragmentInput {
+            name: "uv".into(),
+            ty: MaterialType::Vec2,
+        }],
+        output: MaterialType::Vec4,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:valid-base",
+            "fn base(uv: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.0, 1.0); }",
+        ),
+        resources: Vec::new(),
+    })
+    .with_code_node(MaterialCodeNode {
+        name: "properties".into(),
+        inputs: Vec::new(),
+        output: MaterialType::Vec2,
+        calls: Vec::new(),
+        source: SourceUnit::new(
+            "author:invalid-properties",
+            "fn properties() -> vec2<f32> { return vec2<f32>(0.0); }",
+        ),
+        resources: Vec::new(),
+    });
+    assert!(matches!(
+        MaterialCompiler::compile(&properties_without_uv),
+        Err(MaterialError::SurfacePropertiesInputsUnsupported { properties }) if properties == "properties"
+    ));
 }
 
 #[test]

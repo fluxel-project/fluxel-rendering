@@ -1,12 +1,83 @@
 //! Material composition and instance validation failures.
 
-use super::{
-    BindingLocation, MaterialAssetRef, MaterialResourceKind, MaterialType, SurfaceOutput, fmt,
+use std::fmt;
+
+use crate::{
+    BindingLocation, MaterialAssetRef, MaterialNodeId, MaterialResourceKind, MaterialType,
+    SurfaceOutput,
 };
 
 /// Material composition and instance validation failures.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MaterialError {
+    /// A callable declared an input-port name more than once.
+    DuplicateCallableInput {
+        /// Callable name.
+        callable: String,
+        /// Repeated input-port name.
+        input: String,
+    },
+    /// Author source or metadata referenced a generated node wrapper.
+    GeneratedNodeReference {
+        /// Author fragment or Code Node identity.
+        source: String,
+        /// Generated node-wrapper name.
+        generated: String,
+    },
+    /// A node identity occurred more than once.
+    DuplicateNode {
+        /// Repeated node identity.
+        node: MaterialNodeId,
+    },
+    /// A graph named a node that it did not contain.
+    MissingNode {
+        /// Referenced node identity.
+        node: MaterialNodeId,
+    },
+    /// A node connected the same input more than once.
+    DuplicateNodeInput {
+        /// Receiving node identity.
+        node: MaterialNodeId,
+        /// Repeated input-port name.
+        input: String,
+    },
+    /// A node named an input absent from its callable.
+    UnknownNodeInput {
+        /// Receiving node identity.
+        node: MaterialNodeId,
+        /// Unknown input-port name.
+        input: String,
+    },
+    /// A callable input had no source node.
+    MissingNodeInput {
+        /// Receiving node identity.
+        node: MaterialNodeId,
+        /// Required input-port name.
+        input: String,
+    },
+    /// An upstream output did not match the target input type.
+    NodeInputTypeMismatch {
+        /// Receiving node identity.
+        node: MaterialNodeId,
+        /// Input-port name.
+        input: String,
+        /// Callable input type.
+        expected: MaterialType,
+        /// Source node result type.
+        actual: MaterialType,
+    },
+    /// A node requested a context value unavailable to this surface evaluator.
+    NodeContextUnavailable {
+        /// Receiving node identity.
+        node: MaterialNodeId,
+        /// Input-port name.
+        input: String,
+    },
+    /// A reachable node graph cycle cannot lower to WGSL wrappers.
+    NodeCycle {
+        /// Node encountered a second time on the active DFS path.
+        node: MaterialNodeId,
+    },
     /// An asset-bound variant was used with another asset or content generation.
     VariantMaterialMismatch {
         /// Asset generation recorded by the variant.
@@ -111,7 +182,7 @@ pub enum MaterialError {
         /// Selected output.
         output: SurfaceOutput,
     },
-    /// The selected root needs arguments that the minimal evaluation ABI cannot supply.
+    /// The selected root needs arguments that its evaluation ABI cannot supply.
     RootInputsUnsupported {
         /// Root fragment name.
         fragment: String,
@@ -128,10 +199,78 @@ pub enum MaterialError {
         /// Declared callable result type.
         actual: MaterialType,
     },
-    /// The metallic-roughness property callable needs arguments.
+    /// The metallic-roughness property callable needs arguments its ABI cannot supply.
     SurfacePropertiesInputsUnsupported {
         /// Property callable name.
         properties: String,
+    },
+    /// The tangent-space normal surface domain named no normal callable.
+    MissingSurfaceNormal {
+        /// Requested normal callable name.
+        normal: String,
+    },
+    /// The tangent-space normal callable returned the wrong type.
+    SurfaceNormalTypeMismatch {
+        /// Normal callable name.
+        normal: String,
+        /// Declared callable result type.
+        actual: MaterialType,
+    },
+    /// The tangent-space normal callable needs arguments its ABI cannot supply.
+    SurfaceNormalInputsUnsupported {
+        /// Normal callable name.
+        normal: String,
+    },
+    /// Optional surface channels were selected for an incompatible surface output.
+    SurfaceExtensionsUnsupported {
+        /// Selected output.
+        output: SurfaceOutput,
+    },
+    /// An optional surface channel named no callable.
+    MissingSurfaceExtension {
+        /// Requested callable name.
+        name: String,
+    },
+    /// An optional surface channel returned the wrong type.
+    SurfaceExtensionTypeMismatch {
+        /// Requested callable name.
+        name: String,
+        /// Declared callable result type.
+        actual: MaterialType,
+    },
+    /// An optional surface channel needs arguments its ABI cannot supply.
+    SurfaceExtensionInputsUnsupported {
+        /// Requested callable name.
+        name: String,
+    },
+    /// A surface alpha cutoff must be finite before it can become WGSL source.
+    SurfaceAlphaCutoffNonFinite,
+    /// Transmission controls require a UV0 normal PBR surface.
+    TransmissionExtensionsUnsupported {
+        /// Selected output.
+        output: SurfaceOutput,
+    },
+    /// A requested transmission callable was not declared.
+    MissingTransmissionExtension {
+        /// Requested callable name.
+        name: String,
+    },
+    /// A requested transmission callable returned the wrong type.
+    TransmissionExtensionTypeMismatch {
+        /// Requested callable name.
+        name: String,
+        /// Declared callable result type.
+        actual: MaterialType,
+    },
+    /// A requested transmission callable needs arguments unavailable to UV0 evaluation.
+    TransmissionExtensionInputsUnsupported {
+        /// Requested callable name.
+        name: String,
+    },
+    /// A static transmission value would make refraction or Beer-Lambert invalid.
+    InvalidTransmissionParameter {
+        /// Parameter rejected before shader generation.
+        parameter: &'static str,
     },
     /// A dynamic parameter was not declared by the variant.
     UnknownParameter {

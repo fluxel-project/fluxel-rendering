@@ -1,8 +1,14 @@
 //! Normalization and authoring validation for material definitions.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::canonical::{
+    calls as canonical_calls, inputs as canonical_inputs, piece as canonical_piece,
+    resources as canonical_resources, sorted_by_name, source_id as source_unit_id,
+};
+use super::names::wgsl_top_level_names;
 use super::*;
 use fluxel_shader::CallableDeclaration;
-use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug)]
 pub(super) struct NormalizedMaterialIr {
@@ -13,58 +19,99 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) resources: Vec<MaterialResource>,
     static_options: BTreeMap<String, StaticValue>,
     pub(super) output: SurfaceOutput,
+    surface_extensions: SurfaceExtensions,
+    pub(super) surface_policy: SurfacePolicy,
+    pub(super) transmission_extensions: Option<TransmissionExtensions>,
+    node_graph: Option<super::node_graph::NormalizedNodeGraph>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct FunctionSignature {
-    pub(super) inputs: Vec<MaterialType>,
+    pub(super) inputs: Vec<FragmentInput>,
     pub(super) output: MaterialType,
     calls: Vec<FragmentCall>,
 }
 
 impl NormalizedMaterialIr {
     pub(super) fn from_definition(definition: &MaterialDefinition) -> Result<Self, MaterialError> {
-        let mut fragments = definition.fragments.clone();
+        if !definition.surface_policy().alpha_cutoff.is_finite() {
+            return Err(MaterialError::SurfaceAlphaCutoffNonFinite);
+        }
+        let mut fragments = definition.fragments().to_vec();
         fragments.sort_by(|left, right| left.name.cmp(&right.name));
-        let mut code_nodes = definition.code_nodes.clone();
+        let mut code_nodes = definition.code_nodes().to_vec();
         code_nodes.sort_by(|left, right| left.name.cmp(&right.name));
         validate_code_node_sources(&code_nodes)?;
-        let functions = function_signatures(&fragments, &code_nodes)?;
-        let root = functions
-            .get(definition.root_fragment.as_str())
-            .ok_or_else(|| MaterialError::MissingFragment {
-                name: definition.root_fragment.clone(),
-            })?;
-        super::surface::validate(
-            &definition.output,
-            root,
-            &functions,
-            &definition.root_fragment,
-        )?;
+        let mut functions = function_signatures(&fragments, &code_nodes)?;
+        let node_graph = definition
+            .node_graph()
+            .map(|graph| {
+                super::node_graph::normalize(
+                    graph,
+                    &functions,
+                    super::surface::uses_uv0(definition.output()),
+                )
+            })
+            .transpose()?;
+        if let Some(graph) = &node_graph {
+            validate_generated_node_references(&fragments, &code_nodes, graph)?;
+        }
+        let root_fragment = node_graph.as_ref().map_or_else(
+            || definition.root_fragment().to_owned(),
+            |graph| graph.root.clone(),
+        );
+        if let Some(graph) = &node_graph {
+            functions.insert(
+                graph.root.clone(),
+                FunctionSignature {
+                    inputs: graph
+                        .accepts_uv0
+                        .then_some(FragmentInput {
+                            name: "uv".into(),
+                            ty: MaterialType::Vec2,
+                        })
+                        .into_iter()
+                        .collect(),
+                    output: graph.output,
+                    calls: Vec::new(),
+                },
+            );
+        }
+        let root = functions.get(root_fragment.as_str()).ok_or_else(|| {
+            MaterialError::MissingFragment {
+                name: root_fragment.clone(),
+            }
+        })?;
+        super::surface::validate_definition(definition, root, &functions, &root_fragment)?;
         validate_parameters(
-            &definition.parameters,
+            definition.parameters(),
             &functions,
-            &definition.static_options,
+            definition.static_options(),
         )?;
-        let resources = merge_resources(&definition.resources, &code_nodes)?;
-        validate_parameter_resources(&definition.parameters, &resources)?;
+        let resources = merge_resources(definition.resources(), &code_nodes)?;
+        validate_parameter_resources(definition.parameters(), &resources)?;
         validate_top_level_names(
             &fragments,
             &code_nodes,
             &resources,
-            &definition.parameters,
-            &definition.static_options,
-            &definition.output,
+            definition.parameters(),
+            definition.static_options(),
+            definition.output(),
+            node_graph.as_ref(),
         )?;
         validate_calls(&functions)?;
         Ok(Self {
             fragments,
             code_nodes,
-            root_fragment: definition.root_fragment.clone(),
-            parameters: sorted_by_name(definition.parameters.clone(), |value| &value.name),
+            root_fragment,
+            parameters: sorted_by_name(definition.parameters().to_vec(), |value| &value.name),
             resources,
-            static_options: definition.static_options.clone(),
-            output: definition.output.clone(),
+            static_options: definition.static_options().clone(),
+            output: definition.output().clone(),
+            surface_extensions: definition.surface_extensions().clone(),
+            surface_policy: definition.surface_policy(),
+            transmission_extensions: definition.transmission_extensions().cloned(),
+            node_graph,
         })
     }
 
@@ -72,6 +119,9 @@ impl NormalizedMaterialIr {
         let mut canonical = String::new();
         canonical_piece(&mut canonical, "root", &self.root_fragment);
         super::surface::canonical(&self.output, &mut canonical);
+        super::surface::canonical_extensions(&self.surface_extensions, &mut canonical);
+        super::surface::canonical_policy(self.surface_policy, &mut canonical);
+        super::transmission::canonical(self.transmission_extensions.as_ref(), &mut canonical);
         for fragment in &self.fragments {
             canonical_piece(&mut canonical, "fragment", &fragment.name);
             canonical_piece(&mut canonical, "output", fragment.output.wgsl());
@@ -90,6 +140,9 @@ impl NormalizedMaterialIr {
             resources.sort_by(|left, right| left.name.cmp(&right.name));
             canonical_resources(&mut canonical, &resources);
         }
+        if let Some(graph) = &self.node_graph {
+            canonical_piece(&mut canonical, "node-graph", &graph.source);
+        }
         for parameter in &self.parameters {
             canonical_piece(&mut canonical, "parameter", &parameter.name);
             canonical_piece(&mut canonical, "parameter-type", parameter.ty.wgsl());
@@ -100,10 +153,7 @@ impl NormalizedMaterialIr {
             canonical_piece(&mut canonical, "static-name", name);
             canonical_piece(&mut canonical, "static-value", &value.canonical());
         }
-        MaterialVariantKey {
-            canonical,
-            material: None,
-        }
+        MaterialVariantKey::from_canonical(canonical)
     }
 
     pub(super) fn contribution(&self) -> MaterialShaderContribution {
@@ -122,7 +172,7 @@ impl NormalizedMaterialIr {
             let shader_name = shader_resource_name(resource, &self.parameters);
             let prefix = match resource.kind {
                 MaterialResourceKind::UniformVec4 => "var<uniform>",
-                MaterialResourceKind::Texture2dF32 => "var",
+                MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Sampler { .. } => "var",
             };
             generated.push_str(&format!(
                 "@group({}) @binding({}) {prefix} {shader_name}: {};\n",
@@ -135,7 +185,20 @@ impl NormalizedMaterialIr {
             generated.push_str(&fragment.wgsl);
             generated.push('\n');
         }
-        super::surface::append_evaluators(&mut generated, &self.root_fragment, &self.output);
+        if let Some(graph) = &self.node_graph {
+            generated.push_str(&graph.source);
+        }
+        super::surface::append_evaluators(
+            &mut generated,
+            &self.root_fragment,
+            &self.output,
+            &self.surface_extensions,
+            self.surface_policy,
+        );
+        super::transmission::append_evaluators(
+            &mut generated,
+            self.transmission_extensions.as_ref(),
+        );
         let variant_key = self.variant_key();
         MaterialShaderContribution::new(
             source_unit_id(variant_key.as_str()),
@@ -168,7 +231,7 @@ impl NormalizedMaterialIr {
                     }
                 })
                 .collect(),
-            callable_declarations(&self.fragments, &self.code_nodes),
+            callable_declarations(&self.fragments, &self.code_nodes, self.node_graph.as_ref()),
             self.static_options.clone(),
         )
     }
@@ -224,11 +287,20 @@ fn insert_signature(
     output: MaterialType,
     calls: &[FragmentCall],
 ) -> Result<(), MaterialError> {
+    let mut input_names = BTreeSet::new();
+    for input in inputs {
+        if !input_names.insert(input.name.as_str()) {
+            return Err(MaterialError::DuplicateCallableInput {
+                callable: name.into(),
+                input: input.name.clone(),
+            });
+        }
+    }
     if functions
         .insert(
             name.into(),
             FunctionSignature {
-                inputs: inputs.iter().map(|input| input.ty).collect(),
+                inputs: inputs.to_vec(),
                 output,
                 calls: calls.to_vec(),
             },
@@ -236,6 +308,34 @@ fn insert_signature(
         .is_some()
     {
         return Err(MaterialError::DuplicateFragment { name: name.into() });
+    }
+    Ok(())
+}
+
+fn validate_generated_node_references(
+    fragments: &[MaterialFragment],
+    code_nodes: &[MaterialCodeNode],
+    graph: &super::node_graph::NormalizedNodeGraph,
+) -> Result<(), MaterialError> {
+    for (source, calls, wgsl) in fragments
+        .iter()
+        .map(|fragment| (&fragment.name, &fragment.calls, &fragment.wgsl))
+        .chain(
+            code_nodes
+                .iter()
+                .map(|node| (&node.name, &node.calls, &node.source.source)),
+        )
+    {
+        for generated in &graph.generated_names {
+            if calls.iter().any(|call| call.fragment == *generated)
+                || super::names::contains_identifier(wgsl, generated)?
+            {
+                return Err(MaterialError::GeneratedNodeReference {
+                    source: source.clone(),
+                    generated: generated.clone(),
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -372,7 +472,7 @@ fn validate_calls(functions: &BTreeMap<String, FunctionSignature>) -> Result<(),
             if callee
                 .inputs
                 .iter()
-                .copied()
+                .map(|input| input.ty)
                 .ne(call.arguments.iter().copied())
             {
                 return Err(MaterialError::CallTypeMismatch {
@@ -397,6 +497,7 @@ fn validate_top_level_names(
     parameters: &[MaterialParameter],
     static_options: &BTreeMap<String, StaticValue>,
     output: &SurfaceOutput,
+    graph: Option<&super::node_graph::NormalizedNodeGraph>,
 ) -> Result<(), MaterialError> {
     let mut names = super::surface::reserved_names(output);
     let mut insert = |name: &str| {
@@ -424,12 +525,18 @@ fn validate_top_level_names(
             insert(&name)?;
         }
     }
+    if let Some(graph) = graph {
+        for name in wgsl_top_level_names(&graph.source)? {
+            insert(&name)?;
+        }
+    }
     Ok(())
 }
 
 fn callable_declarations(
     fragments: &[MaterialFragment],
     nodes: &[MaterialCodeNode],
+    graph: Option<&super::node_graph::NormalizedNodeGraph>,
 ) -> Vec<CallableDeclaration> {
     let mut callables = Vec::with_capacity(fragments.len() + nodes.len());
     for (name, inputs, output) in fragments
@@ -447,6 +554,9 @@ fn callable_declarations(
             result: Some(output.shader_type()),
         });
     }
+    if let Some(graph) = graph {
+        callables.extend(graph.callables.iter().cloned());
+    }
     callables
 }
 
@@ -458,43 +568,6 @@ fn shader_resource_name<'a>(
         .iter()
         .find(|parameter| parameter.resource == resource.name)
         .map_or(resource.name.as_str(), |parameter| parameter.name.as_str())
-}
-
-fn canonical_inputs(output: &mut String, inputs: &[FragmentInput]) {
-    for input in inputs {
-        canonical_piece(output, "input-name", &input.name);
-        canonical_piece(output, "input-type", input.ty.wgsl());
-    }
-}
-
-fn canonical_calls(output: &mut String, calls: &[FragmentCall]) {
-    for call in calls {
-        canonical_piece(output, "call", &call.fragment);
-        for argument in &call.arguments {
-            canonical_piece(output, "argument", argument.wgsl());
-        }
-    }
-}
-
-fn canonical_resources(output: &mut String, resources: &[MaterialResource]) {
-    for resource in resources {
-        canonical_piece(output, "resource", &resource.name);
-        canonical_piece(output, "resource-kind", resource.kind.wgsl());
-        canonical_piece(
-            output,
-            "resource-group",
-            &resource.location.group.to_string(),
-        );
-        canonical_piece(
-            output,
-            "resource-binding",
-            &resource.location.binding.to_string(),
-        );
-    }
-}
-
-fn source_unit_id(canonical: &str) -> String {
-    format!("material:{:x}", Sha256::digest(canonical.as_bytes()))
 }
 
 fn visit(
@@ -518,18 +591,4 @@ fn visit(
     visiting.remove(name);
     visited.insert(name.to_owned());
     Ok(())
-}
-
-fn sorted_by_name<T>(mut values: Vec<T>, name: impl Fn(&T) -> &String) -> Vec<T> {
-    values.sort_by(|left, right| name(left).cmp(name(right)));
-    values
-}
-
-fn canonical_piece(output: &mut String, label: &str, value: &str) {
-    output.push_str(label);
-    output.push(':');
-    output.push_str(&value.len().to_string());
-    output.push(':');
-    output.push_str(value);
-    output.push(';');
 }
