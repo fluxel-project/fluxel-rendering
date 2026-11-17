@@ -92,6 +92,17 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|_| Error::InvalidState)?;
+        let effects = frame
+            .effects
+            .map(|texture| {
+                graph.import_texture_with_state(
+                    texture.desc.clone(),
+                    texture.incoming,
+                    texture.layout,
+                )
+            })
+            .transpose()
+            .map_err(|_| Error::InvalidState)?;
         let (target, scene_color, surface_target, readback, row_pitch) = match frame.source {
             super::record_view::RecordSource::Offscreen(owner) => (
                 Some(
@@ -316,6 +327,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 material,
                 environment,
                 gbuffer: [gbuffer[0], gbuffer[1], gbuffer[2]],
+                effects,
                 target: scene_color,
                 deformation,
                 deformation_pass: None,
@@ -424,6 +436,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             environment_upload_slot: environment_upload.map(BufferSlot::from),
             environment_slot: environment.map(TextureSlot::from),
             gbuffer_slots: std::array::from_fn(|index| TextureSlot::from(gbuffer[index])),
+            effects_slot: effects.map(TextureSlot::from),
             scene_color_slot: scene_color.map(TextureSlot::from),
             surface_target_slot: surface_target.map(TextureSlot::from),
             target_slot: target.map(TextureSlot::from),

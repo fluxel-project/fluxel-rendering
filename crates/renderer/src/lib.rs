@@ -33,11 +33,12 @@ pub use pipeline::{
 };
 pub use preparation::{
     ColorTextureAsset, ColorTextureData, EnvironmentIrradianceAsset, EnvironmentIrradianceData,
-    ForwardAssets, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest, ForwardDrawSource,
-    ForwardPreparationError, ForwardResources, GeometryAsset, GeometryAttribute,
-    GeometryBufferOwner, GeometryData, GeometryDraw, GeometryError, GeometryLayout, GeometryStream,
-    GeometryStreamBinding, MaterialPreparationError, PreparedGeometry, PreparedGeometryBindings,
-    PreparedMaterial, prepare_forward, prepare_material,
+    ForwardAssets, ForwardCaptureResources, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
+    ForwardDrawSource, ForwardPreparationError, ForwardResources, ForwardTextureSource,
+    GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData, GeometryDraw,
+    GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding, MaterialPreparationError,
+    PreparedCaptureReceiver, PreparedGeometry, PreparedGeometryBindings, PreparedMaterial,
+    prepare_forward, prepare_forward_capture_receiver, prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,
@@ -45,6 +46,6 @@ pub use render_scene::{
     RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError,
 };
 pub use renderer::{
-    DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, Renderer, RendererError,
-    ShaderAdmissionError, ShutdownReport, Submission,
+    CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, Renderer,
+    RendererError, ShaderAdmissionError, ShutdownReport, Submission,
 };

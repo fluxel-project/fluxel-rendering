@@ -7,12 +7,12 @@ use fluxel_rhi::api::{BindGroupDesc, BindGroupEntry, BindingResource, Error, Sup
 use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
 use crate::residency::{
     DeferredDraw, DeferredFrame, ForwardFrameBuffers, ForwardResidentBuffers, ForwardSampler,
-    ForwardStreamInput, ForwardTextureInput, allocate_deferred_scene_color, plan_deferred_gbuffer,
-    plan_forward_frame, plan_forward_resident,
+    ForwardStreamInput, ForwardTextureInput, allocate_deferred_scene_color,
+    plan_deferred_gbuffer_with_effects, plan_forward_frame, plan_forward_resident,
 };
 use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
 
-use super::templates::gbuffer_request;
+use super::templates::{gbuffer_request, gbuffer_uv0_request};
 use super::*;
 
 impl<B> Renderer<B>
@@ -37,10 +37,25 @@ where
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
         self.ensure_open()?;
         let pbr = crate::pbr::is_pbr(input.material().value().output());
+        let effects = input
+            .material()
+            .value()
+            .surface_extensions()
+            .occlusion
+            .is_some()
+            || input
+                .material()
+                .value()
+                .surface_extensions()
+                .emissive
+                .is_some();
         let request = if pbr {
             match input.material().value().output() {
                 fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => {
                     crate::pbr::gbuffer_uv0_request(&input.geometry().value().layout)
+                }
+                fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } if effects => {
+                    crate::pbr::gbuffer_uv0_normal_effect_request(&input.geometry().value().layout)
                 }
                 fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => {
                     crate::pbr::gbuffer_uv0_normal_request(&input.geometry().value().layout)
@@ -48,7 +63,12 @@ where
                 _ => crate::pbr::gbuffer_request(&input.geometry().value().layout),
             }
         } else {
-            gbuffer_request(&input.geometry().value().layout)
+            match input.material().value().output() {
+                fluxel_material::SurfaceOutput::ColorUv0 => {
+                    gbuffer_uv0_request(&input.geometry().value().layout)
+                }
+                _ => gbuffer_request(&input.geometry().value().layout),
+            }
         }
         .ok_or(Error::Unsupported(
             "Deferred material route cannot consume this geometry layout",
@@ -60,7 +80,8 @@ where
             request,
         )
         .map_err(RendererError::DeferredMaterial)?;
-        self.prepare_deferred_resources(input, &prepared, pbr).await
+        self.prepare_deferred_resources(input, &prepared, pbr, effects)
+            .await
     }
 
     async fn prepare_deferred_resources(
@@ -68,10 +89,16 @@ where
         input: &ForwardDrawInput,
         prepared: &PreparedMaterial,
         pbr: bool,
+        effects: bool,
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
         let limits = self.device.capabilities().limits;
         let ordinary_sampler =
             crate::renderer::forward::material_requires_ordinary_sampler(prepared);
+        if effects && limits.max_bindings_per_group < 4 {
+            return Err(
+                self.observe_rhi_error(Error::Unsupported("four Deferred lighting bindings"))
+            );
+        }
         if ordinary_sampler && limits.max_bindings_per_group < 3 {
             return Err(
                 self.observe_rhi_error(Error::Unsupported("three Deferred material bindings"))
@@ -98,7 +125,7 @@ where
         )?;
         let uniform_len = u64::try_from(uniforms.bytes.len()).map_err(|_| Error::InvalidRange)?;
         let row_pitch = aligned_row(input.extent()[0])?;
-        let texture = input.texture().value();
+        let texture = input.asset_texture().ok_or(Error::InvalidState)?.value();
         if ordinary_sampler {
             // This is only early capability admission. The owner selected from
             // allocation or cache is revalidated immediately before binding.
@@ -131,7 +158,8 @@ where
         let geometry_key =
             crate::residency::ForwardResidentCache::<B>::geometry_key(input, self.device.id());
         let texture_key =
-            crate::residency::ForwardResidentCache::<B>::texture_key(input, self.device.id());
+            crate::residency::ForwardResidentCache::<B>::texture_key(input, self.device.id())
+                .ok_or(Error::InvalidState)?;
         let cached_geometry = self.deferred_residency.geometry(geometry_key);
         let cached_texture = self.deferred_residency.texture(texture_key);
         if cached_geometry.is_some() {
@@ -176,10 +204,12 @@ where
             0..uniform_len,
             row_pitch,
             limits.uniform_offset_alignment,
+            false,
         )
         .map_err(|error| self.observe_rhi_error(error))?;
-        let gbuffer_plan = plan_deferred_gbuffer(&self.device, input.extent())
-            .map_err(|error| self.observe_rhi_error(error))?;
+        let gbuffer_plan =
+            plan_deferred_gbuffer_with_effects(&self.device, input.extent(), effects)
+                .map_err(|error| self.observe_rhi_error(error))?;
         // All Forward-owner descriptors are known here, before the first of
         // those owners is allocated. The G-buffer plan already performed its
         // equivalent exact texture-support checks while it was built above.
@@ -209,7 +239,9 @@ where
 
         // Shader admission and descriptor selection must also complete before
         // allocating resident/frame/G-buffer resource owners.
-        let geometry_program = self.deferred_gbuffer_program(prepared, pbr).await?;
+        let geometry_program = self
+            .deferred_gbuffer_program(prepared, pbr, effects)
+            .await?;
         let environment = if pbr {
             self.environment_irradiance
                 .as_ref()
@@ -228,6 +260,7 @@ where
             .deferred_lighting_program(
                 pbr,
                 environment.is_some(),
+                effects,
                 fluxel_rhi::api::TextureFormat::Rgba8Unorm,
             )
             .await?;
@@ -271,23 +304,25 @@ where
                 input.extent(),
                 uniform_len,
                 row_pitch,
+                effects,
             )
         });
         let reused_frame = pooled.is_some();
-        let (frame, uniform_upload, gbuffer) = if let Some(entry) = pooled {
+        let (frame, uniform_upload, gbuffer, effects_attachment) = if let Some(entry) = pooled {
             (
                 entry.frame,
                 frame_plan.uniform_upload.clone(),
                 entry.gbuffer,
+                entry.effects,
             )
         } else {
             let (frame, uniform_upload) =
                 ForwardFrameBuffers::allocate_planned(&self.device, frame_plan)
                     .map_err(|error| self.observe_rhi_error(error))?;
-            let gbuffer = gbuffer_plan
-                .allocate(&self.device)
+            let (gbuffer, effects_attachment) = gbuffer_plan
+                .allocate_with_effects(&self.device)
                 .map_err(|error| self.observe_rhi_error(error))?;
-            (frame, uniform_upload, gbuffer)
+            (frame, uniform_upload, gbuffer, effects_attachment)
         };
         let scene_color = allocate_deferred_scene_color(&self.device, input.extent())
             .map_err(|error| self.observe_rhi_error(error))?;
@@ -353,25 +388,32 @@ where
                 }],
             })
             .map_err(|error| self.observe_rhi_error(error))?;
+        let mut lighting_entries = vec![
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(&gbuffer[0].view),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::TextureView(&gbuffer[1].view),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::TextureView(&gbuffer[2].view),
+            },
+        ];
+        if let Some(effects) = &effects_attachment {
+            lighting_entries.push(BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::TextureView(&effects.view),
+            });
+        }
         let lighting_group = self
             .device
             .create_bind_group(&BindGroupDesc {
                 label: Some("Deferred lighting G-buffer"),
                 layout: &lighting_program.layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::TextureView(&gbuffer[0].view),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: BindingResource::TextureView(&gbuffer[1].view),
-                    },
-                    BindGroupEntry {
-                        binding: 2,
-                        resource: BindingResource::TextureView(&gbuffer[2].view),
-                    },
-                ],
+                entries: &lighting_entries,
             })
             .map_err(|error| self.observe_rhi_error(error))?;
         if let Some(environment) = environment.as_ref() {
@@ -469,6 +511,7 @@ where
             uniform_bytes: uniforms.bytes,
             environment,
             gbuffer,
+            effects: effects_attachment,
             scene_color,
             scene_color_sampler,
             scene_color_sampler_desc,

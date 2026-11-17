@@ -30,7 +30,8 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
             .destination
             .start
             .is_multiple_of(device.capabilities().limits.uniform_offset_alignment)
-        || device.capabilities().limits.max_color_attachments < 2
+        || device.capabilities().limits.max_color_attachments
+            < if frame.effects.is_some() { 3 } else { 2 }
         || device.capabilities().limits.uniform_offset_alignment == 0
     {
         return Err(Error::InvalidRange);
@@ -69,6 +70,14 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
         TextureFormat::Depth32Float,
     ]) {
         if !matches_gbuffer_template(&texture.desc, frame.extent, format) {
+            return Err(Error::InvalidRange);
+        }
+    }
+    if let Some(effects) = &frame.effects {
+        if effects.texture.device() != device.id()
+            || effects.view.device() != device.id()
+            || !matches_gbuffer_template(&effects.desc, frame.extent, TextureFormat::Rgba16Float)
+        {
             return Err(Error::InvalidRange);
         }
     }

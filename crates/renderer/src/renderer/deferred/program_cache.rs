@@ -31,6 +31,7 @@ pub(super) struct GbufferProgramKey {
     depth_format: TextureFormat,
     multisample_count: u32,
     pbr: bool,
+    effects: bool,
 }
 
 impl GbufferProgramKey {
@@ -39,6 +40,7 @@ impl GbufferProgramKey {
         prepared: &PreparedMaterial,
         transform_uniform_bytes: u64,
         pbr: bool,
+        effects: bool,
     ) -> Self {
         Self {
             device,
@@ -54,6 +56,7 @@ impl GbufferProgramKey {
             depth_format: TextureFormat::Depth32Float,
             multisample_count: 1,
             pbr,
+            effects,
         }
     }
 }
@@ -67,6 +70,7 @@ pub(super) struct LightingProgramKey {
     color_format: TextureFormat,
     multisample_count: u32,
     pbr: bool,
+    effects: bool,
 }
 
 impl LightingProgramKey {
@@ -74,6 +78,7 @@ impl LightingProgramKey {
         device: DeviceId,
         artifact: fluxel_shader::ShaderArtifactKey,
         pbr: bool,
+        effects: bool,
         color_format: TextureFormat,
     ) -> Self {
         Self {
@@ -87,6 +92,7 @@ impl LightingProgramKey {
             color_format,
             multisample_count: 1,
             pbr,
+            effects,
         }
     }
 }

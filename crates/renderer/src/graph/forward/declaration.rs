@@ -15,8 +15,11 @@ pub(crate) struct SurfaceForwardDeclaration {
     pub(super) resident_upload_slot: BufferSlot,
     pub(super) frame_upload_slot: BufferSlot,
     pub(super) uniform_slot: BufferSlot,
+    pub(super) environment_upload_slot: Option<BufferSlot>,
     pub(super) stream_slots: Vec<BufferSlot>,
     pub(super) texture_slots: Vec<TextureSlot>,
+    pub(super) environment_slot: Option<TextureSlot>,
+    pub(super) surface_target_slot: TextureSlot,
     pub(super) extent: [u32; 2],
     pub(super) draw_count: usize,
     pub(super) stream_count: usize,
@@ -77,6 +80,15 @@ where
             frame.frame.uniform_incoming,
         )
         .map_err(|_| Error::InvalidState)?;
+    let environment_upload = frame
+        .environment
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_buffer_desc(owner.upload_desc.clone(), owner.upload_incoming)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
     let streams = frame
         .resident
         .streams
@@ -97,13 +109,35 @@ where
                 .map_err(|_| Error::InvalidState)
         })
         .collect::<Result<Vec<_>>>()?;
+    let environment = frame
+        .environment
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let surface_target = graph
+        .import_surface_texture(TextureDesc {
+            label: Some("fluxel forward surface lease".into()),
+            dimension: fluxel_rhi::api::TextureDimension::D2,
+            extent: [frame.extent[0], frame.extent[1], 1],
+            array_layers: 1,
+            format: frame.color_format,
+            mip_levels: 1,
+            samples: 1,
+            usage: TextureUsage::RENDER_ATTACHMENT,
+            view_formats: Vec::new(),
+        })
+        .map_err(|_| Error::InvalidState)?;
     let texture_ends = frame
         .resident_upload
         .textures
         .iter()
         .map(texture_copy_end)
         .collect::<Result<Vec<_>>>()?;
-    let (upload_pass, (streams, uniform, textures)) = graph
+    let (upload_pass, (streams, uniform, textures, environment)) = graph
         .add_pass("forward-surface-upload", |pass| {
             let mut output_streams = streams.clone();
             for upload in &frame.resident_upload.vertices {
@@ -162,7 +196,26 @@ where
                     TextureUsage::COPY_DST,
                 )?;
             }
-            Ok((output_streams, uniform, output_textures))
+            let environment = match (environment, environment_upload, frame.environment.as_ref()) {
+                (Some(texture), Some(upload), Some(owner)) => {
+                    pass.read_with_use(
+                        upload,
+                        0..owner.upload_desc.size,
+                        copy_read_uses().uses,
+                        BufferUsage::COPY_SRC,
+                    )?;
+                    Some(pass.write_texture_with_use(
+                        texture,
+                        whole(),
+                        texture_copy_write_uses().uses,
+                        ImageLayout::CopyDst,
+                        TextureUsage::COPY_DST,
+                    )?)
+                }
+                (None, None, None) => None,
+                _ => return Err(super::super::definition::GraphError::InvalidRange),
+            };
+            Ok((output_streams, uniform, output_textures, environment))
         })
         .map_err(|_| Error::InvalidState)?;
     let raster_pass = {
@@ -194,18 +247,18 @@ where
             streams: streams.clone(),
             uniform: Some(uniform),
             textures: textures.clone(),
-            environment: None,
-            target: None,
-            surface_target: true,
+            environment,
+            target: surface_target,
             draws,
             declared: false,
             output: None,
         };
         let mut context = ForwardPhaseContext::new(&mut driver);
         contribute(&mut context).map_err(ForwardPlanBuildError::Pipeline)?;
-        driver
-            .finish_surface()
-            .map_err(|_| ForwardPlanBuildError::Pipeline(PipelineError::InvalidPhaseContribution))?
+        let (pass, _) = driver.finish().map_err(|_| {
+            ForwardPlanBuildError::Pipeline(PipelineError::InvalidPhaseContribution)
+        })?;
+        pass
     };
     Ok(SurfaceForwardDeclaration {
         graph,
@@ -215,8 +268,11 @@ where
         resident_upload_slot: BufferSlot::from(resident_upload),
         frame_upload_slot: BufferSlot::from(frame_upload),
         uniform_slot: BufferSlot::from(uniform),
+        environment_upload_slot: environment_upload.map(BufferSlot::from),
         stream_slots: streams.into_iter().map(BufferSlot::from).collect(),
         texture_slots: textures.into_iter().map(TextureSlot::from).collect(),
+        environment_slot: environment.map(TextureSlot::from),
+        surface_target_slot: TextureSlot::from(surface_target),
         extent: frame.extent,
         draw_count: frame.draws.len(),
         stream_count: frame.resident.streams.len(),

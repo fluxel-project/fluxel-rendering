@@ -129,6 +129,7 @@ pub(super) fn blank_surface_frame(
         frame,
         uniform_upload,
         uniform_bytes,
+        environment: None,
         draws: Vec::new(),
         draw_batches: Vec::new(),
         extent: [1, 1],

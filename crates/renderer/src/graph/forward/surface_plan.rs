@@ -27,8 +27,15 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             || self.resident_upload_slot.resource != declaration.resident_upload_slot.resource
             || self.frame_upload_slot.resource != declaration.frame_upload_slot.resource
             || self.uniform_slot.resource != declaration.uniform_slot.resource
+            || self.environment_upload_slot.map(|slot| slot.resource)
+                != declaration
+                    .environment_upload_slot
+                    .map(|slot| slot.resource)
             || !same_buffer_slots(&self.stream_slots, &declaration.stream_slots)
             || !same_texture_slots(&self.texture_slots, &declaration.texture_slots)
+            || self.environment_slot.map(|slot| slot.resource)
+                != declaration.environment_slot.map(|slot| slot.resource)
+            || self.surface_target_slot.resource != declaration.surface_target_slot.resource
             || self.extent != declaration.extent
             || self.draw_count != declaration.draw_count
             || self.stream_count != declaration.stream_count
@@ -82,8 +89,11 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             resident_upload_slot: declaration.resident_upload_slot,
             frame_upload_slot: declaration.frame_upload_slot,
             uniform_slot: declaration.uniform_slot,
+            environment_upload_slot: declaration.environment_upload_slot,
             stream_slots: declaration.stream_slots,
             texture_slots: declaration.texture_slots,
+            environment_slot: declaration.environment_slot,
+            surface_target_slot: declaration.surface_target_slot,
             extent: declaration.extent,
             draw_count: declaration.draw_count,
             stream_count: declaration.stream_count,
@@ -118,6 +128,10 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
     }
     pub(crate) fn validate_frame(&self, frame: &SurfaceForwardFrame<B>) -> Result<()> {
         if frame.resident.device != self.id.device
+            || frame
+                .environment
+                .as_ref()
+                .is_some_and(|owner| owner.device != self.id.device)
             || frame.extent != self.extent
             || frame.color_format != self.color_format
             || frame.draws.len() != self.draw_count
@@ -129,6 +143,9 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         }
         validate_surface_topology(self.topology, frame.draws.len(), frame.draw_batches.len())?;
         validate_surface_uploads(frame)?;
+        if let Some(environment) = frame.environment.as_ref() {
+            environment.validate_for_sampling(self.id.device)?;
+        }
         validate_surface_batches(frame)?;
         for draw in &frame.draws {
             validate_draw(draw, self.stream_count)?;
@@ -138,12 +155,22 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 return Err(Error::InvalidRange);
             }
         }
-        self.bindings(frame).map(|_| ())
+        Ok(())
+    }
+
+    pub(crate) fn validate_frame_with_image(
+        &self,
+        frame: &SurfaceForwardFrame<B>,
+        image: &SurfaceImage<B>,
+    ) -> Result<()> {
+        self.validate_frame(frame)?;
+        self.bindings(frame, image).map(|_| ())
     }
 
     pub(super) fn bindings<'a>(
         &'a self,
         frame: &'a SurfaceForwardFrame<B>,
+        image: &'a SurfaceImage<B>,
     ) -> Result<FrameBindings<'a, B>> {
         let mut buffers = vec![
             BoundBuffer::new(
@@ -178,6 +205,17 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 frame.resident.upload_incoming,
             ));
         }
+        if let (Some(slot), Some(owner)) =
+            (self.environment_upload_slot, frame.environment.as_ref())
+        {
+            buffers.push(BoundBuffer::new(
+                slot,
+                owner.upload_instance,
+                &owner.upload,
+                &owner.upload_desc,
+                owner.upload_incoming,
+            ));
+        }
         for (slot, stream) in self
             .stream_slots
             .iter()
@@ -194,7 +232,8 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 ));
             }
         }
-        FrameBindings::new(
+        let lease = BoundSurfaceTexture::new(self.surface_target_slot, image)?;
+        FrameBindings::new_with_surface_textures(
             &self.execution,
             self.id.device,
             buffers,
@@ -212,7 +251,20 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                         texture.layout,
                     )
                 })
+                .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
+                    |(slot, owner)| {
+                        BoundTexture::new(
+                            slot,
+                            owner.texture_instance,
+                            &owner.texture,
+                            &owner.desc,
+                            owner.incoming,
+                            owner.layout,
+                        )
+                    },
+                ))
                 .collect(),
+            vec![lease],
         )
         .map_err(binding_error)
     }

@@ -55,6 +55,7 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) uniform_bytes: Vec<u8>,
     pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
+    pub(crate) effects: Option<ForwardTexture<B>>,
     /// Frame-local lighting output. It is sampled by the composite pass before
     /// the final readback target is written.
     pub(crate) scene_color: ForwardTexture<B>,
@@ -84,6 +85,7 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) uniform_bytes: Vec<u8>,
     pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
+    pub(crate) effects: Option<ForwardTexture<B>>,
     pub(crate) scene_color: ForwardTexture<B>,
     pub(crate) scene_color_sampler: fluxel_rhi::api::Sampler<B>,
     pub(crate) scene_color_sampler_desc: SamplerDesc,
@@ -105,26 +107,34 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
 pub(crate) struct DeferredGbufferPlan {
     device: DeviceId,
     descs: [TextureDesc; 3],
+    effects: Option<TextureDesc>,
 }
 
 impl DeferredGbufferPlan {
-    /// Allocates the validated albedo, normal, and depth owners.
-    pub(crate) fn allocate<B: ResourceBackend>(
+    pub(crate) fn allocate_with_effects<B: ResourceBackend>(
         self,
         device: &Device<B>,
-    ) -> Result<[ForwardTexture<B>; 3]> {
+    ) -> Result<([ForwardTexture<B>; 3], Option<ForwardTexture<B>>)> {
         if self.device != device.id() {
             return Err(Error::WrongDevice);
         }
         for desc in &self.descs {
             require_texture(device, desc)?;
         }
+        if let Some(desc) = &self.effects {
+            require_texture(device, desc)?;
+        }
         let [albedo_desc, normal_desc, depth_desc] = self.descs;
-        Ok([
+        let gbuffer = [
             allocate_texture(device, albedo_desc, fluxel_rhi::api::TextureAspects::COLOR)?,
             allocate_texture(device, normal_desc, fluxel_rhi::api::TextureAspects::COLOR)?,
             allocate_texture(device, depth_desc, fluxel_rhi::api::TextureAspects::DEPTH)?,
-        ])
+        ];
+        let effects = self
+            .effects
+            .map(|desc| allocate_texture(device, desc, fluxel_rhi::api::TextureAspects::COLOR))
+            .transpose()?;
+        Ok((gbuffer, effects))
     }
 }
 
@@ -134,18 +144,34 @@ impl DeferredGbufferPlan {
 /// one single-sample Depth32Float attachment. All attachments must also be
 /// sampled by the later lighting pass, so support is checked for the exact
 /// combined `RENDER_ATTACHMENT | TEXTURE_BINDING` descriptors now.
-pub(crate) fn plan_deferred_gbuffer<B: ResourceBackend>(
+pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
     device: &Device<B>,
     extent: [u32; 2],
+    effects: bool,
 ) -> Result<DeferredGbufferPlan> {
-    validate_request(extent, device.capabilities().limits.max_color_attachments)?;
+    validate_request(
+        extent,
+        device.capabilities().limits.max_color_attachments,
+        effects,
+    )?;
     let descs = gbuffer_descs(extent);
     for desc in &descs {
+        require_texture(device, desc)?;
+    }
+    let effects = effects.then(|| {
+        gbuffer_desc(
+            "fluxel deferred surface effects",
+            extent,
+            TextureFormat::Rgba16Float,
+        )
+    });
+    if let Some(desc) = &effects {
         require_texture(device, desc)?;
     }
     Ok(DeferredGbufferPlan {
         device: device.id(),
         descs,
+        effects,
     })
 }
 
@@ -156,7 +182,11 @@ pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
     device: &Device<B>,
     extent: [u32; 2],
 ) -> Result<ForwardTexture<B>> {
-    validate_request(extent, device.capabilities().limits.max_color_attachments)?;
+    validate_request(
+        extent,
+        device.capabilities().limits.max_color_attachments,
+        false,
+    )?;
     let desc = gbuffer_desc(
         "fluxel deferred scene color",
         extent,
@@ -172,14 +202,16 @@ pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
     allocate_texture(device, desc, fluxel_rhi::api::TextureAspects::COLOR)
 }
 
-fn validate_request(extent: [u32; 2], max_color_attachments: u32) -> Result<()> {
+fn validate_request(extent: [u32; 2], max_color_attachments: u32, effects: bool) -> Result<()> {
     if extent.contains(&0) {
         return Err(Error::InvalidRange);
     }
-    if max_color_attachments < 2 {
-        return Err(Error::Unsupported(
-            "deferred G-buffer requires two color attachments",
-        ));
+    if max_color_attachments < if effects { 3 } else { 2 } {
+        return Err(Error::Unsupported(if effects {
+            "deferred surface effects require three color attachments"
+        } else {
+            "deferred G-buffer requires two color attachments"
+        }));
     }
     Ok(())
 }

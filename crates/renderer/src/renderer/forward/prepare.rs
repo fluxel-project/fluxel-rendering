@@ -1,4 +1,5 @@
 //! Scene preparation, residency, and frame assembly for Forward submission.
+use super::assembly::{AssembledForward, AssembledForwardTarget};
 use super::*;
 use std::time::Instant;
 
@@ -12,8 +13,14 @@ where
         + PipelineBackend
         + ShaderBackend,
 {
-    #[allow(clippy::too_many_arguments)] // CPU products, target lease and declaration callback have independent ownership.
-    pub(super) async fn submit_prepared_forward<F>(
+    /// Builds one fully owned Forward frame before Graph declaration.
+    ///
+    /// This seam deliberately stops before recording.  Capture composition can
+    /// therefore assemble two independently retained frames and create the
+    /// receiver material bind group against the capture product, while the
+    /// normal path below continues to execute exactly one assembled frame.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn assemble_prepared_forward(
         &mut self,
         retained_snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         prepared_inputs: Vec<crate::ForwardDrawInput>,
@@ -23,19 +30,15 @@ where
         surface: Option<(SurfaceImage<B>, [u32; 2])>,
         color_format: TextureFormat,
         preparation_started: Instant,
+        capture_texture: Option<&super::captured::CaptureTextureOwner<B>>,
+        sampled_target: bool,
         environment_snapshot: Option<
             fluxel_assets::AssetSnapshot<
                 crate::EnvironmentIrradianceAsset,
                 crate::EnvironmentIrradianceData,
             >,
         >,
-        contribute: F,
-    ) -> std::result::Result<super::Submission, RendererError>
-    where
-        F: FnOnce(
-            &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
-        ) -> std::result::Result<(), crate::PipelineError>,
-    {
+    ) -> std::result::Result<AssembledForward<B>, RendererError> {
         use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
         use crate::residency::{
             EnvironmentFrameOwner, ForwardBindGroup, ForwardDraw, ForwardFrame,
@@ -43,12 +46,6 @@ where
             ForwardTextureInput, SurfaceForwardFrame, SurfaceForwardFrameBuffers,
         };
         self.ensure_open()?;
-        if surface.is_some() && environment_snapshot.is_some() {
-            return Err(Error::Unsupported(
-                "Forward surface diffuse irradiance is not implemented",
-            )
-            .into());
-        }
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
         let batched = crate::preparation::batch_forward_draws(prepared_inputs);
         let batch_stats = batched.stats();
@@ -122,11 +119,34 @@ where
         let mut mappings = Vec::new();
         let mut draw_textures = Vec::new();
         for input in &inputs {
+            let texture = input.asset_texture();
             if material_requires_ordinary_sampler(input.prepared()) {
-                require_filterable_material_texture(&self.device, input.texture().value().extent)
-                    .map_err(|error| {
-                    self.observe_forward_error("sampled material texture admission", error)
-                })?;
+                match texture {
+                    Some(texture) => {
+                        require_filterable_material_texture(&self.device, texture.value().extent)
+                            .map_err(|error| {
+                                self.observe_forward_error(
+                                    "sampled material texture admission",
+                                    error,
+                                )
+                            })?
+                    }
+                    None => {
+                        let capture = capture_texture.ok_or_else(|| {
+                            RendererError::ForwardPreparation(
+                                crate::ForwardPreparationError::CaptureReceiverRequiresSlot {
+                                    source: input.source(),
+                                },
+                            )
+                        })?;
+                        let slot = input.capture_texture_slot().ok_or(Error::InvalidState)?;
+                        capture
+                            .validate_for_receiver(self.device.id(), slot)
+                            .map_err(|error| {
+                                self.observe_forward_error("capture texture admission", error)
+                            })?;
+                    }
+                }
             }
             let geometry_key =
                 crate::residency::ForwardResidentCache::<B>::geometry_key(input, self.device.id());
@@ -162,49 +182,70 @@ where
                 mapping
             };
             mappings.push(mapping);
-            let texture_key =
-                crate::residency::ForwardResidentCache::<B>::texture_key(input, self.device.id());
-            let texture_slot = if let Some(slot) = texture_slots.get(&texture_key) {
-                *slot
-            } else {
-                let slot = final_textures.len();
-                if let Some(cached) = self.forward_residency.texture(texture_key) {
-                    self.forward_stats.texture_hits =
-                        self.forward_stats.texture_hits.saturating_add(1);
-                    final_textures.push(Some(cached));
+            let texture_slot = if let Some(texture) = texture {
+                let texture_key = crate::residency::ForwardResidentCache::<B>::texture_key(
+                    input,
+                    self.device.id(),
+                )
+                .ok_or(Error::InvalidState)?;
+                if let Some(slot) = texture_slots.get(&texture_key) {
+                    *slot
                 } else {
-                    let data = input.texture().value();
-                    let pitch = aligned_forward_row(data.extent[0])?;
-                    let size = u64::from(pitch)
-                        .checked_mul(u64::from(data.extent[1]))
-                        .ok_or(Error::InvalidRange)?;
-                    if size > limits.max_buffer_bytes {
-                        return Err(Error::InvalidRange.into());
+                    let slot = final_textures.len();
+                    if let Some(cached) = self.forward_residency.texture(texture_key) {
+                        self.forward_stats.texture_hits =
+                            self.forward_stats.texture_hits.saturating_add(1);
+                        final_textures.push(Some(cached));
+                    } else {
+                        let data = texture.value();
+                        let pitch = aligned_forward_row(data.extent[0])?;
+                        let size = u64::from(pitch)
+                            .checked_mul(u64::from(data.extent[1]))
+                            .ok_or(Error::InvalidRange)?;
+                        if size > limits.max_buffer_bytes {
+                            return Err(Error::InvalidRange.into());
+                        }
+                        let size = usize::try_from(size).map_err(|_| Error::InvalidRange)?;
+                        let mut bytes = Vec::new();
+                        bytes
+                            .try_reserve_exact(size)
+                            .map_err(|_| Error::OutOfMemory)?;
+                        bytes.resize(size, 0);
+                        let tight = usize::try_from(data.extent[0])
+                            .map_err(|_| Error::InvalidRange)?
+                            .checked_mul(4)
+                            .ok_or(Error::InvalidRange)?;
+                        for (row, source) in data.rgba8.chunks_exact(tight).enumerate() {
+                            let start = row * pitch as usize;
+                            bytes[start..start + tight].copy_from_slice(source);
+                        }
+                        texture_inputs.push(ForwardTextureInput {
+                            bytes,
+                            extent: data.extent,
+                            bytes_per_row: pitch,
+                        });
+                        fresh_texture_slots.push(slot);
+                        final_textures.push(None);
                     }
-                    let size = usize::try_from(size).map_err(|_| Error::InvalidRange)?;
-                    let mut bytes = Vec::new();
-                    bytes
-                        .try_reserve_exact(size)
-                        .map_err(|_| Error::OutOfMemory)?;
-                    bytes.resize(size, 0);
-                    let tight = usize::try_from(data.extent[0])
-                        .map_err(|_| Error::InvalidRange)?
-                        .checked_mul(4)
-                        .ok_or(Error::InvalidRange)?;
-                    for (row, source) in data.rgba8.chunks_exact(tight).enumerate() {
-                        let start = row * pitch as usize;
-                        bytes[start..start + tight].copy_from_slice(source);
-                    }
-                    texture_inputs.push(ForwardTextureInput {
-                        bytes,
-                        extent: data.extent,
-                        bytes_per_row: pitch,
-                    });
-                    fresh_texture_slots.push(slot);
-                    final_textures.push(None);
+                    texture_slots.insert(texture_key, slot);
+                    slot
                 }
-                texture_slots.insert(texture_key, slot);
-                slot
+            } else {
+                let capture = capture_texture.ok_or(Error::InvalidState)?;
+                let slot = input.capture_texture_slot().ok_or(Error::InvalidState)?;
+                capture.validate_for_receiver(self.device.id(), slot)?;
+                let texture_slot = final_textures.len();
+                final_textures.push(Some(crate::residency::ForwardTexture {
+                    texture: capture.texture.clone(),
+                    view: capture.view.clone(),
+                    desc: capture.desc.clone(),
+                    instance: capture.instance,
+                    incoming: capture.incoming,
+                    layout: capture.layout,
+                    device: capture.device,
+                    filterable: capture.filterable,
+                }));
+                texture_slot
             };
             draw_textures.push(texture_slot);
         }
@@ -264,6 +305,19 @@ where
             geometry: geometry_slots.into_iter().collect(),
             textures: texture_slots.into_iter().collect(),
         };
+        let reusable_frame = if sampled_target {
+            None
+        } else {
+            self.forward_frames[slot].take().filter(|buffers| {
+                crate::frame_data::pool::compatible(
+                    buffers,
+                    self.device.id(),
+                    extent,
+                    uniform_len,
+                    row_pitch,
+                )
+            })
+        };
         let (
             mut offscreen_frame,
             mut surface_frame,
@@ -288,15 +342,7 @@ where
                     |error| self.observe_forward_error("surface frame allocation", error),
                 )?;
             (None, Some(buffers), upload, 2, allocation_bytes, 0)
-        } else if let Some(buffers) = self.forward_frames[slot].take().filter(|buffers| {
-            crate::frame_data::pool::compatible(
-                buffers,
-                self.device.id(),
-                extent,
-                uniform_len,
-                row_pitch,
-            )
-        }) {
+        } else if let Some(buffers) = reusable_frame {
             self.forward_stats.frame_reuses = self.forward_stats.frame_reuses.saturating_add(1);
             (
                 Some(buffers),
@@ -317,6 +363,7 @@ where
                 0..uniform_len,
                 row_pitch,
                 limits.uniform_offset_alignment,
+                sampled_target,
             )
             .map_err(|error| self.observe_forward_error("frame planning", error))?;
             let allocation_bytes = frame_plan
@@ -424,7 +471,7 @@ where
                             self.observe_forward_error("environment bind group", error)
                         })?,
                 ),
-                (None, None) => None,
+                (None, _) => None,
                 _ => return Err(Error::InvalidState.into()),
             };
             let transform_range = uniforms.transforms[index].clone();
@@ -480,7 +527,7 @@ where
             _inputs: inputs,
         };
         let preparation_elapsed_ns = preparation_started.elapsed().as_nanos();
-        let result = match (surface, offscreen_frame.take(), surface_frame.take()) {
+        let target = match (surface, offscreen_frame.take(), surface_frame.take()) {
             (Some((image, _)), None, Some(frame)) => {
                 let frame = SurfaceForwardFrame {
                     resident,
@@ -488,21 +535,13 @@ where
                     frame,
                     uniform_upload,
                     uniform_bytes: uniforms.bytes,
+                    environment,
                     draws,
                     draw_batches,
                     extent,
                     color_format,
                 };
-                self.execute_forward_surface(
-                    retained,
-                    frame,
-                    publication,
-                    topology,
-                    batch_stats,
-                    image,
-                    contribute,
-                )
-                .await
+                AssembledForwardTarget::Surface { frame, image }
             }
             (None, Some(frame), None) => {
                 let frame = ForwardFrame {
@@ -517,39 +556,23 @@ where
                     extent,
                     readback_row_pitch: row_pitch,
                 };
-                self.execute_forward_with_contribution(
-                    retained,
-                    frame,
-                    publication,
-                    topology,
-                    batch_stats,
-                    contribute,
-                )
-                .await
+                AssembledForwardTarget::Offscreen { frame }
             }
-            _ => Err(Error::InvalidState.into()),
+            _ => return Err(Error::InvalidState.into()),
         };
-        if result.is_ok() {
-            self.forward_stats.preparation_elapsed_ns = self
-                .forward_stats
-                .preparation_elapsed_ns
-                .saturating_add(preparation_elapsed_ns);
-            self.forward_stats.accepted_buffer_allocations = self
-                .forward_stats
-                .accepted_buffer_allocations
-                .saturating_add(resident_buffer_allocations)
-                .saturating_add(frame_buffer_allocations);
-            self.forward_stats.accepted_buffer_allocation_bytes = self
-                .forward_stats
-                .accepted_buffer_allocation_bytes
-                .saturating_add(resident_buffer_allocation_bytes)
-                .saturating_add(frame_buffer_allocation_bytes);
-            self.forward_stats.accepted_texture_allocations = self
-                .forward_stats
-                .accepted_texture_allocations
-                .saturating_add(resident_texture_allocations)
-                .saturating_add(frame_texture_allocations);
-        }
-        result
+        Ok(AssembledForward {
+            retained,
+            target,
+            publication,
+            topology,
+            batch_stats,
+            preparation_elapsed_ns,
+            buffer_allocations: resident_buffer_allocations
+                .saturating_add(frame_buffer_allocations),
+            buffer_allocation_bytes: resident_buffer_allocation_bytes
+                .saturating_add(frame_buffer_allocation_bytes),
+            texture_allocations: resident_texture_allocations
+                .saturating_add(frame_texture_allocations),
+        })
     }
 }

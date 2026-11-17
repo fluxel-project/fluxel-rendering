@@ -86,6 +86,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             environment_upload_slot: declaration.environment_upload_slot,
             environment_slot: declaration.environment_slot,
             gbuffer_slots: declaration.gbuffer_slots,
+            effects_slot: declaration.effects_slot,
             scene_color_slot: declaration.scene_color_slot,
             surface_target_slot: declaration.surface_target_slot,
             target_slot: declaration.target_slot,
@@ -149,6 +150,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 != declaration.environment_slot.map(|slot| slot.resource)
             || self.gbuffer_slots.map(|slot| slot.resource)
                 != declaration.gbuffer_slots.map(|slot| slot.resource)
+            || self.effects_slot.map(|slot| slot.resource)
+                != declaration.effects_slot.map(|slot| slot.resource)
             || self.scene_color_slot.map(|slot| slot.resource)
                 != declaration.scene_color_slot.map(|slot| slot.resource)
             || self.surface_target_slot.map(|slot| slot.resource)
@@ -280,6 +283,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || frame.scene_color.texture.device() != self.id.device
             || frame.scene_color.view.device() != self.id.device
             || frame.scene_color_sampler.device() != self.id.device
+            || frame.effects.as_ref().is_some_and(|effects| {
+                effects.texture.device() != self.id.device
+                    || effects.view.device() != self.id.device
+            })
         {
             return Err(Error::WrongDevice);
         }
@@ -316,6 +323,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 self.extent,
                 fluxel_rhi::api::TextureFormat::Depth32Float,
             )
+            || frame.effects.as_ref().is_some_and(|effects| {
+                !matches_gbuffer_template(
+                    &effects.desc,
+                    self.extent,
+                    fluxel_rhi::api::TextureFormat::Rgba16Float,
+                )
+            })
+            || self.effects_slot.is_some() != frame.effects.is_some()
             || !matches_final_target_template(&frame.frame.target_desc, self.extent)
             || !matches_gbuffer_template(
                 &frame.scene_color.desc,
@@ -512,6 +527,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .iter()
                     .copied()
                     .zip(&frame.gbuffer)
+                    .map(|(slot, texture)| {
+                        BoundTexture::new(
+                            slot,
+                            texture.instance,
+                            &texture.texture,
+                            &texture.desc,
+                            texture.incoming,
+                            texture.layout,
+                        )
+                    }),
+            )
+            .chain(
+                self.effects_slot
+                    .zip(frame.effects.as_ref())
                     .map(|(slot, texture)| {
                         BoundTexture::new(
                             slot,

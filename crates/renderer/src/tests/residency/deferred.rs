@@ -27,15 +27,31 @@ fn gbuffer_descriptors_require_two_sampled_attachments_and_depth() {
 #[test]
 fn request_rejects_zero_extent_and_insufficient_color_attachments() {
     assert!(matches!(
-        validate_request([0, 1], 2),
+        validate_request([0, 1], 2, false),
         Err(fluxel_rhi::api::Error::InvalidRange)
     ));
     assert!(matches!(
-        validate_request([1, 0], 2),
+        validate_request([1, 0], 2, false),
         Err(fluxel_rhi::api::Error::InvalidRange)
     ));
     assert!(matches!(
-        validate_request([1, 1], 1),
+        validate_request([1, 1], 1, false),
         Err(fluxel_rhi::api::Error::Unsupported(_))
     ));
+}
+
+#[test]
+fn effects_require_a_third_color_attachment_without_penalizing_legacy_gbuffer() {
+    assert!(validate_request([1, 1], 2, false).is_ok());
+    assert!(matches!(
+        validate_request([1, 1], 2, true),
+        Err(fluxel_rhi::api::Error::Unsupported(_))
+    ));
+    assert!(validate_request([1, 1], 3, true).is_ok());
+    let effects = gbuffer_desc("effects", [1, 1], TextureFormat::Rgba16Float);
+    assert_eq!(effects.format, TextureFormat::Rgba16Float);
+    assert_eq!(
+        effects.usage,
+        TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING
+    );
 }

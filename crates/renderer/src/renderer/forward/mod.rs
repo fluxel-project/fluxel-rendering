@@ -100,6 +100,7 @@ where
             } => {
                 publish(&_frame.resident, publication, &mut self.forward_residency);
             }
+            super::PendingWork::CaptureForward { .. } => {}
             _ => {}
         }
     }
@@ -116,6 +117,7 @@ where
                 self.deferred_frames[slot] = Some(crate::frame_data::deferred_pool::recycle(
                     frame.frame,
                     frame.gbuffer,
+                    frame.effects,
                 ));
             }
             _ => {}
@@ -166,16 +168,23 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
     pub(super) environment_layout: Option<BindGroupLayout<B>>,
 }
 
+mod assembly;
+mod capture_entry;
+mod capture_execute;
+mod captured;
 mod composed;
 mod entry;
 mod execute;
 mod prepare;
 mod sampler;
+mod surface_composite;
 pub(crate) use sampler::{
     default_material_sampler, material_requires_ordinary_sampler,
     require_filterable_material_texture, validate_ordinary_sampler, validate_sampled_texture_owner,
 };
 mod program;
+pub use captured::CaptureTextureSlot;
+pub(crate) use surface_composite::SurfaceCompositeOwner;
 
 fn aligned_forward_row(width: u32) -> std::result::Result<u32, RendererError> {
     let row = u64::from(width).checked_mul(4).ok_or(Error::InvalidRange)?;

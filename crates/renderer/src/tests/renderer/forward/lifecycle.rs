@@ -231,7 +231,7 @@ fn stale_surface_forward_image_is_rejected_before_execution() {
 }
 
 #[test]
-fn surface_forward_rejects_a_lease_with_a_different_extent_during_raster_recording() {
+fn surface_forward_rejects_a_lease_with_a_different_extent_before_upload() {
     let (device, native) = fixture(Script::AcceptedExact);
     let mut renderer = Renderer::new(device.clone()).unwrap();
     let mut surface = witness_surface(&device);
@@ -247,26 +247,28 @@ fn surface_forward_rejects_a_lease_with_a_different_extent_during_raster_recordi
     block_on(surface.configure(&config)).unwrap();
     let image = block_on(surface.acquire()).unwrap();
 
+    let error = execute_surface(
+        &mut renderer,
+        retained(),
+        blank_surface_frame(&device),
+        FrameTopology::OpaqueForward,
+        image,
+    )
+    .expect_err("mismatched extent must be rejected");
     assert!(matches!(
-        execute_surface(
-            &mut renderer,
-            retained(),
-            blank_surface_frame(&device),
-            FrameTopology::OpaqueForward,
-            image,
-        ),
-        Err(RendererError::RetainedExecution {
-            recording_error: Some(Error::InvalidRange),
-            ..
-        })
+        error,
+        RendererError::ForwardOperation {
+            operation: "surface frame validation",
+            error: Error::InvalidState,
+        }
     ));
-    assert_eq!(native.command_calls.load(Ordering::SeqCst), 2);
-    assert_eq!(native.finishes.load(Ordering::SeqCst), 1);
-    assert_eq!(renderer.pending(), 1);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(native.finishes.load(Ordering::SeqCst), 0);
+    assert_eq!(renderer.pending(), 0);
 }
 
 #[test]
-fn surface_forward_rejects_a_lease_with_a_different_pipeline_format_during_raster_recording() {
+fn surface_forward_rejects_a_lease_with_a_different_pipeline_format_before_upload() {
     let (device, native) = fixture(Script::AcceptedExact);
     let mut renderer = Renderer::new(device.clone()).unwrap();
     let mut surface = witness_surface(&device);
@@ -282,22 +284,24 @@ fn surface_forward_rejects_a_lease_with_a_different_pipeline_format_during_raste
     block_on(surface.configure(&config)).unwrap();
     let image = block_on(surface.acquire()).unwrap();
 
+    let error = execute_surface(
+        &mut renderer,
+        retained(),
+        blank_surface_frame(&device),
+        FrameTopology::OpaqueForward,
+        image,
+    )
+    .expect_err("mismatched format must be rejected");
     assert!(matches!(
-        execute_surface(
-            &mut renderer,
-            retained(),
-            blank_surface_frame(&device),
-            FrameTopology::OpaqueForward,
-            image,
-        ),
-        Err(RendererError::RetainedExecution {
-            recording_error: Some(Error::InvalidRange),
-            ..
-        })
+        error,
+        RendererError::ForwardOperation {
+            operation: "surface frame validation",
+            error: Error::InvalidState,
+        }
     ));
-    assert_eq!(native.command_calls.load(Ordering::SeqCst), 2);
-    assert_eq!(native.finishes.load(Ordering::SeqCst), 1);
-    assert_eq!(renderer.pending(), 1);
+    assert_eq!(native.command_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(native.finishes.load(Ordering::SeqCst), 0);
+    assert_eq!(renderer.pending(), 0);
 }
 
 #[test]

@@ -6,11 +6,12 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         &self,
         encoder: &mut CommandEncoder<B>,
         frame: &SurfaceForwardFrame<B>,
+        image: &SurfaceImage<B>,
     ) -> Result<()>
     where
         B: CommandBackend + ResourceBackend,
     {
-        self.record_surface_upload(encoder, frame)
+        self.record_surface_upload(encoder, frame, image)
     }
 
     pub(crate) fn record_raster(
@@ -36,7 +37,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         }
         validate_surface_topology(self.topology, frame.draws.len(), frame.draw_batches.len())?;
         validate_surface_batches(frame)?;
-        let bindings = self.bindings(frame)?;
+        let bindings = self.bindings(frame, image)?;
         let pass = bindings.pass(self.raster_pass)?;
         for draw in &frame.draws {
             validate_draw(draw, self.stream_slots.len())?;
@@ -81,8 +82,20 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 texture_read_uses(),
             )?;
         }
-        // The surface lease is the actual color attachment. It is intentionally
-        // absent from FrameBindings because it has no persistent owner.
+        if frame.environment.is_some() {
+            pass.texture(
+                self.environment_slot.ok_or(Error::InvalidState)?,
+                whole(),
+                AccessKind::Read,
+                texture_read_uses(),
+            )?;
+        }
+        pass.surface_texture(
+            self.surface_target_slot,
+            whole(),
+            AccessKind::Write,
+            color_write_uses(),
+        )?;
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {
             view: AttachmentView::Surface(image),
@@ -152,11 +165,12 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         &self,
         encoder: &mut CommandEncoder<B>,
         frame: &SurfaceForwardFrame<B>,
+        image: &SurfaceImage<B>,
     ) -> Result<()>
     where
         B: CommandBackend + ResourceBackend,
     {
-        let bindings = self.bindings(frame)?;
+        let bindings = self.bindings(frame, image)?;
         let pass = bindings.pass(self.upload_pass)?;
         for upload in &frame.resident_upload.vertices {
             let slot = *self
@@ -210,6 +224,22 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 copy_read_uses(),
             )?;
             pass.texture(slot, whole(), AccessKind::Write, texture_copy_write_uses())?;
+        }
+        if let (Some(slot), Some(owner)) =
+            (self.environment_upload_slot, frame.environment.as_ref())
+        {
+            pass.buffer(
+                slot,
+                0..owner.upload_desc.size,
+                AccessKind::Read,
+                copy_read_uses(),
+            )?;
+            pass.texture(
+                self.environment_slot.ok_or(Error::InvalidState)?,
+                whole(),
+                AccessKind::Write,
+                texture_copy_write_uses(),
+            )?;
         }
         pass.transition(encoder)?;
         for upload in &frame.resident_upload.vertices {
@@ -283,6 +313,37 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                     mip: 0,
                     origin: [0, 0, 0],
                     extent: copy.extent,
+                    aspect: TextureAspects::COLOR,
+                },
+            )?;
+        }
+        if let (Some(slot), Some(owner)) =
+            (self.environment_upload_slot, frame.environment.as_ref())
+        {
+            let src = pass.buffer(
+                slot,
+                0..owner.upload_desc.size,
+                AccessKind::Read,
+                copy_read_uses(),
+            )?;
+            let texture = pass.texture(
+                self.environment_slot.ok_or(Error::InvalidState)?,
+                whole(),
+                AccessKind::Write,
+                texture_copy_write_uses(),
+            )?;
+            encoder.buffer_to_texture(
+                src,
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: owner.bytes_per_row,
+                    rows_per_image: owner.desc.extent[1],
+                },
+                TextureRegion {
+                    texture,
+                    mip: 0,
+                    origin: [0, 0, 0],
+                    extent: owner.desc.extent,
                     aspect: TextureAspects::COLOR,
                 },
             )?;

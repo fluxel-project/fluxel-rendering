@@ -252,6 +252,8 @@ where
                 .begin_execution(plan.submission().clone(), CompletionRequest::End)
         }
         .map_err(|error| self.observe_rhi_error(error))?;
+        let mut present = Some(PresentBinding::new(image));
+        let image = present.as_ref().ok_or(Error::InvalidState)?.image();
         let mut recorded = execution.commands(plan.upload_step(), |encoder| {
             plan.surface_record_upload(encoder, &frame, &image)
         });
@@ -279,8 +281,14 @@ where
         }
         if recorded.is_ok() {
             recorded = execution
-                .present(plan.present_step()?, PresentBinding::new(image))
-                .map_err(|failure| failure.error);
+                .present(
+                    plan.present_step()?,
+                    present.take().ok_or(Error::InvalidState)?,
+                )
+                .map_err(|failure| {
+                    present = failure.binding;
+                    failure.error
+                });
         }
         let outcome = unsafe { execution.finish() };
         let submission = self.settle_submission(
@@ -291,6 +299,7 @@ where
             (outcome, recorded),
             super::super::PendingWork::DeferredSurface {
                 _frame: Box::new(frame),
+                _present: present,
                 plan,
             },
         )?;

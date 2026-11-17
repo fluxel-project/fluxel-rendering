@@ -128,6 +128,25 @@ pub enum ForwardPreparationError {
         /// Draw requesting the texture.
         source: ForwardDrawSource,
     },
+    /// A capture receiver supplied an ordinary CPU texture source.
+    CaptureReceiverRequiresSlot {
+        /// Draw requesting the capture product.
+        source: ForwardDrawSource,
+    },
+    /// The named capture slot is absent from the compiled material contribution.
+    MissingCaptureSlot {
+        /// Draw requesting the capture product.
+        source: ForwardDrawSource,
+        /// Requested logical resource name.
+        slot: String,
+    },
+    /// The named capture slot is not a sampled float texture at the Forward location.
+    InvalidCaptureSlot {
+        /// Draw requesting the capture product.
+        source: ForwardDrawSource,
+        /// Requested logical resource name.
+        slot: String,
+    },
 }
 
 impl fmt::Display for ForwardPreparationError {

@@ -38,8 +38,8 @@ pub(crate) struct LightingProgram<B: ResourceBackend> {
 }
 
 pub(crate) struct SceneColorCompositeProgram<B: ResourceBackend> {
-    pub(super) pipeline: RasterPipeline<B>,
-    pub(super) layout: BindGroupLayout<B>,
+    pub(crate) pipeline: RasterPipeline<B>,
+    pub(crate) layout: BindGroupLayout<B>,
 }
 
 impl<B> Renderer<B>
@@ -56,6 +56,7 @@ where
         &mut self,
         prepared: &PreparedMaterial,
         pbr: bool,
+        effects: bool,
     ) -> std::result::Result<Arc<GbufferProgram<B>>, RendererError> {
         self.ensure_open()?;
         let transform_uniform_bytes = if pbr { 192 } else { 64 };
@@ -64,6 +65,7 @@ where
             prepared,
             transform_uniform_bytes,
             pbr,
+            effects,
         );
         if let Some(program) = self.deferred_programs.get_gbuffer(&key) {
             self.deferred_stats.gbuffer_program_hits += 1;
@@ -143,7 +145,15 @@ where
                     constants: vec![],
                 }),
                 vertex_buffers: prepared.geometry().streams.clone(),
-                color_targets: vec![Some(color_target()), Some(color_target())],
+                color_targets: if effects {
+                    vec![
+                        Some(color_target()),
+                        Some(color_target()),
+                        Some(color_target_with_format(TextureFormat::Rgba16Float)),
+                    ]
+                } else {
+                    vec![Some(color_target()), Some(color_target())]
+                },
                 primitive: opaque_triangles(),
                 depth_stencil: Some(depth_state()),
                 multisample: single_sample(),
@@ -168,11 +178,16 @@ where
         &mut self,
         pbr: bool,
         use_environment: bool,
+        effects: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<Arc<LightingProgram<B>>, RendererError> {
         self.ensure_open()?;
         let request = if pbr {
-            if use_environment {
+            if effects && use_environment {
+                crate::pbr::lighting_effect_irradiance_request()
+            } else if effects {
+                crate::pbr::lighting_effect_request()
+            } else if use_environment {
                 crate::pbr::lighting_irradiance_request()
             } else {
                 crate::pbr::lighting_request()
@@ -210,6 +225,7 @@ where
             self.device.id(),
             artifact.cache_key().clone(),
             pbr,
+            effects,
             color_format,
         );
         if let Some(program) = self.deferred_programs.get_lighting(&key) {
@@ -261,11 +277,17 @@ where
             .device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some("Deferred lighting bindings".into()),
-                entries: vec![
-                    sampled_texture(0, TextureSampleType::Float),
-                    sampled_texture(1, TextureSampleType::Float),
-                    sampled_texture(2, TextureSampleType::Depth),
-                ],
+                entries: {
+                    let mut entries = vec![
+                        sampled_texture(0, TextureSampleType::Float),
+                        sampled_texture(1, TextureSampleType::Float),
+                        sampled_texture(2, TextureSampleType::Depth),
+                    ];
+                    if effects {
+                        entries.push(sampled_texture(3, TextureSampleType::Float));
+                    }
+                    entries
+                },
             })
             .map_err(|error| self.observe_rhi_error(error))?;
         let environment_layout = if use_environment {
@@ -331,7 +353,7 @@ where
         Ok(program)
     }
 
-    pub(super) async fn deferred_scene_color_composite_program(
+    pub(crate) async fn deferred_scene_color_composite_program(
         &mut self,
         color_format: TextureFormat,
     ) -> std::result::Result<SceneColorCompositeProgram<B>, RendererError> {

@@ -144,6 +144,7 @@ pub(super) fn validate_material_schema(
 #[derive(Clone, Copy)]
 pub(super) enum ForwardTemplate {
     Position,
+    PositionUv0,
     PositionUvColor,
 }
 
@@ -166,6 +167,27 @@ impl ForwardTemplate {
                 VertexType::Vec3(ScalarType::F32),
             ))
             .with_static_option("forward.vertex_inputs", "position"),
+            Self::PositionUv0 => ShaderCompositionRequest::new(vec![SourceUnit::new(
+                "forward-template-position-uv0",
+                POSITION_UV0_TEMPLATE,
+            )])
+            .with_entry_point(EntryPoint::new("forward_vs", ShaderStage::Vertex))
+            .with_entry_point(EntryPoint::new("forward_fs", ShaderStage::Fragment))
+            .with_binding(
+                BindingDeclaration::new(1, 0, BindingKind::Uniform)
+                    .with_visibility([ShaderStage::Vertex]),
+            )
+            .with_vertex_input(VertexInputDeclaration::new(
+                "POSITION",
+                0,
+                VertexType::Vec3(ScalarType::F32),
+            ))
+            .with_vertex_input(VertexInputDeclaration::new(
+                "UV0",
+                1,
+                VertexType::Vec2(ScalarType::F32),
+            ))
+            .with_static_option("forward.vertex_inputs", "position-uv0"),
             Self::PositionUvColor => ShaderCompositionRequest::new(vec![SourceUnit::new(
                 "forward-template-position-uv-color",
                 POSITION_UV_COLOR_TEMPLATE,
@@ -223,6 +245,27 @@ pub(super) fn forward_template(
         (true, true) => Ok(ForwardTemplate::PositionUvColor),
         _ => Err(ForwardPreparationError::IncompleteOptionalAttributes { source }),
     }
+}
+
+/// Selects the unlit UV0 template without accepting the legacy `UV`/`COLOR`
+/// pair. The named semantic is part of the material/geometry contract.
+pub(super) fn color_uv0_template(
+    layout: &GeometryLayout,
+    source: ForwardDrawSource,
+) -> Result<ForwardTemplate, ForwardPreparationError> {
+    let mut position = false;
+    let mut uv0 = false;
+    for attribute in layout.streams.iter().flat_map(|stream| &stream.attributes) {
+        position |= attribute.semantic == "POSITION";
+        uv0 |= attribute.semantic == "UV0";
+    }
+    if !position {
+        return Err(ForwardPreparationError::MissingPosition { source });
+    }
+    if !uv0 {
+        return Err(ForwardPreparationError::MissingUv0 { source });
+    }
+    Ok(ForwardTemplate::PositionUv0)
 }
 
 pub(super) fn finite_transform(transform: RenderTransform) -> bool {
@@ -283,6 +326,31 @@ fn forward_vs(@location(0) forward_position: vec3<f32>) -> ForwardVertexOutput {
 @fragment
 fn forward_fs() -> @location(0) vec4<f32> {
     return evaluate_material();
+}
+"#;
+
+const POSITION_UV0_TEMPLATE: &str = r#"
+@group(1) @binding(0) var<uniform> forward_clip_from_local: mat4x4<f32>;
+
+struct ForwardUv0VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv0: vec2<f32>,
+};
+
+@vertex
+fn forward_vs(
+    @location(0) forward_position: vec3<f32>,
+    @location(1) forward_uv0: vec2<f32>,
+) -> ForwardUv0VertexOutput {
+    var output: ForwardUv0VertexOutput;
+    output.position = forward_clip_from_local * vec4<f32>(forward_position, 1.0);
+    output.uv0 = forward_uv0;
+    return output;
+}
+
+@fragment
+fn forward_fs(input: ForwardUv0VertexOutput) -> @location(0) vec4<f32> {
+    return evaluate_material_uv0(input.uv0);
 }
 "#;
 

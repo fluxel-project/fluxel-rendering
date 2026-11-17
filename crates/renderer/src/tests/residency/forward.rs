@@ -30,6 +30,7 @@ impl<B: ResourceBackend> ForwardFrameBuffers<B> {
                 uniform_range,
                 row_pitch,
                 device.capabilities().limits.uniform_offset_alignment,
+                false,
             )?,
         )
     }

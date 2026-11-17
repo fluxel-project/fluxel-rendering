@@ -123,12 +123,6 @@ where
                 .iter()
                 .any(|input| input.prepared().uses_environment_irradiance())
         });
-        if environment_snapshot.is_some() && surface.is_some() {
-            return Err(Error::Unsupported(
-                "Forward surface diffuse irradiance is not implemented",
-            )
-            .into());
-        }
         self.submit_prepared_forward(
             snapshot.clone(),
             prepared_inputs,

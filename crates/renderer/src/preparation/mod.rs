@@ -12,8 +12,10 @@ pub use environment::{EnvironmentIrradianceAsset, EnvironmentIrradianceData};
 #[cfg(test)]
 pub(crate) use forward::prepare_feature_draws;
 pub use forward::{
-    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, ForwardDrawRequest,
-    ForwardPreparationError, ForwardResources, GeometryAsset, GeometryData, prepare_forward,
+    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardCaptureResources, ForwardDrawInput,
+    ForwardDrawRequest, ForwardPreparationError, ForwardResources, ForwardTextureSource,
+    GeometryAsset, GeometryData, PreparedCaptureReceiver, prepare_forward,
+    prepare_forward_capture_receiver,
 };
 pub(crate) use forward::{
     ForwardBatchStats, ForwardCompatibilityKey, batch_forward_draws,
@@ -27,3 +29,7 @@ pub use geometry::{
     GeometryStream, GeometryStreamBinding, PreparedGeometry, PreparedGeometryBindings,
 };
 pub use material::{MaterialPreparationError, PreparedMaterial, prepare_material};
+
+#[cfg(test)]
+#[path = "../tests/preparation/forward_capture.rs"]
+mod capture_tests;

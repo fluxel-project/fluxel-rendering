@@ -25,8 +25,8 @@ mod forward_pbr;
 mod forward_validation;
 use forward_pbr::normal_from_local;
 use forward_validation::{
-    finite_transform, forward_template, multiply_columns, resolve_asset, validate_cpu_geometry,
-    validate_material_schema, validate_texture,
+    color_uv0_template, finite_transform, forward_template, multiply_columns, resolve_asset,
+    validate_cpu_geometry, validate_material_schema, validate_texture,
 };
 
 /// Marker for immutable geometry assets consumed by the initial Forward path.
@@ -58,6 +58,14 @@ pub struct ColorTextureData {
     /// Exactly four bytes per texel in row-major order.
     pub rgba8: Vec<u8>,
 }
+
+#[path = "forward_capture.rs"]
+mod forward_capture;
+pub(crate) use forward_capture::ResolvedForwardTexture;
+pub use forward_capture::{
+    ForwardCaptureResources, ForwardTextureSource, PreparedCaptureReceiver,
+    prepare_forward_capture_receiver,
+};
 
 /// Logical asset references and dynamic tint owned by one Forward scene record.
 #[derive(Clone, Debug)]
@@ -106,7 +114,7 @@ pub struct ForwardDrawInput {
     order: i64,
     geometry: AssetSnapshot<GeometryAsset, GeometryData>,
     material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
-    texture: AssetSnapshot<ColorTextureAsset, ColorTextureData>,
+    texture: ResolvedForwardTexture,
     prepared: PreparedMaterial,
     tint: [f32; 4],
     transform: RenderTransform,
@@ -222,9 +230,23 @@ impl ForwardDrawInput {
         &self.material
     }
 
-    /// Returns the retained immutable color-texture generation.
-    pub fn texture(&self) -> &AssetSnapshot<ColorTextureAsset, ColorTextureData> {
-        &self.texture
+    /// Returns the retained immutable color-texture generation when this draw
+    /// follows the normal asset route.
+    pub(crate) fn asset_texture(
+        &self,
+    ) -> Option<&AssetSnapshot<ColorTextureAsset, ColorTextureData>> {
+        match &self.texture {
+            ResolvedForwardTexture::Asset(texture) => Some(texture),
+            ResolvedForwardTexture::CaptureSlot(_) => None,
+        }
+    }
+
+    /// Returns the required same-frame capture product slot, if any.
+    pub(crate) fn capture_texture_slot(&self) -> Option<&str> {
+        match &self.texture {
+            ResolvedForwardTexture::Asset(_) => None,
+            ResolvedForwardTexture::CaptureSlot(slot) => Some(slot),
+        }
     }
 
     /// Returns the prepared logical Material, Shader, and geometry products.
@@ -402,14 +424,15 @@ fn prepare_draw(
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
     let extensions = material.value().surface_extensions();
-    if extensions.occlusion.is_some() || extensions.emissive.is_some() {
-        return Err(ForwardPreparationError::UnsupportedSurfaceExtensions { source });
-    }
+    let has_surface_effects = extensions.occlusion.is_some() || extensions.emissive.is_some();
     let texture = resolve_asset(&assets.textures, resources.texture, "texture", source)?;
     validate_texture(texture.value(), source)?;
     let request = match material.value().output() {
         fluxel_material::SurfaceOutput::Color => {
             forward_template(&geometry.value().layout, source)?.request()
+        }
+        fluxel_material::SurfaceOutput::ColorUv0 => {
+            color_uv0_template(&geometry.value().layout, source)?.request()
         }
         fluxel_material::SurfaceOutput::MetallicRoughness { .. } => (if environment {
             crate::pbr::forward_irradiance_request(&geometry.value().layout)
@@ -423,15 +446,22 @@ fn prepare_draw(
             crate::pbr::forward_uv0_request(&geometry.value().layout)
         })
         .ok_or(ForwardPreparationError::MissingUv0 { source })?,
+        fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+            if has_surface_effects =>
+        {
+            (if environment {
+                crate::pbr::forward_uv0_normal_effect_irradiance_request(&geometry.value().layout)
+            } else {
+                crate::pbr::forward_uv0_normal_effect_request(&geometry.value().layout)
+            })
+            .ok_or(ForwardPreparationError::MissingNormal { source })?
+        }
         fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => (if environment {
             crate::pbr::forward_uv0_normal_irradiance_request(&geometry.value().layout)
         } else {
             crate::pbr::forward_uv0_normal_request(&geometry.value().layout)
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
-        fluxel_material::SurfaceOutput::ColorUv0 => {
-            return Err(ForwardPreparationError::MaterialBindingSchema { source });
-        }
     };
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
@@ -461,7 +491,7 @@ fn prepare_draw(
         order,
         geometry,
         material,
-        texture,
+        texture: ResolvedForwardTexture::Asset(texture),
         prepared,
         tint: resources.tint,
         transform,
@@ -521,3 +551,7 @@ mod feature_draws;
 #[cfg(test)]
 #[path = "../tests/preparation/forward_pbr.rs"]
 mod forward_pbr_tests;
+
+#[cfg(test)]
+#[path = "../tests/preparation/color_uv0.rs"]
+mod color_uv0_tests;

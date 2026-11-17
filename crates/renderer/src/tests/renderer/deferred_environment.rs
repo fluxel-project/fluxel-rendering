@@ -229,3 +229,90 @@ fn deferred_surface_environment_rejects_nonfilterable_owner_before_mapping() {
     );
     assert_eq!(native.map_calls.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn forward_surface_environment_uploads_and_retires_after_present_completion() {
+    let (device, native) = environment_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).unwrap();
+    let mut surface = super::surface_tests::surface(&device, [8, 8]);
+    let (snapshot, view, assets) =
+        scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
+    renderer
+        .set_environment_irradiance(Some(irradiance_snapshot([1, 2, 3, 255, 4, 5, 6, 255])))
+        .unwrap();
+
+    let submission = block_on(renderer.submit_forward_surface(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        block_on(surface.acquire()).unwrap(),
+    ))
+    .unwrap();
+
+    assert_eq!(renderer.pending(), 1);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 1);
+    assert!(
+        native
+            .mapped_bytes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|bytes| { bytes.len() == 256 && bytes[..8] == [1, 2, 3, 255, 4, 5, 6, 255] })
+    );
+    assert_eq!(native.texture_uploads.lock().unwrap().len(), 2);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 0);
+    block_on(renderer.complete(&submission)).unwrap();
+    assert_eq!(renderer.pending(), 0);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn forward_surface_without_environment_keeps_the_legacy_route() {
+    let (device, native) = environment_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).unwrap();
+    let mut surface = super::surface_tests::surface(&device, [8, 8]);
+    let (snapshot, view, assets) =
+        scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
+
+    let submission = block_on(renderer.submit_forward_surface(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        snapshot,
+        view,
+        bounds(),
+        &assets,
+        block_on(surface.acquire()).unwrap(),
+    ))
+    .unwrap();
+
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 0);
+    assert_eq!(native.texture_uploads.lock().unwrap().len(), 1);
+    block_on(renderer.complete(&submission)).unwrap();
+}
+
+#[test]
+fn forward_surface_rejects_nonfilterable_actual_environment_owner_before_mapping() {
+    let (device, native) = environment_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).unwrap();
+    let mut surface = super::surface_tests::surface(&device, [8, 8]);
+    let (snapshot, view, assets) =
+        scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
+    renderer
+        .set_environment_irradiance(Some(irradiance_snapshot([1, 2, 3, 255, 4, 5, 6, 255])))
+        .unwrap();
+    native.texture_filterable.store(false, Ordering::SeqCst);
+
+    assert!(
+        block_on(renderer.submit_forward_surface(
+            &ForwardCpuPipeline::new(BoundsVisibility),
+            snapshot,
+            view,
+            bounds(),
+            &assets,
+            block_on(surface.acquire()).unwrap(),
+        ))
+        .is_err()
+    );
+    assert_eq!(native.map_calls.load(Ordering::SeqCst), 0);
+}

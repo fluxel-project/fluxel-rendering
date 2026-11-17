@@ -224,6 +224,7 @@ pub(super) struct SurfaceForwardShape {
     vertex_uploads: Vec<(usize, std::ops::Range<u64>, std::ops::Range<u64>)>,
     texture_uploads: Vec<(usize, u64, u32, u32, [u32; 3])>,
     uniform_upload: (std::ops::Range<u64>, std::ops::Range<u64>),
+    environment: Option<(u64, u32, u32, [u32; 3])>,
     batches: Vec<std::ops::Range<usize>>,
     draws: Vec<ForwardDrawShape>,
 }
@@ -339,6 +340,14 @@ pub(super) fn surface_forward_shape<B: ResourceBackend>(
             frame.uniform_upload.source.clone(),
             frame.uniform_upload.destination.clone(),
         ),
+        environment: frame.environment.as_ref().map(|owner| {
+            (
+                owner.upload_desc.size,
+                owner.bytes_per_row,
+                owner.desc.extent[1],
+                owner.desc.extent,
+            )
+        }),
         batches: frame.draw_batches.clone(),
         draws: frame
             .draws

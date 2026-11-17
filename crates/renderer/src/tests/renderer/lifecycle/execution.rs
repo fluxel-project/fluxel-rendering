@@ -119,10 +119,12 @@ impl ExecutionMode<WitnessBackend> for WitnessMode {
         mut binding: PresentBinding<WitnessBackend>,
     ) -> std::result::Result<(), PresentError<WitnessBackend>> {
         match state.native.script {
-            Script::SurfacePresentRejected => Err(PresentError {
-                error: Error::SurfaceOutdated,
-                binding: Some(binding),
-            }),
+            Script::SurfacePresentRejected | Script::SurfacePresentRejectedAfterScopes => {
+                Err(PresentError {
+                    error: Error::SurfaceOutdated,
+                    binding: Some(binding),
+                })
+            }
             Script::SurfacePresentDeviceLost => Err(PresentError {
                 error: Error::DeviceLost,
                 binding: None,
@@ -181,6 +183,18 @@ impl ExecutionMode<WitnessBackend> for WitnessMode {
                 ExecutionStatus::Rejected,
                 Some(Vec::new()),
                 Some(Vec::new()),
+                None,
+            ),
+            Script::SurfacePresentRejectedAfterScopes => (
+                ExecutionStatus::PartiallyAccepted,
+                Some(vec![
+                    state.steps[0],
+                    state.steps[1],
+                    state.steps[2],
+                    state.steps[3],
+                    state.steps[4],
+                ]),
+                Some(vec![state.steps[4]]),
                 None,
             ),
             Script::AcceptedExact

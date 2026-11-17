@@ -77,7 +77,7 @@ where
         let pending = self.pending_for(submission)?;
         Ok(match &pending.workload {
             super::PendingWork::Deferred { _frame, plan, .. } => Some(plan.diagnostic(_frame)),
-            super::PendingWork::DeferredSurface { _frame, plan } => {
+            super::PendingWork::DeferredSurface { _frame, plan, .. } => {
                 Some(plan.surface_diagnostic(_frame))
             }
             _ => None,

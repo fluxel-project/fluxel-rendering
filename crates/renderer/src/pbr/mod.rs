@@ -119,10 +119,78 @@ pub(crate) fn forward_uv0_normal_request(
     geometry_uv0_normal_request(layout, false)
 }
 
+pub(crate) fn forward_uv0_normal_effect_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    let mut request = geometry_uv0_normal_request(layout, false)?;
+    request
+        .source_units
+        .retain(|unit| unit.id.0 != "pbr-forward-uv0-normal");
+    request.source_units.push(SourceUnit::new(
+        "pbr-forward-uv0-normal-effect",
+        templates::FORWARD_UV0_NORMAL_EFFECT,
+    ));
+    request.static_options.insert(
+        "renderer.surface_effects".into(),
+        "emissive-ao-rgba16float-v1".into(),
+    );
+    Some(request)
+}
+
+pub(crate) fn forward_uv0_normal_effect_irradiance_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    let mut request = forward_uv0_normal_effect_request(layout)?;
+    request
+        .source_units
+        .retain(|unit| unit.id.0 != "pbr-forward-uv0-normal-effect");
+    request.source_units.push(SourceUnit::new(
+        "pbr-diffuse-irradiance",
+        templates::DIFFUSE_IRRADIANCE,
+    ));
+    request.source_units.push(SourceUnit::new(
+        "pbr-forward-uv0-normal-effect-irradiance",
+        templates::FORWARD_UV0_NORMAL_EFFECT_IRRADIANCE,
+    ));
+    Some(
+        request
+            .with_binding(
+                BindingDeclaration::new(2, 0, BindingKind::Texture)
+                    .with_visibility([ShaderStage::Fragment]),
+            )
+            .with_binding(
+                BindingDeclaration::new(2, 1, BindingKind::Sampler)
+                    .with_visibility([ShaderStage::Fragment]),
+            )
+            .with_static_option("renderer.environment", "latlong-diffuse-irradiance-v1"),
+    )
+}
+
 pub(crate) fn gbuffer_uv0_normal_request(
     layout: &GeometryLayout,
 ) -> Option<ShaderCompositionRequest> {
     geometry_uv0_normal_request(layout, true)
+}
+
+/// Deferred MRT request for a UV0 normal surface that has an AO or emissive
+/// extension. The extra target is selected by the Renderer only for such a
+/// material; the legacy request retains its two colour attachments.
+pub(crate) fn gbuffer_uv0_normal_effect_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    let mut request = geometry_uv0_normal_request(layout, true)?;
+    request
+        .source_units
+        .retain(|unit| unit.id.0 != "pbr-gbuffer-uv0-normal");
+    request.source_units.push(SourceUnit::new(
+        "pbr-gbuffer-uv0-normal-effect",
+        templates::GBUFFER_UV0_NORMAL_EFFECT,
+    ));
+    request.static_options.insert(
+        "renderer.surface_effects".into(),
+        "emissive-ao-rgba16float-v1".into(),
+    );
+    Some(request)
 }
 
 fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCompositionRequest> {
@@ -381,6 +449,60 @@ pub(crate) fn lighting_irradiance_request() -> ShaderCompositionRequest {
             BindingDeclaration::new(1, 1, BindingKind::Sampler)
                 .with_visibility([ShaderStage::Fragment]),
         )
+}
+
+pub(crate) fn lighting_effect_request() -> ShaderCompositionRequest {
+    lighting_effect_request_inner(false)
+}
+
+pub(crate) fn lighting_effect_irradiance_request() -> ShaderCompositionRequest {
+    lighting_effect_request_inner(true)
+}
+
+fn lighting_effect_request_inner(environment: bool) -> ShaderCompositionRequest {
+    let mut request = ShaderCompositionRequest::new(vec![
+        SourceUnit::new("pbr-normal", templates::NORMAL),
+        SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT),
+        SourceUnit::new("pbr-diffuse-irradiance", templates::DIFFUSE_IRRADIANCE),
+        SourceUnit::new(
+            if environment {
+                "pbr-deferred-lighting-effect-irradiance"
+            } else {
+                "pbr-deferred-lighting-effect"
+            },
+            if environment {
+                templates::LIGHTING_EFFECT_IRRADIANCE
+            } else {
+                templates::LIGHTING_EFFECT
+            },
+        ),
+    ])
+    .with_entry_point(EntryPoint::new("deferred_lighting_vs", ShaderStage::Vertex))
+    .with_entry_point(EntryPoint::new(
+        "deferred_lighting_fs",
+        ShaderStage::Fragment,
+    ))
+    .with_static_option("renderer.light", "world-directional-orthographic-v1")
+    .with_static_option("renderer.surface_effects", "emissive-ao-rgba16float-v1");
+    for binding in 0..4 {
+        request = request.with_binding(
+            BindingDeclaration::new(0, binding, BindingKind::Texture)
+                .with_visibility([ShaderStage::Fragment]),
+        );
+    }
+    if environment {
+        request = request
+            .with_binding(
+                BindingDeclaration::new(1, 0, BindingKind::Texture)
+                    .with_visibility([ShaderStage::Fragment]),
+            )
+            .with_binding(
+                BindingDeclaration::new(1, 1, BindingKind::Sampler)
+                    .with_visibility([ShaderStage::Fragment]),
+            )
+            .with_static_option("renderer.environment", "latlong-diffuse-irradiance-v1");
+    }
+    request
 }
 
 #[cfg(test)]

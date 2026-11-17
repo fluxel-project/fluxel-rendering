@@ -92,8 +92,12 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
     }
 
     /// Derives the completed texture cache key used by one prepared draw.
-    pub(crate) fn texture_key(draw: &ForwardDrawInput, device: DeviceId) -> ForwardTextureCacheKey {
-        ForwardTextureCacheKey::from_snapshot(draw.texture(), device)
+    pub(crate) fn texture_key(
+        draw: &ForwardDrawInput,
+        device: DeviceId,
+    ) -> Option<ForwardTextureCacheKey> {
+        draw.asset_texture()
+            .map(|texture| ForwardTextureCacheKey::from_snapshot(texture, device))
     }
 
     /// Returns reusable vertex streams for a completed exact geometry generation.

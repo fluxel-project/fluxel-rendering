@@ -63,6 +63,25 @@ pub enum RendererError {
         /// The unmodified RHI failure.
         error: Error,
     },
+    /// A capture receiver did not declare the explicitly requested texture slot.
+    MissingCaptureTextureSlot {
+        /// The requested material resource name.
+        name: String,
+    },
+    /// A capture receiver named a resource that is not a sampled float texture.
+    CaptureTextureSlotWrongKind {
+        /// The requested material resource name.
+        name: String,
+    },
+    /// The provisional Forward capture route cannot bind this material location.
+    CaptureTextureSlotUnsupportedLocation {
+        /// The requested material resource name.
+        name: String,
+        /// The declared bind group.
+        group: u32,
+        /// The declared binding.
+        binding: u32,
+    },
 }
 
 impl fmt::Display for RendererError {
@@ -111,6 +130,23 @@ impl fmt::Display for RendererError {
             Self::ForwardOperation { operation, error } => {
                 write!(formatter, "Forward {operation}: {error}")
             }
+            Self::MissingCaptureTextureSlot { name } => {
+                write!(formatter, "capture receiver is missing texture slot {name}")
+            }
+            Self::CaptureTextureSlotWrongKind { name } => {
+                write!(
+                    formatter,
+                    "capture receiver slot {name} is not a Texture2dF32"
+                )
+            }
+            Self::CaptureTextureSlotUnsupportedLocation {
+                name,
+                group,
+                binding,
+            } => write!(
+                formatter,
+                "capture receiver slot {name} is at unsupported location {group}:{binding}"
+            ),
         }
     }
 }

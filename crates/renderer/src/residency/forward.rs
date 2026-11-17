@@ -211,6 +211,9 @@ pub(crate) struct SurfaceForwardFrame<B: ResourceBackend> {
     pub(crate) frame: SurfaceForwardFrameBuffers<B>,
     pub(crate) uniform_upload: ForwardUniformUpload,
     pub(crate) uniform_bytes: Vec<u8>,
+    /// Optional scene-selected diffuse irradiance owner retained until the
+    /// submission's presentation completion covers its final use.
+    pub(crate) environment: Option<super::EnvironmentFrameOwner<B>>,
     pub(crate) draws: Vec<ForwardDraw<B>>,
     pub(crate) draw_batches: Vec<Range<usize>>,
     pub(crate) extent: [u32; 2],
@@ -456,6 +459,7 @@ pub(crate) fn plan_forward_frame(
     uniform_range: Range<u64>,
     row_pitch: u32,
     alignment: u64,
+    sampled_target: bool,
 ) -> Result<ForwardFramePlan> {
     if extent.contains(&0)
         || uniform_len == 0
@@ -491,6 +495,10 @@ pub(crate) fn plan_forward_frame(
         usage: BufferUsage::COPY_DST | BufferUsage::MAP_READ,
         memory: MemoryClass::Readback,
     };
+    let mut target_usage = TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC;
+    if sampled_target {
+        target_usage |= TextureUsage::TEXTURE_BINDING;
+    }
     let target_desc = TextureDesc {
         label: Some("fluxel forward target".into()),
         dimension: TextureDimension::D2,
@@ -499,7 +507,7 @@ pub(crate) fn plan_forward_frame(
         format: TextureFormat::Rgba8Unorm,
         mip_levels: 1,
         samples: 1,
-        usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
+        usage: target_usage,
         view_formats: Vec::new(),
     };
     Ok(ForwardFramePlan {

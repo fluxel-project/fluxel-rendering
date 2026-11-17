@@ -367,6 +367,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             AccessKind::Write,
             color_write(),
         )?;
+        if let (Some(slot), Some(_)) = (self.effects_slot, frame.effects) {
+            pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
+        }
         pass.texture(
             self.gbuffer_slots[2],
             whole_depth(),
@@ -374,7 +377,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             depth_write(),
         )?;
         pass.transition(encoder)?;
-        let colors = [
+        let mut colors = vec![
             Some(ColorAttachment {
                 view: AttachmentView::Texture(&frame.gbuffer[0].view),
                 resolve_target: None,
@@ -388,6 +391,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 store: StoreOp::Store,
             }),
         ];
+        if let Some(effects) = frame.effects {
+            colors.push(Some(ColorAttachment {
+                view: AttachmentView::Texture(&effects.view),
+                resolve_target: None,
+                load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                store: StoreOp::Store,
+            }));
+        }
         let depth_stencil = DepthStencilAttachment {
             view: AttachmentView::Texture(&frame.gbuffer[2].view),
             depth: Some((LoadOp::Clear(1.0), StoreOp::Store)),
@@ -439,71 +450,6 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             }
         }
         raster.draw(frame.draw.vertices.clone(), 0..1)?;
-        raster.finish()
-    }
-
-    pub(crate) fn record_lighting(
-        &self,
-        encoder: &mut CommandEncoder<B>,
-        frame: &DeferredFrame<B>,
-    ) -> Result<()>
-    where
-        B: RasterBackend,
-    {
-        let scene_color_slot = self.scene_color_slot.ok_or(Error::InvalidState)?;
-        let bindings = self.bindings(frame)?;
-        let pass = bindings.pass(self.lighting_pass)?;
-        pass.texture(
-            self.gbuffer_slots[0],
-            whole_color(),
-            AccessKind::Read,
-            sampled_read(),
-        )?;
-        pass.texture(
-            self.gbuffer_slots[1],
-            whole_color(),
-            AccessKind::Read,
-            sampled_read(),
-        )?;
-        pass.texture(
-            self.gbuffer_slots[2],
-            whole_depth(),
-            AccessKind::Read,
-            sampled_read(),
-        )?;
-        pass.texture(
-            scene_color_slot,
-            whole_color(),
-            AccessKind::Write,
-            color_write(),
-        )?;
-        if let (Some(slot), Some(_)) = (self.environment_slot, frame.environment.as_ref()) {
-            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
-        }
-        pass.transition(encoder)?;
-        let colors = [Some(ColorAttachment {
-            view: AttachmentView::Texture(&frame.scene_color.view),
-            resolve_target: None,
-            load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
-            store: StoreOp::Store,
-        })];
-        let mut raster = encoder.begin_raster(&RasterPassDesc {
-            label: Some("fluxel deferred lighting"),
-            colors: &colors,
-            depth_stencil: None,
-            render_area: render_area(frame.extent),
-            multiview_mask: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            secondary_inheritance: None,
-        })?;
-        configure_raster(&mut raster, frame.extent)?;
-        raster.set_pipeline(&frame.lighting_pipeline)?;
-        raster.set_bind_group(0, &frame.lighting_group, &[])?;
-        if let Some(group) = &frame.lighting_environment_group {
-            raster.set_bind_group(1, group, &[])?;
-        }
-        raster.draw(0..3, 0..1)?;
         raster.finish()
     }
 

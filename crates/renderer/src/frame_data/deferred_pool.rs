@@ -23,6 +23,7 @@ pub(crate) struct DeferredFramePoolEntry<B: ResourceBackend> {
     pub(crate) frame: ForwardFrameBuffers<B>,
     /// Albedo, normal/roughness, and depth owners in Deferred attachment order.
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
+    pub(crate) effects: Option<ForwardTexture<B>>,
 }
 
 /// Records the actual post-readback states for a completed Deferred allocation.
@@ -33,14 +34,20 @@ pub(crate) struct DeferredFramePoolEntry<B: ResourceBackend> {
 pub(crate) fn recycle<B: ResourceBackend>(
     frame: ForwardFrameBuffers<B>,
     mut gbuffer: [ForwardTexture<B>; 3],
+    mut effects: Option<ForwardTexture<B>>,
 ) -> DeferredFramePoolEntry<B> {
     for texture in &mut gbuffer {
+        texture.incoming = sampled_fragment_uses();
+        texture.layout = pooled_layout();
+    }
+    if let Some(texture) = &mut effects {
         texture.incoming = sampled_fragment_uses();
         texture.layout = pooled_layout();
     }
     DeferredFramePoolEntry {
         frame: pool::recycle(frame, true),
         gbuffer,
+        effects,
     }
 }
 
@@ -57,9 +64,30 @@ pub(crate) fn compatible<B: ResourceBackend>(
     extent: [u32; 2],
     uniform_bytes: u64,
     row_pitch: u32,
+    effects: bool,
 ) -> bool {
     pool::compatible(&entry.frame, device, extent, uniform_bytes, row_pitch)
         && gbuffer_compatible(&entry.gbuffer, device, extent)
+        && effect_compatible(&entry.effects, device, extent, effects)
+}
+
+fn effect_compatible<B: ResourceBackend>(
+    effects: &Option<ForwardTexture<B>>,
+    device: DeviceId,
+    extent: [u32; 2],
+    required: bool,
+) -> bool {
+    match (effects, required) {
+        (None, false) => true,
+        (Some(texture), true) => {
+            texture.texture.device() == device
+                && texture.view.device() == device
+                && descriptor_compatible(&texture.desc, extent, TextureFormat::Rgba16Float)
+                && texture.incoming == sampled_fragment_uses()
+                && texture.layout == pooled_layout()
+        }
+        _ => false,
+    }
 }
 
 fn gbuffer_compatible<B: ResourceBackend>(

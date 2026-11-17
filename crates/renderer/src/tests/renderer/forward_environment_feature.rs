@@ -3,7 +3,13 @@
 use super::pbr_tests::{environment_device, geometry, irradiance_snapshot, scene_and_assets};
 use super::*;
 
+use fluxel_assets::{Acquire, AssetStore, ResidentBytes};
+use fluxel_material::{
+    BindingLocation, MaterialAsset, MaterialDefinition, MaterialFragment, MaterialParameter,
+    MaterialResource, MaterialResourceKind, MaterialType, SurfaceOutput,
+};
 use fluxel_shader::ShaderComposer;
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 
 use crate::{
@@ -87,6 +93,86 @@ fn feature_input(
     let input = storage
         .publish(&context, vec![request])
         .expect("feature input");
+    (storage, input)
+}
+
+fn color_material_snapshot() -> fluxel_assets::AssetSnapshot<MaterialAsset, MaterialDefinition> {
+    let store = AssetStore::<MaterialAsset, MaterialDefinition, ()>::new();
+    let handle = store.create().expect("material handle");
+    match store.acquire(&handle).expect("material producer") {
+        Acquire::Producer(producer) => producer
+            .commit(
+                MaterialDefinition::new(
+                    vec![MaterialFragment {
+                        name: "color".into(),
+                        inputs: Vec::new(),
+                        output: MaterialType::Vec4,
+                        calls: Vec::new(),
+                        wgsl: "fn color() -> vec4<f32> { return textureLoad(material_texture, vec2<i32>(0, 0), 0) * tint; }".into(),
+                    }],
+                    "color",
+                    vec![MaterialParameter {
+                        name: "tint".into(),
+                        ty: MaterialType::Vec4,
+                        resource: "material_tint".into(),
+                    }],
+                    vec![
+                        MaterialResource {
+                            name: "material_tint".into(),
+                            kind: MaterialResourceKind::UniformVec4,
+                            location: BindingLocation { group: 0, binding: 0 },
+                        },
+                        MaterialResource {
+                            name: "material_texture".into(),
+                            kind: MaterialResourceKind::Texture2dF32,
+                            location: BindingLocation { group: 0, binding: 1 },
+                        },
+                    ],
+                    BTreeMap::new(),
+                    SurfaceOutput::Color,
+                ),
+                ResidentBytes::new(0),
+            )
+            .expect("color material snapshot"),
+        _ => unreachable!(),
+    }
+}
+
+fn mixed_requests(assets: &mut crate::ForwardAssets) -> Vec<ForwardDrawRequest> {
+    let color = color_material_snapshot();
+    let color_resources = ForwardResources {
+        geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
+        material: SceneAssetRef::from_snapshot(&color),
+        texture: SceneAssetRef::from_snapshot(&assets.textures[0]),
+        tint: [1.0; 4],
+    };
+    assets.materials.push(color);
+    vec![
+        pbr_request(assets, 0, 0),
+        ForwardDrawRequest {
+            local_id: 1,
+            order: 1,
+            resources: color_resources,
+            transform: RenderTransform::identity(),
+        },
+    ]
+}
+
+fn mixed_feature_input(
+    issuer: &crate::FeatureIssuer,
+    scene: &RenderScene<ForwardResources>,
+    handle: crate::FeatureHandle,
+    requests: Vec<ForwardDrawRequest>,
+) -> (
+    crate::TypedFeatureStorage<Vec<ForwardDrawRequest>>,
+    crate::TypedFeatureSnapshot<Vec<ForwardDrawRequest>>,
+) {
+    let mut storage = issuer.storage::<Vec<ForwardDrawRequest>>();
+    let snapshot = scene.snapshot();
+    let context = issuer
+        .context(&snapshot, CpuPhase::Reference, handle)
+        .expect("feature context");
+    let input = storage.publish(&context, requests).expect("feature input");
     (storage, input)
 }
 
@@ -203,4 +289,76 @@ fn public_prepare_material_rejects_environment_static_option_without_group_two_b
         ),
         Err(crate::MaterialPreparationError::InvalidEnvironmentRoute)
     ));
+}
+
+#[test]
+fn mixed_pbr_and_color_feature_draws_share_one_environment_upload_offscreen() {
+    let (device, native) = environment_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device).expect("renderer");
+    let (_, _, mut assets) =
+        scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
+    let (scene, issuer, view) = scene_with_view();
+    let handle = issuer.issue("mixed-feature").expect("feature handle");
+    let feature = PbrFeature { handle };
+    let (storage, input) =
+        mixed_feature_input(&issuer, &scene, handle, mixed_requests(&mut assets));
+    renderer
+        .set_environment_irradiance(Some(irradiance_snapshot([1, 2, 3, 255, 4, 5, 6, 255])))
+        .expect("environment selection");
+
+    let submission = block_on(renderer.submit_forward_with_feature(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        scene.snapshot(),
+        view,
+        bounds(),
+        &assets,
+        FeatureBinding::new(&issuer, &feature, &input),
+    ))
+    .expect("mixed offscreen submission");
+    let _ = storage;
+
+    assert_eq!(renderer.forward_cache_stats().opaque_draws, 2);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 1);
+    assert_eq!(native.texture_uploads.lock().expect("uploads").len(), 2);
+    assert_eq!(renderer.pending(), 1);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 0);
+    block_on(renderer.readback(&submission)).expect("readback");
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn mixed_pbr_and_color_feature_draws_share_one_environment_upload_on_surface() {
+    let (device, native) = environment_device(Script::AcceptedExact);
+    let mut renderer = Renderer::new(device.clone()).expect("renderer");
+    let (_, _, mut assets) =
+        scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
+    let (scene, issuer, view) = scene_with_view();
+    let handle = issuer.issue("mixed-feature").expect("feature handle");
+    let feature = PbrFeature { handle };
+    let (storage, input) =
+        mixed_feature_input(&issuer, &scene, handle, mixed_requests(&mut assets));
+    renderer
+        .set_environment_irradiance(Some(irradiance_snapshot([1, 2, 3, 255, 4, 5, 6, 255])))
+        .expect("environment selection");
+    let mut surface = super::surface_tests::surface(&device, [8, 8]);
+
+    let submission = block_on(renderer.submit_forward_surface_with_feature(
+        &ForwardCpuPipeline::new(BoundsVisibility),
+        scene.snapshot(),
+        view,
+        bounds(),
+        &assets,
+        FeatureBinding::new(&issuer, &feature, &input),
+        block_on(surface.acquire()).expect("surface image"),
+    ))
+    .expect("mixed surface submission");
+    let _ = storage;
+
+    assert_eq!(renderer.forward_cache_stats().opaque_draws, 2);
+    assert_eq!(native.created_samplers.load(Ordering::SeqCst), 1);
+    assert_eq!(native.texture_uploads.lock().expect("uploads").len(), 2);
+    assert_eq!(renderer.pending(), 1);
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 0);
+    block_on(renderer.complete(&submission)).expect("present completion");
+    assert_eq!(native.dropped_samplers.load(Ordering::SeqCst), 1);
 }

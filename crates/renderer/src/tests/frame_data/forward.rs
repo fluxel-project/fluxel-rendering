@@ -57,10 +57,23 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         tint: [1.0; 4],
     };
     let packed = pack_forward_uniforms(&[color, normal], 256, 1024).unwrap();
-    assert_eq!(packed.transforms, [0..64, 512..640]);
+    // Color consumes clip only. The normal surface also consumes normal and
+    // world matrices: all 192 bytes must be declared before its tint binding.
+    assert_eq!(packed.transforms, [0..64, 512..704]);
     assert_eq!(packed.tints, [256..272, 768..784]);
     assert_eq!(packed.bytes.len(), 1024);
     assert_eq!(&packed.bytes[576..580], &2.0f32.to_le_bytes());
+    let world: Vec<_> = packed.bytes[640..704]
+        .chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+        .collect();
+    assert_eq!(
+        world,
+        [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0
+        ]
+    );
+    assert!(packed.bytes[704..768].iter().all(|byte| *byte == 0));
     assert!(packed.bytes[64..256].iter().all(|byte| *byte == 0));
     assert!(matches!(
         pack_forward_uniforms(

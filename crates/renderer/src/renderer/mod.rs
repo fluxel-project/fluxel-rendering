@@ -46,7 +46,9 @@ use crate::{
 pub use admission::AdmissionError as ShaderAdmissionError;
 pub use deferred::{DeferredCacheStats, DeferredProbeFacts};
 pub use error::RendererError;
+pub use forward::CaptureTextureSlot;
 pub use forward::ForwardCacheStats;
+pub(crate) use forward::SurfaceCompositeOwner;
 pub(crate) use forward::validate_ordinary_sampler;
 pub use shutdown::ShutdownReport;
 pub use submission::Submission;
@@ -137,6 +139,13 @@ pub(super) enum PendingInputs {
         _snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         _inputs: Vec<crate::ForwardDrawInput>,
     },
+    /// Both scene generations and resolved inputs retained by a same-Graph
+    /// capture producer and receiver until receiver readback completion.
+    CaptureForward {
+        _capture_snapshot: crate::FrameSnapshot<crate::ForwardResources>,
+        _capture_inputs: Vec<crate::ForwardDrawInput>,
+        _receiver: crate::ForwardDrawInput,
+    },
 }
 
 pub(super) enum PendingWork<B>
@@ -149,8 +158,18 @@ where
         extent: [u32; 2],
         row_pitch: u32,
     },
+    CaptureForwardSurface {
+        _capture: Box<crate::residency::ForwardFrame<B>>,
+        _receiver: Box<crate::residency::ForwardFrame<B>>,
+        _composite: SurfaceCompositeOwner<B>,
+        /// Unconsumed lease returned by a failed present handoff. It remains
+        /// owned until completion/idle proves the preceding scopes are safe.
+        _present: Option<fluxel_rhi::api::PresentBinding<B>>,
+        plan: Arc<crate::graph::CaptureForwardSurfacePlan<B>>,
+    },
     DeferredSurface {
         _frame: Box<crate::residency::DeferredSurfaceFrame<B>>,
+        _present: Option<fluxel_rhi::api::PresentBinding<B>>,
         plan: Arc<crate::graph::DeferredPlan<B>>,
     },
     Forward {
@@ -162,8 +181,17 @@ where
     },
     ForwardSurface {
         _frame: Box<crate::residency::SurfaceForwardFrame<B>>,
+        _present: Option<fluxel_rhi::api::PresentBinding<B>>,
         publication: forward::ForwardPublication,
         plan: Arc<crate::graph::SurfaceForwardPlan<B>>,
+    },
+    /// One combined Graph submission retaining its producer and receiver.
+    CaptureForward {
+        _capture: Box<crate::residency::ForwardFrame<B>>,
+        _receiver: Box<crate::residency::ForwardFrame<B>>,
+        plan: Arc<crate::graph::CaptureForwardPlan<B>>,
+        extent: [u32; 2],
+        row_pitch: u32,
     },
     Copy {
         _buffers: UploadBuffers<B>,
@@ -180,6 +208,7 @@ where
     SurfaceRaster {
         _buffers: SurfaceRasterBuffers<B>,
         _pipeline: RasterPipeline<B>,
+        _present: Option<fluxel_rhi::api::PresentBinding<B>>,
         plan: Arc<SurfaceRasterPlan<B>>,
     },
     Compute {

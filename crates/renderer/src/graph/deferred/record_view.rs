@@ -23,6 +23,7 @@ pub(super) struct DeferredRecordView<'a, B: ResourceBackend> {
     pub(super) environment: Option<&'a crate::residency::EnvironmentFrameOwner<B>>,
     pub(super) deformation: Option<&'a DeferredDeformation<B>>,
     pub(super) gbuffer: &'a [ForwardTexture<B>; 3],
+    pub(super) effects: Option<&'a ForwardTexture<B>>,
     pub(super) draw: &'a DeferredDraw<B>,
     pub(super) extent: [u32; 2],
 }
@@ -50,6 +51,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             environment: frame.environment.as_ref(),
             deformation: frame.deformation.as_ref(),
             gbuffer: &frame.gbuffer,
+            effects: frame.effects.as_ref(),
             draw: &frame.draw,
             extent: frame.extent,
         }
@@ -70,6 +72,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             environment: frame.environment.as_ref(),
             deformation: frame.deformation.as_ref(),
             gbuffer: &frame.gbuffer,
+            effects: frame.effects.as_ref(),
             draw: &frame.draw,
             extent: frame.extent,
         }

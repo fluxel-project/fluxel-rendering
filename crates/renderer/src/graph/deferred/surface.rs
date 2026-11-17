@@ -159,6 +159,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         )
                     }),
             )
+            .chain(
+                self.effects_slot
+                    .zip(frame.effects.as_ref())
+                    .map(|(slot, texture)| {
+                        BoundTexture::new(
+                            slot,
+                            texture.instance,
+                            &texture.texture,
+                            &texture.desc,
+                            texture.incoming,
+                            texture.layout,
+                        )
+                    }),
+            )
             .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
                 |(slot, environment)| {
                     BoundTexture::new(
@@ -218,6 +232,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             (self.gbuffer_slots[2], whole_depth()),
         ] {
             pass.texture(slot, range, AccessKind::Read, sampled_read())?;
+        }
+        if let (Some(slot), Some(_)) = (self.effects_slot, frame.effects.as_ref()) {
+            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
         }
         pass.texture(
             self.scene_color_slot.ok_or(Error::InvalidState)?,

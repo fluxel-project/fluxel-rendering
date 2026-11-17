@@ -6,6 +6,7 @@ mod phase;
 mod plan;
 mod raster;
 mod record;
+mod record_lighting;
 mod record_view;
 mod surface;
 mod surface_record;
@@ -70,6 +71,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     environment_upload_slot: Option<BufferSlot>,
     environment_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
+    effects_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,
@@ -101,6 +103,7 @@ pub(crate) struct DeferredDeclaration {
     environment_upload_slot: Option<BufferSlot>,
     environment_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
+    effects_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,

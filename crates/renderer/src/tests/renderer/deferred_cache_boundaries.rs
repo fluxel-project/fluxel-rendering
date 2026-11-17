@@ -179,10 +179,14 @@ fn cached_deferred_plan_refuses_foreign_and_wrong_gbuffer_owners_before_work() {
     plan.validate_frame(&cached_frame)
         .expect("restored warm frame before descriptor replacement");
     let mut wrong_descriptor = cached_frame;
-    let [_, _, depth] = crate::residency::plan_deferred_gbuffer(&device, wrong_descriptor.extent)
-        .expect("G-buffer plan")
-        .allocate(&device)
-        .expect("G-buffer allocation");
+    let ([_, _, depth], _) = crate::residency::plan_deferred_gbuffer_with_effects(
+        &device,
+        wrong_descriptor.extent,
+        false,
+    )
+    .expect("G-buffer plan")
+    .allocate_with_effects(&device)
+    .expect("G-buffer allocation");
     wrong_descriptor.gbuffer[0] = depth;
     let before_descriptor = counters(&native);
     assert!(matches!(

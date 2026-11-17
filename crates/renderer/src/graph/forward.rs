@@ -1,12 +1,20 @@
 //! Graph declaration and recording for the bounded Forward consumer.
 
 mod access_contracts;
+mod capture_bindings;
+mod capture_declaration;
+mod capture_plan;
+mod capture_record;
+mod capture_surface_declaration;
+mod capture_surface_plan;
+mod capture_surface_record;
 mod declaration;
 mod offscreen_declaration;
 mod offscreen_plan;
 mod offscreen_record;
 mod phase;
 mod read_scope;
+mod shared_record;
 mod spec;
 mod surface_plan;
 mod surface_record;
@@ -52,8 +60,17 @@ use super::{
         AccessKind, BufferAccessContract, GraphBuilder, GraphPass, TextureAccessContract,
         TextureRange,
     },
-    execution::{BoundBuffer, BoundTexture, CompiledExecution, FrameBindings, binding_error},
+    execution::{
+        BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution, FrameBindings,
+        binding_error,
+    },
 };
+use capture_declaration::{CaptureForwardDeclaration, CaptureFrameSlots, declare_capture_forward};
+pub(crate) use capture_plan::CaptureForwardPlan;
+use capture_surface_declaration::{
+    CaptureForwardSurfaceDeclaration, declare_capture_surface_forward,
+};
+pub(crate) use capture_surface_plan::CaptureForwardSurfacePlan;
 use declaration::{SurfaceForwardDeclaration, declare_surface_with};
 use offscreen_declaration::{OffscreenForwardDeclaration, declare_offscreen_with};
 
@@ -115,9 +132,7 @@ pub(crate) struct ForwardPlan<B: ResourceBackend> {
 }
 
 /// Forward execution plan whose final raster attachment is an acquired surface
-/// image. The private Forward graph still owns upload, draw-input and
-/// completion dependency declarations; the surface lease is deliberately not
-/// represented as a persistent Graph texture owner.
+/// lease represented by an RHI-managed Graph texture binding.
 pub(crate) struct SurfaceForwardPlan<B: ResourceBackend> {
     id: PlanId,
     lane: LaneId,
@@ -130,8 +145,11 @@ pub(crate) struct SurfaceForwardPlan<B: ResourceBackend> {
     resident_upload_slot: BufferSlot,
     frame_upload_slot: BufferSlot,
     uniform_slot: BufferSlot,
+    environment_upload_slot: Option<BufferSlot>,
     stream_slots: Vec<BufferSlot>,
     texture_slots: Vec<TextureSlot>,
+    environment_slot: Option<TextureSlot>,
+    surface_target_slot: TextureSlot,
     extent: [u32; 2],
     draw_count: usize,
     stream_count: usize,

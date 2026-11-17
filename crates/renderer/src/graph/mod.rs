@@ -19,10 +19,11 @@ mod forward;
 #[allow(unused_imports)]
 // Consumed by the coordinator once it lowers resident/frame planning facts.
 pub(crate) use forward::{
-    BufferGraphFact, ClearForwardPass, ForwardDrawShape, ForwardGraphDraw, ForwardGraphSpec,
-    ForwardGraphTextureUpload, ForwardGraphUniformUpload, ForwardGraphVertexUpload,
-    ForwardPhaseDriver, ForwardPlan, ForwardPlanBuildError, ForwardReadScope, ForwardShape,
-    OpaqueForwardPass, SurfaceForwardPlan, TextureGraphFact,
+    BufferGraphFact, CaptureForwardPlan, CaptureForwardSurfacePlan, ClearForwardPass,
+    ForwardDrawShape, ForwardGraphDraw, ForwardGraphSpec, ForwardGraphTextureUpload,
+    ForwardGraphUniformUpload, ForwardGraphVertexUpload, ForwardPhaseDriver, ForwardPlan,
+    ForwardPlanBuildError, ForwardReadScope, ForwardShape, OpaqueForwardPass, SurfaceForwardPlan,
+    TextureGraphFact,
 };
 mod raster;
 pub(crate) mod read_set_raster;

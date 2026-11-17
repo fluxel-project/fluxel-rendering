@@ -9,7 +9,7 @@ pub(crate) use deformation::{DeferredDeformation, DeformationAllocationPlan};
 mod forward;
 pub(crate) use deferred::{
     DeferredDraw, DeferredFrame, DeferredSurfaceFrame, allocate_deferred_scene_color,
-    plan_deferred_gbuffer,
+    plan_deferred_gbuffer_with_effects,
 };
 pub(crate) use environment::EnvironmentFrameOwner;
 mod forward_cache;

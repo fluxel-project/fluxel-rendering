@@ -11,14 +11,12 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) uniform: Option<crate::graph::definition::BufferHandle>,
     pub(super) textures: Vec<crate::graph::definition::TextureHandle>,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
-    // A surface target is an RHI lease, not a persistent Graph resource.  The
-    // phase still declares its write on the real Graph transaction as a side
-    // effect, but has no texture handle to version.
-    pub(super) target: Option<crate::graph::definition::TextureHandle>,
-    pub(super) surface_target: bool,
+    /// Either a persistent target or an RHI-managed surface lease. Both are
+    /// real Graph resources and must receive the terminal color write.
+    pub(super) target: crate::graph::definition::TextureHandle,
     pub(super) draws: Vec<ForwardGraphDraw>,
     pub(super) declared: bool,
-    pub(super) output: Option<(GraphPass, Option<crate::graph::definition::TextureHandle>)>,
+    pub(super) output: Option<(GraphPass, crate::graph::definition::TextureHandle)>,
 }
 
 pub(super) const UPLOAD_DEPENDENCY: u8 = 1;
@@ -32,8 +30,7 @@ pub(super) const COLOR_WRITE: u8 = 16;
 pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend> {
     pub(super) pass: &'pass mut crate::graph::definition::PassBuilder<'builder>,
     pub(super) upload: GraphPass,
-    pub(super) target: Option<crate::graph::definition::TextureHandle>,
-    pub(super) surface_target: bool,
+    pub(super) target: crate::graph::definition::TextureHandle,
     pub(super) declared: u8,
     pub(super) reads: ForwardReadState,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
@@ -78,31 +75,21 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
 
     pub(crate) fn write_main_color(&mut self) -> std::result::Result<(), ()> {
         self.mark(COLOR_WRITE)?;
-        if let Some(target) = self.target.take() {
-            self.target = Some(
-                self.pass
-                    .write_texture_with_use(
-                        target,
-                        whole(),
-                        color_write_uses().uses,
-                        ImageLayout::ColorAttachment,
-                        TextureUsage::RENDER_ATTACHMENT,
-                    )
-                    .map_err(|_| ())?,
-            );
-        } else if !self.surface_target {
-            return Err(());
-        }
+        self.target = self
+            .pass
+            .write_texture_with_use(
+                self.target,
+                whole(),
+                color_write_uses().uses,
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )
+            .map_err(|_| ())?;
         Ok(())
     }
 
-    fn finish(
-        &mut self,
-    ) -> std::result::Result<Option<crate::graph::definition::TextureHandle>, ()> {
+    fn finish(&mut self) -> std::result::Result<crate::graph::definition::TextureHandle, ()> {
         if !opaque_requirements_met(self.declared, &self.reads) {
-            return Err(());
-        }
-        if self.target.is_none() && !self.surface_target {
             return Err(());
         }
         if let Some(environment) = self.environment {
@@ -135,8 +122,7 @@ pub(super) fn opaque_requirements_met(declared: u8, reads: &ForwardReadState) ->
 pub(crate) struct ClearForwardPass<'pass, 'builder, 'frame, B: ResourceBackend> {
     pass: &'pass mut crate::graph::definition::PassBuilder<'builder>,
     upload: GraphPass,
-    target: Option<crate::graph::definition::TextureHandle>,
-    surface_target: bool,
+    target: crate::graph::definition::TextureHandle,
     declared: u8,
     marker: PhantomData<&'frame ForwardFrame<B>>,
 }
@@ -154,30 +140,20 @@ impl<B: ResourceBackend> ClearForwardPass<'_, '_, '_, B> {
             return Err(());
         }
         self.declared |= COLOR_WRITE;
-        if let Some(target) = self.target.take() {
-            self.target = Some(
-                self.pass
-                    .write_texture_with_use(
-                        target,
-                        whole(),
-                        color_write_uses().uses,
-                        ImageLayout::ColorAttachment,
-                        TextureUsage::RENDER_ATTACHMENT,
-                    )
-                    .map_err(|_| ())?,
-            );
-        } else if !self.surface_target {
-            return Err(());
-        }
+        self.target = self
+            .pass
+            .write_texture_with_use(
+                self.target,
+                whole(),
+                color_write_uses().uses,
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )
+            .map_err(|_| ())?;
         Ok(())
     }
-    fn finish(
-        &mut self,
-    ) -> std::result::Result<Option<crate::graph::definition::TextureHandle>, ()> {
+    fn finish(&mut self) -> std::result::Result<crate::graph::definition::TextureHandle, ()> {
         if self.declared != UPLOAD_DEPENDENCY | COLOR_WRITE {
-            return Err(());
-        }
-        if self.target.is_none() && !self.surface_target {
             return Err(());
         }
         self.pass.side_effect();
@@ -217,9 +193,6 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         let textures = self.textures.clone();
         let environment = self.environment;
         let target = self.target;
-        if target.is_none() && !self.surface_target {
-            return Err(PipelineError::InvalidPhaseContribution);
-        }
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let draws = self.draws.clone();
         let (pass, target) = self
@@ -231,7 +204,6 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     pass,
                     upload,
                     target,
-                    surface_target: self.surface_target,
                     declared: 0,
                     reads: ForwardReadState::new(streams, uniform, textures, draws),
                     environment,
@@ -263,9 +235,6 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         }
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let target = self.target;
-        if target.is_none() && !self.surface_target {
-            return Err(PipelineError::InvalidPhaseContribution);
-        }
         let (pass, target) = self
             .graph
             .as_deref_mut()
@@ -275,7 +244,6 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     pass,
                     upload,
                     target,
-                    surface_target: self.surface_target,
                     declared: 0,
                     marker: PhantomData,
                 };
@@ -295,10 +263,6 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         self,
     ) -> std::result::Result<(GraphPass, crate::graph::definition::TextureHandle), ()> {
         let (pass, target) = self.output.ok_or(())?;
-        Ok((pass, target.ok_or(())?))
-    }
-
-    pub(super) fn finish_surface(self) -> std::result::Result<GraphPass, ()> {
-        self.output.map(|(pass, _)| pass).ok_or(())
+        Ok((pass, target))
     }
 }

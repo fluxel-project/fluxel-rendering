@@ -45,6 +45,7 @@ pub(super) enum Script {
     AcceptedCompletionDeviceLost,
     AcceptedReadbackDeviceLost,
     SurfacePresentRejected,
+    SurfacePresentRejectedAfterScopes,
     SurfacePresentDeviceLost,
 }
 

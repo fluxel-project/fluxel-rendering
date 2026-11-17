@@ -15,7 +15,8 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
 ) -> Result<()> {
     if frame.resident.device != device.id()
         || frame.extent.contains(&0)
-        || device.capabilities().limits.max_color_attachments < 2
+        || device.capabilities().limits.max_color_attachments
+            < if frame.effects.is_some() { 3 } else { 2 }
         || device.capabilities().limits.uniform_offset_alignment == 0
         || frame.resident.streams.is_empty()
         || frame.resident.textures.is_empty()
@@ -96,6 +97,14 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
         TextureFormat::Depth32Float,
     ]) {
         if !matches_gbuffer_template(&texture.desc, frame.extent, format) {
+            return Err(Error::InvalidRange);
+        }
+    }
+    if let Some(effects) = &frame.effects {
+        if effects.texture.device() != device.id()
+            || effects.view.device() != device.id()
+            || !matches_gbuffer_template(&effects.desc, frame.extent, TextureFormat::Rgba16Float)
+        {
             return Err(Error::InvalidRange);
         }
     }

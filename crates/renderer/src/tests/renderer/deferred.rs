@@ -337,6 +337,12 @@ fn deferred_probe_diagnostic_rejects_a_foreign_renderer_submission() {
 
 #[path = "deferred_cache.rs"]
 mod cache_tests;
+#[path = "capture_binding_failures.rs"]
+mod capture_binding_failure_tests;
+#[path = "capture_forward.rs"]
+mod capture_forward_tests;
+#[path = "capture_surface.rs"]
+mod capture_surface_tests;
 #[path = "deferred_code_nodes.rs"]
 mod code_node_tests;
 #[path = "deferred_deformation.rs"]

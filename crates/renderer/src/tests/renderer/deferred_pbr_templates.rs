@@ -134,3 +134,42 @@ fn pbr_uv0_normal_requests_require_tangent_and_compose_tbn_path() {
     wrong.streams[0].attributes[3].format = VertexFormat::Float32(3);
     assert!(crate::pbr::gbuffer_uv0_normal_request(&wrong).is_none());
 }
+
+#[test]
+fn forward_effect_requests_preserve_direct_light_and_route_ao_only_through_irradiance() {
+    let layout = pbr_uv0_normal_layout();
+    let plain = crate::pbr::forward_uv0_normal_effect_request(&layout).expect("effect layout");
+    let environment = crate::pbr::forward_uv0_normal_effect_irradiance_request(&layout)
+        .expect("effect environment layout");
+    assert!(!plain.static_options.contains_key("renderer.environment"));
+    assert_eq!(
+        environment.static_options["renderer.environment"],
+        "latlong-diffuse-irradiance-v1"
+    );
+    assert_eq!(environment.bindings.len(), plain.bindings.len() + 2);
+    let plain_source = plain
+        .source_units
+        .iter()
+        .map(|unit| unit.source.clone())
+        .collect::<String>();
+    let environment_source = environment
+        .source_units
+        .iter()
+        .map(|unit| unit.source.clone())
+        .collect::<String>();
+    assert!(
+        plain_source
+            .contains("pbr_direct_light(base, properties, normal) + max(evaluate_emissive_uv0")
+    );
+    assert!(environment_source.contains("pbr_diffuse_irradiance(base, properties.x, normal"));
+    assert!(environment_source.contains("* clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"));
+    let evaluators = SourceUnit::new(
+        "effect-evaluators",
+        "fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv, 0.5, 1.0); } fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.2, 0.6) + uv * 0.0; } fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0, 0.0, 1.0 + uv.x * 0.0); } fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 { return 0.25 + uv.x * 0.0; } fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.2, 0.3, 0.4) + vec3<f32>(uv.x * 0.0); }",
+    );
+    let mut request = environment;
+    request.source_units.push(evaluators);
+    ShaderComposer::new()
+        .compose(&request)
+        .expect("effect irradiance shader composes");
+}

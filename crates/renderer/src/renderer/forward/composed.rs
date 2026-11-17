@@ -166,12 +166,6 @@ where
                 .iter()
                 .any(|input| input.prepared().uses_environment_irradiance())
         });
-        if environment_snapshot.is_some() && surface.is_some() {
-            return Err(Error::Unsupported(
-                "Forward surface diffuse irradiance is not implemented",
-            )
-            .into());
-        }
         let mut meshes = Vec::new();
         let mut feature_draws = Vec::new();
         for (index, input) in inputs.iter().enumerate() {

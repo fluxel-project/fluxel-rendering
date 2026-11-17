@@ -156,6 +156,8 @@ where
                 .begin_execution(plan.submission().clone(), CompletionRequest::End)
         }
         .map_err(|error| self.observe_rhi_error(error))?;
+        let mut present = Some(PresentBinding::new(image));
+        let image = present.as_ref().ok_or(Error::InvalidState)?.image();
         let upload = execution.commands(plan.upload_step(), |encoder| {
             plan.record_upload(encoder, &buffers)
         });
@@ -167,14 +169,21 @@ where
         };
         let recorded = match raster {
             Ok(()) => execution
-                .present(plan.present_step(), PresentBinding::new(image))
-                .map_err(|failure| failure.error),
+                .present(
+                    plan.present_step(),
+                    present.take().ok_or(Error::InvalidState)?,
+                )
+                .map_err(|failure| {
+                    present = failure.binding;
+                    failure.error
+                }),
             Err(error) => Err(error),
         };
         let outcome = unsafe { execution.finish() };
         let work = PendingWork::SurfaceRaster {
             _buffers: buffers,
             _pipeline: pipeline,
+            _present: present,
             plan,
         };
         self.settle_submission(

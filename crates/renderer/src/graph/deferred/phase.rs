@@ -43,6 +43,7 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) material: super::super::definition::TextureHandle,
     pub(super) environment: Option<super::super::definition::TextureHandle>,
     pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
+    pub(super) effects: Option<super::super::definition::TextureHandle>,
     pub(super) target: Option<super::super::definition::TextureHandle>,
     pub(super) deformation: Option<DeferredDeformationGraph>,
     pub(super) deformation_pass: Option<(GraphPass, super::super::definition::BufferHandle)>,
@@ -71,12 +72,14 @@ pub(crate) struct DeferredGeometryPass<'pass, 'builder> {
     transform: std::ops::Range<u64>,
     material: super::super::definition::TextureHandle,
     gbuffer: [super::super::definition::TextureHandle; 3],
+    effects: Option<super::super::definition::TextureHandle>,
     declared: u8,
 }
 
 pub(crate) struct DeferredLightingPass<'pass, 'builder> {
     pass: &'pass mut super::super::definition::PassBuilder<'builder>,
     gbuffer: [super::super::definition::TextureHandle; 3],
+    effects: Option<super::super::definition::TextureHandle>,
     target: Option<super::super::definition::TextureHandle>,
     environment: Option<super::super::definition::TextureHandle>,
     declared: u8,
@@ -148,6 +151,7 @@ impl DeferredPhaseDriver<'_> {
         let transform = self.transform.clone();
         let material = self.material;
         let gbuffer = self.gbuffer;
+        let effects = self.effects;
         let (pass, output) = self
             .graph
             .add_pass("deferred-geometry", |pass| {
@@ -161,13 +165,15 @@ impl DeferredPhaseDriver<'_> {
                     transform,
                     material,
                     gbuffer,
+                    effects,
                     declared: 0,
                 };
                 declare(&mut geometry).map_err(|_| GraphError::InvalidRange)?;
                 geometry.finish().map_err(|_| GraphError::InvalidRange)
             })
             .map_err(|_| ())?;
-        self.geometry = Some((pass, output));
+        self.effects = output.1;
+        self.geometry = Some((pass, output.0));
         Ok(())
     }
 
@@ -185,6 +191,7 @@ impl DeferredPhaseDriver<'_> {
         }
         let target = self.target;
         let environment = self.environment;
+        let effects = self.effects;
         let (pass, output) = self
             .graph
             .add_pass("deferred-lighting", |pass| {
@@ -192,6 +199,7 @@ impl DeferredPhaseDriver<'_> {
                 let mut lighting = DeferredLightingPass {
                     pass,
                     gbuffer,
+                    effects,
                     target,
                     environment,
                     declared: 0,
@@ -353,6 +361,19 @@ impl DeferredGeometryPass<'_, '_> {
                 TextureUsage::RENDER_ATTACHMENT,
             )
             .map_err(|_| ())?;
+        if let Some(effects) = self.effects {
+            self.effects = Some(
+                self.pass
+                    .write_texture_with_use(
+                        effects,
+                        whole_color(),
+                        color_write().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                    .map_err(|_| ())?,
+            );
+        }
         self.gbuffer[2] = self
             .pass
             .write_texture_with_use(
@@ -365,11 +386,19 @@ impl DeferredGeometryPass<'_, '_> {
             .map_err(|_| ())?;
         Ok(())
     }
-    fn finish(&mut self) -> std::result::Result<[super::super::definition::TextureHandle; 3], ()> {
+    fn finish(
+        &mut self,
+    ) -> std::result::Result<
+        (
+            [super::super::definition::TextureHandle; 3],
+            Option<super::super::definition::TextureHandle>,
+        ),
+        (),
+    > {
         if self.declared != UPLOAD | VERTEX | UNIFORM | MATERIAL | GBUFFER {
             return Err(());
         }
-        Ok(self.gbuffer)
+        Ok((self.gbuffer, self.effects))
     }
 }
 
@@ -393,6 +422,17 @@ impl DeferredLightingPass<'_, '_> {
                     } else {
                         whole_color()
                     },
+                    sampled_read().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )
+                .map_err(|_| ())?;
+        }
+        if let Some(effects) = self.effects {
+            self.pass
+                .read_texture_with_use(
+                    effects,
+                    whole_color(),
                     sampled_read().uses,
                     ImageLayout::ShaderReadOnly,
                     TextureUsage::TEXTURE_BINDING,

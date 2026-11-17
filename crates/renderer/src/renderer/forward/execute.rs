@@ -55,7 +55,7 @@ where
         let mut graph_compile_elapsed_ns = 0;
         let plan = if let Some(cached) = self.forward_surface_plans.iter().find(|candidate| {
             candidate.validate_declaration(&declaration).is_ok()
-                && candidate.validate_frame(&frame).is_ok()
+                && candidate.validate_frame_with_image(&frame, &image).is_ok()
         }) {
             Arc::clone(cached)
         } else {
@@ -73,21 +73,27 @@ where
             self.forward_surface_plans.push(Arc::clone(&plan));
             plan
         };
-        plan.validate_frame(&frame)
+        plan.validate_frame_with_image(&frame, &image)
             .map_err(|error| self.observe_forward_error("surface frame validation", error))?;
         self.bindings_validated();
         self.write_forward_upload(&frame.resident.upload, &frame.resident_upload.bytes)
             .await?;
         self.write_forward_upload(&frame.frame.upload, &frame.uniform_bytes)
             .await?;
+        if let Some(environment) = frame.environment.as_ref() {
+            self.write_forward_upload(&environment.upload, &environment.upload_bytes)
+                .await?;
+        }
         let serial = self.next_serial()?;
         let mut execution = unsafe {
             self.device
                 .begin_execution(plan.submission().clone(), CompletionRequest::End)
         }
         .map_err(|error| self.observe_forward_error("surface begin execution", error))?;
+        let mut present = Some(PresentBinding::new(image));
+        let image = present.as_ref().ok_or(Error::InvalidState)?.image();
         let upload = execution.commands(plan.upload_step(), |encoder| {
-            plan.record_upload(encoder, &frame)
+            plan.record_upload(encoder, &frame, &image)
         });
         let raster = match upload {
             Ok(()) => execution.commands(plan.raster_step(), |encoder| {
@@ -97,8 +103,14 @@ where
         };
         let recorded = match raster {
             Ok(()) => execution
-                .present(plan.present_step(), PresentBinding::new(image))
-                .map_err(|failure| failure.error),
+                .present(
+                    plan.present_step(),
+                    present.take().ok_or(Error::InvalidState)?,
+                )
+                .map_err(|failure| {
+                    present = failure.binding;
+                    failure.error
+                }),
             Err(error) => Err(error),
         };
         let outcome = unsafe { execution.finish() };
@@ -110,6 +122,7 @@ where
             (outcome, recorded),
             super::PendingWork::ForwardSurface {
                 _frame: Box::new(frame),
+                _present: present,
                 publication,
                 plan,
             },
@@ -296,7 +309,7 @@ where
         result
     }
 
-    fn next_forward_plan_id(&self) -> std::result::Result<PlanId, RendererError> {
+    pub(super) fn next_forward_plan_id(&self) -> std::result::Result<PlanId, RendererError> {
         let ordinal = crate::atomic::claim_next(&super::NEXT_PLAN_ORDINAL)
             .ok_or(RendererError::IdentityExhausted)?;
         Ok(PlanId {
@@ -305,7 +318,7 @@ where
         })
     }
 
-    fn forward_plan_error(
+    pub(super) fn forward_plan_error(
         &mut self,
         operation: &'static str,
         error: crate::graph::ForwardPlanBuildError,
@@ -320,7 +333,7 @@ where
         }
     }
 
-    async fn write_forward_upload(
+    pub(super) async fn write_forward_upload(
         &mut self,
         buffer: &Buffer<B>,
         bytes: &[u8],

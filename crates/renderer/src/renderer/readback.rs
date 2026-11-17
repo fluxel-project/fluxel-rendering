@@ -17,6 +17,10 @@ where
             PendingWork::DeferredSurface { plan, .. } => plan.surface_completion(&self.outcome),
             PendingWork::Forward { plan, .. } => plan.completion(&self.outcome),
             PendingWork::ForwardSurface { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::CaptureForward { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::CaptureForwardSurface { plan, .. } => {
+                plan.surface_completion(&self.outcome)
+            }
             PendingWork::Copy { plan, .. } => plan.completion(&self.outcome),
             PendingWork::Raster { plan, .. } => plan.completion(&self.outcome),
             PendingWork::SurfaceRaster { plan, .. } => plan.completion(&self.outcome),
@@ -32,6 +36,9 @@ where
             PendingWork::Forward {
                 extent, row_pitch, ..
             } => super::strip_raster_padding(bytes, *extent, *row_pitch),
+            PendingWork::CaptureForward {
+                extent, row_pitch, ..
+            } => super::strip_raster_padding(bytes, *extent, *row_pitch),
             PendingWork::Copy { .. } | PendingWork::Compute { .. } => Ok(bytes),
             PendingWork::Raster {
                 extent, row_pitch, ..
@@ -41,7 +48,8 @@ where
             } => super::strip_raster_padding(bytes, *extent, *row_pitch),
             PendingWork::SurfaceRaster { .. }
             | PendingWork::ForwardSurface { .. }
-            | PendingWork::DeferredSurface { .. } => Err(RendererError::RetainedExecution {
+            | PendingWork::DeferredSurface { .. }
+            | PendingWork::CaptureForwardSurface { .. } => Err(RendererError::RetainedExecution {
                 status: self.outcome.facts().status,
                 recording_error: self.recording_error.clone(),
                 execution_error: self.execution_error.clone(),
@@ -138,6 +146,7 @@ where
                 PendingWork::SurfaceRaster { .. }
                     | PendingWork::ForwardSurface { .. }
                     | PendingWork::DeferredSurface { .. }
+                    | PendingWork::CaptureForwardSurface { .. }
             ) {
                 return Err(RendererError::StaleSubmission);
             }
@@ -168,6 +177,7 @@ where
             PendingWork::SurfaceRaster { .. }
                 | PendingWork::ForwardSurface { .. }
                 | PendingWork::DeferredSurface { .. }
+                | PendingWork::CaptureForwardSurface { .. }
         ) {
             self.slots[submission.slot] = Some(pending);
             return Err(RendererError::StaleSubmission);
