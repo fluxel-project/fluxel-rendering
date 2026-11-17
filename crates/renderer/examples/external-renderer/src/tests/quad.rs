@@ -120,7 +120,11 @@ fn quad_material_composes_through_real_forward_preparation() {
         resources: ForwardResources {
             geometry: refs.geometry,
             material: refs.material,
-            texture: refs.texture,
+            textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                "quad_texture",
+                refs.texture,
+            )],
+            sampler: None,
             tint: [1.0, 0.0, 0.0, 1.0],
         },
         transform: RenderTransform::identity(),
@@ -164,7 +168,11 @@ fn insert_view_and_record(
         resources: ForwardResources {
             geometry: assets.geometry,
             material: assets.material,
-            texture: assets.texture,
+            textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                "quad_texture",
+                assets.texture,
+            )],
+            sampler: None,
             tint: [1.0; 4],
         },
         transform: RenderTransform::identity(),
@@ -209,6 +217,8 @@ fn forward_assets() -> ForwardAssets {
         Acquire::Producer(producer) => producer
             .commit(
                 ColorTextureData {
+                    encoding: fluxel_renderer::TextureEncoding::Linear,
+                    mip_levels: 1,
                     extent: [1, 1],
                     rgba8: vec![255; 4],
                 },

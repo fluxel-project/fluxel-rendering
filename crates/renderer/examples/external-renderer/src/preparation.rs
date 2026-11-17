@@ -1,8 +1,8 @@
 //! External preparation and controlled Forward-phase consumer.
 use external_renderer::{ExternalClearPipeline, ExternalOpaquePipeline};
 use fluxel_renderer::{
-    BoundsVisibility, ForwardCpuPipeline, FramePipeline, FrameTopology, RenderBounds,
-    RenderChange, RenderRecord, RenderScene, RenderTransform, RenderView,
+    BoundsVisibility, ForwardCpuPipeline, FramePipeline, FrameTopology, RenderBounds, RenderChange,
+    RenderRecord, RenderScene, RenderTransform, RenderView,
 };
 
 /// Exercises two concrete compositions through the same public trait.
@@ -38,7 +38,9 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
         || external.topology(&second)? != FrameTopology::OpaqueForward
         || clear.topology(&clear_frame)? != FrameTopology::ClearOnly
     {
-        return Err("external frame policies did not retain their selected Forward products".into());
+        return Err(
+            "external frame policies did not retain their selected Forward products".into(),
+        );
     }
     println!("S5 external pipelines select opaque and clear Forward products");
     Ok(())

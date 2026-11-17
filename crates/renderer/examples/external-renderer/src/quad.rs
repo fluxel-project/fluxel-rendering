@@ -134,7 +134,11 @@ impl RenderFeature for QuadFeature {
                 resources: ForwardResources {
                     geometry: marker.assets.geometry,
                     material: marker.assets.material,
-                    texture: marker.assets.texture,
+                    textures: vec![fluxel_renderer::ForwardTextureBinding::asset(
+                        "quad_texture",
+                        marker.assets.texture,
+                    )],
+                    sampler: None,
                     tint: marker.tint,
                 },
                 transform: quad_transform(marker.center, marker.half_extent),
