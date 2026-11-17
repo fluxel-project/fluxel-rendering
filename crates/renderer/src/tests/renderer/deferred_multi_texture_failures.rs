@@ -16,6 +16,7 @@ fn snapshot_with_texture_bindings(
             geometry: SceneAssetRef::from_snapshot(&assets.geometry[0]),
             material: SceneAssetRef::from_snapshot(&assets.materials[0]),
             textures,
+            sampler: None,
             tint: [1.0; 4],
         },
         transform: RenderTransform::identity(),

@@ -211,8 +211,10 @@ mod texture_upload;
 pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{
     default_material_sampler, material_requires_ordinary_sampler, material_sampler,
-    material_sampler_for_inputs, require_filterable_material_texture_with_mip_levels,
-    validate_capture_material_texture, validate_material_texture_owner, validate_ordinary_sampler,
+    material_sampler_descriptors, material_sampler_for_input,
+    require_filterable_material_texture_with_mip_levels, same_material_sampler,
+    validate_capture_material_texture, validate_material_sampler, validate_material_texture_owner,
+    validate_ordinary_sampler,
 };
 mod program;
 pub use captured::CaptureTextureSlot;

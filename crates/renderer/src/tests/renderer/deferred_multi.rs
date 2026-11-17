@@ -330,6 +330,7 @@ fn multi_scene_at(
                         SceneAssetRef::from_snapshot(&ts[index]),
                     ),
                 ],
+                sampler: None,
                 tint: [1.0, 0.75 + index as f32 * 0.25, 1.0, 1.0],
             },
             transform: RenderTransform::identity(),

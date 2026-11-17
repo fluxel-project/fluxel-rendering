@@ -49,6 +49,7 @@ fn inputs() -> (
                 "material_texture",
                 SceneAssetRef::from_snapshot(&assets.textures[0]),
             )],
+            sampler: None,
             tint: [1.; 4],
         },
         transform: RenderTransform::identity(),

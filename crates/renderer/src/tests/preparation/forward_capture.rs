@@ -91,6 +91,7 @@ fn fixture(uv: bool) -> (ForwardCaptureResources, ForwardAssets) {
             "captured_image",
             "captured_image",
         )],
+        sampler: None,
         tint: [0.25, 0.5, 0.75, 1.0],
     };
     (

@@ -67,31 +67,16 @@ pub(super) fn draws<B: ResourceBackend>(
             });
         }
         if let Some(binding) = schema.sampler {
-            let levels = textures[index]
-                .iter()
-                .map(|slot| {
-                    resident
-                        .textures
-                        .get(*slot)
-                        .map(|texture| texture.desc.mip_levels)
-                        .ok_or(Error::InvalidRange)
-                })
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .max()
-                .ok_or(Error::InvalidRange)?;
-            let expected = crate::renderer::forward::material_sampler(levels)?;
+            let expected = crate::renderer::forward::material_sampler_for_input(&inputs[index])?;
             let sampler = resident
                 .samplers
                 .iter()
                 .find(|sampler| {
-                    sampler.desc.mip_filter == expected.mip_filter
-                        && sampler.desc.lod == expected.lod
-                        && sampler.desc.mag_filter == expected.mag_filter
-                        && sampler.desc.min_filter == expected.min_filter
+                    sampler.sampler.device() == device.id()
+                        && crate::renderer::forward::same_material_sampler(&sampler.desc, &expected)
                 })
                 .ok_or(Error::InvalidState)?;
-            crate::renderer::forward::validate_ordinary_sampler(&sampler.desc)?;
+            crate::renderer::forward::validate_material_sampler(&sampler.desc)?;
             entries.push(BindGroupEntry {
                 binding,
                 resource: BindingResource::Sampler(&sampler.sampler),

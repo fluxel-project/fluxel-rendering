@@ -35,6 +35,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) geometry: AssetSnapshot<GeometryAsset, GeometryData>,
     pub(crate) material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
     pub(crate) prepared: PreparedMaterial,
+    pub(crate) sampler: Option<fluxel_rhi::api::SamplerDesc>,
     pub(crate) textures: Vec<ResolvedForwardTexture>,
     pub(crate) tint: [f32; 4],
     pub(crate) transform: RenderTransform,
@@ -53,6 +54,7 @@ impl PreparedCaptureReceiver {
             material: self.material,
             textures: self.textures,
             prepared: self.prepared,
+            sampler: self.sampler,
             tint: self.tint,
             transform: self.transform,
             view: self.view,
@@ -141,6 +143,11 @@ pub fn prepare_forward_capture_receiver(
     let schema = validate_material_schema(&prepared, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
     let textures = resolve_capture_textures(textures, assets, source)?;
+    let sampler = super::super::forward_sampler::resolve_sampler_binding(
+        resources.sampler.as_ref(),
+        &schema,
+        source,
+    )?;
     let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
     let normal_from_local = normal_from_local(
@@ -168,6 +175,7 @@ pub fn prepare_forward_capture_receiver(
         geometry,
         material,
         prepared,
+        sampler,
         textures,
         tint: resources.tint,
         transform,

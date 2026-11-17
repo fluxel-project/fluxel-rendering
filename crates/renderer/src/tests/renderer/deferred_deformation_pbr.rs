@@ -155,6 +155,7 @@ fn pbr_scene() -> (
                 "material_texture",
                 SceneAssetRef::from_snapshot(&texture),
             )],
+            sampler: None,
             tint: [1.0; 4],
         },
         transform: RenderTransform::identity(),

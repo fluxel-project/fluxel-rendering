@@ -36,6 +36,8 @@ pub(super) fn fixture_with_caps(
         waited_completions: Mutex::new(Vec::new()),
         created_buffers: AtomicUsize::new(0),
         created_textures: AtomicUsize::new(0),
+        sampler_anisotropy_limit: AtomicUsize::new(16),
+        bound_sampler_descs: Mutex::new(Vec::new()),
         created_samplers: AtomicUsize::new(0),
         dropped_samplers: AtomicUsize::new(0),
         pipeline_color_formats: Mutex::new(Vec::new()),

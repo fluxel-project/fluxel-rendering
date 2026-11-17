@@ -138,6 +138,7 @@ fn unavailable_resources() -> ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
         textures: Vec::new(),
+        sampler: None,
         tint: [1.0; 4],
     }
 }
@@ -240,6 +241,7 @@ fn assets_with_texture_payload(bytes: Vec<u8>) -> (ForwardResources, crate::Forw
             "material_texture",
             SceneAssetRef::from_snapshot(&texture),
         )],
+        sampler: None,
         tint: [1.0; 4],
     };
     let assets = crate::ForwardAssets {

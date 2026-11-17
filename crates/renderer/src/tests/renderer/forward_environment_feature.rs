@@ -57,6 +57,7 @@ fn feature_resources(assets: &crate::ForwardAssets) -> ForwardResources {
             "material_texture",
             SceneAssetRef::from_snapshot(&assets.textures[0]),
         )],
+        sampler: None,
         tint: [1.0; 4],
     }
 }
@@ -150,6 +151,7 @@ fn mixed_requests(assets: &mut crate::ForwardAssets) -> Vec<ForwardDrawRequest> 
             "material_texture",
             SceneAssetRef::from_snapshot(&assets.textures[0]),
         )],
+        sampler: None,
         tint: [1.0; 4],
     };
     assets.materials.push(color);

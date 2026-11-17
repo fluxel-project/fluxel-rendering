@@ -142,6 +142,7 @@ fn scene_and_assets() -> (
             "material_texture",
             SceneAssetRef::from_snapshot(&texture),
         )],
+        sampler: None,
         tint: [0.75, 0.5, 0.25, 1.0],
     };
     let assets = ForwardAssets {
@@ -369,3 +370,6 @@ mod surface_tests;
 
 #[path = "material_mips.rs"]
 mod material_mip_tests;
+
+#[path = "material_samplers.rs"]
+mod material_sampler_tests;

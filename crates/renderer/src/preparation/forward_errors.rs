@@ -158,6 +158,27 @@ pub enum ForwardPreparationError {
         /// Unexpected material resource name.
         resource: String,
     },
+    /// A draw supplied sampler state for a material without an ordinary sampler.
+    UnexpectedSamplerResource {
+        /// Draw requesting the binding.
+        source: ForwardDrawSource,
+        /// Unexpected sampler resource name.
+        resource: String,
+    },
+    /// A draw named a different sampler resource than the material declares.
+    SamplerResourceMismatch {
+        /// Draw requesting the binding.
+        source: ForwardDrawSource,
+        /// Material-declared sampler resource name.
+        expected: String,
+        /// Supplied sampler resource name.
+        actual: String,
+    },
+    /// An explicit ordinary sampler descriptor violates the portable contract.
+    InvalidSamplerDescriptor {
+        /// Draw requesting the binding.
+        source: ForwardDrawSource,
+    },
     /// An ordinary Forward draw attempted to consume a same-frame capture slot.
     CaptureTextureOutsideReceiver {
         /// Draw requesting the capture product.

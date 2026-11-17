@@ -74,6 +74,8 @@ pub(super) struct Native {
     pub(super) waited_completions: Mutex<Vec<usize>>,
     pub(super) created_buffers: AtomicUsize,
     pub(super) created_textures: AtomicUsize,
+    pub(super) sampler_anisotropy_limit: AtomicUsize,
+    pub(super) bound_sampler_descs: Mutex<Vec<(u32, SamplerDesc)>>,
     pub(super) created_samplers: AtomicUsize,
     pub(super) dropped_samplers: AtomicUsize,
     pub(super) pipeline_color_formats: Mutex<Vec<Vec<TextureFormat>>>,
@@ -90,6 +92,7 @@ pub(super) struct NativeTexture;
 
 pub(super) struct NativeSampler {
     native: Arc<Native>,
+    desc: SamplerDesc,
 }
 
 impl Drop for NativeBuffer {
@@ -234,10 +237,14 @@ impl ResourceBackend for WitnessBackend {
     fn create_view(_: &Arc<Native>, _: &Arc<NativeTexture>, _: &TextureViewDesc) -> Result<()> {
         Ok(())
     }
-    fn create_sampler(device: &Arc<Native>, _: &SamplerDesc) -> Result<Arc<NativeSampler>> {
+    fn create_sampler(device: &Arc<Native>, desc: &SamplerDesc) -> Result<Arc<NativeSampler>> {
+        if usize::from(desc.anisotropy) > device.sampler_anisotropy_limit.load(Ordering::SeqCst) {
+            return Err(Error::Unsupported("witness sampler anisotropy"));
+        }
         device.created_samplers.fetch_add(1, Ordering::SeqCst);
         Ok(Arc::new(NativeSampler {
             native: Arc::clone(device),
+            desc: desc.clone(),
         }))
     }
     fn create_bind_group_layout(_: &Arc<Native>, _: &BindGroupLayoutDesc) -> Result<()> {
@@ -253,6 +260,18 @@ impl ResourceBackend for WitnessBackend {
             })
         {
             return Err(Error::InvalidState);
+        }
+        for entry in desc.entries {
+            if let BindingResource::Sampler(sampler) = entry.resource {
+                // SAFETY: Core admits only same-device resources before the
+                // witness backend receives this concrete bind group.
+                let actual = unsafe { sampler.native_ref() };
+                device
+                    .bound_sampler_descs
+                    .lock()
+                    .unwrap()
+                    .push((entry.binding, actual.desc.clone()));
+            }
         }
         Ok(Arc::clone(device))
     }

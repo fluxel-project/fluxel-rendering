@@ -272,11 +272,7 @@ where
         // An ordinary sampler is a concrete device object rather than a Graph
         // resource. The resident owner below is retained by PendingWork, so a
         // native sampler cannot disappear while its bind group is in flight.
-        if inputs
-            .iter()
-            .any(|input| material_requires_ordinary_sampler(input.prepared()))
-        {
-            let desc = material_sampler_for_inputs(&inputs)?;
+        for desc in material_sampler_descriptors(&inputs)? {
             let sampler = self
                 .device
                 .create_sampler(&desc)
@@ -443,8 +439,16 @@ where
                 });
             }
             if let Some(binding) = schema.sampler {
-                let sampler = resident.samplers.first().ok_or(Error::InvalidState)?;
-                validate_ordinary_sampler(&sampler.desc)?;
+                let expected = material_sampler_for_input(input)?;
+                let sampler = resident
+                    .samplers
+                    .iter()
+                    .find(|sampler| {
+                        sampler.sampler.device() == self.device.id()
+                            && same_material_sampler(&sampler.desc, &expected)
+                    })
+                    .ok_or(Error::InvalidState)?;
+                validate_material_sampler(&sampler.desc)?;
                 material_entries.push(BindGroupEntry {
                     binding,
                     resource: BindingResource::Sampler(&sampler.sampler),

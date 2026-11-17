@@ -196,34 +196,21 @@ where
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or(Error::InvalidState)?;
-        let mut sampler_levels = inputs
-            .iter()
-            .zip(&draw_textures)
-            .zip(prepared)
-            .filter(|(_, prepared)| {
-                crate::renderer::forward::material_requires_ordinary_sampler(prepared)
-            })
-            .map(|((_, textures), _)| {
-                textures
-                    .iter()
-                    .map(|slot| {
-                        resident
-                            .textures
-                            .get(*slot)
-                            .map(|texture| texture.desc.mip_levels)
-                            .ok_or(Error::InvalidRange)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .max()
-                    .ok_or(Error::InvalidRange)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        sampler_levels.sort_unstable();
-        sampler_levels.dedup();
-        for levels in sampler_levels {
-            let desc = crate::renderer::forward::material_sampler(levels)
+        let mut sampler_descs = Vec::new();
+        for (input, material) in inputs.iter().zip(prepared) {
+            if !crate::renderer::forward::material_requires_ordinary_sampler(material) {
+                continue;
+            }
+            let desc = crate::renderer::forward::material_sampler_for_input(input)
                 .map_err(|error| self.observe_rhi_error(error))?;
+            if !sampler_descs
+                .iter()
+                .any(|present| crate::renderer::forward::same_material_sampler(present, &desc))
+            {
+                sampler_descs.push(desc);
+            }
+        }
+        for desc in sampler_descs {
             let sampler = self
                 .device
                 .create_sampler(&desc)

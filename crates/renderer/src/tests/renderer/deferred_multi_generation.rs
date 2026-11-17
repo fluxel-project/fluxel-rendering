@@ -134,6 +134,7 @@ fn generation_scene(
                     crate::ForwardTextureBinding::asset(name, SceneAssetRef::from_snapshot(image))
                 })
                 .collect(),
+            sampler: None,
             tint: [1.0; 4],
         },
         transform: RenderTransform::identity(),

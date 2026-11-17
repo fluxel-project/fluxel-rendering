@@ -35,24 +35,89 @@ pub(crate) fn material_sampler(mip_levels: u32) -> std::result::Result<SamplerDe
     Ok(desc)
 }
 
-/// Chooses one ordinary material sampler for all immutable asset textures in a
-/// prepared frame. Capture slots are renderer-owned single-level products;
-/// the maximum asset count keeps LOD enabled when any bound asset has mips.
-pub(crate) fn material_sampler_for_inputs(
-    inputs: &[crate::ForwardDrawInput],
+/// Builds the exact sampler for one material draw. Immutable image ownership
+/// stays separate: an explicit sampling policy is a draw binding, while the
+/// default derives only the LOD range needed by that draw's image chain.
+pub(crate) fn material_sampler_for_input(
+    input: &crate::ForwardDrawInput,
 ) -> std::result::Result<SamplerDesc, Error> {
-    let mip_levels = inputs
-        .iter()
-        .flat_map(|input| {
-            (0..input.resolved_textures().len()).filter_map(|index| {
-                input
-                    .asset_texture(index)
-                    .map(|texture| texture.value().mip_levels)
-            })
+    if let Some(desc) = input.sampler_descriptor() {
+        validate_material_sampler(desc)?;
+        return Ok(desc.clone());
+    }
+    let mip_levels = (0..input.resolved_textures().len())
+        .filter_map(|index| {
+            input
+                .asset_texture(index)
+                .map(|texture| texture.value().mip_levels)
         })
         .max()
         .unwrap_or(1);
     material_sampler(mip_levels)
+}
+
+/// Deduplicates the concrete sampler policies needed by one resident frame.
+/// Texture allocation and caching intentionally do not participate in this
+/// calculation: image identity is independent of how a draw samples it.
+pub(crate) fn material_sampler_descriptors(
+    inputs: &[crate::ForwardDrawInput],
+) -> std::result::Result<Vec<SamplerDesc>, Error> {
+    let mut descriptors = Vec::new();
+    for input in inputs
+        .iter()
+        .filter(|input| material_requires_ordinary_sampler(input.prepared()))
+    {
+        let descriptor = material_sampler_for_input(input)?;
+        if !descriptors
+            .iter()
+            .any(|existing| same_material_sampler(existing, &descriptor))
+        {
+            descriptors.push(descriptor);
+        }
+    }
+    Ok(descriptors)
+}
+
+/// Compares all semantic native sampler fields while deliberately ignoring a
+/// debug label. Reusing a native sampler is valid only for an exact policy.
+pub(crate) fn same_material_sampler(left: &SamplerDesc, right: &SamplerDesc) -> bool {
+    left.address == right.address
+        && left.mag_filter == right.mag_filter
+        && left.min_filter == right.min_filter
+        && left.mip_filter == right.mip_filter
+        && left.lod.start.to_bits() == right.lod.start.to_bits()
+        && left.lod.end.to_bits() == right.lod.end.to_bits()
+        && left.anisotropy == right.anisotropy
+        && left.compare == right.compare
+        && left.border == right.border
+}
+
+/// Validates the bounded ordinary float-sampler contract consumed by material
+/// bind groups. It intentionally permits nearest filtering and non-clamp
+/// addressing; scene-composite users retain `validate_ordinary_sampler`.
+pub(crate) fn validate_material_sampler(desc: &SamplerDesc) -> std::result::Result<(), Error> {
+    let ordinary_filter = |filter| matches!(filter, FilterMode::Nearest | FilterMode::Linear);
+    if desc.compare.is_some()
+        || desc.border.is_some()
+        || desc.address.contains(&AddressMode::ClampToBorder)
+        || !ordinary_filter(desc.mag_filter)
+        || !ordinary_filter(desc.min_filter)
+        || !ordinary_filter(desc.mip_filter)
+        || desc.anisotropy == 0
+        || !desc.lod.start.is_finite()
+        || !desc.lod.end.is_finite()
+        || desc.lod.start > desc.lod.end
+    {
+        return Err(Error::InvalidState);
+    }
+    if desc.anisotropy > 1
+        && (desc.mag_filter != FilterMode::Linear
+            || desc.min_filter != FilterMode::Linear
+            || desc.mip_filter != FilterMode::Linear)
+    {
+        return Err(Error::InvalidState);
+    }
+    Ok(())
 }
 pub(crate) fn validate_ordinary_sampler(desc: &SamplerDesc) -> std::result::Result<(), Error> {
     if desc.compare.is_some()

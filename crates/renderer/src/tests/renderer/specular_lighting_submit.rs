@@ -114,6 +114,7 @@ fn scene(
                 "material_texture",
                 SceneAssetRef::from_snapshot(&t),
             )],
+            sampler: None,
             tint: [1.; 4],
         },
         transform: RenderTransform::identity(),

@@ -10,6 +10,7 @@ pub(crate) struct MaterialBindingSchema {
     pub(crate) tint: u32,
     pub(crate) textures: Vec<MaterialTextureBinding>,
     pub(crate) sampler: Option<u32>,
+    pub(crate) sampler_name: Option<String>,
 }
 
 /// One material-declared texture location, ordered by its actual binding.
@@ -115,5 +116,6 @@ pub(crate) fn material_binding_schema(
         tint: tint[0].location.binding,
         textures,
         sampler: sampler.first().map(|binding| binding.location.binding),
+        sampler_name: sampler.first().map(|binding| binding.name.clone()),
     })
 }

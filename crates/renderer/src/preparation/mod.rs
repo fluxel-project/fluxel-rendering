@@ -10,6 +10,7 @@ pub use specular_environment::{
     SpecularIblMip,
 };
 mod forward;
+mod forward_sampler;
 mod forward_schema;
 pub(crate) use forward_schema::{
     MaterialBindingSchema, MaterialTextureBinding, material_binding_schema,
@@ -22,9 +23,9 @@ pub use environment::{EnvironmentIrradianceAsset, EnvironmentIrradianceData};
 pub(crate) use forward::prepare_feature_draws;
 pub use forward::{
     ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardCaptureResources, ForwardDrawInput,
-    ForwardDrawRequest, ForwardPreparationError, ForwardResources, ForwardTextureBinding,
-    ForwardTextureSource, GeometryAsset, GeometryData, PreparedCaptureReceiver, TextureEncoding,
-    prepare_forward, prepare_forward_capture_receiver,
+    ForwardDrawRequest, ForwardPreparationError, ForwardResources, ForwardSamplerBinding,
+    ForwardTextureBinding, ForwardTextureSource, GeometryAsset, GeometryData,
+    PreparedCaptureReceiver, TextureEncoding, prepare_forward, prepare_forward_capture_receiver,
 };
 pub(crate) use forward::{
     ForwardBatchStats, ForwardCompatibilityKey, batch_forward_draws,

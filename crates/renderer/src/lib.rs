@@ -35,12 +35,12 @@ pub use preparation::{
     ColorTextureAsset, ColorTextureData, EnvironmentIrradianceAsset, EnvironmentIrradianceData,
     EnvironmentSpecularIblAsset, EnvironmentSpecularIblData, ForwardAssets,
     ForwardCaptureResources, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
-    ForwardDrawSource, ForwardPreparationError, ForwardResources, ForwardTextureBinding,
-    ForwardTextureSource, GeometryAsset, GeometryAttribute, GeometryBufferOwner, GeometryData,
-    GeometryDraw, GeometryError, GeometryLayout, GeometryStream, GeometryStreamBinding,
-    LinearSpecularLod, MaterialPreparationError, PreparedCaptureReceiver, PreparedGeometry,
-    PreparedGeometryBindings, PreparedMaterial, SpecularIblImage, SpecularIblMip, TextureEncoding,
-    prepare_forward, prepare_forward_capture_receiver, prepare_material,
+    ForwardDrawSource, ForwardPreparationError, ForwardResources, ForwardSamplerBinding,
+    ForwardTextureBinding, ForwardTextureSource, GeometryAsset, GeometryAttribute,
+    GeometryBufferOwner, GeometryData, GeometryDraw, GeometryError, GeometryLayout, GeometryStream,
+    GeometryStreamBinding, LinearSpecularLod, MaterialPreparationError, PreparedCaptureReceiver,
+    PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, SpecularIblImage, SpecularIblMip,
+    TextureEncoding, prepare_forward, prepare_forward_capture_receiver, prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,

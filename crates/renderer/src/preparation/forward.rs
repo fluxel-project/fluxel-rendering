@@ -107,6 +107,12 @@ pub struct ForwardResources {
     /// Named material texture sources. Names must exactly match the material
     /// contribution's texture resource names.
     pub textures: Vec<ForwardTextureBinding>,
+    /// Optional named ordinary sampler state for this draw's material binding.
+    ///
+    /// Image assets deliberately do not own sampler state: one immutable image
+    /// generation may be sampled by different draws with different policies.
+    /// When omitted, the built-in consumer retains its existing default policy.
+    pub sampler: Option<ForwardSamplerBinding>,
     /// Per-record vec4 value uploaded to the schema's material uniform binding.
     pub tint: [f32; 4],
 }
@@ -118,6 +124,29 @@ pub struct ForwardTextureBinding {
     pub resource: String,
     /// Source resolved for this material resource.
     pub source: ForwardTextureSource,
+}
+
+/// One named ordinary sampler binding supplied by a Forward draw.
+///
+/// The descriptor is immutable CPU input. Native sampler ownership is created
+/// by the selected renderer backend and retained with the submitted frame.
+#[derive(Clone, Debug)]
+pub struct ForwardSamplerBinding {
+    /// Exact material resource name declared for the ordinary sampler.
+    pub resource: String,
+    /// Requested ordinary sampler state.
+    pub descriptor: fluxel_rhi::api::SamplerDesc,
+}
+
+impl ForwardSamplerBinding {
+    /// Binds `descriptor` to the named material sampler resource.
+    #[must_use]
+    pub fn new(resource: impl Into<String>, descriptor: fluxel_rhi::api::SamplerDesc) -> Self {
+        Self {
+            resource: resource.into(),
+            descriptor,
+        }
+    }
 }
 
 impl ForwardTextureBinding {
@@ -176,6 +205,7 @@ pub struct ForwardDrawInput {
     material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
     textures: Vec<ResolvedForwardTexture>,
     prepared: PreparedMaterial,
+    sampler: Option<fluxel_rhi::api::SamplerDesc>,
     tint: [f32; 4],
     transform: RenderTransform,
     view: RenderView,
@@ -319,6 +349,14 @@ impl ForwardDrawInput {
         &self.prepared
     }
 
+    /// Returns this draw's validated explicit ordinary-sampler descriptor.
+    ///
+    /// `None` names the legacy renderer default rather than an absent material
+    /// sampler binding.
+    pub(crate) fn sampler_descriptor(&self) -> Option<&fluxel_rhi::api::SamplerDesc> {
+        self.sampler.as_ref()
+    }
+
     /// Returns the validated dynamic tint.
     pub fn tint(&self) -> [f32; 4] {
         self.tint
@@ -404,6 +442,11 @@ fn prepare_draw(
         .map_err(ForwardPreparationError::Material)?;
     let schema = validate_material_schema(&prepared, source)?;
     let textures = resolve_asset_textures(resources, &schema, assets, source)?;
+    let sampler = super::forward_sampler::resolve_sampler_binding(
+        resources.sampler.as_ref(),
+        &schema,
+        source,
+    )?;
     let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
     let normal_from_local = normal_from_local(
@@ -432,6 +475,7 @@ fn prepare_draw(
         material,
         textures,
         prepared,
+        sampler,
         tint: resources.tint,
         transform,
         view: view.clone(),
@@ -508,55 +552,6 @@ fn resolve_asset_textures(
 /// returned draws so a later device coordinator cannot accidentally apply the
 /// ranges to an un-ordered input vector. It preserves candidate order and only
 /// joins neighboring draws that select identical raster-program facts.
-pub(crate) fn batch_forward_draws(draws: Vec<ForwardDrawInput>) -> ForwardPreparedBatches {
-    let runs = coalesce_adjacent(draws, ForwardCompatibilityKey::from_draw);
-    let mut ordered = Vec::new();
-    let mut batches = Vec::with_capacity(runs.len());
-    for (key, members) in runs {
-        let start = ordered.len();
-        ordered.extend(members);
-        batches.push(ForwardDrawBatch {
-            key,
-            draws: start..ordered.len(),
-        });
-    }
-    ForwardPreparedBatches {
-        draws: ordered,
-        batches,
-    }
-}
-
-fn coalesce_adjacent<T, K>(items: Vec<T>, key_for: impl Fn(&T) -> K) -> Vec<(K, Vec<T>)>
-where
-    K: Eq,
-{
-    let mut runs: Vec<(K, Vec<T>)> = Vec::new();
-    for item in items {
-        let key = key_for(&item);
-        match runs.last_mut() {
-            Some((last_key, members)) if *last_key == key => members.push(item),
-            _ => runs.push((key, vec![item])),
-        }
-    }
-    runs
-}
-
-#[cfg(test)]
-#[path = "../tests/preparation/forward_batches.rs"]
-mod forward_batches;
-
-#[cfg(test)]
-#[path = "../tests/preparation/feature_draws.rs"]
-mod feature_draws;
-
-#[cfg(test)]
-#[path = "../tests/preparation/forward_pbr.rs"]
-mod forward_pbr_tests;
-
-#[cfg(test)]
-#[path = "../tests/preparation/color_uv0.rs"]
-mod color_uv0_tests;
-
-#[cfg(test)]
-#[path = "../tests/preparation/forward_texture_validation.rs"]
-mod forward_texture_validation_tests;
+#[path = "forward_batch.rs"]
+mod forward_batch;
+pub(crate) use forward_batch::batch_forward_draws;

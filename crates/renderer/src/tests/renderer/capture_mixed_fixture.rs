@@ -69,6 +69,7 @@ fn build_receiver(
             geometry: SceneAssetRef::from_snapshot(&geometry),
             material: SceneAssetRef::from_snapshot(&material),
             textures,
+            sampler: None,
             tint: [1.0; 4],
         },
         RenderTransform::identity(),
