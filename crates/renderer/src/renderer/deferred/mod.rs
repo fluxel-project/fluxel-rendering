@@ -5,7 +5,13 @@
 //! No Forward Graph, independent scheduler or CPU G-buffer round-trip is used.
 
 mod cache;
+mod capture_empty_prepare;
+mod capture_entry;
+mod capture_execute;
+mod capture_forward_execute;
+mod capture_oit_entry;
 mod capture_prepare;
+mod capture_reverse_execute;
 pub(in crate::renderer) use capture_prepare::DeferredCaptureComposition;
 mod deformation;
 mod deformed;
