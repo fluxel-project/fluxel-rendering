@@ -37,7 +37,7 @@ pub(super) fn validate_transform(
                 .sqrt()
         })
         .fold(0.0, f64::max);
-    if scale == 0.0 || !scale.is_finite() || scale > f64::from(f32::MAX) {
+    if !scale.is_finite() || scale > f64::from(f32::MAX) {
         return Err(invalid());
     }
     if transmission.thickness.is_none() {

@@ -34,11 +34,18 @@ const PBR_MESH_VISIBILITY_OFFSET: usize = PBR_WORLD_HANDEDNESS_OFFSET + 4;
 pub(crate) const UNLIT_FORWARD_TRANSFORM_BYTES: u64 = 80;
 
 fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
-    let world = world.map(|column| column.map(f64::from));
-    let (a, b, c) = (world[0][0], world[1][0], world[2][0]);
-    let (d, e, f) = (world[0][1], world[1][1], world[2][1]);
-    let (g, h, i) = (world[0][2], world[1][2], world[2][2]);
+    let matrix = world.map(|column| column.map(f64::from));
+    let (a, b, c) = (matrix[0][0], matrix[1][0], matrix[2][0]);
+    let (d, e, f) = (matrix[0][1], matrix[1][1], matrix[2][1]);
+    let (g, h, i) = (matrix[0][2], matrix[1][2], matrix[2][2]);
     let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if determinant == 0.0
+        && crate::RenderTransform::from_columns(world)
+            .is_ok_and(crate::RenderTransform::collapses_to_point)
+    {
+        // The admitted fully collapsed draw has no winding.
+        return Ok(1.0);
+    }
     if !determinant.is_finite() || determinant == 0.0 {
         return Err(Error::InvalidRange);
     }

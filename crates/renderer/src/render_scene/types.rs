@@ -81,6 +81,11 @@ impl RenderTransform {
     pub fn columns(self) -> [[f32; 4]; 4] {
         self.0
     }
+
+    /// Whether the affine transform maps every local position to one point.
+    pub(crate) fn collapses_to_point(self) -> bool {
+        self.0[3][3] == 1.0 && self.0[..3].iter().flatten().all(|&value| value == 0.0)
+    }
 }
 
 /// A finite axis-aligned bound.

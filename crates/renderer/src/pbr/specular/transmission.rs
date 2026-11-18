@@ -22,6 +22,12 @@ fn pbr_world_max_scale() -> f32 {
     );
 }
 
+fn pbr_world_thickness(thickness: f32) -> f32 {
+    let scale = pbr_world_max_scale();
+    if scale == 0.0 { return 0.0; }
+    return thickness * scale;
+}
+
 // Babylon's refraction path first converts perceptual roughness to alphaG,
 // then reduces it for IORs close to one.  Both environment and projected
 // scene-color refraction use that same material-side choice; only the sampled
@@ -59,10 +65,11 @@ fn pbr_refraction_latlong_uv(direction: vec3<f32>) -> vec2<f32> {
                       acos(clamp(direction.y, -1.0, 1.0)) / 3.141592653589793);
 }
 
-fn pbr_environment_attenuation(thickness: f32) -> vec3<f32> {
+fn pbr_transmission_attenuation(world_thickness: f32) -> vec3<f32> {
+    if world_thickness == 0.0 { return vec3<f32>(1.0); }
     let sigma = -log(material_attenuation_color())
         / max(material_attenuation_distance(), 1e-5);
-    return exp(-sigma * thickness * pbr_world_max_scale());
+    return exp(-sigma * world_thickness);
 }
 "#;
 
@@ -90,7 +97,7 @@ fn pbr_environment_transmission(
             * vec4<f32>(pbr_normal(refracted), 0.0)).xyz),
         lod,
     ).rgb;
-    return environment * pbr_environment_attenuation(thickness) * intensity;
+    return environment * pbr_transmission_attenuation(pbr_world_thickness(thickness)) * intensity;
 }
 "#;
 
@@ -116,7 +123,7 @@ fn pbr_material_transmission(
     let max_lod = f32(textureNumLevels({texture})) - 1.0;
     let color = textureSampleLevel({texture}, {sampler}, pbr_refraction_latlong_uv(direction),
         clamp(lod * {scale} + {offset}, 0.0, max_lod)).rgb;
-    return color * pbr_environment_attenuation(thickness) * intensity;
+    return color * pbr_transmission_attenuation(pbr_world_thickness(thickness)) * intensity;
 }}
 "#
     )

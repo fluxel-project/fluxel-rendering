@@ -42,7 +42,7 @@ fn pbr_scene_transmission(
     intensity: f32,
     thickness: f32,
 ) -> vec3<f32> {
-    let world_thickness = thickness * pbr_world_max_scale();
+    let world_thickness = pbr_world_thickness(thickness);
     let capture_uv = pbr_scene_refraction_uv(world_position, normal, view, world_thickness);
     // The opted-in Babylon LINEARSPECULARREFRACTION path adjusts alphaG
     // by IOR and scales it by the log of the texture width. A sharp capture
@@ -57,9 +57,7 @@ fn pbr_scene_transmission(
     let half_texel = vec2<f32>(0.5) / size;
     let uv = clamp(capture_uv, half_texel, vec2<f32>(1.0) - half_texel);
     let scene_color = textureSampleLevel(scene, scene_sampler, uv, lod).rgb;
-    let absorption = -log(material_attenuation_color())
-        / max(material_attenuation_distance(), 1e-5);
-    let attenuation = exp(-absorption * world_thickness);
+    let attenuation = pbr_transmission_attenuation(world_thickness);
     return scene_color * attenuation * intensity;
 }
 "#;

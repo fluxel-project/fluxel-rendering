@@ -4,21 +4,37 @@ use fluxel_rhi::api::VertexFormat;
 
 use crate::{PreparedGeometry, RenderTransform};
 
-use super::{ForwardDrawSource, ForwardPreparationError, GeometryData};
+use super::{ForwardDrawSource, ForwardPreparationError, GeometryData, PreparedMaterial};
 
 pub(super) fn normal_from_local(
     geometry: &GeometryData,
-    prepared: &PreparedGeometry,
+    prepared: &PreparedMaterial,
     transform: RenderTransform,
-    pbr: bool,
-    normal_map: bool,
     source: ForwardDrawSource,
 ) -> Result<Option<[[f32; 4]; 4]>, ForwardPreparationError> {
-    if !pbr {
+    let output = prepared.material().output();
+    if !crate::pbr::is_pbr(output) {
         return Ok(None);
     }
-    let normal = inverse_transpose(transform, source)?;
-    validate_normals(geometry, prepared, normal, transform, normal_map, source)?;
+    let normal_transform = if prepared.uses_transmission() && transform.collapses_to_point() {
+        // Triangle positions keep the real collapsed transform. The neutral
+        // basis lets us still validate the original mesh normals and tangents.
+        RenderTransform::identity()
+    } else {
+        transform
+    };
+    let normal = inverse_transpose(normal_transform, source)?;
+    validate_normals(
+        geometry,
+        prepared.geometry(),
+        normal,
+        normal_transform,
+        matches!(
+            output,
+            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+        ),
+        source,
+    )?;
     Ok(Some(normal))
 }
 

@@ -458,17 +458,7 @@ fn prepare_draw(
     )?;
     let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
-    let normal_from_local = normal_from_local(
-        geometry.value(),
-        prepared.geometry(),
-        transform,
-        crate::pbr::is_pbr(material.value().output()),
-        matches!(
-            material.value().output(),
-            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
-        ),
-        source,
-    )?;
+    let normal_from_local = normal_from_local(geometry.value(), &prepared, transform, source)?;
     let clip_from_local = multiply_columns(view.transform, transform);
     if !clip_from_local
         .iter()

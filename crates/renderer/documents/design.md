@@ -611,7 +611,12 @@ perceptual-roughness LOD unchanged.
 
 Thickness is multiplied by the largest world-matrix column length. CPU checks
 use f64 and Shader uses scaled lengths to avoid a spurious f32 dot-product
-overflow. Static default thickness that cannot be represented after scaling is
+overflow. A fully collapsed affine transmissive draw has zero world thickness.
+It keeps the collapsed positions, which produce no covered samples under the
+built-in triangle raster state. Its local normal and tangent payload is still
+validated. The frame uses a neutral normal transform and winding for this
+case. Other singular transforms remain subject to normal-matrix validation.
+Static default thickness that cannot be represented after scaling is
 refused before dependent backend work. Custom callable outputs are not treated
 as statically known or clamped to a guessed interval. Beer-Lambert attenuation
 uses `sigma = -log(color) / max(distance, 0.00001)` and
