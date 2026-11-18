@@ -97,6 +97,27 @@ pub enum MaterialResourceKind {
     },
 }
 
+/// Transfer encoding required by an explicitly typed material texture binding.
+///
+/// This is optional metadata. Generic material textures retain no prescribed
+/// encoding until a consumer supplies an explicit requirement.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum MaterialTextureEncoding {
+    /// Texture RGB values are already linear.
+    Linear,
+    /// Texture RGB values use the sRGB transfer function.
+    Srgb,
+}
+
+/// One optional transfer-encoding requirement for a declared texture resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialTextureEncodingRequirement {
+    /// Declared `Texture2dF32` resource name.
+    pub resource: String,
+    /// Required transfer encoding for an asset bound to this resource.
+    pub encoding: MaterialTextureEncoding,
+}
+
 impl MaterialResourceKind {
     /// Returns the WGSL type spelling for this resource.
     #[must_use]

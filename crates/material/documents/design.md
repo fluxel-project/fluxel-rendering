@@ -286,6 +286,12 @@ Normal-map unpacking remains an independent authored operation. Renderer owns
 actual format support, source-generation changes, view creation, and binding
 validation; the material compiler does not infer color roles from resource names.
 
+An author may attach an optional `MaterialTextureEncodingRequirement` to a
+declared texture resource. It becomes part of the static variant identity and
+requires an asset binding with the selected linear or sRGB encoding. A
+same-frame capture is linear. Unannotated resources retain the generic contract
+for callers that intentionally support either source representation.
+
 Material resources describe generic shader-visible requirements. The current
 public subset has `UniformVec4`, read-only `Texture2dF32`, and `Sampler {
 comparison }`, each with a stable name and bind-group location. `comparison` is

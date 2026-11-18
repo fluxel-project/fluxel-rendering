@@ -1,6 +1,6 @@
 //! Consumer-owned binding facts derived from one prepared material.
 
-use fluxel_material::{MaterialResourceKind, MaterialType};
+use fluxel_material::{MaterialResourceKind, MaterialTextureEncoding, MaterialType};
 use fluxel_shader::{BindingKind, BindingShape, ShaderStage};
 
 use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
@@ -18,6 +18,8 @@ pub(crate) struct MaterialBindingSchema {
 pub(crate) struct MaterialTextureBinding {
     pub(crate) binding: u32,
     pub(crate) name: String,
+    /// Optional material-declared asset encoding requirement.
+    pub(crate) encoding: Option<MaterialTextureEncoding>,
 }
 
 pub(crate) fn material_binding_schema(
@@ -109,6 +111,12 @@ pub(crate) fn material_binding_schema(
         .map(|binding| MaterialTextureBinding {
             binding: binding.location.binding,
             name: binding.name.clone(),
+            encoding: prepared
+                .material()
+                .texture_encoding_requirements()
+                .iter()
+                .find(|requirement| requirement.resource == binding.name)
+                .map(|requirement| requirement.encoding),
         })
         .collect();
     textures.sort_unstable_by_key(|texture| texture.binding);

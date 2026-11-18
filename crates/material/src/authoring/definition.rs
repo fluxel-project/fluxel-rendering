@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use super::{
     MaterialCodeNode, MaterialFragment, MaterialNodeGraph, MaterialParameter, MaterialResource,
-    StaticValue, SurfacePolicy, TransmissionExtensions,
+    MaterialTextureEncodingRequirement, StaticValue, SurfacePolicy, TransmissionExtensions,
 };
 
 /// The selected surface output for the minimal material contribution.
@@ -58,6 +58,7 @@ pub struct MaterialDefinition {
     root_fragment: String,
     parameters: Vec<MaterialParameter>,
     resources: Vec<MaterialResource>,
+    texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
     static_options: BTreeMap<String, StaticValue>,
     output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
@@ -83,6 +84,7 @@ impl MaterialDefinition {
             root_fragment: root_fragment.into(),
             parameters,
             resources,
+            texture_encoding_requirements: Vec::new(),
             static_options,
             output,
             surface_extensions: SurfaceExtensions::default(),
@@ -110,6 +112,17 @@ impl MaterialDefinition {
     #[must_use]
     pub fn with_surface_extensions(mut self, extensions: SurfaceExtensions) -> Self {
         self.surface_extensions = extensions;
+        self
+    }
+
+    /// Requires transfer encodings for selected texture resources when an
+    /// asset source is bound by a renderer consumer.
+    #[must_use]
+    pub fn with_texture_encoding_requirements(
+        mut self,
+        requirements: Vec<MaterialTextureEncodingRequirement>,
+    ) -> Self {
+        self.texture_encoding_requirements = requirements;
         self
     }
 
@@ -165,6 +178,9 @@ impl MaterialDefinition {
     }
     pub(crate) fn resources(&self) -> &[MaterialResource] {
         &self.resources
+    }
+    pub(crate) fn texture_encoding_requirements(&self) -> &[MaterialTextureEncodingRequirement] {
+        &self.texture_encoding_requirements
     }
     pub(crate) fn static_options(&self) -> &BTreeMap<String, StaticValue> {
         &self.static_options

@@ -171,6 +171,17 @@ pub enum ForwardPreparationError {
         /// Unexpected material resource name.
         resource: String,
     },
+    /// An asset texture's transfer encoding differs from its material requirement.
+    TextureEncodingMismatch {
+        /// Draw requesting the texture.
+        source: ForwardDrawSource,
+        /// Material texture resource name.
+        resource: String,
+        /// Material-required encoding.
+        expected: TextureEncoding,
+        /// Asset-declared encoding.
+        actual: TextureEncoding,
+    },
     /// A draw supplied sampler state for a material without an ordinary sampler.
     UnexpectedSamplerResource {
         /// Draw requesting the binding.

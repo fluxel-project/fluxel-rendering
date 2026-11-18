@@ -153,6 +153,23 @@ pub enum MaterialError {
         /// Conflicting location.
         location: BindingLocation,
     },
+    /// More than one transfer-encoding requirement named the same resource.
+    DuplicateTextureEncodingRequirement {
+        /// Texture resource name.
+        resource: String,
+    },
+    /// A transfer-encoding requirement named no material resource.
+    TextureEncodingResourceMissing {
+        /// Texture resource name.
+        resource: String,
+    },
+    /// A transfer-encoding requirement named a non-texture resource.
+    TextureEncodingResourceTypeMismatch {
+        /// Texture resource name.
+        resource: String,
+        /// Declared resource kind.
+        actual: MaterialResourceKind,
+    },
     /// The selected root fragment was not defined.
     MissingFragment {
         /// Requested fragment name.

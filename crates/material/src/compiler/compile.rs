@@ -17,6 +17,7 @@ impl MaterialCompiler {
             ir.contribution(),
             ir.parameters,
             ir.resources,
+            ir.texture_encoding_requirements,
             ir.output,
             ir.surface_policy,
             ir.transmission_extensions,

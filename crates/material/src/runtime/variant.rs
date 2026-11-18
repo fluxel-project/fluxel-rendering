@@ -2,7 +2,7 @@
 
 use crate::{
     MaterialAssetRef, MaterialParameter, MaterialResource, MaterialShaderContribution,
-    SurfaceOutput, SurfacePolicy, TransmissionExtensions,
+    MaterialTextureEncodingRequirement, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
 };
 
 /// A stable static-variant identity derived from canonical material input.
@@ -34,6 +34,7 @@ pub struct CompiledMaterialVariant {
     contribution: MaterialShaderContribution,
     parameters: Vec<MaterialParameter>,
     resources: Vec<MaterialResource>,
+    texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
     output: SurfaceOutput,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
@@ -45,6 +46,7 @@ impl CompiledMaterialVariant {
         contribution: MaterialShaderContribution,
         parameters: Vec<MaterialParameter>,
         resources: Vec<MaterialResource>,
+        texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
         output: SurfaceOutput,
         surface_policy: SurfacePolicy,
         transmission_extensions: Option<TransmissionExtensions>,
@@ -55,6 +57,7 @@ impl CompiledMaterialVariant {
             contribution,
             parameters,
             resources,
+            texture_encoding_requirements,
             output,
             surface_policy,
             transmission_extensions,
@@ -100,6 +103,12 @@ impl CompiledMaterialVariant {
     #[must_use]
     pub fn transmission_extensions(&self) -> Option<&TransmissionExtensions> {
         self.transmission_extensions.as_ref()
+    }
+
+    /// Returns optional asset transfer-encoding requirements by resource name.
+    #[must_use]
+    pub fn texture_encoding_requirements(&self) -> &[MaterialTextureEncodingRequirement] {
+        &self.texture_encoding_requirements
     }
 
     pub(crate) fn parameters(&self) -> &[MaterialParameter] {

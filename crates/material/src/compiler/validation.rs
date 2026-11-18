@@ -9,7 +9,6 @@ use super::canonical::{
 use super::names::wgsl_top_level_names;
 use super::*;
 use fluxel_shader::CallableDeclaration;
-
 #[derive(Clone, Debug)]
 pub(super) struct NormalizedMaterialIr {
     fragments: Vec<MaterialFragment>,
@@ -17,6 +16,7 @@ pub(super) struct NormalizedMaterialIr {
     root_fragment: String,
     pub(super) parameters: Vec<MaterialParameter>,
     pub(super) resources: Vec<MaterialResource>,
+    pub(super) texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
     static_options: BTreeMap<String, StaticValue>,
     pub(super) output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
@@ -24,7 +24,6 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
 }
-
 #[derive(Clone, Debug)]
 pub(super) struct FunctionSignature {
     pub(super) inputs: Vec<FragmentInput>,
@@ -90,6 +89,10 @@ impl NormalizedMaterialIr {
         )?;
         let resources = merge_resources(definition.resources(), &code_nodes)?;
         validate_parameter_resources(definition.parameters(), &resources)?;
+        super::texture_encoding::validate(
+            definition.texture_encoding_requirements(),
+            &resources,
+        )?;
         validate_top_level_names(
             &fragments,
             &code_nodes,
@@ -106,6 +109,7 @@ impl NormalizedMaterialIr {
             root_fragment,
             parameters: sorted_by_name(definition.parameters().to_vec(), |value| &value.name),
             resources,
+            texture_encoding_requirements: definition.texture_encoding_requirements().to_vec(),
             static_options: definition.static_options().clone(),
             output: definition.output().clone(),
             surface_extensions: definition.surface_extensions().clone(),
@@ -149,6 +153,7 @@ impl NormalizedMaterialIr {
             canonical_piece(&mut canonical, "parameter-resource", &parameter.resource);
         }
         canonical_resources(&mut canonical, &self.resources);
+        super::texture_encoding::canonical(&self.texture_encoding_requirements, &mut canonical);
         for (name, value) in &self.static_options {
             canonical_piece(&mut canonical, "static-name", name);
             canonical_piece(&mut canonical, "static-value", &value.canonical());

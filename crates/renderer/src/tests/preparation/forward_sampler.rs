@@ -11,6 +11,7 @@ fn schema(sampler: Option<&str>) -> MaterialBindingSchema {
         textures: vec![MaterialTextureBinding {
             binding: 1,
             name: "image".into(),
+            encoding: None,
         }],
         sampler: sampler.map(|_| 2),
         sampler_name: sampler.map(str::to_owned),

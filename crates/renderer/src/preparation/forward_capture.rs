@@ -151,7 +151,7 @@ pub fn prepare_forward_capture_receiver(
     super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
-    let textures = resolve_capture_textures(textures, assets, source)?;
+    let textures = resolve_capture_textures(textures, &schema.textures, assets, source)?;
     let sampler = super::super::forward_sampler::resolve_sampler_binding(
         resources.sampler.as_ref(),
         &schema,
@@ -196,16 +196,19 @@ pub fn prepare_forward_capture_receiver(
 
 fn resolve_capture_textures(
     textures: Vec<&ForwardTextureBinding>,
+    expected: &[super::super::MaterialTextureBinding],
     assets: &ForwardAssets,
     source: ForwardDrawSource,
 ) -> Result<Vec<ResolvedForwardTexture>, ForwardPreparationError> {
     let mut captures = 0;
     let resolved = textures
         .into_iter()
-        .map(|texture| match &texture.source {
+        .zip(expected)
+        .map(|(texture, expected)| match &texture.source {
             ForwardTextureSource::Asset(reference) => {
                 let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
                 validate_texture(asset.value(), source)?;
+                super::validate_texture_encoding(expected, asset.value().encoding, source)?;
                 Ok(ResolvedForwardTexture::Asset(asset))
             }
             ForwardTextureSource::CaptureSlot(slot) => {
@@ -215,6 +218,7 @@ fn resolve_capture_textures(
                         slot: slot.clone(),
                     });
                 }
+                super::validate_texture_encoding(expected, TextureEncoding::Linear, source)?;
                 captures += 1;
                 Ok(ResolvedForwardTexture::CaptureSlot(slot.clone()))
             }

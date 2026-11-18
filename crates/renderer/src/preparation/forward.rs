@@ -459,10 +459,12 @@ fn resolve_asset_textures(
 ) -> Result<Vec<ResolvedForwardTexture>, ForwardPreparationError> {
     ordered_texture_sources(&resources.textures, &schema.textures, source)?
         .into_iter()
-        .map(|texture| match &texture.source {
+        .zip(&schema.textures)
+        .map(|(texture, expected)| match &texture.source {
             ForwardTextureSource::Asset(reference) => {
                 let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
                 validate_texture(asset.value(), source)?;
+                validate_texture_encoding(expected, asset.value().encoding, source)?;
                 Ok(ResolvedForwardTexture::Asset(asset))
             }
             ForwardTextureSource::CaptureSlot(_) => {
@@ -473,6 +475,29 @@ fn resolve_asset_textures(
             }
         })
         .collect()
+}
+
+pub(crate) fn validate_texture_encoding(
+    expected: &super::MaterialTextureBinding,
+    actual: TextureEncoding,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    let Some(required_encoding) = expected.encoding else {
+        return Ok(());
+    };
+    let required_encoding = match required_encoding {
+        fluxel_material::MaterialTextureEncoding::Linear => TextureEncoding::Linear,
+        fluxel_material::MaterialTextureEncoding::Srgb => TextureEncoding::Srgb,
+    };
+    if actual != required_encoding {
+        return Err(ForwardPreparationError::TextureEncodingMismatch {
+            source,
+            resource: expected.name.clone(),
+            expected: required_encoding,
+            actual,
+        });
+    }
+    Ok(())
 }
 
 #[path = "forward_batch.rs"]

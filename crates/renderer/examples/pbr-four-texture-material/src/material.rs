@@ -64,6 +64,24 @@ pub(super) fn definition() -> MaterialDefinition {
             normal: "direction".into(),
         },
     )
+    .with_texture_encoding_requirements(vec![
+        MaterialTextureEncodingRequirement {
+            resource: "base_color".into(),
+            encoding: MaterialTextureEncoding::Srgb,
+        },
+        MaterialTextureEncodingRequirement {
+            resource: "emissive".into(),
+            encoding: MaterialTextureEncoding::Srgb,
+        },
+        MaterialTextureEncodingRequirement {
+            resource: "normal".into(),
+            encoding: MaterialTextureEncoding::Linear,
+        },
+        MaterialTextureEncodingRequirement {
+            resource: "orm".into(),
+            encoding: MaterialTextureEncoding::Linear,
+        },
+    ])
     .with_surface_extensions(SurfaceExtensions {
         occlusion: Some("occlusion".into()),
         emissive: Some("emission".into()),
