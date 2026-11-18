@@ -287,7 +287,8 @@ where
         // An ordinary sampler is a concrete device object rather than a Graph
         // resource. The resident owner below is retained by PendingWork, so a
         // native sampler cannot disappear while its bind group is in flight.
-        for desc in material_sampler_descriptors(&inputs)? {
+        let capture_mip_levels = capture_texture.map(|owner| owner.desc.mip_levels);
+        for desc in material_sampler_descriptors(&inputs, capture_mip_levels)? {
             let sampler = self
                 .device
                 .create_sampler(&desc)
@@ -427,7 +428,7 @@ where
                 });
             }
             if let Some(binding) = schema.sampler {
-                let expected = material_sampler_for_input(input)?;
+                let expected = material_sampler_for_input_with_capture(input, capture_mip_levels)?;
                 let sampler = resident
                     .samplers
                     .iter()

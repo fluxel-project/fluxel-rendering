@@ -40,6 +40,7 @@ pub(crate) struct MipGenerationPass {
     pub(crate) source_mip: u32,
     pub(crate) destination_mip: u32,
     desc: TextureDesc,
+    seed_source: Option<TextureSlot>,
 }
 
 /// Declares all remaining levels after `texture` already has a defined mip 0.
@@ -95,9 +96,56 @@ pub(crate) fn declare_chain(
             source_mip,
             destination_mip,
             desc: desc.clone(),
+            seed_source: None,
         });
     }
     Ok((current, passes))
+}
+
+/// Copies a Graph-produced base level into a separate texture before downsampling.
+pub(super) fn declare_capture_seed(
+    graph: &mut GraphBuilder,
+    source: TextureHandle,
+    destination: TextureHandle,
+    texture: usize,
+) -> std::result::Result<(TextureHandle, MipGenerationPass), GraphError> {
+    let desc = graph
+        .textures
+        .get(destination.resource)
+        .filter(|_| destination.graph == graph.graph)
+        .ok_or(GraphError::UnknownResource)?
+        .desc
+        .clone();
+    if source.resource == destination.resource || desc.mip_levels < 2 {
+        return Err(GraphError::InvalidRange);
+    }
+    let (pass, output) = graph.add_pass("capture-refraction-copy-base", |pass| {
+        pass.read_texture_with_use(
+            source,
+            one_color_mip(0),
+            copy_read().uses,
+            ImageLayout::CopySrc,
+            TextureUsage::COPY_SRC,
+        )?;
+        pass.write_texture_with_use(
+            destination,
+            one_color_mip(0),
+            copy_write().uses,
+            ImageLayout::CopyDst,
+            TextureUsage::COPY_DST,
+        )
+    })?;
+    Ok((
+        output,
+        MipGenerationPass {
+            pass,
+            texture,
+            source_mip: 0,
+            destination_mip: 0,
+            desc,
+            seed_source: Some(source.into()),
+        },
+    ))
 }
 
 /// Records one checked mip blit against the actual Forward texture owner.
@@ -117,7 +165,7 @@ pub(crate) fn record<B: ResourceBackend + CommandBackend>(
     let destination_extent = mip_extent(&generation.desc, generation.destination_mip)?;
     let pass = bindings.pass(generation.pass)?;
     let source = pass.texture(
-        slot,
+        generation.seed_source.unwrap_or(slot),
         one_color_mip(generation.source_mip),
         AccessKind::Read,
         copy_read(),
@@ -129,23 +177,25 @@ pub(crate) fn record<B: ResourceBackend + CommandBackend>(
         copy_write(),
     )?;
     pass.transition(encoder)?;
-    encoder.blit(
-        TextureRegion {
-            texture: source,
-            mip: generation.source_mip,
-            origin: [0, 0, 0],
-            extent: source_extent,
-            aspect: TextureAspects::COLOR,
-        },
-        TextureRegion {
-            texture: destination,
-            mip: generation.destination_mip,
-            origin: [0, 0, 0],
-            extent: destination_extent,
-            aspect: TextureAspects::COLOR,
-        },
-        FilterMode::Linear,
-    )
+    let source = TextureRegion {
+        texture: source,
+        mip: generation.source_mip,
+        origin: [0, 0, 0],
+        extent: source_extent,
+        aspect: TextureAspects::COLOR,
+    };
+    let destination = TextureRegion {
+        texture: destination,
+        mip: generation.destination_mip,
+        origin: [0, 0, 0],
+        extent: destination_extent,
+        aspect: TextureAspects::COLOR,
+    };
+    if generation.seed_source.is_some() {
+        encoder.copy_texture(source, destination)
+    } else {
+        encoder.blit(source, destination, FilterMode::Linear)
+    }
 }
 
 fn validate_actual<B: ResourceBackend>(
@@ -159,7 +209,7 @@ fn validate_actual<B: ResourceBackend>(
         || desc.extent[2] != 1
         || desc.array_layers != 1
         || desc.samples != 1
-        || generation.source_mip >= generation.destination_mip
+        || (generation.seed_source.is_none() && generation.source_mip >= generation.destination_mip)
         || generation.destination_mip >= desc.mip_levels
     {
         return Err(Error::InvalidState);

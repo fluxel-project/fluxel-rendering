@@ -41,6 +41,15 @@ pub(crate) fn material_sampler(mip_levels: u32) -> std::result::Result<SamplerDe
 pub(crate) fn material_sampler_for_input(
     input: &crate::ForwardDrawInput,
 ) -> std::result::Result<SamplerDesc, Error> {
+    material_sampler_for_input_with_capture(input, None)
+}
+
+/// Builds the exact sampler for one material draw, accounting for the actual
+/// capture chain selected by an opt-in projected-refraction receiver.
+pub(crate) fn material_sampler_for_input_with_capture(
+    input: &crate::ForwardDrawInput,
+    capture_mip_levels: Option<u32>,
+) -> std::result::Result<SamplerDesc, Error> {
     if let Some(desc) = input.sampler_descriptor() {
         validate_material_sampler(desc)?;
         return Ok(desc.clone());
@@ -51,6 +60,13 @@ pub(crate) fn material_sampler_for_input(
                 .asset_texture(index)
                 .map(|texture| texture.value().mip_levels)
         })
+        .chain(
+            input
+                .prepared()
+                .uses_scene_refraction()
+                .then_some(capture_mip_levels)
+                .flatten(),
+        )
         .max()
         .unwrap_or(1);
     material_sampler(mip_levels)
@@ -61,13 +77,14 @@ pub(crate) fn material_sampler_for_input(
 /// calculation: image identity is independent of how a draw samples it.
 pub(crate) fn material_sampler_descriptors(
     inputs: &[crate::ForwardDrawInput],
+    capture_mip_levels: Option<u32>,
 ) -> std::result::Result<Vec<SamplerDesc>, Error> {
     let mut descriptors = Vec::new();
     for input in inputs
         .iter()
         .filter(|input| material_requires_ordinary_sampler(input.prepared()))
     {
-        let descriptor = material_sampler_for_input(input)?;
+        let descriptor = material_sampler_for_input_with_capture(input, capture_mip_levels)?;
         if !descriptors
             .iter()
             .any(|existing| same_material_sampler(existing, &descriptor))

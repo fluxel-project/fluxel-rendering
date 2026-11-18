@@ -109,6 +109,11 @@ where
         )
         .map_err(|error| self.observe_forward_error("capture owner admission", error))?;
         if preserve_capture_background {
+            capture_owner = capture_owner
+                .for_scene_refraction(&self.device)
+                .map_err(|error| self.observe_forward_error("scene refraction capture", error))?;
+        }
+        if preserve_capture_background {
             capture_owner.refraction_depth = Some(
                 capture_frame
                     .frame

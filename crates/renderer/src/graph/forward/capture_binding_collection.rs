@@ -25,6 +25,7 @@ pub(super) fn collect<'a, B: ResourceBackend>(
     receiver_slots: &'a CaptureFrameSlots,
     receiver: &'a ForwardFrame<B>,
     receiver_depth_alias: bool,
+    receiver_scene_refraction: bool,
 ) -> Result<(Vec<BoundBuffer<'a, B>>, Vec<BoundTexture<'a, B>>)> {
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
@@ -127,8 +128,11 @@ pub(super) fn collect<'a, B: ResourceBackend>(
             .zip(&frame.resident.textures)
             .zip(capture_slots)
         {
-            if capture_texture {
+            if capture_texture && texture.desc.mip_levels == 1 {
                 continue;
+            }
+            if capture_texture && !receiver_scene_refraction {
+                return Err(Error::InvalidState);
             }
             let owner = (
                 texture.instance,

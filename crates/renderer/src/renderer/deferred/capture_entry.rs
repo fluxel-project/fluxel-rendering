@@ -418,6 +418,9 @@ where
         }
         .map_err(|error| self.observe_rhi_error(error))?;
         if scene_refraction {
+            capture = capture
+                .for_scene_refraction(&self.device)
+                .map_err(|error| self.observe_rhi_error(error))?;
             capture.retain_deferred_refraction_depth(&producer.gbuffer[2]);
         }
         if let CaptureReceiverInput::Forward { partition, rounds } = receiver {

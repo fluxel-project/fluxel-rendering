@@ -556,7 +556,7 @@ struct PbrSpecularVertexOutput {
     };
     let refraction = if let Some((texture, sampler)) = scene_color {
         format!(
-            "let refraction = pbr_scene_transmission({texture}, {sampler}, input.world_position, normal, view, transmission_intensity, transmission_thickness) * spec.refraction_energy;"
+            "let refraction = pbr_scene_transmission({texture}, {sampler}, input.world_position, normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.refraction_energy;"
         )
     } else if transmission {
         String::from(

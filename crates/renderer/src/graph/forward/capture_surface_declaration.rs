@@ -86,7 +86,7 @@ where
         preserve_capture_background,
     )?;
     let receiver_capture = capture_texture_slots(&receiver_spec)?;
-    super::capture_bindings::validate_capture_alias(capture, receiver)?;
+    super::capture_bindings::validate_capture_alias(capture, receiver, preserve_capture_background)?;
     validate_spec(device, &capture_spec, capture_topology, false)?;
     validate_spec(device, &receiver_spec, receiver_topology, true)?;
     let lane = device
@@ -111,10 +111,13 @@ where
         &capture_handles,
         capture_contribute,
     )?;
-    let aliases = receiver_capture
-        .iter()
-        .map(|capture| capture.then_some(capture_target))
-        .collect::<Vec<_>>();
+    let (aliases, refraction_mips) = super::capture_refraction_mips::prepare_aliases(
+        &mut graph,
+        &receiver_spec,
+        &receiver_capture,
+        capture_target,
+        preserve_capture_background,
+    )?;
     let capture_depth = preserve_capture_background
         .then_some(capture_depth)
         .flatten();
@@ -130,8 +133,14 @@ where
     };
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
-    let (mut receiver_handles, receiver_mip_generations) =
+    let (mut receiver_handles, mut receiver_mip_generations) =
         declare_mip_generations(&mut graph, &receiver_spec, receiver_handles, &mut shared)?;
+    super::capture_refraction_mips::append_chain(
+        &mut graph,
+        &mut receiver_handles,
+        refraction_mips,
+        &mut receiver_mip_generations,
+    )?;
     let receiver_background_copy = preserve_capture_background
         .then(|| {
             declare_capture_background_copy(&mut graph, capture_target, receiver_handles.target)

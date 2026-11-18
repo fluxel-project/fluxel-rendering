@@ -1,7 +1,11 @@
 //! Explicit logical-slot checks for the provisional captured-color consumer.
 
 use fluxel_rhi::{
-    api::{DeviceId, Error, ImageLayout, Texture, TextureUsage, TextureUses, TextureView},
+    api::{
+        AccessMask, Device, DeviceId, Error, ImageLayout, StageMask, Support, Texture,
+        TextureAspects, TextureDesc, TextureDimension, TextureUsage, TextureUses, TextureView,
+        TextureViewDesc, TextureViewDimension,
+    },
     backend::ResourceBackend,
 };
 
@@ -9,7 +13,10 @@ use super::super::RendererError;
 
 /// The independent producer name supplied by a same-frame capture product.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct CaptureTextureSlot(String);
+pub struct CaptureTextureSlot {
+    name: String,
+    mipmapped_refraction: bool,
+}
 
 impl CaptureTextureSlot {
     /// Creates an explicit logical capture receiver slot.
@@ -18,13 +25,30 @@ impl CaptureTextureSlot {
         if name.is_empty() {
             return Err(RendererError::MissingCaptureTextureSlot { name });
         }
-        Ok(Self(name))
+        Ok(Self {
+            name,
+            mipmapped_refraction: false,
+        })
     }
 
     /// Returns the stable material resource name.
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.0
+        &self.name
+    }
+
+    /// Opts this producer slot into a mipmapped scene-refraction capture.
+    ///
+    /// The default remains the producer's sharp base-level color, matching
+    /// Babylon render-target refraction unless linear-specular LOD is enabled.
+    #[must_use]
+    pub fn with_mipmapped_refraction(mut self) -> Self {
+        self.mipmapped_refraction = true;
+        self
+    }
+
+    pub(in crate::renderer) const fn mipmapped_refraction(&self) -> bool {
+        self.mipmapped_refraction
     }
 }
 
@@ -47,7 +71,86 @@ pub(crate) struct CaptureTextureOwner<B: ResourceBackend> {
     pub(super) refraction_depth: Option<crate::residency::ForwardDepthAttachment<B>>,
 }
 
+/// Returns the dedicated sampled capture descriptor used by projected scene
+/// refraction.
+///
+/// The producer keeps its original single-level target and its generic capture
+/// behavior. This descriptor instead owns the copied color product and its
+/// complete mip chain.
+pub(crate) fn refraction_capture_desc(source: &TextureDesc) -> TextureDesc {
+    let mut desc = source.clone();
+    desc.label = Some("Fluxel scene refraction capture".into());
+    desc.mip_levels = 1 + source.extent[0].max(source.extent[1]).max(1).ilog2();
+    desc.usage = TextureUsage::COPY_SRC | TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
+    desc
+}
+
 impl<B: ResourceBackend> CaptureTextureOwner<B> {
+    /// Creates the separate, mipmapped capture product required by projected
+    /// scene refraction. A 1×1 source is already its complete mip chain and
+    /// therefore remains an alias of the producer product.
+    pub(in crate::renderer) fn for_scene_refraction(
+        self,
+        device: &Device<B>,
+    ) -> Result<Self, Error> {
+        if !self.slot.mipmapped_refraction() {
+            return Ok(self);
+        }
+        if self.device != device.id()
+            || self.texture.device() != device.id()
+            || self.view.device() != device.id()
+            || self.desc.dimension != TextureDimension::D2
+            || self.desc.extent.contains(&0)
+            || self.desc.extent[2] != 1
+            || self.desc.array_layers != 1
+            || self.desc.mip_levels != 1
+            || self.desc.samples != 1
+            || !Self::is_capture_format(self.desc.format)
+            || !self.desc.usage.contains(TextureUsage::COPY_SRC)
+            || !self.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+            || !self.filterable
+        {
+            return Err(Error::InvalidState);
+        }
+        if self.desc.extent[0] == 1 && self.desc.extent[1] == 1 {
+            return Ok(self);
+        }
+        let desc = refraction_capture_desc(&self.desc);
+        let facts = match device.texture_support(&desc) {
+            Support::Supported(facts) => facts,
+            Support::Unsupported(reason) => return Err(Error::Unsupported(reason)),
+        };
+        if !facts.filterable || facts.max_mips < desc.mip_levels {
+            return Err(Error::Unsupported("filterable scene refraction capture"));
+        }
+        let texture = device.create_texture(&desc)?;
+        let view = device.create_view(
+            &texture,
+            &TextureViewDesc {
+                format: desc.format,
+                dimension: TextureViewDimension::D2,
+                aspects: TextureAspects::COLOR,
+                mips: 0..desc.mip_levels,
+                layers: 0..1,
+            },
+        )?;
+        Ok(Self {
+            slot: self.slot,
+            texture,
+            view,
+            desc,
+            instance: crate::graph::ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
+            incoming: TextureUses {
+                stages: StageMask::EMPTY,
+                accesses: AccessMask::EMPTY,
+            },
+            layout: ImageLayout::Undefined,
+            device: device.id(),
+            filterable: facts.filterable,
+            refraction_depth: self.refraction_depth,
+        })
+    }
+
     /// Borrows the actual Deferred lighting product for same-Graph capture.
     pub(in crate::renderer) fn from_deferred_scene_color(
         device: &fluxel_rhi::api::Device<B>,

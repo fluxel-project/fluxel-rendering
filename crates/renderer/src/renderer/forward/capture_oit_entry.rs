@@ -39,6 +39,7 @@ impl<B: ResourceBackend> CaptureOitSide<B> {
             None => CaptureTextureOwner::from_capture_frame(device, slot, &self.frame),
         }?;
         if scene_refraction {
+            capture = capture.for_scene_refraction(device)?;
             capture.refraction_depth = Some(
                 self.frame
                     .frame

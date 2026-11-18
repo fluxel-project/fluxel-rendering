@@ -130,7 +130,11 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             },
             None => CaptureProductOwner::from_forward_frame(capture),
         };
-        super::capture_bindings::validate_capture_product_alias(&product, receiver)
+        super::capture_bindings::validate_capture_product_alias(
+            &product,
+            receiver,
+            self.scene_refraction,
+        )
     }
 
     pub(super) fn bindings<'a>(
@@ -207,6 +211,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             capture,
             &self.receiver,
             receiver,
+            self.scene_refraction,
             self.scene_refraction,
         )?;
         self.append_oit(&mut textures, &self.capture_oit, capture_oit)?;

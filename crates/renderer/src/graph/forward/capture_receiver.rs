@@ -107,16 +107,20 @@ where
     }
     validate_spec(device, &spec, FrameTopology::SortedForward, receiver)?;
     super::capture_oit_declaration::validate_oit_input(device, frame, &spec, oit_input)?;
-    let aliases = capture_source
-        .map(|source| {
-            capture_texture_slots(&spec).map(|slots| {
-                slots
-                    .iter()
-                    .map(|capture| capture.then_some(source))
-                    .collect::<Vec<_>>()
-            })
-        })
-        .transpose()?;
+    let (aliases, refraction_mips) = match capture_source {
+        Some(source) => {
+            let flags = capture_texture_slots(&spec)?;
+            let (aliases, refraction_mips) = super::capture_refraction_mips::prepare_aliases(
+                graph,
+                &spec,
+                &flags,
+                source,
+                scene_refraction.is_some(),
+            )?;
+            (Some(aliases), refraction_mips)
+        }
+        None => (None, None),
+    };
     let (slots, handles) = match scene_refraction {
         Some(depth) => {
             import_frame_with_depth_alias(graph, &spec, aliases.as_deref(), shared, depth)?
@@ -124,7 +128,14 @@ where
         None => import_frame_inner(graph, &spec, aliases.as_deref(), shared, None)?,
     };
     let (upload, handles) = declare_upload(graph, &spec, handles)?;
-    let (mut handles, mip_generations) = declare_mip_generations(graph, &spec, handles, shared)?;
+    let (mut handles, mut mip_generations) =
+        declare_mip_generations(graph, &spec, handles, shared)?;
+    super::capture_refraction_mips::append_chain(
+        graph,
+        &mut handles,
+        refraction_mips,
+        &mut mip_generations,
+    )?;
     let dependency = mip_generations
         .last()
         .map_or(upload, |generation| generation.pass);
@@ -342,7 +353,7 @@ impl ForwardReceiverComposition {
             .zip(&frame.resident.textures)
             .zip(&capture_slots)
         {
-            if !*capture {
+            if !*capture || owner.desc.mip_levels > 1 {
                 textures.push(BoundTexture::new(
                     slot,
                     owner.instance,

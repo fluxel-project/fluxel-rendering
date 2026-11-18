@@ -38,18 +38,25 @@ fn pbr_scene_transmission(
     world_position: vec3<f32>,
     normal: vec3<f32>,
     view: vec3<f32>,
+    roughness: f32,
     intensity: f32,
     thickness: f32,
 ) -> vec3<f32> {
     let world_thickness = thickness * pbr_world_max_scale();
     let capture_uv = pbr_scene_refraction_uv(world_position, normal, view, world_thickness);
-    // Edge texels bound the projected image even if the shared material
-    // sampler repeats its other, ordinarily authored textures.
-    let half_texel = vec2<f32>(0.5) / vec2<f32>(textureDimensions(scene));
+    // The opted-in Babylon LINEARSPECULARREFRACTION path adjusts alphaG
+    // by IOR and scales it by the log of the texture width. A sharp capture
+    // exposes only level zero and selects the same LOD-zero path.
+    let requested_lod = log2(f32(textureDimensions(scene, 0).x))
+        * pbr_refraction_roughness(roughness);
+    let max_lod = f32(textureNumLevels(scene)) - 1.0;
+    let lod = clamp(requested_lod, 0.0, max_lod);
+    // Bound both levels of a trilinear sample even when the authored sampler
+    // wraps other material textures.
+    let size = vec2<f32>(textureDimensions(scene, u32(ceil(lod))));
+    let half_texel = vec2<f32>(0.5) / size;
     let uv = clamp(capture_uv, half_texel, vec2<f32>(1.0) - half_texel);
-    // The captured scene color is a single resolved image, not a prefiltered
-    // environment map. Its level zero is the prior Graph product.
-    let scene_color = textureSampleLevel(scene, scene_sampler, uv, 0.0).rgb;
+    let scene_color = textureSampleLevel(scene, scene_sampler, uv, lod).rgb;
     let absorption = -log(material_attenuation_color())
         / max(material_attenuation_distance(), 1e-5);
     let attenuation = exp(-absorption * world_thickness);

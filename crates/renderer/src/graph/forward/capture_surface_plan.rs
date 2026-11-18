@@ -258,7 +258,7 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
                 draw_accesses(frame, draw)?;
             }
         }
-        validate_capture_alias(capture, receiver)
+        validate_capture_alias(capture, receiver, self.receiver_depth_alias)
     }
 
     pub(super) fn bindings<'a>(
@@ -269,7 +269,7 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
     ) -> Result<FrameBindings<'a, B>> {
         validate_resident_texture_devices(&capture.resident, self.id.device)?;
         validate_resident_texture_devices(&receiver.resident, self.id.device)?;
-        validate_capture_alias(capture, receiver)?;
+        validate_capture_alias(capture, receiver, self.receiver_depth_alias)?;
         let (buffers, textures) = super::capture_binding_collection::collect(
             &self.execution,
             self.id.device,
@@ -277,6 +277,7 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
             capture,
             &self.receiver,
             receiver,
+            self.receiver_depth_alias,
             self.receiver_depth_alias,
         )?;
         FrameBindings::new_with_surface_textures(

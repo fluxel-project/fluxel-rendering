@@ -18,6 +18,7 @@ mod capture_oit_terminal_record;
 pub(crate) use capture_oit_plan::CaptureOitPlan;
 mod capture_plan;
 mod capture_receiver;
+mod capture_refraction_mips;
 mod capture_record;
 mod capture_specular_bindings;
 mod capture_surface_declaration;

@@ -361,15 +361,16 @@ pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{
     default_material_sampler, material_requires_ordinary_sampler, material_sampler,
     material_sampler_descriptors, material_sampler_for_input,
-    require_filterable_material_texture_with_mip_levels, same_material_sampler,
-    validate_capture_material_texture, validate_material_sampler, validate_material_texture_owner,
-    validate_ordinary_sampler,
+    material_sampler_for_input_with_capture, require_filterable_material_texture_with_mip_levels,
+    same_material_sampler, validate_capture_material_texture, validate_material_sampler,
+    validate_material_texture_owner, validate_ordinary_sampler,
 };
 mod program;
 mod program_selection;
 pub(in crate::renderer) use capture_oit_entry::CaptureOitSide;
 pub(in crate::renderer) use captured::CaptureTextureOwner;
 pub use captured::CaptureTextureSlot;
+pub(crate) use captured::refraction_capture_desc;
 pub(crate) use surface_composite::SurfaceCompositeOwner;
 
 fn aligned_forward_row(width: u32) -> std::result::Result<u32, RendererError> {

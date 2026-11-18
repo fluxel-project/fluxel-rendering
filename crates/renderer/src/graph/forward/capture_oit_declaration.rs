@@ -136,7 +136,7 @@ where
     if scene_refraction && product.desc.format != receiver.frame.target_desc.format {
         return Err(Error::InvalidState.into());
     }
-    super::capture_bindings::validate_capture_product_alias(&product, receiver)?;
+    super::capture_bindings::validate_capture_product_alias(&product, receiver, scene_refraction)?;
     let lane = device
         .lanes()
         .iter()
@@ -166,10 +166,13 @@ where
             &mut capture_contribute,
         )?;
     let capture_texture_slots = capture_texture_slots(&receiver_spec)?;
-    let aliases = capture_texture_slots
-        .iter()
-        .map(|capture_texture| capture_texture.then_some(capture_final))
-        .collect::<Vec<_>>();
+    let (aliases, refraction_mips) = super::capture_refraction_mips::prepare_aliases(
+        &mut graph,
+        &receiver_spec,
+        &capture_texture_slots,
+        capture_final,
+        scene_refraction,
+    )?;
     let (receiver_slots, receiver_handles) = if scene_refraction {
         import_frame_with_depth_alias(
             &mut graph,
@@ -183,8 +186,14 @@ where
     };
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
-    let (mut receiver_handles, receiver_mips) =
+    let (mut receiver_handles, mut receiver_mips) =
         declare_mip_generations(&mut graph, &receiver_spec, receiver_handles, &mut shared)?;
+    super::capture_refraction_mips::append_chain(
+        &mut graph,
+        &mut receiver_handles,
+        refraction_mips,
+        &mut receiver_mips,
+    )?;
     let receiver_dependency = receiver_mips
         .last()
         .map_or(receiver_upload, |generation| generation.pass);

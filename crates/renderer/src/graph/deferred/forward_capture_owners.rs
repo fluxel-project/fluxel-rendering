@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{graph::ForwardOitInput, residency::ForwardFrame};
+use fluxel_rhi::api::{AccessMask, ImageLayout, StageMask, TextureUses};
 
 pub(super) fn validate_owners<B: ResourceBackend>(
     producer: &DeferredFrame<B>,
@@ -64,6 +65,7 @@ pub(super) fn validate_owners<B: ResourceBackend>(
     }
     let mut roles = vec![None; receiver.resident.textures.len()];
     let mut captures = 0;
+    let mut refraction_capture = None;
     for draw in &receiver.draws {
         if draw.textures.len() != draw.capture_textures.len() {
             return Err(Error::InvalidRange);
@@ -80,14 +82,37 @@ pub(super) fn validate_owners<B: ResourceBackend>(
                 .get(index)
                 .ok_or(Error::InvalidRange)?;
             if capture {
-                if owner.instance != instance
-                    || owner.texture.device() != texture.device()
-                    || owner.view.device() != view.device()
-                    || owner.device != device
-                    || !crate::graph::forward::same_texture_owner_desc(&owner.desc, desc)
-                    || owner.incoming != incoming
-                    || owner.layout != layout
-                    || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+                let refraction = owner.desc.mip_levels > 1;
+                let invalid = if refraction {
+                    let expected = crate::renderer::refraction_capture_desc(desc);
+                    let duplicate_refraction = refraction_capture
+                        .is_some_and(|previous| previous != index);
+                    refraction_capture = Some(index);
+                    !scene_refraction
+                        || duplicate_refraction
+                        || owner.instance == instance
+                        || owner.texture.device() != texture.device()
+                        || owner.view.device() != view.device()
+                        || owner.device != device
+                        || !crate::graph::forward::same_texture_owner_desc(&owner.desc, &expected)
+                        || owner.incoming
+                            != TextureUses {
+                                stages: StageMask::EMPTY,
+                                accesses: AccessMask::EMPTY,
+                            }
+                        || owner.layout != ImageLayout::Undefined
+                        || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+                } else {
+                    owner.instance != instance
+                        || owner.texture.device() != texture.device()
+                        || owner.view.device() != view.device()
+                        || owner.device != device
+                        || !crate::graph::forward::same_texture_owner_desc(&owner.desc, desc)
+                        || owner.incoming != incoming
+                        || owner.layout != layout
+                        || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+                };
+                if invalid
                     || receiver
                         .resident_upload
                         .textures
@@ -104,6 +129,23 @@ pub(super) fn validate_owners<B: ResourceBackend>(
     }
     if captures == 0 {
         return Err(Error::InvalidState);
+    }
+    if let Some(index) = refraction_capture {
+        let instance = receiver
+            .resident
+            .textures
+            .get(index)
+            .ok_or(Error::InvalidState)?
+            .instance;
+        if receiver
+            .resident
+            .textures
+            .iter()
+            .enumerate()
+            .any(|(other, texture)| other != index && texture.instance == instance)
+        {
+            return Err(Error::InvalidState);
+        }
     }
     if let Some(input) = receiver_oit {
         input.owners.validate(device)?;

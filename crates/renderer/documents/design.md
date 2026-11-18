@@ -1126,7 +1126,14 @@ suffix, and initializes a separate receiver color target. The receiver samples
 the producer color and loads the original G-buffer depth attachment, using the
 same camera and projection. Opaque and masked receivers write depth on that
 attachment. This preserves foreground occlusion and
-the background outside coverage. When a Blend or MaskBlend receiver is selected
+the background outside coverage. The default capture exposes one sharp level.
+`CaptureTextureSlot::with_mipmapped_refraction()` selects Babylon's optional
+linear refraction LOD path. The Graph copies the producer's final color into
+a separate sampled owner and downsamples the chain before receiver shading.
+All receivers share that chain. Each sampled range covers the exposed mips.
+The shader selects LOD from capture width, roughness, and the selected IOR.
+The original producer color still fills the background at level zero.
+When a Blend or MaskBlend receiver is selected
 for peeling, both the initial and peel material artifacts retain the projected
 refraction binding. The current receiver color and depth seed the same finite
 OIT stages used by Forward capture. The independent final product feeds readback or
