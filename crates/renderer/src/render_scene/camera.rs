@@ -11,6 +11,7 @@ use super::SceneError;
 pub struct ShadingCamera {
     encoded: [f32; 4],
     sort_position: Option<[f32; 3]>,
+    lighting_uses_eye: bool,
 }
 
 impl ShadingCamera {
@@ -22,6 +23,7 @@ impl ShadingCamera {
         Ok(Self {
             encoded: [position[0], position[1], position[2], 1.0],
             sort_position: Some(position),
+            lighting_uses_eye: true,
         })
     }
 
@@ -42,6 +44,7 @@ impl ShadingCamera {
         Ok(Self {
             encoded: [v[0], v[1], v[2], 0.0],
             sort_position: None,
+            lighting_uses_eye: false,
         })
     }
 
@@ -60,6 +63,20 @@ impl ShadingCamera {
         Ok(camera)
     }
 
+    /// Creates an orthographic camera with Babylon-style eye-position lighting.
+    ///
+    /// Surface lighting uses the direction from each world-space fragment to
+    /// the eye, as Babylon PBR does for orthographic views. The camera retains
+    /// its parallel direction, and the view still supplies its own projection.
+    pub fn orthographic_with_eye_lighting(
+        position: [f32; 3],
+        direction_to_eye: [f32; 3],
+    ) -> Result<Self, SceneError> {
+        let mut camera = Self::orthographic_at(position, direction_to_eye)?;
+        camera.lighting_uses_eye = true;
+        Ok(camera)
+    }
+
     /// Returns the perspective world-space eye, if this is a perspective camera.
     pub fn position(self) -> Option<[f32; 3]> {
         (self.encoded[3] == 1.0).then(|| [self.encoded[0], self.encoded[1], self.encoded[2]])
@@ -71,7 +88,10 @@ impl ShadingCamera {
     }
 
     pub(crate) fn uniform(self) -> [f32; 4] {
-        self.encoded
+        match self.sort_position.filter(|_| self.lighting_uses_eye) {
+            Some([x, y, z]) => [x, y, z, 1.0],
+            None => self.encoded,
+        }
     }
 
     pub(crate) fn sorting_position(self) -> Option<[f32; 3]> {

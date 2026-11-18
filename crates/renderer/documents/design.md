@@ -21,7 +21,9 @@ calculation across Forward, Deferred, and environment transmission. It uses
 EON with default zero diffuse roughness, legacy reflectivity energy allocation,
 glTF Schlick Fresnel, and height-correlated GGX visibility. The renderer supplies
 a fixed light direction and color. Forward and Deferred consume the view's
-perspective eye or orthographic direction. Basic PBR uses the historical +Z
+perspective eye or orthographic direction. An orthographic view can select
+`ShadingCamera::orthographic_with_eye_lighting` to evaluate Babylon's
+`normalize(eye - world_position)` while keeping the orthographic projection. Basic PBR uses the historical +Z
 direction when the view omits a shading camera. Deferred reconstructs world
 position from depth for perspective lighting and reads the camera range from
 its frame uniform buffer. Specular IBL supplies its camera through the existing
