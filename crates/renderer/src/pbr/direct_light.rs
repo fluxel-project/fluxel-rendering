@@ -104,13 +104,24 @@ fn pbr_direct_light_view(
     return terms.diffuse + terms.specular;
 }
 
+fn pbr_gbuffer_is_covered(encoded_normal: vec3<f32>) -> bool {
+    // A unit normal cannot encode to the all-zero UNorm clear color:
+    // decoding it would yield (-1, -1, -1), outside the unit sphere.
+    return any(encoded_normal != vec3<f32>(0.0));
+}
+
 fn pbr_world_position_from_depth(
     position: vec2<f32>, depth: f32, extent: vec2<f32>, world_from_clip: mat4x4<f32>,
 ) -> vec3<f32> {
     // Fragment position is already the pixel center in a top-left origin.
     let uv = position / extent;
     let clip = vec4<f32>(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth, 1.0);
-    let world = world_from_clip * clip;
+    var world = world_from_clip * clip;
+    if world.w == 0.0 {
+        // An infinite far plane can produce w = 0 after depth rounds to one.
+        // Lighting only needs the view ray, which an interior point also defines.
+        world = world_from_clip * vec4<f32>(clip.xy, 0.5, 1.0);
+    }
     return world.xyz / world.w;
 }
 

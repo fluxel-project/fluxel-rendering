@@ -285,10 +285,10 @@ fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> @builtin(position)
 @fragment
 fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let coordinate = vec2<i32>(position.xy);
-    let depth = textureLoad(pbr_depth, coordinate, 0);
-    if depth >= 1.0 { return vec4<f32>(0.0); }
-    let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
     let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0);
+    if !pbr_gbuffer_is_covered(normal_roughness.xyz) { return vec4<f32>(0.0); }
+    let depth = textureLoad(pbr_depth, coordinate, 0);
+    let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
     let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0);
     return vec4<f32>(pbr_direct_light_view(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal, pbr_deferred_view_direction(position.xy, depth), vec3<f32>(0.04)), 1.0);
 }
@@ -308,10 +308,10 @@ fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> @builtin(position)
 @fragment
 fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let coordinate = vec2<i32>(position.xy);
-    let depth = textureLoad(pbr_depth, coordinate, 0);
-    if depth >= 1.0 { return vec4<f32>(0.0); }
-    let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
     let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0);
+    if !pbr_gbuffer_is_covered(normal_roughness.xyz) { return vec4<f32>(0.0); }
+    let depth = textureLoad(pbr_depth, coordinate, 0);
+    let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
     let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0);
     let direct = pbr_direct_light_view(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal, pbr_deferred_view_direction(position.xy, depth), vec3<f32>(0.04));
     let indirect = pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04));
@@ -325,7 +325,7 @@ pub(super) const LIGHTING_EFFECT: &str = r#"
 @group(0) @binding(2) var pbr_depth: texture_depth_2d;
 @group(0) @binding(3) var pbr_emissive_ao: texture_2d<f32>;
 @vertex fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> { var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0)); return vec4<f32>(positions[index], 0.0, 1.0); }
-@fragment fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> { let coordinate = vec2<i32>(position.xy); let depth = textureLoad(pbr_depth, coordinate, 0); if depth >= 1.0 { return vec4<f32>(0.0); } let base_metal = textureLoad(pbr_base_metal, coordinate, 0); let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0); let effect = textureLoad(pbr_emissive_ao, coordinate, 0); let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0); return vec4<f32>(pbr_direct_light_view(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal, pbr_deferred_view_direction(position.xy, depth), vec3<f32>(0.04)) + effect.rgb, 1.0); }
+@fragment fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> { let coordinate = vec2<i32>(position.xy); let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0); if !pbr_gbuffer_is_covered(normal_roughness.xyz) { return vec4<f32>(0.0); } let depth = textureLoad(pbr_depth, coordinate, 0); let base_metal = textureLoad(pbr_base_metal, coordinate, 0); let effect = textureLoad(pbr_emissive_ao, coordinate, 0); let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0); return vec4<f32>(pbr_direct_light_view(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal, pbr_deferred_view_direction(position.xy, depth), vec3<f32>(0.04)) + effect.rgb, 1.0); }
 "#;
 
 pub(super) const LIGHTING_EFFECT_IRRADIANCE: &str = r#"
@@ -336,7 +336,7 @@ pub(super) const LIGHTING_EFFECT_IRRADIANCE: &str = r#"
 @group(1) @binding(0) var pbr_environment_irradiance: texture_2d<f32>;
 @group(1) @binding(1) var pbr_environment_sampler: sampler;
 @vertex fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> { var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0)); return vec4<f32>(positions[index], 0.0, 1.0); }
-@fragment fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> { let coordinate = vec2<i32>(position.xy); let depth = textureLoad(pbr_depth, coordinate, 0); if depth >= 1.0 { return vec4<f32>(0.0); } let base_metal = textureLoad(pbr_base_metal, coordinate, 0); let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0); let effect = textureLoad(pbr_emissive_ao, coordinate, 0); let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0); let direct = pbr_direct_light_view(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal, pbr_deferred_view_direction(position.xy, depth), vec3<f32>(0.04)); let indirect = pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04)) * effect.a; return vec4<f32>(direct + indirect + effect.rgb, 1.0); }
+@fragment fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> { let coordinate = vec2<i32>(position.xy); let normal_roughness = textureLoad(pbr_normal_roughness, coordinate, 0); if !pbr_gbuffer_is_covered(normal_roughness.xyz) { return vec4<f32>(0.0); } let depth = textureLoad(pbr_depth, coordinate, 0); let base_metal = textureLoad(pbr_base_metal, coordinate, 0); let effect = textureLoad(pbr_emissive_ao, coordinate, 0); let normal = normal_roughness.xyz * 2.0 - vec3<f32>(1.0); let direct = pbr_direct_light_view(base_metal.rgb, vec2<f32>(base_metal.a, normal_roughness.a), normal, pbr_deferred_view_direction(position.xy, depth), vec3<f32>(0.04)); let indirect = pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04)) * effect.a; return vec4<f32>(direct + indirect + effect.rgb, 1.0); }
 "#;
 
 pub(super) const FORWARD_UV0_IRRADIANCE: &str = r#"

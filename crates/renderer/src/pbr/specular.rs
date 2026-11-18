@@ -433,14 +433,14 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
 }}
 @fragment fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {{
     let coordinate = vec2<i32>(position.xy);
+    let nr = textureLoad(pbr_normal_roughness, coordinate, 0);
+    if !pbr_gbuffer_is_covered(nr.xyz) {{ return vec4(0.0); }}
     let depth = textureLoad(pbr_depth, coordinate, 0);
-    if depth >= 1.0 {{ return vec4(0.0); }}
     let world = pbr_world_position_from_depth(
         position.xy, depth, pbr_specular_camera.target_size_and_mips.xy,
         pbr_specular_camera.world_from_clip,
     );
     let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
-    let nr = textureLoad(pbr_normal_roughness, coordinate, 0);
     let normal = nr.xyz * 2.0 - vec3(1.0);
     let view = pbr_specular_view_direction(world, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.w == 0.0);

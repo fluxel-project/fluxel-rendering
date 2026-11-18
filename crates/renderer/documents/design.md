@@ -236,6 +236,12 @@ The normal/roughness attachment remains RGBA8. The lighting output is still
 RGBA8, so the wider G-buffer preserves input to lighting while HDR output
 requires the later output-composition work.
 
+Deferred geometry and Forward overlays compare depth with LessEqual. The
+Deferred lighting pass distinguishes coverage from the cleared G-buffer.
+Unlit writes an explicit normal alpha marker. PBR reserves the all-zero
+encoded normal RGB for the clear value. This preserves covered far-plane
+fragments even when their depth equals the clear value.
+
 Effects selection is frame-wide. If any material needs effects, every draw
 uses the third-output template, including neutral `AO=1` and `emissive=0` for
 materials without extensions. A two-output draw cannot rely on a cleared effects

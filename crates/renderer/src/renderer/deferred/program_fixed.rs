@@ -44,7 +44,7 @@ pub(super) fn depth_state() -> DepthStencilState {
     DepthStencilState {
         format: TextureFormat::Depth32Float,
         depth_write_enabled: true,
-        depth_compare: CompareFunction::Less,
+        depth_compare: CompareFunction::LessEqual,
         stencil_front: stencil,
         stencil_back: stencil,
         stencil_read_mask: 0,

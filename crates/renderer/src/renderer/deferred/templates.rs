@@ -117,12 +117,14 @@ fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> LightingVertexOutp
 @fragment
 fn deferred_lighting_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let coordinate = vec2<i32>(position.xy);
-    let depth = textureLoad(deferred_depth, coordinate, 0);
-    if depth >= 1.0 {
+    let encoded_normal = textureLoad(deferred_normal, coordinate, 0);
+    // The color G-buffer writes normal alpha = 1 only for covered pixels.
+    if encoded_normal.a == 0.0 {
         return vec4<f32>(0.0);
     }
+    let depth = textureLoad(deferred_depth, coordinate, 0);
     let albedo = textureLoad(deferred_albedo, coordinate, 0);
-    let normal = textureLoad(deferred_normal, coordinate, 0).xyz * 2.0 - vec3<f32>(1.0);
+    let normal = encoded_normal.xyz * 2.0 - vec3<f32>(1.0);
     let diffuse = 0.2 + 0.6 * abs(normal.z) + 0.2 * (1.0 - depth);
     return vec4<f32>(albedo.rgb * diffuse, albedo.a);
 }
