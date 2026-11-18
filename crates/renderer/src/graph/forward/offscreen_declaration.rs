@@ -95,7 +95,7 @@ where
         target,
     } = super::offscreen_prefix::declare_prefix(device, spec, expected)?;
     let raster_dependency = mip_passes.last().map_or(upload_pass, |pass| pass.pass);
-    let (raster_pass, target) = {
+    let (raster_pass, target, _) = {
         let mut driver = ForwardPhaseDriver {
             graph: Some(&mut graph),
             marker: std::marker::PhantomData,

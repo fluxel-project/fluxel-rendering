@@ -184,6 +184,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             capture,
             &self.receiver,
             receiver,
+            false,
         )?;
         self.append_oit(&mut textures, &self.capture_oit, capture_oit)?;
         self.append_oit(&mut textures, &self.receiver_oit, receiver_oit)?;

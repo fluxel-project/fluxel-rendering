@@ -900,9 +900,10 @@ The specular environment remains the source of the surface reflectance.
 The same Graph copies the producer color to a distinct receiver target before
 the refractor raster loads it. The refractor samples the original producer
 version. The copy preserves color outside the refractor's coverage, and only
-this receiver target needs copy-destination usage. The receiver currently owns
-its own depth attachment. Foreground occlusion against producer depth requires
-the producer depth to be retained into the receiver pass.
+this receiver target needs copy-destination usage. The producer stores its
+actual depth for the scene-refraction route. The receiver loads that same
+attachment read-only for foreground occlusion and does not allocate another
+depth texture. The capture pipeline must select depth before submission.
 
 The capture target adds sampled usage only on this route. Ordinary Forward
 targets keep their existing capability requirements. Device format facts and

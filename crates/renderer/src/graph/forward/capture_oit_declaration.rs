@@ -320,7 +320,7 @@ where
             Ok((stages.raster_pass, stages.output, Some(stages.oit)))
         }
         None => {
-            let (raster, target) = declare_raster(
+            let (raster, target, _) = declare_raster(
                 graph,
                 spec,
                 FrameTopology::SortedForward,

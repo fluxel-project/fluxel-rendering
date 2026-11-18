@@ -23,6 +23,18 @@ pub(crate) struct ForwardDepthAttachment<B: ResourceBackend> {
 }
 
 impl<B: ResourceBackend> ForwardDepthAttachment<B> {
+    pub(crate) fn retain(&self) -> Self {
+        Self {
+            texture: self.texture.clone(),
+            view: self.view.clone(),
+            desc: self.desc.clone(),
+            instance: self.instance,
+            incoming: self.incoming,
+            layout: self.layout,
+            device: self.device,
+        }
+    }
+
     /// Allocates a single-sampled depth attachment after capability admission.
     pub(crate) fn allocate(device: &Device<B>, extent: [u32; 2]) -> Result<Self> {
         if extent.contains(&0) {

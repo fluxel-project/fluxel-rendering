@@ -13,6 +13,10 @@ use crate::{
 };
 
 use super::super::mip_generation::MipGenerationPass;
+use super::capture_depth_alias::{import_frame_with_depth_alias, validate_depth_alias};
+pub(in crate::graph) use super::capture_depth_alias::{
+    same_buffer_owner_desc, same_texture_owner_desc,
+};
 use super::capture_terminal::{declare_capture_background_copy, declare_readback};
 use super::{
     BufferGraphFact, BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError,
@@ -69,6 +73,7 @@ pub(crate) struct CaptureForwardDeclaration {
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
     pub(super) receiver_background_copy: Option<GraphPass>,
+    pub(super) receiver_depth_alias: bool,
     pub(super) receiver_raster: GraphPass,
     pub(super) receiver_readback: GraphPass,
     pub(super) capture: CaptureFrameSlots,
@@ -117,6 +122,13 @@ where
     {
         return Err(Error::InvalidState.into());
     }
+    validate_depth_alias(
+        device,
+        capture,
+        receiver,
+        receiver_topology,
+        preserve_capture_background,
+    )?;
     let receiver_capture = capture_texture_slots(&receiver_spec)?;
     // Validate every named alias against the actual producer before adding
     // either namespace to the Graph, including aliases beyond the first slot.
@@ -137,7 +149,7 @@ where
         declare_upload(&mut graph, &capture_spec, capture_handles)?;
     let (capture_handles, capture_mip_generations) =
         declare_mip_generations(&mut graph, &capture_spec, capture_handles, &mut shared)?;
-    let (capture_raster, capture_target) = declare_raster(
+    let (capture_raster, capture_target, capture_depth) = declare_raster(
         &mut graph,
         &capture_spec,
         capture_topology,
@@ -149,8 +161,19 @@ where
         .iter()
         .map(|capture| capture.then_some(capture_target))
         .collect::<Vec<_>>();
-    let (receiver_slots, receiver_handles) =
-        import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
+    let capture_depth = preserve_capture_background
+        .then_some(capture_depth)
+        .flatten();
+    let (receiver_slots, receiver_handles) = match capture_depth {
+        Some(depth) => import_frame_with_depth_alias(
+            &mut graph,
+            &receiver_spec,
+            Some(&aliases),
+            &mut shared,
+            depth,
+        )?,
+        None => import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?,
+    };
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
     let (mut receiver_handles, receiver_mip_generations) =
@@ -163,7 +186,7 @@ where
     if let Some((_, target)) = receiver_background_copy {
         receiver_handles.target = target;
     }
-    let (receiver_raster, receiver_target) = declare_raster(
+    let (receiver_raster, receiver_target, _) = declare_raster(
         &mut graph,
         &receiver_spec,
         receiver_topology,
@@ -186,6 +209,7 @@ where
         receiver_upload,
         receiver_mip_generations,
         receiver_background_copy: receiver_background_copy.map(|(pass, _)| pass),
+        receiver_depth_alias: capture_depth.is_some(),
         receiver_raster,
         receiver_readback,
         capture: capture_slots,
@@ -196,27 +220,6 @@ where
         capture_shape: capture_spec.shape,
         receiver_shape: receiver_spec.shape,
     })
-}
-
-pub(in crate::graph) fn same_texture_owner_desc(
-    left: &fluxel_rhi::api::TextureDesc,
-    right: &fluxel_rhi::api::TextureDesc,
-) -> bool {
-    left.dimension == right.dimension
-        && left.extent == right.extent
-        && left.array_layers == right.array_layers
-        && left.format == right.format
-        && left.mip_levels == right.mip_levels
-        && left.samples == right.samples
-        && left.usage == right.usage
-        && left.view_formats == right.view_formats
-}
-
-pub(in crate::graph) fn same_buffer_owner_desc(
-    left: &fluxel_rhi::api::BufferDesc,
-    right: &fluxel_rhi::api::BufferDesc,
-) -> bool {
-    left.size == right.size && left.usage == right.usage && left.memory == right.memory
 }
 
 pub(super) fn capture_texture_slots(spec: &ForwardGraphSpec) -> Result<Vec<bool>> {
@@ -545,7 +548,14 @@ pub(super) fn declare_raster<B, F>(
     upload: GraphPass,
     handles: &FrameHandles,
     contribute: F,
-) -> std::result::Result<(GraphPass, crate::graph::definition::TextureHandle), ForwardPlanBuildError>
+) -> std::result::Result<
+    (
+        GraphPass,
+        crate::graph::definition::TextureHandle,
+        Option<crate::graph::definition::TextureHandle>,
+    ),
+    ForwardPlanBuildError,
+>
 where
     B: ResourceBackend,
     F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,

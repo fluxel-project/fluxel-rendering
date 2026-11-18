@@ -21,7 +21,11 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) draws: Vec<ForwardGraphDraw>,
     pub(super) declared: bool,
-    pub(super) output: Option<(GraphPass, crate::graph::definition::TextureHandle)>,
+    pub(super) output: Option<(
+        GraphPass,
+        crate::graph::definition::TextureHandle,
+        Option<crate::graph::definition::TextureHandle>,
+    )>,
 }
 
 pub(super) const UPLOAD_DEPENDENCY: u8 = 1;
@@ -30,6 +34,7 @@ pub(super) const UNIFORM_READS: u8 = 4;
 pub(super) const TEXTURE_READS: u8 = 8;
 pub(super) const COLOR_WRITE: u8 = 16;
 pub(super) const DEPTH_WRITE: u8 = 32;
+pub(super) const DEPTH_READ: u8 = 64;
 
 /// Graph-private opaque pass capability, exposed only through the public
 /// policy wrapper for the duration of a real `GraphBuilder::add_pass` call.
@@ -131,7 +136,35 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
         Ok(())
     }
 
-    fn finish(&mut self) -> std::result::Result<crate::graph::definition::TextureHandle, ()> {
+    /// Keeps the selected depth attachment as a read-only attachment for a
+    /// later composition pass. The source depth must therefore have been
+    /// retained by its producer rather than cleared or re-created.
+    pub(crate) fn read_selected_depth(&mut self) -> std::result::Result<(), ()> {
+        let Some(depth) = self.depth else {
+            return Err(());
+        };
+        self.mark(DEPTH_READ)?;
+        self.pass
+            .read_texture_with_use(
+                depth,
+                whole_depth(),
+                depth_read_uses().uses,
+                ImageLayout::DepthStencilAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )
+            .map_err(|_| ())?;
+        Ok(())
+    }
+
+    fn finish(
+        &mut self,
+    ) -> std::result::Result<
+        (
+            crate::graph::definition::TextureHandle,
+            Option<crate::graph::definition::TextureHandle>,
+        ),
+        (),
+    > {
         if !opaque_requirements_met(self.declared, &self.reads, self.depth.is_some()) {
             return Err(());
         }
@@ -184,7 +217,7 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
             return Err(());
         }
         self.pass.side_effect();
-        Ok(self.target)
+        Ok((self.target, self.depth))
     }
 }
 
@@ -201,7 +234,12 @@ pub(super) fn opaque_requirements_met(
             declared & (VERTEX_READS | UNIFORM_READS | TEXTURE_READS)
                 == VERTEX_READS | UNIFORM_READS | TEXTURE_READS
         }
-        && (declared & DEPTH_WRITE != 0) == depth_enabled
+        && if depth_enabled {
+            declared & (DEPTH_READ | DEPTH_WRITE) == DEPTH_READ
+                || declared & (DEPTH_READ | DEPTH_WRITE) == DEPTH_WRITE
+        } else {
+            declared & (DEPTH_READ | DEPTH_WRITE) == 0
+        }
 }
 
 pub(crate) struct ClearForwardPass<'pass, 'builder, 'frame, B: ResourceBackend> {
@@ -323,7 +361,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         let depth = self.depth;
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let draws = self.draws.clone();
-        let (pass, target) = self
+        let (pass, (target, depth)) = self
             .graph
             .as_deref_mut()
             .ok_or(PipelineError::InvalidPhaseContribution)?
@@ -351,7 +389,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
             })
             .map_err(|_| PipelineError::InvalidPhaseContribution)?;
         self.declared = true;
-        self.output = Some((pass, target));
+        self.output = Some((pass, target, depth));
         Ok(())
     }
 
@@ -389,14 +427,20 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
             })
             .map_err(|_| PipelineError::InvalidPhaseContribution)?;
         self.declared = true;
-        self.output = Some((pass, target));
+        self.output = Some((pass, target, None));
         Ok(())
     }
 
     pub(super) fn finish(
         self,
-    ) -> std::result::Result<(GraphPass, crate::graph::definition::TextureHandle), ()> {
-        let (pass, target) = self.output.ok_or(())?;
-        Ok((pass, target))
+    ) -> std::result::Result<
+        (
+            GraphPass,
+            crate::graph::definition::TextureHandle,
+            Option<crate::graph::definition::TextureHandle>,
+        ),
+        (),
+    > {
+        self.output.ok_or(())
     }
 }

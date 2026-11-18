@@ -24,6 +24,7 @@ pub(super) fn collect<'a, B: ResourceBackend>(
     capture: &'a ForwardFrame<B>,
     receiver_slots: &'a CaptureFrameSlots,
     receiver: &'a ForwardFrame<B>,
+    receiver_depth_alias: bool,
 ) -> Result<(Vec<BoundBuffer<'a, B>>, Vec<BoundTexture<'a, B>>)> {
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
@@ -173,15 +174,17 @@ pub(super) fn collect<'a, B: ResourceBackend>(
                 owner.layout,
             ));
         }
-        if let (Some(slot), Some(owner)) = (slots.depth, frame.frame.depth.as_ref()) {
-            textures.push(BoundTexture::new(
-                slot,
-                owner.instance,
-                &owner.texture,
-                &owner.desc,
-                owner.incoming,
-                owner.layout,
-            ));
+        if !(receiver_depth_alias && !capture_side) {
+            if let (Some(slot), Some(owner)) = (slots.depth, frame.frame.depth.as_ref()) {
+                textures.push(BoundTexture::new(
+                    slot,
+                    owner.instance,
+                    &owner.texture,
+                    &owner.desc,
+                    owner.incoming,
+                    owner.layout,
+                ));
+            }
         }
     }
     Ok((buffers, textures))

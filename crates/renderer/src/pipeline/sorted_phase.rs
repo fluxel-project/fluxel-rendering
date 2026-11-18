@@ -41,6 +41,12 @@ impl<B: ResourceBackend> SortedForwardPass<'_, '_, '_, '_, B> {
             .write_selected_depth()
             .map_err(|_| PipelineError::InvalidPhaseContribution)
     }
+    pub(crate) fn read_selected_depth(&mut self) -> Result<(), PipelineError> {
+        self.pass
+            .read_selected_depth()
+            .map_err(|_| PipelineError::InvalidPhaseContribution)
+    }
+
     /// Declares the read/write color attachment used by the blend subrange.
     pub fn read_write_main_color(&mut self) -> Result<(), PipelineError> {
         self.pass

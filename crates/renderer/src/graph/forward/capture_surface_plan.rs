@@ -17,6 +17,7 @@ pub(crate) struct CaptureForwardSurfacePlan<B: ResourceBackend> {
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
     pub(super) receiver_background_copy: Option<GraphPass>,
+    pub(super) receiver_depth_alias: bool,
     pub(super) receiver_raster: GraphPass,
     pub(super) composite: GraphPass,
     pub(super) present: StepId,
@@ -111,6 +112,7 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
             receiver_upload: declaration.receiver_upload,
             receiver_mip_generations: declaration.receiver_mip_generations,
             receiver_background_copy: declaration.receiver_background_copy,
+            receiver_depth_alias: declaration.receiver_depth_alias,
             receiver_raster: declaration.receiver_raster,
             composite: declaration.composite,
             present,
@@ -275,6 +277,7 @@ impl<B: ResourceBackend> CaptureForwardSurfacePlan<B> {
             capture,
             &self.receiver,
             receiver,
+            self.receiver_depth_alias,
         )?;
         FrameBindings::new_with_surface_textures(
             &self.execution,

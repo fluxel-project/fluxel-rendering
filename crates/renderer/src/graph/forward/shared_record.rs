@@ -375,27 +375,52 @@ pub(super) fn record_raster_with_color_load<B: ResourceBackend>(
 where
     B: RasterBackend,
 {
+    record_raster_with_loads(
+        slots,
+        pass_id,
+        bindings,
+        encoder,
+        frame,
+        frame.frame.depth.as_ref(),
+        color_load,
+        LoadOp::Clear(1.0),
+        StoreOp::Discard,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_raster_with_loads<B: ResourceBackend>(
+    slots: &RecordSlots<'_>,
+    pass_id: GraphPass,
+    bindings: &FrameBindings<'_, B>,
+    encoder: &mut CommandEncoder<B>,
+    frame: &ForwardFrame<B>,
+    depth_owner: Option<&crate::residency::ForwardDepthAttachment<B>>,
+    color_load: LoadOp<ClearColor>,
+    depth_load: LoadOp<f32>,
+    depth_store: StoreOp,
+    depth_read_only: bool,
+) -> Result<()>
+where
+    B: RasterBackend,
+{
     validate_forward_topology(slots.topology, frame.draws.len(), frame.draw_batches.len())?;
     validate_batches(frame)?;
-    if frame
-        .frame
-        .depth
-        .as_ref()
-        .is_some_and(|owner| owner.device != slots.device)
-    {
+    if depth_owner.is_some_and(|owner| owner.device != slots.device) {
         return Err(Error::WrongDevice);
     }
-    let depth = match (slots.depth_slot, frame.frame.depth.as_ref()) {
+    let depth = match (slots.depth_slot, depth_owner) {
         (None, None) => None,
         (Some(slot), Some(owner)) => Some(RasterDepthSelection {
             slot,
             texture: &owner.texture,
             view: &owner.view,
             instance: owner.instance,
-            load: LoadOp::Clear(1.0),
-            store: StoreOp::Discard,
-            read_only: false,
-            read_write: slots.topology == FrameTopology::SortedForward,
+            load: depth_load,
+            store: depth_store,
+            read_only: depth_read_only,
+            read_write: !depth_read_only && slots.topology == FrameTopology::SortedForward,
         }),
         _ => return Err(Error::InvalidState),
     };

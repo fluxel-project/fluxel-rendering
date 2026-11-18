@@ -79,6 +79,7 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             capture,
             &self.receiver,
             receiver,
+            self.receiver_depth_alias,
         )?;
         FrameBindings::new(&self.execution, self.id.device, buffers, textures)
             .map_err(binding_error)

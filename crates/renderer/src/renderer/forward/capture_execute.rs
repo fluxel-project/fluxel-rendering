@@ -1,33 +1,9 @@
 //! Assembly and single-execution recording for Forward capture.
 
 use super::assembly::{AssembledForward, AssembledForwardTarget};
+use super::capture_receiver_contribution::receiver_contribution;
 use super::*;
 use std::{sync::Arc, time::Instant};
-
-fn receiver_contribution<B: ResourceBackend>(
-    context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
-    topology: crate::FrameTopology,
-) -> std::result::Result<(), crate::PipelineError> {
-    match topology {
-        crate::FrameTopology::OpaqueForward => context.opaque(|pass| {
-            pass.depends_on_uploads()?;
-            pass.read_vertex_streams()?;
-            pass.read_frame_uniforms()?;
-            pass.read_sampled_textures()?;
-            pass.write_selected_depth()?;
-            pass.write_main_color()
-        }),
-        crate::FrameTopology::SortedForward => context.sorted(|pass| {
-            pass.depends_on_uploads()?;
-            pass.read_vertex_streams()?;
-            pass.read_frame_uniforms()?;
-            pass.read_sampled_textures()?;
-            pass.write_selected_depth()?;
-            pass.read_write_main_color()
-        }),
-        _ => Err(crate::PipelineError::InvalidPhaseContribution),
-    }
-}
 
 impl<B> Renderer<B>
 where
@@ -67,6 +43,12 @@ where
         ) -> std::result::Result<(), crate::PipelineError>,
     {
         let preserve_capture_background = receiver_input.prepared().uses_scene_refraction();
+        if preserve_capture_background
+            && (receiver_topology != crate::FrameTopology::SortedForward
+                || depth_mode != crate::ForwardDepthMode::Depth32LessEqualWrite)
+        {
+            return Err(Error::InvalidState.into());
+        }
         // The receiver is assembled after its producer, but its target facts
         // are already known. Admit a transparent receiver before any producer
         // allocation so an unsupported final target cannot strand that work.
@@ -115,12 +97,22 @@ where
         else {
             return Err(Error::InvalidState.into());
         };
-        let capture_owner = super::captured::CaptureTextureOwner::from_capture_frame(
+        let mut capture_owner = super::captured::CaptureTextureOwner::from_capture_frame(
             &self.device,
             producer_slot,
             &capture_frame,
         )
         .map_err(|error| self.observe_forward_error("capture owner admission", error))?;
+        if preserve_capture_background {
+            capture_owner.refraction_depth = Some(
+                capture_frame
+                    .frame
+                    .depth
+                    .as_ref()
+                    .ok_or(Error::InvalidState)?
+                    .retain(),
+            );
+        }
         let receiver_environment = self
             .environment_irradiance
             .clone()
@@ -300,7 +292,9 @@ where
             receiver_topology,
             preserve_capture_background,
             capture_contribute,
-            |context| receiver_contribution(context, receiver_topology),
+            |context| {
+                receiver_contribution(context, receiver_topology, preserve_capture_background)
+            },
         )
         .map_err(|error| self.forward_plan_error("capture graph declaration", error))?;
         let id = self.next_forward_plan_id()?;
@@ -438,7 +432,9 @@ where
             receiver_topology,
             preserve_capture_background,
             capture_contribute,
-            |context| receiver_contribution(context, receiver_topology),
+            |context| {
+                receiver_contribution(context, receiver_topology, preserve_capture_background)
+            },
         )
         .map_err(|error| self.forward_plan_error("capture surface graph declaration", error))?;
         let id = self.next_forward_plan_id()?;

@@ -308,6 +308,7 @@ mod capture_execute;
 mod capture_oit_composed;
 mod capture_oit_entry;
 mod capture_oit_execute;
+mod capture_receiver_contribution;
 mod captured;
 mod composed;
 mod composed_pair;

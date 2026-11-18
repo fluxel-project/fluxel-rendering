@@ -56,6 +56,20 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
     where
         B: RasterBackend,
     {
+        if self.receiver_depth_alias {
+            return shared_record::record_raster_with_loads(
+                &self.record_slots(&self.capture, self.capture_topology),
+                self.capture_raster,
+                &self.bindings(capture, receiver)?,
+                encoder,
+                capture,
+                capture.frame.depth.as_ref(),
+                LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                LoadOp::Clear(1.0),
+                StoreOp::Store,
+                false,
+            );
+        }
         shared_record::record_raster(
             &self.record_slots(&self.capture, self.capture_topology),
             self.capture_raster,
@@ -120,14 +134,18 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
         B: RasterBackend,
     {
         let slots = self.record_slots(&self.receiver, self.receiver_topology);
-        if self.receiver_background_copy.is_some() {
-            return shared_record::record_raster_with_color_load(
+        if self.receiver_depth_alias {
+            return shared_record::record_raster_with_loads(
                 &slots,
                 self.receiver_raster,
                 &self.bindings(capture, receiver)?,
                 encoder,
                 receiver,
+                capture.frame.depth.as_ref(),
                 LoadOp::Load,
+                LoadOp::Load,
+                StoreOp::Store,
+                true,
             );
         }
         shared_record::record_raster(

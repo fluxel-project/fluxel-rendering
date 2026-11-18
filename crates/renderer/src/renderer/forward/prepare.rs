@@ -47,6 +47,9 @@ where
             ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, SurfaceForwardFrame,
         };
         self.ensure_open()?;
+        let scene_refraction = prepared_inputs
+            .iter()
+            .any(|input| input.prepared().uses_scene_refraction());
         let borrowed_attachments = attachments.is_some();
         if let Some(attachments) = attachments.as_ref() {
             if surface.is_some()
@@ -84,6 +87,13 @@ where
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
         let depth = if borrowed_attachments {
             None
+        } else if scene_refraction {
+            Some(
+                capture_texture
+                    .and_then(|capture| capture.refraction_depth.as_ref())
+                    .ok_or(Error::InvalidState)?
+                    .retain(),
+            )
         } else {
             super::depth::allocate_depth(&self.device, depth_mode, topology, extent)?
         };
@@ -340,9 +350,7 @@ where
             limits.uniform_offset_alignment,
             surface.is_some(),
             sampled_target,
-            inputs
-                .iter()
-                .any(|input| input.prepared().uses_scene_refraction()),
+            scene_refraction,
             attachments.as_ref(),
         )?;
         let mut offscreen_frame = allocated.offscreen;
@@ -572,7 +580,9 @@ where
                 frame_buffer_allocations,
                 frame_buffer_allocation_bytes,
                 frame_texture_allocations,
-                !borrowed_attachments && depth_mode != crate::ForwardDepthMode::Disabled,
+                !borrowed_attachments
+                    && !scene_refraction
+                    && depth_mode != crate::ForwardDepthMode::Disabled,
             ),
         })
     }

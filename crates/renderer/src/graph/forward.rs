@@ -6,6 +6,7 @@ mod access_contracts;
 mod capture_binding_collection;
 mod capture_bindings;
 mod capture_declaration;
+mod capture_depth_alias;
 mod capture_oit_declaration;
 use capture_oit_declaration::CaptureOitDeclaration;
 mod capture_oit_bindings;
@@ -36,7 +37,7 @@ pub(crate) use oit_read_context::ForwardOitReadContext;
 mod oit_plan;
 mod oit_record;
 mod oit_stages;
-pub(in crate::graph) use capture_declaration::{same_buffer_owner_desc, same_texture_owner_desc};
+pub(in crate::graph) use capture_depth_alias::{same_buffer_owner_desc, same_texture_owner_desc};
 mod overlay;
 pub(in crate::graph) use capture_declaration::SharedResidentImports;
 pub(in crate::graph) use capture_receiver::{

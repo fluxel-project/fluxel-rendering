@@ -167,7 +167,8 @@ pub fn prepare_forward_capture_receiver(
 /// Prepares one PBR receiver that refracts an explicitly named capture texture.
 ///
 /// Select a texture resource bound to a capture slot in `resources`. The
-/// ordinary Forward capture producer supplies that slot. Transmission and an
+/// ordinary Forward capture producer supplies that slot and retains its
+/// selected depth for the receiver's depth comparison. Transmission and an
 /// ordinary material sampler must be declared, and the submitted renderer
 /// must provide the specular BRDF environment used for surface reflectance.
 #[allow(clippy::too_many_arguments)]

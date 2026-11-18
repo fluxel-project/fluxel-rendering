@@ -166,3 +166,14 @@ pub(super) fn depth_read_write_uses() -> TextureAccessContract {
         TextureUsage::RENDER_ATTACHMENT,
     )
 }
+
+pub(super) fn depth_read_uses() -> TextureAccessContract {
+    texture(
+        TextureUses {
+            stages: StageMask::FRAGMENT,
+            accesses: AccessMask::DEPTH_READ,
+        },
+        ImageLayout::DepthStencilAttachment,
+        TextureUsage::RENDER_ATTACHMENT,
+    )
+}

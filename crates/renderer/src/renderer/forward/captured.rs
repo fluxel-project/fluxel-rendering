@@ -44,6 +44,7 @@ pub(crate) struct CaptureTextureOwner<B: ResourceBackend> {
     pub(crate) layout: ImageLayout,
     pub(crate) device: DeviceId,
     pub(crate) filterable: bool,
+    pub(super) refraction_depth: Option<crate::residency::ForwardDepthAttachment<B>>,
 }
 
 impl<B: ResourceBackend> CaptureTextureOwner<B> {
@@ -194,6 +195,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
             layout,
             device: owner_device,
             filterable,
+            refraction_depth: None,
         })
     }
 

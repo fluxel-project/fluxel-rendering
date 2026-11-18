@@ -453,7 +453,7 @@ where
         };
         let mut context = ForwardPhaseContext::new(&mut driver);
         contribute(&mut context).map_err(ForwardPlanBuildError::Pipeline)?;
-        let (pass, _) = driver.finish().map_err(|_| {
+        let (pass, _, _) = driver.finish().map_err(|_| {
             ForwardPlanBuildError::Pipeline(PipelineError::InvalidPhaseContribution)
         })?;
         pass

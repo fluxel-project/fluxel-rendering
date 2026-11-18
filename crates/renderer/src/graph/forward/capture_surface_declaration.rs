@@ -7,6 +7,7 @@ use super::capture_declaration::{
 use super::*;
 use fluxel_rhi::api::TextureDimension;
 
+use super::capture_depth_alias::{import_frame_with_depth_alias, validate_depth_alias};
 use super::capture_terminal::declare_capture_background_copy;
 pub(crate) struct CaptureForwardSurfaceDeclaration {
     pub(super) graph: GraphBuilder,
@@ -17,6 +18,7 @@ pub(crate) struct CaptureForwardSurfaceDeclaration {
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
     pub(super) receiver_background_copy: Option<GraphPass>,
+    pub(super) receiver_depth_alias: bool,
     pub(super) receiver_raster: GraphPass,
     pub(super) composite: GraphPass,
     pub(super) capture: CaptureFrameSlots,
@@ -76,6 +78,13 @@ where
     {
         return Err(Error::InvalidState.into());
     }
+    validate_depth_alias(
+        device,
+        capture,
+        receiver,
+        receiver_topology,
+        preserve_capture_background,
+    )?;
     let receiver_capture = capture_texture_slots(&receiver_spec)?;
     super::capture_bindings::validate_capture_alias(capture, receiver)?;
     validate_spec(device, &capture_spec, capture_topology, false)?;
@@ -94,7 +103,7 @@ where
         declare_upload(&mut graph, &capture_spec, capture_handles)?;
     let (capture_handles, capture_mip_generations) =
         declare_mip_generations(&mut graph, &capture_spec, capture_handles, &mut shared)?;
-    let (capture_raster, capture_target) = declare_raster(
+    let (capture_raster, capture_target, capture_depth) = declare_raster(
         &mut graph,
         &capture_spec,
         capture_topology,
@@ -106,8 +115,19 @@ where
         .iter()
         .map(|capture| capture.then_some(capture_target))
         .collect::<Vec<_>>();
-    let (receiver_slots, receiver_handles) =
-        import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
+    let capture_depth = preserve_capture_background
+        .then_some(capture_depth)
+        .flatten();
+    let (receiver_slots, receiver_handles) = match capture_depth {
+        Some(depth) => import_frame_with_depth_alias(
+            &mut graph,
+            &receiver_spec,
+            Some(&aliases),
+            &mut shared,
+            depth,
+        )?,
+        None => import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?,
+    };
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
     let (mut receiver_handles, receiver_mip_generations) =
@@ -120,7 +140,7 @@ where
     if let Some((_, target)) = receiver_background_copy {
         receiver_handles.target = target;
     }
-    let (receiver_raster, receiver_target) = declare_raster(
+    let (receiver_raster, receiver_target, _) = declare_raster(
         &mut graph,
         &receiver_spec,
         receiver_topology,
@@ -173,6 +193,7 @@ where
         receiver_upload,
         receiver_mip_generations,
         receiver_background_copy: receiver_background_copy.map(|(pass, _)| pass),
+        receiver_depth_alias: capture_depth.is_some(),
         receiver_raster,
         composite,
         capture: capture_slots,
