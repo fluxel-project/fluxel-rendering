@@ -5,6 +5,7 @@
 //! height-correlated split-sum generator and are not rescaled here.
 
 use fluxel_assets::AssetKind;
+use half::f16;
 
 /// Marker for an immutable prefiltered-radiance plus BRDF-LUT environment.
 pub struct EnvironmentSpecularIblAsset;
@@ -27,6 +28,44 @@ pub struct SpecularIblImage {
     pub extent: [u32; 2],
     /// Four IEEE-754 binary16 values per texel, in RGBA order.
     pub rgba16f_le: Vec<u8>,
+}
+
+impl SpecularIblImage {
+    /// Expands a Babylon RGBD BRDF LUT into filterable linear RGBA16Float.
+    ///
+    /// Supply tightly packed RGBA8 texels in lookup order. X corresponds to
+    /// NdotV and Y to roughness. RGB is gamma-encoded and alpha is the linear
+    /// divisor D. Choose the exact sRGB transfer for Babylon's exact conversion
+    /// option. Otherwise use the default gamma 2.2 transfer.
+    ///
+    /// Returns `None` for an invalid extent, byte count, or zero divisor.
+    pub fn from_babylon_rgbd8(extent: [u32; 2], rgba8: &[u8], exact_srgb: bool) -> Option<Self> {
+        let source_len = image_byte_len(extent, 4)?;
+        let expanded_len = image_byte_len(extent, 8)?;
+        if rgba8.len() != source_len {
+            return None;
+        }
+        let mut rgba16f_le = Vec::with_capacity(expanded_len);
+        for texel in rgba8.chunks_exact(4) {
+            let divisor = f32::from(texel[3]) / 255.0;
+            if divisor == 0.0 {
+                return None;
+            }
+            for &component in &texel[..3] {
+                let gamma = f32::from(component) / 255.0;
+                let linear = if !exact_srgb {
+                    gamma.powf(2.2)
+                } else if gamma <= 0.04045 {
+                    gamma / 12.92
+                } else {
+                    ((gamma + 0.055) / 1.055).powf(2.4)
+                };
+                rgba16f_le.extend_from_slice(&f16::from_f32(linear / divisor).to_le_bytes());
+            }
+            rgba16f_le.extend_from_slice(&f16::ONE.to_le_bytes());
+        }
+        Some(Self { extent, rgba16f_le })
+    }
 }
 
 /// Babylon's `LinearSpecularReflection` LOD metadata.
@@ -100,17 +139,17 @@ fn valid_image(image: &SpecularIblImage) -> bool {
     valid_bytes(image.extent, &image.rgba16f_le)
 }
 
+fn image_byte_len(extent: [u32; 2], bytes_per_texel: usize) -> Option<usize> {
+    if extent.contains(&0) {
+        return None;
+    }
+    usize::try_from(extent[0].checked_mul(extent[1])?)
+        .ok()?
+        .checked_mul(bytes_per_texel)
+}
+
 fn valid_bytes(extent: [u32; 2], bytes: &[u8]) -> bool {
-    let Some(texels) = extent[0].checked_mul(extent[1]) else {
-        return false;
-    };
-    let Some(expected) = usize::try_from(texels)
-        .ok()
-        .and_then(|value| value.checked_mul(8))
-    else {
-        return false;
-    };
-    if extent.contains(&0) || bytes.len() != expected {
+    if image_byte_len(extent, 8) != Some(bytes.len()) {
         return false;
     }
     bytes.chunks_exact(2).enumerate().all(|(component, pair)| {

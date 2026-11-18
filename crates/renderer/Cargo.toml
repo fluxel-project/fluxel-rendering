@@ -19,6 +19,7 @@ dx12 = ["fluxel-rhi/dx12"]
 native-gl-wgl = ["fluxel-rhi/native-gl-wgl"]
 
 [dependencies]
+half = { version = "2.7", default-features = false }
 fluxel-shader = { path = "../shader", version = "0.16.0" }
 fluxel-material = { path = "../material", version = "0.16.0" }
 fluxel-assets = { git = "https://github.com/fluxel-project/fluxel-bases.git", rev = "124e825f82e5cd0eb485c95fe1281b11c8dbc844", version = "=0.13.4" }

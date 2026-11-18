@@ -169,9 +169,12 @@ allocation descriptors, sampling compatibility and device provenance.
 `EnvironmentSpecularIblData` snapshot independently of diffuse irradiance.
 The selected contract uses a complete linear `RGBA16Float` latitude-longitude
 radiance chain down to 1x1 and a separate linear `RGBA16Float` BRDF LUT.
-Inputs must contain finite binary16 values and nonnegative RGB. This is a
-consumer of externally prefiltered radiance and an externally integrated LUT;
-it does not generate either product or establish HDR presentation.
+Inputs must contain finite binary16 values and nonnegative RGB. The renderer
+consumes externally prefiltered radiance and an externally integrated LUT.
+`SpecularIblImage::from_babylon_rgbd8` accepts a packed Babylon LUT and
+expands each texel to linear RGB by applying the selected gamma transfer and
+dividing by its linear alpha. Doing this before the GPU samples the LUT matches
+Babylon's half-float expansion path. Existing linear LUTs can be supplied directly.
 
 The LOD rule selects Babylon's `LINEARSPECULARREFLECTION` branch. It uses
 `clamp(log2(base_width) * perceptual_roughness * scale + offset, 0, max_lod)`.

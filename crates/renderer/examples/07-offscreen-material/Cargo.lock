@@ -184,6 +184,7 @@ dependencies = [
  "fluxel-material",
  "fluxel-rhi",
  "fluxel-shader",
+ "half",
 ]
 
 [[package]]
