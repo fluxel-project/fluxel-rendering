@@ -111,6 +111,7 @@ fn pbr_specular_metallic_roughness_f0(
 fn pbr_specular_ibl(
     world_position: vec3<f32>,
     world_normal: vec3<f32>,
+    ambient_occlusion: f32,
     base_color: vec3<f32>,
     metallic: f32,
     perceptual_roughness: f32,
@@ -129,7 +130,8 @@ fn pbr_specular_ibl(
     let normal = pbr_normal(world_normal);
     let view = pbr_specular_view_direction(
         world_position, camera_position, orthographic_view_direction, orthographic);
-    let ndotv = abs(dot(normal, view)) + 0.0000001;
+    let ndotv_unclamped = dot(normal, view);
+    let ndotv = abs(ndotv_unclamped) + 0.0000001;
     let f0 = pbr_specular_metallic_roughness_f0(base_color, metallic, dielectric_f0);
     let f90 = vec3<f32>(1.0);
     let reflection = reflect(-view, normal);
@@ -139,7 +141,12 @@ fn pbr_specular_ibl(
         radiance, radiance_sampler, pbr_specular_latlong_uv(reflection), lod).rgb;
     let lut = textureSample(brdf_lut, brdf_lut_sampler,
         pbr_specular_brdf_uv(ndotv, perceptual_roughness)).rg;
-    let reflectance = pbr_specular_height_correlated_reflectance(f0, f90, lut);
+    // Babylon environmentRadianceOcclusion and the RADIANCEOCCLUSION
+    // branch in pbrBlockReflectance. Use the signed NdotV from geometry.
+    let occlusion_input = ndotv_unclamped + ambient_occlusion;
+    let radiance_occlusion = clamp(occlusion_input * occlusion_input - 1.0 + ambient_occlusion, 0.0, 1.0);
+    let reflectance = pbr_specular_height_correlated_reflectance(f0, f90, lut)
+        * radiance_occlusion;
     // Babylon getEnergyConservationFactor. A zero Y coefficient carries no
     // normalization information, so keep unit energy for that authored LUT sample.
     let reciprocal_y = 1.0 / select(1.0, lut.y, lut.y > 0.0);
@@ -156,13 +163,14 @@ fn pbr_specular_ibl(
 fn pbr_specular_ibl_bound(
     world_position: vec3<f32>,
     world_normal: vec3<f32>,
+    ambient_occlusion: f32,
     base_color: vec3<f32>,
     metallic: f32,
     perceptual_roughness: f32,
     dielectric_f0: vec3<f32>,
 ) -> PbrSpecularIblResult {
     return pbr_specular_ibl(
-        world_position, world_normal, base_color, metallic, perceptual_roughness,
+        world_position, world_normal, ambient_occlusion, base_color, metallic, perceptual_roughness,
         pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.w == 0.0,
@@ -406,15 +414,13 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
     } else {
         ""
     };
-    let indirect = if diffuse && effects {
-        " + pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy) * textureLoad(pbr_emissive_ao, coordinate, 0).a"
-    } else if diffuse {
-        " + pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy)"
+    let effects_source = if effects {
+        "textureLoad(pbr_emissive_ao, coordinate, 0)"
     } else {
-        ""
+        "vec4(0.0, 0.0, 0.0, 1.0)"
     };
-    let effect = if effects {
-        " + textureLoad(pbr_emissive_ao, coordinate, 0).rgb"
+    let indirect = if diffuse {
+        " + pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy) * surface_effects.a"
     } else {
         ""
     };
@@ -442,10 +448,11 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
     let normal = nr.xyz * 2.0 - vec3(1.0);
     let view = pbr_specular_view_direction(world, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.w == 0.0);
-    let spec = pbr_specular_ibl_bound(world, normal, base_metal.rgb, base_metal.a, nr.a, vec3(0.04));
+    let surface_effects = {effects_source};
+    let spec = pbr_specular_ibl_bound(world, normal, surface_effects.a, base_metal.rgb, base_metal.a, nr.a, vec3(0.04));
     let terms = pbr_direct_light_components(base_metal.rgb, vec2(base_metal.a, nr.a), normal, view, vec3(0.04));
     let direct = terms.specular * spec.specular_energy + terms.diffuse;
-    return vec4(direct + spec.radiance{indirect}{effect}, 1.0);
+    return vec4(direct + spec.radiance{indirect} + surface_effects.rgb, 1.0);
 }}
 "#
     )
@@ -529,13 +536,14 @@ struct PbrSpecularVertexOutput {
     let direct = format!(
         "let terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = terms.specular * spec.specular_energy + terms.diffuse{diffuse_weight};"
     );
-    let indirect = if diffuse && effects {
+    let ambient_occlusion = if effects {
+        "clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"
+    } else {
+        "1.0"
+    };
+    let indirect = if diffuse {
         format!(
-            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy) * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0){diffuse_weight};"
-        )
-    } else if diffuse {
-        format!(
-            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy){diffuse_weight};"
+            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy) * ambient_occlusion{diffuse_weight};"
         )
     } else {
         String::from("let indirect = vec3<f32>(0.0);")
@@ -568,7 +576,8 @@ fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) ->
     let view = pbr_specular_view_direction(input.world_position,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.w == 0.0);
-    let spec = pbr_specular_ibl_bound(input.world_position, normal, base,
+    let ambient_occlusion = {ambient_occlusion};
+    let spec = pbr_specular_ibl_bound(input.world_position, normal, ambient_occlusion, base,
         properties.x, properties.y, dielectric_f0);
     {direct}
     {indirect}

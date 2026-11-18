@@ -56,7 +56,7 @@ fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) ->
     let view = pbr_specular_view_direction(input.world_position,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.w == 0.0);
-    let spec = pbr_specular_ibl_bound(input.world_position, normal, base,
+    let spec = pbr_specular_ibl_bound(input.world_position, normal, 1.0, base,
         properties.x, properties.y, dielectric_f0);
     {direct}
     {indirect}

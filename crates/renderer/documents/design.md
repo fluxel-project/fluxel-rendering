@@ -848,6 +848,19 @@ owners or Graph resources. Policy changes do not invalidate image residency or
 silently choose a frame-wide maximum/first sampler. Scene-color composite
 samplers keep their separate strict linear contract.
 
+### Ambient occlusion in specular IBL
+
+PBR specular IBL applies Babylon's default radiance occlusion to the colored
+environment reflectance. It evaluates
+`clamp((dot(N, V) + AO)^2 - 1 + AO, 0, 1)` with the signed dot product of the
+final world normal and view direction. Forward uses the material's scalar AO,
+and Deferred reads the same scalar from its effects attachment. Both use one
+when the surface has no AO input.
+
+The occluded reflectance weights the reflected radiance and enters the legacy
+transmission energy calculation. Direct specular retains its own LUT
+compensation. Diffuse irradiance continues to use the material AO directly.
+
 ### Generated material mip chains
 
 `ColorTextureData::mip_levels` is immutable texture-generation metadata. One
