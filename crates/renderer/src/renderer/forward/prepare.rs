@@ -134,8 +134,9 @@ where
                     .normal_from_local()
                     .map(|_| input.transform().columns()),
                 clip_from_world: input
-                    .normal_from_local()
-                    .map(|_| input.view().transform.columns()),
+                    .prepared()
+                    .uses_scene_refraction()
+                    .then(|| input.view().transform.columns()),
                 tint: input.tint(),
                 shading_camera: input.view().shading_camera,
             })
@@ -339,7 +340,9 @@ where
             limits.uniform_offset_alignment,
             surface.is_some(),
             sampled_target,
-            inputs.iter().any(|input| input.prepared().uses_scene_refraction()),
+            inputs
+                .iter()
+                .any(|input| input.prepared().uses_scene_refraction()),
             attachments.as_ref(),
         )?;
         let mut offscreen_frame = allocated.offscreen;

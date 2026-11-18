@@ -308,6 +308,13 @@ fn forward_specular_request_inner(
             transmission::TRANSMISSION,
         ));
         if scene_color.is_some() {
+            request
+                .source_units
+                .retain(|unit| unit.id.0 != "pbr-transforms");
+            request.source_units.push(SourceUnit::new(
+                "pbr-scene-refraction-transforms",
+                super::templates::SCENE_REFRACTION_TRANSFORMS,
+            ));
             request.source_units.push(SourceUnit::new(
                 "pbr-scene-transmission",
                 super::scene_refraction::WGSL,

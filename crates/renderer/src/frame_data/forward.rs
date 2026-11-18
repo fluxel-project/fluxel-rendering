@@ -42,7 +42,21 @@ fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
 
 const PBR_CAMERA_OFFSET: usize = 192;
 const PBR_CLIP_FROM_WORLD_OFFSET: usize = PBR_CAMERA_OFFSET + 16;
-pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64 + 64;
+pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CAMERA_OFFSET as u64 + 16;
+pub(crate) const PBR_SCENE_REFRACTION_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64 + 64;
+
+fn transform_bytes(input: &ForwardUniformInput) -> Result<u64> {
+    match (
+        input.normal_from_local.is_some(),
+        input.world_from_local.is_some(),
+        input.clip_from_world.is_some(),
+    ) {
+        (false, false, false) => Ok(64),
+        (true, true, false) => Ok(PBR_TRANSFORM_BYTES),
+        (true, true, true) => Ok(PBR_SCENE_REFRACTION_TRANSFORM_BYTES),
+        _ => Err(Error::InvalidRange),
+    }
+}
 
 /// Both dynamic bindings use individually aligned physical starts.
 pub(crate) fn pack_forward_uniforms(
@@ -53,30 +67,32 @@ pub(crate) fn pack_forward_uniforms(
     if alignment == 0 {
         return Err(Error::InvalidRange);
     }
-    if inputs.iter().any(|input| {
-        let pbr = input.normal_from_local.is_some();
-        pbr != input.world_from_local.is_some() || pbr != input.clip_from_world.is_some()
-    }) {
-        return Err(Error::InvalidRange);
-    }
     let align = |value: u64| {
         value
             .checked_add(alignment - 1)
             .map(|value| value / alignment * alignment)
             .ok_or(Error::InvalidRange)
     };
-    let transform_bytes = if inputs.iter().any(|input| input.normal_from_local.is_some()) {
-        PBR_TRANSFORM_BYTES
-    } else {
-        64
-    };
-    let tint_offset = align(transform_bytes)?;
-    let stride = align(tint_offset.checked_add(16).ok_or(Error::InvalidRange)?)?;
-    let count = u64::try_from(inputs.len()).map_err(|_| Error::InvalidRange)?;
-    let total = stride
-        .checked_mul(count)
-        .ok_or(Error::InvalidRange)?
-        .max(16);
+    let mut transforms = Vec::new();
+    transforms
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| Error::OutOfMemory)?;
+    let mut tints = Vec::new();
+    tints
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| Error::OutOfMemory)?;
+    let mut total: u64 = 0;
+    for input in inputs {
+        let transform_end = total
+            .checked_add(transform_bytes(input)?)
+            .ok_or(Error::InvalidRange)?;
+        let tint_start = align(transform_end)?;
+        let tint_end = tint_start.checked_add(16).ok_or(Error::InvalidRange)?;
+        transforms.push(total..transform_end);
+        tints.push(tint_start..tint_end);
+        total = align(tint_end)?;
+    }
+    let total = total.max(16);
     if total > max_bytes || total > u64::from(u32::MAX) {
         return Err(Error::InvalidRange);
     }
@@ -113,17 +129,9 @@ pub(crate) fn pack_forward_uniforms(
         .try_reserve_exact(usize::try_from(total).map_err(|_| Error::InvalidRange)?)
         .map_err(|_| Error::OutOfMemory)?;
     bytes.resize(usize::try_from(total).map_err(|_| Error::InvalidRange)?, 0);
-    let mut transforms = Vec::new();
-    transforms
-        .try_reserve_exact(inputs.len())
-        .map_err(|_| Error::OutOfMemory)?;
-    let mut tints = Vec::new();
-    tints
-        .try_reserve_exact(inputs.len())
-        .map_err(|_| Error::OutOfMemory)?;
-    for (index, input) in inputs.iter().enumerate() {
-        let start = u64::try_from(index).map_err(|_| Error::InvalidRange)? * stride;
-        let tint = start + tint_offset;
+    for ((input, transform), tint) in inputs.iter().zip(&transforms).zip(&tints) {
+        let start = transform.start;
+        let tint = tint.start;
         for (component, value) in input.transform.iter().flatten().enumerate() {
             let offset = start as usize + component * 4;
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
@@ -143,10 +151,11 @@ pub(crate) fn pack_forward_uniforms(
                 let offset = start as usize + PBR_CAMERA_OFFSET + component * 4;
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
-            let clip_from_world = input.clip_from_world.ok_or(Error::InvalidRange)?;
-            for (component, value) in clip_from_world.iter().flatten().enumerate() {
-                let offset = start as usize + PBR_CLIP_FROM_WORLD_OFFSET + component * 4;
-                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            if let Some(clip_from_world) = input.clip_from_world {
+                for (component, value) in clip_from_world.iter().flatten().enumerate() {
+                    let offset = start as usize + PBR_CLIP_FROM_WORLD_OFFSET + component * 4;
+                    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
             }
         }
         if let Some(world) = input.world_from_local {
@@ -159,14 +168,6 @@ pub(crate) fn pack_forward_uniforms(
             let offset = tint as usize + component * 4;
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
-        let transform_end = start
-            + if input.normal_from_local.is_some() {
-                PBR_TRANSFORM_BYTES
-            } else {
-                64
-            };
-        transforms.push(start..transform_end);
-        tints.push(tint..tint + 16);
     }
     Ok(ForwardUniformData {
         bytes,

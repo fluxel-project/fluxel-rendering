@@ -106,7 +106,7 @@ pub(super) fn uniforms(
                 None
             },
             world_from_local: pbr.then(|| input.transform().columns()),
-            clip_from_world: pbr.then(|| input.view().transform.columns()),
+            clip_from_world: None,
             tint: input.tint(),
             shading_camera: input.view().shading_camera,
         });

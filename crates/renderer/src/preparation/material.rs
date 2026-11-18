@@ -61,7 +61,7 @@ impl PreparedMaterial {
         self.transmission
     }
 
-    pub(crate) fn uses_scene_refraction(&self) -> bool {
+    pub(crate) const fn uses_scene_refraction(&self) -> bool {
         self.scene_refraction
     }
 

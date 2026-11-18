@@ -43,9 +43,31 @@ struct PbrTransforms {
     normal_from_local: mat4x4<f32>,
     world_from_local: mat4x4<f32>,
     shading_camera: vec4<f32>,
-    clip_from_world: mat4x4<f32>,
 };
 @group(1) @binding(0) var<uniform> pbr_transforms: PbrTransforms;
+struct PbrVertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_normal: vec3<f32>,
+    @location(1) world_position: vec3<f32>,
+};
+fn pbr_vertex(position: vec3<f32>, normal: vec3<f32>) -> PbrVertexOutput {
+    var output: PbrVertexOutput;
+    output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
+    output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
+    output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
+    return output;
+}
+"#;
+
+pub(super) const SCENE_REFRACTION_TRANSFORMS: &str = r#"
+struct PbrSceneRefractionTransforms {
+    clip_from_local: mat4x4<f32>,
+    normal_from_local: mat4x4<f32>,
+    world_from_local: mat4x4<f32>,
+    shading_camera: vec4<f32>,
+    clip_from_world: mat4x4<f32>,
+};
+@group(1) @binding(0) var<uniform> pbr_transforms: PbrSceneRefractionTransforms;
 struct PbrVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_normal: vec3<f32>,
