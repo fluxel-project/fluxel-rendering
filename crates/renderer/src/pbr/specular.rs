@@ -43,6 +43,8 @@ struct PbrSpecularIblResult {
     // Babylon's diffuse conservation uses base (non-coloured) specular
     // reflectance, not the coloured radiance reflectance.
     diffuse_energy: vec3<f32>,
+    specular_energy: vec3<f32>,
+    refraction_energy: f32,
 };
 
 @group(2) @binding(2) var pbr_specular_radiance: texture_2d<f32>;
@@ -93,7 +95,7 @@ fn pbr_specular_height_correlated_reflectance(
     lut: vec2<f32>,
 ) -> vec3<f32> {
     // Babylon BRDF_V_HEIGHT_CORRELATED: x weights (F90 - F0), y weights F0.
-    return clamp((f90 - f0) * lut.x + f0 * lut.y, vec3<f32>(0.0), vec3<f32>(1.0));
+    return (f90 - f0) * lut.x + f0 * lut.y;
 }
 
 fn pbr_specular_metallic_roughness_f0(
@@ -104,10 +106,6 @@ fn pbr_specular_metallic_roughness_f0(
     return mix(clamp(dielectric_f0, vec3<f32>(0.0), vec3<f32>(1.0)),
                clamp(base_color, vec3<f32>(0.0), vec3<f32>(1.0)),
                vec3<f32>(clamp(metallic, 0.0, 1.0)));
-}
-
-fn pbr_specular_base_f0(metallic: f32, dielectric_f0: f32) -> f32 {
-    return mix(clamp(dielectric_f0, 0.0, 1.0), 1.0, clamp(metallic, 0.0, 1.0));
 }
 
 fn pbr_specular_ibl(
@@ -131,9 +129,8 @@ fn pbr_specular_ibl(
     let normal = pbr_normal(world_normal);
     let view = pbr_specular_view_direction(
         world_position, camera_position, orthographic_view_direction, orthographic);
-    let ndotv = clamp(dot(normal, view), 0.0, 1.0);
+    let ndotv = abs(dot(normal, view)) + 0.0000001;
     let f0 = pbr_specular_metallic_roughness_f0(base_color, metallic, dielectric_f0);
-    let base_f0 = pbr_specular_base_f0(metallic, max(max(dielectric_f0.x, dielectric_f0.y), dielectric_f0.z));
     let f90 = vec3<f32>(1.0);
     let reflection = reflect(-view, normal);
     let lod = pbr_specular_linear_lod(
@@ -143,11 +140,16 @@ fn pbr_specular_ibl(
     let lut = textureSample(brdf_lut, brdf_lut_sampler,
         pbr_specular_brdf_uv(ndotv, perceptual_roughness)).rg;
     let reflectance = pbr_specular_height_correlated_reflectance(f0, f90, lut);
-    let base_reflectance = pbr_specular_height_correlated_reflectance(
-        vec3<f32>(base_f0), f90, lut);
+    // Babylon getEnergyConservationFactor. A zero Y coefficient carries no
+    // normalization information, so keep unit energy for that authored LUT sample.
+    let reciprocal_y = 1.0 / select(1.0, lut.y, lut.y > 0.0);
+    let specular_energy = vec3<f32>(1.0) + f0 * (reciprocal_y - 1.0);
+    let max_reflectance = max(reflectance.x, max(reflectance.y, reflectance.z));
     return PbrSpecularIblResult(
-        environment * reflectance,
-        clamp(vec3<f32>(1.0) - base_reflectance, vec3<f32>(0.0), vec3<f32>(1.0)),
+        environment * reflectance * specular_energy,
+        vec3<f32>(1.0) - dielectric_f0,
+        specular_energy,
+        1.0 - max_reflectance,
     );
 }
 
@@ -397,8 +399,9 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
     let normal = nr.xyz * 2.0 - vec3(1.0);
     let view = pbr_specular_view_direction(world, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.w == 0.0);
-    let direct = pbr_direct_light_view(base_metal.rgb, vec2(base_metal.a, nr.a), normal, view, vec3(0.04));
     let spec = pbr_specular_ibl_bound(world, normal, base_metal.rgb, base_metal.a, nr.a, vec3(0.04));
+    let terms = pbr_direct_light_components(base_metal.rgb, vec2(base_metal.a, nr.a), normal, view, vec3(0.04));
+    let direct = terms.specular * spec.specular_energy + terms.diffuse;
     return vec4(direct + spec.radiance{indirect}{effect}, 1.0);
 }}
 "#
@@ -482,16 +485,14 @@ struct PbrSpecularVertexOutput {
     } else {
         "let transmission_intensity = 0.0;\n    let transmission_thickness = 0.0;"
     };
-    let direct = if transmission {
-        "let direct_terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = direct_terms.specular + direct_terms.diffuse * (1.0 - transmission_intensity);"
-    } else {
-        "let direct = pbr_direct_light_view(base, properties, normal, view, dielectric_f0);"
-    };
     let diffuse_weight = if transmission {
         " * (1.0 - transmission_intensity)"
     } else {
         ""
     };
+    let direct = format!(
+        "let terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = terms.specular * spec.specular_energy + terms.diffuse{diffuse_weight};"
+    );
     let indirect = if diffuse && effects {
         format!(
             "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0){diffuse_weight};"
@@ -509,7 +510,7 @@ struct PbrSpecularVertexOutput {
         "let emissive = vec3<f32>(0.0);"
     };
     let refraction = if transmission {
-        "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.diffuse_energy;"
+        "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.refraction_energy;"
     } else {
         "let refraction = vec3<f32>(0.0);"
     };
@@ -525,9 +526,9 @@ fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) ->
     let view = pbr_specular_view_direction(input.world_position,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.w == 0.0);
-    {direct}
     let spec = pbr_specular_ibl_bound(input.world_position, normal, base,
-        properties.x, properties.y, {dielectric_f0});
+        properties.x, properties.y, dielectric_f0);
+    {direct}
     {indirect}
     {refraction}
     {emissive}

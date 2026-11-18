@@ -9,16 +9,14 @@ pub(super) fn source(diffuse: bool, transmission: bool) -> String {
     let transmission_values = transmission.then_some(
         "let transmission_intensity = evaluate_transmission_uv0(vec2<f32>(0.0));\n    let transmission_thickness = evaluate_thickness_uv0(vec2<f32>(0.0));",
     ).unwrap_or("let transmission_intensity = 0.0;\n    let transmission_thickness = 0.0;");
-    let direct = if transmission {
-        "let direct_terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = direct_terms.specular + direct_terms.diffuse * (1.0 - transmission_intensity);"
-    } else {
-        "let direct = pbr_direct_light_view(base, properties, normal, view, dielectric_f0);"
-    };
     let diffuse_weight = if transmission {
         " * (1.0 - transmission_intensity)"
     } else {
         ""
     };
+    let direct = format!(
+        "let terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = terms.specular * spec.specular_energy + terms.diffuse{diffuse_weight};"
+    );
     let indirect = if diffuse {
         format!(
             "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy{diffuse_weight};"
@@ -27,7 +25,7 @@ pub(super) fn source(diffuse: bool, transmission: bool) -> String {
         String::from("let indirect = vec3<f32>(0.0);")
     };
     let refraction = if transmission {
-        "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.diffuse_energy;"
+        "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.refraction_energy;"
     } else {
         "let refraction = vec3<f32>(0.0);"
     };
@@ -58,9 +56,9 @@ fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) ->
     let view = pbr_specular_view_direction(input.world_position,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.w == 0.0);
-    {direct}
     let spec = pbr_specular_ibl_bound(input.world_position, normal, base,
-        properties.x, properties.y, {dielectric_f0});
+        properties.x, properties.y, dielectric_f0);
+    {direct}
     {indirect}
     {refraction}
     if material_alpha_rejected(material.a) {{ discard; }}

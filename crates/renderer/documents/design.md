@@ -176,8 +176,12 @@ latitude-longitude width treated as a cube face size. Scale and offset are
 finite signed metadata. Radiance repeats U, clamps V, and uses linear spatial
 and mip filtering. The LUT clamps both axes at LOD zero. Its UV is
 `(NdotV, perceptual_roughness)` and its height-correlated channels contribute
-`(F90 - F0) * lut.x + F0 * lut.y`. Diffuse conservation uses the base specular
-reflectance rather than the colored radiance reflectance.
+`(F90 - F0) * lut.x + F0 * lut.y`. The selected Babylon legacy branch
+uses the dielectric F0 and metallic weight for diffuse albedo. The
+height-correlated multiscatter correction scales direct specular and reflected
+radiance by `1 + F0 * (1 / lut.y - 1)`. A zero Y coefficient in the authored
+LUT uses unit correction. Environment transmission uses one minus the maximum
+component of the colored reflectance before multiscatter correction.
 
 Specular consumers require an explicit `ShadingCamera`: a finite perspective
 eye or a normalized orthographic direction toward the eye. Forward carries
