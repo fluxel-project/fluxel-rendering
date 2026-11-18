@@ -39,13 +39,10 @@ pub struct LinearSpecularLod {
 }
 
 impl LinearSpecularLod {
-    /// Maps perceptual material roughness to the authored mip-space LOD.
+    /// Maps roughness for an equivalent power-of-two texture of this mip count.
     ///
-    /// This is the Babylon `LINEARSPECULARREFLECTION` branch: with the
-    /// lat-long chain treated as an equivalent `2^max_lod` dimension, first
-    /// clamp material roughness to `[0, 1]`, then apply
-    /// `max_lod * roughness * scale + offset`; the sampling consumer clamps
-    /// that result to `0..mip_count - 1` before `textureSampleLevel`.
+    /// The sampling shader uses the actual base width for a bound texture and
+    /// clamps the resulting LOD to the available mip range.
     pub fn map(self, perceptual_roughness: f32, mip_count: u32) -> Option<f32> {
         if !self.is_valid() || !perceptual_roughness.is_finite() || mip_count == 0 {
             return None;

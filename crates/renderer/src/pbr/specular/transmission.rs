@@ -44,6 +44,7 @@ fn pbr_environment_transmission(
     );
     let lod = pbr_specular_linear_lod(
         ior_roughness,
+        pbr_specular_radiance,
         pbr_specular_camera.target_size_and_mips.z,
         pbr_specular_camera.lod_params.x,
         pbr_specular_camera.lod_params.y,

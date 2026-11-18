@@ -173,11 +173,12 @@ Inputs must contain finite binary16 values and nonnegative RGB. This is a
 consumer of externally prefiltered radiance and an externally integrated LUT;
 it does not generate either product or establish HDR presentation.
 
-The LOD rule selects Babylon's `LINEARSPECULARREFLECTION` branch:
-`clamp(max_lod * perceptual_roughness * scale + offset, 0, max_lod)`.
-Here `max_lod` is the authored chain's final mip index, rather than the
-latitude-longitude width treated as a cube face size. Scale and offset are
-finite signed metadata. Radiance repeats U, clamps V, and uses linear spatial
+The LOD rule selects Babylon's `LINEARSPECULARREFLECTION` branch. It uses
+`clamp(log2(base_width) * perceptual_roughness * scale + offset, 0, max_lod)`.
+The shader reads the bound radiance texture's base-level width. The authored
+chain's final mip index limits the result after the convolution scale and offset.
+Environment refraction uses the same mapping with the IOR-adjusted `alphaG`.
+Scale and offset are finite signed metadata. Radiance repeats U, clamps V, and uses linear spatial
 and mip filtering. The LUT clamps both axes at LOD zero. Its UV is
 `(NdotV, perceptual_roughness)` and its height-correlated channels contribute
 `(F90 - F0) * lut.x + F0 * lut.y`. The selected Babylon legacy branch

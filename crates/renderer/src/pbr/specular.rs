@@ -1,11 +1,8 @@
 //! Shared minimum specular-IBL shader contract.
 //!
-//! This selects Babylon's `LINEARSPECULARREFLECTION` LOD branch, not its
-//! default alpha-G/microsurface branch: `log2(cubeMapDimensionPixels) *
-//! roughness`, followed by Babylon's convolution scale and offset. The first
-//! Fluxel product samples a prefiltered lat-long radiance texture, so its
-//! owner supplies the validated equivalent maximum LOD rather than treating a
-//! lat-long width as a cube-map dimension.
+//! Babylon's `LINEARSPECULARREFLECTION` branch maps roughness using the actual
+//! base-level texture width, then applies the authored convolution scale and
+//! offset. The available mip range limits the resulting sample.
 
 use crate::preparation::forward_fragment::{
     ForwardFragmentInterface, with_ordinary_forward_fragment,
@@ -71,16 +68,15 @@ fn pbr_specular_latlong_uv(direction: vec3<f32>) -> vec2<f32> {
 }
 
 fn pbr_specular_linear_lod(
-    perceptual_roughness: f32,
+    roughness: f32,
+    radiance: texture_2d<f32>,
     max_lod: f32,
     lod_scale: f32,
     lod_offset: f32,
 ) -> f32 {
-    // This is Babylon LINEARSPECULARREFLECTION's
-    // log2(cubeMapDimensionPixels) * roughness branch. The owner supplies
-    // the already validated equivalent maximum mip LOD instead of treating a
-    // lat-long texture width as a cube-map dimension.
-    let babylon_lod = max_lod * clamp(perceptual_roughness, 0.0, 1.0);
+    // Babylon binds the sampled texture's width separately from mip availability.
+    let base_width = f32(textureDimensions(radiance, 0).x);
+    let babylon_lod = log2(base_width) * roughness;
     return clamp(babylon_lod * lod_scale + lod_offset, 0.0, max_lod);
 }
 
@@ -136,7 +132,7 @@ fn pbr_specular_ibl(
     let f90 = vec3<f32>(1.0);
     let reflection = reflect(-view, normal);
     let lod = pbr_specular_linear_lod(
-        perceptual_roughness, max_lod, lod_scale, lod_offset);
+        clamp(perceptual_roughness, 0.0, 1.0), radiance, max_lod, lod_scale, lod_offset);
     let environment = textureSampleLevel(
         radiance, radiance_sampler, pbr_specular_latlong_uv(reflection), lod).rgb;
     let lut = textureSample(brdf_lut, brdf_lut_sampler,
