@@ -190,6 +190,17 @@ impl<V> DeferredCpuPipeline<V> {
         self.forward = self.forward.with_material_instances(instances);
         self
     }
+
+    /// Supplies mesh-side winding for scene records or typed Feature draws.
+    pub fn with_mesh_side_orientations(
+        mut self,
+        orientations: std::collections::HashMap<
+            crate::ForwardDrawSource, fluxel_material::SurfaceSideOrientation,
+        >,
+    ) -> Self {
+        self.forward = self.forward.with_mesh_side_orientations(orientations);
+        self
+    }
 }
 
 impl<R, V> FramePipeline<R> for DeferredCpuPipeline<V>

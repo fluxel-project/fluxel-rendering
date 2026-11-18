@@ -25,7 +25,7 @@ use std::{
     fmt,
     sync::Arc,
 };
-use fluxel_material::MaterialInstance;
+use fluxel_material::{MaterialInstance, SurfaceSideOrientation};
 
 use crate::{FrameSnapshot, RenderBounds, RenderId, RenderRecord, RenderViewId, SceneError};
 use fluxel_rhi::backend::ResourceBackend;
@@ -209,6 +209,7 @@ pub struct ForwardCpuPipeline<V = BoundsVisibility> {
     depth_mode: ForwardDepthMode,
     sorted_transparency: bool,
     material_instances: Option<Arc<HashMap<crate::ForwardDrawSource, MaterialInstance>>>,
+    mesh_side_orientations: Option<Arc<HashMap<crate::ForwardDrawSource, SurfaceSideOrientation>>>,
 }
 
 impl<V> ForwardCpuPipeline<V> {
@@ -219,6 +220,7 @@ impl<V> ForwardCpuPipeline<V> {
             depth_mode: ForwardDepthMode::Disabled,
             sorted_transparency: false,
             material_instances: None,
+            mesh_side_orientations: None,
         }
     }
 
@@ -231,6 +233,18 @@ impl<V> ForwardCpuPipeline<V> {
         instances: HashMap<crate::ForwardDrawSource, MaterialInstance>,
     ) -> Self {
         self.material_instances = Some(Arc::new(instances));
+        self
+    }
+
+    /// Supplies mesh-side winding for scene records or typed Feature draws.
+    ///
+    /// Draws without an explicit winding use counterclockwise. A material can
+    /// override the winding of the mesh using it.
+    pub fn with_mesh_side_orientations(
+        mut self,
+        orientations: HashMap<crate::ForwardDrawSource, SurfaceSideOrientation>,
+    ) -> Self {
+        self.mesh_side_orientations = Some(Arc::new(orientations));
         self
     }
 
@@ -290,6 +304,7 @@ where
             view,
             candidates: visible,
             material_instances: self.material_instances.clone(),
+            mesh_side_orientations: self.mesh_side_orientations.clone(),
         })
     }
 }
@@ -328,6 +343,7 @@ pub struct PreparedFrame<'a, R> {
     view: RenderViewId,
     candidates: Vec<RenderId>,
     material_instances: Option<Arc<HashMap<crate::ForwardDrawSource, MaterialInstance>>>,
+    mesh_side_orientations: Option<Arc<HashMap<crate::ForwardDrawSource, SurfaceSideOrientation>>>,
 }
 
 impl<'a, R> PreparedFrame<'a, R> {
@@ -338,6 +354,29 @@ impl<'a, R> PreparedFrame<'a, R> {
     ) -> Self {
         self.material_instances = Some(Arc::new(instances));
         self
+    }
+
+    /// Supplies mesh-side winding for scene records or typed Feature draws.
+    ///
+    /// Draws without an explicit winding use counterclockwise. A material can
+    /// override the winding of the mesh using it.
+    pub fn with_mesh_side_orientations(
+        mut self,
+        orientations: HashMap<crate::ForwardDrawSource, SurfaceSideOrientation>,
+    ) -> Self {
+        self.mesh_side_orientations = Some(Arc::new(orientations));
+        self
+    }
+
+    pub(crate) fn mesh_side_orientation(
+        &self,
+        source: crate::ForwardDrawSource,
+    ) -> SurfaceSideOrientation {
+        self.mesh_side_orientations
+            .as_ref()
+            .and_then(|orientations| orientations.get(&source))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub(crate) fn material_instance(

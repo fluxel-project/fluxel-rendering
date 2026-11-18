@@ -54,6 +54,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) textures: Vec<ResolvedForwardTexture>,
     pub(crate) tint: [f32; 4],
     uniform_values: Vec<DynamicValue>,
+    mesh_side_orientation: SurfaceSideOrientation,
     pub(crate) transform: RenderTransform,
     pub(crate) view: RenderView,
     pub(crate) clip_from_local: [[f32; 4]; 4],
@@ -62,6 +63,14 @@ pub struct PreparedCaptureReceiver {
 }
 
 impl PreparedCaptureReceiver {
+    /// Overrides the receiver mesh's default counterclockwise winding.
+    ///
+    /// A material-side winding override still takes precedence.
+    pub fn with_mesh_side_orientation(mut self, orientation: SurfaceSideOrientation) -> Self {
+        self.mesh_side_orientation = orientation;
+        self
+    }
+
     /// Converts a validated receiver without manufacturing a CPU texture asset.
     pub(crate) fn into_draw_input(self) -> ForwardDrawInput {
         ForwardDrawInput {
@@ -74,6 +83,7 @@ impl PreparedCaptureReceiver {
             sampler: self.sampler,
             tint: self.tint,
             uniform_values: self.uniform_values,
+            mesh_side_orientation: self.mesh_side_orientation,
             transform: self.transform,
             view: self.view,
             clip_from_local: self.clip_from_local,
@@ -287,6 +297,7 @@ fn prepare_capture_receiver(
         textures,
         tint: resources.tint,
         uniform_values,
+        mesh_side_orientation: SurfaceSideOrientation::default(),
         transform,
         view: view.clone(),
         clip_from_local,

@@ -227,6 +227,13 @@ pub(super) fn canonical_policy(policy: SurfacePolicy, target: &mut String) {
         "surface-back-face-culling",
         &policy.back_face_culling.to_string(),
     );
+    if let Some(orientation) = policy.side_orientation {
+        let orientation = match orientation {
+            crate::SurfaceSideOrientation::CounterClockwise => "counter-clockwise",
+            crate::SurfaceSideOrientation::Clockwise => "clockwise",
+        };
+        canonical_piece(target, "surface-side-orientation", orientation);
+    }
     canonical_piece(
         target,
         "surface-two-sided-lighting",

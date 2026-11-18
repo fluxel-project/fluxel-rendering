@@ -8,7 +8,9 @@
 use std::{collections::HashMap, ops::Range};
 
 use fluxel_assets::{AssetKind, AssetSnapshot};
-use fluxel_material::{DynamicValue, MaterialAsset, MaterialDefinition, MaterialInstance};
+use fluxel_material::{
+    DynamicValue, MaterialAsset, MaterialDefinition, MaterialInstance, SurfaceSideOrientation,
+};
 use fluxel_shader::ShaderComposer;
 
 use crate::{FeatureHandle, PreparedFrame, RenderId, RenderTransform, RenderView, SceneAssetRef};
@@ -214,6 +216,7 @@ pub struct ForwardDrawInput {
     sampler: Option<fluxel_rhi::api::SamplerDesc>,
     tint: [f32; 4],
     uniform_values: Vec<DynamicValue>,
+    mesh_side_orientation: SurfaceSideOrientation,
     transform: RenderTransform,
     view: RenderView,
     clip_from_local: [[f32; 4]; 4],
@@ -310,6 +313,10 @@ impl ForwardDrawInput {
         &self.uniform_values
     }
 
+    pub(crate) const fn mesh_side_orientation(&self) -> SurfaceSideOrientation {
+        self.mesh_side_orientation
+    }
+
     /// Returns the validated scene view retained from the same snapshot.
     pub fn view(&self) -> &RenderView {
         &self.view
@@ -370,6 +377,7 @@ fn prepare_draw(
     order: i64,
     resources: &ForwardResources,
     instance: Option<&MaterialInstance>,
+    mesh_side_orientation: SurfaceSideOrientation,
     transform: RenderTransform,
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
@@ -436,6 +444,7 @@ fn prepare_draw(
         sampler,
         tint: resources.tint,
         uniform_values,
+        mesh_side_orientation,
         transform,
         view: view.clone(),
         clip_from_local,

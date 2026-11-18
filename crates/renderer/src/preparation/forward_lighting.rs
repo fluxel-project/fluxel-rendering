@@ -63,12 +63,14 @@ pub(crate) fn prepare_forward_with_lighting(
                 .map_err(|_| ForwardPreparationError::InvalidTransform {
                     source: ForwardDrawSource::Scene(record_id),
                 })?;
+        let source = ForwardDrawSource::Scene(record_id);
         inputs.push(prepare_draw(
             view,
-            ForwardDrawSource::Scene(record_id),
+            source,
             0,
             &record.resources,
-            frame.material_instance(ForwardDrawSource::Scene(record_id)),
+            frame.material_instance(source),
+            frame.mesh_side_orientation(source),
             record.transform,
             assets,
             composer,
@@ -131,6 +133,7 @@ pub(crate) fn prepare_feature_draws_with_lighting(
                 request.order,
                 &request.resources,
                 frame.material_instance(source),
+                frame.mesh_side_orientation(source),
                 request.transform,
                 assets,
                 composer,

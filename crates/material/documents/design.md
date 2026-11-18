@@ -189,7 +189,8 @@ Every surface also has a static `SurfacePolicy`. Its alpha mode is `Opaque`,
 `Mask`, `Blend`, or `MaskBlend`; its default cutoff is Babylon's `0.4`.
 Cutoffs must be finite but are not clamped to `[0, 1]`, matching Babylon's
 direct comparison behavior. The policy separately records back-face culling
-and two-sided lighting. Defaults follow Babylon: opaque, back-face culling, and
+and two-sided lighting. An optional side orientation overrides the winding of
+the mesh using the material. Defaults follow Babylon: opaque, back-face culling, and
 no two-sided normal reversal. `SurfacePolicy::double_sided()` explicitly turns
 off culling and turns on two-sided lighting together. Material emits pure WGSL
 helpers for alpha rejection, output alpha, and two-sided-lighting selection;

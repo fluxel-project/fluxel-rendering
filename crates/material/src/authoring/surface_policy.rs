@@ -16,6 +16,16 @@ pub enum SurfaceAlphaMode {
     MaskBlend,
 }
 
+/// The winding that identifies the front side of a surface.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SurfaceSideOrientation {
+    /// Counterclockwise triangles are front-facing.
+    #[default]
+    CounterClockwise,
+    /// Clockwise triangles are front-facing.
+    Clockwise,
+}
+
 /// Static alpha, culling, and two-sided-lighting choices for one surface.
 ///
 /// Defaults follow Babylon's opaque, back-face-culling policy. They are
@@ -29,6 +39,8 @@ pub struct SurfacePolicy {
     pub alpha_cutoff: f32,
     /// Whether a consumer should cull back-facing primitives.
     pub back_face_culling: bool,
+    /// Optional front-side winding override for the mesh using this material.
+    pub side_orientation: Option<SurfaceSideOrientation>,
     /// Whether a consumer should reverse the final shading normal on back faces.
     pub two_sided_lighting: bool,
 }
@@ -42,6 +54,13 @@ impl SurfacePolicy {
     #[must_use]
     pub fn double_sided() -> Self {
         Self::default().with_double_sided(true)
+    }
+
+    /// Selects the authored front-side winding for this material.
+    #[must_use]
+    pub fn with_side_orientation(mut self, orientation: SurfaceSideOrientation) -> Self {
+        self.side_orientation = Some(orientation);
+        self
     }
 
     /// Selects whether this surface is rendered and lit as double-sided.
@@ -59,6 +78,7 @@ impl Default for SurfacePolicy {
             alpha_mode: SurfaceAlphaMode::Opaque,
             alpha_cutoff: Self::DEFAULT_ALPHA_CUTOFF,
             back_face_culling: true,
+            side_orientation: None,
             two_sided_lighting: false,
         }
     }
@@ -69,6 +89,7 @@ impl PartialEq for SurfacePolicy {
         self.alpha_mode == other.alpha_mode
             && self.alpha_cutoff.to_bits() == other.alpha_cutoff.to_bits()
             && self.back_face_culling == other.back_face_culling
+            && self.side_orientation == other.side_orientation
             && self.two_sided_lighting == other.two_sided_lighting
     }
 }

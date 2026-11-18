@@ -6,7 +6,7 @@
 //! reverses the effective winding, so a cached pipeline cannot reuse the
 //! opposite front-face state.
 
-use fluxel_material::SurfaceAlphaMode;
+use fluxel_material::{SurfaceAlphaMode, SurfaceSideOrientation};
 use fluxel_rhi::{
     api::{
         BlendComponent, BlendFactor, BlendOperation, BlendState, CullMode, Error, FrontFace,
@@ -77,13 +77,18 @@ impl RasterSurfaceState {
 
 /// Selects the actual front-face and cull state for one resolved draw.
 ///
-/// Babylon changes the effective orientation for a negative world determinant.
+/// Like Babylon Mesh::_getDrawSideOrientation, the material
+/// override takes precedence over the mesh winding. The world determinant
+/// then reverses that choice for a negative determinant.
 /// The zero case remains the canonical orientation: it has no inverse for PBR
 /// normal transforms and is already rejected by the PBR preparation boundary.
 pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceState {
     let policy = input.prepared().material().surface_policy();
+    let orientation = policy.side_orientation.unwrap_or(input.mesh_side_orientation());
+    let clockwise = (orientation == SurfaceSideOrientation::Clockwise)
+        ^ (linear_determinant(input.transform()) < 0.0);
     RasterSurfaceState {
-        front_face: if linear_determinant(input.transform()) < 0.0 {
+        front_face: if clockwise {
             FrontFaceState::Clockwise
         } else {
             FrontFaceState::CounterClockwise

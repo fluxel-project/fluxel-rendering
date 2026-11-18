@@ -693,9 +693,12 @@ TBN from normalized vertex normal and tangent and uses tangent W for the
 bitangent. It transforms all three columns by the world matrix before
 interpolation. Fragment shading applies and normalizes the decoded normal in
 that interpolated basis.
-The effective raster front face follows the sign of the actual draw's linear
-world-transform determinant. Both executable program keys and adjacent-draw
-compatibility include the resulting raster state. A blend request is refused
+The front face comes from the material's side orientation if supplied, or
+from the selected mesh winding, which defaults to counterclockwise. A negative
+world-transform determinant reverses that choice. Scene and Feature pipelines
+can supply mesh winding by exact draw identity, and capture receivers can
+supply it during preparation. Forward, Deferred, and OIT program keys consume
+the resulting front face. Adjacent Forward batches also distinguish it. A blend request is refused
 by an opaque-only consumer before its dependent GPU allocation until the
 transparent phase supplies correct ordering and composition. This refusal
 records an unfinished route and does not count as transparency support.

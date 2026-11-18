@@ -12,6 +12,6 @@ pub use assets::{MaterialAsset, MaterialAssetId, MaterialAssetRef};
 pub use code_node::MaterialCodeNode;
 pub use definition::{MaterialDefinition, SurfaceExtensions, SurfaceOutput};
 pub use nodes::*;
-pub use surface_policy::{SurfaceAlphaMode, SurfacePolicy};
+pub use surface_policy::{SurfaceAlphaMode, SurfacePolicy, SurfaceSideOrientation};
 pub use transmission::TransmissionExtensions;
 pub use types::*;
