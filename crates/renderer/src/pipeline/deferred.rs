@@ -185,7 +185,10 @@ impl<V> DeferredCpuPipeline<V> {
     /// Supplies per-draw material instances for the prepared frame.
     pub fn with_material_instances(
         mut self,
-        instances: std::collections::HashMap<crate::ForwardDrawSource, fluxel_material::MaterialInstance>,
+        instances: std::collections::HashMap<
+            crate::ForwardDrawSource,
+            fluxel_material::MaterialInstance,
+        >,
     ) -> Self {
         self.forward = self.forward.with_material_instances(instances);
         self
@@ -195,10 +198,20 @@ impl<V> DeferredCpuPipeline<V> {
     pub fn with_mesh_side_orientations(
         mut self,
         orientations: std::collections::HashMap<
-            crate::ForwardDrawSource, fluxel_material::SurfaceSideOrientation,
+            crate::ForwardDrawSource,
+            fluxel_material::SurfaceSideOrientation,
         >,
     ) -> Self {
         self.forward = self.forward.with_mesh_side_orientations(orientations);
+        self
+    }
+
+    /// Supplies per-draw mesh visibility for scene records or typed Feature draws.
+    pub fn with_mesh_visibilities(
+        mut self,
+        visibilities: std::collections::HashMap<crate::ForwardDrawSource, crate::MeshVisibility>,
+    ) -> Self {
+        self.forward = self.forward.with_mesh_visibilities(visibilities);
         self
     }
 }

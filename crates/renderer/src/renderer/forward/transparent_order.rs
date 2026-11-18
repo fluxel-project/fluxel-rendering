@@ -7,7 +7,7 @@ use crate::{ForwardDrawInput, PipelineError};
 
 pub(super) fn is_transparent(input: &ForwardDrawInput) -> bool {
     matches!(
-        input.prepared().material().surface_policy().alpha_mode,
+        input.effective_alpha_mode(),
         SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
     )
 }
@@ -42,6 +42,9 @@ pub(super) fn validate(input: &ForwardDrawInput) -> Result<(), PipelineError> {
 }
 
 fn distance_squared(input: &ForwardDrawInput) -> Result<f64, PipelineError> {
+    if input.mesh_visibility().get() == 0.0 {
+        return Ok(0.0);
+    }
     let source = input.source();
     let eye = input
         .view()

@@ -20,12 +20,12 @@ pub use forward_topology::FrameTopology;
 mod oit;
 pub use oit::DualDepthPeelingConfig;
 
+use fluxel_material::{MaterialInstance, SurfaceSideOrientation};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
     sync::Arc,
 };
-use fluxel_material::{MaterialInstance, SurfaceSideOrientation};
 
 use crate::{FrameSnapshot, RenderBounds, RenderId, RenderRecord, RenderViewId, SceneError};
 use fluxel_rhi::backend::ResourceBackend;
@@ -210,6 +210,7 @@ pub struct ForwardCpuPipeline<V = BoundsVisibility> {
     sorted_transparency: bool,
     material_instances: Option<Arc<HashMap<crate::ForwardDrawSource, MaterialInstance>>>,
     mesh_side_orientations: Option<Arc<HashMap<crate::ForwardDrawSource, SurfaceSideOrientation>>>,
+    mesh_visibilities: Option<Arc<HashMap<crate::ForwardDrawSource, crate::MeshVisibility>>>,
 }
 
 impl<V> ForwardCpuPipeline<V> {
@@ -221,6 +222,7 @@ impl<V> ForwardCpuPipeline<V> {
             sorted_transparency: false,
             material_instances: None,
             mesh_side_orientations: None,
+            mesh_visibilities: None,
         }
     }
 
@@ -245,6 +247,18 @@ impl<V> ForwardCpuPipeline<V> {
         orientations: HashMap<crate::ForwardDrawSource, SurfaceSideOrientation>,
     ) -> Self {
         self.mesh_side_orientations = Some(Arc::new(orientations));
+        self
+    }
+
+    /// Supplies per-draw mesh visibility for scene records or typed Feature draws.
+
+    /// Partial visibility uses transparent composition. Enable sorted transparency
+    /// for ordinary Forward submissions, or choose the OIT submission route.
+    pub fn with_mesh_visibilities(
+        mut self,
+        visibilities: HashMap<crate::ForwardDrawSource, crate::MeshVisibility>,
+    ) -> Self {
+        self.mesh_visibilities = Some(Arc::new(visibilities));
         self
     }
 
@@ -305,6 +319,7 @@ where
             candidates: visible,
             material_instances: self.material_instances.clone(),
             mesh_side_orientations: self.mesh_side_orientations.clone(),
+            mesh_visibilities: self.mesh_visibilities.clone(),
         })
     }
 }
@@ -344,6 +359,7 @@ pub struct PreparedFrame<'a, R> {
     candidates: Vec<RenderId>,
     material_instances: Option<Arc<HashMap<crate::ForwardDrawSource, MaterialInstance>>>,
     mesh_side_orientations: Option<Arc<HashMap<crate::ForwardDrawSource, SurfaceSideOrientation>>>,
+    mesh_visibilities: Option<Arc<HashMap<crate::ForwardDrawSource, crate::MeshVisibility>>>,
 }
 
 impl<'a, R> PreparedFrame<'a, R> {
@@ -368,6 +384,15 @@ impl<'a, R> PreparedFrame<'a, R> {
         self
     }
 
+    /// Supplies per-draw mesh visibility for scene records or typed Feature draws.
+    pub fn with_mesh_visibilities(
+        mut self,
+        visibilities: HashMap<crate::ForwardDrawSource, crate::MeshVisibility>,
+    ) -> Self {
+        self.mesh_visibilities = Some(Arc::new(visibilities));
+        self
+    }
+
     pub(crate) fn mesh_side_orientation(
         &self,
         source: crate::ForwardDrawSource,
@@ -375,6 +400,17 @@ impl<'a, R> PreparedFrame<'a, R> {
         self.mesh_side_orientations
             .as_ref()
             .and_then(|orientations| orientations.get(&source))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn mesh_visibility(
+        &self,
+        source: crate::ForwardDrawSource,
+    ) -> crate::MeshVisibility {
+        self.mesh_visibilities
+            .as_ref()
+            .and_then(|visibilities| visibilities.get(&source))
             .copied()
             .unwrap_or_default()
     }

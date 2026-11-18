@@ -332,7 +332,7 @@ fn validate_frame_inputs<B: ResourceBackend>(
         let input = inputs.get(index).ok_or(Error::InvalidRange)?;
         if candidates[..position].contains(&index)
             || !matches!(
-                input.prepared().material().surface_policy().alpha_mode,
+                input.effective_alpha_mode(),
                 fluxel_material::SurfaceAlphaMode::Blend
                     | fluxel_material::SurfaceAlphaMode::MaskBlend
             )

@@ -9,11 +9,15 @@ use std::{collections::HashMap, ops::Range};
 
 use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_material::{
-    DynamicValue, MaterialAsset, MaterialDefinition, MaterialInstance, SurfaceSideOrientation,
+    DynamicValue, MaterialAsset, MaterialDefinition, MaterialInstance, SurfaceAlphaMode,
+    SurfaceSideOrientation,
 };
 use fluxel_shader::ShaderComposer;
 
-use crate::{FeatureHandle, PreparedFrame, RenderId, RenderTransform, RenderView, SceneAssetRef};
+use crate::{
+    FeatureHandle, MeshVisibility, PreparedFrame, RenderId, RenderTransform, RenderView,
+    SceneAssetRef,
+};
 
 use super::ForwardDrawSource;
 use super::{GeometryLayout, MaterialPreparationError, PreparedMaterial, prepare_material};
@@ -102,8 +106,8 @@ mod forward_material_request;
 pub(crate) use forward_capture::ResolvedForwardTexture;
 pub use forward_capture::{
     ForwardCaptureResources, ForwardTextureSource, PreparedCaptureReceiver,
-    prepare_forward_capture_receiver,
-    prepare_forward_capture_receiver_with_instance, prepare_forward_scene_refraction_receiver,
+    prepare_forward_capture_receiver, prepare_forward_capture_receiver_with_instance,
+    prepare_forward_scene_refraction_receiver,
 };
 use forward_material_instance::{resolve_resource_aliases, resolve_uniform_values};
 use forward_material_request::material_request;
@@ -220,6 +224,7 @@ pub struct ForwardDrawInput {
     tint: [f32; 4],
     uniform_values: Vec<DynamicValue>,
     mesh_side_orientation: SurfaceSideOrientation,
+    mesh_visibility: MeshVisibility,
     transform: RenderTransform,
     view: RenderView,
     clip_from_local: [[f32; 4]; 4],
@@ -320,6 +325,20 @@ impl ForwardDrawInput {
         self.mesh_side_orientation
     }
 
+    /// Returns the prepared mesh opacity multiplier.
+    pub const fn mesh_visibility(&self) -> MeshVisibility {
+        self.mesh_visibility
+    }
+
+    pub(crate) fn effective_alpha_mode(&self) -> SurfaceAlphaMode {
+        let mode = self.prepared.material().surface_policy().alpha_mode;
+        match (mode, self.mesh_visibility.get() < 1.0) {
+            (SurfaceAlphaMode::Opaque, true) => SurfaceAlphaMode::Blend,
+            (SurfaceAlphaMode::Mask, true) => SurfaceAlphaMode::MaskBlend,
+            _ => mode,
+        }
+    }
+
     /// Returns the validated scene view retained from the same snapshot.
     pub fn view(&self) -> &RenderView {
         &self.view
@@ -353,7 +372,7 @@ impl ForwardDrawInput {
                 crate::frame_data::forward::PBR_TRANSFORM_BYTES
             }
         } else {
-            64
+            crate::frame_data::forward::UNLIT_FORWARD_TRANSFORM_BYTES
         }
     }
 
@@ -381,6 +400,7 @@ fn prepare_draw(
     resources: &ForwardResources,
     instance: Option<&MaterialInstance>,
     mesh_side_orientation: SurfaceSideOrientation,
+    mesh_visibility: MeshVisibility,
     transform: RenderTransform,
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
@@ -390,7 +410,10 @@ fn prepare_draw(
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
     }
-    if view.emissive_enabled && instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
+    if view.emissive_enabled
+        && instance.is_none()
+        && !resources.tint.iter().all(|value| value.is_finite())
+    {
         return Err(ForwardPreparationError::InvalidTint { source });
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
@@ -408,7 +431,8 @@ fn prepare_draw(
         .map_err(ForwardPreparationError::Material)?;
     forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
-    let resources = resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
+    let resources =
+        resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
     let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
     let textures = resolve_asset_textures(&resources, &schema, assets, source)?;
     let sampler = super::forward_sampler::resolve_sampler_binding(
@@ -448,6 +472,7 @@ fn prepare_draw(
         tint: resources.tint,
         uniform_values,
         mesh_side_orientation,
+        mesh_visibility,
         transform,
         view: view.clone(),
         clip_from_local,
@@ -531,7 +556,9 @@ pub(crate) fn validate_texture_encoding(
     let required_encoding = match required_encoding {
         fluxel_material::MaterialTextureEncoding::Linear => TextureEncoding::Linear,
         fluxel_material::MaterialTextureEncoding::Srgb => TextureEncoding::Srgb,
-        fluxel_material::MaterialTextureEncoding::SrgbEncodedUnorm => TextureEncoding::SrgbEncodedUnorm,
+        fluxel_material::MaterialTextureEncoding::SrgbEncodedUnorm => {
+            TextureEncoding::SrgbEncodedUnorm
+        }
     };
     if actual != required_encoding {
         return Err(ForwardPreparationError::TextureEncodingMismatch {

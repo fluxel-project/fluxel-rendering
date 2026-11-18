@@ -42,6 +42,12 @@ pub(super) fn materials(
     }) {
         return Err(Error::InvalidRange.into());
     }
+    if inputs
+        .iter()
+        .any(|input| input.mesh_visibility().get() != 1.0)
+    {
+        return Err(Error::InvalidState.into());
+    }
     let effects = inputs
         .iter()
         .any(|input| input.material().value().requires_surface_effects());
@@ -112,13 +118,14 @@ pub(super) fn uniforms(
             != if pbr {
                 crate::frame_data::forward::PBR_TRANSFORM_BYTES
             } else {
-                64
+                crate::frame_data::forward::UNLIT_FORWARD_TRANSFORM_BYTES
             }
         {
             return Err(Error::InvalidRange);
         }
         values.push(ForwardUniformInput {
             transform: input.clip_from_local(),
+            mesh_visibility: None,
             normal_from_local: if pbr {
                 Some(input.normal_from_local().ok_or(Error::InvalidRange)?)
             } else {

@@ -30,7 +30,7 @@ pub(crate) fn partition_oit_draws(
     let mut peel = Vec::new();
     let mut excluded = Vec::new();
     for draw in draws {
-        match draw.prepared().material().surface_policy().alpha_mode {
+        match draw.effective_alpha_mode() {
             SurfaceAlphaMode::Opaque | SurfaceAlphaMode::Mask => opaque.push(draw),
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
                 if config.excludes_source(draw.source()) =>

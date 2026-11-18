@@ -114,6 +114,7 @@ where
             .iter()
             .map(|input| ForwardUniformInput {
                 transform: input.clip_from_local(),
+                mesh_visibility: Some(input.mesh_visibility()),
                 normal_from_local: input.normal_from_local(),
                 world_from_local: input
                     .normal_from_local()
@@ -386,9 +387,12 @@ where
                 .get(index)
                 .ok_or(Error::InvalidState)?;
             if material_uniform_ranges.len() != schema.uniforms.len()
-                || material_uniform_ranges.iter().zip(&schema.uniforms).any(|(range, uniform)| {
-                    range.end.checked_sub(range.start) != Some(uniform.size)
-                })
+                || material_uniform_ranges
+                    .iter()
+                    .zip(&schema.uniforms)
+                    .any(|(range, uniform)| {
+                        range.end.checked_sub(range.start) != Some(uniform.size)
+                    })
             {
                 return Err(Error::InvalidState.into());
             }

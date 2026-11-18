@@ -5,6 +5,7 @@ use fluxel_material::DynamicValue;
 fn transform_and_material_uniforms_have_distinct_aligned_physical_ranges() {
     let input = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
+        mesh_visibility: None,
         normal_from_local: None,
         world_from_local: None,
         clip_from_world: None,
@@ -30,6 +31,7 @@ fn empty_input_and_capacity_failures_remain_bounded() {
     ));
     let input = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
+        mesh_visibility: None,
         normal_from_local: None,
         world_from_local: None,
         clip_from_world: None,
@@ -47,6 +49,7 @@ fn empty_input_and_capacity_failures_remain_bounded() {
 fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
     let color = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
+        mesh_visibility: None,
         normal_from_local: None,
         world_from_local: None,
         clip_from_world: None,
@@ -56,6 +59,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
     };
     let normal = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
+        mesh_visibility: None,
         normal_from_local: Some([
             [2.0, 0.0, 0.0, 0.0],
             [0.0, 3.0, 0.0, 0.0],
@@ -92,6 +96,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         pack_forward_uniforms(
             &[ForwardUniformInput {
                 transform: crate::RenderTransform::identity().columns(),
+                mesh_visibility: None,
                 normal_from_local: Some(crate::RenderTransform::identity().columns()),
                 world_from_local: Some(crate::RenderTransform::identity().columns()),
                 clip_from_world: None,
@@ -110,6 +115,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
 fn non_finite_normal_matrix_is_rejected_before_byte_allocation() {
     let input = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
+        mesh_visibility: None,
         normal_from_local: Some([[f32::NAN, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]]),
         world_from_local: Some(crate::RenderTransform::identity().columns()),
         clip_from_world: None,
@@ -135,6 +141,7 @@ fn pbr_transform_matrices_must_be_paired() {
             pack_forward_uniforms(
                 &[ForwardUniformInput {
                     transform: matrix,
+                    mesh_visibility: None,
                     normal_from_local,
                     world_from_local,
                     clip_from_world,

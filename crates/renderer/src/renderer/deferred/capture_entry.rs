@@ -293,7 +293,7 @@ where
         }
         let receiver_blended = partition.draws.iter().any(|input| {
             matches!(
-                input.prepared().material().surface_policy().alpha_mode,
+                input.effective_alpha_mode(),
                 fluxel_material::SurfaceAlphaMode::Blend
                     | fluxel_material::SurfaceAlphaMode::MaskBlend,
             )
@@ -352,7 +352,7 @@ where
                 let (transparent, mut opaque): (Vec<_>, Vec<_>) =
                     ordered.into_iter().partition(|input| {
                         matches!(
-                            input.prepared().material().surface_policy().alpha_mode,
+                            input.effective_alpha_mode(),
                             fluxel_material::SurfaceAlphaMode::Blend
                                 | fluxel_material::SurfaceAlphaMode::MaskBlend,
                         )

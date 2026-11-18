@@ -4,6 +4,7 @@ use fluxel_material::DynamicValue;
 fn pbr_input(world_from_local: [[f32; 4]; 4]) -> ForwardUniformInput {
     ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
+        mesh_visibility: None,
         normal_from_local: Some(crate::RenderTransform::identity().columns()),
         world_from_local: Some(world_from_local),
         clip_from_world: None,

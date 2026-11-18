@@ -56,7 +56,7 @@ use fluxel_rhi::{
 fn requires_forward_overlay(input: &crate::ForwardDrawInput) -> bool {
     (input.prepared().uses_transmission() && !input.prepared().uses_scene_refraction())
         || matches!(
-            input.material().value().surface_policy().alpha_mode,
+            input.effective_alpha_mode(),
             fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend,
         )
 }

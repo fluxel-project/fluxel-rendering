@@ -5,6 +5,8 @@ use std::ops::Range;
 
 pub(crate) struct ForwardUniformInput {
     pub(crate) transform: [[f32; 4]; 4],
+    /// Forward visibility. G-buffer draws carry no fade and retain their own ABI.
+    pub(crate) mesh_visibility: Option<crate::MeshVisibility>,
     pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) world_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) clip_from_world: Option<[[f32; 4]; 4]>,
@@ -27,6 +29,9 @@ pub(crate) struct ForwardUniformData {
 // fragment TBN path need not recompute a determinant in f32 (which can
 // underflow for an otherwise representable inverse-transpose matrix).
 const PBR_WORLD_HANDEDNESS_OFFSET: usize = 64 + 12 * 4;
+// The second component of the PBR normal matrix metadata column.
+const PBR_MESH_VISIBILITY_OFFSET: usize = PBR_WORLD_HANDEDNESS_OFFSET + 4;
+pub(crate) const UNLIT_FORWARD_TRANSFORM_BYTES: u64 = 80;
 
 fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
     let world = world.map(|column| column.map(f64::from));
@@ -56,6 +61,9 @@ fn transform_bytes(input: &ForwardUniformInput) -> Result<u64> {
         input.world_from_local.is_some(),
         input.clip_from_world.is_some(),
     ) {
+        (false, false, false) if input.mesh_visibility.is_some() => {
+            Ok(UNLIT_FORWARD_TRANSFORM_BYTES)
+        }
         (false, false, false) => Ok(64),
         (true, true, false) => Ok(PBR_TRANSFORM_BYTES),
         (true, true, true) => Ok(PBR_SCENE_REFRACTION_TRANSFORM_BYTES),
@@ -187,6 +195,15 @@ pub(crate) fn pack_forward_uniforms(
                 let offset = start as usize + 128 + component * 4;
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
+        }
+        if let Some(visibility) = input.mesh_visibility {
+            let offset = start as usize
+                + if input.normal_from_local.is_some() {
+                    PBR_MESH_VISIBILITY_OFFSET
+                } else {
+                    64
+                };
+            bytes[offset..offset + 4].copy_from_slice(&visibility.get().to_le_bytes());
         }
         for (value, range) in input.material_uniforms.iter().zip(uniforms) {
             for (component, value) in value.components().iter().enumerate() {

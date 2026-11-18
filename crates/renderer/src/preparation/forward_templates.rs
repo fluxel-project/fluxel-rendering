@@ -13,15 +13,15 @@ use super::forward_fragment::{ForwardFragmentInterface, with_ordinary_forward_fr
 
 pub(crate) fn position_request() -> ShaderCompositionRequest {
     with_ordinary_forward_fragment(
-        ShaderCompositionRequest::new(vec![SourceUnit::new(
-            "forward-template-position",
-            POSITION_TEMPLATE,
-        )])
+        ShaderCompositionRequest::new(vec![
+            SourceUnit::new("forward-template-position", POSITION_TEMPLATE),
+            SourceUnit::new("forward-unlit-transform", UNLIT_TRANSFORM),
+        ])
         .with_entry_point(EntryPoint::new("forward_vs", ShaderStage::Vertex))
         .with_entry_point(EntryPoint::new("forward_fs", ShaderStage::Fragment))
         .with_binding(
             BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                .with_visibility([ShaderStage::Vertex]),
+                .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]),
         )
         .with_vertex_input(VertexInputDeclaration::new(
             "POSITION",
@@ -35,15 +35,15 @@ pub(crate) fn position_request() -> ShaderCompositionRequest {
 
 pub(crate) fn position_uv0_request() -> ShaderCompositionRequest {
     with_ordinary_forward_fragment(
-        ShaderCompositionRequest::new(vec![SourceUnit::new(
-            "forward-template-position-uv0",
-            POSITION_UV0_TEMPLATE,
-        )])
+        ShaderCompositionRequest::new(vec![
+            SourceUnit::new("forward-template-position-uv0", POSITION_UV0_TEMPLATE),
+            SourceUnit::new("forward-unlit-transform", UNLIT_TRANSFORM),
+        ])
         .with_entry_point(EntryPoint::new("forward_vs", ShaderStage::Vertex))
         .with_entry_point(EntryPoint::new("forward_fs", ShaderStage::Fragment))
         .with_binding(
             BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                .with_visibility([ShaderStage::Vertex]),
+                .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]),
         )
         .with_vertex_input(VertexInputDeclaration::new(
             "POSITION",
@@ -62,15 +62,18 @@ pub(crate) fn position_uv0_request() -> ShaderCompositionRequest {
 
 pub(crate) fn position_uv_color_request() -> ShaderCompositionRequest {
     with_ordinary_forward_fragment(
-        ShaderCompositionRequest::new(vec![SourceUnit::new(
-            "forward-template-position-uv-color",
-            POSITION_UV_COLOR_TEMPLATE,
-        )])
+        ShaderCompositionRequest::new(vec![
+            SourceUnit::new(
+                "forward-template-position-uv-color",
+                POSITION_UV_COLOR_TEMPLATE,
+            ),
+            SourceUnit::new("forward-unlit-transform", UNLIT_TRANSFORM),
+        ])
         .with_entry_point(EntryPoint::new("forward_vs", ShaderStage::Vertex))
         .with_entry_point(EntryPoint::new("forward_fs", ShaderStage::Fragment))
         .with_binding(
             BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                .with_visibility([ShaderStage::Vertex]),
+                .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]),
         )
         .with_vertex_input(VertexInputDeclaration::new(
             "POSITION",
@@ -92,12 +95,19 @@ pub(crate) fn position_uv_color_request() -> ShaderCompositionRequest {
     )
 }
 
+const UNLIT_TRANSFORM: &str = r#"
+struct ForwardTransform {
+    clip_from_local: mat4x4<f32>,
+    visibility: vec4<f32>,
+};
+@group(1) @binding(0) var<uniform> forward_transform: ForwardTransform;
+"#;
+
 const POSITION_TEMPLATE: &str = r#"
-@group(1) @binding(0) var<uniform> forward_clip_from_local: mat4x4<f32>;
 struct ForwardVertexOutput { @builtin(position) position: vec4<f32>, };
 @vertex fn forward_vs(@location(0) forward_position: vec3<f32>) -> ForwardVertexOutput {
     var output: ForwardVertexOutput;
-    output.position = forward_clip_from_local * vec4<f32>(forward_position, 1.0);
+    output.position = forward_transform.clip_from_local * vec4<f32>(forward_position, 1.0);
     return output;
 }
 fn renderer_forward_shade() -> vec4<f32> {
@@ -108,11 +118,10 @@ fn renderer_forward_shade() -> vec4<f32> {
 "#;
 
 const POSITION_UV0_TEMPLATE: &str = r#"
-@group(1) @binding(0) var<uniform> forward_clip_from_local: mat4x4<f32>;
 struct ForwardUv0VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv0: vec2<f32>, };
 @vertex fn forward_vs(@location(0) forward_position: vec3<f32>, @location(1) forward_uv0: vec2<f32>) -> ForwardUv0VertexOutput {
     var output: ForwardUv0VertexOutput;
-    output.position = forward_clip_from_local * vec4<f32>(forward_position, 1.0);
+    output.position = forward_transform.clip_from_local * vec4<f32>(forward_position, 1.0);
     output.uv0 = forward_uv0;
     return output;
 }
@@ -124,11 +133,10 @@ fn renderer_forward_shade(input: ForwardUv0VertexOutput) -> vec4<f32> {
 "#;
 
 const POSITION_UV_COLOR_TEMPLATE: &str = r#"
-@group(1) @binding(0) var<uniform> forward_clip_from_local: mat4x4<f32>;
 struct ForwardVertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) color: vec4<f32>, };
 @vertex fn forward_vs(@location(0) forward_position: vec3<f32>, @location(1) forward_uv: vec2<f32>, @location(2) forward_color: vec4<f32>) -> ForwardVertexOutput {
     var output: ForwardVertexOutput;
-    output.position = forward_clip_from_local * vec4<f32>(forward_position, 1.0);
+    output.position = forward_transform.clip_from_local * vec4<f32>(forward_position, 1.0);
     output.uv = forward_uv;
     output.color = forward_color;
     return output;

@@ -646,7 +646,10 @@ and groups in its pending Forward workload until covering completion.
 Its sampled opaque target does not enter the ordinary CopySrc frame pool.
 Surface blend policy selects straight RGB with additive alpha, premultiplied
 RGB with additive alpha, or premultiplied RGB with source-over alpha. The
-Forward fragment associates RGB after alpha evaluation. Like Babylon, OIT
+Forward fragment multiplies covered alpha by the draw's mesh visibility before
+associating RGB. The visibility is frame data keyed by scene or Feature source.
+Partial visibility uses the transparent queue, retaining an authored mask cutoff.
+Zero visibility discards coverage before OIT records extrema. Like Babylon, OIT
 receives that surface output and applies its separate peel accumulation.
 Back accumulation discards zero-alpha layers, matching Babylon's `oitBackBlend`.
 Final alpha uses `front.a + back.a`, as in the scene `DepthPeelingRenderer`'s

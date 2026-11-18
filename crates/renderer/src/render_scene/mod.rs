@@ -7,3 +7,5 @@ mod directional_light;
 pub use directional_light::DirectionalLight;
 mod types;
 pub use types::*;
+mod visibility;
+pub use visibility::MeshVisibility;

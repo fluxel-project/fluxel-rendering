@@ -215,7 +215,7 @@ pub(in crate::renderer) fn receiver_topology(
     Ok(
         if receiver.prepared().uses_scene_refraction()
             || matches!(
-                receiver.prepared().material().surface_policy().alpha_mode,
+                receiver.effective_alpha_mode(),
                 fluxel_material::SurfaceAlphaMode::Blend
                     | fluxel_material::SurfaceAlphaMode::MaskBlend
             )

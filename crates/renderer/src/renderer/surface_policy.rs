@@ -140,7 +140,7 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
             (true, false) => Culling::Back,
         },
         blend_mode: matches!(
-            policy.alpha_mode,
+            input.effective_alpha_mode(),
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
         )
         .then_some(policy.blend_mode),
@@ -155,7 +155,7 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
 pub(crate) fn require_opaque_or_mask(inputs: &[ForwardDrawInput]) -> Result<(), Error> {
     if inputs.iter().any(|input| {
         matches!(
-            input.prepared().material().surface_policy().alpha_mode,
+            input.effective_alpha_mode(),
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
         )
     }) {

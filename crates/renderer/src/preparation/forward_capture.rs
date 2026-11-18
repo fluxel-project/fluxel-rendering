@@ -55,6 +55,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) tint: [f32; 4],
     uniform_values: Vec<DynamicValue>,
     mesh_side_orientation: SurfaceSideOrientation,
+    mesh_visibility: MeshVisibility,
     pub(crate) transform: RenderTransform,
     pub(crate) view: RenderView,
     pub(crate) clip_from_local: [[f32; 4]; 4],
@@ -71,6 +72,13 @@ impl PreparedCaptureReceiver {
         self
     }
 
+    /// Selects the receiver mesh opacity multiplier used by transparent composition.
+    #[must_use]
+    pub fn with_mesh_visibility(mut self, visibility: MeshVisibility) -> Self {
+        self.mesh_visibility = visibility;
+        self
+    }
+
     /// Converts a validated receiver without manufacturing a CPU texture asset.
     pub(crate) fn into_draw_input(self) -> ForwardDrawInput {
         ForwardDrawInput {
@@ -84,6 +92,7 @@ impl PreparedCaptureReceiver {
             tint: self.tint,
             uniform_values: self.uniform_values,
             mesh_side_orientation: self.mesh_side_orientation,
+            mesh_visibility: self.mesh_visibility,
             transform: self.transform,
             view: self.view,
             clip_from_local: self.clip_from_local,
@@ -210,7 +219,15 @@ pub fn prepare_forward_capture_receiver_with_instance(
     instance: &MaterialInstance,
 ) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
     prepare_capture_receiver(
-        view, source, order, resources, transform, assets, composer, refraction_texture, Some(instance),
+        view,
+        source,
+        order,
+        resources,
+        transform,
+        assets,
+        composer,
+        refraction_texture,
+        Some(instance),
     )
 }
 
@@ -232,7 +249,10 @@ fn prepare_capture_receiver(
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
     }
-    if view.emissive_enabled && instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
+    if view.emissive_enabled
+        && instance.is_none()
+        && !resources.tint.iter().all(|value| value.is_finite())
+    {
         return Err(ForwardPreparationError::InvalidTint { source });
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
@@ -257,7 +277,8 @@ fn prepare_capture_receiver(
         .map_err(ForwardPreparationError::Material)?;
     super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
-    let resources = resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
+    let resources =
+        resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
     let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
     let textures = resolve_capture_textures(textures, &schema.textures, assets, source)?;
@@ -298,6 +319,7 @@ fn prepare_capture_receiver(
         tint: resources.tint,
         uniform_values,
         mesh_side_orientation: SurfaceSideOrientation::default(),
+        mesh_visibility: MeshVisibility::default(),
         transform,
         view: view.clone(),
         clip_from_local,
@@ -315,7 +337,9 @@ fn scene_refraction_binding(
 ) -> Result<SceneRefractionBinding, ForwardPreparationError> {
     let invalid = ForwardPreparationError::InvalidSceneRefractionSource { source };
     let bindings = &material.contribution().bindings;
-    let texture_alias = instance.and_then(|instance| instance.resource(texture)).unwrap_or(texture);
+    let texture_alias = instance
+        .and_then(|instance| instance.resource(texture))
+        .unwrap_or(texture);
     if material.transmission_extensions().is_none()
         || !bindings.iter().any(|binding| {
             binding.name == texture && binding.kind == MaterialResourceKind::Texture2dF32

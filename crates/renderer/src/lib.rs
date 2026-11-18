@@ -46,9 +46,10 @@ pub use preparation::{
     prepare_material,
 };
 pub use render_scene::{
-    ChangeReceipt, DirectionalLight, DirtyRange, FrameSnapshot, RenderBounds, RenderChange,
-    RenderChangeSet, RenderId, RenderRecord, RenderResources, RenderScene, RenderTransform,
-    RenderView, RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError, ShadingCamera,
+    ChangeReceipt, DirectionalLight, DirtyRange, FrameSnapshot, MeshVisibility, RenderBounds,
+    RenderChange, RenderChangeSet, RenderId, RenderRecord, RenderResources, RenderScene,
+    RenderTransform, RenderView, RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty,
+    SceneError, ShadingCamera,
 };
 pub use renderer::{
     CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats,

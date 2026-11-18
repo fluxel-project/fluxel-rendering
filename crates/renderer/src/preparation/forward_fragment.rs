@@ -87,16 +87,8 @@ pub(crate) fn with_ordinary_forward_fragment(
         .static_options
         .insert(INTERFACE_OPTION.into(), interface.option_value().into());
     replace_entry(&mut request, ordinary_source(interface));
-    if !request
-        .source_units
-        .iter()
-        .any(|unit| unit.id.0 == COLOR_UNIT)
-    {
-        request.source_units.push(SourceUnit::new(
-            COLOR_UNIT,
-            "fn renderer_forward_color(color: vec4<f32>) -> vec4<f32> { return color; }",
-        ));
-    }
+    request.source_units.retain(|unit| unit.id.0 != COLOR_UNIT);
+    request.source_units.push(color_source(interface, false));
     request
         .static_options
         .insert("renderer.forward_fragment_stage".into(), "ordinary".into());
@@ -105,16 +97,40 @@ pub(crate) fn with_ordinary_forward_fragment(
 
 /// Selects RGB association for this renderer-owned Forward color output.
 pub(super) fn use_premultiplied_rgb(request: &mut ShaderCompositionRequest) {
-    if let Some(unit) = request
-        .source_units
-        .iter_mut()
-        .find(|unit| unit.id.0 == COLOR_UNIT)
-    {
-        *unit = SourceUnit::new(
-            COLOR_UNIT,
-            "fn renderer_forward_color(color: vec4<f32>) -> vec4<f32> { return vec4<f32>(color.rgb * color.a, color.a); }",
-        );
+    if let Some(interface) = ForwardFragmentInterface::from_request(request) {
+        if let Some(unit) = request
+            .source_units
+            .iter_mut()
+            .find(|unit| unit.id.0 == COLOR_UNIT)
+        {
+            *unit = color_source(interface, true);
+        }
     }
+}
+
+fn color_source(interface: ForwardFragmentInterface, premultiplied: bool) -> SourceUnit {
+    let visibility = match interface {
+        ForwardFragmentInterface::Position
+        | ForwardFragmentInterface::PositionUv0
+        | ForwardFragmentInterface::PositionUvColor => "forward_transform.visibility.x",
+        _ => "pbr_transforms.normal_from_local[3].y",
+    };
+    let rgb = if premultiplied {
+        "color.rgb * alpha"
+    } else {
+        "color.rgb"
+    };
+    SourceUnit::new(
+        COLOR_UNIT,
+        format!(
+            "fn renderer_forward_color(color: vec4<f32>) -> vec4<f32> {{
+    let visibility = {visibility};
+    if visibility == 0.0 {{ discard; }}
+    let alpha = color.a * visibility;
+    return vec4<f32>({rgb}, alpha);
+}}"
+        ),
+    )
 }
 
 /// Replaces the ordinary entry with a stage-specific OIT entry while retaining
@@ -222,7 +238,8 @@ fn initial_depth_source(
         "@location(0) vec2<f32>",
         "@group(3) @binding(0) var renderer_oit_min_max: texture_2d<f32>;",
         &format!(
-            "let final_color = renderer_forward_shade({{arguments}});\n    var depth = {{position}}.z;\n    {depth_rounding}\n    let coordinate = vec2<i32>({{position}}.xy);\n    let last_depth = textureLoad(renderer_oit_min_max, coordinate, 0);\n    let nearest_depth = -last_depth.x;\n    let furthest_depth = last_depth.y;\n    if depth < nearest_depth || depth > furthest_depth {{ return vec2<f32>(-99999.0); }}\n    return vec2<f32>(-depth, depth);",
+            "let final_color = renderer_forward_color(renderer_forward_shade({{arguments}}));
+    var depth = {{position}}.z;\n    {depth_rounding}\n    let coordinate = vec2<i32>({{position}}.xy);\n    let last_depth = textureLoad(renderer_oit_min_max, coordinate, 0);\n    let nearest_depth = -last_depth.x;\n    let furthest_depth = last_depth.y;\n    if depth < nearest_depth || depth > furthest_depth {{ return vec2<f32>(-99999.0); }}\n    return vec2<f32>(-depth, depth);",
         ),
     )
 }
