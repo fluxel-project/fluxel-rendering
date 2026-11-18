@@ -138,12 +138,12 @@ pub(super) fn build(
         let actual_arguments = function
             .arguments
             .iter()
-            .map(|arg| vertex_type(&m.types[arg.ty].inner))
+            .map(|arg| value_type(&m.types[arg.ty].inner))
             .collect::<Result<Vec<_>, _>>();
         let actual_result = function
             .result
             .as_ref()
-            .map(|result| vertex_type(&m.types[result.ty].inner))
+            .map(|result| value_type(&m.types[result.ty].inner))
             .transpose();
         if actual_arguments.as_ref().ok() != Some(&callable.arguments)
             || actual_result.as_ref().ok() != Some(&callable.result)
@@ -327,7 +327,7 @@ pub(super) fn build(
 }
 fn binding_shape(module: &naga::Module, global: &naga::GlobalVariable) -> Option<BindingShape> {
     match (global.space, &module.types[global.ty].inner) {
-        (naga::AddressSpace::Uniform, inner) => vertex_type(inner).ok().map(BindingShape::Uniform),
+        (naga::AddressSpace::Uniform, inner) => value_type(inner).ok().map(BindingShape::Uniform),
         (
             naga::AddressSpace::Handle,
             naga::TypeInner::Image {
@@ -390,6 +390,24 @@ fn vertex_type(inner: &naga::TypeInner) -> Result<VertexType, ShaderError> {
             })
         }
         _ => Err(ShaderError::UnsupportedVertexType),
+    }
+}
+
+fn value_type(inner: &naga::TypeInner) -> Result<ValueType, ShaderError> {
+    match inner {
+        naga::TypeInner::Matrix {
+            columns: naga::VectorSize::Quad,
+            rows: naga::VectorSize::Quad,
+            scalar,
+        } if scalar.kind == naga::ScalarKind::Float && scalar.width == 4 => {
+            Ok(ValueType::Mat4x4F32)
+        }
+        _ => vertex_type(inner).map(|ty| match ty {
+            VertexType::Scalar(scalar) => ValueType::Scalar(scalar),
+            VertexType::Vec2(scalar) => ValueType::Vec2(scalar),
+            VertexType::Vec3(scalar) => ValueType::Vec3(scalar),
+            VertexType::Vec4(scalar) => ValueType::Vec4(scalar),
+        }),
     }
 }
 fn kind(m: &naga::Module, g: &naga::GlobalVariable) -> Result<BindingKind, ShaderError> {

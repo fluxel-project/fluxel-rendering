@@ -206,9 +206,15 @@ pub(crate) fn pack_forward_uniforms(
             bytes[offset..offset + 4].copy_from_slice(&visibility.get().to_le_bytes());
         }
         for (value, range) in input.material_uniforms.iter().zip(uniforms) {
-            for (component, value) in value.components().iter().enumerate() {
-                let offset = range.start as usize + component * 4;
-                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            let slot = &mut bytes[range.start as usize..range.end as usize];
+            match value {
+                DynamicValue::I32(value) => slot[..4].copy_from_slice(&value.to_le_bytes()),
+                DynamicValue::U32(value) => slot[..4].copy_from_slice(&value.to_le_bytes()),
+                _ => {
+                    for (dest, component) in slot.chunks_exact_mut(4).zip(value.components()) {
+                        dest.copy_from_slice(&component.to_le_bytes());
+                    }
+                }
             }
         }
     }

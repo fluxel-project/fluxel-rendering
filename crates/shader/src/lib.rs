@@ -175,12 +175,27 @@ pub enum VertexType {
     /// Four scalars.
     Vec4(ScalarType),
 }
-/// Scalar or vector type used by a declared callable.
-pub type ValueType = VertexType;
+/// Portable callable or uniform-root value type, independent of buffer packing.
+///
+/// This deliberately differs from [`VertexType`]: matrices are valid callable
+/// and uniform values, but are not valid vertex input locations.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ValueType {
+    /// One scalar.
+    Scalar(ScalarType),
+    /// Two scalars.
+    Vec2(ScalarType),
+    /// Three scalars.
+    Vec3(ScalarType),
+    /// Four scalars.
+    Vec4(ScalarType),
+    /// A column-major `mat4x4<f32>`.
+    Mat4x4F32,
+}
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 /// Supported exact resource-shape requirements.
 pub enum BindingShape {
-    /// Uniform buffer with a scalar or vector root type.
+    /// Uniform buffer with a scalar, vector, or supported matrix root type.
     Uniform(ValueType),
     /// Non-arrayed, non-multisampled float 2D texture.
     Texture2dF32,

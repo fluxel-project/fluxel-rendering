@@ -1,6 +1,7 @@
 use fluxel_shader::{
     BindingDeclaration, BindingKind, BindingShape, EntryPoint, ScalarType, ShaderComposer,
-    ShaderCompositionRequest, ShaderStage, SourceUnit, VertexInputDeclaration, VertexType,
+    ShaderCompositionRequest, ShaderStage, SourceUnit, ValueType, VertexInputDeclaration,
+    VertexType,
 };
 
 const COMPUTE_REFLECTION: &str = r#"
@@ -169,12 +170,12 @@ fn specified_binding_shape_and_visibility_must_match_actual_program() {
     let base = request(source).with_entry_point(EntryPoint::new("main", ShaderStage::Compute));
     let wrong_shape = base.clone().with_binding(
         BindingDeclaration::new(0, 0, BindingKind::Uniform)
-            .with_shape(BindingShape::Uniform(VertexType::Vec4(ScalarType::F32))),
+            .with_shape(BindingShape::Uniform(ValueType::Vec4(ScalarType::F32))),
     );
     assert!(ShaderComposer::new().compose(&wrong_shape).is_err());
     let wrong_stage = base.with_binding(
         BindingDeclaration::new(0, 0, BindingKind::Uniform)
-            .with_shape(BindingShape::Uniform(VertexType::Vec2(ScalarType::F32)))
+            .with_shape(BindingShape::Uniform(ValueType::Vec2(ScalarType::F32)))
             .with_visibility([ShaderStage::Fragment]),
     );
     assert!(ShaderComposer::new().compose(&wrong_stage).is_err());

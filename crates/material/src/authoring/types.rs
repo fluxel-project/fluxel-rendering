@@ -13,6 +13,12 @@ pub enum MaterialType {
     Vec3,
     /// A `vec4<f32>` value.
     Vec4,
+    /// A signed 32-bit integer.
+    I32,
+    /// An unsigned 32-bit integer.
+    U32,
+    /// A four-column, four-row floating-point matrix.
+    Mat4x4,
 }
 
 impl MaterialType {
@@ -24,17 +30,21 @@ impl MaterialType {
             Self::Vec2 => "vec2<f32>",
             Self::Vec3 => "vec3<f32>",
             Self::Vec4 => "vec4<f32>",
+            Self::I32 => "i32",
+            Self::U32 => "u32",
+            Self::Mat4x4 => "mat4x4<f32>",
         }
     }
 
-    /// Returns the portable physical uniform range for this float value.
+    /// Returns the portable physical uniform range for this value.
     ///
     /// Keep a full 16-byte slot for scalar and short vector blocks too. The
     /// type's reflected WGSL shape still determines which components are used.
     #[must_use]
     pub const fn uniform_binding_size(self) -> u64 {
         match self {
-            Self::F32 | Self::Vec2 | Self::Vec3 | Self::Vec4 => 16,
+            Self::F32 | Self::Vec2 | Self::Vec3 | Self::Vec4 | Self::I32 | Self::U32 => 16,
+            Self::Mat4x4 => 64,
         }
     }
 
@@ -46,6 +56,9 @@ impl MaterialType {
             Self::Vec2 => ValueType::Vec2(ScalarType::F32),
             Self::Vec3 => ValueType::Vec3(ScalarType::F32),
             Self::Vec4 => ValueType::Vec4(ScalarType::F32),
+            Self::I32 => ValueType::Scalar(ScalarType::I32),
+            Self::U32 => ValueType::Scalar(ScalarType::U32),
+            Self::Mat4x4 => ValueType::Mat4x4F32,
         }
     }
 }
@@ -72,10 +85,17 @@ pub enum DynamicValue {
     Vec3([f32; 3]),
     /// Four-component parameter value.
     Vec4([f32; 4]),
+    /// Signed 32-bit parameter value.
+    I32(i32),
+    /// Unsigned 32-bit parameter value.
+    U32(u32),
+    /// Matrix in WGSL column order. The outer array indexes columns.
+    Mat4x4([[f32; 4]; 4]),
 }
 
 impl DynamicValue {
-    /// Returns the authored components, without uniform alignment padding.
+    /// Returns the authored floating-point components, without alignment padding.
+    /// A matrix is returned in column order. Integer values return an empty slice.
     #[must_use]
     pub fn components(&self) -> &[f32] {
         match self {
@@ -83,6 +103,8 @@ impl DynamicValue {
             Self::Vec2(values) => values,
             Self::Vec3(values) => values,
             Self::Vec4(values) => values,
+            Self::Mat4x4(columns) => columns.as_flattened(),
+            Self::I32(_) | Self::U32(_) => &[],
         }
     }
 
@@ -94,6 +116,9 @@ impl DynamicValue {
             Self::Vec2(_) => MaterialType::Vec2,
             Self::Vec3(_) => MaterialType::Vec3,
             Self::Vec4(_) => MaterialType::Vec4,
+            Self::I32(_) => MaterialType::I32,
+            Self::U32(_) => MaterialType::U32,
+            Self::Mat4x4(_) => MaterialType::Mat4x4,
         }
     }
 }
@@ -125,6 +150,12 @@ pub enum MaterialResourceKind {
         /// Whether the shader declares `sampler_comparison` rather than `sampler`.
         comparison: bool,
     },
+    /// A uniform `i32` binding.
+    UniformI32,
+    /// A uniform `u32` binding.
+    UniformU32,
+    /// A uniform `mat4x4<f32>` binding.
+    UniformMat4x4,
 }
 
 /// Transfer encoding required by an explicitly typed material texture binding.
@@ -162,14 +193,14 @@ impl MaterialResourceKind {
     /// Returns the WGSL type spelling for this resource.
     #[must_use]
     pub const fn wgsl(self) -> &'static str {
+        if let Some(ty) = self.uniform_material_type() {
+            return ty.wgsl();
+        }
         match self {
-            Self::UniformF32 => "f32",
-            Self::UniformVec2 => "vec2<f32>",
-            Self::UniformVec3 => "vec3<f32>",
-            Self::UniformVec4 => "vec4<f32>",
             Self::Texture2dF32 => "texture_2d<f32>",
             Self::Sampler { comparison: false } => "sampler",
             Self::Sampler { comparison: true } => "sampler_comparison",
+            _ => unreachable!(),
         }
     }
 
@@ -181,13 +212,16 @@ impl MaterialResourceKind {
             Self::UniformVec2 => Some(MaterialType::Vec2),
             Self::UniformVec3 => Some(MaterialType::Vec3),
             Self::UniformVec4 => Some(MaterialType::Vec4),
+            Self::UniformI32 => Some(MaterialType::I32),
+            Self::UniformU32 => Some(MaterialType::U32),
+            Self::UniformMat4x4 => Some(MaterialType::Mat4x4),
             Self::Texture2dF32 | Self::Sampler { .. } => None,
         }
     }
 
     /// Returns a portable uniform binding allocation in bytes.
     ///
-    /// Float scalar and vector uniform bindings each occupy one 16-byte slot.
+    /// Scalar and vector bindings occupy one 16-byte slot. A matrix occupies four.
     #[must_use]
     pub const fn uniform_min_binding_size(self) -> Option<u64> {
         match self.uniform_material_type() {

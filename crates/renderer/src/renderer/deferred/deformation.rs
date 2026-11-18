@@ -17,7 +17,7 @@ use fluxel_rhi::{
 use fluxel_shader::{
     BindingAccess, BindingDeclaration, BindingKind, CallableDeclaration, EntryPoint, ScalarType,
     ShaderComposer, ShaderCompositionRequest, ShaderStage as LogicalShaderStage, SourceUnit,
-    VertexType,
+    ValueType,
 };
 
 use crate::{
@@ -278,10 +278,10 @@ fn compose(
     .with_callable(CallableDeclaration {
         name: "deform_position".into(),
         arguments: vec![
-            VertexType::Vec3(ScalarType::F32),
-            VertexType::Vec4(ScalarType::F32),
+            ValueType::Vec3(ScalarType::F32),
+            ValueType::Vec4(ScalarType::F32),
         ],
-        result: Some(VertexType::Vec3(ScalarType::F32)),
+        result: Some(ValueType::Vec3(ScalarType::F32)),
     })
     .with_binding(
         BindingDeclaration::new(0, 0, BindingKind::StorageRead)

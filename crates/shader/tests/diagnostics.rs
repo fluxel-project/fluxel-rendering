@@ -2,7 +2,7 @@
 
 use fluxel_shader::{
     CallableDeclaration, EntryPoint, ScalarType, ShaderComposer, ShaderCompositionRequest,
-    ShaderError, ShaderStage, SourceUnit, VertexType,
+    ShaderError, ShaderStage, SourceUnit, ValueType,
 };
 
 #[test]
@@ -35,13 +35,13 @@ fn declared_callable_signature_is_checked_against_actual_wgsl() {
         .with_entry_point(EntryPoint::new("main", ShaderStage::Compute))
         .with_callable(CallableDeclaration {
             name: "shade".into(),
-            arguments: vec![VertexType::Vec2(ScalarType::F32)],
-            result: Some(VertexType::Vec4(ScalarType::F32)),
+            arguments: vec![ValueType::Vec2(ScalarType::F32)],
+            result: Some(ValueType::Vec4(ScalarType::F32)),
         });
     let artifact = ShaderComposer::new().compose(&request).unwrap();
     assert_eq!(artifact.source_map()[0].source.0, "callable");
     let mut incorrect = request;
-    incorrect.callables[0].result = Some(VertexType::Scalar(ScalarType::F32));
+    incorrect.callables[0].result = Some(ValueType::Scalar(ScalarType::F32));
     assert!(matches!(
         ShaderComposer::new().compose(&incorrect),
         Err(ShaderError::CallableMismatch { name }) if name == "shade"

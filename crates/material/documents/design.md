@@ -352,8 +352,8 @@ Renderer selects its effects route through
 emissive form and occlusion.
 
 Material resources describe generic shader-visible requirements. The current
-public subset has float scalar and vector uniforms (`UniformF32`,
-`UniformVec2`, `UniformVec3` and `UniformVec4`), read-only `Texture2dF32`,
+public subset has f32, i32, u32, float vector and column-major
+`mat4x4<f32>` uniforms, read-only `Texture2dF32`,
 and `Sampler { comparison }`, each with a stable name and bind-group location. `comparison` is
 a WGSL fact; filtering is not, so Renderer validates it from the actual sampler
 and texture descriptors before recording. Future kinds must carry equally
@@ -367,7 +367,8 @@ Parameters divide into two lifetimes:
   variant identity. They are not preprocessor macros; specialization belongs to
   Material/Shader composition semantics.
 - Dynamic values change per-instance uniform data or logical resource selection
-  and do not compile a new variant.
+  and do not compile a new variant. Signed integers and matrices correspond to
+  Babylon Node Material's `InputBlock` uploads through `setInt` and `setMatrix`.
 
 `MaterialInstance::new` requires the exact asset identity and content generation
 when its variant is asset-bound. It rejects unknown or missing dynamic parameters

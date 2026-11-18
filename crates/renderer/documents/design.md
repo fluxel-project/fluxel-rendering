@@ -296,7 +296,7 @@ named image bindings per material.
 
 ### Material binding locations
 
-The material schema resolves named float scalar and vector uniform parameters,
+The material schema resolves named f32, i32, u32, float vector and matrix parameters,
 2D float textures, and up to one ordinary sampler in material group zero.
 Contribution metadata and actual fragment reflection must agree on binding
 location, value shape, and read/query access. Renderer preparation checks the
@@ -311,8 +311,9 @@ vec4 uniform for existing draws. Instance draws can use numeric parameters
 without supplying textures.
 
 Frame packing uploads each instance parameter into an individually aligned
-16-byte uniform range in binding order. The full slot also covers uniform block
-padding on GL. The bind group uses these same ranges and the
+range in binding order. A scalar or vector uses 16 bytes including padding.
+A `mat4x4<f32>` uses a 64-byte range in WGSL column order. Integers
+keep their 32-bit representation. The bind group uses these same ranges and the
 Graph declares each actual uniform read. Per-draw values can change without
 changing the compiled material key.
 

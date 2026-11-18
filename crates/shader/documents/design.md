@@ -88,7 +88,8 @@ outside this crate.
 Callable declarations are a second contract: a named WGSL function must exist
 and have exactly the declared argument and result types. This lets authored
 contributions expose selected evaluator functions without granting them control
-over the full pass program.
+over the full pass program. Callable signatures and uniform binding shapes
+also support `mat4x4<f32>`.
 
 ## Requirements and device admission
 

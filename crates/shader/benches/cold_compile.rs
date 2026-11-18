@@ -8,7 +8,8 @@ use std::{hint::black_box, sync::Arc, time::Instant};
 
 use fluxel_shader::{
     BindingDeclaration, BindingKind, CallableDeclaration, EntryPoint, ScalarType, ShaderComposer,
-    ShaderCompositionRequest, ShaderStage, SourceUnit, VertexInputDeclaration, VertexType,
+    ShaderCompositionRequest, ShaderStage, SourceUnit, ValueType, VertexInputDeclaration,
+    VertexType,
 };
 
 const DEFAULT_SAMPLES: usize = 41;
@@ -78,8 +79,8 @@ fn representative_request() -> ShaderCompositionRequest {
     ))
     .with_callable(CallableDeclaration {
         name: "apply_tint".into(),
-        arguments: vec![VertexType::Vec4(ScalarType::F32)],
-        result: Some(VertexType::Vec4(ScalarType::F32)),
+        arguments: vec![ValueType::Vec4(ScalarType::F32)],
+        result: Some(ValueType::Vec4(ScalarType::F32)),
     })
     .with_static_option("color-space", "linear")
 }
