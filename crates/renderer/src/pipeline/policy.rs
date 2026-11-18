@@ -58,8 +58,9 @@ pub trait FramePipeline<R> {
     /// Called once per transparent draw in Sorted Forward. Scene draws
     /// default to index zero; feature draws default to their explicit order.
     /// Override this to choose a scene draw's alpha index from its source and
-    /// retained frame. Renderer sorts ascending index, descending camera
-    /// distance, then stable source identity across all contributions.
+    /// retained frame. Renderer sorts ascending index and descending camera
+    /// distance across all contributions. Equal keys retain received draw
+    /// order.
     fn transparent_alpha_index(
         &self,
         _frame: &PreparedFrame<'_, R>,

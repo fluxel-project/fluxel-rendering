@@ -637,7 +637,7 @@ The existing opaque-order hook applies to the opaque segment only. The
 once; scene draws default to zero and Feature draws default to their explicit
 order. Renderer then sorts by ascending alpha index, descending distance from
 the world-transformed local geometry-bounds center to the actual camera eye,
-and stable source identity. It never batches across an intervening draw to
+with equal keys preserving the received draw order. It never batches across an intervening draw to
 improve resource reuse. CPU geometry supplies the bounds in this product;
 GPU-generated geometry requires its own declared bounds product rather than a
 forced GPU readback into this list.

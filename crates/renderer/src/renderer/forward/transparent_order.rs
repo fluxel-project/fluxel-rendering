@@ -14,7 +14,8 @@ pub(super) fn is_transparent(input: &ForwardDrawInput) -> bool {
 
 /// Orders all transparent sources together, irrespective of asset/Feature owner.
 /// Squared distance has the same order as Babylon's Euclidean distance and
-/// avoids rounding distinct far distances to the same square root.
+/// avoids rounding distinct far distances to the same square root. Equal keys
+/// retain the received draw order, matching Babylon's stable array sort.
 pub(super) fn sort(
     inputs: Vec<ForwardDrawInput>,
     mut alpha_index: impl FnMut(&ForwardDrawInput) -> i64,
@@ -24,11 +25,10 @@ pub(super) fn sort(
         .map(|input| Ok((alpha_index(&input), distance_squared(&input)?, input)))
         .collect::<Result<Vec<_>, PipelineError>>()?;
     keyed.sort_by(
-        |(left_index, left_distance, left), (right_index, right_distance, right)| {
+        |(left_index, left_distance, _), (right_index, right_distance, _)| {
             left_index
                 .cmp(right_index)
                 .then_with(|| right_distance.total_cmp(left_distance))
-                .then_with(|| left.source().sort_key().cmp(&right.source().sort_key()))
         },
     );
     Ok(keyed.into_iter().map(|(_, _, input)| input).collect())
