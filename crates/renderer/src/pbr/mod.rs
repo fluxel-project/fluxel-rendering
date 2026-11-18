@@ -17,6 +17,7 @@ use crate::preparation::forward_fragment::{
     ForwardFragmentInterface, with_ordinary_forward_fragment,
 };
 
+mod direct_light;
 pub(crate) mod specular;
 mod templates;
 
@@ -249,7 +250,7 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
         SourceUnit::new(identity, body),
     ];
     if !deferred {
-        units.push(SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT));
+        units.push(SourceUnit::new("pbr-direct-light", direct_light::WGSL));
     }
     let request = ShaderCompositionRequest::new(units)
         .with_entry_point(EntryPoint::new(vertex, ShaderStage::Vertex))
@@ -420,7 +421,7 @@ fn geometry_uv0_normal_request(
 pub(crate) fn lighting_request() -> ShaderCompositionRequest {
     let mut request = ShaderCompositionRequest::new(vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
-        SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT),
+        SourceUnit::new("pbr-direct-light", direct_light::WGSL),
         SourceUnit::new("pbr-diffuse-irradiance", templates::DIFFUSE_IRRADIANCE),
         SourceUnit::new("pbr-deferred-lighting", templates::LIGHTING),
     ])
@@ -444,7 +445,7 @@ pub(crate) fn lighting_request() -> ShaderCompositionRequest {
 pub(crate) fn lighting_irradiance_request() -> ShaderCompositionRequest {
     let mut request = ShaderCompositionRequest::new(vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
-        SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT),
+        SourceUnit::new("pbr-direct-light", direct_light::WGSL),
         SourceUnit::new("pbr-diffuse-irradiance", templates::DIFFUSE_IRRADIANCE),
         SourceUnit::new(
             "pbr-deferred-lighting-irradiance",
@@ -486,7 +487,7 @@ pub(crate) fn lighting_effect_irradiance_request() -> ShaderCompositionRequest {
 fn lighting_effect_request_inner(environment: bool) -> ShaderCompositionRequest {
     let mut request = ShaderCompositionRequest::new(vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
-        SourceUnit::new("pbr-direct-light", templates::DIRECT_LIGHT),
+        SourceUnit::new("pbr-direct-light", direct_light::WGSL),
         SourceUnit::new("pbr-diffuse-irradiance", templates::DIFFUSE_IRRADIANCE),
         SourceUnit::new(
             if environment {

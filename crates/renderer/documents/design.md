@@ -16,11 +16,13 @@ facts.
 
 ## Scope and implementation boundary
 
-The current direct-light template in `src/pbr/templates.rs` uses a
-Filament-referenced GGX/Smith/Schlick calculation with fixed light, view and
-intensity inputs. The environment transmission path selects a prefiltered 2D
-latitude-longitude source. These implementation choices define the baseline
-for comparison with the selected Babylon shader branches.
+`src/pbr/direct_light.rs` shares the selected Babylon directional-light
+calculation across Forward, Deferred, and environment transmission. It uses
+EON with default zero diffuse roughness, legacy reflectivity energy allocation,
+glTF Schlick Fresnel, and height-correlated GGX visibility. The renderer supplies
+a fixed direction and light color. Basic PBR supplies an orthographic view
+direction, and the specular IBL variants supply their camera-derived view.
+Environment transmission selects a prefiltered 2D latitude-longitude source.
 
 | Area | Current implemented subset | Not established by the subset |
 | --- | --- | --- |

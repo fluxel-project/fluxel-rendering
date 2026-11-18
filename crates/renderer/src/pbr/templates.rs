@@ -1,9 +1,4 @@
-//! WGSL implementing one shared direct-light BRDF and its two consumers.
-//!
-//! GGX distribution, height-correlated Smith visibility and Schlick Fresnel:
-//! https://google.github.io/filament/main/filament.html
-//! Diffuse uses Lambert with the remaining (1-F) dielectric energy. Inputs and
-//! outputs are linear; RGBA8 targets clamp HDR radiance without tone mapping.
+//! WGSL for the standard Forward and Deferred PBR consumers.
 
 pub(super) const NORMAL: &str = r#"
 fn pbr_normal(value: vec3<f32>) -> vec3<f32> {
@@ -23,35 +18,6 @@ fn pbr_surface_normal(normal: vec3<f32>, front_facing: bool) -> vec3<f32> {
     let normalized = pbr_normal(normal);
     if material_two_sided_lighting() && !front_facing { return -normalized; }
     return normalized;
-}
-"#;
-
-pub(super) const DIRECT_LIGHT: &str = r#"
-fn pbr_direct_light(base_input: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>) -> vec3<f32> {
-    let base = clamp(base_input, vec3<f32>(0.0), vec3<f32>(1.0));
-    let metal = clamp(properties.x, 0.0, 1.0);
-    let roughness = clamp(properties.y, 0.04, 1.0);
-    let normal = pbr_normal(world_normal);
-    let light = vec3<f32>(0.6, 0.0, 0.8);
-    let view = vec3<f32>(0.0, 0.0, 1.0);
-    let half_direction = normalize(light + view);
-    let no_l = clamp(dot(normal, light), 0.0, 1.0);
-    let no_v = clamp(dot(normal, view), 0.0, 1.0);
-    if no_l <= 0.0 || no_v <= 0.0 { return vec3<f32>(0.0); }
-    let no_h = clamp(dot(normal, half_direction), 0.0, 1.0);
-    let vo_h = clamp(dot(view, half_direction), 0.0, 1.0);
-    let alpha = roughness * roughness;
-    let alpha_squared = alpha * alpha;
-    let distribution_term = no_h * no_h * (alpha_squared - 1.0) + 1.0;
-    let distribution = alpha_squared / (3.141592653589793 * distribution_term * distribution_term);
-    let visibility = 0.5 / (
-        no_l * sqrt(no_v * no_v * (1.0 - alpha_squared) + alpha_squared) +
-        no_v * sqrt(no_l * no_l * (1.0 - alpha_squared) + alpha_squared)
-    );
-    let f0 = mix(vec3<f32>(0.04), base, vec3<f32>(metal));
-    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vo_h, 5.0);
-    let diffuse = (vec3<f32>(1.0) - fresnel) * (1.0 - metal) * base / 3.141592653589793;
-    return (diffuse + distribution * visibility * fresnel) * no_l * 3.0;
 }
 "#;
 

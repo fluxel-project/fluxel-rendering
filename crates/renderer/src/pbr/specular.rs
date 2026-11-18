@@ -181,10 +181,6 @@ pub(crate) fn with_specular_ibl(mut request: ShaderCompositionRequest) -> Shader
     request
         .source_units
         .push(SourceUnit::new("pbr-specular-ibl", WGSL));
-    request.source_units.push(SourceUnit::new(
-        "pbr-specular-direct-light",
-        transmission::DIRECT_LIGHT,
-    ));
     for (binding, kind) in [
         (2, BindingKind::Texture),
         (3, BindingKind::Sampler),
@@ -321,10 +317,6 @@ pub(crate) fn deferred_specular_request(
     request
         .source_units
         .push(SourceUnit::new("pbr-specular-ibl-deferred", remapped));
-    request.source_units.push(SourceUnit::new(
-        "pbr-specular-direct-light",
-        transmission::DIRECT_LIGHT,
-    ));
     for (binding, kind) in [
         (2, BindingKind::Texture),
         (3, BindingKind::Sampler),
