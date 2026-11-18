@@ -89,7 +89,13 @@ impl ForwardReceiverComposition {
             }
         }
         let slots = self.record_slots(frame.resident.device);
-        let depth = frame.frame.depth.as_ref().ok_or(Error::InvalidState)?;
+        let depth = match (self.scene_refraction, producer_depth) {
+            (true, Some(depth)) => OitDepthTargetRef::from(depth),
+            (true, None) => return Err(Error::InvalidState),
+            (false, _) => {
+                OitDepthTargetRef::from(frame.frame.depth.as_ref().ok_or(Error::InvalidState)?)
+            }
+        };
         if pass == self.raster {
             if let Some(oit) = &self.oit {
                 super::shared_record::record_raster_selection(
@@ -110,8 +116,8 @@ impl ForwardReceiverComposition {
                         },
                         depth: Some(super::shared_record::RasterDepthSelection {
                             slot: self.slots.depth.ok_or(Error::InvalidState)?,
-                            texture: &depth.texture,
-                            view: &depth.view,
+                            texture: depth.texture,
+                            view: depth.view,
                             instance: depth.instance,
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
@@ -121,7 +127,6 @@ impl ForwardReceiverComposition {
                     },
                 )?;
             } else if self.scene_refraction {
-                let producer_depth = producer_depth.ok_or(Error::InvalidState)?;
                 super::shared_record::record_raster_selection(
                     &slots,
                     pass,
@@ -140,9 +145,9 @@ impl ForwardReceiverComposition {
                         },
                         depth: Some(super::shared_record::RasterDepthSelection {
                             slot: self.slots.depth.ok_or(Error::InvalidState)?,
-                            texture: &producer_depth.texture,
-                            view: &producer_depth.view,
-                            instance: producer_depth.instance,
+                            texture: depth.texture,
+                            view: depth.view,
+                            instance: depth.instance,
                             load: LoadOp::Load,
                             store: StoreOp::Store,
                             read_only: true,
@@ -169,7 +174,7 @@ impl ForwardReceiverComposition {
                 pass,
                 &oit.slots,
                 input.owners,
-                &OitDepthTargetRef::from(depth),
+                &depth,
                 frame,
                 &OitDrawSlots {
                     streams: &self.slots.streams,
@@ -203,8 +208,8 @@ impl ForwardReceiverComposition {
                     },
                     depth: Some(super::shared_record::RasterDepthSelection {
                         slot: self.slots.depth.ok_or(Error::InvalidState)?,
-                        texture: &depth.texture,
-                        view: &depth.view,
+                        texture: depth.texture,
+                        view: depth.view,
                         instance: depth.instance,
                         load: LoadOp::Load,
                         store: StoreOp::Store,

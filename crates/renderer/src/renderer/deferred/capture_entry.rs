@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::renderer::forward::{
-    CaptureTextureOwner, CaptureTextureSlot, capture_assets, validate_receiver_sources,
-    validate_receiver_view,
+    CaptureTextureOwner, CaptureTextureSlot, capture_assets, capture_oit_receiver_partition,
+    validate_receiver_sources, validate_receiver_view,
 };
 use std::{num::NonZeroU32, time::Instant};
 
@@ -20,9 +20,8 @@ where
     /// Lights the producer and samples its color in a Deferred receiver within
     /// one Graph submission. The producer may append sorted transparency to
     /// its opaque/masked prefix, or use the actual Forward path when that
-    /// partition has no opaque prefix. Opaque and masked receivers use
-    /// Deferred; blended receivers use the real Forward capture-receiver
-    /// branch.
+    /// partition has no opaque prefix. Blended and projected scene-refraction
+    /// receivers compose in the Forward branch against the selected capture.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_deferred_capture<V>(
         &mut self,
@@ -155,12 +154,16 @@ where
                 .alpha_mode,
             fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend,
         );
-        if scene_refraction
-            && receiver_blended
-            && receiver_config
-                .is_some_and(|config| !config.excludes_source(receiver_input.source()))
+        if let Some(config) = receiver_config
+            .filter(|config| receiver_blended && !config.excludes_source(receiver_input.source()))
         {
-            return Err(Error::Unsupported("OIT scene-refraction receiver").into());
+            config
+                .rounds()
+                .get()
+                .checked_mul(3)
+                .and_then(|passes| passes.checked_add(5))
+                .ok_or(Error::InvalidRange)?;
+            crate::residency::OitPlan::admit(&self.device, extent)?;
         }
         if scene_refraction {
             super::super::forward::target_admission::admit(
@@ -262,27 +265,10 @@ where
             capture.retain_deferred_refraction_depth(&producer.gbuffer[2]);
         }
         if scene_refraction || receiver_blended {
-            let receiver_partition = match receiver_config.filter(|_| !scene_refraction) {
-                Some(config) => {
-                    crate::preparation::partition_oit_draws(vec![receiver_input], config)
-                }
-                None => crate::preparation::OitDrawPartition {
-                    draws: vec![receiver_input],
-                    opaque_count: 0,
-                    peel_count: 0,
-                },
-            };
-            let peel_count = receiver_partition.peel_count;
+            let receiver_partition =
+                capture_oit_receiver_partition(receiver_input, receiver_config);
             let rounds =
                 receiver_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
-            if peel_count != 0 {
-                rounds
-                    .get()
-                    .checked_mul(3)
-                    .and_then(|passes| passes.checked_add(5))
-                    .ok_or(Error::InvalidRange)?;
-                crate::residency::OitPlan::admit(&self.device, extent)?;
-            }
             let receiver = self
                 .assemble_capture_oit_side(
                     snapshot.clone(),

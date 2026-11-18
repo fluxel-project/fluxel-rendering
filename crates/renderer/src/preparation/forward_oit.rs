@@ -60,6 +60,12 @@ pub(crate) fn prepare_oit_material(
     precision: OitDepthPrecision,
     composer: &mut ShaderComposer,
 ) -> Result<PreparedMaterial, ForwardPreparationError> {
+    let scene_refraction = input.scene_refraction_names();
+    if input.prepared().uses_scene_refraction() != scene_refraction.is_some() {
+        return Err(ForwardPreparationError::MaterialBindingSchema {
+            source: input.source(),
+        });
+    }
     let request = material_request(
         input.material().value(),
         &input.geometry().value().layout,
@@ -67,7 +73,7 @@ pub(crate) fn prepare_oit_material(
         input.source(),
         input.prepared().uses_environment_irradiance(),
         input.prepared().uses_specular_ibl(),
-        None,
+        scene_refraction,
     )?;
     let request = with_oit_forward_fragment(
         request,
@@ -95,6 +101,7 @@ pub(crate) fn prepare_oit_material(
         || prepared.uses_environment_irradiance() != input.prepared().uses_environment_irradiance()
         || prepared.uses_specular_ibl() != input.prepared().uses_specular_ibl()
         || prepared.uses_transmission() != input.prepared().uses_transmission()
+        || prepared.uses_scene_refraction() != scene_refraction.is_some()
     {
         return Err(ForwardPreparationError::MaterialBindingSchema {
             source: input.source(),

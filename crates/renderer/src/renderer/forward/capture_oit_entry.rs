@@ -54,7 +54,7 @@ impl<B: ResourceBackend> CaptureOitSide<B> {
 pub(in crate::renderer) fn capture_oit_receiver_partition(
     input: crate::ForwardDrawInput,
     config: Option<&crate::DualDepthPeelingConfig>,
-) -> Result<OitDrawPartition> {
+) -> OitDrawPartition {
     let scene_refraction = input.prepared().uses_scene_refraction();
     let mut partition = match config {
         Some(config) => crate::preparation::partition_oit_draws(vec![input], config),
@@ -65,12 +65,11 @@ pub(in crate::renderer) fn capture_oit_receiver_partition(
         },
     };
     if scene_refraction {
-        if partition.peel_count != 0 {
-            return Err(Error::Unsupported("OIT scene-refraction receiver"));
-        }
+        // A projected receiver inherits the producer's background and depth.
+        // Even an unblended receiver must not write into that opaque prefix.
         partition.opaque_count = 0;
     }
-    Ok(partition)
+    partition
 }
 
 impl<B> Renderer<B>
@@ -221,9 +220,12 @@ where
                 .map_err(RendererError::ForwardPipeline)?;
         // The receiver has exactly one draw, so excluded transparency has no
         // inter-object sorting requirement or dependency on a producer eye.
-        let receiver = capture_oit_receiver_partition(receiver, Some(receiver_config))?;
+        let receiver = capture_oit_receiver_partition(receiver, Some(receiver_config));
         if scene_refraction {
-            self.admit_oit_capture_refraction(extent, surface.is_some())?;
+            self.admit_oit_capture_refraction(
+                extent,
+                surface.is_some() || receiver.peel_count != 0,
+            )?;
         }
         for (partition, config) in [(&producer, producer_config), (&receiver, receiver_config)] {
             if partition.peel_count != 0 {

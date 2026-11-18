@@ -109,9 +109,6 @@ where
     }
     validate_spec(device, &capture_spec, FrameTopology::SortedForward, false)?;
     validate_spec(device, &receiver_spec, FrameTopology::SortedForward, true)?;
-    if scene_refraction && receiver_oit.is_some() {
-        return Err(Error::InvalidState.into());
-    }
     validate_depth_alias(
         device,
         capture,
@@ -136,6 +133,9 @@ where
     // Graph product.  In particular, an OIT capture producer is the final
     // output, never its ordinary opaque attachment or an intermediate side.
     let product = capture_product(capture, capture_oit);
+    if scene_refraction && product.desc.format != receiver.frame.target_desc.format {
+        return Err(Error::InvalidState.into());
+    }
     super::capture_bindings::validate_capture_product_alias(&product, receiver)?;
     let lane = device
         .lanes()
@@ -197,15 +197,41 @@ where
         receiver_handles.target = target;
     }
     let (receiver_raster, receiver_final, receiver_oit_plan) = if scene_refraction {
-        let (pass, color, _) = declare_raster(
-            &mut graph,
-            &receiver_spec,
-            FrameTopology::SortedForward,
-            receiver_upload,
-            &receiver_handles,
-            scene_refraction_reads::<B>,
-        )?;
-        (pass, color, None)
+        match receiver_oit {
+            Some(input) => {
+                let reads = super::oit_draw_reads::OitDrawReads::from_capture_handles(
+                    &receiver_handles,
+                    &receiver_spec,
+                );
+                let mut receiver_reads =
+                    |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
+                let stages = super::oit_stages::declare_scene_refraction_stages(
+                    &mut graph,
+                    &receiver_spec,
+                    &reads,
+                    input,
+                    receiver_handles.target,
+                    receiver_handles.depth.ok_or(Error::InvalidState)?,
+                    &mut receiver_reads,
+                )?;
+                // The background-copy is this receiver's opaque stage. It
+                // must run before OIT samples the defined opaque color, but
+                // must not be replayed as a clearing raster pass.
+                let raster = receiver_background_copy.ok_or(Error::InvalidState)?.0;
+                (raster, stages.output, Some(stages.oit))
+            }
+            None => {
+                let (pass, color, _) = declare_raster(
+                    &mut graph,
+                    &receiver_spec,
+                    FrameTopology::SortedForward,
+                    receiver_upload,
+                    &receiver_handles,
+                    scene_refraction_reads::<B>,
+                )?;
+                (pass, color, None)
+            }
+        }
     } else {
         let mut receiver_reads = |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
         let (raster, color, _, oit) = declare_side_with_contribution(

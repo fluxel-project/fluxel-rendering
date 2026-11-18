@@ -6,13 +6,13 @@ use super::*;
 use crate::preparation::material::prepare_compiled_material;
 
 #[derive(Clone)]
-struct SceneRefractionBinding {
+pub(super) struct SceneRefractionBinding {
     texture: String,
     sampler: String,
 }
 
 impl SceneRefractionBinding {
-    fn names(&self) -> (&str, &str) {
+    pub(super) fn names(&self) -> (&str, &str) {
         (&self.texture, &self.sampler)
     }
 }
@@ -76,6 +76,7 @@ impl PreparedCaptureReceiver {
             view: self.view,
             clip_from_local: self.clip_from_local,
             normal_from_local: self.normal_from_local,
+            scene_refraction: self.scene_refraction,
         }
     }
 

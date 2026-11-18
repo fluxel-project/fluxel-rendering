@@ -213,6 +213,11 @@ pub struct ForwardDrawInput {
     view: RenderView,
     clip_from_local: [[f32; 4]; 4],
     normal_from_local: Option<[[f32; 4]; 4]>,
+    // The selected material resources that implement projected scene-color
+    // transmission. This stays with the retained draw so stage-specific OIT
+    // material recompilation cannot silently fall back to environment-only
+    // transmission.
+    scene_refraction: Option<forward_capture::SceneRefractionBinding>,
 }
 
 impl ForwardDrawInput {
@@ -311,6 +316,12 @@ impl ForwardDrawInput {
     /// Returns the PBR local-normal transform, when this draw consumes normals.
     pub fn normal_from_local(&self) -> Option<[[f32; 4]; 4]> {
         self.normal_from_local
+    }
+
+    pub(crate) fn scene_refraction_names(&self) -> Option<(&str, &str)> {
+        self.scene_refraction
+            .as_ref()
+            .map(forward_capture::SceneRefractionBinding::names)
     }
 
     /// Returns the exact transform-uniform payload size selected for this draw.
@@ -415,6 +426,7 @@ fn prepare_draw(
         view: view.clone(),
         clip_from_local,
         normal_from_local,
+        scene_refraction: None,
     })
 }
 

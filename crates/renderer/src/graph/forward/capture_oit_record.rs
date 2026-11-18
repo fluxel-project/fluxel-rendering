@@ -197,7 +197,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             )?;
             return Ok(None);
         }
-        if pass == self.receiver_raster && self.receiver_oit.is_some() {
+        if pass == self.receiver_raster && self.receiver_oit.is_some() && !self.scene_refraction {
             self.record_oit_opaque(
                 &bindings,
                 encoder,
@@ -268,6 +268,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                     capture_commands.ok_or(Error::InvalidState)?,
                     &self.capture,
                     oit,
+                    capture.frame.depth.as_ref().ok_or(Error::InvalidState)?,
                     pass,
                 )?;
                 return Ok(None);
@@ -280,6 +281,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                     capture_input.ok_or(Error::InvalidState)?,
                     &self.capture,
                     oit,
+                    capture.frame.depth.as_ref().ok_or(Error::InvalidState)?,
                     pass,
                 )?;
                 return Ok(None);
@@ -295,6 +297,9 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                     receiver_commands.ok_or(Error::InvalidState)?,
                     &self.receiver,
                     oit,
+                    self.scene_refraction
+                        .then_some(capture.frame.depth.as_ref().ok_or(Error::InvalidState)?)
+                        .unwrap_or(receiver.frame.depth.as_ref().ok_or(Error::InvalidState)?),
                     pass,
                 )?;
                 return Ok(None);
@@ -307,6 +312,9 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                     receiver_input.ok_or(Error::InvalidState)?,
                     &self.receiver,
                     oit,
+                    self.scene_refraction
+                        .then_some(capture.frame.depth.as_ref().ok_or(Error::InvalidState)?)
+                        .unwrap_or(receiver.frame.depth.as_ref().ok_or(Error::InvalidState)?),
                     pass,
                 )?;
                 return Ok(None);
@@ -450,12 +458,13 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         commands: &OitRecordCommands<'_, B>,
         slots: &CaptureFrameSlots,
         oit: &super::oit_plan::ForwardOitPlan,
+        opaque_depth: &crate::residency::ForwardDepthAttachment<B>,
         pass: GraphPass,
     ) -> Result<()>
     where
         B: RasterBackend,
     {
-        let depth = OitDepthTargetRef::from(frame.frame.depth.as_ref().ok_or(Error::InvalidState)?);
+        let depth = OitDepthTargetRef::from(opaque_depth);
         crate::graph::oit_record::record_pass(
             self.id.device,
             encoder,
@@ -487,12 +496,12 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         input: &ForwardOitInput<'_, B>,
         slots: &CaptureFrameSlots,
         oit: &super::oit_plan::ForwardOitPlan,
+        opaque_depth: &crate::residency::ForwardDepthAttachment<B>,
         pass: GraphPass,
     ) -> Result<()>
     where
         B: RasterBackend,
     {
-        let depth = frame.frame.depth.as_ref().ok_or(Error::InvalidState)?;
         shared_record::record_raster_selection(
             &self.slots(slots),
             pass,
@@ -511,9 +520,9 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                 },
                 depth: Some(RasterDepthSelection {
                     slot: slots.depth.ok_or(Error::InvalidState)?,
-                    texture: &depth.texture,
-                    view: &depth.view,
-                    instance: depth.instance,
+                    texture: &opaque_depth.texture,
+                    view: &opaque_depth.view,
+                    instance: opaque_depth.instance,
                     load: LoadOp::Load,
                     store: StoreOp::Store,
                     read_only: true,

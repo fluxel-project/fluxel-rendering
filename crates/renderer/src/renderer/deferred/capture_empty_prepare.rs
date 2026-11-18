@@ -37,36 +37,6 @@ where
         let extent = receiver_input.extent();
         let started = Instant::now();
         let scene_refraction = receiver_input.prepared().uses_scene_refraction();
-        if scene_refraction && peel_count == 0 {
-            let environment = self.environment_irradiance.clone().filter(|_| {
-                producer_inputs
-                    .iter()
-                    .any(|input| input.prepared().uses_environment_irradiance())
-            });
-            return self
-                .submit_prepared_forward_capture(
-                    snapshot,
-                    producer_inputs,
-                    receiver_input,
-                    producer_slot,
-                    extent,
-                    crate::FrameTopology::SortedForward,
-                    crate::FrameTopology::SortedForward,
-                    crate::ForwardDepthMode::Depth32LessEqualWrite,
-                    retained_assets,
-                    surface,
-                    started,
-                    environment,
-                    |context| {
-                        super::super::forward::receiver_contribution(
-                            context,
-                            crate::FrameTopology::SortedForward,
-                            false,
-                        )
-                    },
-                )
-                .await;
-        }
         if peel_count != 0 {
             rounds
                 .get()
@@ -107,17 +77,9 @@ where
             )
         {
             let receiver_partition =
-                capture_oit_receiver_partition(receiver_input, receiver_config)?;
+                capture_oit_receiver_partition(receiver_input, receiver_config);
             let receiver_rounds =
                 receiver_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
-            if receiver_partition.peel_count != 0 {
-                receiver_rounds
-                    .get()
-                    .checked_mul(3)
-                    .and_then(|passes| passes.checked_add(5))
-                    .ok_or(Error::InvalidRange)?;
-                crate::residency::OitPlan::admit(&self.device, extent)?;
-            }
             let receiver = self
                 .assemble_capture_oit_side(
                     snapshot,

@@ -7,11 +7,24 @@ use crate::graph::{
     oit::{DualDepthPeelInputs, OitPeelSide, declare_dual_depth_peeling_rounds},
     oit_record::OitRecordSlots,
 };
+use std::ops::Range;
 
 pub(super) struct OitStageDeclaration {
     pub(super) raster_pass: GraphPass,
     pub(super) opaque_color: TextureHandle,
     pub(super) opaque_depth: TextureHandle,
+    pub(super) output: TextureHandle,
+    pub(super) oit: ForwardOitPlan,
+}
+
+/// The transparent part of a scene-refraction receiver.
+///
+/// Its opaque background is not rendered by this namespace: the caller has
+/// already copied the producer's final color into `opaque_color`.  The
+/// producer depth remains a read-only occluder for the initial peel and for
+/// any excluded sorted fallback; it must never be replaced by an OIT
+/// intermediate or cleared by the receiver.
+pub(super) struct SceneRefractionOitStageDeclaration {
     pub(super) output: TextureHandle,
     pub(super) oit: ForwardOitPlan,
 }
@@ -70,6 +83,80 @@ where
         return Err(ForwardPlanBuildError::Pipeline(error));
     }
     let (raster_pass, (opaque_color, opaque_depth)) = opaque.map_err(|_| Error::InvalidState)?;
+    let (output, oit) = declare_peeling_stages(
+        graph,
+        spec,
+        reads,
+        input,
+        opaque_color,
+        opaque_depth,
+        input.opaque_count..peel_end,
+        contribute,
+    )?;
+    Ok(OitStageDeclaration {
+        raster_pass,
+        opaque_color,
+        opaque_depth,
+        output,
+        oit,
+    })
+}
+
+/// Appends only dual-depth-peeling stages for a scene-refraction receiver.
+///
+/// The producer's copied final color defines the opaque background.  A
+/// refraction receiver has no local opaque prefix because doing so would
+/// clear or write the producer depth alias before the transparent material can
+/// sample and test against it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn declare_scene_refraction_stages<B, C>(
+    graph: &mut GraphBuilder,
+    spec: &ForwardGraphSpec,
+    reads: &OitDrawReads<'_>,
+    input: &ForwardOitInput<'_, B>,
+    opaque_color: TextureHandle,
+    producer_depth: TextureHandle,
+    contribute: &mut C,
+) -> std::result::Result<SceneRefractionOitStageDeclaration, ForwardPlanBuildError>
+where
+    B: ResourceBackend,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+{
+    let peel_end = input
+        .opaque_count
+        .checked_add(input.peel_count)
+        .ok_or(Error::InvalidRange)?;
+    if input.opaque_count != 0 || input.peel_count == 0 || peel_end > spec.draws.len() {
+        return Err(Error::InvalidRange.into());
+    }
+    let (output, oit) = declare_peeling_stages(
+        graph,
+        spec,
+        reads,
+        input,
+        opaque_color,
+        producer_depth,
+        0..peel_end,
+        contribute,
+    )?;
+    Ok(SceneRefractionOitStageDeclaration { output, oit })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn declare_peeling_stages<B, C>(
+    graph: &mut GraphBuilder,
+    spec: &ForwardGraphSpec,
+    reads: &OitDrawReads<'_>,
+    input: &ForwardOitInput<'_, B>,
+    opaque_color: TextureHandle,
+    opaque_depth: TextureHandle,
+    peel_draws: Range<usize>,
+    contribute: &mut C,
+) -> std::result::Result<(TextureHandle, ForwardOitPlan), ForwardPlanBuildError>
+where
+    B: ResourceBackend,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+{
     let ping_pong = [
         import_side(graph, &input.owners.ping_pong[0])?,
         import_side(graph, &input.owners.ping_pong[1])?,
@@ -82,11 +169,11 @@ where
         output: import_owner(graph, input.output)?,
     };
     let slots = OitRecordSlots::from(handles);
-    contribution_error = None;
-    let peeled = declare_dual_depth_peeling_rounds(graph, handles, input.rounds, |_, pass| {
+    let mut contribution_error = None;
+    let product = declare_dual_depth_peeling_rounds(graph, handles, input.rounds, |_, pass| {
         reads.declare_with(
             pass,
-            input.opaque_count..peel_end,
+            peel_draws.clone(),
             contribute,
             &mut contribution_error,
         )
@@ -94,14 +181,14 @@ where
     if let Some(error) = contribution_error {
         return Err(ForwardPlanBuildError::Pipeline(error));
     }
-    let product = peeled.map_err(|_| Error::InvalidState)?;
+    let product = product.map_err(|_| Error::InvalidState)?;
     let mut output = product.output;
-    let fallback = if peel_end < spec.draws.len() {
+    let fallback = if peel_draws.end < spec.draws.len() {
         contribution_error = None;
         let fallback_result = graph.add_pass("oit-excluded-sorted", |pass| {
             reads.declare_with(
                 pass,
-                peel_end..spec.draws.len(),
+                peel_draws.end..spec.draws.len(),
                 contribute,
                 &mut contribution_error,
             )?;
@@ -112,14 +199,14 @@ where
                 ImageLayout::DepthStencilAttachment,
                 TextureUsage::RENDER_ATTACHMENT,
             )?;
-            let output = pass.write_texture_with_use(
+            let next = pass.write_texture_with_use(
                 output,
                 whole(),
                 color_read_write_uses().uses,
                 ImageLayout::ColorAttachment,
                 TextureUsage::RENDER_ATTACHMENT,
             )?;
-            Ok(output)
+            Ok(next)
         });
         if let Some(error) = contribution_error {
             return Err(ForwardPlanBuildError::Pipeline(error));
@@ -130,12 +217,9 @@ where
     } else {
         None
     };
-    Ok(OitStageDeclaration {
-        raster_pass,
-        opaque_color,
-        opaque_depth,
+    Ok((
         output,
-        oit: ForwardOitPlan {
+        ForwardOitPlan {
             product,
             slots,
             opaque_count: input.opaque_count,
@@ -145,7 +229,7 @@ where
             surface: None,
             hdr_readback: None,
         },
-    })
+    ))
 }
 
 fn import_owner<B: ResourceBackend>(

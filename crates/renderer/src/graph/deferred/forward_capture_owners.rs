@@ -43,9 +43,7 @@ pub(super) fn validate_owners<B: ResourceBackend>(
     {
         return Err(Error::InvalidState);
     }
-    if scene_refraction
-        && (receiver_oit.is_some() || desc.format != receiver.frame.target_desc.format)
-    {
+    if scene_refraction && desc.format != receiver.frame.target_desc.format {
         return Err(Error::InvalidState);
     }
     let depth = receiver.frame.depth.as_ref().ok_or(Error::InvalidState)?;

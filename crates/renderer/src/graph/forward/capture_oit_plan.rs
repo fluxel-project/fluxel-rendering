@@ -120,7 +120,12 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         if let Some((pass, _)) = declaration.receiver_background_copy {
             expected.push(pass);
         }
-        expected.push(declaration.receiver_raster);
+        if declaration
+            .receiver_background_copy
+            .is_none_or(|(pass, _)| pass != declaration.receiver_raster)
+        {
+            expected.push(declaration.receiver_raster);
+        }
         append_oit_passes(&mut expected, declaration.receiver_oit.as_ref());
         expected.extend(terminal_passes);
         if execution.logical().passes() != expected {

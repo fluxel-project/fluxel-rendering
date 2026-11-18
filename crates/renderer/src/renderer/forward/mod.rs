@@ -360,7 +360,6 @@ pub(in crate::renderer) use capture_entry::{
     capture_assets, validate_receiver_sources, validate_receiver_view,
 };
 pub(in crate::renderer) use capture_oit_entry::CaptureOitSide;
-pub(in crate::renderer) use capture_receiver_contribution::receiver_contribution;
 pub(in crate::renderer) use captured::CaptureTextureOwner;
 pub use captured::CaptureTextureSlot;
 pub(crate) use surface_composite::SurfaceCompositeOwner;

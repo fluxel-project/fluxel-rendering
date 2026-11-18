@@ -193,9 +193,12 @@ where
         let receiver = super::capture_oit_entry::capture_oit_receiver_partition(
             receiver_input,
             Some(receiver_config),
-        )?;
+        );
         if scene_refraction {
-            self.admit_oit_capture_refraction(extent, surface.is_some())?;
+            self.admit_oit_capture_refraction(
+                extent,
+                surface.is_some() || receiver.peel_count != 0,
+            )?;
         }
         for (partition, config) in [(&producer, producer_config), (&receiver, receiver_config)] {
             if partition.peel_count != 0 {

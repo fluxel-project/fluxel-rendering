@@ -49,7 +49,10 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             else {
                 return Err(Error::InvalidState);
             };
-            if receiver_oit.is_some()
+            if self
+                .receiver_oit
+                .as_ref()
+                .is_some_and(|oit| oit.opaque_count != 0)
                 || capture_depth.device != self.id.device
                 || receiver_depth.device != self.id.device
                 || capture_depth.instance != receiver_depth.instance

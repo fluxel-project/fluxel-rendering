@@ -58,7 +58,7 @@ where
         return Err(Error::WrongDevice.into());
     }
     let receiver = capture_source.is_some();
-    if scene_refraction.is_some() && (!receiver || oit_input.is_some()) {
+    if scene_refraction.is_some() && !receiver {
         return Err(Error::InvalidState.into());
     }
     validate_spec(device, &spec, FrameTopology::SortedForward, receiver)?;
@@ -96,31 +96,51 @@ where
     if let Some((_, target)) = background_copy {
         handles.target = target;
     }
-    let (raster, final_handle, oit) = if scene_refraction.is_some() {
-        let (pass, color, _) = declare_raster(
-            graph,
-            &spec,
-            FrameTopology::SortedForward,
-            upload,
-            &handles,
-            |context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>| {
-                context.sorted(|pass| {
-                    pass.depends_on_uploads()?;
-                    pass.read_vertex_streams()?;
-                    pass.read_frame_uniforms()?;
-                    pass.read_sampled_textures()?;
-                    pass.read_selected_depth()?;
-                    pass.read_write_main_color()
-                })
-            },
-        )?;
-        (pass, color, None)
-    } else {
-        let (raster, color, _, oit) = super::capture_oit_declaration::declare_side(
-            graph, &spec, &handles, upload, dependency, oit_input,
-        )?;
-        (raster, color, oit)
-    };
+    let (raster, final_handle, oit) =
+        if let (Some(producer_depth), Some(input)) = (scene_refraction, oit_input) {
+            // The background copy establishes the receiver's real opaque color.
+            // The OIT helper must then consume that version and the producer's
+            // original depth read-only; it must not clear or write either one.
+            let (background_copy, target) = background_copy.ok_or(Error::InvalidState)?;
+            let reads = super::oit_draw_reads::OitDrawReads::from_capture_handles(&handles, &spec);
+            let stages = super::oit_stages::declare_scene_refraction_stages(
+                graph,
+                &spec,
+                &reads,
+                input,
+                target,
+                producer_depth,
+                &mut |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads(),
+            )?;
+            // The copied target is the OIT background and is already represented
+            // by `background_copy`; keep it as the namespace raster identity so
+            // the compiled pass sequence never records an empty opaque pass.
+            (background_copy, stages.output, Some(stages.oit))
+        } else if scene_refraction.is_some() {
+            let (pass, color, _) = declare_raster(
+                graph,
+                &spec,
+                FrameTopology::SortedForward,
+                upload,
+                &handles,
+                |context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>| {
+                    context.sorted(|pass| {
+                        pass.depends_on_uploads()?;
+                        pass.read_vertex_streams()?;
+                        pass.read_frame_uniforms()?;
+                        pass.read_sampled_textures()?;
+                        pass.read_selected_depth()?;
+                        pass.read_write_main_color()
+                    })
+                },
+            )?;
+            (pass, color, None)
+        } else {
+            let (raster, color, _, oit) = super::capture_oit_declaration::declare_side(
+                graph, &spec, &handles, upload, dependency, oit_input,
+            )?;
+            (raster, color, oit)
+        };
     Ok(ForwardReceiverComposition {
         upload,
         mip_generations,
@@ -178,7 +198,9 @@ impl ForwardReceiverComposition {
         if let Some((pass, _)) = self.background_copy {
             passes.push(pass);
         }
-        passes.push(self.raster);
+        if self.background_copy.map(|(pass, _)| pass) != Some(self.raster) {
+            passes.push(self.raster);
+        }
         if let Some(oit) = &self.oit {
             passes.extend(oit.passes());
             if let Some(pass) = oit.fallback {

@@ -926,12 +926,14 @@ that exposes the capture target to the receiver.
 one Feature's draw reads in the producer's opaque, peel and excluded draw
 scopes. When it has no peel candidates, the producer invokes the typed sorted
 contribution on the same capture Graph. The receiver independently selects
-its ordinary or OIT product. A scene-refraction receiver uses the sorted route
-and copies the producer's final color after any excluded blend segment. Its
-depth test loads the producer's original depth, including a cleared depth
-attachment when the producer has no opaque draws. The same rule covers the
-Forward fallback of a Deferred capture with a peeling producer and no G-buffer
-prefix.
+its ordinary or OIT product. A scene-refraction receiver copies the producer's
+final color after any excluded blend segment. The sorted receiver loads that
+copy. For a peeling receiver it seeds the back accumulator, while the material
+continues sampling the original producer color with its explicit sampler and
+projection. The initial depth reduction loads the producer's original depth
+read-only, including a cleared depth attachment when the producer has no opaque
+draws. Later rounds use the peeling interval. This also covers Deferred capture
+with no G-buffer prefix through its real Forward fallback.
 
 The scene-color transmission receiver is prepared with
 `prepare_forward_scene_refraction_receiver`. It names a material texture bound
@@ -980,16 +982,17 @@ output, followed by any excluded sorted blends. The receiver aliases that actual
 final version and native owner alongside immutable assets. Opaque/masked
 receivers keep their own G-buffer and lighting; Blend/MaskBlend receivers append
 a Forward namespace with their own color/depth owners and optional finite OIT.
-Only sampled capture bindings alias the producer, so the receiver never clears
-or writes its sampled source. A scene-refraction receiver uses the Forward
+The sampled color remains read-only. A scene-refraction receiver uses the Forward
 refraction program for opaque, masked, and blended materials. Its Graph copy
 reads the final producer color after Deferred lighting and any sorted or peeling
 suffix, and initializes a separate receiver color target. The receiver samples
 the producer color and loads the original G-buffer depth attachment read-only,
 using the same camera and projection. This preserves foreground occlusion and
-the background outside coverage. With no opaque producer prefix, a sorted
-producer and this receiver use the existing Forward refraction capture path.
-Scene-refraction receivers that require peeling still need their composition path.
+the background outside coverage. When a Blend or MaskBlend receiver is selected
+for peeling, both the initial and peel material artifacts retain the projected
+refraction binding. The copied color and original depth seed the same finite OIT
+stages used by Forward capture. The independent final product feeds readback or
+Surface composition, with HDR encoding selected at that terminal.
 One shared resident import set covers Forward and Deferred producer,
 overlay and receiver cache hits. Completed allocations reuse one Graph handle
 only after comparing actual device, descriptor and incoming-state facts;
