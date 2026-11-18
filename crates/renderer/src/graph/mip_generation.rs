@@ -64,7 +64,11 @@ pub(crate) fn declare_chain(
     // Check the nonce/current version before authoring any pass. A caller
     // cannot use a stale handle to manufacture a chain for an older version.
     graph.texture_version(texture)?;
-    if levels == 0 || levels != desc.mip_levels || desc.dimension != TextureDimension::D2 {
+    if levels == 0
+        || levels != desc.mip_levels
+        || desc.dimension != TextureDimension::D2
+        || !desc.usage.contains(TextureUsage::COPY_SRC | TextureUsage::COPY_DST)
+    {
         return Err(GraphError::InvalidRange);
     }
 

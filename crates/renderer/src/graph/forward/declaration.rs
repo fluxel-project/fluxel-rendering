@@ -1,7 +1,7 @@
 //! Complete, callback-bearing graph declarations for cached Forward plans.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 /// A fully declared direct-surface graph before device-plan compilation.
 ///
@@ -270,7 +270,7 @@ where
             )?;
             let mut output_textures = textures.clone();
             for (upload, end) in frame.resident_upload.textures.iter().zip(&texture_ends) {
-                let texture = *textures
+                let texture = *output_textures
                     .get(upload.texture)
                     .ok_or(super::super::definition::GraphError::InvalidRange)?;
                 pass.read_with_use(
@@ -281,7 +281,7 @@ where
                 )?;
                 output_textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    one_color_mip(0),
+                    one_color_mip(upload.mip_level),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
@@ -386,23 +386,17 @@ where
         .map_err(|_| Error::InvalidState)?;
     let mut mip_passes = Vec::new();
     for upload in &frame.resident_upload.textures {
-        let texture = *textures.get(upload.texture).ok_or(Error::InvalidRange)?;
-        let levels = frame
-            .resident
-            .textures
-            .get(upload.texture)
-            .ok_or(Error::InvalidRange)?
-            .desc
-            .mip_levels;
-        if levels > 1 {
+        let index = upload.texture;
+        let owner = &frame.resident.textures[index];
+        if upload.mip_level == 0 && owner.desc.usage.contains(TextureUsage::COPY_SRC) {
             let (texture, passes) = super::super::mip_generation::declare_chain(
                 &mut graph,
-                texture,
-                upload.texture,
-                levels,
+                textures[index],
+                index,
+                owner.desc.mip_levels,
             )
             .map_err(|_| Error::InvalidState)?;
-            textures[upload.texture] = texture;
+            textures[index] = texture;
             mip_passes.extend(passes);
         }
     }

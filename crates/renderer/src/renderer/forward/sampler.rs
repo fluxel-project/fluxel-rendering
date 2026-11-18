@@ -1,5 +1,6 @@
 //! Forward material sampler admission and owner checks.
 use super::*;
+use crate::preparation::ResolvedForwardTexture;
 pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
     prepared
         .binding_schema()
@@ -54,12 +55,10 @@ pub(crate) fn material_sampler_for_input_with_capture(
         validate_material_sampler(desc)?;
         return Ok(desc.clone());
     }
-    let mip_levels = (0..input.resolved_textures().len())
-        .filter_map(|index| {
-            input
-                .asset_texture(index)
-                .map(|texture| texture.value().mip_levels)
-        })
+    let mip_levels = input
+        .resolved_textures()
+        .iter()
+        .filter_map(|texture| material_texture_properties(texture).map(|(_, _, levels, _)| levels))
         .chain(
             input
                 .prepared()
@@ -148,14 +147,40 @@ pub(crate) fn validate_ordinary_sampler(desc: &SamplerDesc) -> std::result::Resu
     }
     Ok(())
 }
-/// Admits the exact texture descriptor that an immutable material asset will
-/// allocate, including its requested mip chain.
-pub(crate) fn require_filterable_material_texture_with_mip_levels<B: ResourceBackend>(
+// Format and size come from the immutable CPU payload admitted during preparation.
+fn material_texture_properties(
+    texture: &ResolvedForwardTexture,
+) -> Option<([u32; 2], TextureFormat, u32, bool)> {
+    match texture {
+        ResolvedForwardTexture::Asset(texture) => {
+            let data = texture.value();
+            Some((
+                data.extent,
+                data.encoding.rgba8_format(),
+                data.mip_levels,
+                data.mip_levels > 1,
+            ))
+        }
+        ResolvedForwardTexture::RefractionRadiance(texture) => {
+            let mips = texture.value().mips();
+            Some((
+                mips[0].extent,
+                TextureFormat::Rgba16Float,
+                mips.len() as u32,
+                false,
+            ))
+        }
+        ResolvedForwardTexture::CaptureSlot(_) => None,
+    }
+}
+
+/// Admits the descriptor required to bind an immutable material image.
+pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
     device: &Device<B>,
-    extent: [u32; 2],
-    encoding: crate::TextureEncoding,
-    mip_levels: u32,
+    texture: &ResolvedForwardTexture,
 ) -> std::result::Result<(), Error> {
+    let (extent, format, mip_levels, generate_mips) =
+        material_texture_properties(texture).ok_or(Error::InvalidState)?;
     if extent.contains(&0) || mip_levels == 0 {
         return Err(Error::InvalidRange);
     }
@@ -164,7 +189,7 @@ pub(crate) fn require_filterable_material_texture_with_mip_levels<B: ResourceBac
         return Err(Error::InvalidRange);
     }
     let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
-    if mip_levels > 1 {
+    if generate_mips {
         usage |= TextureUsage::COPY_SRC;
     }
     let desc = TextureDesc {
@@ -172,7 +197,7 @@ pub(crate) fn require_filterable_material_texture_with_mip_levels<B: ResourceBac
         dimension: TextureDimension::D2,
         extent: [extent[0], extent[1], 1],
         array_layers: 1,
-        format: encoding.rgba8_format(),
+        format,
         mip_levels,
         samples: 1,
         usage,
@@ -199,18 +224,18 @@ pub(crate) fn validate_sampled_texture_owner<B: ResourceBackend>(
         resident,
         texture,
         selected_device,
-        expected_encoding,
+        expected_encoding.rgba8_format(),
         1,
         require_filterable,
     )
 }
 
 /// Revalidates a sampled owner against the exact immutable descriptor facts.
-pub(crate) fn validate_sampled_texture_owner_with_mips<B: ResourceBackend>(
+fn validate_sampled_texture_owner_with_mips<B: ResourceBackend>(
     resident: &crate::residency::ForwardResidentBuffers<B>,
     texture: usize,
     selected_device: DeviceId,
-    expected_encoding: crate::TextureEncoding,
+    expected_format: TextureFormat,
     expected_mip_levels: u32,
     require_filterable: bool,
 ) -> std::result::Result<(), Error> {
@@ -220,7 +245,7 @@ pub(crate) fn validate_sampled_texture_owner_with_mips<B: ResourceBackend>(
         || owner.texture.device() != selected_device
         || owner.view.device() != selected_device
         || owner.desc.dimension != TextureDimension::D2
-        || owner.desc.format != expected_encoding.rgba8_format()
+        || owner.desc.format != expected_format
         || owner.desc.extent[0] == 0
         || owner.desc.extent[1] == 0
         || owner.desc.extent[2] != 1
@@ -246,26 +271,25 @@ pub(crate) fn validate_material_texture_owner<B: ResourceBackend>(
     texture_index: usize,
     requires_filtering: bool,
 ) -> std::result::Result<(), Error> {
-    if let Some(source) = input.asset_texture(texture_index) {
-        let extent = source.value().extent;
-        let owner = resident.textures.get(texture).ok_or(Error::InvalidRange)?;
-        if owner.desc.extent != [extent[0], extent[1], 1] {
-            return Err(Error::InvalidState);
-        }
-    }
-    let expected_encoding = input
-        .asset_texture(texture_index)
-        .map(|texture| texture.value().encoding)
-        .unwrap_or(crate::TextureEncoding::Linear);
-    let expected_mip_levels = input
-        .asset_texture(texture_index)
-        .map(|texture| texture.value().mip_levels)
-        .unwrap_or(1);
+    let source = input
+        .resolved_textures()
+        .get(texture_index)
+        .ok_or(Error::InvalidRange)?;
+    let (expected_format, expected_mip_levels) =
+        if let Some((extent, format, mip_levels, _)) = material_texture_properties(source) {
+            let owner = resident.textures.get(texture).ok_or(Error::InvalidRange)?;
+            if owner.desc.extent != [extent[0], extent[1], 1] {
+                return Err(Error::InvalidState);
+            }
+            (format, mip_levels)
+        } else {
+            (TextureFormat::Rgba8Unorm, 1)
+        };
     validate_sampled_texture_owner_with_mips(
         resident,
         texture,
         selected_device,
-        expected_encoding,
+        expected_format,
         expected_mip_levels,
         requires_filtering,
     )

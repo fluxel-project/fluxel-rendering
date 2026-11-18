@@ -1,8 +1,8 @@
 //! Logical resource declaration for the bounded Deferred probe.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::validation::validate_frame_inputs;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
     pub(crate) fn declare_with<F>(
@@ -166,7 +166,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     )?;
                     materials[copy.texture] = pass.write_texture_with_use(
                         texture,
-                        one_color_mip(0),
+                        one_color_mip(copy.mip_level),
                         texture_copy_write().uses,
                         ImageLayout::CopyDst,
                         TextureUsage::COPY_DST,
@@ -319,16 +319,13 @@ impl<B: ResourceBackend> DeferredPlan<B> {
 
         let mut mip_generation = Vec::new();
         for (index, (texture, fresh)) in materials.iter_mut().zip(&fresh_mip_chains).enumerate() {
-            if *fresh {
-                let levels = frame
-                    .resident
-                    .textures
-                    .get(index)
-                    .ok_or(Error::InvalidState)?
-                    .desc
-                    .mip_levels;
+            let desc = &frame.resident.textures[index].desc;
+            if *fresh && desc.usage.contains(TextureUsage::COPY_SRC) {
                 let (generated, passes) = super::super::mip_generation::declare_chain(
-                    &mut graph, *texture, index, levels,
+                    &mut graph,
+                    *texture,
+                    index,
+                    desc.mip_levels,
                 )
                 .map_err(|_| Error::InvalidState)?;
                 *texture = generated;

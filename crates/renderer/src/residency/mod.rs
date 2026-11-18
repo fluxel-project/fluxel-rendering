@@ -13,9 +13,9 @@ mod forward;
 #[cfg(test)]
 pub(crate) use deferred::allocate_deferred_scene_color;
 pub(crate) use deferred::{
-    DeferredDraw, DeferredFrame, DeferredPublication, DeferredSurfaceFrame,
     allocate_deferred_scene_color_desc, deferred_albedo_format, deferred_normal_format,
-    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects,
+    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects, DeferredDraw,
+    DeferredFrame, DeferredPublication, DeferredSurfaceFrame,
 };
 pub(crate) use environment::EnvironmentFrameOwner;
 pub(crate) use oit::{OitDepthPrecision, OitOwners, OitPingPongOwners, OitPlan, OitTextureOwner};
@@ -25,12 +25,16 @@ pub(crate) use forward_cache::{
 };
 mod upload;
 pub(crate) use forward::{
-    ForwardBindGroup, ForwardDepthAttachment, ForwardDraw, ForwardFrame, ForwardFrameBuffers,
-    ForwardResidentBuffers, ForwardResidentUpload, ForwardSampler, ForwardStreamInput,
+    plan_forward_frame, plan_forward_hdr_frame, plan_forward_resident_with_texture_inputs,
+    plan_surface_forward_frame,
+    ForwardAuthoredRgba16FloatTextureInput, ForwardAuthoredTextureMipInput, ForwardBindGroup,
+    ForwardDepthAttachment, ForwardDraw, ForwardFrame, ForwardFrameBuffers, ForwardResidentBuffers,
+    ForwardResidentTextureInput, ForwardResidentUpload, ForwardSampler, ForwardStreamInput,
     ForwardTexture, ForwardTextureInput, ForwardTextureUpload, ForwardUniformUpload,
-    ForwardVertexStream, SurfaceForwardFrame, SurfaceForwardFrameBuffers, plan_forward_frame,
-    plan_forward_hdr_frame, plan_forward_resident, plan_surface_forward_frame,
+    ForwardVertexStream, SurfaceForwardFrame, SurfaceForwardFrameBuffers,
 };
+#[cfg(test)]
+pub(crate) use forward::plan_forward_resident;
 
 pub(crate) use upload::{
     ComputeBuffers, RasterBuffers, ReadSetRasterBuffers, SurfaceRasterBuffers, UploadBuffers,

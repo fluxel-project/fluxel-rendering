@@ -4,7 +4,10 @@
 //! receives only clones of products after the coordinator has observed that
 //! completion, so a failed or pending upload can never become reusable here.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Weak},
+};
 
 use fluxel_assets::{AssetId, AssetSnapshot};
 use fluxel_rhi::{
@@ -14,7 +17,7 @@ use fluxel_rhi::{
 
 use crate::preparation::{
     ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, GeometryAsset,
-    GeometryData,
+    GeometryData, RefractionRadianceAsset, RefractionRadianceData, ResolvedForwardTexture,
 };
 
 use super::{ForwardTexture, ForwardVertexStream};
@@ -41,12 +44,21 @@ impl ForwardGeometryCacheKey {
     }
 }
 
-/// Cache identity for one completed sampled-texture realization on one RHI device.
+/// Cache identity for one completed sampled-texture realization on one RHI
+/// device. The asset kind remains part of the identity, so a color texture
+/// generation can never alias an authored radiance-chain generation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct ForwardTextureCacheKey {
-    asset: AssetId<ColorTextureAsset>,
-    generation: u64,
-    device: DeviceId,
+pub(crate) enum ForwardTextureCacheKey {
+    Color {
+        asset: AssetId<ColorTextureAsset>,
+        generation: u64,
+        device: DeviceId,
+    },
+    RefractionRadiance {
+        asset: AssetId<RefractionRadianceAsset>,
+        generation: u64,
+        device: DeviceId,
+    },
 }
 
 impl ForwardTextureCacheKey {
@@ -55,10 +67,28 @@ impl ForwardTextureCacheKey {
         snapshot: &AssetSnapshot<ColorTextureAsset, ColorTextureData>,
         device: DeviceId,
     ) -> Self {
-        Self {
+        Self::Color {
             asset: snapshot.id(),
             generation: snapshot.generation().get(),
             device,
+        }
+    }
+
+    /// Builds a key from one immutable prefiltered radiance generation.
+    pub(crate) fn from_refraction_radiance_snapshot(
+        snapshot: &AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>,
+        device: DeviceId,
+    ) -> Self {
+        Self::RefractionRadiance {
+            asset: snapshot.id(),
+            generation: snapshot.generation().get(),
+            device,
+        }
+    }
+
+    fn device(self) -> DeviceId {
+        match self {
+            Self::Color { device, .. } | Self::RefractionRadiance { device, .. } => device,
         }
     }
 }
@@ -71,6 +101,10 @@ impl ForwardTextureCacheKey {
 pub(crate) struct ForwardResidentCache<B: ResourceBackend> {
     geometry: HashMap<ForwardGeometryCacheKey, Vec<ForwardVertexStream<B>>>,
     textures: HashMap<ForwardTextureCacheKey, ForwardTexture<B>>,
+    /// Weak source-payload witnesses for independently selected radiance maps.
+    /// A completed GPU product can stay reusable only while an owner still
+    /// retains the exact immutable CPU generation.
+    refraction_radiance: HashMap<ForwardTextureCacheKey, Weak<RefractionRadianceData>>,
 }
 
 impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
@@ -78,6 +112,7 @@ impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
         Self {
             geometry: HashMap::new(),
             textures: HashMap::new(),
+            refraction_radiance: HashMap::new(),
         }
     }
 }
@@ -92,6 +127,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
     }
 
     /// Derives the completed texture cache key used by one prepared draw.
+    #[cfg(test)]
     pub(crate) fn texture_key(
         draw: &ForwardDrawInput,
         texture_index: usize,
@@ -99,6 +135,28 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
     ) -> Option<ForwardTextureCacheKey> {
         draw.asset_texture(texture_index)
             .map(|texture| ForwardTextureCacheKey::from_snapshot(texture, device))
+    }
+
+    /// Derives the cache key for either immutable material texture kind.
+    pub(crate) fn resolved_texture_key(
+        &mut self,
+        draw: &ForwardDrawInput,
+        texture_index: usize,
+        device: DeviceId,
+    ) -> Option<ForwardTextureCacheKey> {
+        match draw.resolved_textures().get(texture_index)? {
+            ResolvedForwardTexture::Asset(texture) => {
+                Some(ForwardTextureCacheKey::from_snapshot(texture, device))
+            }
+            ResolvedForwardTexture::RefractionRadiance(texture) => {
+                let key =
+                    ForwardTextureCacheKey::from_refraction_radiance_snapshot(texture, device);
+                self.refraction_radiance
+                    .insert(key, Arc::downgrade(&texture.value_arc()));
+                Some(key)
+            }
+            ResolvedForwardTexture::CaptureSlot(_) => None,
+        }
     }
 
     /// Returns reusable vertex streams for a completed exact geometry generation.
@@ -156,8 +214,8 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         key: ForwardTextureCacheKey,
         texture: &ForwardTexture<B>,
     ) -> bool {
-        if texture.texture.device() != key.device
-            || texture.device != key.device
+        if texture.texture.device() != key.device()
+            || texture.device != key.device()
             || self.textures.contains_key(&key)
         {
             return false;
@@ -196,20 +254,31 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             .collect::<HashSet<_>>();
         self.geometry
             .retain(|key, _| geometry.contains(&(key.asset, key.generation)));
-        self.textures
-            .retain(|key, _| textures.contains(&(key.asset, key.generation)));
+        self.refraction_radiance
+            .retain(|_, source| source.strong_count() != 0);
+        self.textures.retain(|key, _| match key {
+            ForwardTextureCacheKey::Color {
+                asset, generation, ..
+            } => textures.contains(&(*asset, *generation)),
+            ForwardTextureCacheKey::RefractionRadiance { .. } => {
+                self.refraction_radiance.contains_key(key)
+            }
+        });
     }
 
     /// Drops completed products belonging to one replaced or lost device.
     pub(crate) fn remove_device(&mut self, device: DeviceId) {
         self.geometry.retain(|key, _| key.device != device);
-        self.textures.retain(|key, _| key.device != device);
+        self.textures.retain(|key, _| key.device() != device);
+        self.refraction_radiance
+            .retain(|key, _| key.device() != device);
     }
 
     /// Removes every completed reusable product.
     pub(crate) fn clear(&mut self) {
         self.geometry.clear();
         self.textures.clear();
+        self.refraction_radiance.clear();
     }
 }
 

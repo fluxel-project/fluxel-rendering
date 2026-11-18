@@ -21,6 +21,30 @@ pub struct SpecularIblMip {
     pub rgba16f_le: Vec<u8>,
 }
 
+/// Marker for immutable, independently prefiltered material refraction radiance.
+pub struct RefractionRadianceAsset;
+
+impl AssetKind for RefractionRadianceAsset {}
+
+/// Linear lat-long refraction radiance in the renderer's environment coordinates.
+#[derive(Clone, Debug)]
+pub struct RefractionRadianceData {
+    mips: Vec<SpecularIblMip>,
+}
+
+impl RefractionRadianceData {
+    /// Validates and retains an authored RGBA16Float chain from the base image to 1×1.
+    /// Returns `None` for invalid dimensions, bytes, or radiance values.
+    pub fn new(mips: Vec<SpecularIblMip>) -> Option<Self> {
+        valid_radiance_mips(&mips).then_some(Self { mips })
+    }
+
+    /// Returns the immutable mip chain in GPU copy order.
+    pub fn mips(&self) -> &[SpecularIblMip] {
+        &self.mips
+    }
+}
+
 /// A tightly packed, little-endian `RGBA16Float` two-dimensional image.
 #[derive(Clone, Debug)]
 pub struct SpecularIblImage {
@@ -114,25 +138,28 @@ pub struct EnvironmentSpecularIblData {
 impl EnvironmentSpecularIblData {
     /// Validates all CPU bytes before any GPU resource allocation.
     pub fn is_valid(&self) -> bool {
-        if self.radiance_mips.is_empty() || !self.lod.is_valid() || !valid_image(&self.brdf_lut) {
-            return false;
-        }
-        let mut expected = self.radiance_mips[0].extent;
-        if expected.contains(&0) {
-            return false;
-        }
-        for mip in &self.radiance_mips {
-            if mip.extent != expected || !valid_bytes(expected, &mip.rgba16f_le) {
-                return false;
-            }
-            if expected == [1, 1] {
-                expected = [0, 0];
-            } else {
-                expected = [(expected[0] / 2).max(1), (expected[1] / 2).max(1)];
-            }
-        }
-        expected == [0, 0]
+        self.lod.is_valid()
+            && valid_image(&self.brdf_lut)
+            && valid_radiance_mips(&self.radiance_mips)
     }
+}
+
+fn valid_radiance_mips(mips: &[SpecularIblMip]) -> bool {
+    let Some(base) = mips.first() else {
+        return false;
+    };
+    let mut expected = base.extent;
+    for mip in mips {
+        if mip.extent != expected || !valid_bytes(expected, &mip.rgba16f_le) {
+            return false;
+        }
+        if expected == [1, 1] {
+            expected = [0, 0];
+        } else {
+            expected = [(expected[0] / 2).max(1), (expected[1] / 2).max(1)];
+        }
+    }
+    expected == [0, 0]
 }
 
 fn valid_image(image: &SpecularIblImage) -> bool {

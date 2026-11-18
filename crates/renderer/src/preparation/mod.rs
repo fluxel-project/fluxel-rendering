@@ -6,8 +6,8 @@
 mod environment;
 mod specular_environment;
 pub use specular_environment::{
-    EnvironmentSpecularIblAsset, EnvironmentSpecularIblData, LinearSpecularLod, SpecularIblImage,
-    SpecularIblMip,
+    EnvironmentSpecularIblAsset, EnvironmentSpecularIblData, LinearSpecularLod,
+    RefractionRadianceAsset, RefractionRadianceData, SpecularIblImage, SpecularIblMip,
 };
 mod forward;
 pub(crate) mod forward_fragment;
@@ -21,6 +21,7 @@ mod forward_sources;
 mod geometry;
 mod geometry_key;
 pub use environment::{EnvironmentIrradianceAsset, EnvironmentIrradianceData};
+pub(crate) use forward::ResolvedForwardTexture;
 #[cfg(test)]
 pub(crate) use forward::prepare_feature_draws;
 pub use forward::{

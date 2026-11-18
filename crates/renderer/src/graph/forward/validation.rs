@@ -269,31 +269,11 @@ pub(super) fn validate_uploads<B: ResourceBackend>(frame: &ForwardFrame<B>) -> R
             return Err(Error::InvalidRange);
         }
     }
-    let mut uploaded_textures = vec![false; frame.resident.textures.len()];
-    for upload in &frame.resident_upload.textures {
-        let texture = frame
-            .resident
-            .textures
-            .get(upload.texture)
-            .ok_or(Error::InvalidRange)?;
-        let already_uploaded = std::mem::replace(
-            uploaded_textures
-                .get_mut(upload.texture)
-                .ok_or(Error::InvalidRange)?,
-            true,
-        );
-        if already_uploaded
-            || !upload.source_offset.is_multiple_of(512)
-            || upload.extent != texture.desc.extent
-            || upload.rows_per_image != upload.extent[1]
-            || upload.bytes_per_row == 0
-            || !upload.bytes_per_row.is_multiple_of(256)
-            || u64::from(upload.bytes_per_row) < u64::from(upload.extent[0]) * 4
-            || texture_copy_end(upload)? > frame.resident.upload_desc.size
-        {
-            return Err(Error::InvalidRange);
-        }
-    }
+    validate_texture_uploads(
+        &frame.resident,
+        &frame.resident_upload.textures,
+        frame.resident.upload_desc.size,
+    )?;
     Ok(())
 }
 
@@ -327,32 +307,69 @@ pub(super) fn validate_surface_uploads<B: ResourceBackend>(
             return Err(Error::InvalidRange);
         }
     }
-    let mut uploaded_textures = vec![false; frame.resident.textures.len()];
-    for upload in &frame.resident_upload.textures {
-        let texture = frame
-            .resident
+    validate_texture_uploads(
+        &frame.resident,
+        &frame.resident_upload.textures,
+        frame.resident.upload_desc.size,
+    )?;
+    Ok(())
+}
+
+fn validate_texture_uploads<B: ResourceBackend>(
+    resident: &crate::residency::ForwardResidentBuffers<B>,
+    uploads: &[crate::residency::ForwardTextureUpload],
+    upload_size: u64,
+) -> Result<()> {
+    let mut uploaded = resident
+        .textures
+        .iter()
+        .map(|texture| vec![false; texture.desc.mip_levels as usize])
+        .collect::<Vec<_>>();
+    for upload in uploads {
+        let texture = resident
             .textures
             .get(upload.texture)
             .ok_or(Error::InvalidRange)?;
-        let already = std::mem::replace(
-            uploaded_textures
-                .get_mut(upload.texture)
-                .ok_or(Error::InvalidRange)?,
-            true,
-        );
-        if already
+        let mip_uploaded = uploaded
+            .get_mut(upload.texture)
+            .and_then(|mips| mips.get_mut(upload.mip_level as usize))
+            .ok_or(Error::InvalidRange)?;
+        let expected = [
+            (texture.desc.extent[0] >> upload.mip_level).max(1),
+            (texture.desc.extent[1] >> upload.mip_level).max(1),
+            1,
+        ];
+        let bytes_per_texel = texture_bytes_per_texel(texture.desc.format)?;
+        if std::mem::replace(mip_uploaded, true)
             || !upload.source_offset.is_multiple_of(512)
-            || upload.extent != texture.desc.extent
+            || upload.extent != expected
             || upload.rows_per_image != upload.extent[1]
             || upload.bytes_per_row == 0
             || !upload.bytes_per_row.is_multiple_of(256)
-            || u64::from(upload.bytes_per_row) < u64::from(upload.extent[0]) * 4
-            || texture_copy_end(upload)? > frame.resident.upload_desc.size
+            || u64::from(upload.bytes_per_row)
+                < u64::from(upload.extent[0]) * u64::from(bytes_per_texel)
+            || texture_copy_end(upload)? > upload_size
+        {
+            return Err(Error::InvalidRange);
+        }
+    }
+    for (texture, mips) in resident.textures.iter().zip(uploaded) {
+        if !texture.desc.usage.contains(TextureUsage::COPY_SRC)
+            && mips.iter().any(|uploaded| *uploaded)
+            && mips.iter().any(|uploaded| !uploaded)
         {
             return Err(Error::InvalidRange);
         }
     }
     Ok(())
+}
+
+fn texture_bytes_per_texel(format: TextureFormat) -> Result<u32> {
+    match format {
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(4),
+        TextureFormat::Rgba16Float => Ok(8),
+        _ => Err(Error::InvalidRange),
+    }
 }
 
 pub(super) fn validate_surface_batches<B: ResourceBackend>(

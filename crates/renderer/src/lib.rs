@@ -40,10 +40,10 @@ pub use preparation::{
     ForwardTextureBinding, ForwardTextureSource, GeometryAsset, GeometryAttribute,
     GeometryBufferOwner, GeometryData, GeometryDraw, GeometryError, GeometryLayout, GeometryStream,
     GeometryStreamBinding, LinearSpecularLod, MaterialPreparationError, PreparedCaptureReceiver,
-    PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, SpecularIblImage, SpecularIblMip,
-    TextureEncoding, prepare_forward, prepare_forward_capture_receiver,
-    prepare_forward_capture_receiver_with_instance, prepare_forward_scene_refraction_receiver,
-    prepare_material,
+    PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, RefractionRadianceAsset,
+    RefractionRadianceData, SpecularIblImage, SpecularIblMip, TextureEncoding, prepare_forward,
+    prepare_forward_capture_receiver, prepare_forward_capture_receiver_with_instance,
+    prepare_forward_scene_refraction_receiver, prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirectionalLight, DirtyRange, FrameSnapshot, MeshVisibility, RenderBounds,

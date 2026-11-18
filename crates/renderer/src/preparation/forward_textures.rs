@@ -1,0 +1,118 @@
+//! Immutable material texture resolution and source encoding admission.
+
+use std::collections::HashMap;
+
+use super::forward_validation::validate_texture;
+use super::*;
+use crate::preparation::{MaterialBindingSchema, MaterialTextureBinding};
+
+pub(super) fn ordered_texture_sources<'a>(
+    provided: &'a [ForwardTextureBinding],
+    expected: &[MaterialTextureBinding],
+    source: ForwardDrawSource,
+) -> Result<Vec<&'a ForwardTextureBinding>, ForwardPreparationError> {
+    let mut by_name = HashMap::with_capacity(provided.len());
+    for texture in provided {
+        if by_name.insert(texture.resource.as_str(), texture).is_some() {
+            return Err(ForwardPreparationError::DuplicateTextureResource {
+                source,
+                resource: texture.resource.clone(),
+            });
+        }
+    }
+    let mut ordered = Vec::with_capacity(expected.len());
+    for texture in expected {
+        let Some(provided) = by_name.get(texture.name.as_str()) else {
+            return Err(ForwardPreparationError::MissingTextureResource {
+                source,
+                resource: texture.name.clone(),
+            });
+        };
+        ordered.push(*provided);
+    }
+    for texture in provided {
+        if !expected
+            .iter()
+            .any(|expected| expected.name == texture.resource)
+        {
+            return Err(ForwardPreparationError::UnexpectedTextureResource {
+                source,
+                resource: texture.resource.clone(),
+            });
+        }
+    }
+    Ok(ordered)
+}
+
+pub(super) fn resolve_asset_textures(
+    resources: &ForwardResources,
+    schema: &MaterialBindingSchema,
+    assets: &ForwardAssets,
+    source: ForwardDrawSource,
+) -> Result<Vec<ResolvedForwardTexture>, ForwardPreparationError> {
+    ordered_texture_sources(&resources.textures, &schema.textures, source)?
+        .into_iter()
+        .zip(&schema.textures)
+        .map(|(texture, expected)| match &texture.source {
+            ForwardTextureSource::CaptureSlot(_) => {
+                Err(ForwardPreparationError::CaptureTextureOutsideReceiver {
+                    source,
+                    resource: texture.resource.clone(),
+                })
+            }
+            asset => resolve_texture_asset(asset, expected, assets, source),
+        })
+        .collect()
+}
+
+pub(super) fn resolve_texture_asset(
+    binding: &ForwardTextureSource,
+    expected: &MaterialTextureBinding,
+    assets: &ForwardAssets,
+    source: ForwardDrawSource,
+) -> Result<ResolvedForwardTexture, ForwardPreparationError> {
+    match binding {
+        ForwardTextureSource::Asset(reference) => {
+            let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
+            validate_texture(asset.value(), source)?;
+            validate_texture_encoding(expected, asset.value().encoding, source)?;
+            Ok(ResolvedForwardTexture::Asset(asset))
+        }
+        ForwardTextureSource::RefractionRadiance(asset) => {
+            validate_texture_encoding(expected, TextureEncoding::Linear, source)?;
+            Ok(ResolvedForwardTexture::RefractionRadiance(asset.clone()))
+        }
+        ForwardTextureSource::CaptureSlot(slot) => {
+            Err(ForwardPreparationError::CaptureTextureOutsideReceiver {
+                source,
+                resource: slot.clone(),
+            })
+        }
+    }
+}
+
+pub(super) fn validate_texture_encoding(
+    expected: &MaterialTextureBinding,
+    actual: TextureEncoding,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    let Some(required_encoding) = expected.encoding else {
+        return Ok(());
+    };
+    let required_encoding = match required_encoding {
+        fluxel_material::MaterialTextureEncoding::Linear => TextureEncoding::Linear,
+        fluxel_material::MaterialTextureEncoding::Srgb => TextureEncoding::Srgb,
+        fluxel_material::MaterialTextureEncoding::SrgbEncodedUnorm => {
+            TextureEncoding::SrgbEncodedUnorm
+        }
+    };
+    if actual != required_encoding {
+        return Err(ForwardPreparationError::TextureEncodingMismatch {
+            source,
+            resource: expected.name.clone(),
+            expected: required_encoding,
+            actual,
+        });
+    }
+    Ok(())
+}

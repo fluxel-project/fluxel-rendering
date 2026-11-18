@@ -15,8 +15,6 @@ pub(crate) fn material_texture_reference(
     }
     match &binding.source {
         ForwardTextureSource::Asset(asset) => Ok(*asset),
-        ForwardTextureSource::CaptureSlot(_) => {
-            Err("material_texture must be an asset binding".into())
-        }
+        _ => Err("material_texture must be an RGBA8 color asset binding".into()),
     }
 }

@@ -2,7 +2,10 @@
 
 use fluxel_material::{MaterialCompiler, MaterialResourceKind};
 
-use super::*;
+use super::{
+    forward_textures::{resolve_texture_asset, validate_texture_encoding},
+    *,
+};
 use crate::preparation::material::prepare_compiled_material;
 
 #[derive(Clone)]
@@ -18,12 +21,27 @@ impl SceneRefractionBinding {
 }
 
 /// The declared source for a Forward material's sampled color input.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum ForwardTextureSource {
     /// One exact immutable CPU color-texture generation.
     Asset(SceneAssetRef<ColorTextureAsset>),
+    /// An independently authored HDR radiance chain with an exact immutable generation.
+    RefractionRadiance(AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>),
     /// A renderer-owned same-frame capture product logical resource name.
     CaptureSlot(String),
+}
+
+impl std::fmt::Debug for ForwardTextureSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Asset(asset) => f.debug_tuple("Asset").field(asset).finish(),
+            Self::RefractionRadiance(asset) => f
+                .debug_tuple("RefractionRadiance")
+                .field(&SceneAssetRef::from_snapshot(asset))
+                .finish(),
+            Self::CaptureSlot(slot) => f.debug_tuple("CaptureSlot").field(slot).finish(),
+        }
+    }
 }
 
 impl From<SceneAssetRef<ColorTextureAsset>> for ForwardTextureSource {
@@ -39,6 +57,7 @@ pub type ForwardCaptureResources = ForwardResources;
 #[derive(Clone)]
 pub(crate) enum ResolvedForwardTexture {
     Asset(AssetSnapshot<ColorTextureAsset, ColorTextureData>),
+    RefractionRadiance(AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>),
     CaptureSlot(String),
 }
 
@@ -372,12 +391,6 @@ fn resolve_capture_textures(
         .into_iter()
         .zip(expected)
         .map(|(texture, expected)| match &texture.source {
-            ForwardTextureSource::Asset(reference) => {
-                let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
-                validate_texture(asset.value(), source)?;
-                super::validate_texture_encoding(expected, asset.value().encoding, source)?;
-                Ok(ResolvedForwardTexture::Asset(asset))
-            }
             ForwardTextureSource::CaptureSlot(slot) => {
                 if slot.is_empty() {
                     return Err(ForwardPreparationError::MissingCaptureSlot {
@@ -385,10 +398,11 @@ fn resolve_capture_textures(
                         slot: slot.clone(),
                     });
                 }
-                super::validate_texture_encoding(expected, TextureEncoding::Linear, source)?;
+                validate_texture_encoding(expected, TextureEncoding::Linear, source)?;
                 captures += 1;
                 Ok(ResolvedForwardTexture::CaptureSlot(slot.clone()))
             }
+            asset => resolve_texture_asset(asset, expected, assets, source),
         })
         .collect::<Result<Vec<_>, _>>()?;
     if captures == 0 {

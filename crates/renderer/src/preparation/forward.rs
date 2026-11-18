@@ -5,7 +5,7 @@
 //! the resulting immutable inputs. It does not allocate GPU objects, declare
 //! Graph access, or submit work.
 
-use std::{collections::HashMap, ops::Range};
+use std::ops::Range;
 
 use fluxel_assets::{AssetKind, AssetSnapshot};
 use fluxel_material::{
@@ -20,7 +20,10 @@ use crate::{
 };
 
 use super::ForwardDrawSource;
-use super::{GeometryLayout, MaterialPreparationError, PreparedMaterial, prepare_material};
+use super::{
+    GeometryLayout, MaterialPreparationError, PreparedMaterial, RefractionRadianceAsset,
+    RefractionRadianceData, prepare_material,
+};
 
 #[path = "forward_oit.rs"]
 mod forward_oit;
@@ -34,7 +37,7 @@ mod forward_validation;
 use forward_pbr::normal_from_local;
 use forward_validation::{
     color_uv0_template, finite_transform, forward_template, multiply_columns, resolve_asset,
-    validate_cpu_geometry, validate_material_schema, validate_texture,
+    validate_cpu_geometry, validate_material_schema,
 };
 
 /// Marker for immutable geometry assets consumed by the initial Forward path.
@@ -174,6 +177,18 @@ impl ForwardTextureBinding {
         }
     }
 
+    /// Binds one immutable prefiltered HDR radiance generation to a linear material texture.
+    #[must_use]
+    pub fn refraction_radiance(
+        resource: impl Into<String>,
+        asset: AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::RefractionRadiance(asset),
+        }
+    }
+
     /// Binds a same-frame capture slot to `resource`.
     #[must_use]
     pub fn capture(resource: impl Into<String>, slot: impl Into<String>) -> Self {
@@ -275,21 +290,22 @@ impl ForwardDrawInput {
 
     /// Returns the asset texture at `index`, if its source is an immutable
     /// color-texture asset.
+    #[cfg(test)]
     pub(crate) fn asset_texture(
         &self,
         index: usize,
     ) -> Option<&AssetSnapshot<ColorTextureAsset, ColorTextureData>> {
         match self.textures.get(index)? {
             ResolvedForwardTexture::Asset(texture) => Some(texture),
-            ResolvedForwardTexture::CaptureSlot(_) => None,
+            _ => None,
         }
     }
 
     /// Returns the capture slot at `index`, if that is its resolved source.
     pub(crate) fn capture_texture_slot(&self, index: usize) -> Option<&str> {
         match self.textures.get(index)? {
-            ResolvedForwardTexture::Asset(_) => None,
             ResolvedForwardTexture::CaptureSlot(slot) => Some(slot),
+            _ => None,
         }
     }
 
@@ -481,95 +497,9 @@ fn prepare_draw(
     })
 }
 
-pub(crate) fn ordered_texture_sources<'a>(
-    provided: &'a [ForwardTextureBinding],
-    expected: &[super::MaterialTextureBinding],
-    source: ForwardDrawSource,
-) -> Result<Vec<&'a ForwardTextureBinding>, ForwardPreparationError> {
-    let mut by_name = HashMap::with_capacity(provided.len());
-    for texture in provided {
-        if by_name.insert(texture.resource.as_str(), texture).is_some() {
-            return Err(ForwardPreparationError::DuplicateTextureResource {
-                source,
-                resource: texture.resource.clone(),
-            });
-        }
-    }
-    let mut ordered = Vec::with_capacity(expected.len());
-    for texture in expected {
-        let Some(provided) = by_name.get(texture.name.as_str()) else {
-            return Err(ForwardPreparationError::MissingTextureResource {
-                source,
-                resource: texture.name.clone(),
-            });
-        };
-        ordered.push(*provided);
-    }
-    for texture in provided {
-        if !expected
-            .iter()
-            .any(|expected| expected.name == texture.resource)
-        {
-            return Err(ForwardPreparationError::UnexpectedTextureResource {
-                source,
-                resource: texture.resource.clone(),
-            });
-        }
-    }
-    Ok(ordered)
-}
-
-fn resolve_asset_textures(
-    resources: &ForwardResources,
-    schema: &super::MaterialBindingSchema,
-    assets: &ForwardAssets,
-    source: ForwardDrawSource,
-) -> Result<Vec<ResolvedForwardTexture>, ForwardPreparationError> {
-    ordered_texture_sources(&resources.textures, &schema.textures, source)?
-        .into_iter()
-        .zip(&schema.textures)
-        .map(|(texture, expected)| match &texture.source {
-            ForwardTextureSource::Asset(reference) => {
-                let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
-                validate_texture(asset.value(), source)?;
-                validate_texture_encoding(expected, asset.value().encoding, source)?;
-                Ok(ResolvedForwardTexture::Asset(asset))
-            }
-            ForwardTextureSource::CaptureSlot(_) => {
-                Err(ForwardPreparationError::CaptureTextureOutsideReceiver {
-                    source,
-                    resource: texture.resource.clone(),
-                })
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn validate_texture_encoding(
-    expected: &super::MaterialTextureBinding,
-    actual: TextureEncoding,
-    source: ForwardDrawSource,
-) -> Result<(), ForwardPreparationError> {
-    let Some(required_encoding) = expected.encoding else {
-        return Ok(());
-    };
-    let required_encoding = match required_encoding {
-        fluxel_material::MaterialTextureEncoding::Linear => TextureEncoding::Linear,
-        fluxel_material::MaterialTextureEncoding::Srgb => TextureEncoding::Srgb,
-        fluxel_material::MaterialTextureEncoding::SrgbEncodedUnorm => {
-            TextureEncoding::SrgbEncodedUnorm
-        }
-    };
-    if actual != required_encoding {
-        return Err(ForwardPreparationError::TextureEncodingMismatch {
-            source,
-            resource: expected.name.clone(),
-            expected: required_encoding,
-            actual,
-        });
-    }
-    Ok(())
-}
+#[path = "forward_textures.rs"]
+mod forward_textures;
+use forward_textures::{ordered_texture_sources, resolve_asset_textures};
 
 #[path = "forward_batch.rs"]
 mod forward_batch;

@@ -1,7 +1,7 @@
 //! Upload recording for the Deferred Graph.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
     pub(crate) fn record_upload(
@@ -82,7 +82,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .texture_slots
                     .get(copy.texture)
                     .ok_or(Error::InvalidRange)?,
-                whole_color(),
+                one_color_mip(copy.mip_level),
                 AccessKind::Write,
                 texture_copy_write(),
             )?;
@@ -159,7 +159,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 AccessKind::Read,
                 copy_read(),
             )?;
-            pass.buffer(uniform_slot, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write())?;
+            pass.buffer(
+                uniform_slot,
+                0..SPECULAR_VIEW_BYTES,
+                AccessKind::Write,
+                copy_write(),
+            )?;
         }
         if let (Some(slots), Some(deformation)) = (self.deformation_slots, &frame.deformation) {
             pass.buffer(
@@ -239,7 +244,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .texture_slots
                     .get(copy.texture)
                     .ok_or(Error::InvalidRange)?,
-                whole_color(),
+                one_color_mip(copy.mip_level),
                 AccessKind::Write,
                 texture_copy_write(),
             )?;
@@ -252,7 +257,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 },
                 TextureRegion {
                     texture: material,
-                    mip: 0,
+                    mip: copy.mip_level,
                     origin: [0, 0, 0],
                     extent: copy.extent,
                     aspect: TextureAspects::COLOR,
@@ -339,8 +344,19 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 AccessKind::Read,
                 copy_read(),
             )?;
-            let destination = pass.buffer(uniform_slot, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write())?;
-            encoder.copy_buffer(source, owner.view_uniform_copy.start, destination, 0, SPECULAR_VIEW_BYTES)?;
+            let destination = pass.buffer(
+                uniform_slot,
+                0..SPECULAR_VIEW_BYTES,
+                AccessKind::Write,
+                copy_write(),
+            )?;
+            encoder.copy_buffer(
+                source,
+                owner.view_uniform_copy.start,
+                destination,
+                0,
+                SPECULAR_VIEW_BYTES,
+            )?;
         }
         if let (Some(upload_slot), Some(texture_slot), Some(environment)) = (
             self.environment_upload_slot,

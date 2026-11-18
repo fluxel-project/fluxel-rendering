@@ -1,8 +1,8 @@
 //! Upload declarations for two independent capture-frame namespaces.
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::super::mip_generation::{MipGenerationPass, declare_chain};
 use super::capture_declaration::{FrameHandles, SharedResidentImports};
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 pub(super) fn declare_mip_generations(
     graph: &mut GraphBuilder,
@@ -18,7 +18,12 @@ pub(super) fn declare_mip_generations(
     }
     let mut generations = Vec::new();
     for (index, cold) in handles.cold_textures.iter().copied().enumerate() {
-        if !cold {
+        if !cold
+            || !spec.textures[index]
+                .desc
+                .usage
+                .contains(TextureUsage::COPY_SRC)
+        {
             continue;
         }
         let (output, mut chain) = declare_chain(
@@ -113,7 +118,7 @@ pub(super) fn declare_upload(
                 )?;
                 textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    one_color_mip(0),
+                    one_color_mip(upload.mip_level),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,

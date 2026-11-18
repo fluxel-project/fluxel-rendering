@@ -197,36 +197,32 @@ where
             mappings.push(mapping);
             let mut input_texture_slots = Vec::new();
             let mut input_capture_slots = Vec::new();
-            for texture_index in 0..input.resolved_textures().len() {
-                let texture = input.asset_texture(texture_index);
+            for (texture_index, texture) in input.resolved_textures().iter().enumerate() {
+                let is_asset = input.capture_texture_slot(texture_index).is_none();
                 if material_requires_ordinary_sampler(input.prepared()) {
-                    match texture {
-                        Some(texture) => require_filterable_material_texture_with_mip_levels(
-                            &self.device,
-                            texture.value().extent,
-                            texture.value().encoding,
-                            texture.value().mip_levels,
-                        )
-                        .map_err(|error| {
-                            self.observe_forward_error("sampled material texture admission", error)
-                        })?,
-                        None => {
-                            validate_capture_material_texture(
-                                capture_texture,
-                                input,
-                                texture_index,
-                                self.device.id(),
-                            )?;
-                        }
+                    if is_asset {
+                        require_filterable_material_texture(&self.device, texture).map_err(
+                            |error| {
+                                self.observe_forward_error(
+                                    "sampled material texture admission",
+                                    error,
+                                )
+                            },
+                        )?;
+                    } else {
+                        validate_capture_material_texture(
+                            capture_texture,
+                            input,
+                            texture_index,
+                            self.device.id(),
+                        )?;
                     }
                 }
-                let (texture_slot, is_capture) = if let Some(texture) = texture {
-                    let texture_key = crate::residency::ForwardResidentCache::<B>::texture_key(
-                        input,
-                        texture_index,
-                        self.device.id(),
-                    )
-                    .ok_or(Error::InvalidState)?;
+                let (texture_slot, is_capture) = if is_asset {
+                    let texture_key = self
+                        .forward_residency
+                        .resolved_texture_key(input, texture_index, self.device.id())
+                        .ok_or(Error::InvalidState)?;
                     let slot = if let Some(slot) = texture_slots.get(&texture_key) {
                         *slot
                     } else {
@@ -236,9 +232,10 @@ where
                                 self.forward_stats.texture_hits.saturating_add(1);
                             final_textures.push(Some(cached));
                         } else {
-                            let data = texture.value();
-                            texture_inputs
-                                .push(super::texture_upload::stage(data, limits.max_buffer_bytes)?);
+                            texture_inputs.push(super::texture_upload::stage(
+                                texture,
+                                limits.max_buffer_bytes,
+                            )?);
                             fresh_texture_slots.push(slot);
                             final_textures.push(None);
                         }
@@ -272,8 +269,11 @@ where
             draw_textures.push(input_texture_slots);
             draw_capture_textures.push(input_capture_slots);
         }
-        let resident_plan = crate::residency::plan_forward_resident(stream_inputs, texture_inputs)
-            .map_err(|error| self.observe_forward_error("resident planning", error))?;
+        let resident_plan = crate::residency::plan_forward_resident_with_texture_inputs(
+            stream_inputs,
+            texture_inputs,
+        )
+        .map_err(|error| self.observe_forward_error("resident planning", error))?;
         let resident_allocations =
             super::assembly::ForwardAllocationStats::from_resident_descriptors(
                 &resident_plan.stream_descs,

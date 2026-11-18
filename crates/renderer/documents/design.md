@@ -31,8 +31,10 @@ its frame uniform buffer. Specular IBL supplies its camera through the existing
 environment uniform.
 Environment transmission can select a named linear 2D latitude-longitude
 texture on the material. Its own direction matrix and LOD scale and offset
-control the refraction sample. The per-draw material binding retains and
-declares the exact texture, including all sampled mips. Without a local source,
+control the refraction sample. `ForwardTextureBinding::refraction_radiance`
+binds an exact asset snapshot containing authored linear RGBA16Float mips.
+The renderer uploads each level individually and declares the entire sampled
+mip chain. Without a local source,
 environment refraction uses the selected scene radiance and its orientation.
 A local source can work without a scene environment. That route uses the
 Babylon analytical reflectance in place of the environment BRDF lookup.
@@ -582,14 +584,14 @@ framebuffer feedback is forbidden.
 ### Reference behavior and proposed realization
 
 The Forward environment-refraction route consumes Material's optional
-`TransmissionExtensions` on UV0-normal metallic/roughness surfaces. It requires
-the selected complete specular radiance/LUT owner and an explicit shading
-camera. Its refracted input is that same linear, prefiltered latitude-longitude
-environment, rather than a scene-color capture or cube map. It reuses the
-existing environment bindings, Graph declarations and completion retention.
-Capture receivers may prepare this required logical interface before a Renderer
-is available, but submission re-prepares against the actual selected environment
-and refuses a missing owner before allocation. Ordinary Deferred submissions
+`TransmissionExtensions` on UV0-normal metallic/roughness surfaces and requires
+an explicit shading camera. The material's radiance binding takes precedence.
+Otherwise, refraction samples the selected scene's prefiltered latitude-longitude
+radiance. The shader uses the selected scene's BRDF LUT when available and an
+analytical reflectance term for material radiance without scene specular IBL.
+Each source uses the existing Graph and completion retention. Capture receiver
+submission re-prepares against the available environment and declared capture.
+Ordinary Deferred submissions
 route environment transmission into the Forward overlay after G-buffer lighting.
 Opaque and masked transmissive draws write the original depth attachment before
 the sorted blend segment. The Graph declares that depth version read/write only

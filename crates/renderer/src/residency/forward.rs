@@ -27,100 +27,18 @@ pub(crate) use forward_frame_allocation::plan_forward_hdr_frame;
 
 #[path = "forward_support.rs"]
 mod forward_support;
-pub(crate) use forward_support::{ForwardFramePlan, SurfaceForwardFramePlan};
 use forward_support::{
     empty_buffer_uses, empty_texture_uses, pad_to, require_buffer, require_texture,
 };
-
-/// Source bytes and declared layout for one complete vertex stream.
-pub(crate) struct ForwardStreamInput {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) layout: VertexBufferLayout,
-}
-
-/// Source bytes and copied extent for one RGBA8 material texture base level.
-pub(crate) struct ForwardTextureInput {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) extent: [u32; 2],
-    pub(crate) bytes_per_row: u32,
-    pub(crate) encoding: crate::preparation::TextureEncoding,
-    /// Exact total mip count requested by the immutable asset.
-    pub(crate) mip_levels: u32,
-}
-
-/// One device-local vertex stream and its allocation facts.
-pub(crate) struct ForwardVertexStream<B: ResourceBackend> {
-    pub(crate) buffer: Buffer<B>,
-    pub(crate) desc: BufferDesc,
-    pub(crate) instance: ResourceInstanceId,
-    pub(crate) incoming: BufferUses,
-}
-
-/// Device-local texture and its allocation facts.
-pub(crate) struct ForwardTexture<B: ResourceBackend> {
-    pub(crate) texture: Texture<B>,
-    pub(crate) view: TextureView<B>,
-    pub(crate) desc: TextureDesc,
-    pub(crate) instance: ResourceInstanceId,
-    pub(crate) incoming: TextureUses,
-    pub(crate) layout: ImageLayout,
-    /// Device that allocated this owner, retained for binding provenance checks.
-    pub(crate) device: DeviceId,
-    /// Filterability reported for this exact allocation descriptor.
-    pub(crate) filterable: bool,
-}
-
-/// A concrete sampler retained with the texture owners it can bind.
-///
-/// Samplers carry no memory access range, so they are deliberately absent from
-/// RenderGraph declarations. Retaining them in the resident owner still keeps
-/// their native handle alive through the completion of every submitted frame.
-pub(crate) struct ForwardSampler<B: ResourceBackend> {
-    pub(crate) sampler: Sampler<B>,
-    pub(crate) desc: SamplerDesc,
-}
-
-/// Persistent logical geometry/material realization for one device.
-///
-/// A renderer cache keys this owner by logical asset identity, content
-/// generation and [`DeviceId`]. Submitted frames retain an [`Arc`] until the
-/// completion that covers their final use.
-pub(crate) struct ForwardResidentBuffers<B: ResourceBackend> {
-    pub(crate) device: DeviceId,
-    pub(crate) upload: Buffer<B>,
-    pub(crate) upload_desc: BufferDesc,
-    pub(crate) upload_instance: ResourceInstanceId,
-    pub(crate) upload_incoming: BufferUses,
-    pub(crate) streams: Vec<ForwardVertexStream<B>>,
-    pub(crate) textures: Vec<ForwardTexture<B>>,
-    pub(crate) samplers: Vec<ForwardSampler<B>>,
-}
-
-/// One source-to-device vertex copy, with physical byte offsets.
-#[derive(Clone, Debug)]
-pub(crate) struct ForwardVertexUpload {
-    pub(crate) stream: usize,
-    pub(crate) source: Range<u64>,
-    pub(crate) destination: Range<u64>,
-}
-
-/// One source-to-device texture copy, with physical copy layout.
-#[derive(Clone, Debug)]
-pub(crate) struct ForwardTextureUpload {
-    /// Physical resident slot written by this copy.
-    pub(crate) texture: usize,
-    pub(crate) source_offset: u64,
-    pub(crate) bytes_per_row: u32,
-    pub(crate) rows_per_image: u32,
-    pub(crate) extent: [u32; 3],
-}
-
-/// Exact upload map contents and declared copy ranges for a resident product.
-pub(crate) struct ForwardResidentUpload {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) vertices: Vec<ForwardVertexUpload>,
-    pub(crate) textures: Vec<ForwardTextureUpload>,
-}
+#[path = "forward_texture_plan.rs"]
+mod forward_texture_plan;
+pub(crate) use forward_support::{ForwardFramePlan, SurfaceForwardFramePlan};
+use forward_texture_plan::{
+    append_texture_upload, validate_authored_rgba16float_texture, validate_generated_texture,
+};
+#[path = "forward_resources.rs"]
+mod forward_resources;
+pub(crate) use forward_resources::*;
 
 /// Per-frame uniform/attachment/readback owners.
 pub(crate) struct ForwardFrameBuffers<B: ResourceBackend> {
@@ -209,7 +127,10 @@ pub(crate) struct ForwardDraw<B: ResourceBackend> {
 impl<B: ResourceBackend> ForwardDraw<B> {
     pub(crate) fn pipelines_on(&self, device: DeviceId) -> bool {
         self.pipeline.device() == device
-            && self.preliminary_pipeline.as_ref().is_none_or(|pipeline| pipeline.device() == device)
+            && self
+                .preliminary_pipeline
+                .as_ref()
+                .is_none_or(|pipeline| pipeline.device() == device)
     }
 }
 
@@ -270,9 +191,25 @@ pub(crate) struct ForwardResidentPlan {
     pub(crate) upload_desc: BufferDesc,
 }
 
+#[cfg(test)]
 pub(crate) fn plan_forward_resident(
     streams: Vec<ForwardStreamInput>,
     textures: Vec<ForwardTextureInput>,
+) -> Result<ForwardResidentPlan> {
+    plan_forward_resident_with_texture_inputs(
+        streams,
+        textures
+            .into_iter()
+            .map(ForwardResidentTextureInput::from)
+            .collect(),
+    )
+}
+
+/// Plans one resident product with ordinary material textures and complete
+/// authored `RGBA16Float` texture chains.
+pub(crate) fn plan_forward_resident_with_texture_inputs(
+    streams: Vec<ForwardStreamInput>,
+    textures: Vec<ForwardResidentTextureInput>,
 ) -> Result<ForwardResidentPlan> {
     // Complete input validation precedes the first backend allocation. The
     // vertex source may end before its padded stride; only its physical byte
@@ -284,26 +221,11 @@ pub(crate) fn plan_forward_resident(
         return Err(Error::InvalidRange);
     }
     for texture in &textures {
-        if texture.extent.contains(&0)
-            || texture.mip_levels == 0
-            || texture.bytes_per_row == 0
-            || texture.bytes_per_row % 256 != 0
-            || texture.bytes_per_row
-                < texture.extent[0]
-                    .checked_mul(4)
-                    .ok_or(Error::InvalidRange)?
-        {
-            return Err(Error::InvalidRange);
-        }
-        let max_mip_levels = 1 + texture.extent[0].max(texture.extent[1]).ilog2();
-        if texture.mip_levels > max_mip_levels {
-            return Err(Error::InvalidRange);
-        }
-        let texture_bytes = u64::from(texture.bytes_per_row)
-            .checked_mul(u64::from(texture.extent[1]))
-            .ok_or(Error::InvalidRange)?;
-        if u64::try_from(texture.bytes.len()).map_err(|_| Error::InvalidRange)? != texture_bytes {
-            return Err(Error::InvalidRange);
+        match texture {
+            ForwardResidentTextureInput::Generated(texture) => validate_generated_texture(texture)?,
+            ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
+                validate_authored_rgba16float_texture(texture)?;
+            }
         }
     }
 
@@ -331,31 +253,61 @@ pub(crate) fn plan_forward_resident(
     let mut texture_uploads = Vec::with_capacity(textures.len());
     let mut texture_descs = Vec::with_capacity(textures.len());
     for (index, texture) in textures.into_iter().enumerate() {
-        pad_to(&mut bytes, 512)?;
-        let source_offset = u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)?;
-        bytes.extend_from_slice(&texture.bytes);
-        texture_uploads.push(ForwardTextureUpload {
-            texture: index,
-            source_offset,
-            bytes_per_row: texture.bytes_per_row,
-            rows_per_image: texture.extent[1],
-            extent: [texture.extent[0], texture.extent[1], 1],
-        });
-        let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
-        if texture.mip_levels > 1 {
-            usage |= TextureUsage::COPY_SRC;
+        match texture {
+            ForwardResidentTextureInput::Generated(texture) => {
+                append_texture_upload(
+                    &mut bytes,
+                    &mut texture_uploads,
+                    index,
+                    0,
+                    texture.bytes,
+                    texture.bytes_per_row,
+                    texture.extent,
+                )?;
+                let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
+                if texture.mip_levels > 1 {
+                    usage |= TextureUsage::COPY_SRC;
+                }
+                texture_descs.push(TextureDesc {
+                    label: Some("fluxel forward material texture".into()),
+                    dimension: TextureDimension::D2,
+                    extent: [texture.extent[0], texture.extent[1], 1],
+                    array_layers: 1,
+                    format: texture.encoding.rgba8_format(),
+                    mip_levels: texture.mip_levels,
+                    samples: 1,
+                    usage,
+                    view_formats: Vec::new(),
+                });
+            }
+            ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
+                let base_extent = texture.mips[0].extent;
+                let mip_levels =
+                    u32::try_from(texture.mips.len()).map_err(|_| Error::InvalidRange)?;
+                for (mip_level, mip) in texture.mips.into_iter().enumerate() {
+                    append_texture_upload(
+                        &mut bytes,
+                        &mut texture_uploads,
+                        index,
+                        u32::try_from(mip_level).map_err(|_| Error::InvalidRange)?,
+                        mip.bytes,
+                        mip.bytes_per_row,
+                        mip.extent,
+                    )?;
+                }
+                texture_descs.push(TextureDesc {
+                    label: Some("fluxel forward authored radiance texture".into()),
+                    dimension: TextureDimension::D2,
+                    extent: [base_extent[0], base_extent[1], 1],
+                    array_layers: 1,
+                    format: TextureFormat::Rgba16Float,
+                    mip_levels,
+                    samples: 1,
+                    usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
+                    view_formats: Vec::new(),
+                });
+            }
         }
-        texture_descs.push(TextureDesc {
-            label: Some("fluxel forward material texture".into()),
-            dimension: TextureDimension::D2,
-            extent: [texture.extent[0], texture.extent[1], 1],
-            array_layers: 1,
-            format: texture.encoding.rgba8_format(),
-            mip_levels: texture.mip_levels,
-            samples: 1,
-            usage,
-            view_formats: Vec::new(),
-        });
     }
     let upload_desc = BufferDesc {
         label: Some("fluxel forward resident upload".into()),

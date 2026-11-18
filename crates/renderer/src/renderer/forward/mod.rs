@@ -354,14 +354,14 @@ mod prepare_frames;
 mod sampler;
 mod surface_composite;
 pub(in crate::renderer) mod target_admission;
-mod texture_upload;
+pub(super) mod texture_upload;
 mod transparent_order;
 #[cfg(test)]
 pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{
     default_material_sampler, material_requires_ordinary_sampler, material_sampler,
     material_sampler_descriptors, material_sampler_for_input,
-    material_sampler_for_input_with_capture, require_filterable_material_texture_with_mip_levels,
+    material_sampler_for_input_with_capture, require_filterable_material_texture,
     same_material_sampler, validate_capture_material_texture, validate_material_sampler,
     validate_material_texture_owner, validate_ordinary_sampler,
 };

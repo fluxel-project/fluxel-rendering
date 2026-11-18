@@ -1,6 +1,6 @@
 //! Surface Record for the bounded Forward product.
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 impl<B: ResourceBackend> SurfaceForwardPlan<B> {
     pub(crate) fn record_upload(
@@ -307,7 +307,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             )?;
             pass.texture(
                 slot,
-                one_color_mip(0),
+                one_color_mip(copy.mip_level),
                 AccessKind::Write,
                 texture_copy_write_uses(),
             )?;
@@ -372,7 +372,12 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 AccessKind::Read,
                 copy_read_uses(),
             )?;
-            pass.buffer(uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write_uses())?;
+            pass.buffer(
+                uniform,
+                0..SPECULAR_VIEW_BYTES,
+                AccessKind::Write,
+                copy_write_uses(),
+            )?;
         }
         pass.transition(encoder)?;
         for upload in &frame.resident_upload.vertices {
@@ -430,7 +435,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                     .texture_slots
                     .get(copy.texture)
                     .ok_or(Error::InvalidRange)?,
-                whole(),
+                one_color_mip(copy.mip_level),
                 AccessKind::Write,
                 texture_copy_write_uses(),
             )?;
@@ -443,7 +448,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 },
                 TextureRegion {
                     texture,
-                    mip: 0,
+                    mip: copy.mip_level,
                     origin: [0, 0, 0],
                     extent: copy.extent,
                     aspect: TextureAspects::COLOR,
@@ -555,8 +560,19 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 AccessKind::Read,
                 copy_read_uses(),
             )?;
-            let dst = pass.buffer(uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write_uses())?;
-            encoder.copy_buffer(src, owner.view_uniform_copy.start, dst, 0, SPECULAR_VIEW_BYTES)?;
+            let dst = pass.buffer(
+                uniform,
+                0..SPECULAR_VIEW_BYTES,
+                AccessKind::Write,
+                copy_write_uses(),
+            )?;
+            encoder.copy_buffer(
+                src,
+                owner.view_uniform_copy.start,
+                dst,
+                0,
+                SPECULAR_VIEW_BYTES,
+            )?;
         }
         Ok(())
     }
