@@ -106,10 +106,29 @@ pub(crate) struct OitDrawPrograms<'a, B: ResourceBackend> {
     pub(crate) draw: usize,
     pub(crate) initial: &'a RasterPipeline<B>,
     pub(crate) peel: &'a RasterPipeline<B>,
+    pub(crate) preliminary_initial: Option<&'a RasterPipeline<B>>,
+    pub(crate) preliminary_peel: Option<&'a RasterPipeline<B>>,
     pub(crate) initial_group3: OitSampledGroupRef<'a, B>,
     pub(crate) peel_group3: [OitSampledGroupRef<'a, B>; 2],
     pub(crate) empty_group2: Option<&'a BindGroup<B>>,
 }
+impl<B: ResourceBackend> OitDrawPrograms<'_, B> {
+    pub(crate) fn pipelines(&self, initial: bool) -> impl Iterator<Item = &RasterPipeline<B>> {
+        let (preliminary, primary) = if initial {
+            (self.preliminary_initial, self.initial)
+        } else {
+            (self.preliminary_peel, self.peel)
+        };
+        preliminary.into_iter().chain(std::iter::once(primary))
+    }
+
+    pub(crate) fn pipelines_on(&self, device: fluxel_rhi::api::DeviceId) -> bool {
+        self.pipelines(true)
+            .chain(self.pipelines(false))
+            .all(|pipeline| pipeline.device() == device)
+    }
+}
+
 pub(crate) struct OitFullscreenCommand<'a, B: ResourceBackend> {
     pub(crate) pipeline: &'a RasterPipeline<B>,
     pub(crate) bind_group: OitSampledGroupRef<'a, B>,

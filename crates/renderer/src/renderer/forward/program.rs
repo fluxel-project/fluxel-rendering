@@ -198,54 +198,67 @@ where
                 push_constants: &[],
             })
             .map_err(|error| self.observe_forward_error("pipeline layout", error))?;
+        let mut primitive = PrimitiveState {
+            topology: PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: FrontFace::Ccw,
+            cull_mode: CullMode::None,
+            unclipped_depth: false,
+            polygon_mode: PolygonMode::Fill,
+            conservative: false,
+        };
+        surface.apply_to(&mut primitive);
+        let descriptor = |label: &str, primitive| RasterPipelineDesc {
+            label: Some(label.into()),
+            layout: layout.clone(),
+            vertex: PipelineStage {
+                module: shader.clone(),
+                entry: vertex.clone(),
+                constants: vec![],
+            },
+            fragment: Some(PipelineStage {
+                module: shader.clone(),
+                entry: fragment.clone(),
+                constants: vec![],
+            }),
+            vertex_buffers: prepared.geometry().streams.clone(),
+            color_targets: vec![Some(ColorTargetState {
+                format: color_format,
+                blend: surface.blend_state(),
+                write_mask: 0xf,
+            })],
+            primitive,
+            depth_stencil: super::depth::pipeline_depth(depth_mode, surface),
+            multisample: MultisampleState {
+                count: samples,
+                mask: u64::from(u32::MAX),
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        };
+        let preliminary_pipeline =
+            if let Some(primitive) = surface.preliminary_primitive(primitive) {
+                Some(
+                    self.device
+                        .raster_pipeline(descriptor("Forward preliminary culling pipeline", primitive))
+                        .await
+                        .map_err(|error| {
+                            self.observe_forward_error("preliminary raster pipeline", error)
+                        })?,
+                )
+            } else {
+                None
+            };
         let pipeline = self
             .device
-            .raster_pipeline(RasterPipelineDesc {
-                label: Some("Forward raster pipeline".into()),
-                layout,
-                vertex: PipelineStage {
-                    module: shader.clone(),
-                    entry: vertex,
-                    constants: vec![],
-                },
-                fragment: Some(PipelineStage {
-                    module: shader,
-                    entry: fragment,
-                    constants: vec![],
-                }),
-                vertex_buffers: prepared.geometry().streams.clone(),
-                color_targets: vec![Some(ColorTargetState {
-                    format: color_format,
-                    blend: surface.blend_state(),
-                    write_mask: 0xf,
-                })],
-                primitive: {
-                    let mut primitive = PrimitiveState {
-                        topology: PrimitiveTopology::TriangleList,
-                        strip_index_format: None,
-                        front_face: FrontFace::Ccw,
-                        cull_mode: CullMode::None,
-                        unclipped_depth: false,
-                        polygon_mode: PolygonMode::Fill,
-                        conservative: false,
-                    };
-                    surface.apply_to(&mut primitive);
-                    primitive
-                },
-                depth_stencil: super::depth::pipeline_depth(depth_mode, surface),
-                multisample: MultisampleState {
-                    count: samples,
-                    mask: u64::from(u32::MAX),
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-                cache: None,
-            })
+            .raster_pipeline(descriptor("Forward raster pipeline", primitive))
             .await
             .map_err(|error| self.observe_forward_error("raster pipeline", error))?;
         let objects = Arc::new(ForwardPipelineObjects {
             key: key.clone(),
             pipeline,
+            preliminary_pipeline,
             material_layout,
             transform_layout,
             environment_layout,

@@ -384,6 +384,9 @@ pub(super) fn canonical_policy(policy: SurfacePolicy, target: &mut String) {
         };
         canonical_piece(target, "surface-side-orientation", orientation);
     }
+    if policy.separate_culling_pass {
+        canonical_piece(target, "surface-separate-culling-pass", "enabled");
+    }
     canonical_piece(
         target,
         "surface-two-sided-lighting",

@@ -357,7 +357,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if frame.draws.is_empty()
             || frame.resident.device != self.id.device
             || frame.draws.iter().any(|draw| {
-                draw.pipeline.device() != self.id.device
+                !draw.pipelines_on(self.id.device)
                     || draw.material_group.device() != self.id.device
                     || draw.transform_group.device() != self.id.device
             })

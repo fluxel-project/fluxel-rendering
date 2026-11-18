@@ -44,7 +44,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         let pass = bindings.pass(self.raster_pass)?;
         for draw in &frame.draws {
             validate_draw(draw, self.stream_slots.len())?;
-            if draw.pipeline.device() != self.id.device
+            if !draw.pipelines_on(self.id.device)
                 || draw
                     .bind_groups
                     .iter()
@@ -203,22 +203,12 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 if draw.batch != batch {
                     return Err(Error::InvalidState);
                 }
-                for group in &draw.bind_groups {
-                    raster.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
+                if let Some(preliminary) = draw.preliminary_pipeline.as_ref() {
+                    raster.set_pipeline(preliminary)?;
+                    super::shared_record::bind_and_draw(&mut raster, &frame.resident, draw)?;
+                    raster.set_pipeline(&draw.pipeline)?;
                 }
-                for (slot, (stream, range)) in draw
-                    .vertex_streams
-                    .iter()
-                    .zip(&draw.vertex_ranges)
-                    .enumerate()
-                {
-                    raster.set_vertex_buffer(
-                        u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
-                        &frame.resident.streams[*stream].buffer,
-                        range.clone(),
-                    )?;
-                }
-                raster.draw(draw.vertices.clone(), draw.instances.clone())?;
+                super::shared_record::bind_and_draw(&mut raster, &frame.resident, draw)?;
             }
         }
         raster.finish()

@@ -74,7 +74,7 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
         .transpose()?;
     for draw in &frame.draws[selection.draws.clone()] {
         validate_draw(draw, slots.stream_slots.len())?;
-        if draw.pipeline.device() != slots.device
+        if !draw.pipelines_on(slots.device)
             || draw
                 .bind_groups
                 .iter()
@@ -255,24 +255,40 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
             raster.set_pipeline(&draw.pipeline)?;
             bound_batch = Some(draw.batch);
         }
-        for group in &draw.bind_groups {
-            raster.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
+        if let Some(preliminary) = draw.preliminary_pipeline.as_ref() {
+            raster.set_pipeline(preliminary)?;
+            bind_and_draw(&mut raster, &frame.resident, draw)?;
+            // Do not rely on backend state surviving a pipeline switch. The
+            // main pass must re-establish its complete draw state.
+            raster.set_pipeline(&draw.pipeline)?;
+            bound_batch = Some(draw.batch);
         }
-        for (slot, (stream, range)) in draw
-            .vertex_streams
-            .iter()
-            .zip(&draw.vertex_ranges)
-            .enumerate()
-        {
-            raster.set_vertex_buffer(
-                u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
-                &frame.resident.streams[*stream].buffer,
-                range.clone(),
-            )?;
-        }
-        raster.draw(draw.vertices.clone(), draw.instances.clone())?;
+        bind_and_draw(&mut raster, &frame.resident, draw)?;
     }
     raster.finish()
+}
+
+pub(in crate::graph::forward) fn bind_and_draw<B: RasterBackend + ResourceBackend>(
+    raster: &mut fluxel_rhi::api::RasterPass<'_, B>,
+    resident: &crate::residency::ForwardResidentBuffers<B>,
+    draw: &crate::residency::ForwardDraw<B>,
+) -> Result<()> {
+    for group in &draw.bind_groups {
+        raster.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
+    }
+    for (slot, (stream, range)) in draw
+        .vertex_streams
+        .iter()
+        .zip(&draw.vertex_ranges)
+        .enumerate()
+    {
+        raster.set_vertex_buffer(
+            u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
+            &resident.streams[*stream].buffer,
+            range.clone(),
+        )?;
+    }
+    raster.draw(draw.vertices.clone(), draw.instances.clone())
 }
 
 fn depth_read_uses() -> TextureAccessContract {

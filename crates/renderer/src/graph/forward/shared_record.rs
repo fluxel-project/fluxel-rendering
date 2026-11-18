@@ -4,7 +4,7 @@ use super::*;
 #[path = "shared_raster.rs"]
 mod shared_raster;
 pub(super) use shared_raster::{
-    RasterColorSelection, RasterDepthSelection, RasterSelection, record_raster_selection,
+    RasterColorSelection, RasterDepthSelection, RasterSelection, bind_and_draw, record_raster_selection,
 };
 
 pub(super) struct RecordSlots<'a> {

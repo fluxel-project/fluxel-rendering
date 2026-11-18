@@ -50,7 +50,7 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
         return Err(Error::InvalidRange);
     }
     if frame.draws.iter().any(|draw| {
-        draw.pipeline.device() != device.id()
+        !draw.pipelines_on(device.id())
             || draw.material_group.device() != device.id()
             || draw.transform_group.device() != device.id()
     }) || frame.lighting_pipeline.device() != device.id()

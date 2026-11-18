@@ -486,6 +486,7 @@ where
                 batch: draw_batch_ids[index],
                 compatibility: draw_compatibility[index].clone(),
                 pipeline: objects.pipeline.clone(),
+                preliminary_pipeline: objects.preliminary_pipeline.clone(),
                 textures: draw_textures[index].clone(),
                 capture_textures: draw_capture_textures[index].clone(),
                 vertex_streams: mappings[index].clone(),

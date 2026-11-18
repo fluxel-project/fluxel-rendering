@@ -126,7 +126,7 @@ impl OverlaySlots {
             validate_draw(draw, frame.resident.streams.len())?;
             validate_offsets(draw, self.alignment)?;
             draw_accesses(frame, draw)?;
-            if draw.pipeline.device() != device
+            if !draw.pipelines_on(device)
                 || draw
                     .bind_groups
                     .iter()

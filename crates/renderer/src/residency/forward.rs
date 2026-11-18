@@ -189,6 +189,9 @@ pub(crate) struct ForwardDraw<B: ResourceBackend> {
     /// pipeline bind.
     pub(crate) compatibility: crate::preparation::ForwardCompatibilityKey,
     pub(crate) pipeline: fluxel_rhi::api::RasterPipeline<B>,
+    /// Optional first pass with opposite winding and back-face culling.
+    /// It is recorded immediately before the ordinary material draw.
+    pub(crate) preliminary_pipeline: Option<fluxel_rhi::api::RasterPipeline<B>>,
     /// Maps pipeline vertex-buffer slots to resident stream indices.
     pub(crate) vertex_streams: Vec<usize>,
     pub(crate) vertex_layouts: Vec<VertexBufferLayout>,
@@ -201,6 +204,13 @@ pub(crate) struct ForwardDraw<B: ResourceBackend> {
     /// True exactly where the logical material texture is the same-submission
     /// capture product rather than an immutable asset owner.
     pub(crate) capture_textures: Vec<bool>,
+}
+
+impl<B: ResourceBackend> ForwardDraw<B> {
+    pub(crate) fn pipelines_on(&self, device: DeviceId) -> bool {
+        self.pipeline.device() == device
+            && self.preliminary_pipeline.as_ref().is_none_or(|pipeline| pipeline.device() == device)
+    }
 }
 
 /// Complete concrete owners and uploads admitted for one Forward submission.

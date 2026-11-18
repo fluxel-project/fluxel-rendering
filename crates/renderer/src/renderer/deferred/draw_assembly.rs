@@ -62,9 +62,10 @@ pub(super) fn draws<B: ResourceBackend>(
             .get(index)
             .ok_or(Error::InvalidState)?;
         if material_uniform_ranges.len() != schema.uniforms.len()
-            || material_uniform_ranges.iter().zip(&schema.uniforms).any(|(range, uniform)| {
-                range.end.checked_sub(range.start) != Some(uniform.size)
-            })
+            || material_uniform_ranges
+                .iter()
+                .zip(&schema.uniforms)
+                .any(|(range, uniform)| range.end.checked_sub(range.start) != Some(uniform.size))
         {
             return Err(Error::InvalidRange);
         }
@@ -139,6 +140,7 @@ pub(super) fn draws<B: ResourceBackend>(
             })
             .collect::<Result<Vec<_>, _>>()?;
         result.push(DeferredDraw {
+            preliminary_pipeline: programs[index].preliminary_pipeline.clone(),
             pipeline: programs[index].pipeline.clone(),
             material_group,
             transform_group,

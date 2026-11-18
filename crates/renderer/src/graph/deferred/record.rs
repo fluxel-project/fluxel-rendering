@@ -138,7 +138,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         B: RasterBackend,
     {
         if frame.draws.iter().any(|draw| {
-            draw.pipeline.device() != self.id.device
+            !draw.pipelines_on(self.id.device)
                 || draw.material_group.device() != self.id.device
                 || draw.transform_group.device() != self.id.device
         }) {
@@ -276,47 +276,58 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         })?;
         configure_raster(&mut raster, frame.extent)?;
         for draw in frame.draws {
-            raster.set_pipeline(&draw.pipeline)?;
-            raster.set_bind_group(
-                0,
-                &draw.material_group,
-                &draw
-                    .material_uniform_ranges
-                    .iter()
-                    .map(|range| u32::try_from(range.start).map_err(|_| Error::InvalidRange))
-                    .collect::<Result<Vec<_>>>()?,
-            )?;
-            raster.set_bind_group(
-                1,
-                &draw.transform_group,
-                &[u32::try_from(draw.transform_range.start).map_err(|_| Error::InvalidRange)?],
-            )?;
-            if let Some(deformation) = &frame.deformation {
-                raster.set_vertex_buffer(
+            // The preliminary pipeline has the same resource layout and
+            // footprint as the primary pipeline. Record it first with the
+            // same concrete bindings so the declaration above remains the
+            // complete Graph access set for both physical draws.
+            for pipeline in draw
+                .preliminary_pipeline
+                .iter()
+                .chain(std::iter::once(&draw.pipeline))
+            {
+                raster.set_pipeline(pipeline)?;
+                raster.set_bind_group(
                     0,
-                    &deformation.product.buffer,
-                    draw.vertex_ranges[0].clone(),
+                    &draw.material_group,
+                    &draw
+                        .material_uniform_ranges
+                        .iter()
+                        .map(|range| u32::try_from(range.start).map_err(|_| Error::InvalidRange))
+                        .collect::<Result<Vec<_>>>()?,
                 )?;
-            } else {
-                for (slot, (&stream_index, range)) in draw
-                    .vertex_streams
-                    .iter()
-                    .zip(&draw.vertex_ranges)
-                    .enumerate()
-                {
-                    let stream = frame
-                        .resident
-                        .streams
-                        .get(stream_index)
-                        .ok_or(Error::InvalidRange)?;
+                raster.set_bind_group(
+                    1,
+                    &draw.transform_group,
+                    &[u32::try_from(draw.transform_range.start)
+                        .map_err(|_| Error::InvalidRange)?],
+                )?;
+                if let Some(deformation) = &frame.deformation {
                     raster.set_vertex_buffer(
-                        u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
-                        &stream.buffer,
-                        range.clone(),
+                        0,
+                        &deformation.product.buffer,
+                        draw.vertex_ranges[0].clone(),
                     )?;
+                } else {
+                    for (slot, (&stream_index, range)) in draw
+                        .vertex_streams
+                        .iter()
+                        .zip(&draw.vertex_ranges)
+                        .enumerate()
+                    {
+                        let stream = frame
+                            .resident
+                            .streams
+                            .get(stream_index)
+                            .ok_or(Error::InvalidRange)?;
+                        raster.set_vertex_buffer(
+                            u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
+                            &stream.buffer,
+                            range.clone(),
+                        )?;
+                    }
                 }
+                raster.draw(draw.vertices.clone(), 0..1)?;
             }
-            raster.draw(draw.vertices.clone(), 0..1)?;
         }
         raster.finish()
     }

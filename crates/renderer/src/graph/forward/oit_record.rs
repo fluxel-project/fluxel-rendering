@@ -345,8 +345,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         let product = self.oit.as_ref().ok_or(Error::InvalidState)?;
         let device = self.id.device;
         if commands.draws.iter().any(|draw| {
-            draw.initial.device() != device
-                || draw.peel.device() != device
+            !draw.pipelines_on(device)
                 || draw.initial_group3.group.device() != device
                 || draw
                     .peel_group3

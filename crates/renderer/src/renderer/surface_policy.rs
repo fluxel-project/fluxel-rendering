@@ -40,6 +40,7 @@ enum Culling {
     None,
     Front,
     Back,
+    SeparateBack,
 }
 
 impl RasterSurfaceState {
@@ -52,8 +53,30 @@ impl RasterSurfaceState {
         primitive.cull_mode = match self.culling {
             Culling::None => CullMode::None,
             Culling::Front => CullMode::Front,
-            Culling::Back => CullMode::Back,
+            Culling::Back | Culling::SeparateBack => CullMode::Back,
         };
+    }
+
+    /// Returns the preliminary primitive with the opposite front-face winding.
+    pub(crate) fn preliminary_primitive(self, mut primary: PrimitiveState) -> Option<PrimitiveState> {
+        if self.culling != Culling::SeparateBack {
+            return None;
+        }
+        primary.front_face = match primary.front_face {
+            FrontFace::Ccw => FrontFace::Cw,
+            FrontFace::Cw => FrontFace::Ccw,
+        };
+        Some(primary)
+    }
+
+    /// Babylon peeling disables ordinary culling before each mesh draw.
+    pub(in crate::renderer) fn for_oit(mut self, separate_culling_pass: bool) -> Self {
+        self.culling = if separate_culling_pass {
+            Culling::SeparateBack
+        } else {
+            Culling::None
+        };
+        self
     }
 
     /// Returns Babylon's `ALPHA_COMBINE` fixed-function blend factors.
@@ -101,6 +124,7 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
             FrontFaceState::CounterClockwise
         },
         culling: match (policy.back_face_culling, input.view().mirrored) {
+            (false, _) if policy.separate_culling_pass => Culling::SeparateBack,
             (false, _) => Culling::None,
             (true, true) => Culling::Front,
             (true, false) => Culling::Back,

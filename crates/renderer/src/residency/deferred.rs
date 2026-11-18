@@ -26,6 +26,10 @@ use super::{
 /// The Graph and recorder consume the actual ranges and binding owners retained
 /// by the enclosing frame. This type grants no recording authority.
 pub(crate) struct DeferredDraw<B: ResourceBackend> {
+    /// Babylon's optional preliminary opposite-winding pass. It uses the same
+    /// shader layout and bindings as `pipeline`, so the Graph footprint stays
+    /// identical to the primary draw.
+    pub(crate) preliminary_pipeline: Option<RasterPipeline<B>>,
     pub(crate) pipeline: RasterPipeline<B>,
     pub(crate) material_group: BindGroup<B>,
     pub(crate) transform_group: BindGroup<B>,
@@ -46,6 +50,13 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
     pub(crate) transform_range: Range<u64>,
     /// Exact transform binding footprint selected by the material route.
     pub(crate) transform_bytes: u64,
+}
+
+impl<B: ResourceBackend> DeferredDraw<B> {
+    pub(crate) fn pipelines_on(&self, device: DeviceId) -> bool {
+        self.pipeline.device() == device
+            && self.preliminary_pipeline.as_ref().is_none_or(|pipeline| pipeline.device() == device)
+    }
 }
 
 /// Exact immutable resident products eligible for completion-gated reuse.

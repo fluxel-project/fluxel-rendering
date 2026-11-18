@@ -33,6 +33,7 @@ use program_layout::{ordinary_sampler, sampled_texture, uniform as uniform_entry
 pub(crate) use program_cache::DeferredProgramCache;
 
 pub(crate) struct GbufferProgram<B: ResourceBackend> {
+    pub(super) preliminary_pipeline: Option<RasterPipeline<B>>,
     pub(super) pipeline: RasterPipeline<B>,
     pub(super) material_layout: BindGroupLayout<B>,
     pub(super) transform_layout: BindGroupLayout<B>,
@@ -170,49 +171,64 @@ where
                 push_constants: &[],
             })
             .map_err(|error| self.observe_rhi_error(error))?;
+        let primary_primitive = surface_triangles(surface);
+        let pipeline_desc = |label: &str, primitive| RasterPipelineDesc {
+            label: Some(label.into()),
+            layout: layout.clone(),
+            vertex: PipelineStage {
+                module: shader.clone(),
+                entry: vertex.clone(),
+                constants: vec![],
+            },
+            fragment: Some(PipelineStage {
+                module: shader.clone(),
+                entry: fragment.clone(),
+                constants: vec![],
+            }),
+            vertex_buffers: prepared.geometry().streams.clone(),
+            color_targets: if effects {
+                vec![
+                    Some(color_target_with_format(
+                        crate::residency::deferred_albedo_format(pbr),
+                    )),
+                    Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
+                    Some(color_target_with_format(TextureFormat::Rgba16Float)),
+                ]
+            } else {
+                vec![
+                    Some(color_target_with_format(
+                        crate::residency::deferred_albedo_format(pbr),
+                    )),
+                    Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
+                ]
+            },
+            primitive,
+            depth_stencil: Some(depth_state()),
+            multisample: single_sample(),
+            multiview: None,
+            cache: None,
+        };
+        let preliminary_pipeline = if let Some(preliminary_primitive) =
+            surface.preliminary_primitive(primary_primitive)
+        {
+            Some(
+                self.device
+                    .raster_pipeline(pipeline_desc("Deferred G-buffer preliminary culling pipeline", preliminary_primitive))
+                    .await
+                    .map_err(|error| self.observe_rhi_error(error))?,
+            )
+        } else {
+            None
+        };
         let pipeline = self
             .device
-            .raster_pipeline(RasterPipelineDesc {
-                label: Some("Deferred G-buffer pipeline".into()),
-                layout,
-                vertex: PipelineStage {
-                    module: shader.clone(),
-                    entry: vertex,
-                    constants: vec![],
-                },
-                fragment: Some(PipelineStage {
-                    module: shader,
-                    entry: fragment,
-                    constants: vec![],
-                }),
-                vertex_buffers: prepared.geometry().streams.clone(),
-                color_targets: if effects {
-                    vec![
-                        Some(color_target_with_format(
-                            crate::residency::deferred_albedo_format(pbr),
-                        )),
-                        Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
-                        Some(color_target_with_format(TextureFormat::Rgba16Float)),
-                    ]
-                } else {
-                    vec![
-                        Some(color_target_with_format(
-                            crate::residency::deferred_albedo_format(pbr),
-                        )),
-                        Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
-                    ]
-                },
-                primitive: surface_triangles(surface),
-                depth_stencil: Some(depth_state()),
-                multisample: single_sample(),
-                multiview: None,
-                cache: None,
-            })
+            .raster_pipeline(pipeline_desc("Deferred G-buffer pipeline", primary_primitive))
             .await
             .map_err(|error| self.observe_rhi_error(error))?;
         // Do not publish a partially realized program: every shader, layout,
         // and pipeline operation above must have completed successfully first.
         let program = Arc::new(GbufferProgram {
+            preliminary_pipeline,
             pipeline,
             material_layout,
             transform_layout,

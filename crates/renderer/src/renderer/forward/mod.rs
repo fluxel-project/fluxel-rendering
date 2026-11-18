@@ -306,6 +306,10 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
     /// OIT must compare against these, not reconstruct expected facts.
     pub(super) key: ForwardProgramKey,
     pub(super) pipeline: RasterPipeline<B>,
+    /// Babylon's separate-culling prepass for a double-sided material.  It
+    /// shares every program/layout fact with `pipeline` and changes only the
+    /// fixed primitive winding used for the earlier draw.
+    pub(super) preliminary_pipeline: Option<RasterPipeline<B>>,
     pub(super) material_layout: BindGroupLayout<B>,
     pub(super) transform_layout: BindGroupLayout<B>,
     /// Present only for the explicit lat-long diffuse-irradiance shader route.

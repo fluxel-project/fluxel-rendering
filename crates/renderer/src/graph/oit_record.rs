@@ -407,41 +407,43 @@ fn material<B: RasterBackend + ResourceBackend>(
     let mut r = encoder.begin_raster(&desc("oit-material", colors, depth_stencil, frame.extent))?;
     for item in programs {
         let draw = &frame.draws[item.draw];
-        r.set_pipeline(if initial { item.initial } else { item.peel })?;
-        for group in &draw.bind_groups {
-            r.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
-        }
-        if let Some(empty) = item.empty_group2 {
-            r.set_bind_group(2, empty, &[])?;
-        }
-        r.set_bind_group(
-            3,
-            if initial {
-                item.initial_group3.group
-            } else {
-                item.peel_group3[read_side_index(slots, read_slot)?].group
-            },
-            &[],
-        )?;
-        for (index, (stream, range)) in draw
-            .vertex_streams
-            .iter()
-            .zip(&draw.vertex_ranges)
-            .enumerate()
-        {
-            r.set_vertex_buffer(
-                u32::try_from(index).map_err(|_| Error::InvalidRange)?,
-                bindings.canonical_buffer(
-                    *draw_slots.streams.get(*stream).ok_or(Error::InvalidRange)?,
-                    frame.resident.streams[*stream].instance,
-                    &frame.resident.streams[*stream].buffer,
-                    &frame.resident.streams[*stream].desc,
-                    frame.resident.streams[*stream].incoming,
-                )?,
-                range.clone(),
+        for pipeline in item.pipelines(initial) {
+            r.set_pipeline(pipeline)?;
+            for group in &draw.bind_groups {
+                r.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
+            }
+            if let Some(empty) = item.empty_group2 {
+                r.set_bind_group(2, empty, &[])?;
+            }
+            r.set_bind_group(
+                3,
+                if initial {
+                    item.initial_group3.group
+                } else {
+                    item.peel_group3[read_side_index(slots, read_slot)?].group
+                },
+                &[],
             )?;
+            for (index, (stream, range)) in draw
+                .vertex_streams
+                .iter()
+                .zip(&draw.vertex_ranges)
+                .enumerate()
+            {
+                r.set_vertex_buffer(
+                    u32::try_from(index).map_err(|_| Error::InvalidRange)?,
+                    bindings.canonical_buffer(
+                        *draw_slots.streams.get(*stream).ok_or(Error::InvalidRange)?,
+                        frame.resident.streams[*stream].instance,
+                        &frame.resident.streams[*stream].buffer,
+                        &frame.resident.streams[*stream].desc,
+                        frame.resident.streams[*stream].incoming,
+                    )?,
+                    range.clone(),
+                )?;
+            }
+            r.draw(draw.vertices.clone(), draw.instances.clone())?;
         }
-        r.draw(draw.vertices.clone(), draw.instances.clone())?;
     }
     let _ = read_minmax;
     r.finish()

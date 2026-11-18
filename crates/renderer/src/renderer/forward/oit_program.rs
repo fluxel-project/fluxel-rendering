@@ -20,6 +20,8 @@ pub(super) struct OitFullscreenPrograms<B: ResourceBackend> {
 pub(super) struct OitMaterialProgram<B: ResourceBackend> {
     pub(super) initial: RasterPipeline<B>,
     pub(super) peel: RasterPipeline<B>,
+    pub(super) preliminary_initial: Option<RasterPipeline<B>>,
+    pub(super) preliminary_peel: Option<RasterPipeline<B>>,
     pub(super) initial_layout: BindGroupLayout<B>,
     pub(super) peel_layout: BindGroupLayout<B>,
     pub(super) _empty_environment_layout: Option<BindGroupLayout<B>>,
@@ -261,24 +263,30 @@ where
         let group2 = environment
             .or(empty_layout.as_ref())
             .ok_or(Error::InvalidState)?;
-        let initial_pipeline = self
+        let surface = base
+            .key
+            .surface
+            .for_oit(ordinary.material().surface_policy().separate_culling_pass);
+        let (initial_pipeline, preliminary_initial) = self
             .oit_draw_pipeline(
                 "OIT initial depth",
                 initial,
                 base,
                 group2,
                 &initial_layout,
+                surface,
                 vec![oit_target(min_max_format)],
                 Some(read_only_depth()),
             )
             .await?;
-        let peel_pipeline = self
+        let (peel_pipeline, preliminary_peel) = self
             .oit_draw_pipeline(
                 "OIT peel",
                 peel,
                 base,
                 group2,
                 &peel_layout,
+                surface,
                 vec![
                     oit_target(min_max_format),
                     oit_target(TextureFormat::Rgba16Float),
@@ -290,6 +298,8 @@ where
         Ok(OitMaterialProgram {
             initial: initial_pipeline,
             peel: peel_pipeline,
+            preliminary_initial,
+            preliminary_peel,
             initial_layout,
             peel_layout,
             _empty_environment_layout: empty_layout,
@@ -321,9 +331,10 @@ where
         base: &ForwardPipelineObjects<B>,
         group2: &BindGroupLayout<B>,
         oit: &BindGroupLayout<B>,
+        surface: crate::renderer::RasterSurfaceState,
         targets: Vec<Option<ColorTargetState>>,
         depth: Option<DepthStencilState>,
-    ) -> std::result::Result<RasterPipeline<B>, RendererError> {
+    ) -> std::result::Result<(RasterPipeline<B>, Option<RasterPipeline<B>>), RendererError> {
         let artifact = prepared.shader();
         let vertex = artifact
             .entry_point(fluxel_shader::ShaderStage::Vertex)
@@ -386,30 +397,45 @@ where
                 push_constants: &[],
             })
             .map_err(|e| self.observe_forward_error("OIT material pipeline layout", e))?;
-        self.device
-            .raster_pipeline(RasterPipelineDesc {
-                label: Some(label.into()),
-                layout,
-                vertex: PipelineStage {
-                    module: shader.clone(),
-                    entry: vertex,
-                    constants: vec![],
-                },
-                fragment: Some(PipelineStage {
-                    module: shader,
-                    entry: fragment,
-                    constants: vec![],
-                }),
-                vertex_buffers: prepared.geometry().streams.clone(),
-                color_targets: targets,
-                primitive: oit_triangles(base.key.surface),
-                depth_stencil: depth,
-                multisample: single_sample(),
-                multiview: None,
-                cache: None,
-            })
+        let mut primitive = fullscreen_triangles();
+        surface.apply_to(&mut primitive);
+        let raster = |label: &str, primitive| RasterPipelineDesc {
+            label: Some(label.into()),
+            layout: layout.clone(),
+            vertex: PipelineStage {
+                module: shader.clone(),
+                entry: vertex.clone(),
+                constants: vec![],
+            },
+            fragment: Some(PipelineStage {
+                module: shader.clone(),
+                entry: fragment.clone(),
+                constants: vec![],
+            }),
+            vertex_buffers: prepared.geometry().streams.clone(),
+            color_targets: targets.clone(),
+            primitive,
+            depth_stencil: depth.clone(),
+            multisample: single_sample(),
+            multiview: None,
+            cache: None,
+        };
+        let preliminary = if let Some(primitive) = surface.preliminary_primitive(primitive) {
+            Some(
+                self.device
+                    .raster_pipeline(raster(label, primitive))
+                    .await
+                    .map_err(|e| self.observe_forward_error("OIT preliminary pipeline", e))?,
+            )
+        } else {
+            None
+        };
+        let primary = self
+            .device
+            .raster_pipeline(raster(label, primitive))
             .await
-            .map_err(|e| self.observe_forward_error("OIT material pipeline", e))
+            .map_err(|e| self.observe_forward_error("OIT material pipeline", e))?;
+        Ok((primary, preliminary))
     }
 }
 
@@ -495,15 +521,6 @@ fn fullscreen_triangles() -> PrimitiveState {
         polygon_mode: PolygonMode::Fill,
         conservative: false,
     }
-}
-
-/// OIT must not cull either side, but its fragment `front_facing` input still
-/// has to use the exact orientation selected for this real draw.
-fn oit_triangles(surface: crate::renderer::RasterSurfaceState) -> PrimitiveState {
-    let mut primitive = fullscreen_triangles();
-    surface.apply_to(&mut primitive);
-    primitive.cull_mode = CullMode::None;
-    primitive
 }
 
 fn single_sample() -> MultisampleState {

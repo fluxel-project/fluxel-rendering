@@ -57,6 +57,8 @@ impl<B: ResourceBackend> OitFrameResources<B> {
                 draw: draw.draw,
                 initial: &draw.program.initial,
                 peel: &draw.program.peel,
+                preliminary_initial: draw.program.preliminary_initial.as_ref(),
+                preliminary_peel: draw.program.preliminary_peel.as_ref(),
                 initial_group3: draw.initial_group.borrowed(),
                 peel_group3: draw.peel_groups.each_ref().map(OitSampledGroup::borrowed),
                 empty_group2: draw.program.empty_environment_group.as_ref(),

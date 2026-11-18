@@ -197,6 +197,10 @@ helpers for alpha rejection, output alpha, and two-sided-lighting selection;
 the Renderer applies `discard` only after all material evaluations that can use
 texture derivatives, and it owns culling, blending, ordering, and Graph work.
 
+`SurfacePolicy::with_separate_culling_pass` opts into two ordered raster
+draws when ordinary back-face culling is disabled. It is a static variant
+fact. The consumer retains ownership of both raster states and their order.
+
 `TransmissionExtensions` is a separate optional contract for
 `MetallicRoughnessUv0Normal`. Its optional UV0 scalar callables provide
 transmission intensity and normalized thickness. Static fields carry surface

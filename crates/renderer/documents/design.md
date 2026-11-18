@@ -710,6 +710,14 @@ and OIT share the PBR view-facing predicate. The explicit tangent basis keeps
 its ordinary calculation, as in Babylon's explicit tangent branch. This uses
 the existing RHI clip/depth and winding conventions.
 
+`SurfacePolicy::with_separate_culling_pass` draws a logical double-sided
+surface twice, matching the two `setState` calls in Babylon's mesh render.
+Both pipelines cull back faces. The first uses the opposite resolved winding
+and the second restores the resolved winding. The pair shares its shader,
+bindings, Graph resource footprint, and render pass. It finishes before the
+next logical draw, preserving sorted order. OIT uses the same pair within
+initialization and each peel because its mesh step disables ordinary culling.
+
 A blend request is refused
 by an opaque-only consumer before its dependent GPU allocation until the
 transparent phase supplies correct ordering and composition. This refusal

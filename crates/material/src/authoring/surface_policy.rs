@@ -43,6 +43,8 @@ pub struct SurfacePolicy {
     pub side_orientation: Option<SurfaceSideOrientation>,
     /// Whether a consumer should reverse the final shading normal on back faces.
     pub two_sided_lighting: bool,
+    /// Draws each side with its own culling state when ordinary culling is disabled.
+    pub separate_culling_pass: bool,
 }
 
 impl SurfacePolicy {
@@ -63,6 +65,13 @@ impl SurfacePolicy {
         self
     }
 
+    /// Selects ordered back-side and front-side draws for a two-sided surface.
+    #[must_use]
+    pub fn with_separate_culling_pass(mut self, enabled: bool) -> Self {
+        self.separate_culling_pass = enabled;
+        self
+    }
+
     /// Selects whether this surface is rendered and lit as double-sided.
     #[must_use]
     pub fn with_double_sided(mut self, enabled: bool) -> Self {
@@ -80,6 +89,7 @@ impl Default for SurfacePolicy {
             back_face_culling: true,
             side_orientation: None,
             two_sided_lighting: false,
+            separate_culling_pass: false,
         }
     }
 }
@@ -91,6 +101,7 @@ impl PartialEq for SurfacePolicy {
             && self.back_face_culling == other.back_face_culling
             && self.side_orientation == other.side_orientation
             && self.two_sided_lighting == other.two_sided_lighting
+            && self.separate_culling_pass == other.separate_culling_pass
     }
 }
 
