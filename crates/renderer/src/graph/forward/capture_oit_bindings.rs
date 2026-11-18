@@ -43,6 +43,30 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         }
         self.validate_oit_side(capture, &self.capture_oit, capture_oit)?;
         self.validate_oit_side(receiver, &self.receiver_oit, receiver_oit)?;
+        if self.scene_refraction {
+            let (Some(capture_depth), Some(receiver_depth)) =
+                (&capture.frame.depth, &receiver.frame.depth)
+            else {
+                return Err(Error::InvalidState);
+            };
+            if receiver_oit.is_some()
+                || capture_depth.device != self.id.device
+                || receiver_depth.device != self.id.device
+                || capture_depth.instance != receiver_depth.instance
+                || capture_depth.texture.device() != self.id.device
+                || receiver_depth.texture.device() != self.id.device
+                || capture_depth.view.device() != self.id.device
+                || receiver_depth.view.device() != self.id.device
+                || capture_depth.incoming != receiver_depth.incoming
+                || capture_depth.layout != receiver_depth.layout
+                || !super::capture_declaration::same_texture_owner_desc(
+                    &capture_depth.desc,
+                    &receiver_depth.desc,
+                )
+            {
+                return Err(Error::InvalidState);
+            }
+        }
         if let (Some(left), Some(right)) = (capture_oit, receiver_oit) {
             let left = oit_instances(left);
             if oit_instances(right)
@@ -184,7 +208,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             capture,
             &self.receiver,
             receiver,
-            false,
+            self.scene_refraction,
         )?;
         self.append_oit(&mut textures, &self.capture_oit, capture_oit)?;
         self.append_oit(&mut textures, &self.receiver_oit, receiver_oit)?;

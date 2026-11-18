@@ -893,7 +893,12 @@ that exposes the capture target to the receiver.
 one Feature's draw reads in the producer's opaque, peel and excluded draw
 scopes. When it has no peel candidates, the producer invokes the typed sorted
 contribution on the same capture Graph. The receiver independently selects
-its ordinary or OIT product.
+its ordinary or OIT product. A scene-refraction receiver uses the sorted route
+and copies the producer's final color after any excluded blend segment. Its
+depth test loads the producer's original depth, including a cleared depth
+attachment when the producer has no opaque draws. The same rule covers the
+Forward fallback of a Deferred capture with a peeling producer and no G-buffer
+prefix.
 
 The scene-color transmission receiver is prepared with
 `prepare_forward_scene_refraction_receiver`. It names a material texture bound
@@ -951,8 +956,7 @@ the producer color and loads the original G-buffer depth attachment read-only,
 using the same camera and projection. This preserves foreground occlusion and
 the background outside coverage. With no opaque producer prefix, a sorted
 producer and this receiver use the existing Forward refraction capture path.
-Scene-refraction receivers that require peeling and all-transparent peeling
-producers for scene refraction still require their composition paths.
+Scene-refraction receivers that require peeling still need their composition path.
 One shared resident import set covers Forward and Deferred producer,
 overlay and receiver cache hits. Completed allocations reuse one Graph handle
 only after comparing actual device, descriptor and incoming-state facts;

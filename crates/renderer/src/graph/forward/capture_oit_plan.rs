@@ -13,6 +13,7 @@ pub(crate) struct CaptureOitPlan<B: ResourceBackend> {
     pub(super) capture_oit: Option<super::oit_plan::ForwardOitPlan>,
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mips: Vec<super::super::mip_generation::MipGenerationPass>,
+    pub(super) receiver_background_copy: Option<(GraphPass, TextureSlot)>,
     pub(super) receiver_raster: GraphPass,
     pub(super) receiver_oit: Option<super::oit_plan::ForwardOitPlan>,
     pub(super) terminal: super::capture_oit_declaration::CaptureOitTerminal,
@@ -22,6 +23,7 @@ pub(crate) struct CaptureOitPlan<B: ResourceBackend> {
     pub(super) alignment: u64,
     pub(super) capture_shape: ForwardShape,
     pub(super) receiver_shape: ForwardShape,
+    pub(super) scene_refraction: bool,
 }
 
 impl<B: ResourceBackend> CaptureOitPlan<B> {
@@ -37,6 +39,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         receiver: &ForwardFrame<B>,
         capture_oit: Option<&ForwardOitInput<'_, B>>,
         receiver_oit: Option<&ForwardOitInput<'_, B>>,
+        scene_refraction: bool,
         capture_ordinary: N,
         capture_contribute: C,
     ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError>
@@ -52,6 +55,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             receiver,
             capture_oit,
             receiver_oit,
+            scene_refraction,
             capture_ordinary,
             capture_contribute,
         )
@@ -65,6 +69,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         receiver: &ForwardFrame<B>,
         capture_oit: Option<&ForwardOitInput<'_, B>>,
         receiver_oit: Option<&ForwardOitInput<'_, B>>,
+        scene_refraction: bool,
         image: &SurfaceImage<B>,
         capture_ordinary: N,
         capture_contribute: C,
@@ -81,6 +86,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             receiver,
             capture_oit,
             receiver_oit,
+            scene_refraction,
             image,
             capture_ordinary,
             capture_contribute,
@@ -100,7 +106,19 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             super::capture_oit_declaration::CaptureOitTerminal::Readback { pass }
             | super::capture_oit_declaration::CaptureOitTerminal::Surface { pass, .. } => pass,
         };
-        if !execution.logical().passes().contains(&terminal_pass) {
+        let mut expected = vec![declaration.capture_upload];
+        expected.extend(declaration.capture_mips.iter().map(|item| item.pass));
+        expected.push(declaration.capture_raster);
+        append_oit_passes(&mut expected, declaration.capture_oit.as_ref());
+        expected.push(declaration.receiver_upload);
+        expected.extend(declaration.receiver_mips.iter().map(|item| item.pass));
+        if let Some((pass, _)) = declaration.receiver_background_copy {
+            expected.push(pass);
+        }
+        expected.push(declaration.receiver_raster);
+        append_oit_passes(&mut expected, declaration.receiver_oit.as_ref());
+        expected.push(terminal_pass);
+        if execution.logical().passes() != expected {
             return Err(Error::InvalidState.into());
         }
         let mut steps = execution.steps(device, id, declaration.lane)?;
@@ -146,6 +164,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             capture_oit: declaration.capture_oit,
             receiver_upload: declaration.receiver_upload,
             receiver_mips: declaration.receiver_mips,
+            receiver_background_copy: declaration.receiver_background_copy,
             receiver_raster: declaration.receiver_raster,
             receiver_oit: declaration.receiver_oit,
             terminal: declaration.terminal,
@@ -155,6 +174,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             alignment: declaration.alignment,
             capture_shape: declaration.capture_shape,
             receiver_shape: declaration.receiver_shape,
+            scene_refraction: declaration.scene_refraction,
         })
     }
 
@@ -257,5 +277,15 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             })
             .map(|point| point.point.clone())
             .ok_or(Error::InvalidState)
+    }
+}
+
+fn append_oit_passes(passes: &mut Vec<GraphPass>, oit: Option<&super::oit_plan::ForwardOitPlan>) {
+    let Some(oit) = oit else {
+        return;
+    };
+    passes.extend(oit.passes());
+    if let Some(pass) = oit.fallback {
+        passes.push(pass);
     }
 }

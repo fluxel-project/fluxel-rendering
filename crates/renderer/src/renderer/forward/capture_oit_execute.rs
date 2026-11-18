@@ -55,11 +55,14 @@ where
     {
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
-        match (&capture.retained, &receiver.retained) {
+        let scene_refraction = match (&capture.retained, &receiver.retained) {
             (PendingInputs::Frame { .. }, PendingInputs::Frame { _inputs, .. })
-                if _inputs.len() == 1 => {}
+                if _inputs.len() == 1 =>
+            {
+                _inputs[0].prepared().uses_scene_refraction()
+            }
             _ => return Err(Error::InvalidState.into()),
-        }
+        };
         let capture_input = capture.graph_input();
         let receiver_input = receiver.graph_input();
         let (mut present, composite) = match target {
@@ -76,6 +79,7 @@ where
                 &receiver.frame,
                 capture_input.as_ref(),
                 receiver_input.as_ref(),
+                scene_refraction,
                 image,
                 capture_ordinary,
                 capture_contribute,
@@ -86,6 +90,7 @@ where
                 &receiver.frame,
                 capture_input.as_ref(),
                 receiver_input.as_ref(),
+                scene_refraction,
                 capture_ordinary,
                 capture_contribute,
             ),

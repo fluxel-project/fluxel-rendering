@@ -8,6 +8,8 @@ use super::capture_declaration::{
     CaptureFrameSlots, FrameHandles, SharedResidentImports, capture_texture_slots,
     declare_mip_generations, declare_raster, declare_upload, import_frame, validate_spec,
 };
+use super::capture_depth_alias::{import_frame_with_depth_alias, validate_depth_alias};
+use super::capture_terminal::declare_capture_background_copy;
 use super::*;
 use fluxel_rhi::api::TextureDimension;
 
@@ -20,6 +22,7 @@ pub(crate) struct CaptureOitDeclaration {
     pub(super) capture_oit: Option<super::oit_plan::ForwardOitPlan>,
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mips: Vec<super::super::mip_generation::MipGenerationPass>,
+    pub(super) receiver_background_copy: Option<(GraphPass, TextureSlot)>,
     pub(super) receiver_raster: GraphPass,
     pub(super) receiver_oit: Option<super::oit_plan::ForwardOitPlan>,
     pub(super) terminal: CaptureOitTerminal,
@@ -29,6 +32,7 @@ pub(crate) struct CaptureOitDeclaration {
     pub(super) alignment: u64,
     pub(super) capture_shape: ForwardShape,
     pub(super) receiver_shape: ForwardShape,
+    pub(super) scene_refraction: bool,
 }
 
 /// The one actual terminal selected during Graph declaration.
@@ -52,6 +56,7 @@ pub(super) fn declare_capture_oit_with_capture_contribution<B, N, C>(
     receiver: &ForwardFrame<B>,
     capture_oit: Option<&ForwardOitInput<'_, B>>,
     receiver_oit: Option<&ForwardOitInput<'_, B>>,
+    scene_refraction: bool,
     capture_ordinary: N,
     capture_contribute: C,
 ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError>
@@ -66,6 +71,7 @@ where
         receiver,
         capture_oit,
         receiver_oit,
+        scene_refraction,
         None,
         capture_ordinary,
         capture_contribute,
@@ -79,6 +85,7 @@ pub(super) fn declare_capture_oit_inner<B, N, C>(
     receiver: &ForwardFrame<B>,
     capture_oit: Option<&ForwardOitInput<'_, B>>,
     receiver_oit: Option<&ForwardOitInput<'_, B>>,
+    scene_refraction: bool,
     image: Option<&SurfaceImage<B>>,
     capture_ordinary: N,
     mut capture_contribute: C,
@@ -101,6 +108,16 @@ where
     }
     validate_spec(device, &capture_spec, FrameTopology::SortedForward, false)?;
     validate_spec(device, &receiver_spec, FrameTopology::SortedForward, true)?;
+    if scene_refraction && receiver_oit.is_some() {
+        return Err(Error::InvalidState.into());
+    }
+    validate_depth_alias(
+        device,
+        capture,
+        receiver,
+        FrameTopology::SortedForward,
+        scene_refraction,
+    )?;
     validate_oit_input(device, capture, &capture_spec, capture_oit)?;
     validate_oit_input(device, receiver, &receiver_spec, receiver_oit)?;
     if let Some(image) = image {
@@ -136,41 +153,72 @@ where
     let capture_dependency = capture_mips
         .last()
         .map_or(capture_upload, |generation| generation.pass);
-    let (capture_raster, capture_final, capture_oit_plan) = declare_side_with_contribution(
-        &mut graph,
-        &capture_spec,
-        &capture_handles,
-        capture_upload,
-        capture_dependency,
-        capture_oit,
-        capture_ordinary,
-        &mut capture_contribute,
-    )?;
+    let (capture_raster, capture_final, capture_depth, capture_oit_plan) =
+        declare_side_with_contribution(
+            &mut graph,
+            &capture_spec,
+            &capture_handles,
+            capture_upload,
+            capture_dependency,
+            capture_oit,
+            capture_ordinary,
+            &mut capture_contribute,
+        )?;
     let capture_texture_slots = capture_texture_slots(&receiver_spec)?;
     let aliases = capture_texture_slots
         .iter()
         .map(|capture_texture| capture_texture.then_some(capture_final))
         .collect::<Vec<_>>();
-    let (receiver_slots, receiver_handles) =
-        import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
+    let (receiver_slots, receiver_handles) = if scene_refraction {
+        import_frame_with_depth_alias(
+            &mut graph,
+            &receiver_spec,
+            Some(&aliases),
+            &mut shared,
+            capture_depth.ok_or(Error::InvalidState)?,
+        )?
+    } else {
+        import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?
+    };
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
-    let (receiver_handles, receiver_mips) =
+    let (mut receiver_handles, receiver_mips) =
         declare_mip_generations(&mut graph, &receiver_spec, receiver_handles, &mut shared)?;
     let receiver_dependency = receiver_mips
         .last()
         .map_or(receiver_upload, |generation| generation.pass);
-    let mut receiver_reads = |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
-    let (receiver_raster, receiver_final, receiver_oit_plan) = declare_side_with_contribution(
-        &mut graph,
-        &receiver_spec,
-        &receiver_handles,
-        receiver_upload,
-        receiver_dependency,
-        receiver_oit,
-        ordinary_reads::<B>,
-        &mut receiver_reads,
-    )?;
+    let receiver_background_copy = scene_refraction
+        .then(|| {
+            declare_capture_background_copy(&mut graph, capture_final, receiver_handles.target)
+        })
+        .transpose()?;
+    if let Some((_, target)) = receiver_background_copy {
+        receiver_handles.target = target;
+    }
+    let (receiver_raster, receiver_final, receiver_oit_plan) = if scene_refraction {
+        let (pass, color, _) = declare_raster(
+            &mut graph,
+            &receiver_spec,
+            FrameTopology::SortedForward,
+            receiver_upload,
+            &receiver_handles,
+            scene_refraction_reads::<B>,
+        )?;
+        (pass, color, None)
+    } else {
+        let mut receiver_reads = |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
+        let (raster, color, _, oit) = declare_side_with_contribution(
+            &mut graph,
+            &receiver_spec,
+            &receiver_handles,
+            receiver_upload,
+            receiver_dependency,
+            receiver_oit,
+            ordinary_reads::<B>,
+            &mut receiver_reads,
+        )?;
+        (raster, color, oit)
+    };
     let terminal = match image {
         None => CaptureOitTerminal::Readback {
             pass: declare_readback(
@@ -193,6 +241,8 @@ where
         capture_oit: capture_oit_plan,
         receiver_upload,
         receiver_mips,
+        receiver_background_copy: receiver_background_copy
+            .map(|(pass, _)| (pass, capture_final.into())),
         receiver_raster,
         receiver_oit: receiver_oit_plan,
         terminal,
@@ -202,6 +252,7 @@ where
         alignment: device.capabilities().limits.uniform_offset_alignment,
         capture_shape: capture_spec.shape,
         receiver_shape: receiver_spec.shape,
+        scene_refraction,
     })
 }
 
@@ -263,6 +314,7 @@ pub(super) fn declare_side<B>(
     (
         GraphPass,
         crate::graph::definition::TextureHandle,
+        Option<crate::graph::definition::TextureHandle>,
         Option<super::oit_plan::ForwardOitPlan>,
     ),
     ForwardPlanBuildError,
@@ -295,6 +347,7 @@ pub(super) fn declare_side_with_contribution<B, N, C>(
     (
         GraphPass,
         crate::graph::definition::TextureHandle,
+        Option<crate::graph::definition::TextureHandle>,
         Option<super::oit_plan::ForwardOitPlan>,
     ),
     ForwardPlanBuildError,
@@ -317,10 +370,15 @@ where
                 handles.depth.ok_or(Error::InvalidState)?,
                 contribute,
             )?;
-            Ok((stages.raster_pass, stages.output, Some(stages.oit)))
+            Ok((
+                stages.raster_pass,
+                stages.output,
+                Some(stages.opaque_depth),
+                Some(stages.oit),
+            ))
         }
         None => {
-            let (raster, target, _) = declare_raster(
+            let (raster, target, depth) = declare_raster(
                 graph,
                 spec,
                 FrameTopology::SortedForward,
@@ -328,7 +386,7 @@ where
                 handles,
                 ordinary,
             )?;
-            Ok((raster, target, None))
+            Ok((raster, target, depth, None))
         }
     }
 }
@@ -342,6 +400,19 @@ fn ordinary_reads<B: ResourceBackend>(
         pass.read_frame_uniforms()?;
         pass.read_sampled_textures()?;
         pass.write_selected_depth()?;
+        pass.read_write_main_color()
+    })
+}
+
+fn scene_refraction_reads<B: ResourceBackend>(
+    context: &mut ForwardPhaseContext<'_, '_, '_, B>,
+) -> std::result::Result<(), PipelineError> {
+    context.sorted(|pass| {
+        pass.depends_on_uploads()?;
+        pass.read_vertex_streams()?;
+        pass.read_frame_uniforms()?;
+        pass.read_sampled_textures()?;
+        pass.read_selected_depth()?;
         pass.read_write_main_color()
     })
 }

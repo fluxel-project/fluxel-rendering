@@ -1,7 +1,9 @@
 //! Capture preparation when the producer has no Deferred G-buffer prefix.
 
 use super::*;
-use crate::renderer::forward::{CaptureTextureOwner, CaptureTextureSlot, OitExecutionTarget};
+use crate::renderer::forward::{
+    CaptureTextureSlot, OitExecutionTarget, capture_oit_receiver_partition,
+};
 use std::{num::NonZeroU32, time::Instant};
 
 impl<B> Renderer<B>
@@ -34,10 +36,8 @@ where
     ) -> Result<Submission, RendererError> {
         let extent = receiver_input.extent();
         let started = Instant::now();
-        if receiver_input.prepared().uses_scene_refraction() {
-            if peel_count != 0 {
-                return Err(Error::Unsupported("OIT-only producer for scene refraction").into());
-            }
+        let scene_refraction = receiver_input.prepared().uses_scene_refraction();
+        if scene_refraction && peel_count == 0 {
             let environment = self.environment_irradiance.clone().filter(|_| {
                 producer_inputs
                     .iter()
@@ -91,36 +91,23 @@ where
                 started,
             )
             .await?;
-        let capture = match producer.oit.as_ref() {
-            Some(oit) => {
-                CaptureTextureOwner::from_oit_output(&self.device, producer_slot, &oit.output)
-            }
-            None => CaptureTextureOwner::from_capture_frame(
-                &self.device,
-                producer_slot,
-                &producer.frame,
-            ),
-        }
-        .map_err(|error| self.observe_rhi_error(error))?;
+        let capture = producer
+            .capture_owner(&self.device, producer_slot, scene_refraction)
+            .map_err(|error| self.observe_rhi_error(error))?;
 
-        if matches!(
-            receiver_input
-                .prepared()
-                .material()
-                .surface_policy()
-                .alpha_mode,
-            fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend,
-        ) {
-            let receiver_partition = match receiver_config {
-                Some(config) => {
-                    crate::preparation::partition_oit_draws(vec![receiver_input], config)
-                }
-                None => crate::preparation::OitDrawPartition {
-                    draws: vec![receiver_input],
-                    opaque_count: 0,
-                    peel_count: 0,
-                },
-            };
+        if scene_refraction
+            || matches!(
+                receiver_input
+                    .prepared()
+                    .material()
+                    .surface_policy()
+                    .alpha_mode,
+                fluxel_material::SurfaceAlphaMode::Blend
+                    | fluxel_material::SurfaceAlphaMode::MaskBlend,
+            )
+        {
+            let receiver_partition =
+                capture_oit_receiver_partition(receiver_input, receiver_config)?;
             let receiver_rounds =
                 receiver_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
             if receiver_partition.peel_count != 0 {

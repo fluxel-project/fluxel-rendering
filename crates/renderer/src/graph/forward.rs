@@ -13,7 +13,7 @@ mod capture_oit_bindings;
 mod capture_oit_plan;
 mod capture_oit_record;
 mod capture_oit_surface_declaration;
-mod capture_oit_surface_record;
+mod capture_oit_terminal_record;
 pub(crate) use capture_oit_plan::CaptureOitPlan;
 mod capture_plan;
 mod capture_receiver;

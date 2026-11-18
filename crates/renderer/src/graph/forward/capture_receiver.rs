@@ -203,9 +203,10 @@ where
         )?;
         (pass, color, None)
     } else {
-        super::capture_oit_declaration::declare_side(
+        let (raster, color, _, oit) = super::capture_oit_declaration::declare_side(
             graph, &spec, &handles, upload, dependency, oit_input,
-        )?
+        )?;
+        (raster, color, oit)
     };
     Ok(ForwardReceiverComposition {
         upload,

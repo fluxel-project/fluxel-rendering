@@ -26,6 +26,51 @@ impl<B: ResourceBackend> CaptureOitSide<B> {
             rounds: self.rounds,
         })
     }
+
+    pub(in crate::renderer) fn capture_owner(
+        &self,
+        device: &Device<B>,
+        slot: CaptureTextureSlot,
+        scene_refraction: bool,
+    ) -> Result<CaptureTextureOwner<B>> {
+        let mut capture = match self.oit.as_ref() {
+            Some(oit) => CaptureTextureOwner::from_oit_output(device, slot, &oit.output),
+            None => CaptureTextureOwner::from_capture_frame(device, slot, &self.frame),
+        }?;
+        if scene_refraction {
+            capture.refraction_depth = Some(
+                self.frame
+                    .frame
+                    .depth
+                    .as_ref()
+                    .ok_or(Error::InvalidState)?
+                    .retain(),
+            );
+        }
+        Ok(capture)
+    }
+}
+
+pub(in crate::renderer) fn capture_oit_receiver_partition(
+    input: crate::ForwardDrawInput,
+    config: Option<&crate::DualDepthPeelingConfig>,
+) -> Result<OitDrawPartition> {
+    let scene_refraction = input.prepared().uses_scene_refraction();
+    let mut partition = match config {
+        Some(config) => crate::preparation::partition_oit_draws(vec![input], config),
+        None => OitDrawPartition {
+            draws: vec![input],
+            opaque_count: 0,
+            peel_count: 0,
+        },
+    };
+    if scene_refraction {
+        if partition.peel_count != 0 {
+            return Err(Error::Unsupported("OIT scene-refraction receiver"));
+        }
+        partition.opaque_count = 0;
+    }
+    Ok(partition)
 }
 
 impl<B> Renderer<B>
@@ -152,7 +197,7 @@ where
         }
         let mut composer = fluxel_shader::ShaderComposer::new();
         let receiver = receiver
-            .with_lighting(
+            .with_capture_lighting(
                 &mut composer,
                 self.environment_irradiance.is_some(),
                 self.environment_specular.is_some(),
@@ -160,9 +205,8 @@ where
             .map_err(RendererError::ForwardPreparation)?
             .into_draw_input();
         super::capture_entry::validate_receiver_sources(&receiver, &producer_slot)?;
-        if receiver.extent() != extent {
-            return Err(Error::InvalidRange.into());
-        }
+        super::capture_entry::validate_receiver_view(&receiver, selected.view_record())?;
+        let scene_refraction = receiver.prepared().uses_scene_refraction();
         let assets = super::capture_entry::capture_assets(assets, &receiver);
         let inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
@@ -177,7 +221,10 @@ where
                 .map_err(RendererError::ForwardPipeline)?;
         // The receiver has exactly one draw, so excluded transparency has no
         // inter-object sorting requirement or dependency on a producer eye.
-        let receiver = crate::preparation::partition_oit_draws(vec![receiver], receiver_config);
+        let receiver = capture_oit_receiver_partition(receiver, Some(receiver_config))?;
+        if scene_refraction {
+            self.admit_oit_capture_refraction(extent, surface.is_some())?;
+        }
         for (partition, config) in [(&producer, producer_config), (&receiver, receiver_config)] {
             if partition.peel_count != 0 {
                 config
@@ -201,19 +248,9 @@ where
                 started,
             )
             .await?;
-        let capture_owner = match producer.oit.as_ref() {
-            Some(oit) => super::captured::CaptureTextureOwner::from_oit_output(
-                &self.device,
-                producer_slot,
-                &oit.output,
-            ),
-            None => super::captured::CaptureTextureOwner::from_capture_frame(
-                &self.device,
-                producer_slot,
-                &producer.frame,
-            ),
-        }
-        .map_err(|error| self.observe_forward_error("OIT capture product admission", error))?;
+        let capture_owner = producer
+            .capture_owner(&self.device, producer_slot, scene_refraction)
+            .map_err(|error| self.observe_forward_error("OIT capture product admission", error))?;
         let receiver = self
             .assemble_capture_oit_side(
                 snapshot,
@@ -244,6 +281,22 @@ where
         };
         self.execute_capture_oit(producer, receiver, target, started)
             .await
+    }
+
+    pub(super) fn admit_oit_capture_refraction(
+        &self,
+        extent: [u32; 2],
+        sampled_target: bool,
+    ) -> Result<()> {
+        super::target_admission::admit(
+            &self.device,
+            crate::FrameTopology::SortedForward,
+            extent,
+            TextureFormat::Rgba8Unorm,
+            false,
+            sampled_target,
+            true,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

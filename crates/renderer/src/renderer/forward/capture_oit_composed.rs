@@ -145,13 +145,12 @@ where
         let specular = self.environment_specular.is_some();
         let mut composer = fluxel_shader::ShaderComposer::new();
         let receiver_input = receiver
-            .with_lighting(&mut composer, environment, specular)
+            .with_capture_lighting(&mut composer, environment, specular)
             .map_err(RendererError::ForwardPreparation)?
             .into_draw_input();
         super::capture_entry::validate_receiver_sources(&receiver_input, &producer_slot)?;
-        if receiver_input.extent() != extent {
-            return Err(Error::InvalidRange.into());
-        }
+        super::capture_entry::validate_receiver_view(&receiver_input, selected.view_record())?;
+        let scene_refraction = receiver_input.prepared().uses_scene_refraction();
         let retained_assets = super::capture_entry::capture_assets(assets, &receiver_input);
         let mut inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
@@ -191,8 +190,13 @@ where
                 }
             }
         }
-        let receiver =
-            crate::preparation::partition_oit_draws(vec![receiver_input], receiver_config);
+        let receiver = super::capture_oit_entry::capture_oit_receiver_partition(
+            receiver_input,
+            Some(receiver_config),
+        )?;
+        if scene_refraction {
+            self.admit_oit_capture_refraction(extent, surface.is_some())?;
+        }
         for (partition, config) in [(&producer, producer_config), (&receiver, receiver_config)] {
             if partition.peel_count != 0 {
                 config
@@ -216,21 +220,11 @@ where
                 started,
             )
             .await?;
-        let capture_owner = match producer.oit.as_ref() {
-            Some(oit) => super::captured::CaptureTextureOwner::from_oit_output(
-                &self.device,
-                producer_slot,
-                &oit.output,
-            ),
-            None => super::captured::CaptureTextureOwner::from_capture_frame(
-                &self.device,
-                producer_slot,
-                &producer.frame,
-            ),
-        }
-        .map_err(|error| {
-            self.observe_forward_error("typed OIT capture product admission", error)
-        })?;
+        let capture_owner = producer
+            .capture_owner(&self.device, producer_slot, scene_refraction)
+            .map_err(|error| {
+                self.observe_forward_error("typed OIT capture product admission", error)
+            })?;
         let receiver = self
             .assemble_capture_oit_side(
                 snapshot.clone(),

@@ -307,6 +307,7 @@ mod capture_entry;
 mod capture_execute;
 mod capture_oit_composed;
 mod capture_oit_entry;
+pub(in crate::renderer) use capture_oit_entry::capture_oit_receiver_partition;
 mod capture_oit_execute;
 mod capture_receiver_contribution;
 mod captured;

@@ -1,8 +1,23 @@
-//! The native terminal raster for a capture OIT surface Graph.
+//! Native terminal recording for one capture OIT Graph.
 
 use super::*;
 
 impl<B: ResourceBackend> CaptureOitPlan<B> {
+    pub(super) fn record_final_readback(
+        &self,
+        bindings: &FrameBindings<'_, B>,
+        encoder: &mut CommandEncoder<B>,
+        receiver: &ForwardFrame<B>,
+        pass: GraphPass,
+    ) -> Result<fluxel_rhi::api::ReadbackTicket<B>>
+    where
+        B: ReadbackBackend,
+    {
+        let mut slots = self.slots(&self.receiver);
+        slots.target_slot = self.receiver_final;
+        shared_record::record_readback(&slots, pass, bindings, encoder, receiver)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn record_surface_composite(
         &self,

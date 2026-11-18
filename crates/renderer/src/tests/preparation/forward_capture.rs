@@ -238,18 +238,18 @@ fn pbr_uv0_normal_capture_receiver_keeps_normal_transform_and_lighting_contract(
     assert!(receiver.normal_from_local.is_some());
     let draw = receiver
         .clone()
-        .with_lighting(&mut ShaderComposer::new(), false, false)
+        .with_capture_lighting(&mut ShaderComposer::new(), false, false)
         .unwrap()
         .into_draw_input();
     assert_eq!(draw.transform_uniform_bytes(), crate::frame_data::forward::PBR_TRANSFORM_BYTES);
     let diffuse = receiver
         .clone()
-        .with_lighting(&mut ShaderComposer::new(), true, false)
+        .with_capture_lighting(&mut ShaderComposer::new(), true, false)
         .expect("PBR capture receiver accepts the diffuse-lighting request")
         .into_draw_input();
     assert!(diffuse.normal_from_local().is_some());
     assert!(matches!(
-        receiver.with_lighting(&mut ShaderComposer::new(), false, true),
+        receiver.with_capture_lighting(&mut ShaderComposer::new(), false, true),
         Err(ForwardPreparationError::InvalidView)
     ));
 }

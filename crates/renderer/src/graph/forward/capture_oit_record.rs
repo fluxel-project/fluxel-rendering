@@ -7,7 +7,7 @@ use super::*;
 use crate::graph::oit_record::{OitDepthTargetRef, OitDrawSlots, OitRecordCommands};
 
 impl<B: ResourceBackend> CaptureOitPlan<B> {
-    fn slots<'a>(&self, slots: &'a CaptureFrameSlots) -> RecordSlots<'a> {
+    pub(super) fn slots<'a>(&self, slots: &'a CaptureFrameSlots) -> RecordSlots<'a> {
         RecordSlots {
             device: self.id.device,
             topology: FrameTopology::SortedForward,
@@ -194,6 +194,19 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             )?;
             return Ok(None);
         }
+        if let Some((background_copy, source)) = self.receiver_background_copy {
+            if pass == background_copy {
+                super::capture_terminal::record_background_copy(
+                    &bindings,
+                    pass,
+                    encoder,
+                    source,
+                    self.receiver.target,
+                    receiver.extent,
+                )?;
+                return Ok(None);
+            }
+        }
         if pass == self.capture_raster && self.capture_oit.is_some() {
             self.record_oit_opaque(
                 &bindings,
@@ -217,6 +230,21 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             return Ok(None);
         }
         if pass == self.capture_raster {
+            if self.scene_refraction {
+                shared_record::record_raster_with_loads(
+                    &self.slots(&self.capture),
+                    pass,
+                    &bindings,
+                    encoder,
+                    capture,
+                    capture.frame.depth.as_ref(),
+                    LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                    LoadOp::Clear(1.0),
+                    StoreOp::Store,
+                    false,
+                )?;
+                return Ok(None);
+            }
             shared_record::record_raster(
                 &self.slots(&self.capture),
                 pass,
@@ -227,6 +255,21 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             return Ok(None);
         }
         if pass == self.receiver_raster {
+            if self.scene_refraction {
+                shared_record::record_raster_with_loads(
+                    &self.slots(&self.receiver),
+                    pass,
+                    &bindings,
+                    encoder,
+                    receiver,
+                    capture.frame.depth.as_ref(),
+                    LoadOp::Load,
+                    LoadOp::Load,
+                    StoreOp::Store,
+                    true,
+                )?;
+                return Ok(None);
+            }
             shared_record::record_raster(
                 &self.slots(&self.receiver),
                 pass,
@@ -292,7 +335,9 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         }
         if matches!(self.terminal, super::capture_oit_declaration::CaptureOitTerminal::Readback { pass: terminal } if pass == terminal)
         {
-            return self.record_final_readback(&bindings, encoder, receiver, pass, receiver_input);
+            return self
+                .record_final_readback(&bindings, encoder, receiver, pass)
+                .map(Some);
         }
         if let (
             super::capture_oit_declaration::CaptureOitTerminal::Surface {
@@ -352,22 +397,6 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         )
     }
 
-    fn record_final_readback(
-        &self,
-        bindings: &FrameBindings<'_, B>,
-        encoder: &mut CommandEncoder<B>,
-        receiver: &ForwardFrame<B>,
-        pass: GraphPass,
-        input: Option<&ForwardOitInput<'_, B>>,
-    ) -> Result<Option<fluxel_rhi::api::ReadbackTicket<B>>>
-    where
-        B: ReadbackBackend,
-    {
-        let mut slots = self.slots(&self.receiver);
-        slots.target_slot = self.receiver_final;
-        let _ = input;
-        shared_record::record_readback(&slots, pass, bindings, encoder, receiver).map(Some)
-    }
     fn record_oit_opaque(
         &self,
         bindings: &FrameBindings<'_, B>,

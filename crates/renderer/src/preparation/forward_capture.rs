@@ -80,22 +80,6 @@ impl PreparedCaptureReceiver {
     }
 
     /// Re-prepares this retained receiver for the selected lighting route.
-    pub(crate) fn with_lighting(
-        self,
-        composer: &mut ShaderComposer,
-        environment: bool,
-        specular: bool,
-    ) -> Result<Self, ForwardPreparationError> {
-        if self.scene_refraction.is_some() {
-            return Err(
-                ForwardPreparationError::UnsupportedSceneRefractionReceiver {
-                    source: self.source,
-                },
-            );
-        }
-        self.with_capture_lighting(composer, environment, specular)
-    }
-
     pub(crate) fn with_capture_lighting(
         mut self,
         composer: &mut ShaderComposer,
