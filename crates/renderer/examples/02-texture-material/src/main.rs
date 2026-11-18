@@ -389,6 +389,7 @@ fn encoding_name(encoding: TextureEncoding) -> &'static str {
     match encoding {
         TextureEncoding::Linear => "Linear",
         TextureEncoding::Srgb => "Srgb",
+        TextureEncoding::SrgbEncodedUnorm => "SrgbEncodedUnorm",
     }
 }
 

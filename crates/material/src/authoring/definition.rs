@@ -67,8 +67,27 @@ pub struct EmissiveConfiguration {
     pub color_parameter: Option<String>,
     /// Optional `F32` material parameter naming the emissive intensity.
     pub intensity_parameter: Option<String>,
+    /// Selects the software sRGB decode used for an
+    /// [`MaterialTextureEncoding::SrgbEncodedUnorm`] emissive texture.
+    ///
+    /// This has no effect for linear or hardware-sRGB texture encodings.
+    pub srgb_encoded_unorm_decode: EmissiveSrgbDecode,
     /// Optional named texture, sampler, level, and transfer encoding.
     pub texture: Option<EmissiveTexture>,
+}
+
+/// Software sRGB decode selected for an encoded UNORM emissive texture.
+///
+/// Babylon uses [`Self::BabylonApproximate`] by default. Its engine-level
+/// exact-conversion option selects [`Self::Exact`]. Fluxel keeps this choice
+/// material-local until a renderer exposes a broader policy deliberately.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum EmissiveSrgbDecode {
+    /// Babylon's default approximation: `pow(rgb, 2.2)`.
+    #[default]
+    BabylonApproximate,
+    /// The IEC sRGB piecewise transfer-function inverse.
+    Exact,
 }
 
 /// One declared emissive texture binding.
@@ -83,7 +102,8 @@ pub struct EmissiveTexture {
     /// Transfer encoding required of the bound texture asset.
     ///
     /// `Srgb` selects hardware sRGB decode before filtering, as on Babylon's
-    /// sRGB texture path. The evaluator consumes the resulting linear RGB.
+    /// sRGB texture path. `SrgbEncodedUnorm` instead samples ordinary UNORM
+    /// bytes and performs the selected software decode after filtering.
     pub encoding: MaterialTextureEncoding,
 }
 

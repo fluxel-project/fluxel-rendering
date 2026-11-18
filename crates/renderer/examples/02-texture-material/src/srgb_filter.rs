@@ -70,7 +70,7 @@ pub(super) fn sample(texture: &TextureInput, u: f64, v: f64) -> [u8; 4] {
             .round() as u8;
         }
         let decode = |value: u8| match texture.encoding {
-            TextureEncoding::Linear => f64::from(value) / 255.0,
+            TextureEncoding::Linear | TextureEncoding::SrgbEncodedUnorm => f64::from(value) / 255.0,
             TextureEncoding::Srgb => srgb_to_linear(f64::from(value) / 255.0),
         };
         (bilinear(

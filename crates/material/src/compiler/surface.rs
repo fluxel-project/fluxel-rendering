@@ -339,8 +339,22 @@ pub(super) fn canonical_extensions(
                 match texture.encoding {
                     crate::MaterialTextureEncoding::Linear => "linear",
                     crate::MaterialTextureEncoding::Srgb => "srgb",
+                    crate::MaterialTextureEncoding::SrgbEncodedUnorm => "srgb-encoded-unorm",
                 },
             );
+            if matches!(
+                texture.encoding,
+                crate::MaterialTextureEncoding::SrgbEncodedUnorm
+            ) {
+                canonical_piece(
+                    target,
+                    "surface-emissive-srgb-encoded-unorm-decode",
+                    match configuration.srgb_encoded_unorm_decode {
+                        crate::EmissiveSrgbDecode::BabylonApproximate => "babylon-approximate",
+                        crate::EmissiveSrgbDecode::Exact => "exact",
+                    },
+                );
+            }
         }
     }
 }
@@ -452,33 +466,55 @@ fn append_emissive_configuration(generated: &mut String, configuration: &Emissiv
         .intensity_parameter
         .as_deref()
         .unwrap_or("1.0");
-    let mut uv = String::from("emissive_uv");
-    while [color, intensity].contains(&uv.as_str())
-        || configuration.texture.as_ref().is_some_and(|texture| {
-            [
-                Some(texture.texture.as_str()),
-                Some(texture.sampler.as_str()),
-                texture.level_parameter.as_deref(),
-            ]
-            .contains(&Some(uv.as_str()))
-        })
-    {
-        uv.push('_');
+    let texture = configuration.texture.as_ref();
+    let level = texture
+        .and_then(|texture| texture.level_parameter.as_deref())
+        .unwrap_or("1.0");
+    let mut bindings = [color, intensity, level, "", ""];
+    if let Some(texture) = texture {
+        bindings[3] = &texture.texture;
+        bindings[4] = &texture.sampler;
     }
+    let uv = unique_emissive_local("emissive_uv", &bindings);
     generated.push_str(&format!(
         "fn evaluate_emissive_uv0({uv}: vec2<f32>) -> vec3<f32> {{\n"
     ));
-    match &configuration.texture {
-        Some(texture) => {
-            let level = texture.level_parameter.as_deref().unwrap_or("1.0");
-            generated.push_str(&format!(
-                "    return {color} * textureSample({}, {}, {uv}).rgb * {level} * {intensity};\n",
-                texture.texture, texture.sampler,
-            ));
-        }
-        None => generated.push_str(&format!("    return {color} * {intensity};\n")),
+
+    if let Some(texture) = texture {
+        let sample = format!(
+            "textureSample({}, {}, {uv}).rgb",
+            texture.texture, texture.sampler
+        );
+        let linear = match texture.encoding {
+            crate::MaterialTextureEncoding::Linear | crate::MaterialTextureEncoding::Srgb => sample,
+            crate::MaterialTextureEncoding::SrgbEncodedUnorm => {
+                let name = unique_emissive_local("emissive_sample", &bindings);
+                generated.push_str(&format!("    let {name} = {sample};\n"));
+                match configuration.srgb_encoded_unorm_decode {
+                    crate::EmissiveSrgbDecode::BabylonApproximate => {
+                        format!("pow({name}, vec3<f32>(2.2))")
+                    }
+                    crate::EmissiveSrgbDecode::Exact => format!(
+                        "select(\n        pow(0.947867299 * ({name} + vec3<f32>(0.055)), vec3<f32>(2.4)),\n        0.0773993808 * {name},\n        {name} <= vec3<f32>(0.04045)\n    )"
+                    ),
+                }
+            }
+        };
+        generated.push_str(&format!(
+            "    return {color} * {linear} * {level} * {intensity};\n"
+        ));
+    } else {
+        generated.push_str(&format!("    return {color} * {intensity};\n"));
     }
     generated.push_str("}\n");
+}
+
+fn unique_emissive_local(seed: &str, bindings: &[&str]) -> String {
+    let mut name = seed.to_owned();
+    while bindings.contains(&name.as_str()) {
+        name.push('_');
+    }
+    name
 }
 
 fn append_policy_helpers(generated: &mut String, policy: SurfacePolicy) {

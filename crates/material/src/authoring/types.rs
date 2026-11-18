@@ -136,7 +136,17 @@ pub enum MaterialTextureEncoding {
     /// Texture RGB values are already linear.
     Linear,
     /// Texture RGB values use the sRGB transfer function.
+    ///
+    /// The renderer must bind an sRGB sampled view, which decodes RGB before
+    /// texture filtering. Generated material evaluators consume linear RGB.
     Srgb,
+    /// Texture RGB bytes use the sRGB transfer function but are sampled
+    /// through an ordinary UNORM view.
+    ///
+    /// The material evaluator decodes the sampled, post-filter RGB values in
+    /// software. This is distinct from [`Self::Srgb`], whose decode happens
+    /// in the sampled texture format before filtering.
+    SrgbEncodedUnorm,
 }
 
 /// One optional transfer-encoding requirement for a declared texture resource.

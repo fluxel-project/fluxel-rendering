@@ -77,6 +77,9 @@ pub enum TextureEncoding {
     /// RGB bytes are sRGB values decoded by the sampled texture format; alpha
     /// remains linear as required by the RGBA8 sRGB format contract.
     Srgb,
+    /// RGB stores sRGB-encoded bytes sampled raw through an RGBA8 UNorm view.
+    /// The material can decode the filtered sample in its shader.
+    SrgbEncodedUnorm,
 }
 
 impl TextureEncoding {
@@ -84,7 +87,7 @@ impl TextureEncoding {
     #[must_use]
     pub fn rgba8_format(self) -> fluxel_rhi::api::TextureFormat {
         match self {
-            Self::Linear => fluxel_rhi::api::TextureFormat::Rgba8Unorm,
+            Self::Linear | Self::SrgbEncodedUnorm => fluxel_rhi::api::TextureFormat::Rgba8Unorm,
             Self::Srgb => fluxel_rhi::api::TextureFormat::Rgba8UnormSrgb,
         }
     }
@@ -528,6 +531,7 @@ pub(crate) fn validate_texture_encoding(
     let required_encoding = match required_encoding {
         fluxel_material::MaterialTextureEncoding::Linear => TextureEncoding::Linear,
         fluxel_material::MaterialTextureEncoding::Srgb => TextureEncoding::Srgb,
+        fluxel_material::MaterialTextureEncoding::SrgbEncodedUnorm => TextureEncoding::SrgbEncodedUnorm,
     };
     if actual != required_encoding {
         return Err(ForwardPreparationError::TextureEncodingMismatch {

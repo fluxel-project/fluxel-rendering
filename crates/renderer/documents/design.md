@@ -312,7 +312,9 @@ end-to-end consumer and source-bound evidence.
 
 Each draw retains a slot for every logical texture binding. Residency deduplicates
 physical owners by exact asset identity, generation, and device, including two
-names referencing the same image. Every view is bound and every actual sampled
+names referencing the same image. The encoding distinguishes linear, hardware sRGB, and raw sRGB bytes in an
+UNorm sampled view. Material preparation pairs the raw mode with the authored
+post-filter decode branch. Every view is bound and every actual sampled
 footprint enters Graph; duplicate logical slots do not create duplicate uploads.
 Completed publication covers every physical source. Reuse validates current
 declarations and all saved/actual owner device facts before recording.

@@ -50,6 +50,7 @@ pub(super) fn canonical(requirements: &[MaterialTextureEncodingRequirement], tar
             match requirement.encoding {
                 MaterialTextureEncoding::Linear => "linear",
                 MaterialTextureEncoding::Srgb => "srgb",
+                MaterialTextureEncoding::SrgbEncodedUnorm => "srgb-encoded-unorm",
             },
         );
     }

@@ -289,7 +289,8 @@ validation; the material compiler does not infer color roles from resource names
 
 An author may attach an optional `MaterialTextureEncodingRequirement` to a
 declared texture resource. It becomes part of the static variant identity and
-requires an asset binding with the selected linear or sRGB encoding. A
+requires an asset binding with the selected linear, hardware-sRGB, or
+sRGB-encoded-UNORM encoding. A
 same-frame capture is linear. Unannotated resources retain the generic contract
 for callers that intentionally support either source representation.
 
@@ -299,10 +300,15 @@ PBR emissive composition. Its color, intensity, and texture-level references
 are optional, typed material parameters (`Vec3`, `F32`, and `F32`); absent
 references lower to black color and unit factors. The optional texture names a
 declared `Texture2dF32` resource and non-comparison sampler, plus an explicit
-linear or sRGB encoding. That encoding is added to the variant's required
-texture metadata, so an sRGB asset is hardware-decoded before the evaluator
-uses its RGB. The author can supply a custom `SurfaceExtensions::emissive`
-callable as an exclusive alternative.
+linear, hardware-sRGB, or sRGB-encoded-UNORM encoding. That encoding is added
+to the variant's required texture metadata. Hardware `Srgb` is decoded before
+filtering by its sampled texture format. `SrgbEncodedUnorm` instead samples an
+ordinary UNORM view and performs Babylon's default post-filter `pow(rgb, 2.2)`
+decode in the evaluator. `EmissiveSrgbDecode::Exact` selects the IEC sRGB
+piecewise inverse instead. This distinction is intentional because filtering
+before versus after transfer decoding is observably different. The author can
+supply a custom `SurfaceExtensions::emissive` callable as an exclusive
+alternative.
 Renderer selects its effects route through
 `MaterialDefinition::requires_surface_effects()`, which includes either
 emissive form and occlusion.
