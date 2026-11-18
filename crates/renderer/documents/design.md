@@ -641,7 +641,9 @@ uses ordinary sorted Forward before OIT admission; selected-route failures
 remain errors. One submission retains all intermediate/output owners, pipelines
 and groups in its pending Forward workload until covering completion.
 Its sampled opaque target does not enter the ordinary CopySrc frame pool.
-Final alpha follows Babylon's `oitFinal` source: `front.a + back.a`.
+Back accumulation discards zero-alpha layers, matching Babylon's `oitBackBlend`.
+Final alpha uses `front.a + back.a`, as in the scene `DepthPeelingRenderer`'s
+`oitFinal` pass. The back accumulator already contains the opaque scene color.
 The offscreen terminal reads back the final output. The Surface terminal samples
 that same output into an actual acquired image, followed by native presentation;
 it declares no readback pass and does not bind the unused readback buffer.

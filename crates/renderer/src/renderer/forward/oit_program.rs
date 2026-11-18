@@ -538,7 +538,15 @@ struct O { @builtin(position) p: vec4<f32>, };
 const BACK_SOURCE: &str = r#"@group(0) @binding(0) var back: texture_2d<f32>;
 struct O { @builtin(position) p: vec4<f32>, };
 @vertex fn oit_vs(@builtin(vertex_index) i:u32)->O { var v=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.)); var o:O;o.p=vec4(v[i],0.,1.);return o; }
-@fragment fn oit_fs(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32>{return textureLoad(back,vec2<i32>(p.xy),0);}"#;
+@fragment
+fn oit_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let layer = textureLoad(back, vec2<i32>(position.xy), 0);
+    if layer.a == 0.0 {
+        discard;
+    }
+    return layer;
+}
+"#;
 // Babylon's oitFinal fragment uses additive front.a + back.a for final alpha.
 const FINAL_SOURCE: &str = r#"@group(0) @binding(0) var front: texture_2d<f32>; @group(0) @binding(1) var back: texture_2d<f32>;
 struct O { @builtin(position) p: vec4<f32>, };
