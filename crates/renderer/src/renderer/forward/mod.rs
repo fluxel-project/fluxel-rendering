@@ -315,7 +315,7 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
 mod assembly;
 mod prepare_attachments;
 pub(in crate::renderer) use assembly::AssembledForwardTarget;
-pub(in crate::renderer) use composed::order_draws as order_forward_draws;
+pub(in crate::renderer) use composed::{order_draws as order_forward_draws, order_opaque_mask};
 mod capture_batch;
 mod capture_composed;
 pub(in crate::renderer) use capture_batch::CaptureReceivers;

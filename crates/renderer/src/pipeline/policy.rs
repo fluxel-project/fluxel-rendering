@@ -39,11 +39,13 @@ pub trait FramePipeline<R> {
         Err(PipelineError::InvalidPhaseContribution)
     }
 
-    /// Defines opaque/mask order across built-in and feature-owned draws.
+    /// Defines order within the opaque and mask queues across built-in and
+    /// feature-owned draws.
     ///
     /// The result must remain a permutation of the exact supplied metadata.
     /// In Sorted Forward this hook sees only the opaque/mask segment; the
-    /// renderer orders the complete transparent segment after it.
+    /// renderer runs the opaque queue before the mask queue and orders the
+    /// complete transparent segment after both.
     fn order_forward(
         &self,
         _frame: &PreparedFrame<'_, R>,

@@ -281,7 +281,16 @@ fn order_opaque<P: FramePipeline<crate::ForwardResources>>(
         }
         ordered.push(input);
     }
+    order_opaque_mask(&mut ordered);
     Ok(ordered)
+}
+
+/// Keeps each opaque or alpha-test queue's order while dispatching opaque first.
+pub(in crate::renderer) fn order_opaque_mask(inputs: &mut [ForwardDrawInput]) {
+    inputs.sort_by_key(|input| {
+        input.prepared().material().surface_policy().alpha_mode
+            == fluxel_material::SurfaceAlphaMode::Mask
+    });
 }
 
 #[cfg(test)]

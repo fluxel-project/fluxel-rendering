@@ -669,7 +669,8 @@ transparent phase supplies correct ordering and composition. This refusal
 records an unfinished route and does not count as transparency support.
 
 `ForwardCpuPipeline::with_sorted_transparency()` selects `SortedForward` and
-the shared Depth32Float attachment. Ordinary opaque/masked draws run first;
+the shared Depth32Float attachment. The opaque queue runs before the mask
+queue. Within each queue the selected draw order is preserved;
 transparent draws from the scene and the typed Feature then merge into one
 global list. They run in the same real Graph raster pass because the attachment
 owners and resource footprints are shared. This is an explicit sorted product:

@@ -184,7 +184,7 @@ where
                 crate::PipelineError::InvalidPhaseContribution,
             ));
         }
-        let inputs = crate::preparation::prepare_forward_with_lighting(
+        let mut inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             assets,
             &mut fluxel_shader::ShaderComposer::new(),
@@ -214,6 +214,7 @@ where
                 )
                 .await;
         }
+        super::forward::order_opaque_mask(&mut inputs);
         self.deferred_residency.retain_assets(assets);
         let frame = self
             .prepare_deferred_frames(&inputs)
@@ -273,7 +274,7 @@ where
                 crate::PipelineError::InvalidPhaseContribution,
             ));
         }
-        let inputs = crate::preparation::prepare_forward_with_lighting(
+        let mut inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             assets,
             &mut fluxel_shader::ShaderComposer::new(),
@@ -303,6 +304,7 @@ where
                 )
                 .await;
         }
+        super::forward::order_opaque_mask(&mut inputs);
         self.deferred_residency.retain_assets(assets);
         let frame = self
             .prepare_deferred_surface_frames(&inputs, format)
