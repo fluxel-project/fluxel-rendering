@@ -59,7 +59,7 @@ pub use forward::CaptureTextureSlot;
 pub use forward::ForwardCacheStats;
 pub(crate) use forward::SurfaceCompositeOwner;
 pub(crate) use forward::validate_ordinary_sampler;
-pub use output_processing::OutputProcessing;
+pub use output_processing::{OutputProcessing, OutputTransfer};
 pub use shutdown::ShutdownReport;
 pub use submission::Submission;
 

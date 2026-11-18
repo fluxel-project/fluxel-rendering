@@ -5,21 +5,46 @@ use fluxel_shader::{
     BindingDeclaration, BindingKind, EntryPoint, ShaderCompositionRequest, ShaderStage, SourceUnit,
 };
 
-/// Maps a linear floating-point scene color to a display-referred sRGB output.
-///
-/// RGB uses the Babylon Standard curve after exposure. Alpha passes through.
+/// Transfer from linear scene values to display-encoded RGB.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputTransfer {
+    /// Piecewise sRGB transfer, matching Babylon's exact conversion option.
+    Srgb,
+    /// Babylon's default power approximation.
+    Gamma22,
+}
+
+/// Maps a linear floating-point scene color to display RGB while preserving alpha.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OutputProcessing {
     exposure: f32,
+    standard_tone_mapping: bool,
+    transfer: OutputTransfer,
+}
+
+impl Default for OutputProcessing {
+    /// Uses Babylon's default image-processing settings: unit exposure,
+    /// gamma 2.2, and disabled tone mapping.
+    fn default() -> Self {
+        Self {
+            exposure: 1.0,
+            standard_tone_mapping: false,
+            transfer: OutputTransfer::Gamma22,
+        }
+    }
 }
 
 impl OutputProcessing {
-    /// Selects a finite, nonnegative linear exposure multiplier.
+    /// Selects Standard tone mapping with exact sRGB and a finite, nonnegative exposure.
     pub fn new(exposure: f32) -> Result<Self, super::RendererError> {
         if !exposure.is_finite() || exposure < 0.0 {
             return Err(Error::InvalidRange.into());
         }
-        Ok(Self { exposure })
+        Ok(Self {
+            exposure,
+            standard_tone_mapping: true,
+            transfer: OutputTransfer::Srgb,
+        })
     }
 
     /// Returns the linear exposure multiplier.
@@ -27,11 +52,36 @@ impl OutputProcessing {
         self.exposure
     }
 
+    /// Enables or disables the Standard curve independently of the transfer.
+    #[must_use]
+    pub const fn with_standard_tone_mapping(mut self, enabled: bool) -> Self {
+        self.standard_tone_mapping = enabled;
+        self
+    }
+
+    /// Selects the display transfer without changing exposure or tone mapping.
+    #[must_use]
+    pub const fn with_transfer(mut self, transfer: OutputTransfer) -> Self {
+        self.transfer = transfer;
+        self
+    }
+
     pub(super) fn shader_source(self, target: TextureFormat) -> Result<String, Error> {
-        let transfer = match target {
-            TextureFormat::Rgba8UnormSrgb | TextureFormat::Bgra8UnormSrgb => "mapped",
-            TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm => "encode_srgb(mapped)",
+        let srgb_attachment = match target {
+            TextureFormat::Rgba8UnormSrgb | TextureFormat::Bgra8UnormSrgb => true,
+            TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm => false,
             _ => return Err(Error::Unsupported("sRGB output target format")),
+        };
+        let transfer = match (self.transfer, srgb_attachment) {
+            (OutputTransfer::Srgb, true) => "mapped",
+            (OutputTransfer::Srgb, false) => "encode_srgb(mapped)",
+            (OutputTransfer::Gamma22, true) => "decode_srgb(encode_gamma22(mapped))",
+            (OutputTransfer::Gamma22, false) => "encode_gamma22(mapped)",
+        };
+        let curve = if self.standard_tone_mapping {
+            "vec3<f32>(1.0) - exp2(-1.590579 * exposed)"
+        } else {
+            "exposed"
         };
         // Capture the exact selected value in the frame's terminal program.
         // Bit encoding avoids rounding, locale and decimal-literal issues.
@@ -44,13 +94,23 @@ fn encode_srgb(linear: vec3<f32>) -> vec3<f32> {{
     return select(high, low, linear <= vec3<f32>(0.0031308));
 }}
 
+fn decode_srgb(encoded: vec3<f32>) -> vec3<f32> {{
+    let low = encoded / 12.92;
+    let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, encoded <= vec3<f32>(0.04045));
+}}
+
+fn encode_gamma22(linear: vec3<f32>) -> vec3<f32> {{
+    return pow(clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
+}}
+
 fn process_scene_output(color: vec4<f32>) -> vec4<f32> {{
     let exposure = bitcast<f32>({exposure}u);
     if exposure == 0.0 {{
         return vec4<f32>(0.0, 0.0, 0.0, color.a);
     }}
     let exposed = max(color.rgb, vec3<f32>(0.0)) * exposure;
-    let mapped = vec3<f32>(1.0) - exp2(-1.590579 * exposed);
+    let mapped = {curve};
     return vec4<f32>(clamp({transfer}, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
 }}
 "#

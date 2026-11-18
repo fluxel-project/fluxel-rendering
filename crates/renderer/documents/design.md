@@ -362,14 +362,17 @@ texels before interpolation, and contrasts filtering encoded values before
 decoding and decoding twice at the same acceptance tolerance. This input
 contract does not infer color roles from names. The four-texture consumer checks
 its explicit base/emissive color and normal/ORM data-source contract before use.
-The renderer's opt-in `OutputProcessing` selects the Babylon Standard display
-curve for supported scene submissions. The terminal composite samples the
-linear floating-point scene color and applies finite nonnegative exposure,
-then `1 - exp2(-1.590579 * rgb)`. An RGBA8 or BGRA8 UNORM destination receives
-explicit sRGB transfer. When the selected destination is an sRGB attachment,
-its write conversion performs that transfer. Alpha is preserved. The exposure
-value is captured in the terminal program for the submitted frame. The default
-output stays raw linear UNORM for existing consumers and numeric readback.
+The terminal composite processes linear floating-point scene color when an
+`OutputProcessing` policy is selected. `OutputProcessing::default()` matches
+Babylon's default image-processing parameters: unit exposure, no tone mapping,
+and a gamma exponent of `1/2.2`. `OutputProcessing::new` selects Standard tone
+mapping, `1 - exp2(-1.590579 * rgb)`, and exact sRGB. The curve and transfer can
+be selected independently. Plain UNORM attachments receive encoded RGB. On sRGB
+attachments exact sRGB uses the write conversion directly, and gamma 2.2 uses
+inverse sRGB before the write conversion so the stored RGB follows gamma 2.2.
+The terminal preserves alpha. The policy and exposure are captured in the
+frame program. With no policy selected, output stays raw linear for numeric
+readback.
 Deferred selects `Rgba16Float` for its admitted lighting attachment. Ordinary
 sorted transparency and environment transmission compose into that same
 attachment, and the final version feeds the terminal. Offscreen output still

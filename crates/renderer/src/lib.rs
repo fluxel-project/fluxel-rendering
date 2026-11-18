@@ -42,15 +42,16 @@ pub use preparation::{
     GeometryStreamBinding, LinearSpecularLod, MaterialPreparationError, PreparedCaptureReceiver,
     PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, SpecularIblImage, SpecularIblMip,
     TextureEncoding, prepare_forward, prepare_forward_capture_receiver,
-    prepare_forward_capture_receiver_with_instance, prepare_forward_scene_refraction_receiver, prepare_material,
+    prepare_forward_capture_receiver_with_instance, prepare_forward_scene_refraction_receiver,
+    prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirectionalLight, DirtyRange, FrameSnapshot, RenderBounds, RenderChange,
-    RenderChangeSet,
-    RenderId, RenderRecord, RenderResources, RenderScene, RenderTransform, RenderView,
-    RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError, ShadingCamera,
+    RenderChangeSet, RenderId, RenderRecord, RenderResources, RenderScene, RenderTransform,
+    RenderView, RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError, ShadingCamera,
 };
 pub use renderer::{
     CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats,
-    OutputProcessing, Renderer, RendererError, ShaderAdmissionError, ShutdownReport, Submission,
+    OutputProcessing, OutputTransfer, Renderer, RendererError, ShaderAdmissionError,
+    ShutdownReport, Submission,
 };
