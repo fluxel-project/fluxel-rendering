@@ -27,15 +27,17 @@ where
         F: FnOnce(&mut crate::DeferredPhaseContext<'_, '_>) -> Result<(), crate::PipelineError>,
     {
         let started = Instant::now();
-        let (transparent, opaque): (Vec<_>, Vec<_>) = inputs.into_iter().partition(|input| {
-            matches!(
-                input.material().value().surface_policy().alpha_mode,
-                fluxel_material::SurfaceAlphaMode::Blend
-                    | fluxel_material::SurfaceAlphaMode::MaskBlend
-            )
-        });
+        // Environment transmission needs the Forward PBR route even when its material is
+        // opaque or masked: Deferred G-buffer programs cannot consume the
+        // selected specular IBL transmission bindings.  The ordered overlay
+        // therefore contains all transmission plus the normal blend segment.
+        // Its non-blended members retain depth writes, before the sorted blend
+        // segment, so overlapping transmissive shells still occlude correctly.
+        let (overlay, opaque): (Vec<_>, Vec<_>) = inputs
+            .into_iter()
+            .partition(super::requires_forward_overlay);
         let environment = self.environment_irradiance.clone().filter(|_| {
-            transparent
+            overlay
                 .iter()
                 .any(|input| input.prepared().uses_environment_irradiance())
         });
@@ -48,7 +50,7 @@ where
             return self
                 .submit_prepared_forward(
                     snapshot,
-                    transparent,
+                    overlay,
                     extent,
                     crate::FrameTopology::SortedForward,
                     crate::ForwardDepthMode::Depth32LessEqualWrite,
@@ -70,7 +72,7 @@ where
                 )
                 .await;
         }
-        if transparent.is_empty() {
+        if overlay.is_empty() {
             return Err(Error::InvalidState.into());
         }
         // This is the same descriptor used by actual lighting allocation.
@@ -94,7 +96,7 @@ where
         let assembled = self
             .assemble_prepared_forward_with_attachments(
                 snapshot.clone(),
-                transparent,
+                overlay,
                 extent,
                 crate::FrameTopology::SortedForward,
                 crate::ForwardDepthMode::Depth32LessEqualWrite,

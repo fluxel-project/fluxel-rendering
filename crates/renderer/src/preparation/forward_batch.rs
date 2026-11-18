@@ -18,9 +18,11 @@ pub(crate) struct ForwardCompatibilityKey {
 }
 
 impl ForwardCompatibilityKey {
-    /// Actual ordinary pipeline selection retained when the program is built.
-    pub(crate) fn is_blended(&self) -> bool {
-        self.surface.blend_state().is_some()
+    /// Whether the selected fixed-function state writes the bound depth
+    /// attachment. Scene-refraction receivers can be unblended yet remain
+    /// read-only, so attachment ownership must use the selected state.
+    pub(crate) const fn writes_depth(&self) -> bool {
+        self.surface.depth_write_enabled()
     }
 
     pub(crate) fn from_draw(draw: &ForwardDrawInput) -> Self {

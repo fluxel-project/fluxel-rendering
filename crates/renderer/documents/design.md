@@ -496,8 +496,13 @@ environment, rather than a scene-color capture or cube map. It reuses the
 existing environment bindings, Graph declarations and completion retention.
 Capture receivers may prepare this required logical interface before a Renderer
 is available, but submission re-prepares against the actual selected environment
-and refuses a missing owner before allocation. A legacy Deferred G-buffer route
-refuses the extension until its transmission composition pass is implemented.
+and refuses a missing owner before allocation. Ordinary Deferred submissions
+route environment transmission into the Forward overlay after G-buffer lighting.
+Opaque and masked transmissive draws write the original depth attachment before
+the sorted blend segment. The Graph declares that depth version read/write only
+when an overlay pipeline writes depth. With no G-buffer draws, the selected
+inputs use the normal Forward submission path. Scene-color refraction still
+requires its explicit capture input.
 
 Surface IOR determines dielectric F0; optional volume IOR controls
 `refract(-view, normal, 1 / volume_ior)` and falls back to the surface IOR.
@@ -652,7 +657,8 @@ samples the unchanged lighting color, reads the original G-buffer depth, and
 writes independent peeling output before the excluded sorted suffix and final
 terminal. Empty opaque input stays on the prepared Forward path, while zero
 peel candidates stay on the ordinary Deferred/Forward routes without OIT
-admission. Opaque transmission/scene-color refraction and typed-Feature capture remain unfinished.
+admission. The ordinary Deferred overlay also composes environment transmission.
+The explicit capture routes and their remaining combinations are described below.
 
 The existing opaque-order hook applies to the opaque segment only. The
 `transparent_alpha_index` hook supplies each transparent draw's alpha index

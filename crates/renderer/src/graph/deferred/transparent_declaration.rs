@@ -163,27 +163,47 @@ pub(super) fn declare_transparent_composition_with_shared<B: ResourceBackend>(
         .last()
         .map(|generation| generation.pass)
         .unwrap_or(overlay_prefix.upload);
-    let (overlay_raster, scene_color) = prefix
+    let overlay_writes_depth = overlay_prefix.slots.writes_depth();
+    let (overlay_raster, (scene_color, depth)) = prefix
         .graph
         .add_pass("deferred-transparent-overlay", |pass| {
             pass.depends_on(prefix.lighting_pass)?;
             pass.depends_on(overlay_dependency)?;
             overlay_prefix.declare_reads(pass)?;
-            pass.read_texture_with_use(
-                prefix.gbuffer[2],
-                whole_depth(),
-                texture_contract(
-                    TextureUses {
-                        stages: StageMask::FRAGMENT,
-                        accesses: AccessMask::DEPTH_READ,
-                    },
+            let depth = if overlay_writes_depth {
+                pass.write_texture_with_use(
+                    prefix.gbuffer[2],
+                    whole_depth(),
+                    texture_contract(
+                        TextureUses {
+                            stages: StageMask::FRAGMENT,
+                            accesses: AccessMask::DEPTH_READ | AccessMask::DEPTH_WRITE,
+                        },
+                        ImageLayout::DepthStencilAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                    .uses,
                     ImageLayout::DepthStencilAttachment,
                     TextureUsage::RENDER_ATTACHMENT,
-                )
-                .uses,
-                ImageLayout::DepthStencilAttachment,
-                TextureUsage::RENDER_ATTACHMENT,
-            )?;
+                )?
+            } else {
+                pass.read_texture_with_use(
+                    prefix.gbuffer[2],
+                    whole_depth(),
+                    texture_contract(
+                        TextureUses {
+                            stages: StageMask::FRAGMENT,
+                            accesses: AccessMask::DEPTH_READ,
+                        },
+                        ImageLayout::DepthStencilAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                    .uses,
+                    ImageLayout::DepthStencilAttachment,
+                    TextureUsage::RENDER_ATTACHMENT,
+                )?;
+                prefix.gbuffer[2]
+            };
             let scene_color = pass.write_texture_with_use(
                 prefix.scene_color,
                 whole_color(),
@@ -199,9 +219,10 @@ pub(super) fn declare_transparent_composition_with_shared<B: ResourceBackend>(
                 ImageLayout::ColorAttachment,
                 TextureUsage::RENDER_ATTACHMENT,
             )?;
-            Ok(scene_color)
+            Ok((scene_color, depth))
         })
         .map_err(|_| Error::InvalidState)?;
+    prefix.gbuffer[2] = depth;
     Ok(DeferredTransparentComposition {
         overlay: overlay_prefix.slots,
         overlay_upload: overlay_prefix.upload,

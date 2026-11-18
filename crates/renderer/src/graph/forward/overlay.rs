@@ -19,6 +19,7 @@ pub(in crate::graph) struct OverlaySlots {
     slots: CaptureFrameSlots,
     shape: ForwardShape,
     alignment: u64,
+    writes_depth: bool,
 }
 
 pub(in crate::graph) fn declare_overlay_prefix<B: ResourceBackend>(
@@ -58,6 +59,10 @@ pub(in crate::graph) fn declare_overlay_prefix_with_shared<B: ResourceBackend>(
             slots,
             shape: spec.shape.clone(),
             alignment,
+            writes_depth: frame
+                .draws
+                .iter()
+                .any(|draw| draw.compatibility.writes_depth()),
         },
         upload,
         mip_generation,
@@ -112,10 +117,15 @@ impl OverlaySlots {
         }
         validate_uploads(frame)?;
         validate_batches(frame)?;
+        if frame
+            .draws
+            .iter()
+            .any(|draw| draw.compatibility.writes_depth())
+            != self.writes_depth
+        {
+            return Err(Error::InvalidState);
+        }
         for draw in &frame.draws {
-            if !draw.compatibility.is_blended() {
-                return Err(Error::InvalidState);
-            }
             validate_draw(draw, frame.resident.streams.len())?;
             validate_offsets(draw, self.alignment)?;
             draw_accesses(frame, draw)?;
@@ -135,6 +145,12 @@ impl OverlaySlots {
             owner.validate_for_sampling(device)?;
         }
         Ok(())
+    }
+
+    /// Whether this overlay has an opaque or masked Forward draw which writes
+    /// the enclosing owner's actual depth attachment.
+    pub(in crate::graph) const fn writes_depth(&self) -> bool {
+        self.writes_depth
     }
 
     /// The enclosing owner binds color and depth once. This namespace only
@@ -361,8 +377,8 @@ impl OverlaySlots {
                     instance: depth.instance,
                     load: LoadOp::Load,
                     store: StoreOp::Store,
-                    read_only: true,
-                    read_write: false,
+                    read_only: !self.writes_depth,
+                    read_write: self.writes_depth,
                 }),
             },
         )

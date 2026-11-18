@@ -48,6 +48,17 @@ use fluxel_rhi::{
     },
 };
 
+/// Selects the ordinary Deferred Forward overlay. Environment transmission
+/// uses its selected IBL bindings there; scene-color refraction has a separate
+/// capture composition entry because it needs a distinct sampled scene image.
+fn requires_forward_overlay(input: &crate::ForwardDrawInput) -> bool {
+    (input.prepared().uses_transmission() && !input.prepared().uses_scene_refraction())
+        || matches!(
+            input.material().value().surface_policy().alpha_mode,
+            fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend,
+        )
+}
+
 /// Observed owner and compiled-Graph facts for the last accepted Deferred probe.
 ///
 /// This is diagnostic evidence for the selected Deferred path, not permission
@@ -182,13 +193,7 @@ where
         if inputs.is_empty() {
             return Err(Error::Unsupported("Deferred requires visible geometry").into());
         }
-        if inputs.iter().any(|input| {
-            matches!(
-                input.material().value().surface_policy().alpha_mode,
-                fluxel_material::SurfaceAlphaMode::Blend
-                    | fluxel_material::SurfaceAlphaMode::MaskBlend,
-            )
-        }) {
+        if inputs.iter().any(requires_forward_overlay) {
             let inputs = super::forward::order_forward_draws(
                 pipeline,
                 &selected,
@@ -277,13 +282,7 @@ where
         if inputs.is_empty() {
             return Err(Error::Unsupported("Deferred surface requires visible geometry").into());
         }
-        if inputs.iter().any(|input| {
-            matches!(
-                input.material().value().surface_policy().alpha_mode,
-                fluxel_material::SurfaceAlphaMode::Blend
-                    | fluxel_material::SurfaceAlphaMode::MaskBlend,
-            )
-        }) {
+        if inputs.iter().any(requires_forward_overlay) {
             let inputs = super::forward::order_forward_draws(
                 pipeline,
                 &selected,
