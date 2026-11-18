@@ -104,12 +104,19 @@ fn pbr_direct_light_view(
     return terms.diffuse + terms.specular;
 }
 
+fn pbr_world_position_from_depth(
+    position: vec2<f32>, depth: f32, extent: vec2<f32>, world_from_clip: mat4x4<f32>,
+) -> vec3<f32> {
+    // Fragment position is already the pixel center in a top-left origin.
+    let uv = position / extent;
+    let clip = vec4<f32>(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth, 1.0);
+    let world = world_from_clip * clip;
+    return world.xyz / world.w;
+}
+
 fn pbr_shading_view_direction(world_position: vec3<f32>, camera: vec4<f32>) -> vec3<f32> {
     let direction = select(camera.xyz, camera.xyz - world_position, camera.w != 0.0);
     return pbr_normal(direction);
 }
 
-fn pbr_direct_light(base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>) -> vec3<f32> {
-    return pbr_direct_light_view(base, properties, world_normal, vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.04));
-}
 "#;

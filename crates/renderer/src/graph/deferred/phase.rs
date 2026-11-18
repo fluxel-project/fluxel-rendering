@@ -50,6 +50,7 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) streams: Vec<super::super::definition::BufferHandle>,
     pub(super) draws: Vec<DeferredGraphDraw>,
     pub(super) uniform: super::super::definition::BufferHandle,
+    pub(super) lighting_view: Option<std::ops::Range<u64>>,
     pub(super) materials: Vec<super::super::definition::TextureHandle>,
     pub(super) environment: Option<super::super::definition::TextureHandle>,
     pub(super) specular_radiance: Option<super::super::definition::TextureHandle>,
@@ -90,6 +91,7 @@ pub(crate) struct DeferredGeometryPass<'pass, 'builder> {
 
 pub(crate) struct DeferredLightingPass<'pass, 'builder> {
     pass: &'pass mut super::super::definition::PassBuilder<'builder>,
+    view: Option<(super::super::definition::BufferHandle, std::ops::Range<u64>)>,
     gbuffer: [super::super::definition::TextureHandle; 3],
     effects: Option<super::super::definition::TextureHandle>,
     target: Option<super::super::definition::TextureHandle>,
@@ -208,12 +210,17 @@ impl DeferredPhaseDriver<'_> {
         let specular_view_uniform = self.specular_view_uniform;
         let specular_mip_levels = self.specular_mip_levels;
         let effects = self.effects;
+        let view = self
+            .lighting_view
+            .clone()
+            .map(|range| (self.uniform, range));
         let (pass, output) = self
             .graph
             .add_pass("deferred-lighting", |pass| {
                 pass.depends_on(geometry)?;
                 let mut lighting = DeferredLightingPass {
                     pass,
+                    view,
                     gbuffer,
                     effects,
                     target,
@@ -496,6 +503,16 @@ impl DeferredLightingPass<'_, '_> {
     ) -> std::result::Result<Option<super::super::definition::TextureHandle>, ()> {
         if self.declared != GBUFFER_READ | COLOR {
             return Err(());
+        }
+        if let Some((buffer, range)) = &self.view {
+            self.pass
+                .read_with_use(
+                    *buffer,
+                    range.clone(),
+                    lighting_uniform_read().uses,
+                    BufferUsage::UNIFORM,
+                )
+                .map_err(|_| ())?;
         }
         if let Some(environment) = self.environment {
             self.pass

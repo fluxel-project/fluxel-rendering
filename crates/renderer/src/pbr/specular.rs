@@ -320,9 +320,12 @@ pub(crate) fn deferred_specular_request(
     );
     // The plain route still contributes the reusable diffuse helper. Only
     // this entry source owns deferred_lighting_fs and must be replaced.
-    request
-        .source_units
-        .retain(|unit| !unit.source.contains("fn deferred_lighting_fs"));
+    request.source_units.retain(|unit| {
+        !unit.source.contains("fn deferred_lighting_fs") && unit.id.0 != "pbr-basic-light-view"
+    });
+    request.bindings.retain(|binding| {
+        binding.group != 0 || binding.binding != super::basic_deferred_view_binding(effects)
+    });
     request.source_units.push(SourceUnit::new(
         "pbr-deferred-lighting-specular",
         deferred_source(effects, diffuse),
@@ -400,12 +403,10 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
     let coordinate = vec2<i32>(position.xy);
     let depth = textureLoad(pbr_depth, coordinate, 0);
     if depth >= 1.0 {{ return vec4(0.0); }}
-    // position is already the pixel center in top-left raster coordinates.
-    // Do not add 0.5; convert top-left Y to clip-space +Y explicitly.
-    let uv = position.xy / pbr_specular_camera.target_size_and_mips.xy;
-    let clip = vec4(2.0 * uv.x - 1.0, 1.0 - 2.0 * uv.y, depth, 1.0);
-    let world4 = pbr_specular_camera.world_from_clip * clip;
-    let world = world4.xyz / world4.w;
+    let world = pbr_world_position_from_depth(
+        position.xy, depth, pbr_specular_camera.target_size_and_mips.xy,
+        pbr_specular_camera.world_from_clip,
+    );
     let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
     let nr = textureLoad(pbr_normal_roughness, coordinate, 0);
     let normal = nr.xyz * 2.0 - vec3(1.0);

@@ -273,6 +273,16 @@ fn uniform_read() -> BufferAccessContract {
     )
 }
 
+fn lighting_uniform_read() -> BufferAccessContract {
+    buffer_contract(
+        BufferUses {
+            stages: StageMask::FRAGMENT,
+            accesses: AccessMask::SHADER_READ,
+        },
+        BufferUsage::UNIFORM,
+    )
+}
+
 fn compute_read() -> BufferAccessContract {
     buffer_contract(
         BufferUses {

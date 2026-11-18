@@ -1,4 +1,4 @@
-//! Exact per-view uniform bytes for the shared specular environment consumers.
+//! Exact camera uniform bytes for Deferred lighting and specular environments.
 
 use fluxel_rhi::api::{Error, Result};
 
@@ -28,6 +28,42 @@ pub(crate) fn pack_specular_view(
         bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
     }
     Ok(bytes)
+}
+
+pub(crate) const BASIC_DEFERRED_VIEW_BYTES: u64 = 96;
+
+pub(crate) fn append_basic_deferred_view(
+    bytes: &mut Vec<u8>,
+    view: &crate::RenderView,
+    max_bytes: u64,
+) -> Result<std::ops::Range<u64>> {
+    let camera = view
+        .shading_camera
+        .map_or([0.0, 0.0, 1.0, 0.0], crate::ShadingCamera::uniform);
+    let inverse = if camera[3] != 0.0 {
+        inverse(view.transform.columns())?
+    } else {
+        crate::RenderTransform::identity().columns()
+    };
+    let start = u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)?;
+    let end = start
+        .checked_add(BASIC_DEFERRED_VIEW_BYTES)
+        .ok_or(Error::InvalidRange)?;
+    if view.extent.contains(&0) || end > max_bytes || end > u64::from(u32::MAX) {
+        return Err(Error::InvalidRange);
+    }
+    bytes
+        .try_reserve_exact(BASIC_DEFERRED_VIEW_BYTES as usize)
+        .map_err(|_| Error::OutOfMemory)?;
+    for value in inverse.into_iter().flatten().chain(camera).chain([
+        view.extent[0] as f32,
+        view.extent[1] as f32,
+        0.0,
+        0.0,
+    ]) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(start..end)
 }
 
 fn inverse(columns: [[f32; 4]; 4]) -> Result<[[f32; 4]; 4]> {

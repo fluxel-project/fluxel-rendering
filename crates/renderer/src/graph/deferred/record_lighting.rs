@@ -60,6 +60,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             pass.texture(lut, one_color_mip(0), AccessKind::Read, sampled_read())?;
             pass.buffer(view_uniform, 0..112, AccessKind::Read, uniform_read())?;
         }
+        if let Some(range) = &frame.lighting_view {
+            pass.buffer(
+                self.uniform_slot,
+                range.clone(),
+                AccessKind::Read,
+                lighting_uniform_read(),
+            )?;
+        }
         pass.transition(encoder)?;
         let colors = [Some(ColorAttachment {
             view: AttachmentView::Texture(&frame.scene_color.view),

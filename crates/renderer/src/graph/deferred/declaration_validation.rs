@@ -139,3 +139,31 @@ pub(super) fn validate_uploads<B: ResourceBackend>(frame: &DeferredFrame<B>) -> 
 }
 
 pub(super) use super::uploads::validate_resident_uploads;
+
+pub(super) fn validate_lighting_view(
+    required: bool,
+    range: Option<&std::ops::Range<u64>>,
+    upload: &std::ops::Range<u64>,
+    buffer_size: u64,
+    alignment: u64,
+) -> Result<()> {
+    let Some(range) = range else {
+        return if required {
+            Err(Error::InvalidRange)
+        } else {
+            Ok(())
+        };
+    };
+    if !required
+        || alignment == 0
+        || !range.start.is_multiple_of(alignment)
+        || range.start < upload.start
+        || range.end != upload.end
+        || range.end > buffer_size
+        || range.end.checked_sub(range.start)
+            != Some(crate::frame_data::specular_view::BASIC_DEFERRED_VIEW_BYTES)
+    {
+        return Err(Error::InvalidRange);
+    }
+    Ok(())
+}

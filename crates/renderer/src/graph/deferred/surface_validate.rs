@@ -10,6 +10,13 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
     frame: &DeferredSurfaceFrame<B>,
 ) -> Result<()> {
     super::validate_resident_texture_devices(&frame.resident, device.id())?;
+    super::declaration_validation::validate_lighting_view(
+        frame.pbr && frame.specular.is_none(),
+        frame.lighting_view.as_ref(),
+        &frame.uniform_upload.destination,
+        frame.frame.uniform_desc.size,
+        device.capabilities().limits.uniform_offset_alignment,
+    )?;
     validate_draw_uniform_ranges(
         frame.draws.first().ok_or(Error::InvalidRange)?,
         frame.frame.uniform_desc.size,

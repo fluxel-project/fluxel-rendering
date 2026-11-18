@@ -91,22 +91,32 @@ where
         let ordinary_sampler = prepared
             .iter()
             .any(crate::renderer::forward::material_requires_ordinary_sampler);
-        if effects && limits.max_bindings_per_group < 4 {
-            return Err(
-                self.observe_rhi_error(Error::Unsupported("four Deferred lighting bindings"))
-            );
+        let lighting_bindings = 3 + u32::from(effects) + u32::from(pbr && specular.is_none());
+        if limits.max_bindings_per_group < lighting_bindings {
+            return Err(self.observe_rhi_error(Error::Unsupported("Deferred lighting bindings")));
         }
         if ordinary_sampler && limits.max_bindings_per_group < 3 {
             return Err(
                 self.observe_rhi_error(Error::Unsupported("three Deferred material bindings"))
             );
         }
-        let uniforms = super::scene_prepare::uniforms(
+        let mut uniforms = super::scene_prepare::uniforms(
             inputs,
             pbr,
             limits.uniform_offset_alignment,
             limits.max_buffer_bytes,
         )?;
+        let lighting_view = if pbr && specular.is_none() {
+            Some(
+                crate::frame_data::specular_view::append_basic_deferred_view(
+                    &mut uniforms.bytes,
+                    input.view(),
+                    limits.max_buffer_bytes,
+                )?,
+            )
+        } else {
+            None
+        };
         let uniform_len = u64::try_from(uniforms.bytes.len()).map_err(|_| Error::InvalidRange)?;
         let row_pitch = aligned_row(input.extent()[0])?;
         let frame_plan = plan_forward_frame(
@@ -270,6 +280,15 @@ where
                 resource: BindingResource::TextureView(&effects.view),
             });
         }
+        if let Some(range) = &lighting_view {
+            lighting_entries.push(BindGroupEntry {
+                binding: crate::pbr::basic_deferred_view_binding(effects),
+                resource: BindingResource::Buffer {
+                    buffer: &frame.uniform,
+                    range: range.clone(),
+                },
+            });
+        }
         let lighting_group = self
             .device
             .create_bind_group(&BindGroupDesc {
@@ -359,6 +378,7 @@ where
             draws,
             lighting_pipeline: lighting_program.pipeline.clone(),
             lighting_group,
+            lighting_view,
             lighting_environment_group,
             composite_pipeline: composite_program.pipeline,
             composite_group,

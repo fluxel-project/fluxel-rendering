@@ -14,6 +14,13 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
     frame: &DeferredFrame<B>,
 ) -> Result<()> {
     super::validate_resident_texture_devices(&frame.resident, device.id())?;
+    super::declaration_validation::validate_lighting_view(
+        frame.pbr && frame.specular.is_none(),
+        frame.lighting_view.as_ref(),
+        &frame.uniform_upload.destination,
+        frame.frame.uniform_desc.size,
+        device.capabilities().limits.uniform_offset_alignment,
+    )?;
     if frame.resident.device != device.id()
         || frame.extent.contains(&0)
         || device.capabilities().limits.max_color_attachments

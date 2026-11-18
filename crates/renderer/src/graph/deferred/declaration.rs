@@ -343,6 +343,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 streams: streams.clone(),
                 draws,
                 uniform,
+                lighting_view: frame.lighting_view.clone(),
                 materials: materials.clone(),
                 environment,
                 specular_radiance,

@@ -424,6 +424,25 @@ fn geometry_uv0_normal_request(
     Some(request)
 }
 
+pub(crate) fn basic_deferred_view_binding(effects: bool) -> u32 {
+    if effects { 4 } else { 3 }
+}
+
+fn with_basic_deferred_view(
+    mut request: ShaderCompositionRequest,
+    effects: bool,
+) -> ShaderCompositionRequest {
+    let binding = basic_deferred_view_binding(effects);
+    request.source_units.push(SourceUnit::new(
+        "pbr-basic-light-view",
+        templates::BASIC_LIGHT_VIEW.replace("@binding(4)", &format!("@binding({binding})")),
+    ));
+    request.with_binding(
+        BindingDeclaration::new(0, binding, BindingKind::Uniform)
+            .with_visibility([ShaderStage::Fragment]),
+    )
+}
+
 pub(crate) fn lighting_request() -> ShaderCompositionRequest {
     let mut request = ShaderCompositionRequest::new(vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
@@ -443,7 +462,7 @@ pub(crate) fn lighting_request() -> ShaderCompositionRequest {
                 .with_visibility([ShaderStage::Fragment]),
         );
     }
-    request
+    with_basic_deferred_view(request, false)
 }
 
 /// Builds the Deferred lighting route with the same diffuse irradiance input
@@ -471,7 +490,7 @@ pub(crate) fn lighting_irradiance_request() -> ShaderCompositionRequest {
                 .with_visibility([ShaderStage::Fragment]),
         );
     }
-    request
+    let request = request
         .with_binding(
             BindingDeclaration::new(1, 0, BindingKind::Texture)
                 .with_visibility([ShaderStage::Fragment]),
@@ -479,7 +498,8 @@ pub(crate) fn lighting_irradiance_request() -> ShaderCompositionRequest {
         .with_binding(
             BindingDeclaration::new(1, 1, BindingKind::Sampler)
                 .with_visibility([ShaderStage::Fragment]),
-        )
+        );
+    with_basic_deferred_view(request, false)
 }
 
 pub(crate) fn lighting_effect_request() -> ShaderCompositionRequest {
@@ -533,7 +553,7 @@ fn lighting_effect_request_inner(environment: bool) -> ShaderCompositionRequest 
             )
             .with_static_option("renderer.environment", "latlong-diffuse-irradiance-v1");
     }
-    request
+    with_basic_deferred_view(request, true)
 }
 
 #[cfg(test)]
