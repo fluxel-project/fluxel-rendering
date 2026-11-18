@@ -23,12 +23,20 @@ glTF Schlick Fresnel, and height-correlated GGX visibility. The renderer supplie
 a fixed light direction and color. Forward and Deferred consume the view's
 perspective eye or orthographic direction. An orthographic view can select
 `ShadingCamera::orthographic_with_eye_lighting` to evaluate Babylon's
-`normalize(eye - world_position)` while keeping the orthographic projection. Basic PBR uses the historical +Z
+`normalize(eye - world_position)` while keeping the orthographic projection.
+Basic PBR uses the historical +Z
 direction when the view omits a shading camera. Deferred reconstructs world
 position from depth for perspective lighting and reads the camera range from
 its frame uniform buffer. Specular IBL supplies its camera through the existing
 environment uniform.
-Environment transmission selects a prefiltered 2D latitude-longitude source.
+Environment transmission can select a named linear 2D latitude-longitude
+texture on the material. Its own direction matrix and LOD scale and offset
+control the refraction sample. The per-draw material binding retains and
+declares the exact texture, including all sampled mips. Without a local source,
+environment refraction uses the selected scene radiance and its orientation.
+A local source can work without a scene environment. That route uses the
+Babylon analytical reflectance in place of the environment BRDF lookup.
+Projected scene capture is a separate source selection.
 
 | Area | Current implemented subset | Not established by the subset |
 | --- | --- | --- |

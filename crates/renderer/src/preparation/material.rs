@@ -254,9 +254,12 @@ pub(super) fn prepare_compiled_material(
         .get("renderer.transmission")
         .map(String::as_str);
     let scene_refraction = transmission_route == Some("scene-color-projected-v1");
-    let transmission =
-        scene_refraction || transmission_route == Some("environment-refraction-beer-lambert-v1");
-    if transmission && !specular_ibl {
+    let scene_environment_refraction =
+        transmission_route == Some("environment-refraction-beer-lambert-v1");
+    let transmission = scene_refraction
+        || scene_environment_refraction
+        || transmission_route == Some("material-environment-refraction-v1");
+    if (scene_refraction || scene_environment_refraction) && !specular_ibl {
         return Err(MaterialPreparationError::InvalidEnvironmentRoute);
     }
     if specular_ibl {

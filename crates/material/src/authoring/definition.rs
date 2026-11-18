@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use super::{
     MaterialCodeNode, MaterialFragment, MaterialNodeGraph, MaterialParameter, MaterialResource,
-    MaterialTextureEncoding, MaterialTextureEncodingRequirement, StaticValue, SurfacePolicy,
-    TransmissionExtensions,
+    MaterialTextureEncoding, MaterialTextureEncodingRequirement, RefractionEnvironment,
+    StaticValue, SurfacePolicy, TransmissionExtensions,
 };
 
 /// The selected surface output for the minimal material contribution.
@@ -210,6 +210,7 @@ pub struct MaterialDefinition {
     pbr_surface_factors: Option<PbrSurfaceFactors>,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
+    refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<MaterialNodeGraph>,
 }
 
@@ -238,6 +239,7 @@ impl MaterialDefinition {
             pbr_surface_factors: None,
             surface_policy: SurfacePolicy::default(),
             transmission_extensions: None,
+            refraction_environment: None,
             node_graph: None,
         }
     }
@@ -303,6 +305,17 @@ impl MaterialDefinition {
         self
     }
 
+    /// Selects a material-local environment for transmission refraction.
+    ///
+    /// Transmission controls must also be selected. The named texture and
+    /// sampler remain ordinary material resources; Renderer owns their source,
+    /// residency, and Graph reads.
+    #[must_use]
+    pub fn with_refraction_environment(mut self, environment: RefractionEnvironment) -> Self {
+        self.refraction_environment = Some(environment);
+        self
+    }
+
     /// Returns the explicitly requested optional surface evaluators.
     #[must_use]
     pub fn surface_extensions(&self) -> &SurfaceExtensions {
@@ -349,6 +362,12 @@ impl MaterialDefinition {
     #[must_use]
     pub fn transmission_extensions(&self) -> Option<&TransmissionExtensions> {
         self.transmission_extensions.as_ref()
+    }
+
+    /// Returns the material-local transmission environment, when selected.
+    #[must_use]
+    pub fn refraction_environment(&self) -> Option<&RefractionEnvironment> {
+        self.refraction_environment.as_ref()
     }
 
     /// Returns the selected surface domain.

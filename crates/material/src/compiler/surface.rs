@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    EmissiveConfiguration, MaterialDefinition, MaterialError, MaterialParameter, MaterialResource,
-    MaterialResourceKind, MaterialType, PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions,
-    SurfaceOutput, SurfacePolicy, validation::FunctionSignature,
+    validation::FunctionSignature, EmissiveConfiguration, MaterialDefinition, MaterialError,
+    MaterialParameter, MaterialResource, MaterialResourceKind, MaterialType, PbrSurfaceFactors,
+    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
 };
 
 /// Validates all surface-owned extensions after the root callable is resolved.
@@ -31,7 +31,9 @@ pub(super) fn validate_definition(
     super::transmission::validate(
         definition.output(),
         definition.transmission_extensions(),
+        definition.refraction_environment(),
         functions,
+        resources,
     )
 }
 

@@ -175,9 +175,7 @@ pub(crate) fn require_supported_surface_modes(
     for input in inputs {
         let prepared = input.prepared();
         let requested = prepared.material().transmission_extensions().is_some();
-        if requested != prepared.uses_transmission()
-            || (prepared.uses_transmission() && !prepared.uses_specular_ibl())
-        {
+        if requested != prepared.uses_transmission() {
             return Err(Error::Unsupported(
                 "Forward transmission requires its selected refraction shader route",
             ));

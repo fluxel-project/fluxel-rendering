@@ -2,8 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::MaterialTextureEncoding;
+
 use super::{
-    MaterialError, MaterialType, SurfaceOutput, TransmissionExtensions, canonical::piece,
+    MaterialError, MaterialResource, MaterialResourceKind, MaterialTextureEncodingRequirement,
+    MaterialType, RefractionEnvironment, SurfaceOutput, TransmissionExtensions, canonical::piece,
     validation::FunctionSignature,
 };
 
@@ -13,10 +16,16 @@ const ATTENUATION_DISTANCE_DEFAULT: f32 = 1.0;
 pub(super) fn validate(
     output: &SurfaceOutput,
     extensions: Option<&TransmissionExtensions>,
+    environment: Option<&RefractionEnvironment>,
     functions: &BTreeMap<String, FunctionSignature>,
+    resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
     let Some(extensions) = extensions else {
-        return Ok(());
+        return if environment.is_some() {
+            Err(MaterialError::RefractionEnvironmentTransmissionRequired)
+        } else {
+            Ok(())
+        };
     };
     if !matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. }) {
         return Err(MaterialError::TransmissionExtensionsUnsupported {
@@ -25,7 +34,81 @@ pub(super) fn validate(
     }
     validate_callable(extensions.intensity.as_deref(), functions)?;
     validate_callable(extensions.thickness.as_deref(), functions)?;
-    validate_static(extensions)
+    validate_static(extensions)?;
+    validate_environment(environment, resources)
+}
+
+fn validate_environment(
+    environment: Option<&RefractionEnvironment>,
+    resources: &[MaterialResource],
+) -> Result<(), MaterialError> {
+    let Some(environment) = environment else {
+        return Ok(());
+    };
+    let texture = resources
+        .iter()
+        .find(|resource| resource.name == environment.texture)
+        .ok_or_else(|| MaterialError::RefractionEnvironmentResourceMissing {
+            field: "texture",
+            resource: environment.texture.clone(),
+        })?;
+    validate_environment_resource("texture", texture, MaterialResourceKind::Texture2dF32)?;
+    let sampler = resources
+        .iter()
+        .find(|resource| resource.name == environment.sampler)
+        .ok_or_else(|| MaterialError::RefractionEnvironmentResourceMissing {
+            field: "sampler",
+            resource: environment.sampler.clone(),
+        })?;
+    validate_environment_resource(
+        "sampler",
+        sampler,
+        MaterialResourceKind::Sampler { comparison: false },
+    )?;
+    if !environment.lod_scale.is_finite() {
+        return Err(MaterialError::InvalidRefractionEnvironmentParameter {
+            parameter: "lod_scale",
+        });
+    }
+    if !environment.lod_offset.is_finite() {
+        return Err(MaterialError::InvalidRefractionEnvironmentParameter {
+            parameter: "lod_offset",
+        });
+    }
+    if environment
+        .direction_from_world
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(MaterialError::InvalidRefractionEnvironmentParameter {
+            parameter: "direction_from_world",
+        });
+    }
+    Ok(())
+}
+
+fn validate_environment_resource(
+    field: &'static str,
+    resource: &MaterialResource,
+    expected: MaterialResourceKind,
+) -> Result<(), MaterialError> {
+    if resource.location.group != 0 {
+        return Err(MaterialError::RefractionEnvironmentResourceGroup {
+            field,
+            resource: resource.name.clone(),
+            group: resource.location.group,
+        });
+    }
+    if resource.kind != expected {
+        return Err(MaterialError::RefractionEnvironmentResourceTypeMismatch {
+            field,
+            resource: resource.name.clone(),
+            expected,
+            actual: resource.kind,
+        });
+    }
+    Ok(())
 }
 
 fn validate_callable(
@@ -141,6 +224,73 @@ pub(super) fn canonical(extensions: Option<&TransmissionExtensions>, target: &mu
         "transmission-maximum-thickness",
         extensions.maximum_thickness,
     );
+}
+
+pub(super) fn canonical_environment(
+    environment: Option<&RefractionEnvironment>,
+    target: &mut String,
+) {
+    let Some(environment) = environment else {
+        piece(target, "refraction-environment", "absent");
+        return;
+    };
+    piece(target, "refraction-environment", "present");
+    piece(
+        target,
+        "refraction-environment-texture",
+        &environment.texture,
+    );
+    piece(
+        target,
+        "refraction-environment-sampler",
+        &environment.sampler,
+    );
+    canonical_f32(
+        target,
+        "refraction-environment-lod-scale",
+        environment.lod_scale,
+    );
+    canonical_f32(
+        target,
+        "refraction-environment-lod-offset",
+        environment.lod_offset,
+    );
+    for (row, values) in environment.direction_from_world.iter().enumerate() {
+        for (column, value) in values.iter().enumerate() {
+            canonical_f32(
+                target,
+                &format!("refraction-environment-direction-{row}-{column}"),
+                *value,
+            );
+        }
+    }
+}
+
+pub(super) fn effective_texture_encodings(
+    environment: Option<&RefractionEnvironment>,
+    mut requirements: Vec<MaterialTextureEncodingRequirement>,
+) -> Result<Vec<MaterialTextureEncodingRequirement>, MaterialError> {
+    let Some(environment) = environment else {
+        return Ok(requirements);
+    };
+    match requirements
+        .iter()
+        .find(|requirement| requirement.resource == environment.texture)
+    {
+        Some(requirement) if requirement.encoding != MaterialTextureEncoding::Linear => {
+            return Err(
+                MaterialError::RefractionEnvironmentTextureEncodingConflict {
+                    resource: environment.texture.clone(),
+                },
+            );
+        }
+        Some(_) => {}
+        None => requirements.push(MaterialTextureEncodingRequirement {
+            resource: environment.texture.clone(),
+            encoding: MaterialTextureEncoding::Linear,
+        }),
+    }
+    Ok(requirements)
 }
 
 fn canonical_optional(target: &mut String, label: &str, value: Option<&str>) {

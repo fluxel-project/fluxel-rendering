@@ -215,6 +215,16 @@ and a finite non-negative ordered thickness interval. It does not allocate a
 refraction source or select environment versus scene capture; those are
 Renderer/Graph choices.
 
+`RefractionEnvironment` is an optional material-local alternative to the
+Renderer scene-environment fallback. It requires transmission extensions and
+names an ordinary group-zero linear `Texture2dF32` resource and non-comparison
+sampler. Its finite `lod_scale`, `lod_offset`, and `direction_from_world`
+matrix are static variant facts. The compiler adds the implicit linear
+texture-encoding requirement and rejects incompatible explicit metadata.
+Material neither allocates nor prefilters this environment; Renderer retains
+source residency, Graph reads, mip availability, sampling support, and fallback
+selection.
+
 When present, the thickness callable is used directly in
 `minimum + (maximum - minimum) * sample`. Material does not clamp it to
 `[0, 1]`: imported texture data is conventionally normalized, while a Code Node

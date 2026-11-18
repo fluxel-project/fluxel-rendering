@@ -24,6 +24,7 @@ pub(super) struct NormalizedMaterialIr {
     pbr_surface_factors: Option<PbrSurfaceFactors>,
     pub(super) surface_policy: SurfacePolicy,
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
+    refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
 }
 #[derive(Clone, Debug)]
@@ -124,6 +125,7 @@ impl NormalizedMaterialIr {
             pbr_surface_factors: definition.pbr_surface_factors().cloned(),
             surface_policy: definition.surface_policy(),
             transmission_extensions: definition.transmission_extensions().cloned(),
+            refraction_environment: definition.refraction_environment().cloned(),
             node_graph,
         })
     }
@@ -140,6 +142,10 @@ impl NormalizedMaterialIr {
         );
         super::surface::canonical_policy(self.surface_policy, &mut canonical);
         super::transmission::canonical(self.transmission_extensions.as_ref(), &mut canonical);
+        super::transmission::canonical_environment(
+            self.refraction_environment.as_ref(),
+            &mut canonical,
+        );
         for fragment in &self.fragments {
             canonical_piece(&mut canonical, "fragment", &fragment.name);
             canonical_piece(&mut canonical, "output", fragment.output.wgsl());
@@ -263,31 +269,34 @@ fn effective_texture_encoding_requirements(
     definition: &MaterialDefinition,
 ) -> Result<Vec<MaterialTextureEncodingRequirement>, MaterialError> {
     let mut requirements = definition.texture_encoding_requirements().to_vec();
-    let Some(texture) = definition
+    if let Some(texture) = definition
         .emissive_configuration()
         .and_then(|configuration| configuration.texture.as_ref())
-    else {
-        return super::pbr_factors::effective_texture_encodings(
-            definition.pbr_surface_factors(),
-            requirements,
-        );
-    };
-    match requirements
-        .iter()
-        .find(|requirement| requirement.resource == texture.texture)
     {
-        Some(requirement) if requirement.encoding != texture.encoding => {
-            return Err(MaterialError::EmissiveTextureEncodingConflict {
+        match requirements
+            .iter()
+            .find(|requirement| requirement.resource == texture.texture)
+        {
+            Some(requirement) if requirement.encoding != texture.encoding => {
+                return Err(MaterialError::EmissiveTextureEncodingConflict {
+                    resource: texture.texture.clone(),
+                });
+            }
+            Some(_) => {}
+            None => requirements.push(MaterialTextureEncodingRequirement {
                 resource: texture.texture.clone(),
-            });
+                encoding: texture.encoding,
+            }),
         }
-        Some(_) => {}
-        None => requirements.push(MaterialTextureEncodingRequirement {
-            resource: texture.texture.clone(),
-            encoding: texture.encoding,
-        }),
     }
-    super::pbr_factors::effective_texture_encodings(definition.pbr_surface_factors(), requirements)
+    let requirements = super::pbr_factors::effective_texture_encodings(
+        definition.pbr_surface_factors(),
+        requirements,
+    )?;
+    super::transmission::effective_texture_encodings(
+        definition.refraction_environment(),
+        requirements,
+    )
 }
 
 fn validate_code_node_sources(nodes: &[MaterialCodeNode]) -> Result<(), MaterialError> {

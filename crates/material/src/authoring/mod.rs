@@ -19,5 +19,5 @@ pub use nodes::*;
 pub use surface_policy::{
     SurfaceAlphaMode, SurfaceBlendMode, SurfacePolicy, SurfaceSideOrientation,
 };
-pub use transmission::TransmissionExtensions;
+pub use transmission::{RefractionEnvironment, TransmissionExtensions};
 pub use types::*;

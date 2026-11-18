@@ -381,6 +381,45 @@ pub enum MaterialError {
         /// Parameter rejected before shader generation.
         parameter: &'static str,
     },
+    /// A material-local refraction environment requires transmission controls.
+    RefractionEnvironmentTransmissionRequired,
+    /// A refraction environment named no declared material resource.
+    RefractionEnvironmentResourceMissing {
+        /// Configuration field.
+        field: &'static str,
+        /// Missing resource name.
+        resource: String,
+    },
+    /// A refraction environment resource has an incompatible kind.
+    RefractionEnvironmentResourceTypeMismatch {
+        /// Configuration field.
+        field: &'static str,
+        /// Resource name.
+        resource: String,
+        /// Required kind.
+        expected: MaterialResourceKind,
+        /// Declared kind.
+        actual: MaterialResourceKind,
+    },
+    /// A refraction environment resource must be an ordinary material binding.
+    RefractionEnvironmentResourceGroup {
+        /// Configuration field.
+        field: &'static str,
+        /// Resource name.
+        resource: String,
+        /// Declared bind group.
+        group: u32,
+    },
+    /// A static refraction environment value was non-finite.
+    InvalidRefractionEnvironmentParameter {
+        /// Parameter rejected before shader generation.
+        parameter: &'static str,
+    },
+    /// Explicit texture encoding metadata contradicts a refraction environment.
+    RefractionEnvironmentTextureEncodingConflict {
+        /// Texture resource name.
+        resource: String,
+    },
     /// A dynamic parameter was not declared by the variant.
     UnknownParameter {
         /// Parameter name.

@@ -13,6 +13,8 @@ use fluxel_shader::{
 
 #[path = "specular/forward_standard.rs"]
 mod forward_standard;
+#[path = "specular/forward_uv0.rs"]
+mod forward_uv0;
 #[path = "specular/transmission.rs"]
 mod transmission;
 
@@ -214,7 +216,7 @@ pub(crate) fn with_specular_ibl(mut request: ShaderCompositionRequest) -> Shader
 pub(crate) fn forward_specular_request(
     request: ShaderCompositionRequest,
 ) -> ShaderCompositionRequest {
-    forward_specular_request_inner(request, false, None)
+    forward_specular_request_inner(request, true, None)
 }
 
 /// Selects environment refraction from the same prefiltered radiance chain as
@@ -222,7 +224,7 @@ pub(crate) fn forward_specular_request(
 pub(crate) fn forward_transmission_request(
     request: ShaderCompositionRequest,
 ) -> ShaderCompositionRequest {
-    forward_specular_request_inner(request, true, None)
+    forward_specular_request_inner(request, true, Some(ForwardRefraction::Environment))
 }
 
 pub(crate) fn forward_scene_transmission_request(
@@ -230,13 +232,32 @@ pub(crate) fn forward_scene_transmission_request(
     texture: &str,
     sampler: &str,
 ) -> ShaderCompositionRequest {
-    forward_specular_request_inner(request, true, Some((texture, sampler)))
+    forward_specular_request_inner(
+        request,
+        true,
+        Some(ForwardRefraction::Scene(texture, sampler)),
+    )
+}
+
+pub(crate) fn forward_material_transmission_request(
+    request: ShaderCompositionRequest,
+    specular: bool,
+    source: &fluxel_material::RefractionEnvironment,
+) -> ShaderCompositionRequest {
+    forward_specular_request_inner(request, specular, Some(ForwardRefraction::Material(source)))
+}
+
+#[derive(Clone, Copy)]
+enum ForwardRefraction<'a> {
+    Environment,
+    Scene(&'a str, &'a str),
+    Material(&'a fluxel_material::RefractionEnvironment),
 }
 
 fn forward_specular_request_inner(
     mut request: ShaderCompositionRequest,
-    transmission: bool,
-    scene_color: Option<(&str, &str)>,
+    specular: bool,
+    refraction: Option<ForwardRefraction<'_>>,
 ) -> ShaderCompositionRequest {
     let diffuse_irradiance = has_static_option(
         &request,
@@ -251,15 +272,15 @@ fn forward_specular_request_inner(
     let uv0 = has_vertex_semantic(&request, "UV0");
     let normal_map = uv0 && has_vertex_semantic(&request, "TANGENT");
     let source = if uv0 {
-        forward_source(
+        forward_uv0::source(
             normal_map,
             effects,
             diffuse_irradiance,
-            transmission,
-            scene_color,
+            refraction,
+            specular,
         )
     } else {
-        forward_standard::source(diffuse_irradiance, transmission)
+        forward_standard::source(diffuse_irradiance, refraction.is_some())
     };
     // Only renderer-owned bodies are replaceable; Material source is never
     // inspected or rewritten.
@@ -297,7 +318,11 @@ fn forward_specular_request_inner(
             }
         }
     }
-    let mut request = with_specular_ibl(request);
+    let mut request = if specular {
+        with_specular_ibl(request)
+    } else {
+        request
+    };
     if let Some(binding) = request
         .bindings
         .iter_mut()
@@ -307,29 +332,46 @@ fn forward_specular_request_inner(
             .clone()
             .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
     }
-    let request = if transmission {
+    let request = if let Some(refraction) = refraction {
         request.source_units.push(SourceUnit::new(
-            "pbr-specular-transmission",
-            transmission::TRANSMISSION,
+            "pbr-transmission-math",
+            transmission::TRANSMISSION_MATH,
         ));
-        if scene_color.is_some() {
-            request
-                .source_units
-                .retain(|unit| unit.id.0 != "pbr-transforms");
-            request.source_units.push(SourceUnit::new(
-                "pbr-scene-refraction-transforms",
-                super::templates::SCENE_REFRACTION_TRANSFORMS,
-            ));
-            request.source_units.push(SourceUnit::new(
-                "pbr-scene-transmission",
-                super::scene_refraction::WGSL,
-            ));
-            request.with_static_option("renderer.transmission", "scene-color-projected-v1")
-        } else {
-            request.with_static_option(
-                "renderer.transmission",
-                "environment-refraction-beer-lambert-v1",
-            )
+        match refraction {
+            ForwardRefraction::Scene(_, _) => {
+                request
+                    .source_units
+                    .retain(|unit| unit.id.0 != "pbr-transforms");
+                request.source_units.push(SourceUnit::new(
+                    "pbr-scene-refraction-transforms",
+                    super::templates::SCENE_REFRACTION_TRANSFORMS,
+                ));
+                request.source_units.push(SourceUnit::new(
+                    "pbr-scene-transmission",
+                    super::scene_refraction::WGSL,
+                ));
+                request.with_static_option("renderer.transmission", "scene-color-projected-v1")
+            }
+            ForwardRefraction::Environment => {
+                request.source_units.push(SourceUnit::new(
+                    "pbr-scene-environment-transmission",
+                    transmission::ENVIRONMENT_TRANSMISSION,
+                ));
+                request.with_static_option(
+                    "renderer.transmission",
+                    "environment-refraction-beer-lambert-v1",
+                )
+            }
+            ForwardRefraction::Material(source) => {
+                request.source_units.push(SourceUnit::new(
+                    "pbr-material-environment-transmission",
+                    transmission::material_transmission(source),
+                ));
+                request.with_static_option(
+                    "renderer.transmission",
+                    "material-environment-refraction-v1",
+                )
+            }
         }
     } else {
         request
@@ -454,139 +496,6 @@ fn pbr_directional_light() -> PbrDirectionalLight {{
     let direct = terms.specular * spec.specular_energy + terms.diffuse;
     let color = max(direct + spec.radiance{indirect} + surface_effects.rgb, vec3(0.0));
     return vec4(color, 1.0);
-}}
-"#
-    )
-}
-
-fn forward_source(
-    normal_map: bool,
-    effects: bool,
-    diffuse: bool,
-    transmission: bool,
-    scene_color: Option<(&str, &str)>,
-) -> String {
-    let input = if normal_map {
-        r#"
-struct PbrSpecularVertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) world_position: vec3<f32>,
-    @location(1) tangent_world: vec3<f32>,
-    @location(2) bitangent_world: vec3<f32>,
-    @location(3) normal_world: vec3<f32>,
-    @location(4) uv0: vec2<f32>,
-};
-@vertex fn forward_vs(
-    @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>,
-) -> PbrSpecularVertexOutput {
-    var output: PbrSpecularVertexOutput;
-    output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
-    output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
-    let basis = pbr_vertex_tangent_basis(normal, tangent);
-    output.tangent_world = basis[0];
-    output.bitangent_world = basis[1];
-    output.normal_world = basis[2];
-    output.uv0 = uv0;
-    return output;
-}
-"#
-    } else {
-        r#"
-struct PbrSpecularVertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) world_position: vec3<f32>,
-    @location(1) world_normal: vec3<f32>,
-    @location(2) uv0: vec2<f32>,
-};
-@vertex fn forward_vs(
-    @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) uv0: vec2<f32>,
-) -> PbrSpecularVertexOutput {
-    var output: PbrSpecularVertexOutput;
-    output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
-    output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
-    output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
-    output.uv0 = uv0;
-    return output;
-}
-"#
-    };
-    let normal = if normal_map {
-        "pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0))"
-    } else {
-        "input.world_normal"
-    };
-    let base = "material.rgb";
-    let dielectric_f0 = if transmission {
-        "vec3<f32>(pbr_surface_dielectric_f0(material_surface_ior()))"
-    } else {
-        "vec3<f32>(0.04)"
-    };
-    let transmission_values = "let transmission_intensity = evaluate_transmission_uv0(input.uv0);\n    let transmission_thickness = evaluate_thickness_uv0(input.uv0);";
-    let transmission_values = if transmission {
-        transmission_values
-    } else {
-        "let transmission_intensity = 0.0;\n    let transmission_thickness = 0.0;"
-    };
-    let diffuse_weight = if transmission {
-        " * (1.0 - transmission_intensity)"
-    } else {
-        ""
-    };
-    let direct = format!(
-        "let terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = terms.specular * spec.specular_energy + terms.diffuse{diffuse_weight};"
-    );
-    let ambient_occlusion = if effects {
-        "clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"
-    } else {
-        "1.0"
-    };
-    let indirect = if diffuse {
-        format!(
-            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy) * ambient_occlusion{diffuse_weight};"
-        )
-    } else {
-        String::from("let indirect = vec3<f32>(0.0);")
-    };
-    let emissive = if effects {
-        "let emissive = pbr_emissive(input.uv0);"
-    } else {
-        "let emissive = vec3<f32>(0.0);"
-    };
-    let refraction = if let Some((texture, sampler)) = scene_color {
-        format!(
-            "let refraction = pbr_scene_transmission({texture}, {sampler}, input.world_position, normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.refraction_energy;"
-        )
-    } else if transmission {
-        String::from(
-            "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.refraction_energy;",
-        )
-    } else {
-        String::from("let refraction = vec3<f32>(0.0);")
-    };
-    format!(
-        r#"{input}
-fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) -> vec4<f32> {{
-    let material = evaluate_material_uv0(input.uv0);
-    let base = {base};
-    let properties = evaluate_metallic_roughness_uv0(input.uv0);
-    let normal = pbr_surface_normal({normal}, front_facing);
-    let dielectric_f0 = {dielectric_f0};
-    {transmission_values}
-    let view = pbr_specular_view_direction(input.world_position,
-        pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz,
-        pbr_specular_camera.camera.w == 0.0);
-    let ambient_occlusion = {ambient_occlusion};
-    let spec = pbr_specular_ibl_bound(input.world_position, normal, ambient_occlusion, base,
-        properties.x, properties.y, dielectric_f0);
-    {direct}
-    {indirect}
-    {refraction}
-    {emissive}
-    if material_alpha_rejected(material.a) {{ discard; }}
-    let color = max(direct + spec.radiance + indirect + refraction + emissive, vec3<f32>(0.0));
-    return vec4<f32>(color, material_output_alpha(material.a));
 }}
 "#
     )

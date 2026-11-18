@@ -1,5 +1,47 @@
 //! Static transmission and volume-attenuation facts for PBR surfaces.
 
+/// A material-local, prefiltered environment used for transmission refraction.
+///
+/// The texture and sampler name ordinary group-zero material resources. Its
+/// RGB values must already be linear. `lod_scale` and `lod_offset` transform
+/// the consumer's normalized roughness LOD before it is clamped to the bound
+/// texture's available mip range. `direction_from_world` rotates a world-space
+/// refraction direction into the texture's environment direction convention.
+#[derive(Clone, Debug)]
+pub struct RefractionEnvironment {
+    /// Declared linear `Texture2dF32` material resource.
+    pub texture: String,
+    /// Declared non-comparison material sampler resource.
+    pub sampler: String,
+    /// Scale applied to the normalized roughness LOD.
+    pub lod_scale: f32,
+    /// Offset applied to the normalized roughness LOD.
+    pub lod_offset: f32,
+    /// Environment direction derived from the Fluxel world-space direction.
+    pub direction_from_world: [[f32; 3]; 3],
+}
+
+impl PartialEq for RefractionEnvironment {
+    fn eq(&self, other: &Self) -> bool {
+        self.texture == other.texture
+            && self.sampler == other.sampler
+            && self.lod_scale.to_bits() == other.lod_scale.to_bits()
+            && self.lod_offset.to_bits() == other.lod_offset.to_bits()
+            && self
+                .direction_from_world
+                .iter()
+                .flatten()
+                .map(|value| value.to_bits())
+                .eq(other
+                    .direction_from_world
+                    .iter()
+                    .flatten()
+                    .map(|value| value.to_bits()))
+    }
+}
+
+impl Eq for RefractionEnvironment {}
+
 /// Author-selected transmission controls for a UV0 normal PBR surface.
 ///
 /// `intensity` and `thickness` name optional `vec2<f32> -> f32` callables.

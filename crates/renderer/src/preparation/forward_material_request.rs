@@ -58,6 +58,19 @@ pub(super) fn material_request(
         request
     };
     if transmission {
+        if let Some(local_environment) = material.refraction_environment() {
+            if scene_color.is_some() {
+                return Err(ForwardPreparationError::InvalidSceneRefractionSource { source });
+            }
+            if view.shading_camera.is_none() {
+                return Err(ForwardPreparationError::InvalidView);
+            }
+            return Ok(crate::pbr::specular::forward_material_transmission_request(
+                request,
+                specular,
+                local_environment,
+            ));
+        }
         if !specular {
             return Err(
                 ForwardPreparationError::TransmissionRequiresSpecularEnvironment { source },
