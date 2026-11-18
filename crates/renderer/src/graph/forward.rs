@@ -25,6 +25,7 @@ mod capture_surface_record;
 mod capture_terminal;
 mod capture_upload;
 mod declaration;
+pub(in crate::graph) mod hdr_output;
 mod hdr_record;
 mod offscreen_bindings;
 mod offscreen_declaration;

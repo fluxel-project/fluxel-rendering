@@ -18,6 +18,7 @@ pub(in crate::graph) use super::capture_depth_alias::{
     same_buffer_owner_desc, same_texture_owner_desc,
 };
 use super::capture_terminal::{declare_capture_background_copy, declare_readback};
+use super::hdr_output::{HdrReadbackTerminal, declare_hdr_readback};
 use super::{
     BufferGraphFact, BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError,
     GraphBuilder, GraphPass, TextureGraphFact, TextureSlot, validate_depth_spec,
@@ -75,6 +76,7 @@ pub(crate) struct CaptureForwardDeclaration {
     pub(super) receiver_background_copy: Option<GraphPass>,
     pub(super) receiver_depth_alias: bool,
     pub(super) receiver_raster: GraphPass,
+    pub(super) hdr_terminal: Option<HdrReadbackTerminal>,
     pub(super) receiver_readback: GraphPass,
     pub(super) capture: CaptureFrameSlots,
     pub(super) receiver: CaptureFrameSlots,
@@ -194,12 +196,28 @@ where
         &receiver_handles,
         receiver_contribute,
     )?;
-    let receiver_readback = declare_readback(
-        &mut graph,
-        &receiver_spec,
-        receiver_target,
-        receiver_handles.readback,
-    )?;
+    let hdr_terminal = (receiver.frame.target_desc.format
+        == fluxel_rhi::api::TextureFormat::Rgba16Float)
+        .then(|| {
+            declare_hdr_readback(
+                &mut graph,
+                receiver_target,
+                receiver.frame.output.as_ref().ok_or(Error::InvalidState)?,
+                receiver_handles.readback,
+                receiver.extent,
+                receiver.readback_row_pitch,
+            )
+        })
+        .transpose()?;
+    let receiver_readback = match hdr_terminal {
+        Some(terminal) => terminal.readback_pass,
+        None => declare_readback(
+            &mut graph,
+            &receiver_spec,
+            receiver_target,
+            receiver_handles.readback,
+        )?,
+    };
     Ok(CaptureForwardDeclaration {
         graph,
         lane,
@@ -211,6 +229,7 @@ where
         receiver_background_copy: receiver_background_copy.map(|(pass, _)| pass),
         receiver_depth_alias: capture_depth.is_some(),
         receiver_raster,
+        hdr_terminal,
         receiver_readback,
         capture: capture_slots,
         receiver: receiver_slots,
@@ -541,50 +560,6 @@ pub(super) fn import_frame_inner(
 
 pub(super) use super::capture_upload::{declare_mip_generations, declare_upload};
 
-pub(super) fn declare_raster<B, F>(
-    graph: &mut GraphBuilder,
-    spec: &ForwardGraphSpec,
-    topology: FrameTopology,
-    upload: GraphPass,
-    handles: &FrameHandles,
-    contribute: F,
-) -> std::result::Result<
-    (
-        GraphPass,
-        crate::graph::definition::TextureHandle,
-        Option<crate::graph::definition::TextureHandle>,
-    ),
-    ForwardPlanBuildError,
->
-where
-    B: ResourceBackend,
-    F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
-{
-    let mut driver = ForwardPhaseDriver {
-        graph: Some(graph),
-        marker: std::marker::PhantomData,
-        expected: topology,
-        upload: Some(upload),
-        streams: handles.streams.clone(),
-        uniform: Some(handles.uniform),
-        textures: handles.textures.clone(),
-        environment: handles.environment,
-        specular_radiance: handles.specular_radiance,
-        specular_brdf_lut: handles.specular_brdf_lut,
-        specular_view_uniform: handles.specular_view_uniform,
-        specular_mip_levels: spec
-            .specular_radiance
-            .as_ref()
-            .map(|owner| owner.desc.mip_levels),
-        depth: handles.depth,
-        target: handles.target,
-        draws: spec.draws.clone(),
-        declared: false,
-        output: None,
-    };
-    let mut context = ForwardPhaseContext::new(&mut driver);
-    contribute(&mut context).map_err(ForwardPlanBuildError::Pipeline)?;
-    driver
-        .finish()
-        .map_err(|_| ForwardPlanBuildError::Pipeline(PipelineError::InvalidPhaseContribution))
-}
+#[path = "capture_raster_declaration.rs"]
+mod raster_declaration;
+pub(super) use raster_declaration::declare_raster;

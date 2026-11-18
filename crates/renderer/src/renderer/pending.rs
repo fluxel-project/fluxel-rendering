@@ -110,6 +110,7 @@ where
     CaptureForward {
         _capture: Box<crate::residency::ForwardFrame<B>>,
         _receiver: Box<crate::residency::ForwardFrame<B>>,
+        _composite: Option<SurfaceCompositeOwner<B>>,
         capture_publication: forward::ForwardPublication,
         receiver_publication: forward::ForwardPublication,
         plan: Arc<crate::graph::CaptureForwardPlan<B>>,

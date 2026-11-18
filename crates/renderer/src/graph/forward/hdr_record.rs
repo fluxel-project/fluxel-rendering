@@ -194,7 +194,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
     }
 }
 
-fn record_composite_raster<B: ResourceBackend + RasterBackend>(
+pub(super) fn record_composite_raster<B: ResourceBackend + RasterBackend>(
     encoder: &mut CommandEncoder<B>,
     view: AttachmentView<'_, B>,
     extent: [u32; 2],

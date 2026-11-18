@@ -72,7 +72,7 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
         validate_resident_texture_devices(&capture.resident, self.id.device)?;
         validate_resident_texture_devices(&receiver.resident, self.id.device)?;
         validate_capture_alias(capture, receiver)?;
-        let (buffers, textures) = super::capture_binding_collection::collect(
+        let (buffers, mut textures) = super::capture_binding_collection::collect(
             &self.execution,
             self.id.device,
             &self.capture,
@@ -81,6 +81,12 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             receiver,
             self.receiver_depth_alias,
         )?;
+        if let Some(terminal) = self.hdr_terminal() {
+            terminal.append_binding(
+                receiver.frame.output.as_ref().ok_or(Error::InvalidState)?,
+                &mut textures,
+            );
+        }
         FrameBindings::new(&self.execution, self.id.device, buffers, textures)
             .map_err(binding_error)
     }

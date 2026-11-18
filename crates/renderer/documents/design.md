@@ -336,6 +336,8 @@ Deferred frames without a G-buffer prefix use this same Forward route. The
 terminal pipeline, sampling group, scene and destination owners remain alive
 through covering completion, including recording or presentation failure
 where earlier commands may have been accepted.
+Ordinary Forward capture retains the linear format through producer sampling
+and receiver composition. The receiver owns the terminal color conversion.
 This processing targets SDR sRGB presentation. Native HDR display transfer
 and color-space selection remain separate work.
 

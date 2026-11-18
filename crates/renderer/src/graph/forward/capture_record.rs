@@ -214,12 +214,45 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
     where
         B: ReadbackBackend,
     {
+        if let Some(terminal) = self.hdr_terminal() {
+            let mut slots = self.record_slots(&self.receiver, self.receiver_topology);
+            slots.target_slot = terminal.output_slot;
+            return shared_record::record_readback(
+                &slots,
+                terminal.readback_pass,
+                &self.bindings(capture, receiver)?,
+                encoder,
+                receiver,
+            );
+        }
         shared_record::record_readback(
             &self.record_slots(&self.receiver, self.receiver_topology),
             self.receiver_readback,
             &self.bindings(capture, receiver)?,
             encoder,
             receiver,
+        )
+    }
+
+    pub(crate) fn record_hdr_terminal(
+        &self,
+        device: &Device<B>,
+        encoder: &mut CommandEncoder<B>,
+        capture: &ForwardFrame<B>,
+        receiver: &ForwardFrame<B>,
+        composite: &crate::renderer::SurfaceCompositeOwner<B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        self.hdr_terminal().ok_or(Error::InvalidState)?.record(
+            device,
+            &self.bindings(capture, receiver)?,
+            encoder,
+            self.receiver.target,
+            receiver.frame.target_instance,
+            receiver,
+            composite,
         )
     }
 }

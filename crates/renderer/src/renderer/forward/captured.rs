@@ -61,7 +61,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
             || color.desc.array_layers != 1
             || color.desc.mip_levels != 1
             || color.desc.samples != 1
-            || color.desc.format != fluxel_rhi::api::TextureFormat::Rgba8Unorm
+            || !Self::is_capture_format(color.desc.format)
         {
             return Err(Error::InvalidState);
         }
@@ -147,7 +147,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
             || output.desc.array_layers != 1
             || output.desc.mip_levels != 1
             || output.desc.samples != 1
-            || output.desc.format != fluxel_rhi::api::TextureFormat::Rgba8Unorm
+            || !Self::is_capture_format(output.desc.format)
             || output.view_desc.format != output.desc.format
             || output.view_desc.dimension != fluxel_rhi::api::TextureViewDimension::D2
             || output.view_desc.aspects != fluxel_rhi::api::TextureAspects::COLOR
@@ -184,6 +184,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
         if owner_device != device.id()
             || texture.device() != device.id()
             || view.device() != device.id()
+            || !Self::is_capture_format(desc.format)
             || !desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         {
             return Err(Error::WrongDevice);
@@ -219,13 +220,21 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
             return Err(Error::WrongDevice);
         }
         if self.slot.name() != expected_slot
-            || self.desc.format != fluxel_rhi::api::TextureFormat::Rgba8Unorm
+            || !Self::is_capture_format(self.desc.format)
             || (require_filterable && !self.filterable)
             || !self.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         {
             return Err(Error::InvalidState);
         }
         Ok(())
+    }
+
+    const fn is_capture_format(format: fluxel_rhi::api::TextureFormat) -> bool {
+        matches!(
+            format,
+            fluxel_rhi::api::TextureFormat::Rgba8Unorm
+                | fluxel_rhi::api::TextureFormat::Rgba16Float
+        )
     }
 }
 

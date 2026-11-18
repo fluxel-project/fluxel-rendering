@@ -17,6 +17,7 @@ pub(crate) struct CaptureForwardPlan<B: ResourceBackend> {
     pub(super) receiver_background_copy: Option<GraphPass>,
     pub(super) receiver_depth_alias: bool,
     pub(super) receiver_raster: GraphPass,
+    pub(super) hdr_terminal: Option<super::hdr_output::HdrReadbackTerminal>,
     pub(super) receiver_readback: GraphPass,
     pub(super) capture: CaptureFrameSlots,
     pub(super) receiver: CaptureFrameSlots,
@@ -89,6 +90,7 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             receiver_background_copy: declaration.receiver_background_copy,
             receiver_depth_alias: declaration.receiver_depth_alias,
             receiver_raster: declaration.receiver_raster,
+            hdr_terminal: declaration.hdr_terminal,
             receiver_readback: declaration.receiver_readback,
             capture: declaration.capture,
             receiver: declaration.receiver,
@@ -167,8 +169,19 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
     pub(crate) fn receiver_readback_step(&self) -> StepId {
         StepId {
             plan: self.id,
-            index: self.receiver_raster_step().index + 1,
+            index: self.receiver_raster_step().index + 1 + u32::from(self.hdr_terminal.is_some()),
         }
+    }
+
+    pub(crate) fn receiver_hdr_terminal_step(&self) -> Option<StepId> {
+        self.hdr_terminal.map(|_| StepId {
+            plan: self.id,
+            index: self.receiver_raster_step().index + 1,
+        })
+    }
+
+    pub(super) fn hdr_terminal(&self) -> Option<super::hdr_output::HdrReadbackTerminal> {
+        self.hdr_terminal
     }
 
     pub(crate) fn completion(&self, outcome: &Outcome<B>) -> Result<CompletionPoint<B>>
@@ -201,7 +214,8 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
         let mut steps = Vec::with_capacity(
             5 + self.capture_mip_generations.len()
                 + self.receiver_mip_generations.len()
-                + usize::from(self.receiver_background_copy.is_some()),
+                + usize::from(self.receiver_background_copy.is_some())
+                + usize::from(self.hdr_terminal.is_some()),
         );
         steps.push(self.capture_upload_step());
         for index in 0..self.capture_mip_generations.len() {
@@ -222,6 +236,9 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             steps.push(step);
         }
         steps.push(self.receiver_raster_step());
+        if let Some(step) = self.receiver_hdr_terminal_step() {
+            steps.push(step);
+        }
         steps.push(self.receiver_readback_step());
         steps
     }
@@ -231,7 +248,8 @@ fn declared_passes(declaration: &CaptureForwardDeclaration) -> Vec<GraphPass> {
     let mut passes = Vec::with_capacity(
         5 + declaration.capture_mip_generations.len()
             + declaration.receiver_mip_generations.len()
-            + usize::from(declaration.receiver_background_copy.is_some()),
+            + usize::from(declaration.receiver_background_copy.is_some())
+            + usize::from(declaration.hdr_terminal.is_some()),
     );
     passes.push(declaration.capture_upload);
     passes.extend(
@@ -252,6 +270,9 @@ fn declared_passes(declaration: &CaptureForwardDeclaration) -> Vec<GraphPass> {
         passes.push(copy);
     }
     passes.push(declaration.receiver_raster);
+    if let Some(terminal) = declaration.hdr_terminal {
+        passes.push(terminal.composite_pass);
+    }
     passes.push(declaration.receiver_readback);
     passes
 }
