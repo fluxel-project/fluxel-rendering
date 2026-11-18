@@ -414,6 +414,23 @@ classifies mappings as exact, approximate, bake-required or unsupported, with
 named reasons. Do not promise arbitrary Blender graphs or a specific Principled
 version before its semantics have been checked.
 
+### Porting the selected material behavior
+
+For each selected effect, trace the authored value from the Babylon host
+configuration through the effective defines and shader inputs to the WGSL
+consumer at the revision below. Material carries channel meanings, units,
+defaults, texture interpretation and static choices. Renderer combines those
+choices with scene and device facts to select an executable program. Shader
+composes the source units and reflects their interfaces.
+
+Port the selected functions with their constants, input domains, branch
+conditions and evaluation order. Keep the upstream file, symbol, revision and
+applicable notices with adapted code. Record resource or coordinate adaptations
+and the input that exposes their effect. An algorithmic difference needs a
+specific reason and a comparison case. Forward and Deferred consume the same
+material definition and share the selected shading functions where their
+inputs are equivalent.
+
 ### Authoring and consumer contract
 
 The first real consumer must construct a representative PBR material through

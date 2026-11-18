@@ -16,7 +16,11 @@ facts.
 
 ## Scope and implementation boundary
 
-The implemented surface is deliberately narrower than the target architecture.
+The current direct-light template in `src/pbr/templates.rs` uses a
+Filament-referenced GGX/Smith/Schlick calculation with fixed light, view and
+intensity inputs. The environment transmission path selects a prefiltered 2D
+latitude-longitude source. These implementation choices define the baseline
+for comparison with the selected Babylon shader branches.
 
 | Area | Current implemented subset | Not established by the subset |
 | --- | --- | --- |
@@ -437,6 +441,22 @@ thickness-based absorption included in the first full milestone. The
 [Material design](../../material/documents/design.md#babylon-aligned-material-direction-planned)
 owns authoring semantics; the [ecosystem roadmap](https://github.com/fluxel-project/.github/blob/main/ROADMAP.md)
 owns delivery order. Browser routes have separate capability and evidence gates.
+
+Use Babylon.js revision `daae8d9483dcbb6308ebd0f6ca5b218783614771` for the
+selected programs. Start with `packages/dev/core/src/ShadersWGSL/pbr.fragment.fx`
+and follow the active includes and the host code that selects them.
+
+| Behavior | Upstream source in the selected revision | Renderer adaptation |
+| --- | --- | --- |
+| Direct and environment lighting | `pbrDirectLightingFunctions.fx`, `pbrBRDFFunctions.fx`, `pbrIBLFunctions.fx` | Share selected WGSL functions between Forward shading and Deferred lighting. Supply the light, view and environment inputs and document any G-buffer quantization. |
+| Refraction and attenuation | `pbrBlockSubSurface.fx` and `pbrSubSurfaceConfiguration.ts` | Preserve thickness and IOR branch selection and sampling order. Bind the declared environment or scene-color source and retain its owner. |
+| Sorted transparency and finite OIT | `renderingGroup.ts`, `thinDepthPeelingRenderer.pure.ts`, `oitFragment.fx`, `oitBackBlend.fragment.fx`, `oitFinal.fragment.fx` | Preserve sort, peel and blend rules. Declare attachment versions and final consumption in the Graph. |
+| Exposure and output | `imageProcessingFunctions.fx::applyImageProcessing` and its material/post-process callers | Keep lighting linear through the selected composition. Apply exposure, tone mapping and output transfer at the selected boundary, accounting for the actual target format. |
+
+Compare the same inputs under the same effective branches at milestone
+acceptance. Record which differences come from resource representation, such as
+an environment projection or G-buffer format, and which change the computation.
+Keep applicable notices and source attribution for copied or translated code.
 
 A Deferred pipeline may combine opaque G-buffer lighting with specialized
 transparent and refractive passes in the same Graph. Requiring every effect to
