@@ -315,8 +315,20 @@ texels before interpolation, and contrasts filtering encoded values before
 decoding and decoding twice at the same acceptance tolerance. This input
 contract does not infer color roles from names. The four-texture consumer checks
 its explicit base/emissive color and normal/ORM data-source contract before use.
-Output exposure, tone mapping, transfer encoding, and HDR presentation
-remain separate work; the current raw linear UNORM output is retained.
+The renderer's opt-in `OutputProcessing` selects the Babylon Standard display
+curve for supported scene submissions. The terminal composite samples the
+linear floating-point scene color and applies finite nonnegative exposure,
+then `1 - exp2(-1.590579 * rgb)`. An RGBA8 or BGRA8 UNORM destination receives
+explicit sRGB transfer. When the selected destination is an sRGB attachment,
+its write conversion performs that transfer. Alpha is preserved. The exposure
+value is captured in the terminal program for the submitted frame. The default
+output stays raw linear UNORM for existing consumers and numeric readback.
+Deferred selects `Rgba16Float` for its admitted lighting attachment. Ordinary
+sorted transparency and environment transmission compose into that same
+attachment, and the final version feeds the terminal. Offscreen output still
+reads the separate RGBA8 destination with its four-byte pixel layout.
+This processing targets SDR sRGB presentation. Native HDR display transfer
+and color-space selection remain separate work.
 
 ## Private RenderGraph
 

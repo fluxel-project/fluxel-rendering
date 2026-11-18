@@ -50,6 +50,6 @@ pub use render_scene::{
     RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError, ShadingCamera,
 };
 pub use renderer::{
-    CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, Renderer,
-    RendererError, ShaderAdmissionError, ShutdownReport, Submission,
+    CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats,
+    OutputProcessing, Renderer, RendererError, ShaderAdmissionError, ShutdownReport, Submission,
 };

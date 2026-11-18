@@ -5,8 +5,9 @@ use fluxel_rhi::api::{
 };
 
 use crate::residency::{
-    DeferredSurfaceFrame, SurfaceForwardFrameBuffers, allocate_deferred_scene_color,
-    plan_deferred_gbuffer_with_effects, plan_surface_forward_frame,
+    DeferredSurfaceFrame, SurfaceForwardFrameBuffers, allocate_deferred_scene_color_desc,
+    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects,
+    plan_surface_forward_frame,
 };
 use crate::{ForwardDrawInput, PreparedMaterial};
 
@@ -141,17 +142,22 @@ where
         } else {
             None
         };
+        let scene_color_desc = deferred_scene_color_desc_with_format(
+            input.extent(),
+            self.deferred_scene_color_format(),
+        );
+        self.admit_deferred_scene_color(&scene_color_desc)?;
         let lighting_program = self
             .deferred_lighting_program(
                 pbr,
                 environment.is_some(),
                 specular.is_some(),
                 effects,
-                TextureFormat::Rgba8Unorm,
+                scene_color_desc.format,
             )
             .await?;
         let composite_program = self
-            .deferred_scene_color_composite_program(color_format)
+            .scene_color_composite_program(color_format, scene_color_desc.format)
             .await?;
         let super::resident_assembly::ResidentAssembly {
             resident,
@@ -170,7 +176,7 @@ where
         let (gbuffer, effects_attachment) = gbuffer_plan
             .allocate_with_effects(&self.device)
             .map_err(|error| self.observe_rhi_error(error))?;
-        let scene_color = allocate_deferred_scene_color(&self.device, input.extent())
+        let scene_color = allocate_deferred_scene_color_desc(&self.device, scene_color_desc)
             .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color_sampler_desc = crate::renderer::forward::default_material_sampler();
         let scene_color_sampler = self

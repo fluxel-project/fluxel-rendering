@@ -104,6 +104,12 @@ where
     {
         self.ensure_open()?;
         self.free_slot().ok_or(RendererError::Backpressure)?;
+        if self.output_processing().is_some() {
+            return Err(Error::Unsupported(
+                "HDR Deferred capture requires an HDR capture product",
+            )
+            .into());
+        }
         if let Some(image) = surface.as_ref() {
             if image.device() != self.device.id() {
                 return Err(Error::WrongDevice.into());

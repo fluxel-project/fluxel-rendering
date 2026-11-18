@@ -13,7 +13,7 @@ use crate::{
     renderer::admission::{self, PipelineCapabilityFacts},
 };
 
-use super::templates::{LIGHTING_TEMPLATE, SCENE_COLOR_COMPOSITE_TEMPLATE};
+use super::templates::LIGHTING_TEMPLATE;
 use super::*;
 
 #[path = "lighting_program.rs"]
@@ -222,31 +222,21 @@ where
         Ok(program)
     }
 
-    pub(crate) async fn deferred_scene_color_composite_program(
+    pub(crate) async fn scene_color_composite_program(
         &mut self,
         color_format: TextureFormat,
+        source_format: TextureFormat,
     ) -> std::result::Result<SceneColorCompositeProgram<B>, RendererError> {
         self.ensure_open()?;
-        let request = ShaderCompositionRequest::new(vec![SourceUnit::new(
-            "deferred-scene-color-composite",
-            SCENE_COLOR_COMPOSITE_TEMPLATE,
-        )])
-        .with_entry_point(EntryPoint::new(
-            "deferred_composite_vs",
-            LogicalShaderStage::Vertex,
-        ))
-        .with_entry_point(EntryPoint::new(
-            "deferred_composite_fs",
-            LogicalShaderStage::Fragment,
-        ))
-        .with_binding(
-            BindingDeclaration::new(0, 0, BindingKind::Texture)
-                .with_visibility([LogicalShaderStage::Fragment]),
-        )
-        .with_binding(
-            BindingDeclaration::new(0, 1, BindingKind::Sampler)
-                .with_visibility([LogicalShaderStage::Fragment]),
-        );
+        let processing = match source_format {
+            TextureFormat::Rgba8Unorm => None,
+            TextureFormat::Rgba16Float => {
+                Some(self.output_processing().ok_or(Error::InvalidState)?)
+            }
+            _ => return Err(Error::Unsupported("scene composite source format").into()),
+        };
+        let request =
+            super::super::output_processing::scene_output_request(processing, color_format)?;
         let artifact = fluxel_shader::ShaderComposer::new()
             .compose(&request)
             .map_err(RendererError::DeferredShader)?;

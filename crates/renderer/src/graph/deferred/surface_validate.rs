@@ -1,6 +1,6 @@
 //! Actual Surface owner validation and geometry footprints.
 use super::declaration_validation::{
-    matches_gbuffer_template, validate_deformation, validate_draw_uniform_ranges,
+    matches_gbuffer_template, matches_scene_color_template, validate_deformation, validate_draw_uniform_ranges,
     validate_resident_uploads,
 };
 use super::*;
@@ -93,11 +93,7 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
             return Err(Error::InvalidRange);
         }
     }
-    if !matches_gbuffer_template(
-        &frame.scene_color.desc,
-        frame.extent,
-        TextureFormat::Rgba8Unorm,
-    ) {
+    if !matches_scene_color_template(&frame.scene_color.desc, frame.extent) {
         return Err(Error::InvalidRange);
     }
     validate_resident_uploads(&frame.resident, &frame.resident_upload)?;

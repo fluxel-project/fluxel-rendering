@@ -134,6 +134,26 @@ pub(super) fn matches_final_target_template(
             .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC)
 }
 
+/// Deferred lighting stays in a sampleable frame-local owner. The final
+/// readback or Surface target has its own fixed output descriptor, so HDR only
+/// expands this source format set and never its copy layout.
+pub(super) fn matches_scene_color_template(
+    desc: &fluxel_rhi::api::TextureDesc,
+    extent: [u32; 2],
+) -> bool {
+    matches!(
+        desc.format,
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float
+    ) && desc.dimension == fluxel_rhi::api::TextureDimension::D2
+        && desc.extent == [extent[0], extent[1], 1]
+        && desc.array_layers == 1
+        && desc.mip_levels == 1
+        && desc.samples == 1
+        && desc
+            .usage
+            .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING)
+}
+
 pub(super) fn validate_uploads<B: ResourceBackend>(frame: &DeferredFrame<B>) -> Result<()> {
     validate_resident_uploads(&frame.resident, &frame.resident_upload)
 }

@@ -77,7 +77,10 @@ where
         }
         // This is the same descriptor used by actual lighting allocation.
         // Ordinary opaque Deferred does not acquire a blending requirement.
-        let desc = crate::residency::deferred_scene_color_desc(extent);
+        let desc = crate::residency::deferred_scene_color_desc_with_format(
+            extent,
+            self.deferred_scene_color_format(),
+        );
         super::super::require_blendable_target(
             &self.device,
             &desc,
@@ -102,7 +105,7 @@ where
                 crate::ForwardDepthMode::Depth32LessEqualWrite,
                 assets,
                 None,
-                TextureFormat::Rgba8Unorm,
+                opaque_frame.scene_color.desc.format,
                 started,
                 None,
                 true,

@@ -48,7 +48,10 @@ fn validate_color<B: ResourceBackend>(
         || owner.desc.array_layers != 1
         || owner.desc.mip_levels != 1
         || owner.desc.samples != 1
-        || owner.desc.format != TextureFormat::Rgba8Unorm
+        || !matches!(
+            owner.desc.format,
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float
+        )
         || !owner
             .desc
             .usage

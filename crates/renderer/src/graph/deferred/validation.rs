@@ -126,10 +126,9 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
             return Err(Error::InvalidRange);
         }
     }
-    if !matches_gbuffer_template(
+    if !super::declaration_validation::matches_scene_color_template(
         &frame.scene_color.desc,
         frame.extent,
-        TextureFormat::Rgba8Unorm,
     ) {
         return Err(Error::InvalidRange);
     }

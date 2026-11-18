@@ -435,10 +435,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.effects_slot.is_some() != frame.effects.is_some()
             || (!matches!(self.output, DeferredOutputPlan::Capture)
                 && !matches_final_target_template(&frame.frame.target_desc, self.extent))
-            || !matches_gbuffer_template(
+            || !super::declaration_validation::matches_scene_color_template(
                 &frame.scene_color.desc,
                 self.extent,
-                fluxel_rhi::api::TextureFormat::Rgba8Unorm,
             )
             || (!matches!(self.output, DeferredOutputPlan::Capture)
                 && self.composite_pass.is_none())

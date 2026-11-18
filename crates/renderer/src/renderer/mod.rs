@@ -12,6 +12,7 @@ mod deferred;
 mod error;
 mod forward;
 mod lighting;
+mod output_processing;
 mod pending;
 mod raster;
 mod read_set;
@@ -58,6 +59,7 @@ pub use forward::CaptureTextureSlot;
 pub use forward::ForwardCacheStats;
 pub(crate) use forward::SurfaceCompositeOwner;
 pub(crate) use forward::validate_ordinary_sampler;
+pub use output_processing::OutputProcessing;
 pub use shutdown::ShutdownReport;
 pub use submission::Submission;
 
@@ -98,6 +100,7 @@ where
     >,
     environment_irradiance:
         Option<AssetSnapshot<crate::EnvironmentIrradianceAsset, crate::EnvironmentIrradianceData>>,
+    output_processing: Option<OutputProcessing>,
     owner: Arc<()>,
     plans: HashMap<cache::PlanKey, cache::CachedPlan<B>>,
     forward_programs: HashMap<forward::ForwardProgramKey, Arc<forward::ForwardPipelineObjects<B>>>,
@@ -171,6 +174,7 @@ where
             device,
             environment_irradiance: None,
             environment_specular: None,
+            output_processing: None,
             owner: Arc::new(()),
             plans: HashMap::new(),
             forward_programs: HashMap::new(),
@@ -193,6 +197,22 @@ where
             binding_refreshes: 0,
             lifecycle: Lifecycle::Active,
         })
+    }
+
+    /// Selects terminal HDR-to-sRGB processing for subsequent supported frames.
+    /// Pass `None` to select the ordinary output path.
+    pub fn set_output_processing(
+        &mut self,
+        processing: Option<OutputProcessing>,
+    ) -> Result<(), RendererError> {
+        self.ensure_open()?;
+        self.output_processing = processing;
+        Ok(())
+    }
+
+    /// Returns the output processing selected for future submissions.
+    pub const fn output_processing(&self) -> Option<OutputProcessing> {
+        self.output_processing
     }
 
     /// Selects the exact linear lat-long diffuse-irradiance generation used by

@@ -69,7 +69,7 @@ impl<B: ResourceBackend> SurfaceCompositeOwner<B> {
             || self.target_desc.array_layers != 1
             || self.target_desc.mip_levels != 1
             || self.target_desc.samples != 1
-            || self.target_desc.format != TextureFormat::Rgba8Unorm
+            || !composite_source_format(self.target_desc.format)
             || !self
                 .target_desc
                 .usage
@@ -180,7 +180,7 @@ where
         .await
     }
 
-    async fn surface_composite_from_target(
+    pub(in crate::renderer) async fn surface_composite_from_target(
         &mut self,
         target: &Texture<B>,
         target_view: &TextureView<B>,
@@ -207,7 +207,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn color_composite_from_target(
+    pub(in crate::renderer) async fn color_composite_from_target(
         &mut self,
         target: &Texture<B>,
         target_view: &TextureView<B>,
@@ -218,7 +218,7 @@ where
     ) -> std::result::Result<SurfaceCompositeOwner<B>, RendererError> {
         validate_composite_source(&self.device, target, target_view, desc, extent)?;
         let program = self
-            .deferred_scene_color_composite_program(target_format)
+            .scene_color_composite_program(target_format, desc.format)
             .await?;
         let sampler_desc = default_material_sampler();
         validate_ordinary_sampler(&sampler_desc)
@@ -273,13 +273,20 @@ fn validate_composite_source<B: ResourceBackend>(
         || desc.array_layers != 1
         || desc.mip_levels != 1
         || desc.samples != 1
-        || desc.format != TextureFormat::Rgba8Unorm
+        || !composite_source_format(desc.format)
         || !desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         || !matches!(device.texture_support(desc), Support::Supported(facts) if facts.filterable)
     {
         return Err(Error::InvalidState.into());
     }
     Ok(())
+}
+
+fn composite_source_format(format: TextureFormat) -> bool {
+    matches!(
+        format,
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float
+    )
 }
 
 fn validate_oit_output<B: ResourceBackend>(

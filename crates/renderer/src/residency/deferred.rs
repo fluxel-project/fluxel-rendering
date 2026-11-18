@@ -198,22 +198,6 @@ pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
     })
 }
 
-/// Allocates the private Deferred lighting result that the later composite
-/// pass samples. This owner is intentionally frame-local: it must remain alive
-/// through the completion that covers both lighting and compositing.
-pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
-    device: &Device<B>,
-    extent: [u32; 2],
-) -> Result<ForwardTexture<B>> {
-    validate_request(
-        extent,
-        device.capabilities().limits.max_color_attachments,
-        false,
-    )?;
-    let desc = deferred_scene_color_desc(extent);
-    allocate_deferred_scene_color_desc(device, desc)
-}
-
 pub(crate) fn allocate_deferred_scene_color_desc<B: ResourceBackend>(
     device: &Device<B>,
     desc: TextureDesc,
@@ -228,12 +212,35 @@ pub(crate) fn allocate_deferred_scene_color_desc<B: ResourceBackend>(
     allocate_texture(device, desc, fluxel_rhi::api::TextureAspects::COLOR)
 }
 
-/// The exact descriptor used by the lighting owner and transparent admission.
-pub(crate) fn deferred_scene_color_desc(extent: [u32; 2]) -> TextureDesc {
+/// Allocates the default linear Deferred lighting result for owner-validation
+/// fixtures. Product paths select their format explicitly before allocation.
+#[cfg(test)]
+pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
+    device: &Device<B>,
+    extent: [u32; 2],
+) -> Result<ForwardTexture<B>> {
+    validate_request(
+        extent,
+        device.capabilities().limits.max_color_attachments,
+        false,
+    )?;
+    allocate_deferred_scene_color_desc(
+        device,
+        deferred_scene_color_desc_with_format(extent, TextureFormat::Rgba8Unorm),
+    )
+}
+
+/// The exact linear lighting descriptor selected for one Deferred submission.
+/// The terminal remains a distinct LDR or Surface target, so this format never
+/// changes the byte layout of an offscreen readback.
+pub(crate) fn deferred_scene_color_desc_with_format(
+    extent: [u32; 2],
+    format: TextureFormat,
+) -> TextureDesc {
     gbuffer_desc(
         "fluxel deferred scene color",
         extent,
-        TextureFormat::Rgba8Unorm,
+        format,
     )
 }
 

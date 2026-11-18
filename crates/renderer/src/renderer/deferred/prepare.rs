@@ -8,7 +8,7 @@ use fluxel_rhi::api::{
 
 use crate::residency::{
     DeferredFrame, ForwardFrameBuffers, allocate_deferred_scene_color_desc,
-    deferred_scene_color_desc, plan_deferred_gbuffer_with_effects, plan_forward_frame,
+    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects, plan_forward_frame,
 };
 use crate::{ForwardDrawInput, PreparedMaterial};
 
@@ -24,6 +24,29 @@ where
         + PipelineBackend
         + ShaderBackend,
 {
+    pub(super) fn deferred_scene_color_format(&self) -> fluxel_rhi::api::TextureFormat {
+        if self.output_processing().is_some() {
+            fluxel_rhi::api::TextureFormat::Rgba16Float
+        } else {
+            fluxel_rhi::api::TextureFormat::Rgba8Unorm
+        }
+    }
+
+    pub(super) fn admit_deferred_scene_color(
+        &mut self,
+        desc: &TextureDesc,
+    ) -> std::result::Result<(), RendererError> {
+        match self.device.texture_support(desc) {
+            Support::Supported(facts) if facts.filterable => Ok(()),
+            Support::Supported(_) => {
+                Err(self.observe_rhi_error(Error::Unsupported("filterable Deferred scene-color")))
+            }
+            Support::Unsupported(reason) => {
+                Err(self.observe_rhi_error(Error::Unsupported(reason)))
+            }
+        }
+    }
+
     /// Rebuilds one exact Forward draw with its Deferred surface template.
     ///
     /// The caller has already run `prepare_forward` for scene/asset/schema
@@ -66,7 +89,10 @@ where
             .map_err(|error| self.observe_rhi_error(error))?;
         let (prepared, pbr, effects) = super::scene_prepare::materials(inputs)?;
         let extent = inputs.first().ok_or(Error::InvalidState)?.extent();
-        let mut scene_color = deferred_scene_color_desc(extent);
+        let mut scene_color = deferred_scene_color_desc_with_format(
+            extent,
+            self.deferred_scene_color_format(),
+        );
         if copy_source {
             scene_color.usage |= TextureUsage::COPY_SRC;
             match self.device.texture_support(&scene_color) {
@@ -77,6 +103,7 @@ where
                 Support::Unsupported(reason) => return Err(Error::Unsupported(reason).into()),
             }
         }
+        self.admit_deferred_scene_color(&scene_color)?;
         self.prepare_deferred_resources(inputs, &prepared, pbr, effects, capture, scene_color)
             .await
     }
@@ -205,11 +232,14 @@ where
                 environment.is_some(),
                 specular.is_some(),
                 effects,
-                fluxel_rhi::api::TextureFormat::Rgba8Unorm,
+                scene_color_desc.format,
             )
             .await?;
         let composite_program = self
-            .deferred_scene_color_composite_program(fluxel_rhi::api::TextureFormat::Rgba8Unorm)
+            .scene_color_composite_program(
+                fluxel_rhi::api::TextureFormat::Rgba8Unorm,
+                scene_color_desc.format,
+            )
             .await?;
         let frame_slot = self.free_slot().ok_or(RendererError::Backpressure)?;
 
