@@ -177,7 +177,8 @@ impl DeferredGbufferPlan {
 /// Validates the Deferred G-buffer resource request without allocating.
 ///
 /// PBR uses a linear RGBA16F albedo attachment; unlit keeps RGBA8 compatibility.
-/// Both use an RGBA8 normal attachment and one single-sample Depth32Float attachment. All attachments must also be
+/// PBR stores signed normals and roughness in RGBA32Float. Both use a single-sample
+/// Depth32Float attachment. All attachments must also be
 /// sampled by the later lighting pass, so support is checked for the exact
 /// combined `RENDER_ATTACHMENT | TEXTURE_BINDING` descriptors now.
 pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
@@ -276,6 +277,14 @@ pub(crate) fn deferred_albedo_format(pbr: bool) -> TextureFormat {
     }
 }
 
+pub(crate) fn deferred_normal_format(pbr: bool) -> TextureFormat {
+    if pbr {
+        TextureFormat::Rgba32Float
+    } else {
+        TextureFormat::Rgba8Unorm
+    }
+}
+
 fn gbuffer_descs(extent: [u32; 2], pbr: bool) -> [TextureDesc; 3] {
     [
         gbuffer_desc(
@@ -283,7 +292,7 @@ fn gbuffer_descs(extent: [u32; 2], pbr: bool) -> [TextureDesc; 3] {
             extent,
             deferred_albedo_format(pbr),
         ),
-        gbuffer_desc("fluxel deferred normal", extent, TextureFormat::Rgba8Unorm),
+        gbuffer_desc("fluxel deferred normal", extent, deferred_normal_format(pbr)),
         gbuffer_desc("fluxel deferred depth", extent, TextureFormat::Depth32Float),
     ]
 }

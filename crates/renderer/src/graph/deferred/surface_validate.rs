@@ -77,7 +77,7 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
     }
     for (texture, format) in frame.gbuffer.iter().zip([
         crate::residency::deferred_albedo_format(frame.pbr),
-        TextureFormat::Rgba8Unorm,
+        crate::residency::deferred_normal_format(frame.pbr),
         TextureFormat::Depth32Float,
     ]) {
         if !matches_gbuffer_template(&texture.desc, frame.extent, format) {

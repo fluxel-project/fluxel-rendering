@@ -99,7 +99,7 @@ fn gbuffer_compatible<B: ResourceBackend>(
 ) -> bool {
     let formats = [
         crate::residency::deferred_albedo_format(pbr),
-        TextureFormat::Rgba8Unorm,
+        crate::residency::deferred_normal_format(pbr),
         TextureFormat::Depth32Float,
     ];
     gbuffer.iter().zip(formats).all(|(texture, format)| {

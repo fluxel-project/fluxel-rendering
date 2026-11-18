@@ -445,7 +445,7 @@ fn pbr_directional_light() -> PbrDirectionalLight {{
         pbr_specular_camera.world_from_clip,
     );
     let base_metal = textureLoad(pbr_base_metal, coordinate, 0);
-    let normal = nr.xyz * 2.0 - vec3(1.0);
+    let normal = nr.xyz;
     let view = pbr_specular_view_direction(world, pbr_specular_camera.camera.xyz,
         pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.w == 0.0);
     let surface_effects = {effects_source};

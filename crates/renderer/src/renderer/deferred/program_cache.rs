@@ -56,7 +56,7 @@ impl GbufferProgramKey {
             transform_uniform_bytes,
             color_formats: [
                 crate::residency::deferred_albedo_format(pbr),
-                TextureFormat::Rgba8Unorm,
+                crate::residency::deferred_normal_format(pbr),
             ],
             depth_format: TextureFormat::Depth32Float,
             multisample_count: 1,
@@ -92,7 +92,7 @@ impl LightingProgramKey {
             artifact,
             sampled_formats: [
                 crate::residency::deferred_albedo_format(pbr),
-                TextureFormat::Rgba8Unorm,
+                crate::residency::deferred_normal_format(pbr),
                 TextureFormat::Depth32Float,
             ],
             color_format,

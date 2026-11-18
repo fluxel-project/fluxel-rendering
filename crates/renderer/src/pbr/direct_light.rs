@@ -111,10 +111,9 @@ fn pbr_direct_light_view(
     return terms.diffuse + terms.specular;
 }
 
-fn pbr_gbuffer_is_covered(encoded_normal: vec3<f32>) -> bool {
-    // A unit normal cannot encode to the all-zero UNorm clear color:
-    // decoding it would yield (-1, -1, -1), outside the unit sphere.
-    return any(encoded_normal != vec3<f32>(0.0));
+fn pbr_gbuffer_is_covered(normal: vec3<f32>) -> bool {
+    // The all-zero clear value cannot be a unit surface normal.
+    return any(normal != vec3<f32>(0.0));
 }
 
 fn pbr_world_position_from_depth(

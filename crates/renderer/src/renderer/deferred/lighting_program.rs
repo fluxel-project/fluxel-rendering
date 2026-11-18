@@ -124,7 +124,14 @@ where
                 entries: {
                     let mut entries = vec![
                         sampled_texture(0, TextureSampleType::Float),
-                        sampled_texture(1, TextureSampleType::Float),
+                        sampled_texture(
+                            1,
+                            if pbr {
+                                TextureSampleType::UnfilterableFloat
+                            } else {
+                                TextureSampleType::Float
+                            },
+                        ),
                         sampled_texture(2, TextureSampleType::Depth),
                     ];
                     if effects {

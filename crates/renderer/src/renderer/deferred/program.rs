@@ -191,7 +191,9 @@ where
                     Some(color_target_with_format(
                         crate::residency::deferred_albedo_format(pbr),
                     )),
-                    Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
+                    Some(color_target_with_format(
+                        crate::residency::deferred_normal_format(pbr),
+                    )),
                     Some(color_target_with_format(TextureFormat::Rgba16Float)),
                 ]
             } else {
@@ -199,7 +201,9 @@ where
                     Some(color_target_with_format(
                         crate::residency::deferred_albedo_format(pbr),
                     )),
-                    Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
+                    Some(color_target_with_format(
+                        crate::residency::deferred_normal_format(pbr),
+                    )),
                 ]
             },
             primitive,

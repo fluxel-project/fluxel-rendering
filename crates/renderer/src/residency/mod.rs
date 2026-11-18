@@ -14,7 +14,7 @@ mod forward;
 pub(crate) use deferred::allocate_deferred_scene_color;
 pub(crate) use deferred::{
     DeferredDraw, DeferredFrame, DeferredPublication, DeferredSurfaceFrame,
-    allocate_deferred_scene_color_desc, deferred_albedo_format,
+    allocate_deferred_scene_color_desc, deferred_albedo_format, deferred_normal_format,
     deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects,
 };
 pub(crate) use environment::EnvironmentFrameOwner;

@@ -238,9 +238,9 @@ PBR uses a linear RGBA16Float base-color/metallic attachment, preserving
 nonnegative base-color values above one up to the format's representable range.
 Unlit uses the RGBA8 attachment. Format admission checks the actual sampled
 and render-attachment usages. Pipeline and frame reuse consume that format.
-The normal/roughness attachment remains RGBA8. The lighting output is still
-RGBA8, so the wider G-buffer preserves input to lighting while HDR output
-requires the later output-composition work.
+The PBR normal/roughness attachment stores signed world normals and perceptual
+roughness as RGBA32Float. The lighting pass uses unfiltered pixel loads and
+consumes the stored values directly. Unlit retains its RGBA8 normal attachment.
 
 Each render view owns one directional light for the built-in PBR shaders.
 The constructor accepts the world-space emitted ray direction, linear diffuse
@@ -253,8 +253,8 @@ values.
 
 Deferred geometry and Forward overlays compare depth with LessEqual. The
 Deferred lighting pass distinguishes coverage from the cleared G-buffer.
-Unlit writes an explicit normal alpha marker. PBR reserves the all-zero
-encoded normal RGB for the clear value. This preserves covered far-plane
+Unlit writes an explicit normal alpha marker. PBR reserves the zero normal
+vector for the clear value. This preserves covered far-plane
 fragments even when their depth equals the clear value.
 
 Effects selection is frame-wide. If any material needs effects, every draw
