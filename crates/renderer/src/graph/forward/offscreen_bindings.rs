@@ -220,6 +220,10 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 output.layout,
             ));
         }
+        if let Some(terminal) = self.oit.as_ref().and_then(|oit| oit.hdr_readback) {
+            let output = frame.frame.output.as_ref().ok_or(Error::InvalidState)?;
+            terminal.append_binding(output, &mut textures);
+        }
         if let Some(input) = oit {
             let product = self.oit.as_ref().ok_or(Error::InvalidState)?;
             for (slots, side) in product.slots.ping_pong.iter().zip(&input.owners.ping_pong) {

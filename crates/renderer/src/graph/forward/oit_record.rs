@@ -208,6 +208,57 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         )
     }
 
+    pub(crate) fn record_hdr_oit_composite(
+        &self,
+        device: &Device<B>,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+        input: &ForwardOitInput<'_, B>,
+        composite: &SurfaceCompositeOwner<B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        self.validate_frame_with_oit(frame, input, None)?;
+        let product = self.oit.as_ref().ok_or(Error::InvalidState)?;
+        let terminal = product.hdr_readback.ok_or(Error::InvalidState)?;
+        terminal.record(
+            device,
+            &self.bindings_with_oit(frame, input, None)?,
+            encoder,
+            product.slots.output,
+            input.output.instance,
+            frame,
+            composite,
+        )
+    }
+
+    pub(crate) fn record_hdr_oit_readback(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+        input: &ForwardOitInput<'_, B>,
+    ) -> Result<fluxel_rhi::api::ReadbackTicket<B>>
+    where
+        B: ReadbackBackend,
+    {
+        self.validate_frame_with_oit(frame, input, None)?;
+        let terminal = self
+            .oit
+            .as_ref()
+            .and_then(|product| product.hdr_readback)
+            .ok_or(Error::InvalidState)?;
+        let mut slots = self.record_slots();
+        slots.target_slot = terminal.output_slot;
+        shared_record::record_readback(
+            &slots,
+            terminal.readback_pass,
+            &self.bindings_with_oit(frame, input, None)?,
+            encoder,
+            frame,
+        )
+    }
+
     pub(crate) fn record_oit_surface_composite(
         &self,
         device: &Device<B>,

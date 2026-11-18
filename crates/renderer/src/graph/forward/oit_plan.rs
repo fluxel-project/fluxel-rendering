@@ -18,6 +18,10 @@ pub(super) struct ForwardOitPlan {
     pub(super) rounds: NonZeroU32,
     pub(super) fallback: Option<GraphPass>,
     pub(super) surface: Option<OitSurfaceTarget>,
+    /// Optional display-encoded offscreen terminal for a linear OIT product.
+    /// The source remains the last OIT output version, including any excluded
+    /// sorted draws, rather than the opaque Forward target.
+    pub(super) hdr_readback: Option<super::hdr_output::HdrReadbackTerminal>,
 }
 
 impl ForwardOitPlan {
@@ -75,6 +79,21 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         )
     }
 
+    pub(crate) fn declare_hdr_oit_contribution<C>(
+        device: &Device<B>,
+        frame: &ForwardFrame<B>,
+        input: &ForwardOitInput<'_, B>,
+        contribute: C,
+    ) -> std::result::Result<
+        super::oit_declaration::OffscreenForwardOitDeclaration,
+        ForwardPlanBuildError,
+    >
+    where
+        C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+    {
+        super::oit_declaration::declare_hdr_with_contribution(device, frame, input, contribute)
+    }
+
     pub(crate) fn compile_declared_oit(
         device: &Device<B>,
         id: PlanId,
@@ -110,9 +129,9 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         {
             return Err(Error::InvalidState);
         }
-        match (product.surface, image) {
-            (None, None) => {}
-            (Some(surface), Some(image)) => {
+        match (product.surface, product.hdr_readback, image) {
+            (None, None, None) | (None, Some(_), None) => {}
+            (Some(surface), None, Some(image)) => {
                 if image.device() != self.id.device {
                     return Err(Error::WrongDevice);
                 }
@@ -174,6 +193,42 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             return Err(Error::InvalidState);
         }
         Ok(self.readback_step())
+    }
+
+    pub(crate) fn oit_hdr_composite_step(&self) -> Result<StepId> {
+        let terminal = self
+            .oit
+            .as_ref()
+            .and_then(|product| product.hdr_readback)
+            .ok_or(Error::InvalidState)?;
+        self.execution
+            .logical()
+            .passes()
+            .iter()
+            .position(|pass| *pass == terminal.composite_pass)
+            .map(|index| StepId {
+                plan: self.id,
+                index: u32::try_from(index).expect("compiled pass index fits u32"),
+            })
+            .ok_or(Error::InvalidState)
+    }
+
+    pub(crate) fn oit_hdr_readback_step(&self) -> Result<StepId> {
+        let terminal = self
+            .oit
+            .as_ref()
+            .and_then(|product| product.hdr_readback)
+            .ok_or(Error::InvalidState)?;
+        self.execution
+            .logical()
+            .passes()
+            .iter()
+            .position(|pass| *pass == terminal.readback_pass)
+            .map(|index| StepId {
+                plan: self.id,
+                index: u32::try_from(index).expect("compiled pass index fits u32"),
+            })
+            .ok_or(Error::InvalidState)
     }
 
     pub(crate) fn oit_present_step(&self) -> Result<StepId> {

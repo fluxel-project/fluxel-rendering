@@ -143,6 +143,7 @@ where
             rounds: input.rounds,
             fallback,
             surface: None,
+            hdr_readback: None,
         },
     })
 }

@@ -84,7 +84,11 @@ where
                 crate::ForwardDepthMode::Depth32LessEqualWrite,
                 assets,
                 None,
-                TextureFormat::Rgba8Unorm,
+                if self.output_processing().is_some() {
+                    TextureFormat::Rgba16Float
+                } else {
+                    TextureFormat::Rgba8Unorm
+                },
                 preparation_started,
                 None,
                 true,
@@ -112,14 +116,20 @@ where
                 &mut fluxel_shader::ShaderComposer::new(),
             )
             .await?;
-        let target = match surface {
+        let (target, hdr_composite) = match surface {
             Some(image) => {
                 let composite = self
                     .oit_surface_composite_owner(&oit.output, extent, &image)
                     .await?;
-                OitExecutionTarget::Surface { image, composite }
+                (OitExecutionTarget::Surface { image, composite }, None)
             }
-            None => OitExecutionTarget::Readback,
+            None if frame.frame.target_desc.format == TextureFormat::Rgba16Float => {
+                let composite = self
+                    .oit_offscreen_composite_owner(&oit.output, extent, TextureFormat::Rgba8Unorm)
+                    .await?;
+                (OitExecutionTarget::Readback, Some(composite))
+            }
+            None => (OitExecutionTarget::Readback, None),
         };
         let preparation_elapsed_ns = preparation_started.elapsed().as_nanos();
         let result = self
@@ -133,6 +143,7 @@ where
                 config.rounds(),
                 assembled.batch_stats,
                 target,
+                hdr_composite,
                 contribute,
             )
             .await;

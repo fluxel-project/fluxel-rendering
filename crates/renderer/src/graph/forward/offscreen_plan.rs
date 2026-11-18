@@ -116,6 +116,8 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                     expected.push(*composite_pass);
                 }
             }
+        } else if let Some(terminal) = oit.as_ref().and_then(|product| product.hdr_readback) {
+            expected.extend([terminal.composite_pass, terminal.readback_pass]);
         } else {
             expected.push(declaration.readback_pass);
         }

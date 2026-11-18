@@ -28,6 +28,7 @@ where
         rounds: NonZeroU32,
         batch_stats: crate::preparation::ForwardBatchStats,
         target: OitExecutionTarget<B>,
+        hdr_composite: Option<SurfaceCompositeOwner<B>>,
         contribute: C,
     ) -> std::result::Result<Submission, RendererError>
     where
@@ -59,33 +60,40 @@ where
             peel_count,
             rounds,
         };
-        let (mut present, composite) = match target {
+        let (mut present, surface_composite) = match target {
             OitExecutionTarget::Readback => (None, None),
             OitExecutionTarget::Surface { image, composite } => {
                 (Some(PresentBinding::new(image)), Some(composite))
             }
         };
         let image = present.as_ref().map(PresentBinding::image);
-        if let (Some(image), Some(composite)) = (image, composite.as_ref()) {
+        if let (Some(image), Some(composite)) = (image, surface_composite.as_ref()) {
             composite.validate_for(&self.device, image)?;
             if composite.target_instance() != oit.output.instance {
                 return Err(Error::InvalidState.into());
             }
         }
-        let declaration = match image {
-            Some(image) => crate::graph::ForwardPlan::declare_surface_oit_contribution(
+        let declaration = match (image, hdr_composite.as_ref()) {
+            (Some(image), None) => crate::graph::ForwardPlan::declare_surface_oit_contribution(
                 &self.device,
                 &frame,
                 &input,
                 image,
                 contribute,
             ),
-            None => crate::graph::ForwardPlan::declare_with_oit_contribution(
+            (None, Some(_)) => crate::graph::ForwardPlan::declare_hdr_oit_contribution(
                 &self.device,
                 &frame,
                 &input,
                 contribute,
             ),
+            (None, None) => crate::graph::ForwardPlan::declare_with_oit_contribution(
+                &self.device,
+                &frame,
+                &input,
+                contribute,
+            ),
+            _ => Err(Error::InvalidState.into()),
         }
         .map_err(|error| self.forward_plan_error("OIT graph declaration", error))?;
         let id = self.next_forward_plan_id()?;
@@ -115,6 +123,14 @@ where
         let commands = oit.commands(&frame, &draw_commands);
         let surface_steps = if image.is_some() {
             Some((plan.oit_surface_step()?, plan.oit_present_step()?))
+        } else {
+            None
+        };
+        let hdr_steps = if hdr_composite.is_some() {
+            Some((
+                plan.oit_hdr_composite_step()?,
+                plan.oit_hdr_readback_step()?,
+            ))
         } else {
             None
         };
@@ -160,8 +176,14 @@ where
         }
         let mut ticket = None;
         if recorded.is_ok() {
-            recorded = match (image, composite.as_ref(), surface_steps) {
-                (Some(image), Some(composite), Some((surface_step, present_step))) => {
+            recorded = match (
+                image,
+                surface_composite.as_ref(),
+                hdr_composite.as_ref(),
+                surface_steps,
+                hdr_steps,
+            ) {
+                (Some(image), Some(composite), None, Some((surface_step, present_step)), None) => {
                     operation = "OIT Surface composite recording";
                     let composite_result = execution.commands(surface_step, |encoder| {
                         plan.record_oit_surface_composite(
@@ -189,7 +211,28 @@ where
                         Err(error) => Err(error),
                     }
                 }
-                (None, None, None) => {
+                (None, None, Some(composite), None, Some((composite_step, readback_step))) => {
+                    operation = "OIT HDR output composite recording";
+                    execution
+                        .commands(composite_step, |encoder| {
+                            plan.record_hdr_oit_composite(
+                                &self.device,
+                                encoder,
+                                &frame,
+                                &input,
+                                composite,
+                            )
+                        })
+                        .and_then(|()| {
+                            operation = "OIT HDR readback recording";
+                            execution.commands(readback_step, |encoder| {
+                                ticket =
+                                    Some(plan.record_hdr_oit_readback(encoder, &frame, &input)?);
+                                Ok(())
+                            })
+                        })
+                }
+                (None, None, None, None, None) => {
                     operation = "OIT final readback recording";
                     execution.commands(plan.readback_step(), |encoder| {
                         ticket = Some(
@@ -205,7 +248,7 @@ where
         if recorded.is_ok() {
             operation = "OIT execution finalization";
         }
-        let workload = match composite {
+        let workload = match surface_composite {
             Some(composite) => super::PendingWork::ForwardOitSurface {
                 _frame: Box::new(frame),
                 _oit: Box::new(oit),
@@ -217,7 +260,7 @@ where
             None => super::PendingWork::Forward {
                 _frame: Box::new(frame),
                 _oit: Some(Box::new(oit)),
-                _composite: None,
+                _composite: hdr_composite,
                 publication,
                 plan,
                 extent,

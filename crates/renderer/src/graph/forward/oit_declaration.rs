@@ -18,7 +18,7 @@ where
     B: ResourceBackend,
     C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
 {
-    declare_inner(device, frame, input, None, contribute)
+    declare_inner(device, frame, input, None, false, contribute)
 }
 
 pub(super) fn declare_surface_with_contribution<B, C>(
@@ -41,7 +41,23 @@ where
     if image.extent() != frame.extent {
         return Err(Error::InvalidRange.into());
     }
-    declare_inner(device, frame, input, Some(image), contribute)
+    declare_inner(device, frame, input, Some(image), false, contribute)
+}
+
+pub(super) fn declare_hdr_with_contribution<B, C>(
+    device: &Device<B>,
+    frame: &ForwardFrame<B>,
+    input: &ForwardOitInput<'_, B>,
+    contribute: C,
+) -> std::result::Result<OffscreenForwardOitDeclaration, ForwardPlanBuildError>
+where
+    B: ResourceBackend,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+{
+    if frame.frame.target_desc.format != TextureFormat::Rgba16Float {
+        return Err(Error::InvalidState.into());
+    }
+    declare_inner(device, frame, input, None, true, contribute)
 }
 
 fn declare_inner<B, C>(
@@ -49,6 +65,7 @@ fn declare_inner<B, C>(
     frame: &ForwardFrame<B>,
     input: &ForwardOitInput<'_, B>,
     image: Option<&SurfaceImage<B>>,
+    hdr_readback: bool,
     mut contribute: C,
 ) -> std::result::Result<OffscreenForwardOitDeclaration, ForwardPlanBuildError>
 where
@@ -94,7 +111,7 @@ where
         output,
         mut oit,
     } = stages;
-    let (readback_pass, surface) = if let Some(image) = image {
+    let (readback_pass, surface, hdr_terminal) = if let Some(image) = image {
         let surface_target = prefix
             .graph
             .import_surface_texture(TextureDesc {
@@ -137,7 +154,19 @@ where
                 extent: frame.extent,
                 format: image.format(),
             }),
+            None,
         )
+    } else if hdr_readback {
+        let display = frame.frame.output.as_ref().ok_or(Error::InvalidState)?;
+        let terminal = super::hdr_output::declare_hdr_readback(
+            &mut prefix.graph,
+            output,
+            display,
+            prefix.readback,
+            spec.extent,
+            spec.readback_row_pitch,
+        )?;
+        (terminal.readback_pass, None, Some(terminal))
     } else {
         let readback_len = u64::from(spec.readback_row_pitch)
             .checked_mul(u64::from(spec.extent[1]))
@@ -162,9 +191,10 @@ where
                 Ok(())
             })
             .map_err(|_| Error::InvalidState)?;
-        (readback, None)
+        (readback, None, None)
     };
     oit.surface = surface;
+    oit.hdr_readback = hdr_terminal;
     Ok(OffscreenForwardOitDeclaration {
         oit,
         base: OffscreenForwardDeclaration {

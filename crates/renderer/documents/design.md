@@ -336,6 +336,9 @@ Deferred frames without a G-buffer prefix use this same Forward route. The
 terminal pipeline, sampling group, scene and destination owners remain alive
 through covering completion, including recording or presentation failure
 where earlier commands may have been accepted.
+Forward peeling applies that terminal to the final resolved color version,
+after the excluded sorted draws. The opaque attachment and intermediate
+peeling colors stay in the linear domain.
 Ordinary Forward capture retains the linear format through producer sampling
 and receiver composition. The receiver owns the terminal color conversion.
 This processing targets SDR sRGB presentation. Native HDR display transfer
