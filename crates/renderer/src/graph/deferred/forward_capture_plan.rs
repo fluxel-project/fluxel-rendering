@@ -210,6 +210,10 @@ fn namespace_passes(declaration: &DeferredDeclaration) -> Vec<GraphPass> {
     if let Some(pass) = declaration.deformation_pass {
         passes.push(pass);
     }
-    passes.extend([declaration.geometry_pass, declaration.lighting_pass]);
+    passes.push(declaration.geometry_pass);
+    if let Some(pass) = declaration.resolve_pass {
+        passes.push(pass);
+    }
+    passes.push(declaration.lighting_pass);
     passes
 }

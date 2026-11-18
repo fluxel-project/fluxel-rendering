@@ -1,7 +1,7 @@
 //! Actual Surface owner validation and geometry footprints.
 use super::declaration_validation::{
-    matches_gbuffer_template, matches_scene_color_template, validate_deformation, validate_draw_uniform_ranges,
-    validate_resident_uploads,
+    matches_gbuffer_template, matches_scene_color_template, validate_deformation,
+    validate_draw_uniform_ranges, validate_resident_uploads,
 };
 use super::*;
 
@@ -92,6 +92,51 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
             return Err(Error::InvalidRange);
         }
     }
+    if let Some(msaa) = &frame.msaa {
+        if msaa.pipeline.device() != device.id()
+            || msaa.group.device() != device.id()
+            || msaa
+                .gbuffer
+                .iter()
+                .zip([
+                    crate::residency::deferred_albedo_format(frame.pbr),
+                    crate::residency::deferred_normal_format(frame.pbr),
+                    TextureFormat::Depth32Float,
+                ])
+                .any(|(texture, format)| {
+                    texture.texture.device() != device.id()
+                        || texture.view.device() != device.id()
+                        || texture.desc.format != format
+                        || texture.desc.extent != [frame.extent[0], frame.extent[1], 1]
+                        || texture.desc.samples <= 1
+                        || !texture.desc.usage.contains(
+                            TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING,
+                        )
+                })
+            || msaa.gbuffer[0].desc.samples != msaa.gbuffer[1].desc.samples
+            || msaa.gbuffer[0].desc.samples != msaa.gbuffer[2].desc.samples
+            || matches!(
+                (&frame.effects, &msaa.effects),
+                (Some(_), None) | (None, Some(_))
+            )
+        {
+            return Err(Error::InvalidRange);
+        }
+        if let Some(effects) = &msaa.effects {
+            if effects.texture.device() != device.id()
+                || effects.view.device() != device.id()
+                || effects.desc.format != TextureFormat::Rgba16Float
+                || effects.desc.extent != [frame.extent[0], frame.extent[1], 1]
+                || effects.desc.samples != msaa.gbuffer[0].desc.samples
+                || !effects
+                    .desc
+                    .usage
+                    .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING)
+            {
+                return Err(Error::InvalidRange);
+            }
+        }
+    }
     if !matches_scene_color_template(&frame.scene_color.desc, frame.extent) {
         return Err(Error::InvalidRange);
     }
@@ -112,9 +157,9 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
             device.capabilities().limits.uniform_offset_alignment,
         )?;
         if draw
-                .textures
-                .iter()
-                .any(|texture| *texture >= frame.resident.textures.len())
+            .textures
+            .iter()
+            .any(|texture| *texture >= frame.resident.textures.len())
         {
             return Err(Error::InvalidRange);
         }

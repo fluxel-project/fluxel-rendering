@@ -18,7 +18,9 @@ const DEFORMATION_PRODUCT: u8 = 4;
 type DeferredPhaseDeclaration = (
     Option<GraphPass>,
     GraphPass,
+    Option<GraphPass>,
     [super::super::definition::TextureHandle; 3],
+    Option<super::super::definition::TextureHandle>,
     GraphPass,
     Option<super::super::definition::TextureHandle>,
 );
@@ -76,10 +78,13 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) specular_mip_levels: Option<u32>,
     pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
     pub(super) effects: Option<super::super::definition::TextureHandle>,
+    pub(super) msaa_gbuffer: Option<[super::super::definition::TextureHandle; 3]>,
+    pub(super) msaa_effects: Option<super::super::definition::TextureHandle>,
     pub(super) target: Option<super::super::definition::TextureHandle>,
     pub(super) deformation: Option<DeferredDeformationGraph>,
     pub(super) deformation_pass: Option<(GraphPass, super::super::definition::BufferHandle)>,
     pub(super) geometry: Option<(GraphPass, [super::super::definition::TextureHandle; 3])>,
+    pub(super) resolve: Option<GraphPass>,
     pub(super) lighting: Option<(GraphPass, Option<super::super::definition::TextureHandle>)>,
 }
 
@@ -180,8 +185,8 @@ impl DeferredPhaseDriver<'_> {
         }
         let uniform = self.uniform;
         let materials = self.materials.clone();
-        let gbuffer = self.gbuffer;
-        let effects = self.effects;
+        let gbuffer = self.msaa_gbuffer.unwrap_or(self.gbuffer);
+        let effects = self.msaa_effects.or(self.effects);
         let (pass, output) = self
             .graph
             .add_pass("deferred-geometry", |pass| {
@@ -205,7 +210,11 @@ impl DeferredPhaseDriver<'_> {
                 geometry.finish().map_err(|_| GraphError::InvalidRange)
             })
             .map_err(|_| ())?;
-        self.effects = output.1;
+        if self.msaa_gbuffer.is_some() {
+            self.msaa_effects = output.1;
+        } else {
+            self.effects = output.1;
+        }
         self.geometry = Some((pass, output.0));
         Ok(())
     }
@@ -216,7 +225,7 @@ impl DeferredPhaseDriver<'_> {
             &mut DeferredLightingPass<'pass, 'builder>,
         ) -> std::result::Result<(), ()>,
     {
-        let Some((geometry, gbuffer)) = self.geometry else {
+        let Some((geometry, raster_gbuffer)) = self.geometry else {
             return Err(());
         };
         if self.lighting.is_some() {
@@ -228,7 +237,25 @@ impl DeferredPhaseDriver<'_> {
         let specular_brdf_lut = self.specular_brdf_lut;
         let specular_view_uniform = self.specular_view_uniform;
         let specular_mip_levels = self.specular_mip_levels;
-        let effects = self.effects;
+        let (dependency, gbuffer, effects) = if self.msaa_gbuffer.is_some() {
+            let resolved_gbuffer = self.gbuffer;
+            let resolved_effects = self.effects;
+            let msaa_effects = self.msaa_effects;
+            let (resolve, output) = super::msaa_resolve::declare(
+                self.graph,
+                geometry,
+                raster_gbuffer,
+                msaa_effects,
+                resolved_gbuffer,
+                resolved_effects,
+            )?;
+            self.resolve = Some(resolve);
+            self.gbuffer = output.0;
+            self.effects = output.1;
+            (resolve, self.gbuffer, self.effects)
+        } else {
+            (geometry, raster_gbuffer, self.effects)
+        };
         let view = self
             .lighting_view
             .clone()
@@ -236,7 +263,7 @@ impl DeferredPhaseDriver<'_> {
         let (pass, output) = self
             .graph
             .add_pass("deferred-lighting", |pass| {
-                pass.depends_on(geometry)?;
+                pass.depends_on(dependency)?;
                 let mut lighting = DeferredLightingPass {
                     pass,
                     view,
@@ -263,9 +290,17 @@ impl DeferredPhaseDriver<'_> {
         if self.deformation.is_some() != deformation.is_some() {
             return Err(());
         }
-        let (geometry, gbuffer) = self.geometry.ok_or(())?;
+        let (geometry, _) = self.geometry.ok_or(())?;
         let (lighting, target) = self.lighting.ok_or(())?;
-        Ok((deformation, geometry, gbuffer, lighting, target))
+        Ok((
+            deformation,
+            geometry,
+            self.resolve,
+            self.gbuffer,
+            self.effects,
+            lighting,
+            target,
+        ))
     }
 }
 

@@ -1,14 +1,16 @@
 //! Fixed raster state shared by realized Deferred programs.
 use fluxel_rhi::api::*;
 
-pub(super) fn color_target_with_format(format: TextureFormat) -> ColorTargetState {
+pub(in crate::renderer::deferred) fn color_target_with_format(
+    format: TextureFormat,
+) -> ColorTargetState {
     ColorTargetState {
         format,
         blend: None,
         write_mask: 0xf,
     }
 }
-pub(super) fn opaque_triangles() -> PrimitiveState {
+pub(in crate::renderer::deferred) fn opaque_triangles() -> PrimitiveState {
     PrimitiveState {
         topology: PrimitiveTopology::TriangleList,
         strip_index_format: None,
@@ -27,14 +29,23 @@ pub(super) fn surface_triangles(surface: crate::renderer::RasterSurfaceState) ->
     surface.apply_to(&mut primitive);
     primitive
 }
-pub(super) fn single_sample() -> MultisampleState {
+pub(in crate::renderer::deferred) fn single_sample() -> MultisampleState {
+    multisample(1)
+}
+
+/// Fixed multisample state for Deferred geometry attachments.
+pub(super) fn multisample(count: u32) -> MultisampleState {
     MultisampleState {
-        count: 1,
-        mask: u64::from(u32::MAX),
+        count,
+        mask: if count > 32 {
+            u64::MAX
+        } else {
+            u64::from(u32::MAX)
+        },
         alpha_to_coverage_enabled: false,
     }
 }
-pub(super) fn depth_state() -> DepthStencilState {
+pub(in crate::renderer::deferred) fn depth_state() -> DepthStencilState {
     let stencil = StencilFaceState {
         compare: CompareFunction::Always,
         fail: StencilOperation::Keep,

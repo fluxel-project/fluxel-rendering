@@ -85,8 +85,8 @@ pub(super) fn validate_owners<B: ResourceBackend>(
                 let refraction = owner.desc.mip_levels > 1;
                 let invalid = if refraction {
                     let expected = crate::renderer::refraction_capture_desc(desc);
-                    let duplicate_refraction = refraction_capture
-                        .is_some_and(|previous| previous != index);
+                    let duplicate_refraction =
+                        refraction_capture.is_some_and(|previous| previous != index);
                     refraction_capture = Some(index);
                     !scene_refraction
                         || duplicate_refraction

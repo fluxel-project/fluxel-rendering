@@ -7,7 +7,7 @@ use fluxel_rhi::api::{
 use crate::residency::{
     DeferredSurfaceFrame, SurfaceForwardFrameBuffers, allocate_deferred_scene_color_desc,
     deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects,
-    plan_surface_forward_frame,
+    plan_deferred_msaa_with_effects, plan_surface_forward_frame,
 };
 use crate::{ForwardDrawInput, PreparedMaterial};
 
@@ -110,6 +110,14 @@ where
         let gbuffer_plan =
             plan_deferred_gbuffer_with_effects(&self.device, input.extent(), pbr, effects)
                 .map_err(|error| self.observe_rhi_error(error))?;
+        let msaa_plan = plan_deferred_msaa_with_effects(
+            &self.device,
+            input.extent(),
+            pbr,
+            effects,
+            self.deferred_sample_count(),
+        )
+        .map_err(|error| self.observe_rhi_error(error))?;
         for desc in [&frame_plan.upload_desc, &frame_plan.uniform_desc] {
             if let Support::Unsupported(reason) = self.device.buffer_support(desc) {
                 return Err(self.observe_rhi_error(Error::Unsupported(reason)));
@@ -178,6 +186,7 @@ where
             .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color = allocate_deferred_scene_color_desc(&self.device, scene_color_desc)
             .map_err(|error| self.observe_rhi_error(error))?;
+        let msaa = self.realize_deferred_msaa(msaa_plan, pbr, effects).await?;
         let scene_color_sampler_desc = crate::renderer::forward::default_material_sampler();
         let scene_color_sampler = self
             .device
@@ -308,6 +317,7 @@ where
             specular,
             gbuffer,
             effects: effects_attachment,
+            msaa,
             scene_color,
             scene_color_sampler,
             scene_color_sampler_desc,

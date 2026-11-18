@@ -102,6 +102,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             specular_brdf_lut,
             gbuffer,
             effects,
+            msaa_gbuffer,
+            msaa_effects,
             target,
             scene_color,
             surface_target,
@@ -334,7 +336,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         }
 
         let draws = frame.draw_graph_data()?;
-        let (deformation_pass, geometry_pass, gbuffer, lighting_pass, scene_color) = {
+        let (
+            deformation_pass,
+            geometry_pass,
+            resolve_pass,
+            gbuffer,
+            effects,
+            lighting_pass,
+            scene_color,
+        ) = {
             let mut driver = DeferredPhaseDriver {
                 graph: &mut graph,
                 upload: upload_pass,
@@ -350,10 +360,13 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 specular_mip_levels: frame.specular.map(|owner| owner.radiance.desc.mip_levels),
                 gbuffer: [gbuffer[0], gbuffer[1], gbuffer[2]],
                 effects,
+                msaa_gbuffer: msaa_gbuffer.map(|items| [items[0], items[1], items[2]]),
+                msaa_effects,
                 target: scene_color,
                 deformation,
                 deformation_pass: None,
                 geometry: None,
+                resolve: None,
                 lighting: None,
             };
             let mut context = crate::DeferredPhaseContext::new(&mut driver);
@@ -368,6 +381,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             mip_generation,
             deformation_pass,
             geometry_pass,
+            resolve_pass,
             lighting_pass,
             scene_color: scene_color.ok_or(Error::InvalidState)?,
             resident_upload,
@@ -383,6 +397,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             specular_brdf_lut,
             gbuffer,
             effects,
+            msaa_gbuffer,
+            msaa_effects,
             surface_target,
             target,
             readback,

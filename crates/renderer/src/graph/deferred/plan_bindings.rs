@@ -163,6 +163,36 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                             )
                         }),
                 )
+                .chain(
+                    self.msaa_gbuffer_slots
+                        .into_iter()
+                        .flatten()
+                        .zip(frame.msaa.iter().flat_map(|msaa| msaa.gbuffer.iter()))
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.msaa_effects_slot
+                        .zip(frame.msaa.as_ref().and_then(|msaa| msaa.effects.as_ref()))
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
                 .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
                     |(slot, environment)| {
                         BoundTexture::new(

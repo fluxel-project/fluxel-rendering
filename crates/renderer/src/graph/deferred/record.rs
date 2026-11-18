@@ -213,23 +213,33 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 )?;
             }
         }
+        let raster_gbuffer_slots = self.msaa_gbuffer_slots.unwrap_or(self.gbuffer_slots);
+        let raster_effects_slot = self.msaa_effects_slot.or(self.effects_slot);
+        let raster_gbuffer = frame
+            .msaa
+            .map(|msaa| &msaa.gbuffer)
+            .unwrap_or(frame.gbuffer);
+        let raster_effects = frame
+            .msaa
+            .and_then(|msaa| msaa.effects.as_ref())
+            .or(frame.effects);
         pass.texture(
-            self.gbuffer_slots[0],
+            raster_gbuffer_slots[0],
             whole_color(),
             AccessKind::Write,
             color_write(),
         )?;
         pass.texture(
-            self.gbuffer_slots[1],
+            raster_gbuffer_slots[1],
             whole_color(),
             AccessKind::Write,
             color_write(),
         )?;
-        if let (Some(slot), Some(_)) = (self.effects_slot, frame.effects) {
+        if let (Some(slot), Some(_)) = (raster_effects_slot, raster_effects) {
             pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
         }
         pass.texture(
-            self.gbuffer_slots[2],
+            raster_gbuffer_slots[2],
             whole_depth(),
             AccessKind::Write,
             depth_write(),
@@ -237,19 +247,19 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         pass.transition(encoder)?;
         let mut colors = vec![
             Some(ColorAttachment {
-                view: AttachmentView::Texture(&frame.gbuffer[0].view),
+                view: AttachmentView::Texture(&raster_gbuffer[0].view),
                 resolve_target: None,
                 load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
                 store: StoreOp::Store,
             }),
             Some(ColorAttachment {
-                view: AttachmentView::Texture(&frame.gbuffer[1].view),
+                view: AttachmentView::Texture(&raster_gbuffer[1].view),
                 resolve_target: None,
                 load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
                 store: StoreOp::Store,
             }),
         ];
-        if let Some(effects) = frame.effects {
+        if let Some(effects) = raster_effects {
             colors.push(Some(ColorAttachment {
                 view: AttachmentView::Texture(&effects.view),
                 resolve_target: None,
@@ -258,7 +268,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             }));
         }
         let depth_stencil = DepthStencilAttachment {
-            view: AttachmentView::Texture(&frame.gbuffer[2].view),
+            view: AttachmentView::Texture(&raster_gbuffer[2].view),
             depth: Some((LoadOp::Clear(1.0), StoreOp::Store)),
             stencil: None,
             depth_read_only: false,

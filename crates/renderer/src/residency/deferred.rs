@@ -55,7 +55,10 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
 impl<B: ResourceBackend> DeferredDraw<B> {
     pub(crate) fn pipelines_on(&self, device: DeviceId) -> bool {
         self.pipeline.device() == device
-            && self.preliminary_pipeline.as_ref().is_none_or(|pipeline| pipeline.device() == device)
+            && self
+                .preliminary_pipeline
+                .as_ref()
+                .is_none_or(|pipeline| pipeline.device() == device)
     }
 }
 
@@ -87,6 +90,8 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
+    /// Optional multisample G-buffer inputs and their resolve program.
+    pub(crate) msaa: Option<DeferredMsaa<B>>,
     /// Frame-local lighting output. It is sampled by the composite pass before
     /// the final readback target is written.
     pub(crate) scene_color: ForwardTexture<B>,
@@ -121,6 +126,8 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
+    /// Optional multisample G-buffer inputs and their resolve program.
+    pub(crate) msaa: Option<DeferredMsaa<B>>,
     pub(crate) scene_color: ForwardTexture<B>,
     pub(crate) scene_color_sampler: fluxel_rhi::api::Sampler<B>,
     pub(crate) scene_color_sampler_desc: SamplerDesc,
@@ -133,6 +140,17 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) composite_group: BindGroup<B>,
     pub(crate) extent: [u32; 2],
     pub(crate) color_format: TextureFormat,
+}
+
+/// Multisample G-buffer owners retained through the Deferred frame completion.
+///
+/// The ordinary frame G-buffer remains single-sample and is populated by this
+/// resolve program before lighting. This owner has no alternate Graph path.
+pub(crate) struct DeferredMsaa<B: ResourceBackend> {
+    pub(crate) gbuffer: [ForwardTexture<B>; 3],
+    pub(crate) effects: Option<ForwardTexture<B>>,
+    pub(crate) pipeline: RasterPipeline<B>,
+    pub(crate) group: BindGroup<B>,
 }
 
 /// Validated, handle-free G-buffer allocation facts for one device and extent.
@@ -187,12 +205,22 @@ pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
     pbr: bool,
     effects: bool,
 ) -> Result<DeferredGbufferPlan> {
+    plan_gbuffer(device, extent, pbr, effects, 1)
+}
+
+fn plan_gbuffer<B: ResourceBackend>(
+    device: &Device<B>,
+    extent: [u32; 2],
+    pbr: bool,
+    effects: bool,
+    samples: u32,
+) -> Result<DeferredGbufferPlan> {
     validate_request(
         extent,
         device.capabilities().limits.max_color_attachments,
         effects,
     )?;
-    let descs = gbuffer_descs(extent, pbr);
+    let descs = gbuffer_descs(extent, pbr, samples);
     for desc in &descs {
         require_texture(device, desc)?;
     }
@@ -201,6 +229,7 @@ pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
             "fluxel deferred surface effects",
             extent,
             TextureFormat::Rgba16Float,
+            samples,
         )
     });
     if let Some(desc) = &effects {
@@ -211,6 +240,26 @@ pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
         descs,
         effects,
     })
+}
+
+/// Plans separate multisample G-buffer attachments for a later explicit
+/// resolve into the frame's single-sample G-buffer.
+///
+/// `None` preserves the existing single-sample path. Every admitted attachment
+/// carries the exact render-attachment and multisample-texture-binding usage
+/// needed by the resolve pass.
+pub(crate) fn plan_deferred_msaa_with_effects<B: ResourceBackend>(
+    device: &Device<B>,
+    extent: [u32; 2],
+    pbr: bool,
+    effects: bool,
+    samples: u32,
+) -> Result<Option<DeferredGbufferPlan>> {
+    match samples {
+        0 => Err(Error::InvalidRange),
+        1 => Ok(None),
+        _ => plan_gbuffer(device, extent, pbr, effects, samples).map(Some),
+    }
 }
 
 pub(crate) fn allocate_deferred_scene_color_desc<B: ResourceBackend>(
@@ -252,7 +301,7 @@ pub(crate) fn deferred_scene_color_desc_with_format(
     extent: [u32; 2],
     format: TextureFormat,
 ) -> TextureDesc {
-    gbuffer_desc("fluxel deferred scene color", extent, format)
+    gbuffer_desc("fluxel deferred scene color", extent, format, 1)
 }
 
 fn validate_request(extent: [u32; 2], max_color_attachments: u32, effects: bool) -> Result<()> {
@@ -285,19 +334,30 @@ pub(crate) fn deferred_normal_format(pbr: bool) -> TextureFormat {
     }
 }
 
-fn gbuffer_descs(extent: [u32; 2], pbr: bool) -> [TextureDesc; 3] {
+fn gbuffer_descs(extent: [u32; 2], pbr: bool, samples: u32) -> [TextureDesc; 3] {
     [
         gbuffer_desc(
             "fluxel deferred albedo",
             extent,
             deferred_albedo_format(pbr),
+            samples,
         ),
-        gbuffer_desc("fluxel deferred normal", extent, deferred_normal_format(pbr)),
-        gbuffer_desc("fluxel deferred depth", extent, TextureFormat::Depth32Float),
+        gbuffer_desc(
+            "fluxel deferred normal",
+            extent,
+            deferred_normal_format(pbr),
+            samples,
+        ),
+        gbuffer_desc(
+            "fluxel deferred depth",
+            extent,
+            TextureFormat::Depth32Float,
+            samples,
+        ),
     ]
 }
 
-fn gbuffer_desc(label: &str, extent: [u32; 2], format: TextureFormat) -> TextureDesc {
+fn gbuffer_desc(label: &str, extent: [u32; 2], format: TextureFormat, samples: u32) -> TextureDesc {
     TextureDesc {
         label: Some(label.into()),
         dimension: TextureDimension::D2,
@@ -305,7 +365,7 @@ fn gbuffer_desc(label: &str, extent: [u32; 2], format: TextureFormat) -> Texture
         array_layers: 1,
         format,
         mip_levels: 1,
-        samples: 1,
+        samples,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING,
         view_formats: Vec::new(),
     }
@@ -313,7 +373,14 @@ fn gbuffer_desc(label: &str, extent: [u32; 2], format: TextureFormat) -> Texture
 
 fn require_texture<B: ResourceBackend>(device: &Device<B>, desc: &TextureDesc) -> Result<()> {
     match device.texture_support(desc) {
-        Support::Supported(_) => Ok(()),
+        Support::Supported(support)
+            if desc.samples == 1 || support.sample_counts.contains(&desc.samples) =>
+        {
+            Ok(())
+        }
+        Support::Supported(_) => Err(Error::Unsupported(
+            "Deferred multisample G-buffer attachment",
+        )),
         Support::Unsupported(reason) => Err(Error::Unsupported(reason)),
     }
 }

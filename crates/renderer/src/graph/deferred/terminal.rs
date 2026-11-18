@@ -101,6 +101,7 @@ pub(super) fn declare_terminal(
         mip_generation: prefix.mip_generation,
         deformation_pass: prefix.deformation_pass,
         geometry_pass: prefix.geometry_pass,
+        resolve_pass: prefix.resolve_pass,
         lighting_pass: prefix.lighting_pass,
         composite_pass,
         output,
@@ -121,6 +122,10 @@ pub(super) fn declare_terminal(
         specular_brdf_lut_slot: prefix.specular_brdf_lut.map(TextureSlot::from),
         gbuffer_slots: std::array::from_fn(|index| TextureSlot::from(prefix.gbuffer[index])),
         effects_slot: prefix.effects.map(TextureSlot::from),
+        msaa_gbuffer_slots: prefix
+            .msaa_gbuffer
+            .map(|items| items.map(TextureSlot::from)),
+        msaa_effects_slot: prefix.msaa_effects.map(TextureSlot::from),
         // This remains the lighting owner/version.  A final OIT source needs
         // its own actual owner, view, and composite binding before it can be
         // recorded; terminal selection alone must not retarget this slot.

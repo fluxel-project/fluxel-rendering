@@ -3,11 +3,11 @@
 use super::*;
 use crate::{
     graph::{
-        ForwardOitInput,
         forward::{
-            ForwardCaptureReceiver, ForwardReceiverTerminal, SharedResidentImports,
-            declare_receiver_after_deferred, declare_receiver_terminal,
+            declare_receiver_after_deferred, declare_receiver_terminal, ForwardCaptureReceiver,
+            ForwardReceiverTerminal, SharedResidentImports,
         },
+        ForwardOitInput,
     },
     residency::ForwardFrame,
 };

@@ -20,6 +20,7 @@ mod forward_capture_plan;
 mod forward_capture_record;
 mod hybrid_record;
 mod imports;
+mod msaa_resolve;
 mod oit_bindings;
 mod oit_declaration;
 mod oit_plan;
@@ -27,10 +28,12 @@ mod oit_record;
 mod phase;
 mod plan;
 mod plan_bindings;
+mod plan_steps;
 mod prefix;
 mod raster;
 mod record;
 mod record_lighting;
+mod record_msaa;
 mod record_view;
 mod reverse_capture_bindings;
 mod reverse_capture_declaration;
@@ -85,8 +88,8 @@ use super::{
         TextureAccessContract, TextureRange,
     },
     execution::{
-        BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution, FrameBindings,
-        binding_error,
+        binding_error, BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution,
+        FrameBindings,
     },
 };
 
@@ -105,6 +108,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     mip_generation: Vec<super::mip_generation::MipGenerationPass>,
     deformation_pass: Option<GraphPass>,
     geometry_pass: GraphPass,
+    resolve_pass: Option<GraphPass>,
     lighting_pass: GraphPass,
     composition_passes: Vec<GraphPass>,
     composite_pass: Option<GraphPass>,
@@ -122,6 +126,8 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     specular_brdf_lut_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
+    msaa_gbuffer_slots: Option<[TextureSlot; 3]>,
+    msaa_effects_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,
@@ -144,6 +150,7 @@ pub(crate) struct DeferredDeclaration {
     mip_generation: Vec<super::mip_generation::MipGenerationPass>,
     deformation_pass: Option<GraphPass>,
     geometry_pass: GraphPass,
+    resolve_pass: Option<GraphPass>,
     lighting_pass: GraphPass,
     composite_pass: Option<GraphPass>,
     output: DeferredOutputDeclaration,
@@ -160,6 +167,8 @@ pub(crate) struct DeferredDeclaration {
     specular_brdf_lut_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
+    msaa_gbuffer_slots: Option<[TextureSlot; 3]>,
+    msaa_effects_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,

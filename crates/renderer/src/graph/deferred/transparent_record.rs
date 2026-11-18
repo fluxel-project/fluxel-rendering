@@ -63,6 +63,13 @@ impl<B: ResourceBackend> DeferredTransparentPlan<B> {
                 .base
                 .record_geometry_with_bindings(encoder, opaque, &bindings);
         }
+        if self.base.resolve_pass == Some(pass) {
+            return self.base.record_resolve_with_bindings(
+                encoder,
+                super::record_view::DeferredRecordView::offscreen(opaque),
+                &bindings,
+            );
+        }
         if pass == self.base.lighting_pass {
             return self
                 .base
@@ -181,6 +188,14 @@ impl<B: ResourceBackend> DeferredTransparentPlan<B> {
         if pass == self.base.geometry_pass {
             self.base
                 .record_geometry_with_bindings(encoder, opaque, &bindings)?;
+            return Ok(None);
+        }
+        if self.base.resolve_pass == Some(pass) {
+            self.base.record_resolve_with_bindings(
+                encoder,
+                super::record_view::DeferredRecordView::offscreen(opaque),
+                &bindings,
+            )?;
             return Ok(None);
         }
         if pass == self.base.lighting_pass {

@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::graph::{
-    ForwardOitInput,
     execution::{merge_buffer_bindings, merge_texture_bindings},
+    ForwardOitInput,
 };
 use crate::residency::ForwardFrame;
 

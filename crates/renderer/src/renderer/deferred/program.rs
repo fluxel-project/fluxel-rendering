@@ -21,11 +21,12 @@ mod lighting_program;
 #[path = "program_cache.rs"]
 mod program_cache;
 #[path = "program_fixed.rs"]
-mod program_fixed;
+pub(super) mod program_fixed;
 #[path = "program_layout.rs"]
 mod program_layout;
 use program_fixed::{
-    color_target_with_format, depth_state, opaque_triangles, single_sample, surface_triangles,
+    color_target_with_format, depth_state, multisample, opaque_triangles, single_sample,
+    surface_triangles,
 };
 
 use program_layout::{ordinary_sampler, sampled_texture, uniform as uniform_entry};
@@ -82,6 +83,7 @@ where
                     pbr,
                     effects,
                     crate::renderer::raster_surface_state(input),
+                    self.deferred_sample_count(),
                 )
             })
             .collect();
@@ -101,6 +103,7 @@ where
         } else {
             64
         };
+        let multisample_count = self.deferred_sample_count();
         let key = program_cache::GbufferProgramKey::for_material(
             self.device.id(),
             prepared,
@@ -108,6 +111,7 @@ where
             pbr,
             effects,
             surface,
+            multisample_count,
         );
         if let Some(program) = self.deferred_programs.get_gbuffer(&key) {
             self.deferred_stats.gbuffer_program_hits += 1;
@@ -142,13 +146,14 @@ where
             ],
             required_features: artifact.requirements().names.iter().cloned().collect(),
         };
-        self.admit_deferred_shader(
+        self.admit_deferred_shader_with_samples(
             &descriptor,
             artifact
                 .requirements()
                 .naga_capabilities
                 .iter()
                 .map(|capability| capability.name()),
+            multisample_count,
         )?;
         let shader = self
             .device
@@ -208,25 +213,30 @@ where
             },
             primitive,
             depth_stencil: Some(depth_state()),
-            multisample: single_sample(),
+            multisample: multisample(multisample_count),
             multiview: None,
             cache: None,
         };
-        let preliminary_pipeline = if let Some(preliminary_primitive) =
-            surface.preliminary_primitive(primary_primitive)
-        {
-            Some(
-                self.device
-                    .raster_pipeline(pipeline_desc("Deferred G-buffer preliminary culling pipeline", preliminary_primitive))
-                    .await
-                    .map_err(|error| self.observe_rhi_error(error))?,
-            )
-        } else {
-            None
-        };
+        let preliminary_pipeline =
+            if let Some(preliminary_primitive) = surface.preliminary_primitive(primary_primitive) {
+                Some(
+                    self.device
+                        .raster_pipeline(pipeline_desc(
+                            "Deferred G-buffer preliminary culling pipeline",
+                            preliminary_primitive,
+                        ))
+                        .await
+                        .map_err(|error| self.observe_rhi_error(error))?,
+                )
+            } else {
+                None
+            };
         let pipeline = self
             .device
-            .raster_pipeline(pipeline_desc("Deferred G-buffer pipeline", primary_primitive))
+            .raster_pipeline(pipeline_desc(
+                "Deferred G-buffer pipeline",
+                primary_primitive,
+            ))
             .await
             .map_err(|error| self.observe_rhi_error(error))?;
         // Do not publish a partially realized program: every shader, layout,
@@ -347,10 +357,19 @@ where
         Ok(SceneColorCompositeProgram { pipeline, layout })
     }
 
-    fn admit_deferred_shader<'a>(
+    pub(in crate::renderer::deferred) fn admit_deferred_shader<'a>(
         &self,
         descriptor: &ShaderDesc,
         demands: impl IntoIterator<Item = &'a str>,
+    ) -> std::result::Result<(), RendererError> {
+        self.admit_deferred_shader_with_samples(descriptor, demands, 1)
+    }
+
+    fn admit_deferred_shader_with_samples<'a>(
+        &self,
+        descriptor: &ShaderDesc,
+        demands: impl IntoIterator<Item = &'a str>,
+        multisample_count: u32,
     ) -> std::result::Result<(), RendererError> {
         admission::admit(
             &demands.into_iter().map(str::to_owned).collect::<Vec<_>>(),
@@ -358,7 +377,7 @@ where
             PipelineCapabilityFacts {
                 multiview_views: None,
                 push_constant_bytes: 0,
-                multisample_count: 1,
+                multisample_count,
                 nonuniform: Default::default(),
             },
         )

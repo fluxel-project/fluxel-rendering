@@ -13,7 +13,7 @@ use fluxel_rhi::{
 
 use crate::{PreparedMaterial, preparation::VertexLayoutKey};
 
-use super::{GbufferProgram, LightingProgram};
+use super::{super::msaa::MsaaResolveProgram, GbufferProgram, LightingProgram};
 
 /// Complete fixed-function facts for one realized G-buffer program.
 ///
@@ -43,6 +43,7 @@ impl GbufferProgramKey {
         pbr: bool,
         effects: bool,
         surface: crate::renderer::RasterSurfaceState,
+        multisample_count: u32,
     ) -> Self {
         Self {
             device,
@@ -59,7 +60,7 @@ impl GbufferProgramKey {
                 crate::residency::deferred_normal_format(pbr),
             ],
             depth_format: TextureFormat::Depth32Float,
-            multisample_count: 1,
+            multisample_count,
             pbr,
             effects,
             surface,
@@ -111,6 +112,7 @@ impl LightingProgramKey {
 pub(crate) struct DeferredProgramCache<B: ResourceBackend> {
     gbuffer: HashMap<GbufferProgramKey, Arc<GbufferProgram<B>>>,
     lighting: HashMap<LightingProgramKey, Arc<LightingProgram<B>>>,
+    msaa_resolve: HashMap<(bool, bool), Arc<MsaaResolveProgram<B>>>,
 }
 
 impl<B: ResourceBackend> Default for DeferredProgramCache<B> {
@@ -118,6 +120,7 @@ impl<B: ResourceBackend> Default for DeferredProgramCache<B> {
         Self {
             gbuffer: HashMap::new(),
             lighting: HashMap::new(),
+            msaa_resolve: HashMap::new(),
         }
     }
 }
@@ -125,6 +128,23 @@ impl<B: ResourceBackend> Default for DeferredProgramCache<B> {
 impl<B: ResourceBackend> DeferredProgramCache<B> {
     pub(super) fn get_gbuffer(&self, key: &GbufferProgramKey) -> Option<Arc<GbufferProgram<B>>> {
         self.gbuffer.get(key).cloned()
+    }
+
+    pub(in crate::renderer::deferred) fn get_msaa_resolve(
+        &self,
+        pbr: bool,
+        effects: bool,
+    ) -> Option<Arc<MsaaResolveProgram<B>>> {
+        self.msaa_resolve.get(&(pbr, effects)).cloned()
+    }
+
+    pub(in crate::renderer::deferred) fn publish_msaa_resolve(
+        &mut self,
+        pbr: bool,
+        effects: bool,
+        program: Arc<MsaaResolveProgram<B>>,
+    ) {
+        self.msaa_resolve.insert((pbr, effects), program);
     }
 
     pub(super) fn get_lighting(&self, key: &LightingProgramKey) -> Option<Arc<LightingProgram<B>>> {
@@ -160,5 +180,6 @@ impl<B: ResourceBackend> DeferredProgramCache<B> {
     pub(crate) fn clear(&mut self) {
         self.gbuffer.clear();
         self.lighting.clear();
+        self.msaa_resolve.clear();
     }
 }

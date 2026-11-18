@@ -4,11 +4,36 @@
 //! transactions are the same as the offscreen route and the lease is recorded
 //! after that Graph has been compiled.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::surface_validate::validate_surface_inputs;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
+    pub(crate) fn surface_record_resolve(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredSurfaceFrame<B>,
+        image: &fluxel_rhi::api::SurfaceImage<B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        if image.device() != self.id.device {
+            return Err(Error::WrongDevice);
+        }
+        if !image.is_current() {
+            return Err(Error::SurfaceOutdated);
+        }
+        if image.extent() != frame.extent || image.format() != frame.color_format {
+            return Err(Error::InvalidRange);
+        }
+        let bindings = self.surface_bindings(frame, image)?;
+        self.record_resolve_with_bindings(
+            encoder,
+            super::record_view::DeferredRecordView::surface_with_image(frame, image),
+            &bindings,
+        )
+    }
     pub(crate) fn declare_surface_with<F>(
         device: &Device<B>,
         frame: &DeferredSurfaceFrame<B>,
@@ -43,6 +68,13 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.deformation_pass.is_some() != frame.deformation.is_some()
             || self.composite_pass.is_none()
             || self.scene_color_slot.is_none()
+            || self.msaa_gbuffer_slots.is_some() != frame.msaa.is_some()
+            || self.msaa_effects_slot.is_some()
+                != frame
+                    .msaa
+                    .as_ref()
+                    .and_then(|msaa| msaa.effects.as_ref())
+                    .is_some()
         {
             return Err(Error::InvalidState);
         }
@@ -218,6 +250,36 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                             )
                         }),
                 )
+                .chain(
+                    self.msaa_gbuffer_slots
+                        .into_iter()
+                        .flatten()
+                        .zip(frame.msaa.iter().flat_map(|msaa| msaa.gbuffer.iter()))
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.msaa_effects_slot
+                        .zip(frame.msaa.as_ref().and_then(|msaa| msaa.effects.as_ref()))
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
                 .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
                     |(slot, environment)| {
                         BoundTexture::new(
@@ -331,7 +393,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 sampled_read(),
             )?;
             pass.texture(lut, one_color_mip(0), AccessKind::Read, sampled_read())?;
-            pass.buffer(view_uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Read, uniform_read())?;
+            pass.buffer(
+                view_uniform,
+                0..SPECULAR_VIEW_BYTES,
+                AccessKind::Read,
+                uniform_read(),
+            )?;
         }
         if let Some(range) = &frame.lighting_view {
             pass.buffer(

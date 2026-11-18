@@ -4,7 +4,7 @@ use fluxel_rhi::api::{TextureDimension, TextureFormat, TextureUsage};
 
 #[test]
 fn gbuffer_descriptors_require_two_sampled_attachments_and_depth() {
-    let descs = gbuffer_descs([320, 180], true);
+    let descs = gbuffer_descs([320, 180], true, 1);
 
     assert_eq!(descs.len(), 3);
     for desc in &descs {
@@ -48,7 +48,7 @@ fn effects_require_a_third_color_attachment_without_penalizing_legacy_gbuffer() 
         Err(fluxel_rhi::api::Error::Unsupported(_))
     ));
     assert!(validate_request([1, 1], 3, true).is_ok());
-    let effects = gbuffer_desc("effects", [1, 1], TextureFormat::Rgba16Float);
+    let effects = gbuffer_desc("effects", [1, 1], TextureFormat::Rgba16Float, 1);
     assert_eq!(effects.format, TextureFormat::Rgba16Float);
     assert_eq!(
         effects.usage,

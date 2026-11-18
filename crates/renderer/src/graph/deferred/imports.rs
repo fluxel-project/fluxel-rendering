@@ -18,6 +18,8 @@ pub(super) struct DeferredImports {
     pub(super) specular_brdf_lut: Option<TextureHandle>,
     pub(super) gbuffer: Vec<TextureHandle>,
     pub(super) effects: Option<TextureHandle>,
+    pub(super) msaa_gbuffer: Option<[TextureHandle; 3]>,
+    pub(super) msaa_effects: Option<TextureHandle>,
     pub(super) target: Option<TextureHandle>,
     pub(super) scene_color: Option<TextureHandle>,
     pub(super) surface_target: Option<TextureHandle>,
@@ -169,6 +171,25 @@ pub(super) fn import<B: ResourceBackend>(
         })
         .transpose()
         .map_err(|_| Error::InvalidState)?;
+    let msaa_gbuffer = frame
+        .msaa
+        .map(|msaa| {
+            let mut import = |owner: &crate::residency::ForwardTexture<B>| {
+                graph.import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+            };
+            let [albedo, normal, depth] = &msaa.gbuffer;
+            Ok([import(albedo)?, import(normal)?, import(depth)?])
+        })
+        .transpose()
+        .map_err(|_: GraphError| Error::InvalidState)?;
+    let msaa_effects = frame
+        .msaa
+        .and_then(|msaa| msaa.effects.as_ref())
+        .map(|texture| {
+            graph.import_texture_with_state(texture.desc.clone(), texture.incoming, texture.layout)
+        })
+        .transpose()
+        .map_err(|_| Error::InvalidState)?;
     let (target, scene_color, surface_target, readback, row_pitch) = match &frame.source {
         super::record_view::RecordSource::Offscreen(owner) => (
             Some(
@@ -279,6 +300,8 @@ pub(super) fn import<B: ResourceBackend>(
         specular_brdf_lut,
         gbuffer,
         effects,
+        msaa_gbuffer,
+        msaa_effects,
         target,
         scene_color,
         surface_target,

@@ -57,8 +57,8 @@ pub use deferred::{DeferredCacheStats, DeferredProbeFacts};
 pub use error::RendererError;
 pub use forward::CaptureTextureSlot;
 pub use forward::ForwardCacheStats;
-pub(crate) use forward::{SurfaceCompositeOwner, refraction_capture_desc};
 pub(crate) use forward::validate_ordinary_sampler;
+pub(crate) use forward::{SurfaceCompositeOwner, refraction_capture_desc};
 pub use output_processing::{OutputProcessing, OutputTransfer};
 pub use shutdown::ShutdownReport;
 pub use submission::Submission;
@@ -100,6 +100,7 @@ where
         Option<AssetSnapshot<crate::EnvironmentIrradianceAsset, crate::EnvironmentIrradianceData>>,
     output_processing: Option<OutputProcessing>,
     forward_sample_count: u32,
+    deferred_sample_count: u32,
     owner: Arc<()>,
     plans: HashMap<cache::PlanKey, cache::CachedPlan<B>>,
     forward_programs: HashMap<forward::ForwardProgramKey, Arc<forward::ForwardPipelineObjects<B>>>,
@@ -175,6 +176,7 @@ where
             environment_specular: None,
             output_processing: None,
             forward_sample_count: 1,
+            deferred_sample_count: 1,
             owner: Arc::new(()),
             plans: HashMap::new(),
             forward_programs: HashMap::new(),
@@ -231,6 +233,24 @@ where
     /// Returns the sample count requested for ordinary Forward submissions.
     pub const fn forward_sample_count(&self) -> u32 {
         self.forward_sample_count
+    }
+
+    /// Selects the Deferred geometry sample count for future submissions.
+    ///
+    /// One sample is the default. Multisampled G-buffers require sampleable
+    /// color and depth attachments at the exact requested count.
+    pub fn set_deferred_sample_count(&mut self, samples: u32) -> Result<(), RendererError> {
+        self.ensure_open()?;
+        if samples == 0 {
+            return Err(Error::InvalidRange.into());
+        }
+        self.deferred_sample_count = samples;
+        Ok(())
+    }
+
+    /// Returns the requested Deferred geometry sample count.
+    pub const fn deferred_sample_count(&self) -> u32 {
+        self.deferred_sample_count
     }
 
     /// Selects the exact linear lat-long diffuse-irradiance generation used by

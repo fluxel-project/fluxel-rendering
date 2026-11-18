@@ -8,7 +8,8 @@ use fluxel_rhi::api::{
 
 use crate::residency::{
     DeferredFrame, ForwardFrameBuffers, allocate_deferred_scene_color_desc,
-    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects, plan_forward_frame,
+    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects,
+    plan_deferred_msaa_with_effects, plan_forward_frame,
 };
 use crate::{ForwardDrawInput, PreparedMaterial};
 
@@ -41,9 +42,7 @@ where
             Support::Supported(_) => {
                 Err(self.observe_rhi_error(Error::Unsupported("filterable Deferred scene-color")))
             }
-            Support::Unsupported(reason) => {
-                Err(self.observe_rhi_error(Error::Unsupported(reason)))
-            }
+            Support::Unsupported(reason) => Err(self.observe_rhi_error(Error::Unsupported(reason))),
         }
     }
 
@@ -89,10 +88,8 @@ where
             .map_err(|error| self.observe_rhi_error(error))?;
         let (prepared, pbr, effects) = super::scene_prepare::materials(inputs)?;
         let extent = inputs.first().ok_or(Error::InvalidState)?.extent();
-        let mut scene_color = deferred_scene_color_desc_with_format(
-            extent,
-            self.deferred_scene_color_format(),
-        );
+        let mut scene_color =
+            deferred_scene_color_desc_with_format(extent, self.deferred_scene_color_format());
         if copy_source {
             scene_color.usage |= TextureUsage::COPY_SRC;
             match self.device.texture_support(&scene_color) {
@@ -184,6 +181,14 @@ where
         let gbuffer_plan =
             plan_deferred_gbuffer_with_effects(&self.device, input.extent(), pbr, effects)
                 .map_err(|error| self.observe_rhi_error(error))?;
+        let msaa_plan = plan_deferred_msaa_with_effects(
+            &self.device,
+            input.extent(),
+            pbr,
+            effects,
+            self.deferred_sample_count(),
+        )
+        .map_err(|error| self.observe_rhi_error(error))?;
         // All Forward-owner descriptors are known here, before the first of
         // those owners is allocated. The G-buffer plan already performed its
         // equivalent exact texture-support checks while it was built above.
@@ -288,6 +293,7 @@ where
         };
         let scene_color = allocate_deferred_scene_color_desc(&self.device, scene_color_desc)
             .map_err(|error| self.observe_rhi_error(error))?;
+        let msaa = self.realize_deferred_msaa(msaa_plan, pbr, effects).await?;
         let scene_color_sampler_desc = crate::renderer::forward::material_sampler(1)
             .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color_sampler = self
@@ -427,6 +433,7 @@ where
             specular,
             gbuffer,
             effects: effects_attachment,
+            msaa,
             scene_color,
             scene_color_sampler,
             scene_color_sampler_desc,

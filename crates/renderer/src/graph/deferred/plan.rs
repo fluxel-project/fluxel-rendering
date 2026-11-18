@@ -41,7 +41,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(pass) = declaration.deformation_pass {
             expected.push(pass);
         }
-        expected.extend([declaration.geometry_pass, declaration.lighting_pass]);
+        expected.push(declaration.geometry_pass);
+        if let Some(pass) = declaration.resolve_pass {
+            expected.push(pass);
+        }
+        expected.push(declaration.lighting_pass);
         expected.extend_from_slice(composition_passes);
         if let Some(pass) = declaration.composite_pass {
             expected.push(pass);
@@ -95,6 +99,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             mip_generation: declaration.mip_generation,
             deformation_pass: declaration.deformation_pass,
             geometry_pass: declaration.geometry_pass,
+            resolve_pass: declaration.resolve_pass,
             lighting_pass: declaration.lighting_pass,
             composition_passes: composition_passes.to_vec(),
             composite_pass: declaration.composite_pass,
@@ -112,6 +117,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             specular_brdf_lut_slot: declaration.specular_brdf_lut_slot,
             gbuffer_slots: declaration.gbuffer_slots,
             effects_slot: declaration.effects_slot,
+            msaa_gbuffer_slots: declaration.msaa_gbuffer_slots,
+            msaa_effects_slot: declaration.msaa_effects_slot,
             scene_color_slot: declaration.scene_color_slot,
             surface_target_slot: declaration.surface_target_slot,
             target_slot: declaration.target_slot,
@@ -166,6 +173,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.deformation_pass.map(|pass| pass.1)
                 != declaration.deformation_pass.map(|pass| pass.1)
             || self.geometry_pass.1 != declaration.geometry_pass.1
+            || self.resolve_pass.map(|pass| pass.1) != declaration.resolve_pass.map(|pass| pass.1)
             || self.lighting_pass.1 != declaration.lighting_pass.1
             || !self.composition_passes.is_empty()
             || self.composite_pass.map(|pass| pass.1)
@@ -213,6 +221,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 != declaration.gbuffer_slots.map(|slot| slot.resource)
             || self.effects_slot.map(|slot| slot.resource)
                 != declaration.effects_slot.map(|slot| slot.resource)
+            || self
+                .msaa_gbuffer_slots
+                .map(|items| items.map(|slot| slot.resource))
+                != declaration
+                    .msaa_gbuffer_slots
+                    .map(|items| items.map(|slot| slot.resource))
+            || self.msaa_effects_slot.map(|slot| slot.resource)
+                != declaration.msaa_effects_slot.map(|slot| slot.resource)
             || self.scene_color_slot.map(|slot| slot.resource)
                 != declaration.scene_color_slot.map(|slot| slot.resource)
             || self.surface_target_slot.map(|slot| slot.resource)
@@ -244,20 +260,6 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             plan: self.id,
             index: 0,
         }
-    }
-
-    pub(crate) fn mip_generation_steps(
-        &self,
-    ) -> impl Iterator<Item = (StepId, &super::super::mip_generation::MipGenerationPass)> {
-        self.mip_generation.iter().map(|generation| {
-            (
-                StepId {
-                    plan: self.id,
-                    index: u32::try_from(generation.pass.1).expect("graph pass index fits StepId"),
-                },
-                generation,
-            )
-        })
     }
 
     pub(crate) fn geometry_step(&self) -> StepId {
@@ -433,6 +435,13 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 )
             })
             || self.effects_slot.is_some() != frame.effects.is_some()
+            || self.msaa_gbuffer_slots.is_some() != frame.msaa.is_some()
+            || self.msaa_effects_slot.is_some()
+                != frame
+                    .msaa
+                    .as_ref()
+                    .and_then(|msaa| msaa.effects.as_ref())
+                    .is_some()
             || (!matches!(self.output, DeferredOutputPlan::Capture)
                 && !matches_final_target_template(&frame.frame.target_desc, self.extent))
             || !super::declaration_validation::matches_scene_color_template(
@@ -444,6 +453,35 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.scene_color_slot.is_none()
         {
             return Err(Error::InvalidState);
+        }
+        if let Some(msaa) = &frame.msaa {
+            if msaa.pipeline.device() != self.id.device
+                || msaa.group.device() != self.id.device
+                || msaa
+                    .gbuffer
+                    .iter()
+                    .zip(&frame.gbuffer)
+                    .any(|(source, destination)| {
+                        source.texture.device() != self.id.device
+                            || source.view.device() != self.id.device
+                            || source.desc.samples <= 1
+                            || source.desc.extent != [self.extent[0], self.extent[1], 1]
+                            || source.desc.format != destination.desc.format
+                            || destination.desc.samples != 1
+                    })
+                || msaa
+                    .effects
+                    .as_ref()
+                    .zip(frame.effects.as_ref())
+                    .is_some_and(|(source, destination)| {
+                        source.desc.format != destination.desc.format
+                            || source.desc.extent != destination.desc.extent
+                            || source.desc.samples != msaa.gbuffer[0].desc.samples
+                            || destination.desc.samples != 1
+                    })
+            {
+                return Err(Error::InvalidState);
+            }
         }
         validate_draw_uniforms(frame, self.uniform_alignment)?;
         validate_uploads(frame)?;
@@ -462,7 +500,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(step) = self.deformation_step() {
             expected.push(step);
         }
-        expected.extend([self.geometry_step(), self.lighting_step()]);
+        expected.push(self.geometry_step());
+        if let Some(step) = self.resolve_step() {
+            expected.push(step);
+        }
+        expected.push(self.lighting_step());
         expected.extend(self.composition_passes.iter().map(|pass| StepId {
             plan: self.id,
             index: u32::try_from(pass.1).expect("graph pass index fits StepId"),
@@ -503,7 +545,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(step) = self.deformation_step() {
             expected.push(step);
         }
-        expected.extend([self.geometry_step(), self.lighting_step()]);
+        expected.push(self.geometry_step());
+        if let Some(step) = self.resolve_step() {
+            expected.push(step);
+        }
+        expected.push(self.lighting_step());
         expected.extend(self.composition_passes.iter().map(|pass| StepId {
             plan: self.id,
             index: u32::try_from(pass.1).expect("graph pass index fits StepId"),

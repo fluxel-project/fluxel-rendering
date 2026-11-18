@@ -1,4 +1,4 @@
-//! Four-pass Deferred recording and shared completion-held pending ownership.
+//! Deferred recording and shared completion-held pending ownership.
 
 use super::*;
 use crate::{
@@ -119,6 +119,11 @@ where
             recorded = execution.commands(plan.geometry_step(), |encoder| {
                 plan.record_geometry(encoder, &frame)
             });
+        }
+        if recorded.is_ok() {
+            if let Some(step) = plan.resolve_step() {
+                recorded = execution.commands(step, |encoder| plan.record_resolve(encoder, &frame));
+            }
         }
         if recorded.is_ok() {
             recorded = execution.commands(plan.lighting_step(), |encoder| {
@@ -296,6 +301,13 @@ where
             recorded = execution.commands(plan.geometry_step(), |encoder| {
                 plan.surface_record_geometry(encoder, &frame, &image)
             });
+        }
+        if recorded.is_ok() {
+            if let Some(step) = plan.resolve_step() {
+                recorded = execution.commands(step, |encoder| {
+                    plan.surface_record_resolve(encoder, &frame, &image)
+                });
+            }
         }
         if recorded.is_ok() {
             recorded = execution.commands(plan.lighting_step(), |encoder| {

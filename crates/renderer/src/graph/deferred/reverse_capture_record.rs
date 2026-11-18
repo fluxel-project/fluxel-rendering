@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    graph::{ForwardOitInput, oit_record::OitRecordCommands},
+    graph::{oit_record::OitRecordCommands, ForwardOitInput},
     residency::ForwardFrame,
 };
 

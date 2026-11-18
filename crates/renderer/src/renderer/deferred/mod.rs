@@ -19,6 +19,7 @@ mod deformation;
 mod deformed;
 mod draw_assembly;
 mod execute;
+mod msaa;
 mod oit_entry;
 mod oit_execute;
 mod oit_prepare;

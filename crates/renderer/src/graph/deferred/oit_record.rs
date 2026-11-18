@@ -147,6 +147,14 @@ impl<B: ResourceBackend> DeferredOitPlan<B> {
                 .record_geometry_with_bindings(encoder, opaque, bindings)?;
             return Ok(None);
         }
+        if self.base.resolve_pass == Some(pass) {
+            self.base.record_resolve_with_bindings(
+                encoder,
+                super::record_view::DeferredRecordView::offscreen(opaque),
+                bindings,
+            )?;
+            return Ok(None);
+        }
         if pass == self.base.lighting_pass {
             self.base
                 .record_lighting_with_bindings(encoder, opaque, bindings)?;

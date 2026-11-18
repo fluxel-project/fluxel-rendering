@@ -916,11 +916,25 @@ multisample color and optional depth stay frame-owned through completion. Both
 are discarded after raster and later released at retirement. The Surface path
 presents the acquired lease without a readback pass.
 
-The setting applies to the ordinary Forward entry points. OIT, scene capture
-and Deferred currently use their respective single-sample routes. Those routes
-need a depth attachment contract across passes. The selected RHI exposes a
-color resolve target, and Deferred's reconstructed position still depends on
-the exact stored depth and matching G-buffer samples.
+The setting applies to ordinary Forward entry points. Forward OIT and capture
+use single-sample attachments shared between their passes.
+
+### Deferred multisampled depth
+
+`Renderer::set_deferred_sample_count` selects the exact G-buffer raster count.
+One sample is the default. For a larger count, the G-buffer color attachments
+and depth must support the combined render and sampled usages at that count.
+The renderer retains them alongside the single-sample G-buffer until covering
+completion. The geometry executable and Graph shape include that count.
+
+The resolve pass uses the sample-zero selection in Babylon WebGPU's
+`webgpuTextureManager.ts::resolveDepthFragmentSource`. It loads albedo, normal,
+depth and optional surface effects from the same sample to preserve one
+coherent surface per pixel. The single-sample Depth32Float attachment is
+written through `frag_depth` and supplies both Deferred lighting
+reconstruction and subsequent raster depth tests. This mode resolves a
+representative surface. Coverage antialiasing requires lighting more than one
+sample and combining scene color.
 
 ### Per-draw ordinary sampler policy
 

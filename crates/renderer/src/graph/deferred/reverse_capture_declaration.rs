@@ -3,8 +3,8 @@
 use super::*;
 use crate::{
     graph::{
+        forward::{declare_forward_capture_namespace_with_contribution, SharedResidentImports},
         ForwardOitInput,
-        forward::{SharedResidentImports, declare_forward_capture_namespace_with_contribution},
     },
     residency::ForwardFrame,
 };

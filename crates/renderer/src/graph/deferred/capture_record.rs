@@ -149,6 +149,14 @@ pub(super) fn record_namespace<B: ResourceBackend + CommandBackend + RasterBacke
         plan.record_geometry_with_bindings(encoder, frame, bindings)?;
         return Ok(true);
     }
+    if plan.resolve_pass == Some(pass) {
+        plan.record_resolve_with_bindings(
+            encoder,
+            super::record_view::DeferredRecordView::offscreen(frame),
+            bindings,
+        )?;
+        return Ok(true);
+    }
     if pass == plan.lighting_pass {
         plan.record_lighting_with_bindings(encoder, frame, bindings)?;
         return Ok(true);

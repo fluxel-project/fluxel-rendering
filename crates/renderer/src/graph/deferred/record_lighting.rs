@@ -1,7 +1,7 @@
 //! Deferred lighting recording, including the optional surface-effects input.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
     pub(crate) fn record_lighting(
@@ -59,7 +59,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 sampled_read(),
             )?;
             pass.texture(lut, one_color_mip(0), AccessKind::Read, sampled_read())?;
-            pass.buffer(view_uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Read, uniform_read())?;
+            pass.buffer(
+                view_uniform,
+                0..SPECULAR_VIEW_BYTES,
+                AccessKind::Read,
+                uniform_read(),
+            )?;
         }
         if let Some(range) = &frame.lighting_view {
             pass.buffer(
