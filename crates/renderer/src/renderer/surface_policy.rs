@@ -25,7 +25,7 @@ use crate::{ForwardDrawInput, FrameTopology, RenderTransform};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RasterSurfaceState {
     front_face: FrontFaceState,
-    cull_back_faces: bool,
+    culling: Culling,
     alpha_blending: bool,
 }
 
@@ -35,6 +35,13 @@ enum FrontFaceState {
     Clockwise,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Culling {
+    None,
+    Front,
+    Back,
+}
+
 impl RasterSurfaceState {
     /// Applies the selected material/transform facts to triangle primitives.
     pub(crate) fn apply_to(self, primitive: &mut PrimitiveState) {
@@ -42,10 +49,10 @@ impl RasterSurfaceState {
             FrontFaceState::CounterClockwise => FrontFace::Ccw,
             FrontFaceState::Clockwise => FrontFace::Cw,
         };
-        primitive.cull_mode = if self.cull_back_faces {
-            CullMode::Back
-        } else {
-            CullMode::None
+        primitive.cull_mode = match self.culling {
+            Culling::None => CullMode::None,
+            Culling::Front => CullMode::Front,
+            Culling::Back => CullMode::Back,
         };
     }
 
@@ -93,7 +100,11 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
         } else {
             FrontFaceState::CounterClockwise
         },
-        cull_back_faces: policy.back_face_culling,
+        culling: match (policy.back_face_culling, input.view().mirrored) {
+            (false, _) => Culling::None,
+            (true, true) => Culling::Front,
+            (true, false) => Culling::Back,
+        },
         alpha_blending: matches!(
             policy.alpha_mode,
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend

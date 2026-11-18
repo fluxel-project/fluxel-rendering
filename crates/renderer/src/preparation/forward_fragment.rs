@@ -120,7 +120,7 @@ pub(crate) fn with_oit_forward_fragment(
         *normal = SourceUnit::new(
             "pbr-surface-normal",
             format!(
-                "fn pbr_surface_normal(normal: vec3<f32>, front_facing: bool) -> vec3<f32> {{\n    let normalized = pbr_normal(normal);\n    if {two_sided_lighting} && !front_facing {{ return -normalized; }}\n    return normalized;\n}}"
+                "fn pbr_surface_normal(normal: vec3<f32>, front_facing: bool) -> vec3<f32> {{\n    let normalized = pbr_normal(normal);\n    if {two_sided_lighting} && pbr_flip_back_normal(front_facing) {{ return -normalized; }}\n    return normalized;\n}}"
             ),
         );
     }

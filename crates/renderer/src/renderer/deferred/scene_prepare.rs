@@ -37,6 +37,7 @@ pub(super) fn materials(
             || input.view().transform.columns() != first.view().transform.columns()
             || input.view().shading_camera != first.view().shading_camera
             || input.view().directional_light != first.view().directional_light
+            || input.view().mirrored != first.view().mirrored
     }) {
         return Err(Error::InvalidRange.into());
     }
@@ -67,6 +68,11 @@ pub(super) fn materials(
         .ok_or(Error::Unsupported(
             "Deferred material cannot consume this geometry layout",
         ))?;
+        let request = if pbr && input.view().mirrored {
+            crate::pbr::with_mirrored_view(request)
+        } else {
+            request
+        };
         let material = prepare_material(
             input.material(),
             layout,

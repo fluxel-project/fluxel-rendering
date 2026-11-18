@@ -208,6 +208,22 @@ pub(crate) fn gbuffer_uv0_normal_effect_request(
     Some(request)
 }
 
+const VIEW_FACING: &str = "pbr-view-facing";
+
+/// Specializes the PBR normal-facing predicate for a reflected camera.
+pub(crate) fn with_mirrored_view(mut request: ShaderCompositionRequest) -> ShaderCompositionRequest {
+    let unit = request
+        .source_units
+        .iter_mut()
+        .find(|unit| unit.id.0 == VIEW_FACING)
+        .expect("PBR geometry includes its view-facing predicate");
+    *unit = SourceUnit::new(
+        VIEW_FACING,
+        "fn pbr_flip_back_normal(front_facing: bool) -> bool { return front_facing; }",
+    );
+    request
+}
+
 fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCompositionRequest> {
     if layout.streams.is_empty()
         || layout.streams.iter().any(|stream| {
@@ -245,6 +261,10 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
     };
     let mut units = vec![
         SourceUnit::new("pbr-normal", templates::NORMAL),
+        SourceUnit::new(
+            VIEW_FACING,
+            "fn pbr_flip_back_normal(front_facing: bool) -> bool { return !front_facing; }",
+        ),
         SourceUnit::new("pbr-surface-normal", templates::SURFACE_NORMAL),
         SourceUnit::new("pbr-transforms", templates::TRANSFORMS),
         SourceUnit::new(identity, body),

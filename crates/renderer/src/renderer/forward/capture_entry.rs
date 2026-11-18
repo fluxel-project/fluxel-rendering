@@ -199,7 +199,8 @@ pub(in crate::renderer) fn validate_receiver_view(
     }
     if receiver.prepared().uses_scene_refraction()
         && (receiver.view().transform.columns() != producer.transform.columns()
-            || receiver.view().shading_camera != producer.shading_camera)
+            || receiver.view().shading_camera != producer.shading_camera
+            || receiver.view().mirrored != producer.mirrored)
     {
         return Err(Error::InvalidRange.into());
     }

@@ -47,6 +47,11 @@ pub(super) fn material_request(
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
     };
+    let request = if view.mirrored && crate::pbr::is_pbr(material.output()) {
+        crate::pbr::with_mirrored_view(request)
+    } else {
+        request
+    };
     if transmission {
         if !specular {
             return Err(

@@ -16,7 +16,7 @@ fn pbr_normal(value: vec3<f32>) -> vec3<f32> {
 pub(super) const SURFACE_NORMAL: &str = r#"
 fn pbr_surface_normal(normal: vec3<f32>, front_facing: bool) -> vec3<f32> {
     let normalized = pbr_normal(normal);
-    if material_two_sided_lighting() && !front_facing { return -normalized; }
+    if material_two_sided_lighting() && pbr_flip_back_normal(front_facing) { return -normalized; }
     return normalized;
 }
 "#;

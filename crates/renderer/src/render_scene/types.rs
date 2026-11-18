@@ -253,6 +253,8 @@ pub struct RenderView {
     pub shading_camera: Option<super::ShadingCamera>,
     /// The view's directional light shared by Forward and Deferred PBR.
     pub directional_light: super::DirectionalLight,
+    /// Whether this view is rendering a reflected camera.
+    pub mirrored: bool,
 }
 
 impl RenderView {
@@ -268,6 +270,16 @@ impl RenderView {
         self
     }
 
+    /// Selects reflected-camera raster and two-sided PBR behavior for this view.
+    ///
+    /// Supply its existing Fluxel clip transform and reflected shading camera
+    /// independently. This flag does not construct or modify either transform.
+    #[must_use]
+    pub fn with_mirrored_view(mut self) -> Self {
+        self.mirrored = true;
+        self
+    }
+
     /// Creates a view with a nonempty extent and the default directional light.
     pub fn new(transform: RenderTransform, extent: [u32; 2]) -> Result<Self, SceneError> {
         if extent.contains(&0) {
@@ -278,6 +290,7 @@ impl RenderView {
                 extent,
                 shading_camera: None,
                 directional_light: super::DirectionalLight::default(),
+                mirrored: false,
             })
         }
     }

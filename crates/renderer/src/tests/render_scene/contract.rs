@@ -362,6 +362,7 @@ fn invalid_adapter_values_are_refused() {
                 extent: [0, 1],
                 shading_camera: None,
                 directional_light: crate::DirectionalLight::default(),
+                mirrored: false,
             })]
             .into_iter()
             .collect(),

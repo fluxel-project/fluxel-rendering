@@ -698,7 +698,17 @@ from the selected mesh winding, which defaults to counterclockwise. A negative
 world-transform determinant reverses that choice. Scene and Feature pipelines
 can supply mesh winding by exact draw identity, and capture receivers can
 supply it during preparation. Forward, Deferred, and OIT program keys consume
-the resulting front face. Adjacent Forward batches also distinguish it. A blend request is refused
+the resulting front face. Adjacent Forward batches also distinguish it.
+
+A reflected view uses the caller's Fluxel clip transform and shading camera
+with `RenderView::with_mirrored_view`. It changes enabled back-face culling
+to front-face culling. In two-sided PBR, the final mapped normal reverses
+on front-facing fragments for the reflected view. Forward, Deferred, capture,
+and OIT share the PBR view-facing predicate. The explicit tangent basis keeps
+its ordinary calculation, as in Babylon's explicit tangent branch. This uses
+the existing RHI clip/depth and winding conventions.
+
+A blend request is refused
 by an opaque-only consumer before its dependent GPU allocation until the
 transparent phase supplies correct ordering and composition. This refusal
 records an unfinished route and does not count as transparency support.
