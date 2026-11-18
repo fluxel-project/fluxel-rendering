@@ -186,6 +186,7 @@ where
                     frame.frame.target_desc.format,
                     input.transform_uniform_bytes(),
                     crate::ForwardDepthMode::Depth32LessEqualWrite,
+                    1,
                     crate::renderer::raster_surface_state(input),
                 )
                 .await?;

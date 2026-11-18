@@ -21,6 +21,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             specular_brdf_lut_slot: slots.specular_brdf_lut,
             depth_slot: slots.depth,
             target_slot: slots.target,
+            multisample_color_slot: None,
             readback_slot: slots.readback,
         }
     }

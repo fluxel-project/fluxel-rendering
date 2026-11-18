@@ -50,6 +50,27 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
         selection.color.instance,
         selection.color.texture,
     )?;
+    let multisample_color = slots
+        .multisample_color_slot
+        .map(|slot| {
+            let owner = frame
+                .frame
+                .multisample_color
+                .as_ref()
+                .ok_or(Error::InvalidState)?;
+            if selection.color.slot != slots.target_slot {
+                return Err(Error::InvalidState);
+            }
+            if owner.device != slots.device
+                || owner.texture.device() != slots.device
+                || owner.view.device() != slots.device
+            {
+                return Err(Error::WrongDevice);
+            }
+            bindings.require_texture_owner(slot, owner.instance, &owner.texture)?;
+            Ok((slot, owner))
+        })
+        .transpose()?;
     for draw in &frame.draws[selection.draws.clone()] {
         validate_draw(draw, slots.stream_slots.len())?;
         if draw.pipeline.device() != slots.device
@@ -130,8 +151,9 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
             )?;
         }
     }
+    let raster_color_slot = multisample_color.map_or(selection.color.slot, |(slot, _)| slot);
     pass.texture(
-        selection.color.slot,
+        raster_color_slot,
         whole(),
         AccessKind::Write,
         if selection.color.read_write {
@@ -140,6 +162,17 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
             color_write_uses()
         },
     )?;
+    if multisample_color.is_some() {
+        // This is the product of the in-pass color resolve, never an input
+        // attachment.  Keep its Graph contract separate from the raster
+        // attachment, whose descriptor has the multisample count.
+        pass.texture(
+            selection.color.slot,
+            whole(),
+            AccessKind::Write,
+            color_write_uses(),
+        )?;
+    }
     let depth_stencil = selection
         .depth
         .as_ref()
@@ -175,10 +208,16 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
         .transpose()?;
     pass.transition(encoder)?;
     let colors = [Some(ColorAttachment {
-        view: AttachmentView::Texture(selection.color.view),
-        resolve_target: None,
+        view: AttachmentView::Texture(
+            multisample_color.map_or(selection.color.view, |(_, owner)| &owner.view),
+        ),
+        resolve_target: multisample_color.map(|_| AttachmentView::Texture(selection.color.view)),
         load: selection.color.load,
-        store: StoreOp::Store,
+        store: if multisample_color.is_some() {
+            StoreOp::Discard
+        } else {
+            StoreOp::Store
+        },
     })];
     let mut raster = encoder.begin_raster(&RasterPassDesc {
         label: Some("fluxel forward selection"),

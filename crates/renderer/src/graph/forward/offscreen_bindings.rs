@@ -153,6 +153,20 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                     frame.frame.target_incoming,
                     frame.frame.target_layout,
                 )))
+                .chain(
+                    self.multisample_color_slot
+                        .zip(frame.frame.multisample_color.as_ref())
+                        .map(|(slot, owner)| {
+                            BoundTexture::new(
+                                slot,
+                                owner.instance,
+                                &owner.texture,
+                                &owner.desc,
+                                owner.incoming,
+                                owner.layout,
+                            )
+                        }),
+                )
                 .chain(self.environment_slot.zip(frame.environment.as_ref()).map(
                     |(slot, owner)| {
                         BoundTexture::new(

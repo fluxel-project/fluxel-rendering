@@ -65,6 +65,8 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             || self.depth_slot.map(|slot| slot.resource)
                 != declaration.depth_slot.map(|slot| slot.resource)
             || self.target_slot.resource != declaration.target_slot.resource
+            || self.multisample_color_slot.map(|slot| slot.resource)
+                != declaration.multisample_color_slot.map(|slot| slot.resource)
             || self.readback_slot.resource != declaration.readback_slot.resource
             || self.draw_count != declaration.draw_count
             || self.stream_count != declaration.stream_count
@@ -180,6 +182,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             specular_brdf_lut_slot: declaration.specular_brdf_lut_slot,
             depth_slot: declaration.depth_slot,
             target_slot: declaration.target_slot,
+            multisample_color_slot: declaration.multisample_color_slot,
             readback_slot: declaration.readback_slot,
             draw_count: declaration.draw_count,
             stream_count: declaration.stream_count,
@@ -284,7 +287,11 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         image: Option<&SurfaceImage<B>>,
     ) -> Result<()> {
         self.validate_frame_base(frame)?;
-        if frame.frame.target_desc.format != TextureFormat::Rgba16Float {
+        let standard_msaa_surface = frame.frame.multisample_color.is_some()
+            && image.is_some()
+            && frame.frame.output.is_none()
+            && frame.frame.target_desc.format == TextureFormat::Rgba8Unorm;
+        if frame.frame.target_desc.format != TextureFormat::Rgba16Float && !standard_msaa_surface {
             return Err(Error::InvalidState);
         }
         match (self.hdr_terminal.as_ref(), image) {

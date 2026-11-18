@@ -272,6 +272,7 @@ impl OverlaySlots {
             specular_brdf_lut_slot: s.specular_brdf_lut,
             depth_slot: s.depth,
             target_slot: s.target,
+            multisample_color_slot: None,
             readback_slot: s.readback,
         }
     }

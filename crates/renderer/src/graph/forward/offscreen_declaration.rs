@@ -42,6 +42,7 @@ pub(crate) struct OffscreenForwardDeclaration {
     pub(super) specular_brdf_lut_slot: Option<TextureSlot>,
     pub(super) depth_slot: Option<TextureSlot>,
     pub(super) target_slot: TextureSlot,
+    pub(super) multisample_color_slot: Option<TextureSlot>,
     pub(super) readback_slot: BufferSlot,
     pub(super) draw_count: usize,
     pub(super) stream_count: usize,
@@ -141,6 +142,7 @@ where
         specular_brdf_lut,
         depth,
         target,
+        multisample_color,
     } = super::offscreen_prefix::declare_prefix(device, spec, expected)?;
     let raster_dependency = mip_passes.last().map_or(upload_pass, |pass| pass.pass);
     let (raster_pass, target, _) = {
@@ -160,7 +162,8 @@ where
                 .specular_radiance
                 .as_ref()
                 .map(|value| value.desc.mip_levels),
-            target,
+            target: multisample_color.unwrap_or(target),
+            resolve_target: multisample_color.map(|_| target),
             depth,
             draws: spec.draws.clone(),
             declared: false,
@@ -241,6 +244,7 @@ where
         specular_brdf_lut_slot: specular_brdf_lut.map(TextureSlot::from),
         depth_slot: depth.map(TextureSlot::from),
         target_slot: TextureSlot::from(target),
+        multisample_color_slot: multisample_color.map(TextureSlot::from),
         readback_slot: BufferSlot::from(readback),
         draw_count: spec.draws.len(),
         stream_count: spec.streams.len(),
@@ -266,7 +270,11 @@ where
     F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
 {
     validate_resident_texture_devices(&frame.resident, device.id())?;
-    if frame.frame.target_desc.format != TextureFormat::Rgba16Float {
+    let standard_msaa_surface = frame.frame.multisample_color.is_some()
+        && image.is_some()
+        && frame.frame.output.is_none()
+        && frame.frame.target_desc.format == TextureFormat::Rgba8Unorm;
+    if frame.frame.target_desc.format != TextureFormat::Rgba16Float && !standard_msaa_surface {
         return Err(Error::InvalidState.into());
     }
     if image.is_some_and(|image| {
@@ -280,6 +288,9 @@ where
             format: image.format(),
         },
         None => {
+            if frame.frame.target_desc.format != TextureFormat::Rgba16Float {
+                return Err(Error::InvalidState.into());
+            }
             let output = frame.frame.output.as_ref().ok_or(Error::InvalidState)?;
             if output.desc.format != TextureFormat::Rgba8Unorm
                 || output.desc.extent != [frame.extent[0], frame.extent[1], 1]

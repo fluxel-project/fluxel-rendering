@@ -18,6 +18,9 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     /// Either a persistent target or an RHI-managed surface lease. Both are
     /// real Graph resources and must receive the terminal color write.
     pub(super) target: crate::graph::definition::TextureHandle,
+    /// The single-sample target written by the native raster resolve, if the
+    /// raster attachment above is multisampled.
+    pub(super) resolve_target: Option<crate::graph::definition::TextureHandle>,
     pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) draws: Vec<ForwardGraphDraw>,
     pub(super) declared: bool,
@@ -42,6 +45,7 @@ pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend>
     pub(super) pass: &'pass mut crate::graph::definition::PassBuilder<'builder>,
     pub(super) upload: GraphPass,
     pub(super) target: crate::graph::definition::TextureHandle,
+    pub(super) resolve_target: Option<crate::graph::definition::TextureHandle>,
     pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) declared: u8,
     pub(super) reads: ForwardReadState,
@@ -107,6 +111,19 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
                 TextureUsage::RENDER_ATTACHMENT,
             )
             .map_err(|_| ())?;
+        if let Some(resolve_target) = self.resolve_target {
+            self.resolve_target = Some(
+                self.pass
+                    .write_texture_with_use(
+                        resolve_target,
+                        whole(),
+                        color_write_uses().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                    .map_err(|_| ())?,
+            );
+        }
         Ok(())
     }
 
@@ -217,7 +234,7 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
             return Err(());
         }
         self.pass.side_effect();
-        Ok((self.target, self.depth))
+        Ok((self.resolve_target.unwrap_or(self.target), self.depth))
     }
 }
 
@@ -246,6 +263,7 @@ pub(crate) struct ClearForwardPass<'pass, 'builder, 'frame, B: ResourceBackend> 
     pass: &'pass mut crate::graph::definition::PassBuilder<'builder>,
     upload: GraphPass,
     target: crate::graph::definition::TextureHandle,
+    resolve_target: Option<crate::graph::definition::TextureHandle>,
     declared: u8,
     marker: PhantomData<&'frame ForwardFrame<B>>,
 }
@@ -273,6 +291,19 @@ impl<B: ResourceBackend> ClearForwardPass<'_, '_, '_, B> {
                 TextureUsage::RENDER_ATTACHMENT,
             )
             .map_err(|_| ())?;
+        if let Some(resolve_target) = self.resolve_target {
+            self.resolve_target = Some(
+                self.pass
+                    .write_texture_with_use(
+                        resolve_target,
+                        whole(),
+                        color_write_uses().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                    .map_err(|_| ())?,
+            );
+        }
         Ok(())
     }
     fn finish(&mut self) -> std::result::Result<crate::graph::definition::TextureHandle, ()> {
@@ -280,7 +311,7 @@ impl<B: ResourceBackend> ClearForwardPass<'_, '_, '_, B> {
             return Err(());
         }
         self.pass.side_effect();
-        Ok(self.target)
+        Ok(self.resolve_target.unwrap_or(self.target))
     }
 }
 
@@ -358,6 +389,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         let specular_view_uniform = self.specular_view_uniform;
         let specular_mip_levels = self.specular_mip_levels;
         let target = self.target;
+        let resolve_target = self.resolve_target;
         let depth = self.depth;
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let draws = self.draws.clone();
@@ -370,6 +402,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     pass,
                     upload,
                     target,
+                    resolve_target,
                     depth,
                     declared: 0,
                     reads: ForwardReadState::new(streams, uniform, textures, draws)
@@ -408,6 +441,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         }
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let target = self.target;
+        let resolve_target = self.resolve_target;
         let (pass, target) = self
             .graph
             .as_deref_mut()
@@ -417,6 +451,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     pass,
                     upload,
                     target,
+                    resolve_target,
                     declared: 0,
                     marker: PhantomData,
                 };

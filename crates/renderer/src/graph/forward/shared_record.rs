@@ -22,6 +22,9 @@ pub(super) struct RecordSlots<'a> {
     pub(super) specular_brdf_lut_slot: Option<TextureSlot>,
     pub(super) depth_slot: Option<TextureSlot>,
     pub(super) target_slot: TextureSlot,
+    /// Multisampled raster attachment; `target_slot` remains its single-sample
+    /// in-pass resolve destination.
+    pub(super) multisample_color_slot: Option<TextureSlot>,
     pub(super) readback_slot: BufferSlot,
 }
 

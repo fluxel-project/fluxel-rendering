@@ -22,6 +22,7 @@ pub(super) struct ForwardDeclarationPrefix {
     pub(super) specular_brdf_lut: Option<super::super::definition::TextureHandle>,
     pub(super) depth: Option<super::super::definition::TextureHandle>,
     pub(super) target: super::super::definition::TextureHandle,
+    pub(super) multisample_color: Option<super::super::definition::TextureHandle>,
 }
 
 pub(super) fn declare_prefix<B: ResourceBackend>(
@@ -38,6 +39,7 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
     }
     validate_forward_topology(expected, spec.draws.len(), spec.shape.batches.len())?;
     validate_depth_spec(spec)?;
+    validate_multisample_color_spec(spec)?;
     validate_depth_topology(expected, spec.depth.is_some())?;
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
@@ -168,6 +170,15 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
         .map_err(|_| Error::InvalidState)?;
     let depth = spec
         .depth
+        .as_ref()
+        .map(|owner| {
+            graph
+                .import_texture_with_state(owner.desc.clone(), owner.incoming, owner.layout)
+                .map_err(|_| Error::InvalidState)
+        })
+        .transpose()?;
+    let multisample_color = spec
+        .multisample_color
         .as_ref()
         .map(|owner| {
             graph
@@ -396,5 +407,6 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
         specular_brdf_lut,
         depth,
         target,
+        multisample_color,
     })
 }

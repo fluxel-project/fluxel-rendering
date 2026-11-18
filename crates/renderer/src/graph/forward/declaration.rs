@@ -446,6 +446,7 @@ where
                 .as_ref()
                 .map(|owner| owner.radiance.desc.mip_levels),
             target: surface_target,
+            resolve_target: None,
             depth,
             draws,
             declared: false,

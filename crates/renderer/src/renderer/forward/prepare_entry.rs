@@ -47,6 +47,7 @@ where
             capture_texture,
             sampled_target,
             None,
+            1,
             environment_snapshot,
         )
         .await

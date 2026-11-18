@@ -34,6 +34,7 @@ where
         capture_texture: Option<&super::captured::CaptureTextureOwner<B>>,
         sampled_target: bool,
         attachments: Option<BorrowedForwardAttachments<B>>,
+        samples: u32,
         environment_snapshot: Option<
             fluxel_assets::AssetSnapshot<
                 crate::EnvironmentIrradianceAsset,
@@ -51,60 +52,26 @@ where
             .iter()
             .any(|input| input.prepared().uses_scene_refraction());
         let borrowed_attachments = attachments.is_some();
-        // A 16-bit acquired image is still an ordinary direct Surface target
-        // unless output processing explicitly requested the separate linear
-        // scene target.  The latter must not be inferred from the lease's
-        // format: applications may legitimately acquire an RGBA16F surface.
-        let process_output = self.output_processing().is_some()
-            && color_format == TextureFormat::Rgba16Float
-            && attachments.is_none();
-        let direct_surface = surface.is_some() && !process_output;
-        if let Some(attachments) = attachments.as_ref() {
-            if direct_surface
-                || depth_mode != crate::ForwardDepthMode::Depth32LessEqualWrite
-                || !matches!(topology, crate::FrameTopology::SortedForward)
-                || color_format != attachments.color.desc.format
-            {
-                return Err(Error::InvalidState.into());
-            }
-            attachments
-                .validate(self.device.id(), extent)
-                .map_err(|error| {
-                    self.observe_forward_error("borrowed Forward attachments", error)
-                })?;
-            crate::renderer::require_supported_surface_modes(&prepared_inputs, topology)
-                .map_err(|error| self.observe_forward_error("borrowed surface policy", error))?;
-            crate::renderer::require_blendable_target(
-                &self.device,
-                &attachments.color.desc,
-                topology,
-            )
-            .map_err(|error| self.observe_forward_error("borrowed target admission", error))?;
-        } else {
-            super::target_admission::admit_assembly(
-                &self.device,
-                &prepared_inputs,
-                topology,
-                extent,
-                color_format,
-                direct_surface,
-                sampled_target || process_output,
-            )
-            .map_err(|error| self.observe_forward_error("surface target admission", error))?;
-        }
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
-        let depth = if borrowed_attachments {
-            None
-        } else if scene_refraction {
-            Some(
-                capture_texture
-                    .and_then(|capture| capture.refraction_depth.as_ref())
-                    .ok_or(Error::InvalidState)?
-                    .retain(),
-            )
-        } else {
-            super::depth::allocate_depth(&self.device, depth_mode, topology, extent)?
-        };
+        let super::prepare_attachments::PreparedAttachments {
+            depth,
+            multisample_color,
+            direct_surface,
+            composite_surface,
+            sampled_target,
+        } = self.prepare_forward_attachments(
+            &prepared_inputs,
+            extent,
+            topology,
+            depth_mode,
+            samples,
+            color_format,
+            surface.is_some(),
+            sampled_target,
+            scene_refraction,
+            capture_texture,
+            attachments.as_ref(),
+        )?;
         let specular = if let Some(input) = prepared_inputs
             .iter()
             .find(|input| input.prepared().uses_specular_ibl())
@@ -138,7 +105,7 @@ where
             return Err(Error::InvalidState.into());
         }
         let active_programs =
-            super::program_selection::active_programs(&inputs, color_format, depth_mode);
+            super::program_selection::active_programs(&inputs, color_format, depth_mode, samples);
         // Submitted frames retain their own executable handles. Cache residency
         // is bounded by this frame's concrete program/layout set.
         self.forward_programs
@@ -358,7 +325,7 @@ where
             limits.uniform_offset_alignment,
             direct_surface,
             color_format,
-            sampled_target || process_output,
+            sampled_target,
             scene_refraction,
             attachments.as_ref(),
         )?;
@@ -367,7 +334,10 @@ where
         let uniform_upload = allocated.uniform_upload;
         let frame_buffer_allocations = allocated.buffers;
         let frame_buffer_allocation_bytes = allocated.bytes;
-        let frame_texture_allocations = allocated.textures;
+        let frame_texture_allocations = allocated.textures + u64::from(multisample_color.is_some());
+        if let Some(frame) = offscreen_frame.as_mut() {
+            frame.multisample_color = multisample_color;
+        }
         if !borrowed_attachments {
             match (&mut offscreen_frame, &mut surface_frame) {
                 (Some(frame), None) => frame.depth = depth,
@@ -406,6 +376,7 @@ where
                     color_format,
                     input.transform_uniform_bytes(),
                     depth_mode,
+                    samples,
                     crate::renderer::raster_surface_state(input),
                 )
                 .await?;
@@ -574,7 +545,7 @@ where
                     extent,
                     readback_row_pitch: row_pitch,
                 };
-                AssembledForwardTarget::from_offscreen(frame, surface, process_output)?
+                AssembledForwardTarget::from_offscreen(frame, surface, composite_surface)?
             }
             _ => return Err(Error::InvalidState.into()),
         };

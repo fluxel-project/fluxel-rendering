@@ -11,6 +11,7 @@ pub(super) fn active_programs(
     inputs: &[crate::ForwardDrawInput],
     color_format: TextureFormat,
     depth_mode: crate::ForwardDepthMode,
+    samples: u32,
 ) -> HashSet<ForwardProgramKey> {
     inputs
         .iter()
@@ -20,6 +21,7 @@ pub(super) fn active_programs(
                 color_format,
                 input.transform_uniform_bytes(),
                 depth_mode,
+                samples,
                 crate::renderer::raster_surface_state(input),
             )
         })

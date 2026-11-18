@@ -63,6 +63,7 @@ where
                     opaque.scene_color.clone(),
                     opaque.gbuffer[2].clone(),
                 )),
+                1,
                 environment,
             )
             .await?;

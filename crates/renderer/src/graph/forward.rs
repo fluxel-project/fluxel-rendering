@@ -194,6 +194,7 @@ pub(crate) struct ForwardPlan<B: ResourceBackend> {
     specular_brdf_lut_slot: Option<TextureSlot>,
     depth_slot: Option<TextureSlot>,
     target_slot: TextureSlot,
+    multisample_color_slot: Option<TextureSlot>,
     readback_slot: BufferSlot,
     draw_count: usize,
     stream_count: usize,

@@ -13,6 +13,7 @@ pub(crate) struct ForwardShape {
     /// Keeping this in the reusable shape prevents a plan made for one mip
     /// chain/layout from being rebound to a different one.
     pub(crate) specular: Option<SpecularIblShape>,
+    pub(crate) multisample_color: Option<TextureShape>,
     pub(crate) depth: Option<DepthShape>,
     /// Batch boundaries affect pipeline binding and therefore are part of the
     /// compiled recording shape even though the batches contain no resources.
@@ -102,6 +103,9 @@ pub(crate) struct ForwardGraphSpec {
     pub(crate) specular_brdf_lut: Option<TextureGraphFact>,
     pub(crate) specular_view_uniform: Option<BufferGraphFact>,
     pub(crate) target: TextureGraphFact,
+    /// Optional multisampled raster attachment whose resolve target is the
+    /// always-single-sampled `target` above.
+    pub(crate) multisample_color: Option<TextureGraphFact>,
     pub(crate) depth: Option<TextureGraphFact>,
     pub(crate) readback: BufferGraphFact,
     pub(crate) vertex_uploads: Vec<ForwardGraphVertexUpload>,
@@ -274,6 +278,13 @@ impl ForwardGraphSpec {
                 incoming: frame.frame.target_incoming,
                 layout: frame.frame.target_layout,
             },
+            multisample_color: frame.frame.multisample_color.as_ref().map(|owner| {
+                TextureGraphFact {
+                    desc: owner.desc.clone(),
+                    incoming: owner.incoming,
+                    layout: owner.layout,
+                }
+            }),
             depth: frame.frame.depth.as_ref().map(|owner| TextureGraphFact {
                 desc: owner.desc.clone(),
                 incoming: owner.incoming,
@@ -396,6 +407,11 @@ pub(super) fn forward_shape<B: ResourceBackend>(frame: &ForwardFrame<B>) -> Forw
             )
         }),
         specular: frame.specular.as_ref().map(specular_shape),
+        multisample_color: frame
+            .frame
+            .multisample_color
+            .as_ref()
+            .map(|owner| texture_shape(&owner.desc, owner.incoming, owner.layout)),
         depth: frame.frame.depth.as_ref().map(depth_shape),
         batches: frame.draw_batches.clone(),
         draws: frame

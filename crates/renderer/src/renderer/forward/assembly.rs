@@ -21,6 +21,7 @@ where
         extent: [u32; 2],
         topology: crate::FrameTopology,
         depth_mode: crate::ForwardDepthMode,
+        samples: u32,
         assets: &crate::ForwardAssets,
         surface: Option<(SurfaceImage<B>, [u32; 2])>,
         color_format: TextureFormat,
@@ -40,11 +41,13 @@ where
     {
         let color_format = if self.output_processing().is_some() {
             TextureFormat::Rgba16Float
+        } else if samples > 1 {
+            TextureFormat::Rgba8Unorm
         } else {
             color_format
         };
         let assembled = self
-            .assemble_prepared_forward(
+            .assemble_prepared_forward_with_attachments(
                 retained_snapshot,
                 prepared_inputs,
                 extent,
@@ -56,6 +59,8 @@ where
                 preparation_started,
                 None,
                 false,
+                None,
+                samples,
                 environment_snapshot,
             )
             .await?;
@@ -149,11 +154,11 @@ impl<B: ResourceBackend> AssembledForwardTarget<B> {
     pub(super) fn from_offscreen(
         frame: crate::residency::ForwardFrame<B>,
         surface: Option<(SurfaceImage<B>, [u32; 2])>,
-        process_output: bool,
+        composite_surface: bool,
     ) -> Result<Self> {
         match surface {
             None => Ok(Self::Offscreen { frame }),
-            Some((image, _)) if process_output => Ok(Self::HdrSurface { frame, image }),
+            Some((image, _)) if composite_surface => Ok(Self::HdrSurface { frame, image }),
             Some(_) => Err(Error::InvalidState),
         }
     }

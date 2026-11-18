@@ -101,6 +101,7 @@ where
     environment_irradiance:
         Option<AssetSnapshot<crate::EnvironmentIrradianceAsset, crate::EnvironmentIrradianceData>>,
     output_processing: Option<OutputProcessing>,
+    forward_sample_count: u32,
     owner: Arc<()>,
     plans: HashMap<cache::PlanKey, cache::CachedPlan<B>>,
     forward_programs: HashMap<forward::ForwardProgramKey, Arc<forward::ForwardPipelineObjects<B>>>,
@@ -175,6 +176,7 @@ where
             environment_irradiance: None,
             environment_specular: None,
             output_processing: None,
+            forward_sample_count: 1,
             owner: Arc::new(()),
             plans: HashMap::new(),
             forward_programs: HashMap::new(),
@@ -213,6 +215,24 @@ where
     /// Returns the output processing selected for future submissions.
     pub const fn output_processing(&self) -> Option<OutputProcessing> {
         self.output_processing
+    }
+
+    /// Selects the raster sample count for ordinary Forward submissions.
+    ///
+    /// The default is one sample. Submission checks the selected device's
+    /// exact color and depth attachment support for the chosen count.
+    pub fn set_forward_sample_count(&mut self, samples: u32) -> Result<(), RendererError> {
+        self.ensure_open()?;
+        if samples == 0 {
+            return Err(Error::InvalidRange.into());
+        }
+        self.forward_sample_count = samples;
+        Ok(())
+    }
+
+    /// Returns the sample count requested for ordinary Forward submissions.
+    pub const fn forward_sample_count(&self) -> u32 {
+        self.forward_sample_count
     }
 
     /// Selects the exact linear lat-long diffuse-irradiance generation used by

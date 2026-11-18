@@ -17,6 +17,7 @@ where
         color_format: TextureFormat,
         transform_uniform_bytes: u64,
         depth_mode: crate::ForwardDepthMode,
+        samples: u32,
         surface: crate::renderer::RasterSurfaceState,
     ) -> std::result::Result<Arc<ForwardPipelineObjects<B>>, RendererError> {
         self.ensure_open()?;
@@ -25,6 +26,7 @@ where
             color_format,
             transform_uniform_bytes,
             depth_mode,
+            samples,
             surface,
         );
         if let Some(objects) = self.forward_programs.get(&key) {
@@ -75,7 +77,7 @@ where
             PipelineCapabilityFacts {
                 multiview_views: None,
                 push_constant_bytes: 0,
-                multisample_count: 1,
+                multisample_count: samples,
                 nonuniform: Default::default(),
             },
         )
@@ -228,7 +230,7 @@ where
                 },
                 depth_stencil: super::depth::pipeline_depth(depth_mode, surface),
                 multisample: MultisampleState {
-                    count: 1,
+                    count: samples,
                     mask: u64::from(u32::MAX),
                     alpha_to_coverage_enabled: false,
                 },

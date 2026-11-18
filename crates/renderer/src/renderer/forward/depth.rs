@@ -7,6 +7,7 @@ pub(super) fn allocate_depth<B: ResourceBackend>(
     mode: crate::ForwardDepthMode,
     topology: crate::FrameTopology,
     extent: [u32; 2],
+    samples: u32,
 ) -> Result<Option<crate::residency::ForwardDepthAttachment<B>>> {
     match mode {
         crate::ForwardDepthMode::Disabled => {
@@ -23,7 +24,12 @@ pub(super) fn allocate_depth<B: ResourceBackend>(
             ) {
                 return Err(Error::InvalidState);
             }
-            crate::residency::ForwardDepthAttachment::allocate(device, extent).map(Some)
+            if samples == 1 {
+                crate::residency::ForwardDepthAttachment::allocate(device, extent).map(Some)
+            } else {
+                crate::residency::ForwardDepthAttachment::allocate_sampled(device, extent, samples)
+                    .map(Some)
+            }
         }
     }
 }

@@ -13,7 +13,11 @@ pub(super) fn validate_depth_spec(spec: &ForwardGraphSpec) -> Result<()> {
         || depth.desc.array_layers != 1
         || depth.desc.format != TextureFormat::Depth32Float
         || depth.desc.mip_levels != 1
-        || depth.desc.samples != 1
+        || depth.desc.samples
+            != spec
+                .multisample_color
+                .as_ref()
+                .map_or(1, |color| color.desc.samples)
         || !depth.desc.usage.contains(TextureUsage::RENDER_ATTACHMENT)
         || depth.incoming
             != (TextureUses {
@@ -21,6 +25,38 @@ pub(super) fn validate_depth_spec(spec: &ForwardGraphSpec) -> Result<()> {
                 accesses: AccessMask::EMPTY,
             })
         || depth.layout != ImageLayout::Undefined
+    {
+        return Err(Error::InvalidState);
+    }
+    Ok(())
+}
+
+/// The resolve target is the ordinary single-sample frame target.  The
+/// multisample owner exists solely for the raster attachment and is never
+/// sampled or copied by this graph path.
+pub(super) fn validate_multisample_color_spec(spec: &ForwardGraphSpec) -> Result<()> {
+    let Some(color) = spec.multisample_color.as_ref() else {
+        return Ok(());
+    };
+    if color.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+        || color.desc.extent != [spec.extent[0], spec.extent[1], 1]
+        || color.desc.array_layers != 1
+        || color.desc.format != spec.target.desc.format
+        || color.desc.mip_levels != 1
+        || color.desc.samples < 2
+        || !color.desc.usage.contains(TextureUsage::RENDER_ATTACHMENT)
+        || spec.target.desc.samples != 1
+        || !spec
+            .target
+            .desc
+            .usage
+            .contains(TextureUsage::RENDER_ATTACHMENT)
+        || color.incoming
+            != (TextureUses {
+                stages: StageMask::EMPTY,
+                accesses: AccessMask::EMPTY,
+            })
+        || color.layout != ImageLayout::Undefined
     {
         return Err(Error::InvalidState);
     }

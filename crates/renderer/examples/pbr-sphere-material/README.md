@@ -22,6 +22,13 @@ cargo run --locked --features dx12 -- --visible --exit-after-capture --output ta
 cargo run --locked --features dx12 -- --visible --multi-records --exit-after-capture --output target/pbr-multi-visible-dx12
 ```
 
+`--samples N` explicitly configures the public ordinary-Forward sample-count
+setting on the Renderer used by both the offscreen and Surface Forward
+submissions; the attempt records the configured value in
+`forward-samples.json`. The paired Deferred submissions deliberately remain a
+single-sample baseline, so their oracle comparison does not claim multisample
+evidence. A Deferred-only MSAA route is not exposed by this consumer.
+
 Before each case allocates resources, uploads, or records, the program persists
 raw geometry, ORM, radiance, LUT, VP/camera, material and CPU raster oracle input.
 The CPU oracle projects

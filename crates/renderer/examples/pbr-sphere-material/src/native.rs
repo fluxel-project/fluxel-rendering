@@ -161,6 +161,7 @@ where
     crate::window_oracle::write_contract(&options.output, scene::EXTENT)?;
     write_device_capabilities(&device, &options.output)?;
     let mut renderer = Renderer::new(device)?;
+    configure_forward_samples(&mut renderer, options)?;
     let bounds = RenderBounds::new([-5.; 3], [5.; 3])?;
     let mut frame = 0;
     for case in cases() {

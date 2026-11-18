@@ -141,6 +141,8 @@ pub(crate) struct ForwardFrameBuffers<B: ResourceBackend> {
     /// Display-referred terminal target for an HDR scene-color frame.
     /// Ordinary Forward frames retain no second color owner.
     pub(crate) output: Option<ForwardTexture<B>>,
+    /// Raster color owner when the single-sample target receives a resolve.
+    pub(crate) multisample_color: Option<ForwardTexture<B>>,
     pub(crate) depth: Option<ForwardDepthAttachment<B>>,
     pub(crate) readback: Buffer<B>,
     pub(crate) readback_desc: BufferDesc,

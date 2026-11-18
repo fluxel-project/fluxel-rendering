@@ -226,6 +226,7 @@ where
             extent,
             topology,
             depth_mode,
+            self.forward_sample_count(),
             assets,
             surface,
             color_format,

@@ -73,6 +73,12 @@ where
     C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
 {
     validate_resident_texture_devices(&frame.resident, device.id())?;
+    if frame.frame.multisample_color.is_some() {
+        // OIT has its own accumulation attachments.  It cannot silently bind
+        // the ordinary Forward MSAA raster owner as though it were that
+        // product's resolve attachment.
+        return Err(Error::InvalidState.into());
+    }
     input.owners.validate(device.id())?;
     let peel_end = input
         .opaque_count
@@ -217,6 +223,7 @@ where
             specular_brdf_lut_slot: prefix.specular_brdf_lut.map(Into::into),
             depth_slot: Some(opaque_depth.into()),
             target_slot: opaque_color.into(),
+            multisample_color_slot: None,
             readback_slot: prefix.readback.into(),
             draw_count: spec.draws.len(),
             stream_count: spec.streams.len(),

@@ -20,6 +20,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             specular_brdf_lut_slot: self.specular_brdf_lut_slot,
             depth_slot: self.depth_slot,
             target_slot: self.target_slot,
+            multisample_color_slot: self.multisample_color_slot,
             readback_slot: self.readback_slot,
         }
     }

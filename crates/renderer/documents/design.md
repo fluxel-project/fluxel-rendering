@@ -799,6 +799,30 @@ contents and releases it at retirement rather than publishing an unproven depth
 reuse state through the color frame pool. This is not a depth-sampling, shadow,
 transparency or depth-resolve interface.
 
+### Ordinary Forward multisampling
+
+`Renderer::set_forward_sample_count` selects an exact raster count for ordinary
+Forward, including scene/Feature composition. One sample is the default. The
+selected device must support that count for the intended color format and any
+selected depth attachment. Admission checks the single-sample resolve target
+separately, including filterability when a Surface composite samples it.
+Unsupported requests return an error before attachment allocation.
+
+The material shader keeps its ordinary pixel-frequency interface. The count is
+part of the native pipeline key and the frame's Graph attachment shape. One
+raster pass writes the multisample color and resolves into the separately bound
+single-sample scene color using `ColorAttachment::resolve_target`. The latter
+version feeds readback, HDR output processing, or the Surface composite. The
+multisample color and optional depth stay frame-owned through completion. Both
+are discarded after raster and later released at retirement. The Surface path
+presents the acquired lease without a readback pass.
+
+The setting applies to the ordinary Forward entry points. OIT, scene capture
+and Deferred currently use their respective single-sample routes. Those routes
+need a depth attachment contract across passes. The selected RHI exposes a
+color resolve target, and Deferred's reconstructed position still depends on
+the exact stored depth and matching G-buffer samples.
+
 ### Per-draw ordinary sampler policy
 
 `ForwardResources::sampler` optionally supplies one `ForwardSamplerBinding` by

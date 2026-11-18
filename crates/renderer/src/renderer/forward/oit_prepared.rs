@@ -59,6 +59,7 @@ where
                     extent,
                     crate::FrameTopology::SortedForward,
                     crate::ForwardDepthMode::Depth32LessEqualWrite,
+                    1,
                     assets,
                     surface.map(|image| (image, extent)),
                     format,

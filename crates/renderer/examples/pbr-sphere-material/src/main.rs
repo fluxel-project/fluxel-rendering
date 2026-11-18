@@ -45,6 +45,9 @@ pub(crate) struct Options {
     pub(crate) exit_after_capture: bool,
     pub(crate) output: PathBuf,
     pub(crate) multi_records: bool,
+    /// Requested ordinary-Forward sample count.  The sample count is applied
+    /// to the exact Renderer used by both offscreen and Surface Forward work.
+    pub(crate) forward_samples: u32,
 }
 pub(crate) struct Case {
     pub(crate) name: &'static str,
@@ -89,6 +92,7 @@ fn parse() -> Result<Options, Box<dyn Error>> {
     let mut mode = None;
     let mut exit_after_capture = false;
     let mut multi_records = false;
+    let mut forward_samples = 1;
     let mut output = PathBuf::from("target/renderer-pbr-sphere-material");
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -105,6 +109,15 @@ fn parse() -> Result<Options, Box<dyn Error>> {
             }
             "--exit-after-capture" => exit_after_capture = true,
             "--multi-records" => multi_records = true,
+            "--samples" => {
+                let value = args
+                    .next()
+                    .ok_or("--samples requires an unsigned integer")?;
+                forward_samples = value
+                    .to_string_lossy()
+                    .parse()
+                    .map_err(|_| "--samples requires an unsigned integer")?;
+            }
             "--output" => output = args.next().ok_or("--output requires a directory")?.into(),
             _ => return Err(format!("unsupported argument: {}", arg.to_string_lossy()).into()),
         }
@@ -114,6 +127,7 @@ fn parse() -> Result<Options, Box<dyn Error>> {
         exit_after_capture,
         output,
         multi_records,
+        forward_samples,
     })
 }
 
@@ -137,6 +151,7 @@ where
 {
     write_device_capabilities(&device, &options.output)?;
     let mut renderer = Renderer::new(device)?;
+    configure_forward_samples(&mut renderer, options)?;
     for case in cases() {
         let input = case_input(options, &case)?;
         let probes = oracle::reference(&input)?;
@@ -153,6 +168,25 @@ where
     fs::write(
         options.output.join("result.json"),
         "{\"scope\":\"perspective ORM and split-sum IBL sphere grid\",\"numericOracle\":\"independent saved-input triangle raster and PBR\",\"nonGoal\":\"unrestricted mixed Deferred surface families or physical environment prefilter generation\"}\n",
+    )?;
+    Ok(())
+}
+
+pub(crate) fn configure_forward_samples<B>(
+    renderer: &mut Renderer<B>,
+    options: &Options,
+) -> Result<(), Box<dyn Error>>
+where
+    B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend,
+{
+    renderer.set_forward_sample_count(options.forward_samples)?;
+    fs::write(
+        options.output.join("forward-samples.json"),
+        format!(
+            "{{\"schemaVersion\":1,\"requestedForwardSamples\":{},\"configuredForwardSamples\":{},\"forwardScope\":\"ordinary Forward offscreen and Surface submissions\",\"deferredBaselineSamples\":1,\"deferredPolicy\":\"the paired Deferred route remains a single-sample baseline\"}}\n",
+            options.forward_samples,
+            renderer.forward_sample_count(),
+        ),
     )?;
     Ok(())
 }

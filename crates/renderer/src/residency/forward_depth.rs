@@ -49,20 +49,32 @@ impl<B: ResourceBackend> ForwardDepthAttachment<B> {
 
     /// Allocates a single-sampled depth attachment after capability admission.
     pub(crate) fn allocate(device: &Device<B>, extent: [u32; 2]) -> Result<Self> {
-        if extent.contains(&0) {
-            return Err(Error::InvalidRange);
-        }
-        let desc = TextureDesc {
+        Self::allocate_sampled(device, extent, 1)
+    }
+
+    pub(crate) fn descriptor(extent: [u32; 2], samples: u32) -> TextureDesc {
+        TextureDesc {
             label: Some("fluxel forward depth".into()),
             dimension: TextureDimension::D2,
             extent: [extent[0], extent[1], 1],
             array_layers: 1,
             format: TextureFormat::Depth32Float,
             mip_levels: 1,
-            samples: 1,
+            samples,
             usage: TextureUsage::RENDER_ATTACHMENT,
             view_formats: Vec::new(),
-        };
+        }
+    }
+
+    pub(crate) fn allocate_sampled(
+        device: &Device<B>,
+        extent: [u32; 2],
+        samples: u32,
+    ) -> Result<Self> {
+        if extent.contains(&0) {
+            return Err(Error::InvalidRange);
+        }
+        let desc = Self::descriptor(extent, samples);
         super::forward_support::require_texture(device, &desc)?;
         let texture = device.create_texture(&desc)?;
         let view = device.create_view(

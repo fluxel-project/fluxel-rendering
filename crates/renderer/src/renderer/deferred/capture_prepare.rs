@@ -112,6 +112,7 @@ where
                     deferred.scene_color.clone(),
                     deferred.gbuffer[2].clone(),
                 )),
+                1,
                 environment,
             )
             .await?;

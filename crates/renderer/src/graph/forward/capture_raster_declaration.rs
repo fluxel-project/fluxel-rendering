@@ -39,6 +39,7 @@ where
             .map(|owner| owner.desc.mip_levels),
         depth: handles.depth,
         target: handles.target,
+        resolve_target: None,
         draws: spec.draws.clone(),
         declared: false,
         output: None,

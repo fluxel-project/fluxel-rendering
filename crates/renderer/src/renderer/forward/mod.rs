@@ -273,6 +273,7 @@ pub(super) struct ForwardProgramKey {
     color_format: TextureFormat,
     transform_uniform_bytes: u64,
     depth_mode: crate::ForwardDepthMode,
+    samples: u32,
     surface: crate::renderer::RasterSurfaceState,
 }
 impl ForwardProgramKey {
@@ -281,6 +282,7 @@ impl ForwardProgramKey {
         color_format: TextureFormat,
         transform_uniform_bytes: u64,
         depth_mode: crate::ForwardDepthMode,
+        samples: u32,
         surface: crate::renderer::RasterSurfaceState,
     ) -> Self {
         Self {
@@ -294,6 +296,7 @@ impl ForwardProgramKey {
             color_format,
             transform_uniform_bytes,
             depth_mode,
+            samples,
             surface,
         }
     }
@@ -310,6 +313,7 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
 }
 
 mod assembly;
+mod prepare_attachments;
 pub(in crate::renderer) use assembly::AssembledForwardTarget;
 pub(in crate::renderer) use composed::order_draws as order_forward_draws;
 mod capture_batch;
