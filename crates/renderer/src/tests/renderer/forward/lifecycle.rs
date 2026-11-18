@@ -55,7 +55,9 @@ fn execute_surface(
         |context| match topology {
             FrameTopology::OpaqueForward => context.opaque_forward(),
             FrameTopology::ClearOnly => context.clear_only(),
-            FrameTopology::Deferred => Err(PipelineError::InvalidPhaseContribution),
+            FrameTopology::SortedForward | FrameTopology::Deferred => {
+                Err(PipelineError::InvalidPhaseContribution)
+            }
         },
     ))
 }

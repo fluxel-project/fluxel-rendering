@@ -12,9 +12,10 @@ use fluxel_shader::ShaderComposer;
 
 use crate::{
     ForwardAssets, ForwardCpuPipeline, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
-    ForwardDrawSource, ForwardResources, FramePipeline, GeometryAsset, GeometryAttribute,
-    GeometryData, GeometryLayout, GeometryStream, PipelineError, RenderBounds, RenderChange,
-    RenderChangeSet, RenderRecord, RenderScene, RenderTransform, RenderView, SceneAssetRef,
+    ForwardDrawSource, ForwardResources, FramePipeline, FrameTopology, GeometryAsset,
+    GeometryAttribute, GeometryData, GeometryLayout, GeometryStream, PipelineError, RenderBounds,
+    RenderChange, RenderChangeSet, RenderRecord, RenderScene, RenderTransform, RenderView,
+    SceneAssetRef,
 };
 
 #[derive(Clone, Copy)]
@@ -240,7 +241,13 @@ fn with_prepared_inputs<T>(
 #[test]
 fn custom_pipeline_permutation_reorders_cross_source_draws() {
     with_prepared_inputs(|frame, inputs, sources| {
-        let ordered = order_draws(&Ordering::Reverse, frame, inputs).unwrap();
+        let ordered = order_draws(
+            &Ordering::Reverse,
+            frame,
+            inputs,
+            FrameTopology::OpaqueForward,
+        )
+        .unwrap();
         assert_eq!(
             ordered
                 .into_iter()
@@ -255,7 +262,12 @@ fn custom_pipeline_permutation_reorders_cross_source_draws() {
 fn rewritten_order_metadata_is_rejected() {
     with_prepared_inputs(|frame, inputs, _| {
         assert!(matches!(
-            order_draws(&Ordering::RewriteFirst, frame, inputs),
+            order_draws(
+                &Ordering::RewriteFirst,
+                frame,
+                inputs,
+                FrameTopology::OpaqueForward
+            ),
             Err(PipelineError::InvalidDrawOrder)
         ));
     });
@@ -266,7 +278,12 @@ fn duplicate_source_is_rejected_before_pipeline_ordering() {
     with_prepared_inputs(|frame, inputs, _| {
         let duplicate = vec![inputs[0].clone(), inputs[0].clone()];
         assert!(matches!(
-            order_draws(&Ordering::Reverse, frame, duplicate),
+            order_draws(
+                &Ordering::Reverse,
+                frame,
+                duplicate,
+                FrameTopology::OpaqueForward
+            ),
             Err(PipelineError::InvalidDrawOrder)
         ));
     });
@@ -276,7 +293,7 @@ fn duplicate_source_is_rejected_before_pipeline_ordering() {
 fn equal_orders_use_scene_then_stable_feature_namespaces() {
     with_prepared_inputs(|frame, inputs, sources| {
         let pipeline = ForwardCpuPipeline::<crate::BoundsVisibility>::default();
-        let ordered = order_draws(&pipeline, frame, inputs).unwrap();
+        let ordered = order_draws(&pipeline, frame, inputs, FrameTopology::OpaqueForward).unwrap();
         assert_eq!(
             ordered
                 .into_iter()
@@ -292,7 +309,7 @@ fn empty_draw_list_stays_empty() {
     with_prepared_inputs(|frame, _, _| {
         let pipeline = ForwardCpuPipeline::<crate::BoundsVisibility>::default();
         assert!(
-            order_draws(&pipeline, frame, Vec::new())
+            order_draws(&pipeline, frame, Vec::new(), FrameTopology::OpaqueForward)
                 .unwrap()
                 .is_empty()
         );
