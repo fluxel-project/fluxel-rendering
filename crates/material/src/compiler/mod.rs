@@ -5,6 +5,7 @@ mod compile;
 mod contribution;
 mod names;
 mod node_graph;
+mod pbr_factors;
 mod surface;
 mod texture_encoding;
 mod transmission;
@@ -14,8 +15,9 @@ use crate::{
     BindingLocation, CompiledMaterialVariant, EmissiveConfiguration, FragmentCall, FragmentInput,
     MaterialAsset, MaterialAssetRef, MaterialCodeNode, MaterialDefinition, MaterialError,
     MaterialFragment, MaterialParameter, MaterialResource, MaterialResourceKind,
-    MaterialTextureEncodingRequirement, MaterialType, MaterialVariantKey, StaticValue,
-    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
+    MaterialTextureEncodingRequirement, MaterialType, MaterialVariantKey, PbrSurfaceFactors,
+    StaticValue, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
+    TransmissionExtensions,
 };
 use fluxel_assets::AssetSnapshot;
 

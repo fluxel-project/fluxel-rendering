@@ -21,6 +21,7 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
+    pbr_surface_factors: Option<PbrSurfaceFactors>,
     pub(super) surface_policy: SurfacePolicy,
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
@@ -120,6 +121,7 @@ impl NormalizedMaterialIr {
             output: definition.output().clone(),
             surface_extensions: definition.surface_extensions().clone(),
             emissive_configuration: definition.emissive_configuration().cloned(),
+            pbr_surface_factors: definition.pbr_surface_factors().cloned(),
             surface_policy: definition.surface_policy(),
             transmission_extensions: definition.transmission_extensions().cloned(),
             node_graph,
@@ -133,6 +135,7 @@ impl NormalizedMaterialIr {
         super::surface::canonical_extensions(
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
+            self.pbr_surface_factors.as_ref(),
             &mut canonical,
         );
         super::surface::canonical_policy(self.surface_policy, &mut canonical);
@@ -211,6 +214,7 @@ impl NormalizedMaterialIr {
             &self.output,
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
+            self.pbr_surface_factors.as_ref(),
             self.surface_policy,
         );
         super::transmission::append_evaluators(
@@ -263,26 +267,27 @@ fn effective_texture_encoding_requirements(
         .emissive_configuration()
         .and_then(|configuration| configuration.texture.as_ref())
     else {
-        return Ok(requirements);
+        return super::pbr_factors::effective_texture_encodings(
+            definition.pbr_surface_factors(),
+            requirements,
+        );
     };
     match requirements
         .iter()
         .find(|requirement| requirement.resource == texture.texture)
     {
         Some(requirement) if requirement.encoding != texture.encoding => {
-            Err(MaterialError::EmissiveTextureEncodingConflict {
+            return Err(MaterialError::EmissiveTextureEncodingConflict {
                 resource: texture.texture.clone(),
-            })
-        }
-        Some(_) => Ok(requirements),
-        None => {
-            requirements.push(MaterialTextureEncodingRequirement {
-                resource: texture.texture.clone(),
-                encoding: texture.encoding,
             });
-            Ok(requirements)
         }
+        Some(_) => {}
+        None => requirements.push(MaterialTextureEncodingRequirement {
+            resource: texture.texture.clone(),
+            encoding: texture.encoding,
+        }),
     }
+    super::pbr_factors::effective_texture_encodings(definition.pbr_surface_factors(), requirements)
 }
 
 fn validate_code_node_sources(nodes: &[MaterialCodeNode]) -> Result<(), MaterialError> {

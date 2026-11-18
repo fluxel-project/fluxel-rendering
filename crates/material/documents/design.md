@@ -281,6 +281,30 @@ names may reference one physical image without changing the authored shader
 interface. Image color roles remain explicit consumer facts, rather than
 special resource kinds inferred from names.
 
+`PbrSurfaceFactors` is an opt-in UV0 metallic/roughness layer over the
+existing authored evaluator ABI. It never changes the meaning of legacy root,
+metallic/roughness, normal, or optional occlusion callables. Packed occlusion
+requires the UV0 normal-surface interface. The compiler emits
+the same `evaluate_material_uv0`, `evaluate_metallic_roughness_uv0`, and
+`evaluate_occlusion_uv0` entry points, with authored values multiplied by the
+selected standard factors. An optional base texture is hardware-sRGB and is
+multiplied with an authored `vec4` base and optional `Vec4` base factor. An
+optional packed texture is linear and multiplies authored metallic and
+perceptual roughness through explicit channels. `gltf_orm` selects occlusion
+red, roughness green, metallic blue; `babylon_metallic_roughness` selects
+metallic red and roughness alpha. Other explicit channel assignments remain
+available because Babylon exposes those controls independently.
+
+When a packed occlusion channel is selected, the generated scalar relation is
+`mix(authored_occlusion_or_one, packed_channel, occlusion_strength_or_one)`.
+This follows Babylon's ambient-strength blend while retaining an existing
+custom occlusion callable as the previous value. Factors require correctly
+typed declared parameters and texture/sampler resources. Their fixed sRGB or
+linear role is added to material texture-encoding requirements and to the
+variant identity; conflicting explicit metadata is rejected before publication.
+No renderer pass, coordinate transform, binding owner, or texture allocation is
+introduced by this configuration.
+
 ## Resources, parameters, and instances
 
 RGB transfer encoding is an image-source fact resolved by Renderer, rather than

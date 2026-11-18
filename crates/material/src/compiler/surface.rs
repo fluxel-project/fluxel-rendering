@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     EmissiveConfiguration, MaterialDefinition, MaterialError, MaterialParameter, MaterialResource,
-    MaterialResourceKind, MaterialType, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput,
-    SurfacePolicy, validation::FunctionSignature,
+    MaterialResourceKind, MaterialType, PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions,
+    SurfaceOutput, SurfacePolicy, validation::FunctionSignature,
 };
 
 /// Validates all surface-owned extensions after the root callable is resolved.
@@ -21,6 +21,7 @@ pub(super) fn validate_definition(
         definition.output(),
         definition.surface_extensions(),
         definition.emissive_configuration(),
+        definition.pbr_surface_factors(),
         root,
         functions,
         root_name,
@@ -38,6 +39,7 @@ pub(super) fn validate(
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
+    pbr_surface_factors: Option<&PbrSurfaceFactors>,
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
@@ -53,6 +55,7 @@ pub(super) fn validate(
             output: output.clone(),
         });
     }
+    super::pbr_factors::validate(pbr_surface_factors, output, parameters, resources)?;
     if root.output != MaterialType::Vec4 {
         return Err(MaterialError::UnsupportedOutput {
             output: output.clone(),
@@ -311,11 +314,13 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
 pub(super) fn canonical_extensions(
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
+    pbr_surface_factors: Option<&PbrSurfaceFactors>,
     target: &mut String,
 ) {
     if let Some(occlusion) = &extensions.occlusion {
         canonical_piece(target, "surface-occlusion", occlusion);
     }
+    super::pbr_factors::canonical(pbr_surface_factors, target);
     if let Some(emissive) = &extensions.emissive {
         canonical_piece(target, "surface-emissive", emissive);
     }
@@ -420,6 +425,7 @@ pub(super) fn append_evaluators(
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
+    pbr_surface_factors: Option<&PbrSurfaceFactors>,
     policy: SurfacePolicy,
 ) {
     match output {
@@ -438,17 +444,15 @@ pub(super) fn append_evaluators(
             ));
         }
         SurfaceOutput::MetallicRoughnessUv0 { properties } => {
-            generated.push_str(&format!("fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> {{\n    return {root_fragment}(uv);\n}}\n"));
-            generated.push_str(&format!("fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{\n    return {properties}(uv);\n}}\n"));
+            append_uv0_pbr_evaluators(generated, root_fragment, properties, pbr_surface_factors);
         }
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
-            generated.push_str(&format!("fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> {{\n    return {root_fragment}(uv);\n}}\n"));
-            generated.push_str(&format!("fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{\n    return {properties}(uv);\n}}\n"));
+            append_uv0_pbr_evaluators(generated, root_fragment, properties, pbr_surface_factors);
             generated.push_str(&format!("fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {normal}(uv);\n}}\n"));
-            match &extensions.occlusion {
-                Some(occlusion) => generated.push_str(&format!("fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 {{\n    return {occlusion}(uv);\n}}\n")),
-                None => generated.push_str("fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 { return 1.0; }\n"),
-            }
+            generated.push_str(&super::pbr_factors::uv0_occlusion_evaluator(
+                extensions.occlusion.as_deref(),
+                pbr_surface_factors,
+            ));
             match (&extensions.emissive, emissive_configuration) {
                 (Some(_), Some(_)) => unreachable!("validated emissive configuration conflict"),
                 (Some(emissive), None) => generated.push_str(&format!("fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {emissive}(uv);\n}}\n")),
@@ -458,6 +462,33 @@ pub(super) fn append_evaluators(
         }
     }
     append_policy_helpers(generated, policy);
+}
+
+fn append_uv0_pbr_evaluators(
+    generated: &mut String,
+    root: &str,
+    properties: &str,
+    factors: Option<&PbrSurfaceFactors>,
+) {
+    if let Some(factors) = factors {
+        generated.push_str(&super::pbr_factors::uv0_base_evaluator(root, factors));
+        generated.push_str(&super::pbr_factors::uv0_properties_evaluator(
+            properties, factors,
+        ));
+    } else {
+        generated.push_str(&format!(
+            "fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> {{
+    return {root}(uv);
+}}
+"
+        ));
+        generated.push_str(&format!(
+            "fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{
+    return {properties}(uv);
+}}
+"
+        ));
+    }
 }
 
 fn append_emissive_configuration(generated: &mut String, configuration: &EmissiveConfiguration) {

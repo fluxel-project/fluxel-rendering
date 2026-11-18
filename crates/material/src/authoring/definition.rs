@@ -107,6 +107,93 @@ pub struct EmissiveTexture {
     pub encoding: MaterialTextureEncoding,
 }
 
+/// One sampled base-color texture used by the standard PBR factor route.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PbrBaseTexture {
+    /// Declared hardware-sRGB `Texture2dF32` resource.
+    pub texture: String,
+    /// Declared non-comparison sampler resource.
+    pub sampler: String,
+}
+
+/// One channel of a packed PBR data texture.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum PbrPackedChannel {
+    /// Red channel.
+    Red,
+    /// Green channel.
+    Green,
+    /// Blue channel.
+    Blue,
+    /// Alpha channel.
+    Alpha,
+}
+
+/// One linear packed metallic/roughness texture and its channel assignment.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PbrPackedMetallicRoughness {
+    /// Declared linear `Texture2dF32` resource.
+    pub texture: String,
+    /// Declared non-comparison sampler resource.
+    pub sampler: String,
+    /// Channel multiplied by the authored metallic value and factor.
+    pub metallic: PbrPackedChannel,
+    /// Channel multiplied by the authored roughness value and factor.
+    pub roughness: PbrPackedChannel,
+    /// Optional channel mixed into authored occlusion.
+    pub occlusion: Option<PbrPackedChannel>,
+}
+
+impl PbrPackedMetallicRoughness {
+    /// Selects Babylon's traditional metallic-red, roughness-alpha packing.
+    #[must_use]
+    pub fn babylon_metallic_roughness(
+        texture: impl Into<String>,
+        sampler: impl Into<String>,
+    ) -> Self {
+        Self {
+            texture: texture.into(),
+            sampler: sampler.into(),
+            metallic: PbrPackedChannel::Red,
+            roughness: PbrPackedChannel::Alpha,
+            occlusion: None,
+        }
+    }
+
+    /// Selects the glTF ORM convention: occlusion-red, roughness-green and metallic-blue.
+    #[must_use]
+    pub fn gltf_orm(texture: impl Into<String>, sampler: impl Into<String>) -> Self {
+        Self {
+            texture: texture.into(),
+            sampler: sampler.into(),
+            metallic: PbrPackedChannel::Blue,
+            roughness: PbrPackedChannel::Green,
+            occlusion: Some(PbrPackedChannel::Red),
+        }
+    }
+}
+
+/// Optional standard PBR factors layered over the existing authored callables.
+///
+/// This is deliberately opt-in. The root and metallic/roughness callables
+/// retain their established meanings, then this configuration multiplies their
+/// values with authored factors and selected texture channels.
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PbrSurfaceFactors {
+    /// Optional `Vec4` parameter multiplied with the authored base value.
+    pub base_factor_parameter: Option<String>,
+    /// Optional hardware-sRGB base-color texture.
+    pub base_texture: Option<PbrBaseTexture>,
+    /// Optional `F32` parameter multiplied with authored metallic.
+    pub metallic_factor_parameter: Option<String>,
+    /// Optional `F32` parameter multiplied with authored perceptual roughness.
+    pub roughness_factor_parameter: Option<String>,
+    /// Optional linear packed metallic/roughness/occlusion texture.
+    pub packed_metallic_roughness: Option<PbrPackedMetallicRoughness>,
+    /// Optional `F32` weight for mixing packed occlusion into authored occlusion.
+    pub occlusion_strength_parameter: Option<String>,
+}
+
 /// One material's validated, author-facing definition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterialDefinition {
@@ -120,6 +207,7 @@ pub struct MaterialDefinition {
     output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
+    pbr_surface_factors: Option<PbrSurfaceFactors>,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
     node_graph: Option<MaterialNodeGraph>,
@@ -147,6 +235,7 @@ impl MaterialDefinition {
             output,
             surface_extensions: SurfaceExtensions::default(),
             emissive_configuration: None,
+            pbr_surface_factors: None,
             surface_policy: SurfacePolicy::default(),
             transmission_extensions: None,
             node_graph: None,
@@ -179,6 +268,13 @@ impl MaterialDefinition {
     #[must_use]
     pub fn with_emissive_configuration(mut self, configuration: EmissiveConfiguration) -> Self {
         self.emissive_configuration = Some(configuration);
+        self
+    }
+
+    /// Selects standard base and packed metallic/roughness factor composition.
+    #[must_use]
+    pub fn with_pbr_surface_factors(mut self, factors: PbrSurfaceFactors) -> Self {
+        self.pbr_surface_factors = Some(factors);
         self
     }
 
@@ -219,6 +315,12 @@ impl MaterialDefinition {
         self.emissive_configuration.as_ref()
     }
 
+    /// Returns standard base and packed metallic/roughness controls, when selected.
+    #[must_use]
+    pub fn pbr_surface_factors(&self) -> Option<&PbrSurfaceFactors> {
+        self.pbr_surface_factors.as_ref()
+    }
+
     /// Returns whether this material needs the renderer effects route.
     ///
     /// The effects route owns the stable occlusion and emissive evaluator ABI
@@ -228,6 +330,13 @@ impl MaterialDefinition {
         self.surface_extensions.occlusion.is_some()
             || self.surface_extensions.emissive.is_some()
             || self.emissive_configuration.is_some()
+            || match &self.pbr_surface_factors {
+                Some(factors) => match &factors.packed_metallic_roughness {
+                    Some(packed) => packed.occlusion.is_some(),
+                    None => false,
+                },
+                None => false,
+            }
     }
 
     /// Returns the static alpha and raster facts selected for this surface.

@@ -304,6 +304,54 @@ pub enum MaterialError {
         /// Texture resource name.
         resource: String,
     },
+    /// PBR factors require UV0 and packed occlusion also requires the normal-surface interface.
+    PbrSurfaceFactorsUnsupported {
+        /// Selected output.
+        output: SurfaceOutput,
+    },
+    /// A standard PBR factor named no declared material parameter.
+    PbrSurfaceFactorParameterMissing {
+        /// Configuration field.
+        field: &'static str,
+        /// Missing parameter name.
+        parameter: String,
+    },
+    /// A standard PBR factor named a parameter with an incompatible type.
+    PbrSurfaceFactorParameterTypeMismatch {
+        /// Configuration field.
+        field: &'static str,
+        /// Parameter name.
+        parameter: String,
+        /// Required type.
+        expected: MaterialType,
+        /// Actual type.
+        actual: MaterialType,
+    },
+    /// A standard PBR texture named no declared material resource.
+    PbrSurfaceFactorResourceMissing {
+        /// Configuration field.
+        field: &'static str,
+        /// Missing resource name.
+        resource: String,
+    },
+    /// A standard PBR texture named a resource with an incompatible kind.
+    PbrSurfaceFactorResourceTypeMismatch {
+        /// Configuration field.
+        field: &'static str,
+        /// Resource name.
+        resource: String,
+        /// Required kind.
+        expected: MaterialResourceKind,
+        /// Actual kind.
+        actual: MaterialResourceKind,
+    },
+    /// An occlusion strength was selected without a packed occlusion channel.
+    PbrOcclusionStrengthWithoutPackedChannel,
+    /// Explicit texture encoding metadata contradicts a standard PBR texture role.
+    PbrSurfaceFactorTextureEncodingConflict {
+        /// Texture resource name.
+        resource: String,
+    },
     /// A surface alpha cutoff must be finite before it can become WGSL source.
     SurfaceAlphaCutoffNonFinite,
     /// Transmission controls require a UV0 normal PBR surface.

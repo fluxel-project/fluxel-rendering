@@ -11,8 +11,9 @@ mod types;
 pub use assets::{MaterialAsset, MaterialAssetId, MaterialAssetRef};
 pub use code_node::MaterialCodeNode;
 pub use definition::{
-    EmissiveConfiguration, EmissiveSrgbDecode, EmissiveTexture, MaterialDefinition,
-    SurfaceExtensions, SurfaceOutput,
+    EmissiveConfiguration, EmissiveSrgbDecode, EmissiveTexture, MaterialDefinition, PbrBaseTexture,
+    PbrPackedChannel, PbrPackedMetallicRoughness, PbrSurfaceFactors, SurfaceExtensions,
+    SurfaceOutput,
 };
 pub use nodes::*;
 pub use surface_policy::{SurfaceAlphaMode, SurfacePolicy, SurfaceSideOrientation};
