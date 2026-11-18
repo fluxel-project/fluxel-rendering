@@ -36,6 +36,7 @@ pub(super) fn materials(
         input.extent() != first.extent()
             || input.view().transform.columns() != first.view().transform.columns()
             || input.view().shading_camera != first.view().shading_camera
+            || input.view().directional_light != first.view().directional_light
     }) {
         return Err(Error::InvalidRange.into());
     }
@@ -109,6 +110,7 @@ pub(super) fn uniforms(
             clip_from_world: None,
             tint: input.tint(),
             shading_camera: input.view().shading_camera,
+            directional_light: input.view().directional_light,
         });
     }
     pack_forward_uniforms(&values, alignment, max_bytes)

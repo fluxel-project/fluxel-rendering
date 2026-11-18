@@ -1,5 +1,6 @@
 //! Complete, callback-bearing graph declarations for cached Forward plans.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 
 /// A fully declared direct-surface graph before device-plan compilation.
@@ -364,7 +365,7 @@ where
                     )?;
                     let view_uniform = pass.write_with_use(
                         view_uniform,
-                        0..112,
+                        0..SPECULAR_VIEW_BYTES,
                         copy_write_uses().uses,
                         BufferUsage::COPY_DST,
                     )?;

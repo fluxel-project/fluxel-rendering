@@ -1,5 +1,6 @@
 //! Real Forward and Deferred submission witnesses for specular IBL.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 
 use std::{collections::BTreeMap, sync::atomic::Ordering};
@@ -321,7 +322,7 @@ fn forward_cached_plan_refuses_an_actual_foreign_specular_owner_before_commands(
     let foreign = crate::residency::SpecularEnvironmentFrameOwner::allocate(
         &foreign_device,
         snapshot().value(),
-        &[0; 112],
+        &[0; SPECULAR_VIEW_BYTES as usize],
     )
     .unwrap();
     let pending = renderer.slots[submission.slot].as_mut().unwrap();

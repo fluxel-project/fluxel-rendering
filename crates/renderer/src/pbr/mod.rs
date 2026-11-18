@@ -1,9 +1,8 @@
 //! Shared opaque metallic/roughness consumers for Forward and Deferred.
 //!
-//! This selected lighting policy uses a world-space directional light and a
-//! constant orthographic view direction. It is not a perspective camera or an
-//! environment-lighting implementation. Material owns surface evaluation;
-//! Renderer owns normal transforms, lighting, and G-buffer encoding.
+//! The selected lighting policy uses one view-owned directional light and
+//! supports orthographic and perspective shading cameras. Material owns
+//! surface evaluation. Renderer owns transforms, lighting and G-buffer encoding.
 
 use fluxel_material::SurfaceOutput;
 use fluxel_rhi::api::{VertexFormat, VertexStepMode};
@@ -252,6 +251,7 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
     ];
     if !deferred {
         units.push(SourceUnit::new("pbr-direct-light", direct_light::WGSL));
+        units.push(SourceUnit::new("pbr-directional-light-binding", templates::FORWARD_LIGHT));
     }
     let transform_stages = if deferred {
         vec![ShaderStage::Vertex]
@@ -275,7 +275,7 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
             VertexType::Vec3(ScalarType::F32),
         ))
         .with_static_option("renderer.surface", "opaque-metallic-roughness")
-        .with_static_option("renderer.light", "world-directional-orthographic-v1");
+        .with_static_option("renderer.light", "world-directional-uniform-v2");
     Some(if deferred {
         request
     } else {
@@ -456,7 +456,7 @@ pub(crate) fn lighting_request() -> ShaderCompositionRequest {
         "deferred_lighting_fs",
         ShaderStage::Fragment,
     ))
-    .with_static_option("renderer.light", "world-directional-orthographic-v1");
+    .with_static_option("renderer.light", "world-directional-uniform-v2");
     for binding in 0..3 {
         request = request.with_binding(
             BindingDeclaration::new(0, binding, BindingKind::Texture)
@@ -483,7 +483,7 @@ pub(crate) fn lighting_irradiance_request() -> ShaderCompositionRequest {
         "deferred_lighting_fs",
         ShaderStage::Fragment,
     ))
-    .with_static_option("renderer.light", "world-directional-orthographic-v1")
+    .with_static_option("renderer.light", "world-directional-uniform-v2")
     .with_static_option("renderer.environment", "latlong-diffuse-irradiance-v1");
     for binding in 0..3 {
         request = request.with_binding(
@@ -534,7 +534,7 @@ fn lighting_effect_request_inner(environment: bool) -> ShaderCompositionRequest 
         "deferred_lighting_fs",
         ShaderStage::Fragment,
     ))
-    .with_static_option("renderer.light", "world-directional-orthographic-v1")
+    .with_static_option("renderer.light", "world-directional-uniform-v2")
     .with_static_option("renderer.surface_effects", "emissive-ao-rgba16float-v1");
     for binding in 0..4 {
         request = request.with_binding(

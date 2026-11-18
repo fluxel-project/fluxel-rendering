@@ -8,6 +8,7 @@ fn pbr_input(world_from_local: [[f32; 4]; 4]) -> ForwardUniformInput {
         clip_from_world: None,
         tint: [1.0; 4],
         shading_camera: None,
+        directional_light: crate::DirectionalLight::default(),
     }
 }
 

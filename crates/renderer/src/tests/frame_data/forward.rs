@@ -9,6 +9,7 @@ fn transform_and_tint_have_distinct_aligned_physical_ranges() {
         clip_from_world: None,
         tint: [0.25, 0.5, 0.75, 1.0],
         shading_camera: None,
+        directional_light: crate::DirectionalLight::default(),
     };
     let packed = pack_forward_uniforms(&[input], 256, 512).unwrap();
     assert_eq!(packed.transforms.len(), 1);
@@ -34,6 +35,7 @@ fn empty_input_and_capacity_failures_remain_bounded() {
         clip_from_world: None,
         tint: [1.0; 4],
         shading_camera: None,
+        directional_light: crate::DirectionalLight::default(),
     };
     assert!(matches!(
         pack_forward_uniforms(&[input], 256, 511),
@@ -50,6 +52,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         clip_from_world: None,
         tint: [0.25, 0.5, 0.75, 1.0],
         shading_camera: None,
+        directional_light: crate::DirectionalLight::default(),
     };
     let normal = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
@@ -63,6 +66,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         clip_from_world: None,
         tint: [1.0; 4],
         shading_camera: None,
+        directional_light: crate::DirectionalLight::default(),
     };
     let packed = pack_forward_uniforms(&[color, normal], 256, 1024).unwrap();
     // Color consumes clip only. The normal surface also consumes normal and
@@ -93,6 +97,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
                 clip_from_world: None,
                 tint: [1.0; 4],
                 shading_camera: None,
+                directional_light: crate::DirectionalLight::default(),
             }],
             256,
             511,
@@ -110,6 +115,7 @@ fn non_finite_normal_matrix_is_rejected_before_byte_allocation() {
         clip_from_world: None,
         tint: [1.0; 4],
         shading_camera: None,
+        directional_light: crate::DirectionalLight::default(),
     };
     assert!(matches!(
         pack_forward_uniforms(&[input], 256, 1024),
@@ -134,6 +140,7 @@ fn pbr_transform_matrices_must_be_paired() {
                     clip_from_world,
                     tint: [1.0; 4],
                     shading_camera: None,
+                    directional_light: crate::DirectionalLight::default(),
                 }],
                 256,
                 1024

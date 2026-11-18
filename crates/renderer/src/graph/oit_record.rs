@@ -4,6 +4,7 @@
 //! they never authorize a resource access. Every texture and buffer is first
 //! resolved through the Graph pass authority before any transition or raster use.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use fluxel_rhi::{
     api::{
         AccessMask, AttachmentView, ClearColor, ColorAttachment, CommandEncoder,
@@ -378,7 +379,7 @@ fn material<B: RasterBackend + ResourceBackend>(
             draw_slots
                 .specular_view_uniform
                 .ok_or(Error::InvalidState)?,
-            0..112,
+            0..SPECULAR_VIEW_BYTES,
             AccessKind::Read,
             uniform_read(),
         )?;

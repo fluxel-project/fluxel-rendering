@@ -9,6 +9,7 @@ pub(crate) struct ForwardUniformInput {
     pub(crate) clip_from_world: Option<[[f32; 4]; 4]>,
     pub(crate) tint: [f32; 4],
     pub(crate) shading_camera: Option<crate::ShadingCamera>,
+    pub(crate) directional_light: crate::DirectionalLight,
 }
 
 pub(crate) struct ForwardUniformData {
@@ -41,8 +42,9 @@ fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
 }
 
 const PBR_CAMERA_OFFSET: usize = 192;
-const PBR_CLIP_FROM_WORLD_OFFSET: usize = PBR_CAMERA_OFFSET + 16;
-pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CAMERA_OFFSET as u64 + 16;
+const PBR_LIGHT_OFFSET: usize = PBR_CAMERA_OFFSET + 16;
+const PBR_CLIP_FROM_WORLD_OFFSET: usize = PBR_LIGHT_OFFSET + 32;
+pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64;
 pub(crate) const PBR_SCENE_REFRACTION_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64 + 64;
 
 fn transform_bytes(input: &ForwardUniformInput) -> Result<u64> {
@@ -149,6 +151,10 @@ pub(crate) fn pack_forward_uniforms(
                 .map_or([0.0, 0.0, 1.0, 0.0], crate::ShadingCamera::uniform);
             for (component, value) in camera.into_iter().enumerate() {
                 let offset = start as usize + PBR_CAMERA_OFFSET + component * 4;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            for (component, value) in input.directional_light.uniform().into_iter().enumerate() {
+                let offset = start as usize + PBR_LIGHT_OFFSET + component * 4;
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
             if let Some(clip_from_world) = input.clip_from_world {

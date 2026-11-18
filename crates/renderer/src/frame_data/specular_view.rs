@@ -2,12 +2,14 @@
 
 use fluxel_rhi::api::{Error, Result};
 
+pub(crate) const SPECULAR_VIEW_BYTES: u64 = 144;
+
 pub(crate) fn pack_specular_view(
     view: &crate::RenderView,
     max_lod: f32,
     lod_scale: f32,
     lod_offset: f32,
-) -> Result<[u8; 112]> {
+) -> Result<[u8; SPECULAR_VIEW_BYTES as usize]> {
     if view.extent.contains(&0)
         || !max_lod.is_finite()
         || max_lod < 0.0
@@ -18,19 +20,20 @@ pub(crate) fn pack_specular_view(
     }
     let camera = view.shading_camera.ok_or(Error::InvalidState)?.uniform();
     let inverse = inverse(view.transform.columns())?;
-    let mut values = Vec::with_capacity(28);
+    let mut values = Vec::with_capacity(SPECULAR_VIEW_BYTES as usize / 4);
     values.extend(inverse.into_iter().flatten());
     values.extend(camera);
     values.extend([view.extent[0] as f32, view.extent[1] as f32, max_lod, 0.0]);
     values.extend([lod_scale, lod_offset, 0.0, 0.0]);
-    let mut bytes = [0; 112];
+    values.extend(view.directional_light.uniform());
+    let mut bytes = [0; SPECULAR_VIEW_BYTES as usize];
     for (index, value) in values.into_iter().enumerate() {
         bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
     }
     Ok(bytes)
 }
 
-pub(crate) const BASIC_DEFERRED_VIEW_BYTES: u64 = 96;
+pub(crate) const BASIC_DEFERRED_VIEW_BYTES: u64 = 128;
 
 pub(crate) fn append_basic_deferred_view(
     bytes: &mut Vec<u8>,
@@ -55,12 +58,13 @@ pub(crate) fn append_basic_deferred_view(
     bytes
         .try_reserve_exact(BASIC_DEFERRED_VIEW_BYTES as usize)
         .map_err(|_| Error::OutOfMemory)?;
-    for value in inverse.into_iter().flatten().chain(camera).chain([
-        view.extent[0] as f32,
-        view.extent[1] as f32,
-        0.0,
-        0.0,
-    ]) {
+    for value in inverse
+        .into_iter()
+        .flatten()
+        .chain(camera)
+        .chain([view.extent[0] as f32, view.extent[1] as f32, 0.0, 0.0])
+        .chain(view.directional_light.uniform())
+    {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     Ok(start..end)

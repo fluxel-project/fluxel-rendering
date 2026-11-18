@@ -33,7 +33,7 @@ Environment transmission selects a prefiltered 2D latitude-longitude source.
 | Scene | Generational render and view identities; transactional batch changes; immutable snapshots; typed CPU feature storage | A general ECS integration or heterogeneous runtime registry |
 | Forward | Multi-mesh preparation over geometry, materials and textures; controlled opaque and clear policy; residency and frame data | General SRP, transparent composition, arbitrary external GPU products |
 | External composition | One statically typed opaque Forward Feature and external pipeline compose through the actual Graph | Dynamic plugins, arbitrary Graph access, a plugin ABI, general cross-pass Features |
-| Deferred | Multiple UV0-normal metallic/roughness records with fixed direct lighting, selected diffuse/specular environment inputs, and compatible G-buffer packing; legacy single-mesh paths and optional position-only GPU deformation | Arbitrarily mixed lighting families, configurable direct lighting, general environment generation, arbitrary normal-map conventions or deformation |
+| Deferred | Multiple UV0-normal metallic/roughness records with one view-owned directional light, selected diffuse/specular environment inputs, and compatible G-buffer packing; legacy single-mesh paths and optional position-only GPU deformation | Arbitrarily mixed lighting families, multiple lights or shadows, general environment generation, arbitrary normal-map conventions or deformation |
 | Optimisation | Private validation indices for the exercised Forward path | A public cache/index API, or claims about GPU duration, VRAM, or whole-frame speedup |
 
 Future work starts from an actual producer and consumer. A new public extension
@@ -235,6 +235,15 @@ and render-attachment usages. Pipeline and frame reuse consume that format.
 The normal/roughness attachment remains RGBA8. The lighting output is still
 RGBA8, so the wider G-buffer preserves input to lighting while HDR output
 requires the later output-composition work.
+
+Each render view owns one directional light for the built-in PBR shaders.
+The constructor accepts the world-space emitted ray direction, linear diffuse
+RGB, intensity and angular radius. Forward and Deferred lighting consume
+`normalize(-direction)` and intensity-scaled RGB. As in Babylon's physical
+falloff branch, direct specular roughness receives a saturated radius divided
+by the original direction length. Angular radius has no effect on IBL
+roughness. Views created with the existing constructor use the previous light
+values.
 
 Deferred geometry and Forward overlays compare depth with LessEqual. The
 Deferred lighting pass distinguishes coverage from the cleared G-buffer.

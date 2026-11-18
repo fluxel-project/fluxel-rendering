@@ -1,5 +1,6 @@
 //! Logical resource declaration for the bounded Deferred probe.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::validation::validate_frame_inputs;
 use super::*;
 
@@ -254,7 +255,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         )?;
                         let view_uniform = pass.write_with_use(
                             view_uniform,
-                            0..112,
+                            0..SPECULAR_VIEW_BYTES,
                             copy_write().uses,
                             BufferUsage::COPY_DST,
                         )?;

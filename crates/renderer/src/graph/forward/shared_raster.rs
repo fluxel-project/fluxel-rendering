@@ -1,5 +1,6 @@
 //! Range-scoped Forward raster recording shared by ordinary and OIT paths.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 
 pub(in crate::graph::forward) struct RasterColorSelection<'a, B: ResourceBackend> {
@@ -145,7 +146,7 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
                 slots
                     .specular_view_uniform_slot
                     .ok_or(Error::InvalidState)?,
-                0..112,
+                0..SPECULAR_VIEW_BYTES,
                 AccessKind::Read,
                 shader_read_uses(),
             )?;

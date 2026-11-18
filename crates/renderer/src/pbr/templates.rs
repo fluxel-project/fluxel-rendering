@@ -43,6 +43,8 @@ struct PbrTransforms {
     normal_from_local: mat4x4<f32>,
     world_from_local: mat4x4<f32>,
     shading_camera: vec4<f32>,
+    light_direction_and_roughness: vec4<f32>,
+    light_radiance: vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> pbr_transforms: PbrTransforms;
 struct PbrVertexOutput {
@@ -65,6 +67,8 @@ struct PbrSceneRefractionTransforms {
     normal_from_local: mat4x4<f32>,
     world_from_local: mat4x4<f32>,
     shading_camera: vec4<f32>,
+    light_direction_and_roughness: vec4<f32>,
+    light_radiance: vec4<f32>,
     clip_from_world: mat4x4<f32>,
 };
 @group(1) @binding(0) var<uniform> pbr_transforms: PbrSceneRefractionTransforms;
@@ -79,6 +83,12 @@ fn pbr_vertex(position: vec3<f32>, normal: vec3<f32>) -> PbrVertexOutput {
     output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
     output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
     return output;
+}
+"#;
+
+pub(super) const FORWARD_LIGHT: &str = r#"
+fn pbr_directional_light() -> PbrDirectionalLight {
+    return PbrDirectionalLight(pbr_transforms.light_direction_and_roughness, pbr_transforms.light_radiance);
 }
 "#;
 
@@ -259,8 +269,13 @@ struct PbrBasicLightingView {
     world_from_clip: mat4x4<f32>,
     camera: vec4<f32>,
     extent: vec4<f32>,
+    light: PbrDirectionalLight,
 };
 @group(0) @binding(4) var<uniform> pbr_basic_view: PbrBasicLightingView;
+
+fn pbr_directional_light() -> PbrDirectionalLight {
+    return pbr_basic_view.light;
+}
 
 fn pbr_deferred_view_direction(position: vec2<f32>, depth: f32) -> vec3<f32> {
     if pbr_basic_view.camera.w == 0.0 {

@@ -1,4 +1,5 @@
 //! Upload declarations for two independent capture-frame namespaces.
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::super::mip_generation::{MipGenerationPass, declare_chain};
 use super::capture_declaration::{FrameHandles, SharedResidentImports};
 use super::*;
@@ -205,7 +206,7 @@ pub(super) fn declare_upload(
                     )?;
                     let view_uniform = pass.write_with_use(
                         view_uniform,
-                        0..112,
+                        0..SPECULAR_VIEW_BYTES,
                         copy_write_uses().uses,
                         BufferUsage::COPY_DST,
                     )?;

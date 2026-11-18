@@ -47,6 +47,11 @@ fn diffuseBRDF_EON(albedo: vec3f, roughness: f32, NdotL: f32, NdotV: f32, LdotV:
     return (f_ss + f_ms);
 }
 
+struct PbrDirectionalLight {
+    direction_and_roughness: vec4<f32>,
+    radiance: vec4<f32>,
+}
+
 struct PbrDirectLight {
     diffuse: vec3<f32>,
     specular: vec3<f32>,
@@ -54,9 +59,11 @@ struct PbrDirectLight {
 
 fn pbr_direct_light_brdf(
     base: vec3<f32>, properties: vec2<f32>, normal: vec3<f32>, view: vec3<f32>,
-    dielectric_f0: vec3<f32>, light: vec3<f32>, light_color: vec3<f32>,
+    dielectric_f0: vec3<f32>, directional: PbrDirectionalLight,
 ) -> PbrDirectLight {
-    // Directional light with unit attenuation and zero radius, no specular AA.
+    // The authored direction follows emitted rays, as in Babylon's vLightData.
+    let light = pbr_normal(-directional.direction_and_roughness.xyz);
+    let light_color = directional.radiance.rgb;
     let half_sum = view + light;
     let half_direction = select(normal, pbr_normal(half_sum), any(half_sum != vec3<f32>(0.0)));
     let no_l = clamp(dot(normal, light), PBR_EPSILON, 1.0);
@@ -76,7 +83,8 @@ fn pbr_direct_light_brdf(
     let grazing = 1.0 - vo_h;
     let grazing_squared = grazing * grazing;
     let fresnel = f0 + (vec3<f32>(1.0) - f0) * (grazing_squared * grazing_squared * grazing);
-    let alpha_g = properties.y * properties.y + 0.0005;
+    let roughness = clamp(properties.y + directional.direction_and_roughness.w, 0.0, 1.0);
+    let alpha_g = roughness * roughness + 0.0005;
     let a2 = alpha_g * alpha_g;
     let d = no_h * no_h * (a2 - 1.0) + 1.0;
     let distribution = a2 / (PI * d * d);
@@ -90,10 +98,9 @@ fn pbr_direct_light_brdf(
 fn pbr_direct_light_components(
     base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>, dielectric_f0: vec3<f32>,
 ) -> PbrDirectLight {
-    // Renderer currently supplies one directional light to both pipelines.
     return pbr_direct_light_brdf(
         max(base, vec3<f32>(0.0)), clamp(properties, vec2<f32>(0.0), vec2<f32>(1.0)), pbr_normal(world_normal),
-        view, dielectric_f0, vec3<f32>(0.6, 0.0, 0.8), vec3<f32>(3.0),
+        view, dielectric_f0, pbr_directional_light(),
     );
 }
 

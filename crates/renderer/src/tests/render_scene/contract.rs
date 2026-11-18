@@ -361,6 +361,7 @@ fn invalid_adapter_values_are_refused() {
                 transform: RenderTransform::identity(),
                 extent: [0, 1],
                 shading_camera: None,
+                directional_light: crate::DirectionalLight::default(),
             })]
             .into_iter()
             .collect(),

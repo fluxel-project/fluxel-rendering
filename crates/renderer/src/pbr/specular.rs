@@ -25,7 +25,7 @@ mod transmission;
 /// position before calling the helper.
 pub(crate) const WGSL: &str = r#"
 struct PbrSpecularIblCamera {
-    // 112 bytes, in the ABI shared by Forward and Deferred.
+    // ABI shared by Forward and Deferred.
     world_from_clip: mat4x4<f32>,
     // xyz is a perspective eye when w=1, or a normalized direction toward
     // the eye for orthographic rendering when w=0.
@@ -34,6 +34,8 @@ struct PbrSpecularIblCamera {
     target_size_and_mips: vec4<f32>,
     // Babylon convolution scale/offset are x/y.
     lod_params: vec4<f32>,
+    light_direction_and_roughness: vec4<f32>,
+    light_radiance: vec4<f32>,
 };
 struct PbrSpecularIblResult {
     radiance: vec3<f32>,
@@ -294,17 +296,12 @@ fn forward_specular_request_inner(
         }
     }
     let mut request = with_specular_ibl(request);
-    let transform_stages = if transmission {
-        vec![ShaderStage::Vertex, ShaderStage::Fragment]
-    } else {
-        vec![ShaderStage::Vertex]
-    };
     if let Some(binding) = request
         .bindings
         .iter_mut()
         .find(|binding| binding.group == 1 && binding.binding == 0)
     {
-        *binding = binding.clone().with_visibility(transform_stages);
+        *binding = binding.clone().with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
     }
     let request = if transmission {
         request.source_units.push(SourceUnit::new(
@@ -427,6 +424,9 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
 @group(0) @binding(2) var pbr_depth: texture_depth_2d;
 {effect_binding}
 {diffuse_binding}
+fn pbr_directional_light() -> PbrDirectionalLight {{
+    return PbrDirectionalLight(pbr_specular_camera.light_direction_and_roughness, pbr_specular_camera.light_radiance);
+}}
 @vertex fn deferred_lighting_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {{
     let positions = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
     return vec4(positions[index], 0.0, 1.0);

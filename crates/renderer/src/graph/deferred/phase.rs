@@ -1,5 +1,6 @@
 //! Transaction-scoped Deferred phase capabilities.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 use crate::graph::{DrawReads, ForwardReadScope, ForwardReadState};
 
@@ -538,7 +539,7 @@ impl DeferredLightingPass<'_, '_> {
                 self.pass
                     .read_with_use(
                         view_uniform,
-                        0..112,
+                        0..SPECULAR_VIEW_BYTES,
                         uniform_read().uses,
                         BufferUsage::UNIFORM,
                     )

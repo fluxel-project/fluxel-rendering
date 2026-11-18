@@ -45,7 +45,8 @@ pub use preparation::{
     prepare_forward_scene_refraction_receiver, prepare_material,
 };
 pub use render_scene::{
-    ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,
+    ChangeReceipt, DirectionalLight, DirtyRange, FrameSnapshot, RenderBounds, RenderChange,
+    RenderChangeSet,
     RenderId, RenderRecord, RenderResources, RenderScene, RenderTransform, RenderView,
     RenderViewId, SceneAssetRef, SceneCapacity, SceneDirty, SceneError, ShadingCamera,
 };

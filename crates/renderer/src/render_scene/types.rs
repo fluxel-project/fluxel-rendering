@@ -251,6 +251,8 @@ pub struct RenderView {
     pub extent: [u32; 2],
     /// Explicit eye information for lighting routes that require world-space view direction.
     pub shading_camera: Option<super::ShadingCamera>,
+    /// The view's directional light shared by Forward and Deferred PBR.
+    pub directional_light: super::DirectionalLight,
 }
 
 impl RenderView {
@@ -260,7 +262,13 @@ impl RenderView {
         self
     }
 
-    /// Creates a view with a nonempty extent.
+    /// Associates one directional light with this view snapshot.
+    pub fn with_directional_light(mut self, light: super::DirectionalLight) -> Self {
+        self.directional_light = light;
+        self
+    }
+
+    /// Creates a view with a nonempty extent and the default directional light.
     pub fn new(transform: RenderTransform, extent: [u32; 2]) -> Result<Self, SceneError> {
         if extent.contains(&0) {
             Err(SceneError::InvalidView)
@@ -269,6 +277,7 @@ impl RenderView {
                 transform,
                 extent,
                 shading_camera: None,
+                directional_light: super::DirectionalLight::default(),
             })
         }
     }
@@ -491,6 +500,8 @@ pub enum SceneError {
     InvalidBounds,
     /// A view has an empty extent.
     InvalidView,
+    /// Directional light inputs cannot be represented as shader data.
+    InvalidDirectionalLight,
     /// An ID came from another scene.
     ForeignId {
         /// Index of the rejected operation in the submitted batch.
@@ -535,6 +546,7 @@ impl fmt::Display for SceneError {
             Self::InvalidTransform => f.write_str("render transform contains a non-finite value"),
             Self::InvalidBounds => f.write_str("render bounds are non-finite or inverted"),
             Self::InvalidView => f.write_str("render view has an empty extent"),
+            Self::InvalidDirectionalLight => f.write_str("invalid directional light inputs"),
             Self::ForeignId { operation } => {
                 write!(f, "change {operation} names an ID from another scene")
             }

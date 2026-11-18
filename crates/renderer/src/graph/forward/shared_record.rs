@@ -1,4 +1,5 @@
 //! Checked recording shared by ordinary and captured Forward frames.
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 #[path = "shared_raster.rs"]
 mod shared_raster;
@@ -155,7 +156,7 @@ where
             AccessKind::Read,
             copy_read_uses(),
         )?;
-        pass.buffer(uniform, 0..112, AccessKind::Write, copy_write_uses())?;
+        pass.buffer(uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write_uses())?;
     }
     pass.transition(encoder)?;
     for upload in &frame.resident_upload.vertices {
@@ -341,8 +342,8 @@ where
             AccessKind::Read,
             copy_read_uses(),
         )?;
-        let dst = pass.buffer(uniform, 0..112, AccessKind::Write, copy_write_uses())?;
-        encoder.copy_buffer(src, owner.view_uniform_copy.start, dst, 0, 112)?;
+        let dst = pass.buffer(uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write_uses())?;
+        encoder.copy_buffer(src, owner.view_uniform_copy.start, dst, 0, SPECULAR_VIEW_BYTES)?;
     }
     Ok(())
 }

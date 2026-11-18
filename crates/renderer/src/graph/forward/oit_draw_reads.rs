@@ -1,5 +1,6 @@
 //! The existing Forward read protocol applied to an actual OIT Graph pass.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::offscreen_prefix::ForwardDeclarationPrefix;
 use super::*;
 use crate::graph::definition::{GraphError, PassBuilder};
@@ -110,7 +111,7 @@ impl<'a> OitDrawReads<'a> {
                     ImageLayout::ShaderReadOnly,
                     TextureUsage::TEXTURE_BINDING,
                 )?;
-                pass.read_with_use(view, 0..112, shader_read_uses().uses, BufferUsage::UNIFORM)?;
+                pass.read_with_use(view, 0..SPECULAR_VIEW_BYTES, shader_read_uses().uses, BufferUsage::UNIFORM)?;
             }
             (None, None, None) => {}
             _ => return Err(GraphError::InvalidRange),

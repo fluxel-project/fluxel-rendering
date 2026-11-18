@@ -1,5 +1,6 @@
 //! Shared offscreen imports, uploads and mip generation before any raster output.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 
 pub(super) struct ForwardDeclarationPrefix {
@@ -346,7 +347,7 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
                     )?;
                     let view_uniform = pass.write_with_use(
                         view_uniform,
-                        0..112,
+                        0..SPECULAR_VIEW_BYTES,
                         copy_write_uses().uses,
                         BufferUsage::COPY_DST,
                     )?;

@@ -1,5 +1,6 @@
 //! Concrete per-frame ownership for split-sum specular IBL.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use fluxel_rhi::{
     api::{
         AccessMask, AddressMode, Buffer, BufferDesc, BufferUsage, BufferUses, Device, DeviceId,
@@ -49,7 +50,7 @@ pub(crate) struct SpecularEnvironmentFrameOwner<B: ResourceBackend> {
     pub(crate) brdf_lut_sampler_desc: SamplerDesc,
     pub(crate) radiance_copies: Vec<SpecularIblCopyFootprint>,
     pub(crate) brdf_lut_copy: SpecularIblCopyFootprint,
-    /// Source range for the exact 112-byte view uniform copied into `view_uniform`.
+    /// Source range for the exact view uniform copied into `view_uniform`.
     pub(crate) view_uniform_copy: std::ops::Range<u64>,
     pub(crate) view_uniform: Buffer<B>,
     pub(crate) view_uniform_desc: BufferDesc,
@@ -63,7 +64,7 @@ impl<B: ResourceBackend> SpecularEnvironmentFrameOwner<B> {
     pub(crate) fn allocate(
         device: &Device<B>,
         data: &EnvironmentSpecularIblData,
-        view_uniform_bytes: &[u8; 112],
+        view_uniform_bytes: &[u8; SPECULAR_VIEW_BYTES as usize],
     ) -> std::result::Result<Self, Error> {
         if !data.is_valid() {
             return Err(Error::InvalidRange);
@@ -108,7 +109,7 @@ impl<B: ResourceBackend> SpecularEnvironmentFrameOwner<B> {
         };
         let view_uniform_desc = BufferDesc {
             label: Some("fluxel environment specular view uniform".into()),
-            size: 112,
+            size: SPECULAR_VIEW_BYTES,
             usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST,
             memory: MemoryClass::Device,
         };
@@ -202,7 +203,7 @@ impl<B: ResourceBackend> SpecularEnvironmentFrameOwner<B> {
             || self.upload_desc.usage != (BufferUsage::COPY_SRC | BufferUsage::MAP_WRITE)
             || self.upload_desc.memory != MemoryClass::Upload
             || self.upload_incoming != empty_buffer_uses()
-            || self.view_uniform_desc.size != 112
+            || self.view_uniform_desc.size != SPECULAR_VIEW_BYTES
             || self.view_uniform_desc.usage != (BufferUsage::UNIFORM | BufferUsage::COPY_DST)
             || self.view_uniform_desc.memory != MemoryClass::Device
             || self.view_uniform_incoming != empty_buffer_uses()
@@ -210,7 +211,7 @@ impl<B: ResourceBackend> SpecularEnvironmentFrameOwner<B> {
                 .view_uniform_copy
                 .end
                 .checked_sub(self.view_uniform_copy.start)
-                != Some(112)
+                != Some(SPECULAR_VIEW_BYTES)
             || self.view_uniform_copy.end > self.upload_desc.size
             || self.view_uniform_copy.start % 512 != 0
             || !valid_radiance_sampler(&self.radiance_sampler_desc, self.radiance.desc.mip_levels)
@@ -275,7 +276,7 @@ fn empty_buffer_uses() -> BufferUses {
 
 fn staging_payload(
     data: &EnvironmentSpecularIblData,
-    view_uniform_bytes: &[u8; 112],
+    view_uniform_bytes: &[u8; SPECULAR_VIEW_BYTES as usize],
 ) -> std::result::Result<
     (
         Vec<u8>,
@@ -315,7 +316,7 @@ fn staging_payload(
         bytes,
         copies,
         brdf_lut_copy,
-        uniform_start..uniform_start + 112,
+        uniform_start..uniform_start + SPECULAR_VIEW_BYTES,
     ))
 }
 

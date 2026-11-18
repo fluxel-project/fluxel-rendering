@@ -124,6 +124,7 @@ where
                     .then(|| input.view().transform.columns()),
                 tint: input.tint(),
                 shading_camera: input.view().shading_camera,
+                directional_light: input.view().directional_light,
             })
             .collect();
         let limits = self.device.capabilities().limits;

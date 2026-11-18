@@ -1,4 +1,5 @@
 //! Transaction-scoped Forward phase and access capabilities.
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 
 /// Private state behind the public, deliberately narrow phase context.
@@ -222,7 +223,7 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
             self.pass
                 .read_with_use(
                     view_uniform,
-                    0..112,
+                    0..SPECULAR_VIEW_BYTES,
                     shader_read_uses().uses,
                     BufferUsage::UNIFORM,
                 )

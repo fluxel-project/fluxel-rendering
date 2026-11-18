@@ -1,5 +1,6 @@
 //! Shared concrete bind layout for separately owned diffuse and specular inputs.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use crate::residency::{EnvironmentFrameOwner, SpecularEnvironmentFrameOwner};
 use fluxel_rhi::{api::*, backend::ResourceBackend};
 
@@ -35,7 +36,7 @@ pub(super) fn layout_entries(diffuse: bool, specular: bool) -> Vec<BindGroupLayo
                 6,
                 BindingType::UniformBuffer {
                     dynamic_offset: false,
-                    min_size: 112,
+                    min_size: SPECULAR_VIEW_BYTES,
                 },
             ),
         ]);
@@ -90,7 +91,7 @@ pub(super) fn bind_group<B: ResourceBackend>(
                 binding: 6,
                 resource: BindingResource::Buffer {
                     buffer: &owner.view_uniform,
-                    range: 0..112,
+                    range: 0..SPECULAR_VIEW_BYTES,
                 },
             },
         ]);

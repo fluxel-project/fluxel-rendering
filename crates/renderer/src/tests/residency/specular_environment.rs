@@ -1,5 +1,6 @@
 //! Specular IBL residency tests run beside the shared renderer witness.
 
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 
 use std::sync::atomic::Ordering;
@@ -44,7 +45,7 @@ fn data() -> EnvironmentSpecularIblData {
 #[test]
 fn specular_owner_allocates_exact_two_textures_two_samplers_and_aligned_common_staging() {
     let (device, native) = fixture(Script::AcceptedExact);
-    let owner = SpecularEnvironmentFrameOwner::allocate(&device, &data(), &[3; 112])
+    let owner = SpecularEnvironmentFrameOwner::allocate(&device, &data(), &[3; SPECULAR_VIEW_BYTES as usize])
         .expect("specular owner");
     assert_eq!(native.created_textures.load(Ordering::SeqCst), 2);
     assert_eq!(native.created_samplers.load(Ordering::SeqCst), 2);
@@ -61,7 +62,7 @@ fn specular_owner_allocates_exact_two_textures_two_samplers_and_aligned_common_s
     assert_eq!(owner.brdf_lut_copy.source_offset % 512, 0);
     assert_eq!(
         owner.view_uniform_copy.end - owner.view_uniform_copy.start,
-        112
+        SPECULAR_VIEW_BYTES
     );
     assert_eq!(owner.view_uniform_copy.start % 512, 0);
     owner
@@ -74,7 +75,7 @@ fn capability_failure_is_refused_before_any_specular_allocation() {
     let (device, native) = fixture(Script::AcceptedExact);
     native.texture_filterable.store(false, Ordering::SeqCst);
     assert!(matches!(
-        SpecularEnvironmentFrameOwner::allocate(&device, &data(), &[0; 112]),
+        SpecularEnvironmentFrameOwner::allocate(&device, &data(), &[0; SPECULAR_VIEW_BYTES as usize]),
         Err(Error::Unsupported("filterable specular environment"))
     ));
     assert_eq!(native.created_textures.load(Ordering::SeqCst), 0);
@@ -85,7 +86,7 @@ fn capability_failure_is_refused_before_any_specular_allocation() {
 #[test]
 fn actual_texture_shape_and_complete_mip_chain_are_rechecked_before_sampling() {
     let (device, _) = fixture(Script::AcceptedExact);
-    let mut owner = SpecularEnvironmentFrameOwner::allocate(&device, &data(), &[0; 112])
+    let mut owner = SpecularEnvironmentFrameOwner::allocate(&device, &data(), &[0; SPECULAR_VIEW_BYTES as usize])
         .expect("specular owner");
     owner.radiance.desc.extent[2] = 2;
     assert!(owner.validate_for_sampling(device.id()).is_err());

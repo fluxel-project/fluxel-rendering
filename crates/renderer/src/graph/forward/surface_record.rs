@@ -1,4 +1,5 @@
 //! Surface Record for the bounded Forward product.
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
 
 impl<B: ResourceBackend> SurfaceForwardPlan<B> {
@@ -113,7 +114,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             )?;
             pass.buffer(
                 self.specular_view_uniform_slot.ok_or(Error::InvalidState)?,
-                0..112,
+                0..SPECULAR_VIEW_BYTES,
                 AccessKind::Read,
                 shader_read_uses(),
             )?;
@@ -384,7 +385,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 AccessKind::Read,
                 copy_read_uses(),
             )?;
-            pass.buffer(uniform, 0..112, AccessKind::Write, copy_write_uses())?;
+            pass.buffer(uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write_uses())?;
         }
         pass.transition(encoder)?;
         for upload in &frame.resident_upload.vertices {
@@ -567,8 +568,8 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 AccessKind::Read,
                 copy_read_uses(),
             )?;
-            let dst = pass.buffer(uniform, 0..112, AccessKind::Write, copy_write_uses())?;
-            encoder.copy_buffer(src, owner.view_uniform_copy.start, dst, 0, 112)?;
+            let dst = pass.buffer(uniform, 0..SPECULAR_VIEW_BYTES, AccessKind::Write, copy_write_uses())?;
+            encoder.copy_buffer(src, owner.view_uniform_copy.start, dst, 0, SPECULAR_VIEW_BYTES)?;
         }
         Ok(())
     }

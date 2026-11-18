@@ -30,7 +30,7 @@ fn view_inverse_and_camera_bytes_follow_the_actual_uniform_layout() {
         ]
     );
     assert_eq!(
-        &data[16..],
+        &data[16..28],
         &[3., 4., 5., 1., 512., 256., 3., 0., 3., -0.25, 0., 0.]
     );
 }
@@ -76,7 +76,7 @@ fn finite_signed_lod_conversion_survives_the_uniform_boundary() {
         .unwrap()
         .with_shading_camera(ShadingCamera::orthographic([0., 0., 1.]).unwrap());
     let values = floats(&pack_specular_view(&view, 4., -2., 3.).unwrap());
-    assert_eq!(&values[24..], &[-2., 3., 0., 0.]);
+    assert_eq!(&values[24..28], &[-2., 3., 0., 0.]);
     let lod = crate::LinearSpecularLod {
         scale: -2.,
         offset: 3.,
