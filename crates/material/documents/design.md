@@ -293,6 +293,20 @@ requires an asset binding with the selected linear or sRGB encoding. A
 same-frame capture is linear. Unannotated resources retain the generic contract
 for callers that intentionally support either source representation.
 
+`EmissiveConfiguration` is the standard UV0-normal-PBR emissive path. It emits
+`color * sampled_linear_rgb * texture_level * intensity`, matching Babylon's
+PBR emissive composition. Its color, intensity, and texture-level references
+are optional, typed material parameters (`Vec3`, `F32`, and `F32`); absent
+references lower to black color and unit factors. The optional texture names a
+declared `Texture2dF32` resource and non-comparison sampler, plus an explicit
+linear or sRGB encoding. That encoding is added to the variant's required
+texture metadata, so an sRGB asset is hardware-decoded before the evaluator
+uses its RGB. The author can supply a custom `SurfaceExtensions::emissive`
+callable as an exclusive alternative.
+Renderer selects its effects route through
+`MaterialDefinition::requires_surface_effects()`, which includes either
+emissive form and occlusion.
+
 Material resources describe generic shader-visible requirements. The current
 public subset has float scalar and vector uniforms (`UniformF32`,
 `UniformVec2`, `UniformVec3` and `UniformVec4`), read-only `Texture2dF32`,

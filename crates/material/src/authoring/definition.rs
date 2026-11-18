@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use super::{
     MaterialCodeNode, MaterialFragment, MaterialNodeGraph, MaterialParameter, MaterialResource,
-    MaterialTextureEncodingRequirement, StaticValue, SurfacePolicy, TransmissionExtensions,
+    MaterialTextureEncoding, MaterialTextureEncodingRequirement, StaticValue, SurfacePolicy,
+    TransmissionExtensions,
 };
 
 /// The selected surface output for the minimal material contribution.
@@ -47,7 +48,43 @@ pub struct SurfaceExtensions {
     /// Optional `vec2<f32> -> f32` occlusion callable.
     pub occlusion: Option<String>,
     /// Optional `vec2<f32> -> vec3<f32>` emissive callable.
+    ///
+    /// This remains available for custom emissive evaluation. It cannot be
+    /// combined with a definition-level [`EmissiveConfiguration`], which
+    /// generates the standard color-texture-strength evaluator itself.
     pub emissive: Option<String>,
+}
+
+/// Standard emissive controls for a UV0 normal PBR surface.
+///
+/// This lowers to Babylon's PBR relation: color multiplied by sampled linear
+/// RGB, texture level, and intensity. Missing parameter references lower to
+/// neutral constants: black color and unit intensity. A missing texture leaves
+/// no sampled term, so the result is color multiplied by intensity.
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct EmissiveConfiguration {
+    /// Optional `Vec3` material parameter naming the emissive color.
+    pub color_parameter: Option<String>,
+    /// Optional `F32` material parameter naming the emissive intensity.
+    pub intensity_parameter: Option<String>,
+    /// Optional named texture, sampler, level, and transfer encoding.
+    pub texture: Option<EmissiveTexture>,
+}
+
+/// One declared emissive texture binding.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct EmissiveTexture {
+    /// Declared `Texture2dF32` resource sampled by the evaluator.
+    pub texture: String,
+    /// Declared non-comparison sampler resource paired with [`Self::texture`].
+    pub sampler: String,
+    /// Optional `F32` material parameter naming the texture level.
+    pub level_parameter: Option<String>,
+    /// Transfer encoding required of the bound texture asset.
+    ///
+    /// `Srgb` selects hardware sRGB decode before filtering, as on Babylon's
+    /// sRGB texture path. The evaluator consumes the resulting linear RGB.
+    pub encoding: MaterialTextureEncoding,
 }
 
 /// One material's validated, author-facing definition.
@@ -62,6 +99,7 @@ pub struct MaterialDefinition {
     static_options: BTreeMap<String, StaticValue>,
     output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
+    emissive_configuration: Option<EmissiveConfiguration>,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
     node_graph: Option<MaterialNodeGraph>,
@@ -88,6 +126,7 @@ impl MaterialDefinition {
             static_options,
             output,
             surface_extensions: SurfaceExtensions::default(),
+            emissive_configuration: None,
             surface_policy: SurfacePolicy::default(),
             transmission_extensions: None,
             node_graph: None,
@@ -112,6 +151,14 @@ impl MaterialDefinition {
     #[must_use]
     pub fn with_surface_extensions(mut self, extensions: SurfaceExtensions) -> Self {
         self.surface_extensions = extensions;
+        self
+    }
+
+    /// Selects standard color-texture-strength emissive evaluation for a UV0
+    /// normal PBR surface.
+    #[must_use]
+    pub fn with_emissive_configuration(mut self, configuration: EmissiveConfiguration) -> Self {
+        self.emissive_configuration = Some(configuration);
         self
     }
 
@@ -144,6 +191,23 @@ impl MaterialDefinition {
     #[must_use]
     pub fn surface_extensions(&self) -> &SurfaceExtensions {
         &self.surface_extensions
+    }
+
+    /// Returns standard emissive evaluation controls, when selected.
+    #[must_use]
+    pub fn emissive_configuration(&self) -> Option<&EmissiveConfiguration> {
+        self.emissive_configuration.as_ref()
+    }
+
+    /// Returns whether this material needs the renderer effects route.
+    ///
+    /// The effects route owns the stable occlusion and emissive evaluator ABI
+    /// for UV0 normal PBR surfaces.
+    #[must_use]
+    pub const fn requires_surface_effects(&self) -> bool {
+        self.surface_extensions.occlusion.is_some()
+            || self.surface_extensions.emissive.is_some()
+            || self.emissive_configuration.is_some()
     }
 
     /// Returns the static alpha and raster facts selected for this surface.

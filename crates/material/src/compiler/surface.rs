@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    MaterialDefinition, MaterialError, MaterialType, SurfaceAlphaMode, SurfaceExtensions,
-    SurfaceOutput, SurfacePolicy, validation::FunctionSignature,
+    EmissiveConfiguration, MaterialDefinition, MaterialError, MaterialParameter, MaterialResource,
+    MaterialResourceKind, MaterialType, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput,
+    SurfacePolicy, validation::FunctionSignature,
 };
 
 /// Validates all surface-owned extensions after the root callable is resolved.
@@ -13,13 +14,18 @@ pub(super) fn validate_definition(
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
+    parameters: &[MaterialParameter],
+    resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
     validate(
         definition.output(),
         definition.surface_extensions(),
+        definition.emissive_configuration(),
         root,
         functions,
         root_name,
+        parameters,
+        resources,
     )?;
     super::transmission::validate(
         definition.output(),
@@ -31,11 +37,16 @@ pub(super) fn validate_definition(
 pub(super) fn validate(
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
+    emissive_configuration: Option<&EmissiveConfiguration>,
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
+    parameters: &[MaterialParameter],
+    resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
-    if (!extensions.occlusion.is_none() || !extensions.emissive.is_none())
+    if (extensions.occlusion.is_some()
+        || extensions.emissive.is_some()
+        || emissive_configuration.is_some())
         && !matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. })
     {
         return Err(MaterialError::SurfaceExtensionsUnsupported {
@@ -118,6 +129,103 @@ pub(super) fn validate(
         &reserved,
         functions,
     )?;
+    if extensions.emissive.is_some() && emissive_configuration.is_some() {
+        return Err(MaterialError::EmissiveConfigurationConflict);
+    }
+    if let Some(configuration) = emissive_configuration {
+        validate_emissive_configuration(configuration, parameters, resources)?;
+    }
+    Ok(())
+}
+
+fn validate_emissive_configuration(
+    configuration: &EmissiveConfiguration,
+    parameters: &[MaterialParameter],
+    resources: &[MaterialResource],
+) -> Result<(), MaterialError> {
+    validate_emissive_parameter(
+        configuration.color_parameter.as_deref(),
+        "color_parameter",
+        MaterialType::Vec3,
+        parameters,
+    )?;
+    validate_emissive_parameter(
+        configuration.intensity_parameter.as_deref(),
+        "intensity_parameter",
+        MaterialType::F32,
+        parameters,
+    )?;
+    let Some(texture) = &configuration.texture else {
+        return Ok(());
+    };
+    validate_emissive_parameter(
+        texture.level_parameter.as_deref(),
+        "texture.level_parameter",
+        MaterialType::F32,
+        parameters,
+    )?;
+    validate_emissive_resource(
+        "texture.texture",
+        &texture.texture,
+        MaterialResourceKind::Texture2dF32,
+        resources,
+    )?;
+    validate_emissive_resource(
+        "texture.sampler",
+        &texture.sampler,
+        MaterialResourceKind::Sampler { comparison: false },
+        resources,
+    )
+}
+
+fn validate_emissive_parameter(
+    name: Option<&str>,
+    control: &'static str,
+    expected: MaterialType,
+    parameters: &[MaterialParameter],
+) -> Result<(), MaterialError> {
+    let Some(name) = name else {
+        return Ok(());
+    };
+    let parameter = parameters
+        .iter()
+        .find(|parameter| parameter.name == name)
+        .ok_or_else(|| MaterialError::EmissiveParameterMissing {
+            control,
+            parameter: name.into(),
+        })?;
+    if parameter.ty != expected {
+        return Err(MaterialError::EmissiveParameterTypeMismatch {
+            control,
+            parameter: name.into(),
+            expected,
+            actual: parameter.ty,
+        });
+    }
+    Ok(())
+}
+
+fn validate_emissive_resource(
+    field: &'static str,
+    name: &str,
+    expected: MaterialResourceKind,
+    resources: &[MaterialResource],
+) -> Result<(), MaterialError> {
+    let resource = resources
+        .iter()
+        .find(|resource| resource.name == name)
+        .ok_or_else(|| MaterialError::EmissiveResourceMissing {
+            field,
+            resource: name.into(),
+        })?;
+    if resource.kind != expected {
+        return Err(MaterialError::EmissiveResourceTypeMismatch {
+            field,
+            resource: name.into(),
+            expected,
+            actual: resource.kind,
+        });
+    }
     Ok(())
 }
 
@@ -200,12 +308,40 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
     names
 }
 
-pub(super) fn canonical_extensions(extensions: &SurfaceExtensions, target: &mut String) {
+pub(super) fn canonical_extensions(
+    extensions: &SurfaceExtensions,
+    emissive_configuration: Option<&EmissiveConfiguration>,
+    target: &mut String,
+) {
     if let Some(occlusion) = &extensions.occlusion {
         canonical_piece(target, "surface-occlusion", occlusion);
     }
     if let Some(emissive) = &extensions.emissive {
         canonical_piece(target, "surface-emissive", emissive);
+    }
+    if let Some(configuration) = emissive_configuration {
+        canonical_piece(target, "surface-emissive-configuration", "enabled");
+        if let Some(color) = &configuration.color_parameter {
+            canonical_piece(target, "surface-emissive-color", color);
+        }
+        if let Some(intensity) = &configuration.intensity_parameter {
+            canonical_piece(target, "surface-emissive-intensity", intensity);
+        }
+        if let Some(texture) = &configuration.texture {
+            canonical_piece(target, "surface-emissive-texture", &texture.texture);
+            canonical_piece(target, "surface-emissive-sampler", &texture.sampler);
+            if let Some(level) = &texture.level_parameter {
+                canonical_piece(target, "surface-emissive-level", level);
+            }
+            canonical_piece(
+                target,
+                "surface-emissive-texture-encoding",
+                match texture.encoding {
+                    crate::MaterialTextureEncoding::Linear => "linear",
+                    crate::MaterialTextureEncoding::Srgb => "srgb",
+                },
+            );
+        }
     }
 }
 
@@ -266,6 +402,7 @@ pub(super) fn append_evaluators(
     root_fragment: &str,
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
+    emissive_configuration: Option<&EmissiveConfiguration>,
     policy: SurfacePolicy,
 ) {
     match output {
@@ -295,13 +432,53 @@ pub(super) fn append_evaluators(
                 Some(occlusion) => generated.push_str(&format!("fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 {{\n    return {occlusion}(uv);\n}}\n")),
                 None => generated.push_str("fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 { return 1.0; }\n"),
             }
-            match &extensions.emissive {
-                Some(emissive) => generated.push_str(&format!("fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {emissive}(uv);\n}}\n")),
-                None => generated.push_str("fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }\n"),
+            match (&extensions.emissive, emissive_configuration) {
+                (Some(_), Some(_)) => unreachable!("validated emissive configuration conflict"),
+                (Some(emissive), None) => generated.push_str(&format!("fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {emissive}(uv);\n}}\n")),
+                (None, Some(configuration)) => append_emissive_configuration(generated, configuration),
+                (None, None) => generated.push_str("fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }\n"),
             }
         }
     }
     append_policy_helpers(generated, policy);
+}
+
+fn append_emissive_configuration(generated: &mut String, configuration: &EmissiveConfiguration) {
+    let color = configuration
+        .color_parameter
+        .as_deref()
+        .unwrap_or("vec3<f32>(0.0)");
+    let intensity = configuration
+        .intensity_parameter
+        .as_deref()
+        .unwrap_or("1.0");
+    let mut uv = String::from("emissive_uv");
+    while [color, intensity].contains(&uv.as_str())
+        || configuration.texture.as_ref().is_some_and(|texture| {
+            [
+                Some(texture.texture.as_str()),
+                Some(texture.sampler.as_str()),
+                texture.level_parameter.as_deref(),
+            ]
+            .contains(&Some(uv.as_str()))
+        })
+    {
+        uv.push('_');
+    }
+    generated.push_str(&format!(
+        "fn evaluate_emissive_uv0({uv}: vec2<f32>) -> vec3<f32> {{\n"
+    ));
+    match &configuration.texture {
+        Some(texture) => {
+            let level = texture.level_parameter.as_deref().unwrap_or("1.0");
+            generated.push_str(&format!(
+                "    return {color} * textureSample({}, {}, {uv}).rgb * {level} * {intensity};\n",
+                texture.texture, texture.sampler,
+            ));
+        }
+        None => generated.push_str(&format!("    return {color} * {intensity};\n")),
+    }
+    generated.push_str("}\n");
 }
 
 fn append_policy_helpers(generated: &mut String, policy: SurfacePolicy) {

@@ -40,10 +40,9 @@ pub(super) fn materials(
     }) {
         return Err(Error::InvalidRange.into());
     }
-    let effects = inputs.iter().any(|input| {
-        let extensions = input.material().value().surface_extensions();
-        extensions.occlusion.is_some() || extensions.emissive.is_some()
-    });
+    let effects = inputs
+        .iter()
+        .any(|input| input.material().value().requires_surface_effects());
     let mut prepared = Vec::with_capacity(inputs.len());
     for input in inputs {
         let layout = &input.geometry().value().layout;

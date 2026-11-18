@@ -20,6 +20,7 @@ pub(super) struct NormalizedMaterialIr {
     static_options: BTreeMap<String, StaticValue>,
     pub(super) output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
+    emissive_configuration: Option<EmissiveConfiguration>,
     pub(super) surface_policy: SurfacePolicy,
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
@@ -81,7 +82,6 @@ impl NormalizedMaterialIr {
                 name: root_fragment.clone(),
             }
         })?;
-        super::surface::validate_definition(definition, root, &functions, &root_fragment)?;
         validate_parameters(
             definition.parameters(),
             &functions,
@@ -89,10 +89,16 @@ impl NormalizedMaterialIr {
         )?;
         let resources = merge_resources(definition.resources(), &code_nodes)?;
         validate_parameter_resources(definition.parameters(), &resources)?;
-        super::texture_encoding::validate(
-            definition.texture_encoding_requirements(),
+        super::surface::validate_definition(
+            definition,
+            root,
+            &functions,
+            &root_fragment,
+            definition.parameters(),
             &resources,
         )?;
+        let texture_encoding_requirements = effective_texture_encoding_requirements(definition)?;
+        super::texture_encoding::validate(&texture_encoding_requirements, &resources)?;
         validate_top_level_names(
             &fragments,
             &code_nodes,
@@ -109,10 +115,11 @@ impl NormalizedMaterialIr {
             root_fragment,
             parameters: sorted_by_name(definition.parameters().to_vec(), |value| &value.name),
             resources,
-            texture_encoding_requirements: definition.texture_encoding_requirements().to_vec(),
+            texture_encoding_requirements,
             static_options: definition.static_options().clone(),
             output: definition.output().clone(),
             surface_extensions: definition.surface_extensions().clone(),
+            emissive_configuration: definition.emissive_configuration().cloned(),
             surface_policy: definition.surface_policy(),
             transmission_extensions: definition.transmission_extensions().cloned(),
             node_graph,
@@ -123,7 +130,11 @@ impl NormalizedMaterialIr {
         let mut canonical = String::new();
         canonical_piece(&mut canonical, "root", &self.root_fragment);
         super::surface::canonical(&self.output, &mut canonical);
-        super::surface::canonical_extensions(&self.surface_extensions, &mut canonical);
+        super::surface::canonical_extensions(
+            &self.surface_extensions,
+            self.emissive_configuration.as_ref(),
+            &mut canonical,
+        );
         super::surface::canonical_policy(self.surface_policy, &mut canonical);
         super::transmission::canonical(self.transmission_extensions.as_ref(), &mut canonical);
         for fragment in &self.fragments {
@@ -199,6 +210,7 @@ impl NormalizedMaterialIr {
             &self.root_fragment,
             &self.output,
             &self.surface_extensions,
+            self.emissive_configuration.as_ref(),
             self.surface_policy,
         );
         super::transmission::append_evaluators(
@@ -240,6 +252,36 @@ impl NormalizedMaterialIr {
             callable_declarations(&self.fragments, &self.code_nodes, self.node_graph.as_ref()),
             self.static_options.clone(),
         )
+    }
+}
+
+fn effective_texture_encoding_requirements(
+    definition: &MaterialDefinition,
+) -> Result<Vec<MaterialTextureEncodingRequirement>, MaterialError> {
+    let mut requirements = definition.texture_encoding_requirements().to_vec();
+    let Some(texture) = definition
+        .emissive_configuration()
+        .and_then(|configuration| configuration.texture.as_ref())
+    else {
+        return Ok(requirements);
+    };
+    match requirements
+        .iter()
+        .find(|requirement| requirement.resource == texture.texture)
+    {
+        Some(requirement) if requirement.encoding != texture.encoding => {
+            Err(MaterialError::EmissiveTextureEncodingConflict {
+                resource: texture.texture.clone(),
+            })
+        }
+        Some(_) => Ok(requirements),
+        None => {
+            requirements.push(MaterialTextureEncodingRequirement {
+                resource: texture.texture.clone(),
+                encoding: texture.encoding,
+            });
+            Ok(requirements)
+        }
     }
 }
 

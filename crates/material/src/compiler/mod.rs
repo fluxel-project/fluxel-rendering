@@ -11,11 +11,11 @@ mod transmission;
 mod validation;
 
 use crate::{
-    BindingLocation, CompiledMaterialVariant, FragmentCall, FragmentInput, MaterialAsset,
-    MaterialAssetRef, MaterialCodeNode, MaterialDefinition, MaterialError, MaterialFragment,
-    MaterialParameter, MaterialResource, MaterialTextureEncodingRequirement, MaterialType,
-    MaterialVariantKey, StaticValue, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput,
-    SurfacePolicy, TransmissionExtensions,
+    BindingLocation, CompiledMaterialVariant, EmissiveConfiguration, FragmentCall, FragmentInput,
+    MaterialAsset, MaterialAssetRef, MaterialCodeNode, MaterialDefinition, MaterialError,
+    MaterialFragment, MaterialParameter, MaterialResource, MaterialResourceKind,
+    MaterialTextureEncodingRequirement, MaterialType, MaterialVariantKey, StaticValue,
+    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
 };
 use fluxel_assets::AssetSnapshot;
 

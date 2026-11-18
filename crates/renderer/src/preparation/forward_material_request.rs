@@ -17,8 +17,7 @@ pub(super) fn material_request(
     specular: bool,
     scene_color: Option<(&str, &str)>,
 ) -> Result<ShaderCompositionRequest, ForwardPreparationError> {
-    let effects = material.surface_extensions();
-    let has_effects = effects.occlusion.is_some() || effects.emissive.is_some();
+    let has_effects = material.requires_surface_effects();
     let transmission = material.transmission_extensions().is_some();
     let request = match material.output() {
         SurfaceOutput::Color => forward_template(geometry, source)?.request(),

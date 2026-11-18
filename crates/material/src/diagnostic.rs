@@ -260,6 +260,50 @@ pub enum MaterialError {
         /// Requested callable name.
         name: String,
     },
+    /// A custom callable and the standard emissive configuration both tried to
+    /// generate the emissive evaluator.
+    EmissiveConfigurationConflict,
+    /// An emissive control named no declared material parameter.
+    EmissiveParameterMissing {
+        /// Emissive control field.
+        control: &'static str,
+        /// Missing material parameter name.
+        parameter: String,
+    },
+    /// An emissive control named a parameter with an incompatible type.
+    EmissiveParameterTypeMismatch {
+        /// Emissive control field.
+        control: &'static str,
+        /// Material parameter name.
+        parameter: String,
+        /// Required parameter type.
+        expected: MaterialType,
+        /// Declared parameter type.
+        actual: MaterialType,
+    },
+    /// The emissive configuration named no declared resource.
+    EmissiveResourceMissing {
+        /// Emissive configuration field.
+        field: &'static str,
+        /// Missing resource name.
+        resource: String,
+    },
+    /// The emissive configuration named a resource with an incompatible kind.
+    EmissiveResourceTypeMismatch {
+        /// Emissive configuration field.
+        field: &'static str,
+        /// Resource name.
+        resource: String,
+        /// Required resource kind.
+        expected: MaterialResourceKind,
+        /// Declared resource kind.
+        actual: MaterialResourceKind,
+    },
+    /// Explicit texture encoding metadata contradicts the emissive texture.
+    EmissiveTextureEncodingConflict {
+        /// Texture resource name.
+        resource: String,
+    },
     /// A surface alpha cutoff must be finite before it can become WGSL source.
     SurfaceAlphaCutoffNonFinite,
     /// Transmission controls require a UV0 normal PBR surface.
