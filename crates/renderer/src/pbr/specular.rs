@@ -276,6 +276,15 @@ fn forward_specular_request_inner(
     }
     let mut request = with_specular_ibl(request);
     let request = if transmission {
+        let transforms = request
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.group == 1 && binding.binding == 0);
+        if let Some(binding) = transforms {
+            *binding = binding
+                .clone()
+                .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
+        }
         request.source_units.push(SourceUnit::new(
             "pbr-specular-transmission",
             transmission::TRANSMISSION,
@@ -414,26 +423,11 @@ fn forward_source(normal_map: bool, effects: bool, diffuse: bool, transmission: 
 struct PbrSpecularVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec3<f32>,
-    @location(1) local_normal: vec3<f32>,
-    @location(2) tangent: vec4<f32>,
-    @location(3) uv0: vec2<f32>,
+    @location(1) tangent_world: vec3<f32>,
+    @location(2) bitangent_world: vec3<f32>,
+    @location(3) normal_world: vec3<f32>,
+    @location(4) uv0: vec2<f32>,
 };
-fn pbr_specular_world_normal(
-    local_normal: vec3<f32>, tangent: vec4<f32>, sampled: vec3<f32>,
-) -> vec3<f32> {
-    let normal = pbr_normal(
-        (pbr_transforms.normal_from_local * vec4<f32>(local_normal, 0.0)).xyz);
-    let raw_tangent =
-        (pbr_transforms.world_from_local * vec4<f32>(tangent.xyz, 0.0)).xyz;
-    let orthogonal = raw_tangent - normal * dot(normal, raw_tangent);
-    let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(normal.x) > 0.9);
-    let tangent_world = select(
-        pbr_normal(cross(normal, axis)), pbr_normal(orthogonal), dot(orthogonal, orthogonal) > 1e-12);
-    let tangent_sign = select(1.0, -1.0, tangent.w < 0.0);
-    let handedness = tangent_sign * pbr_transforms.normal_from_local[3].x;
-    let bitangent = cross(normal, tangent_world) * handedness;
-    return pbr_normal(mat3x3<f32>(tangent_world, bitangent, normal) * sampled);
-}
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
     @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>,
@@ -441,8 +435,10 @@ fn pbr_specular_world_normal(
     var output: PbrSpecularVertexOutput;
     output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
     output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
-    output.local_normal = normal;
-    output.tangent = tangent;
+    let basis = pbr_vertex_tangent_basis(normal, tangent);
+    output.tangent_world = basis[0];
+    output.bitangent_world = basis[1];
+    output.normal_world = basis[2];
     output.uv0 = uv0;
     return output;
 }
@@ -469,7 +465,7 @@ struct PbrSpecularVertexOutput {
 "#
     };
     let normal = if normal_map {
-        "pbr_specular_world_normal(input.local_normal,input.tangent,evaluate_normal_uv0(input.uv0))"
+        "pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0))"
     } else {
         "input.world_normal"
     };

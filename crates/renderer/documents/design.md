@@ -601,7 +601,11 @@ GPU state or choose Graph topology.
 Renderer evaluates a complete base RGBA value and all texture/derivative
 work before applying alpha rejection in the fragment entry. Material
 evaluators remain pure. Two-sided PBR flips the final mapped world normal on
-back faces; it does not replace the existing tangent handedness calculation.
+back faces. For explicit tangents, the Babylon branch constructs the local
+TBN from normalized vertex normal and tangent and uses tangent W for the
+bitangent. It transforms all three columns by the world matrix before
+interpolation. Fragment shading applies and normalizes the decoded normal in
+that interpolated basis.
 The effective raster front face follows the sign of the actual draw's linear
 world-transform determinant. Both executable program keys and adjacent-draw
 compatibility include the resulting raster state. A blend request is refused

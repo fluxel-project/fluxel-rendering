@@ -144,7 +144,7 @@ where
                 label: Some("Forward transform bindings".into()),
                 entries: vec![BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: if transform_uniform_bytes == 192 {
+                    visibility: if prepared.material().transmission_extensions().is_some() {
                         vec![ShaderStage::Vertex, ShaderStage::Fragment]
                     } else {
                         vec![ShaderStage::Vertex]

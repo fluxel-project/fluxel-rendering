@@ -407,8 +407,10 @@ fn geometry_uv0_normal_request(
         3,
         VertexType::Vec4(ScalarType::F32),
     ));
-    request.bindings[0] = BindingDeclaration::new(1, 0, BindingKind::Uniform)
-        .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
+    request.source_units.push(SourceUnit::new(
+        "pbr-tangent-basis",
+        templates::TANGENT_BASIS,
+    ));
     request
         .static_options
         .insert("renderer.material_context".into(), "uv0-normal".into());

@@ -565,11 +565,7 @@ where
                 label: Some(label.into()),
                 entries: vec![BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: if bytes == 192 {
-                        vec![ShaderStage::Vertex, ShaderStage::Fragment]
-                    } else {
-                        vec![ShaderStage::Vertex]
-                    },
+                    visibility: vec![ShaderStage::Vertex],
                     ty: BindingType::UniformBuffer {
                         dynamic_offset: true,
                         min_size: bytes,
