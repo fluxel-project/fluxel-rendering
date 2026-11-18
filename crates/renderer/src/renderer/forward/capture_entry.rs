@@ -194,7 +194,7 @@ where
     }
 }
 
-fn receiver_topology(
+pub(in crate::renderer) fn receiver_topology(
     receiver: &crate::ForwardDrawInput,
 ) -> std::result::Result<crate::FrameTopology, RendererError> {
     super::composed::validate_transparent_input(receiver)

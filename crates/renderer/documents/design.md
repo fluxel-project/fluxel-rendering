@@ -868,6 +868,12 @@ and reusable Graph shape, so actual owner identity cannot redefine the expected
 source. Warm shared resident owners must reuse one Graph import with consistent
 descriptor, device and incoming-state facts across producer and receiver.
 
+`submit_forward_capture_with_feature` and
+`submit_forward_capture_surface_with_feature` include one concrete Feature
+in the ordinary Forward producer. Scene and Feature draws share the selected
+ordering policy. The producer invokes `contribute_composed` on the same Graph
+that exposes the capture target to the receiver.
+
 The capture target adds sampled usage only on this route. Ordinary Forward
 targets keep their existing capability requirements. Device format facts and
 the allocation owner's saved descriptor, identity, incoming state and layout
