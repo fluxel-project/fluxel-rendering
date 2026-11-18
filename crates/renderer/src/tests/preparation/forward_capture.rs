@@ -241,7 +241,7 @@ fn pbr_uv0_normal_capture_receiver_keeps_normal_transform_and_lighting_contract(
         .with_lighting(&mut ShaderComposer::new(), false, false)
         .unwrap()
         .into_draw_input();
-    assert_eq!(draw.transform_uniform_bytes(), 192);
+    assert_eq!(draw.transform_uniform_bytes(), crate::frame_data::forward::PBR_TRANSFORM_BYTES);
     let diffuse = receiver
         .clone()
         .with_lighting(&mut ShaderComposer::new(), true, false)

@@ -235,10 +235,10 @@ fn pbr_compiled_plan_refuses_short_or_retyped_transform_footprints_before_work()
     let (snapshot, view, assets) =
         scene_and_assets(geometry(true, [0.0, 0.0, 1.0]), RenderTransform::identity());
     let mut frame = pbr_frame(&mut renderer, &snapshot, view, &assets);
-    assert_eq!(frame.draws[0].transform_bytes, 192);
+    assert_eq!(frame.draws[0].transform_bytes, crate::frame_data::forward::PBR_TRANSFORM_BYTES);
     assert_eq!(
         frame.draws[0].transform_range.end - frame.draws[0].transform_range.start,
-        192
+        crate::frame_data::forward::PBR_TRANSFORM_BYTES
     );
     let plan = crate::graph::DeferredPlan::compile(
         &device,

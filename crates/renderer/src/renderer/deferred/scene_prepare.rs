@@ -89,7 +89,13 @@ pub(super) fn uniforms(
 ) -> Result<ForwardUniformData, Error> {
     let mut values = Vec::with_capacity(inputs.len());
     for input in inputs {
-        if input.transform_uniform_bytes() != if pbr { 192 } else { 64 } {
+        if input.transform_uniform_bytes()
+            != if pbr {
+                crate::frame_data::forward::PBR_TRANSFORM_BYTES
+            } else {
+                64
+            }
+        {
             return Err(Error::InvalidRange);
         }
         values.push(ForwardUniformInput {
@@ -101,6 +107,7 @@ pub(super) fn uniforms(
             },
             world_from_local: pbr.then(|| input.transform().columns()),
             tint: input.tint(),
+            shading_camera: input.view().shading_camera,
         });
     }
     pack_forward_uniforms(&values, alignment, max_bytes)

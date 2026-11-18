@@ -6,11 +6,12 @@ fn pbr_input(world_from_local: [[f32; 4]; 4]) -> ForwardUniformInput {
         normal_from_local: Some(crate::RenderTransform::identity().columns()),
         world_from_local: Some(world_from_local),
         tint: [1.0; 4],
+        shading_camera: None,
     }
 }
 
 #[test]
-fn pbr_uniform_preserves_f64_negative_world_orientation_in_192_byte_payload() {
+fn pbr_uniform_preserves_f64_negative_world_orientation_in_pbr_payload() {
     // This determinant is below the smallest f32 subnormal, but its inverse
     // remains representable.  The shader must consume the CPU-derived sign.
     let world = [
@@ -20,7 +21,7 @@ fn pbr_uniform_preserves_f64_negative_world_orientation_in_192_byte_payload() {
         [0.0, 0.0, 0.0, 1.0],
     ];
     let packed = pack_forward_uniforms(&[pbr_input(world)], 256, 512).unwrap();
-    assert_eq!(packed.transforms, [0..192]);
+    assert_eq!(packed.transforms, [0..PBR_TRANSFORM_BYTES]);
     let offset = PBR_WORLD_HANDEDNESS_OFFSET;
     assert_eq!(
         f32::from_le_bytes(packed.bytes[offset..offset + 4].try_into().unwrap()),

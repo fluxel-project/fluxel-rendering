@@ -275,16 +275,19 @@ fn forward_specular_request_inner(
         }
     }
     let mut request = with_specular_ibl(request);
+    let transform_stages = if transmission {
+        vec![ShaderStage::Vertex, ShaderStage::Fragment]
+    } else {
+        vec![ShaderStage::Vertex]
+    };
+    if let Some(binding) = request
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.group == 1 && binding.binding == 0)
+    {
+        *binding = binding.clone().with_visibility(transform_stages);
+    }
     let request = if transmission {
-        let transforms = request
-            .bindings
-            .iter_mut()
-            .find(|binding| binding.group == 1 && binding.binding == 0);
-        if let Some(binding) = transforms {
-            *binding = binding
-                .clone()
-                .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
-        }
         request.source_units.push(SourceUnit::new(
             "pbr-specular-transmission",
             transmission::TRANSMISSION,

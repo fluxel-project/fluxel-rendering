@@ -83,7 +83,10 @@ pub(super) fn validate_draw_uniform_ranges<B: ResourceBackend>(
     if alignment == 0 {
         return Err(Error::InvalidRange);
     }
-    if !matches!(draw.transform_bytes, 64 | 192) {
+    if !matches!(
+        draw.transform_bytes,
+        64 | crate::frame_data::forward::PBR_TRANSFORM_BYTES
+    ) {
         return Err(Error::InvalidRange);
     }
     for (range, bytes) in [

@@ -7,6 +7,7 @@ pub(crate) struct ForwardUniformInput {
     pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) world_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) tint: [f32; 4],
+    pub(crate) shading_camera: Option<crate::ShadingCamera>,
 }
 
 pub(crate) struct ForwardUniformData {
@@ -38,6 +39,9 @@ fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
     })
 }
 
+const PBR_CAMERA_OFFSET: usize = 192;
+pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CAMERA_OFFSET as u64 + 16;
+
 /// Both dynamic bindings use individually aligned physical starts.
 pub(crate) fn pack_forward_uniforms(
     inputs: &[ForwardUniformInput],
@@ -60,7 +64,7 @@ pub(crate) fn pack_forward_uniforms(
             .ok_or(Error::InvalidRange)
     };
     let transform_bytes = if inputs.iter().any(|input| input.normal_from_local.is_some()) {
-        192
+        PBR_TRANSFORM_BYTES
     } else {
         64
     };
@@ -124,6 +128,13 @@ pub(crate) fn pack_forward_uniforms(
             let world = input.world_from_local.ok_or(Error::InvalidRange)?;
             let offset = start as usize + PBR_WORLD_HANDEDNESS_OFFSET;
             bytes[offset..offset + 4].copy_from_slice(&world_handedness(world)?.to_le_bytes());
+            let camera = input
+                .shading_camera
+                .map_or([0.0, 0.0, 1.0, 0.0], crate::ShadingCamera::uniform);
+            for (component, value) in camera.into_iter().enumerate() {
+                let offset = start as usize + PBR_CAMERA_OFFSET + component * 4;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
         }
         if let Some(world) = input.world_from_local {
             for (component, value) in world.iter().flatten().enumerate() {
@@ -137,7 +148,7 @@ pub(crate) fn pack_forward_uniforms(
         }
         let transform_end = start
             + if input.normal_from_local.is_some() {
-                192
+                PBR_TRANSFORM_BYTES
             } else {
                 64
             };

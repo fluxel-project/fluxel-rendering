@@ -134,6 +134,7 @@ where
                     .normal_from_local()
                     .map(|_| input.transform().columns()),
                 tint: input.tint(),
+                shading_camera: input.view().shading_camera,
             })
             .collect();
         let limits = self.device.capabilities().limits;

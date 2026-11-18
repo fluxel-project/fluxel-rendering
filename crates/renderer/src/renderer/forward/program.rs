@@ -144,7 +144,13 @@ where
                 label: Some("Forward transform bindings".into()),
                 entries: vec![BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: if prepared.material().transmission_extensions().is_some() {
+                    visibility: if artifact.interface().bindings().iter().any(|binding| {
+                        binding.group == 1
+                            && binding.binding == 0
+                            && binding
+                                .visibility
+                                .contains(&fluxel_shader::ShaderStage::Fragment)
+                    }) {
                         vec![ShaderStage::Vertex, ShaderStage::Fragment]
                     } else {
                         vec![ShaderStage::Vertex]

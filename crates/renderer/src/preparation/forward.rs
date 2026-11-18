@@ -316,7 +316,7 @@ impl ForwardDrawInput {
     /// Returns the exact transform-uniform payload size selected for this draw.
     pub const fn transform_uniform_bytes(&self) -> u64 {
         if self.normal_from_local.is_some() {
-            192
+            crate::frame_data::forward::PBR_TRANSFORM_BYTES
         } else {
             64
         }

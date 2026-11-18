@@ -252,12 +252,16 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
     if !deferred {
         units.push(SourceUnit::new("pbr-direct-light", direct_light::WGSL));
     }
+    let transform_stages = if deferred {
+        vec![ShaderStage::Vertex]
+    } else {
+        vec![ShaderStage::Vertex, ShaderStage::Fragment]
+    };
     let request = ShaderCompositionRequest::new(units)
         .with_entry_point(EntryPoint::new(vertex, ShaderStage::Vertex))
         .with_entry_point(EntryPoint::new(fragment, ShaderStage::Fragment))
         .with_binding(
-            BindingDeclaration::new(1, 0, BindingKind::Uniform)
-                .with_visibility([ShaderStage::Vertex]),
+            BindingDeclaration::new(1, 0, BindingKind::Uniform).with_visibility(transform_stages),
         )
         .with_vertex_input(VertexInputDeclaration::new(
             "POSITION",

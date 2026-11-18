@@ -20,8 +20,11 @@ facts.
 calculation across Forward, Deferred, and environment transmission. It uses
 EON with default zero diffuse roughness, legacy reflectivity energy allocation,
 glTF Schlick Fresnel, and height-correlated GGX visibility. The renderer supplies
-a fixed direction and light color. Basic PBR supplies an orthographic view
-direction, and the specular IBL variants supply their camera-derived view.
+a fixed light direction and color. Forward consumes the view's perspective eye
+or orthographic direction and uses the historical +Z direction when the view
+omits a shading camera. Deferred uses that fixed direction in its basic
+lighting path. Deferred specular IBL reconstructs world position from depth
+and supplies a camera-derived view.
 Environment transmission selects a prefiltered 2D latitude-longitude source.
 
 | Area | Current implemented subset | Not established by the subset |

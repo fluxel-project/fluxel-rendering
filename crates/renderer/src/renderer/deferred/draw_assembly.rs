@@ -36,7 +36,11 @@ pub(super) fn draws<B: ResourceBackend>(
     {
         return Err(Error::InvalidState);
     }
-    let transform_bytes = if pbr { 192 } else { 64 };
+    let transform_bytes = if pbr {
+        crate::frame_data::forward::PBR_TRANSFORM_BYTES
+    } else {
+        64
+    };
     let mut result = Vec::with_capacity(count);
     for index in 0..count {
         let schema = prepared[index]
