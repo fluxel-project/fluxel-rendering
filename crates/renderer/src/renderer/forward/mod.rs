@@ -318,6 +318,7 @@ pub(in crate::renderer) use capture_batch::CaptureReceivers;
 mod capture_entry;
 mod capture_execute;
 mod capture_oit_composed;
+mod capture_oit_composed_pair;
 mod capture_oit_entry;
 mod capture_oit_execute;
 mod capture_receiver_contribution;

@@ -362,11 +362,12 @@ where
                 (opaque, opaque_count, 0, NonZeroU32::MIN)
             }
         };
-        let handle = producer_reads.feature_handle();
-        let opaque_groups = CaptureDrawGroups::from_draws(&producer_inputs[..opaque_count], handle)
-            .map_err(RendererError::DeferredPipeline)?;
+        let handles = producer_reads.feature_handles();
+        let opaque_groups =
+            CaptureDrawGroups::from_draws(&producer_inputs[..opaque_count], handles)
+                .map_err(RendererError::DeferredPipeline)?;
         let overlay_groups =
-            CaptureDrawGroups::from_draws(&producer_inputs[opaque_count..], handle)
+            CaptureDrawGroups::from_draws(&producer_inputs[opaque_count..], handles)
                 .map_err(RendererError::DeferredPipeline)?;
         if opaque_count == 0 {
             return self

@@ -38,7 +38,7 @@ where
     {
         self.submit_composed_oit_capture_target(
             pipeline,
-            snapshot,
+            snapshot.clone(),
             view,
             visibility,
             assets,
@@ -285,6 +285,63 @@ where
                 crate::residency::OitPlan::admit(&self.device, extent)?;
             }
         }
+        self.execute_prepared_oit_capture(
+            snapshot.clone(),
+            producer,
+            receiver,
+            extent,
+            retained_assets,
+            producer_slot,
+            scene_refraction,
+            surface,
+            producer_rounds,
+            receiver_rounds,
+            started,
+            |phase| {
+                let mut context = crate::ForwardCompositionContext::new(
+                    phase,
+                    feature.feature,
+                    &prepared,
+                    &meshes,
+                    &feature_draws,
+                );
+                pipeline.contribute_composed(&selected, &mut context)
+            },
+            |context| {
+                context.scope(&meshes, read_all)?;
+                context.scope(&feature_draws, |pass| {
+                    feature.feature.contribute(&prepared, pass)
+                })
+            },
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn execute_prepared_oit_capture<N, C>(
+        &mut self,
+        snapshot: crate::FrameSnapshot<crate::ForwardResources>,
+        producer: crate::preparation::OitDrawPartition,
+        receiver: crate::preparation::OitDrawPartition,
+        extent: [u32; 2],
+        retained_assets: crate::ForwardAssets,
+        producer_slot: CaptureTextureSlot,
+        scene_refraction: bool,
+        surface: Option<SurfaceImage<B>>,
+        producer_rounds: NonZeroU32,
+        receiver_rounds: NonZeroU32,
+        started: Instant,
+        ordinary: N,
+        contribute: C,
+    ) -> Result<Submission>
+    where
+        N: FnOnce(
+            &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+        C: FnMut(
+            &mut crate::graph::ForwardOitReadContext<'_, '_>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+    {
         let producer = self
             .assemble_capture_oit_side(
                 snapshot.clone(),
@@ -304,15 +361,13 @@ where
             })?;
         let receiver = self
             .assemble_capture_oit_side(
-                snapshot.clone(),
+                snapshot,
                 receiver,
                 extent,
                 &retained_assets,
                 Some(&capture_owner),
                 surface.is_some(),
-                receiver_config
-                    .map(crate::DualDepthPeelingConfig::rounds)
-                    .unwrap_or(std::num::NonZeroU32::MIN),
+                receiver_rounds,
                 started,
             )
             .await?;
@@ -328,31 +383,12 @@ where
                             .await?
                     }
                 };
-                super::oit_execute::OitExecutionTarget::Surface { image, composite }
+                OitExecutionTarget::Surface { image, composite }
             }
-            None => super::oit_execute::OitExecutionTarget::Readback,
+            None => OitExecutionTarget::Readback,
         };
         self.execute_capture_oit_with_capture_contribution(
-            producer,
-            receiver,
-            target,
-            started,
-            |phase| {
-                let mut context = crate::ForwardCompositionContext::new(
-                    phase,
-                    feature.feature,
-                    &prepared,
-                    &meshes,
-                    &feature_draws,
-                );
-                pipeline.contribute_composed(&selected, &mut context)
-            },
-            |context| {
-                context.scope(&meshes, read_all)?;
-                context.scope(&feature_draws, |pass| {
-                    feature.feature.contribute(&prepared, pass)
-                })
-            },
+            producer, receiver, target, started, ordinary, contribute,
         )
         .await
     }

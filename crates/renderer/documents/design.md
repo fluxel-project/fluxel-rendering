@@ -618,7 +618,10 @@ sides, optional OIT owners, composite and an unhanded/failed present binding
 until completion covers every command step and the accepted present. It does
 not add a CPU transfer or scheduler. Single-Feature Forward capture uses
 `submit_forward_capture_with_feature` for sorting and the typed OIT capture
-entry points for peeling.
+entry points for peeling. The plural `submit_forward_oit_capture_with_features`
+and batch variants add two concrete Feature bindings. Their Surface forms
+use the same producer declarations, with independent scene and Feature
+read scopes in ordinary and peeling passes.
 Shader composition and compilation
 are static evidence only; the local actual-constructor Naga matrix accepts
 1360 ordinary/OIT combinations, including every independent cull/lighting
@@ -1021,7 +1024,10 @@ submission.
 
 `submit_deferred_capture_with_feature` and
 `submit_deferred_capture_surface_with_feature` add one statically bound producer
-Feature. Built-in draws and the Feature declare disjoint reads for the actual
+Feature. The plural `submit_deferred_capture_with_features` and
+`submit_deferred_capture_surface_with_features` accept two concrete Feature
+bindings and reject duplicate handles before preparing either Feature.
+Built-in draws and each Feature declare disjoint reads for the actual
 G-buffer geometry pass and the Forward sorted, peel, and excluded passes. The
 opaque-free Forward fallback consumes the same Feature contribution on its
 actual producer passes. The renderer derives phase-local draw indices after

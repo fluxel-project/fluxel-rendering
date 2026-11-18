@@ -223,7 +223,7 @@ fn read_all(
     pass.read_sampled_textures()
 }
 
-fn pair_draws(
+pub(super) fn pair_draws(
     draws: &[ForwardDrawInput],
     first: crate::FeatureHandle,
     second: crate::FeatureHandle,
