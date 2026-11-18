@@ -106,7 +106,7 @@ fn deferred_gbuffer_fs(input: PbrVertexOutput, @builtin(front_facing) front_faci
     if material_alpha_rejected(material.a) { discard; }
     var output: PbrGbufferOutput;
     output.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0));
-    output.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.04, 1.0));
+    output.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.0, 1.0));
     return output;
 }
 "#;
@@ -163,7 +163,7 @@ fn deferred_gbuffer_fs(input: PbrUv0VertexOutput, @builtin(front_facing) front_f
     if material_alpha_rejected(material.a) { discard; }
     var output: PbrGbufferUv0Output;
     output.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0));
-    output.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.04, 1.0));
+    output.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.0, 1.0));
     return output;
 }
 "#;
@@ -180,7 +180,7 @@ struct PbrNormalGbufferOutput { @location(0) base_metal: vec4<f32>, @location(1)
 struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) local_normal: vec3<f32>, @location(1) tangent: vec4<f32>, @location(2) uv0: vec2<f32>, };
 @vertex fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); o.local_normal = normal; o.tangent = tangent; o.uv0 = uv0; return o; }
 fn pbr_world_normal(local_normal: vec3<f32>, tangent: vec4<f32>, sampled: vec3<f32>) -> vec3<f32> { let n = pbr_normal((pbr_transforms.normal_from_local * vec4<f32>(local_normal, 0.0)).xyz); let raw_t = (pbr_transforms.world_from_local * vec4<f32>(tangent.xyz, 0.0)).xyz; let orthogonal = raw_t - n * dot(n, raw_t); let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9); let t = select(pbr_normal(cross(n, axis)), pbr_normal(orthogonal), dot(orthogonal, orthogonal) > 1e-12); let tangent_sign = select(1.0, -1.0, tangent.w < 0.0); let handedness = tangent_sign * pbr_transforms.normal_from_local[3].x; let b = cross(n, t) * handedness; return pbr_normal(mat3x3<f32>(t, b, n) * sampled); }
-@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalGbufferOutput { let material = evaluate_material_uv0(input.uv0); let base = clamp(material.rgb, vec3<f32>(0.0), vec3<f32>(1.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_world_normal(input.local_normal, input.tangent, evaluate_normal_uv0(input.uv0)), front_facing); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.04, 1.0)); return o; }
+@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalGbufferOutput { let material = evaluate_material_uv0(input.uv0); let base = clamp(material.rgb, vec3<f32>(0.0), vec3<f32>(1.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_world_normal(input.local_normal, input.tangent, evaluate_normal_uv0(input.uv0)), front_facing); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.0, 1.0)); return o; }
 "#;
 
 pub(super) const FORWARD_UV0_NORMAL_EFFECT: &str = r#"
@@ -206,7 +206,7 @@ struct PbrNormalEffectGbufferOutput { @location(0) base_metal: vec4<f32>, @locat
 struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) local_normal: vec3<f32>, @location(1) tangent: vec4<f32>, @location(2) uv0: vec2<f32>, };
 @vertex fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); o.local_normal = normal; o.tangent = tangent; o.uv0 = uv0; return o; }
 fn pbr_world_normal(local_normal: vec3<f32>, tangent: vec4<f32>, sampled: vec3<f32>) -> vec3<f32> { let n = pbr_normal((pbr_transforms.normal_from_local * vec4<f32>(local_normal, 0.0)).xyz); let raw_t = (pbr_transforms.world_from_local * vec4<f32>(tangent.xyz, 0.0)).xyz; let orthogonal = raw_t - n * dot(n, raw_t); let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9); let t = select(pbr_normal(cross(n, axis)), pbr_normal(orthogonal), dot(orthogonal, orthogonal) > 1e-12); let tangent_sign = select(1.0, -1.0, tangent.w < 0.0); let handedness = tangent_sign * pbr_transforms.normal_from_local[3].x; let b = cross(n, t) * handedness; return pbr_normal(mat3x3<f32>(t, b, n) * sampled); }
-@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalEffectGbufferOutput { let material = evaluate_material_uv0(input.uv0); let base = clamp(material.rgb, vec3<f32>(0.0), vec3<f32>(1.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_world_normal(input.local_normal, input.tangent, evaluate_normal_uv0(input.uv0)), front_facing); let emissive = max(evaluate_emissive_uv0(input.uv0), vec3<f32>(0.0)); let occlusion = clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalEffectGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.04, 1.0)); o.emissive_ao = vec4<f32>(emissive, occlusion); return o; }
+@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalEffectGbufferOutput { let material = evaluate_material_uv0(input.uv0); let base = clamp(material.rgb, vec3<f32>(0.0), vec3<f32>(1.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_world_normal(input.local_normal, input.tangent, evaluate_normal_uv0(input.uv0)), front_facing); let emissive = max(evaluate_emissive_uv0(input.uv0), vec3<f32>(0.0)); let occlusion = clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalEffectGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal * 0.5 + vec3<f32>(0.5), clamp(properties.y, 0.0, 1.0)); o.emissive_ao = vec4<f32>(emissive, occlusion); return o; }
 "#;
 
 pub(super) const LIGHTING: &str = r#"
