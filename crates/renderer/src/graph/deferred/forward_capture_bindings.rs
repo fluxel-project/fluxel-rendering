@@ -94,13 +94,22 @@ impl<B: ResourceBackend> DeferredForwardCapturePlan<B> {
             .append_bindings(&self.execution, receiver, &mut buffers, &mut textures)?;
         self.receiver
             .append_oit_bindings(receiver_oit, &mut textures)?;
+        if let crate::graph::forward::ForwardReceiverTerminal::HdrReadback(terminal) = self.terminal
+        {
+            terminal.append_binding(
+                receiver.frame.output.as_ref().ok_or(Error::InvalidState)?,
+                &mut textures,
+            );
+        }
         let buffers = merge_buffer_bindings(buffers)?;
         let textures = merge_texture_bindings(textures)?;
         match (&self.terminal, image) {
-            (crate::graph::forward::ForwardReceiverTerminal::Offscreen { .. }, None) => {
-                FrameBindings::new(&self.execution, self.id.device, buffers, textures)
-                    .map_err(binding_error)
-            }
+            (
+                crate::graph::forward::ForwardReceiverTerminal::Offscreen { .. }
+                | crate::graph::forward::ForwardReceiverTerminal::HdrReadback(_),
+                None,
+            ) => FrameBindings::new(&self.execution, self.id.device, buffers, textures)
+                .map_err(binding_error),
             (crate::graph::forward::ForwardReceiverTerminal::Surface { slot, .. }, Some(image)) => {
                 FrameBindings::new_with_surface_textures(
                     &self.execution,

@@ -344,6 +344,10 @@ and receiver composition. The receiver owns the terminal color conversion.
 For a peeling capture, producer sampling and receiver output each consume
 their own final version after excluded draws. Capture textures use the linear
 scene format through the receiver's material bindings.
+Deferred capture keeps the same floating-point format across the producer,
+its optional sorted or peeling overlay, and the Forward or Deferred receiver.
+Scene-refraction copies use matching scene formats and preserve the producer's
+original depth. Any RGBA8 conversion is part of the receiver terminal.
 This processing targets SDR sRGB presentation. Native HDR display transfer
 and color-space selection remain separate work.
 

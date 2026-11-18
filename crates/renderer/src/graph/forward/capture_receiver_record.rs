@@ -224,9 +224,10 @@ impl ForwardReceiverComposition {
         bindings: &FrameBindings<'_, B>,
         frame: &ForwardFrame<B>,
         pass: GraphPass,
+        source: TextureSlot,
     ) -> Result<fluxel_rhi::api::ReadbackTicket<B>> {
         let mut slots = self.record_slots(frame.resident.device);
-        slots.target_slot = self.final_slot;
+        slots.target_slot = source;
         super::shared_record::record_readback(&slots, pass, bindings, encoder, frame)
     }
 }

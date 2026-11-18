@@ -86,8 +86,34 @@ impl<B: ResourceBackend> DeferredForwardCapturePlan<B> {
         match self.terminal {
             ForwardReceiverTerminal::Offscreen { pass: terminal } if pass == terminal => self
                 .receiver
-                .record_final_readback(encoder, &bindings, receiver, pass)
+                .record_final_readback(
+                    encoder,
+                    &bindings,
+                    receiver,
+                    pass,
+                    self.receiver.final_slot(),
+                )
                 .map(Some),
+            ForwardReceiverTerminal::HdrReadback(terminal) if pass == terminal.composite_pass => {
+                let source = receiver_oit.map_or(receiver.frame.target_instance, |input| {
+                    input.output.instance
+                });
+                terminal.record(
+                    device,
+                    &bindings,
+                    encoder,
+                    self.receiver.final_slot(),
+                    source,
+                    receiver,
+                    composite.ok_or(Error::InvalidState)?,
+                )?;
+                Ok(None)
+            }
+            ForwardReceiverTerminal::HdrReadback(terminal) if pass == terminal.readback_pass => {
+                self.receiver
+                    .record_final_readback(encoder, &bindings, receiver, pass, terminal.output_slot)
+                    .map(Some)
+            }
             ForwardReceiverTerminal::Surface {
                 pass: terminal,
                 slot,

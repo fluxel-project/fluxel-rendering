@@ -77,6 +77,12 @@ impl<B: ResourceBackend> super::DeferredForwardCapturePlan<B> {
             .map(super::capture_producer::DeferredCaptureProducerComposition::final_source)
             .unwrap_or(prefix.scene_color);
         let mut producer_declaration = prefix.clone().capture_namespace_declaration();
+        let output = receiver.frame.output.as_ref();
+        if image.is_none()
+            && (receiver.frame.target_desc.format == TextureFormat::Rgba16Float) != output.is_some()
+        {
+            return Err(Error::InvalidState);
+        }
         let receiver = declare_receiver_after_deferred(
             device,
             &mut prefix.graph,
@@ -88,7 +94,7 @@ impl<B: ResourceBackend> super::DeferredForwardCapturePlan<B> {
             &mut shared,
         )
         .map_err(|_| Error::InvalidState)?;
-        let terminal = declare_receiver_terminal(&mut prefix.graph, &receiver, image)
+        let terminal = declare_receiver_terminal(&mut prefix.graph, &receiver, output, image)
             .map_err(|_| Error::InvalidState)?;
         // The Deferred namespace metadata deliberately remains a capture
         // projection, while its declaration owns the complete one-Graph

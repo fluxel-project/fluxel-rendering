@@ -30,11 +30,13 @@ impl<B: ResourceBackend> DeferredForwardCapturePlan<B> {
             composition.append_passes(&mut expected);
         }
         declaration.receiver.append_passes(&mut expected);
-        let terminal_pass = match declaration.terminal {
+        match declaration.terminal {
             ForwardReceiverTerminal::Offscreen { pass }
-            | ForwardReceiverTerminal::Surface { pass, .. } => pass,
-        };
-        expected.push(terminal_pass);
+            | ForwardReceiverTerminal::Surface { pass, .. } => expected.push(pass),
+            ForwardReceiverTerminal::HdrReadback(terminal) => {
+                expected.extend([terminal.composite_pass, terminal.readback_pass]);
+            }
+        }
         if execution.logical().passes() != expected {
             return Err(Error::InvalidState);
         }
@@ -116,6 +118,16 @@ impl<B: ResourceBackend> DeferredForwardCapturePlan<B> {
         )?;
         match (&self.terminal, image, composite) {
             (ForwardReceiverTerminal::Offscreen { .. }, None, None) => {}
+            (ForwardReceiverTerminal::HdrReadback(_), None, Some(composite)) => {
+                let output = receiver.frame.output.as_ref().ok_or(Error::InvalidState)?;
+                let source = receiver_oit.map_or(receiver.frame.target_instance, |input| {
+                    input.output.instance
+                });
+                if composite.target_instance() != source || output.instance == source {
+                    return Err(Error::InvalidState);
+                }
+                composite.validate_offscreen(device, receiver.extent, output.desc.format)?;
+            }
             (
                 ForwardReceiverTerminal::Surface { extent, format, .. },
                 Some(image),

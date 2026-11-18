@@ -104,7 +104,7 @@ where
                 crate::ForwardDepthMode::Depth32LessEqualWrite,
                 assets,
                 None,
-                TextureFormat::Rgba8Unorm,
+                deferred.scene_color.desc.format,
                 started,
                 None,
                 true,

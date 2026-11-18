@@ -24,6 +24,7 @@ where
         _producer: Box<crate::residency::DeferredFrame<B>>,
         _composition: Option<Box<deferred::DeferredCaptureComposition<B>>>,
         _receiver: Box<forward::CaptureOitSide<B>>,
+        _composite: Option<SurfaceCompositeOwner<B>>,
         plan: Arc<crate::graph::DeferredForwardCapturePlan<B>>,
         extent: [u32; 2],
         row_pitch: u32,

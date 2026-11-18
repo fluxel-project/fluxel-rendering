@@ -299,7 +299,7 @@ fn validate_oit_input<B: ResourceBackend>(
         || output.desc.array_layers != 1
         || output.desc.mip_levels != 1
         || output.desc.samples != 1
-        || output.desc.format != fluxel_rhi::api::TextureFormat::Rgba8Unorm
+        || output.desc.format != producer.scene_color.desc.format
         || !output.desc.usage.contains(TextureUsage::RENDER_ATTACHMENT)
         || !output.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         || output.view_desc.format != output.desc.format

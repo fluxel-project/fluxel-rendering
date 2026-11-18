@@ -43,7 +43,9 @@ pub(super) fn validate_owners<B: ResourceBackend>(
     {
         return Err(Error::InvalidState);
     }
-    if scene_refraction && receiver_oit.is_some() {
+    if scene_refraction
+        && (receiver_oit.is_some() || desc.format != receiver.frame.target_desc.format)
+    {
         return Err(Error::InvalidState);
     }
     let depth = receiver.frame.depth.as_ref().ok_or(Error::InvalidState)?;
@@ -113,7 +115,7 @@ pub(super) fn validate_owners<B: ResourceBackend>(
             || output.texture.device() != device
             || output.view.device() != device
             || output.desc.extent != [receiver.extent[0], receiver.extent[1], 1]
-            || output.desc.format != TextureFormat::Rgba8Unorm
+            || output.desc.format != receiver.frame.target_desc.format
             || output.desc.mip_levels != 1
             || output.desc.array_layers != 1
             || output.desc.samples != 1

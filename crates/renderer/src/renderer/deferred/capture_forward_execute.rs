@@ -30,6 +30,7 @@ where
     {
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
+        let surface_submission = surface.is_some();
         let composite = match surface.as_ref() {
             Some(image) => Some(match receiver.oit.as_ref() {
                 Some(oit) => {
@@ -38,7 +39,30 @@ where
                 }
                 None => self.surface_composite_owner(&receiver.frame, image).await?,
             }),
-            None => None,
+            None => match receiver.frame.frame.output.as_ref() {
+                Some(output) => Some(match receiver.oit.as_ref() {
+                    Some(oit) => {
+                        self.oit_offscreen_composite_owner(
+                            &oit.output,
+                            receiver.frame.extent,
+                            output.desc.format,
+                        )
+                        .await?
+                    }
+                    None => {
+                        self.color_composite_from_target(
+                            &receiver.frame.frame.target,
+                            &receiver.frame.frame.target_view,
+                            &receiver.frame.frame.target_desc,
+                            receiver.frame.frame.target_instance,
+                            receiver.frame.extent,
+                            output.desc.format,
+                        )
+                        .await?
+                    }
+                }),
+                None => None,
+            },
         };
         // Keep the lease outside command closures. A recording failure must
         // not drop an image already referenced by earlier submitted scopes.
@@ -205,8 +229,8 @@ where
         let outcome = unsafe { execution.finish() };
         let extent = receiver.frame.extent;
         let row_pitch = receiver.frame.readback_row_pitch;
-        let workload = match composite {
-            Some(composite) => super::super::PendingWork::DeferredForwardCaptureSurface {
+        let workload = match (surface_submission, composite) {
+            (true, Some(composite)) => super::super::PendingWork::DeferredForwardCaptureSurface {
                 _producer: Box::new(producer),
                 _composition: composition.map(Box::new),
                 _receiver: Box::new(receiver),
@@ -214,10 +238,11 @@ where
                 _present: present,
                 plan,
             },
-            None => super::super::PendingWork::DeferredForwardCapture {
+            (_, composite) => super::super::PendingWork::DeferredForwardCapture {
                 _producer: Box::new(producer),
                 _composition: composition.map(Box::new),
                 _receiver: Box::new(receiver),
+                _composite: composite,
                 plan,
                 extent,
                 row_pitch,
