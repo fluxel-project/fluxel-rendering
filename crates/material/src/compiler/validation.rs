@@ -175,9 +175,10 @@ impl NormalizedMaterialIr {
         }
         for resource in &self.resources {
             let shader_name = shader_resource_name(resource, &self.parameters);
-            let prefix = match resource.kind {
-                MaterialResourceKind::UniformVec4 => "var<uniform>",
-                MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Sampler { .. } => "var",
+            let prefix = if resource.kind.uniform_material_type().is_some() {
+                "var<uniform>"
+            } else {
+                "var"
             };
             generated.push_str(&format!(
                 "@group({}) @binding({}) {prefix} {shader_name}: {};\n",
@@ -452,8 +453,7 @@ fn validate_parameter_resources(
                 resource: resource.name.clone(),
             });
         }
-        if parameter.ty != MaterialType::Vec4 || resource.kind != MaterialResourceKind::UniformVec4
-        {
+        if resource.kind.uniform_material_type() != Some(parameter.ty) {
             return Err(MaterialError::ParameterResourceTypeMismatch {
                 parameter: parameter.name.clone(),
                 parameter_type: parameter.ty,

@@ -2,10 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use fluxel_shader::{
-    BindingDeclaration, BindingKind, BindingShape, CallableDeclaration, ScalarType, SourceUnit,
-    ValueType,
-};
+use fluxel_shader::{BindingDeclaration, BindingKind, BindingShape, CallableDeclaration, SourceUnit};
 
 use crate::{BindingLocation, MaterialResourceKind, MaterialType, StaticValue};
 
@@ -117,24 +114,22 @@ impl MaterialShaderContribution {
         self.bindings
             .iter()
             .map(|binding| {
-                BindingDeclaration::new(
-                    binding.location.group,
-                    binding.location.binding,
-                    match binding.kind {
-                        MaterialResourceKind::UniformVec4 => BindingKind::Uniform,
-                        MaterialResourceKind::Texture2dF32 => BindingKind::Texture,
-                        MaterialResourceKind::Sampler { .. } => BindingKind::Sampler,
-                    },
-                )
-                .with_shape(match binding.kind {
-                    MaterialResourceKind::UniformVec4 => {
-                        BindingShape::Uniform(ValueType::Vec4(ScalarType::F32))
+                let (kind, shape) = match binding.kind {
+                    MaterialResourceKind::Texture2dF32 => {
+                        (BindingKind::Texture, BindingShape::Texture2dF32)
                     }
-                    MaterialResourceKind::Texture2dF32 => BindingShape::Texture2dF32,
                     MaterialResourceKind::Sampler { comparison } => {
-                        BindingShape::Sampler { comparison }
+                        (BindingKind::Sampler, BindingShape::Sampler { comparison })
                     }
-                })
+                    uniform => {
+                        let ty = uniform
+                            .uniform_material_type()
+                            .expect("all remaining resource kinds are uniforms");
+                        (BindingKind::Uniform, BindingShape::Uniform(ty.shader_type()))
+                    }
+                };
+                BindingDeclaration::new(binding.location.group, binding.location.binding, kind)
+                    .with_shape(shape)
             })
             .collect()
     }

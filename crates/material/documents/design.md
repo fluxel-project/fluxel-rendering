@@ -293,8 +293,9 @@ same-frame capture is linear. Unannotated resources retain the generic contract
 for callers that intentionally support either source representation.
 
 Material resources describe generic shader-visible requirements. The current
-public subset has `UniformVec4`, read-only `Texture2dF32`, and `Sampler {
-comparison }`, each with a stable name and bind-group location. `comparison` is
+public subset has float scalar and vector uniforms (`UniformF32`,
+`UniformVec2`, `UniformVec3` and `UniformVec4`), read-only `Texture2dF32`,
+and `Sampler { comparison }`, each with a stable name and bind-group location. `comparison` is
 a WGSL fact; filtering is not, so Renderer validates it from the actual sampler
 and texture descriptors before recording. Future kinds must carry equally
 explicit logical semantics and must be proven by a consumer before their public
@@ -311,7 +312,9 @@ Parameters divide into two lifetimes:
 
 `MaterialInstance::new` requires the exact asset identity and content generation
 when its variant is asset-bound. It rejects unknown or missing dynamic parameters
-and resources, and parameter type mismatches. This prevents an old compiled
+and external resources, and parameter type mismatches. The value of a
+parameter-owned uniform comes from the parameters map. That uniform's resource
+alias is optional. This prevents an old compiled
 variant from being accidentally used with replacement material content.
 
 Instances carry logical resource selections only. Renderer resolves those to

@@ -60,13 +60,20 @@ impl MaterialInstance {
             .iter()
             .map(|resource| resource.name.as_str())
             .collect::<BTreeSet<_>>();
+        let parameter_resources = variant
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.resource.as_str())
+            .collect::<BTreeSet<_>>();
         for name in resources.keys() {
             if !expected_resources.contains(name.as_str()) {
                 return Err(MaterialError::UnknownResource { name: name.clone() });
             }
         }
         for resource in variant.resources() {
-            if !resources.contains_key(&resource.name) {
+            if !parameter_resources.contains(resource.name.as_str())
+                && !resources.contains_key(&resource.name)
+            {
                 return Err(MaterialError::MissingResource {
                     name: resource.name.clone(),
                 });

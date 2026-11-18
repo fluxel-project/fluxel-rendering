@@ -27,7 +27,9 @@ impl MaterialType {
         }
     }
 
-    pub(crate) fn shader_type(self) -> ValueType {
+    /// Returns the exact shader value type used by callable and uniform reflection.
+    #[must_use]
+    pub const fn shader_type(self) -> ValueType {
         match self {
             Self::F32 => ValueType::Scalar(ScalarType::F32),
             Self::Vec2 => ValueType::Vec2(ScalarType::F32),
@@ -86,6 +88,12 @@ pub struct BindingLocation {
 /// Logical resource kinds supported by the material core.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MaterialResourceKind {
+    /// A uniform `f32` binding.
+    UniformF32,
+    /// A uniform `vec2<f32>` binding.
+    UniformVec2,
+    /// A uniform `vec3<f32>` binding.
+    UniformVec3,
     /// A uniform `vec4<f32>` binding.
     UniformVec4,
     /// A read-only `texture_2d<f32>` binding.
@@ -123,10 +131,39 @@ impl MaterialResourceKind {
     #[must_use]
     pub const fn wgsl(self) -> &'static str {
         match self {
+            Self::UniformF32 => "f32",
+            Self::UniformVec2 => "vec2<f32>",
+            Self::UniformVec3 => "vec3<f32>",
             Self::UniformVec4 => "vec4<f32>",
             Self::Texture2dF32 => "texture_2d<f32>",
             Self::Sampler { comparison: false } => "sampler",
             Self::Sampler { comparison: true } => "sampler_comparison",
+        }
+    }
+
+    /// Returns the dynamic material value type for a uniform resource.
+    #[must_use]
+    pub const fn uniform_material_type(self) -> Option<MaterialType> {
+        match self {
+            Self::UniformF32 => Some(MaterialType::F32),
+            Self::UniformVec2 => Some(MaterialType::Vec2),
+            Self::UniformVec3 => Some(MaterialType::Vec3),
+            Self::UniformVec4 => Some(MaterialType::Vec4),
+            Self::Texture2dF32 | Self::Sampler { .. } => None,
+        }
+    }
+
+    /// Returns a portable uniform binding allocation in bytes.
+    ///
+    /// `vec3<f32>` has 16-byte uniform layout alignment and therefore occupies
+    /// a 16-byte dynamic allocation even though it contains three components.
+    #[must_use]
+    pub const fn uniform_min_binding_size(self) -> Option<u64> {
+        match self {
+            Self::UniformF32 => Some(4),
+            Self::UniformVec2 => Some(8),
+            Self::UniformVec3 | Self::UniformVec4 => Some(16),
+            Self::Texture2dF32 | Self::Sampler { .. } => None,
         }
     }
 }
