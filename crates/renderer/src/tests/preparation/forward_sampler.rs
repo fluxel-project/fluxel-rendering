@@ -15,6 +15,9 @@ fn schema(sampler: Option<&str>) -> MaterialBindingSchema {
         }],
         sampler: sampler.map(|_| 2),
         sampler_name: sampler.map(str::to_owned),
+        unused_textures: Vec::new(),
+        unused_samplers: Vec::new(),
+        legacy_tint_compatible: true,
     }
 }
 

@@ -41,6 +41,7 @@ pub struct RenderScene<R: Clone> {
     view_free: BTreeSet<usize>,
     record_count: usize,
     view_count: usize,
+    emissive_override: Option<bool>,
     version: u64,
     snapshot_records: SnapshotRoot<RenderRecord<R>>,
     snapshot_views: SnapshotRoot<RenderView>,
@@ -74,6 +75,7 @@ impl<R: Clone> RenderScene<R> {
             view_free: BTreeSet::new(),
             record_count: 0,
             view_count: 0,
+            emissive_override: None,
             version: 0,
             snapshot_records: None,
             snapshot_views: None,
@@ -92,6 +94,44 @@ impl<R: Clone> RenderScene<R> {
     pub fn view_len(&self) -> usize {
         self.view_count
     }
+    /// Overrides emissive lighting for all current and future views in this scene.
+    ///
+    /// Existing snapshots retain their previous view settings. The override
+    /// also applies to views inserted or replaced after this call.
+    pub fn set_emissive_enabled(&mut self, enabled: bool) -> Result<(), SceneError> {
+        if self.emissive_override == Some(enabled) {
+            return Ok(());
+        }
+        let version = self
+            .version
+            .checked_add(1)
+            .ok_or(SceneError::SnapshotVersionExhausted)?;
+        let mut dirty = BTreeSet::new();
+        for (index, slot) in self.views.iter_mut().enumerate() {
+            if let Some(view) = &mut slot.value {
+                if view.emissive_enabled != enabled {
+                    view.emissive_enabled = enabled;
+                    dirty.insert(index);
+                }
+            }
+        }
+        self.emissive_override = Some(enabled);
+        self.version = version;
+        self.snapshot_dirty = SceneDirty {
+            records: Vec::new(),
+            views: slot_ranges(&dirty),
+        };
+        publish_view_chunks(&self.views, &dirty, &mut self.snapshot_views);
+        Ok(())
+    }
+
+    fn effective_view(&self, mut view: RenderView) -> RenderView {
+        if let Some(enabled) = self.emissive_override {
+            view.emissive_enabled = enabled;
+        }
+        view
+    }
+
     /// Publishes an immutable view that remains stable across later updates.
     pub fn snapshot(&self) -> FrameSnapshot<R> {
         FrameSnapshot {
@@ -163,14 +203,14 @@ impl<R: Clone> RenderScene<R> {
                 }
                 RenderChange::InsertView(view) => {
                     let id = self
-                        .insert_view(view.clone(), operation)
+                        .insert_view(self.effective_view(view.clone()), operation)
                         .expect("prevalidated insert");
                     view_dirty.insert(usize::try_from(id.slot).expect("u32 fits usize"));
                     receipt.views.push(id);
                 }
                 RenderChange::UpdateView(id, view) => {
                     let index = self.view_index(*id, operation).expect("prevalidated view");
-                    self.views[index].value = Some(view.clone());
+                    self.views[index].value = Some(self.effective_view(view.clone()));
                     view_dirty.insert(index);
                 }
                 RenderChange::RemoveView(id) => {

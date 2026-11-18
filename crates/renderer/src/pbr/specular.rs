@@ -546,7 +546,7 @@ struct PbrSpecularVertexOutput {
         String::from("let indirect = vec3<f32>(0.0);")
     };
     let emissive = if effects {
-        "let emissive = evaluate_emissive_uv0(input.uv0);"
+        "let emissive = pbr_emissive(input.uv0);"
     } else {
         "let emissive = vec3<f32>(0.0);"
     };

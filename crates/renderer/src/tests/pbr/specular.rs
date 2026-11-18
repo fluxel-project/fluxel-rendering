@@ -1,4 +1,4 @@
-use crate::pbr::specular::{WGSL, deferred_specular_request, with_specular_ibl};
+use crate::pbr::specular::{deferred_specular_request, with_specular_ibl, WGSL};
 use crate::{GeometryAttribute, GeometryLayout, GeometryStream};
 use fluxel_rhi::api::{VertexFormat, VertexStepMode};
 use fluxel_shader::{

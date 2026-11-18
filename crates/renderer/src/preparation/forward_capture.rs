@@ -232,7 +232,7 @@ fn prepare_capture_receiver(
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
     }
-    if instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
+    if view.emissive_enabled && instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
         return Err(ForwardPreparationError::InvalidTint { source });
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
@@ -240,9 +240,8 @@ fn prepare_capture_receiver(
     let compiled = MaterialCompiler::compile_for(&material)
         .map_err(MaterialPreparationError::Material)
         .map_err(ForwardPreparationError::Material)?;
-    let resources = resolve_resource_aliases(resources, instance, &compiled, source)?;
     let scene_refraction = refraction_texture
-        .map(|name| scene_refraction_binding(&compiled, &resources, name, source))
+        .map(|name| scene_refraction_binding(&compiled, resources, instance, name, source))
         .transpose()?;
     let request = material_request(
         material.value(),
@@ -258,6 +257,7 @@ fn prepare_capture_receiver(
         .map_err(ForwardPreparationError::Material)?;
     super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
+    let resources = resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
     let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
     let textures = resolve_capture_textures(textures, &schema.textures, assets, source)?;
@@ -309,17 +309,19 @@ fn prepare_capture_receiver(
 fn scene_refraction_binding(
     material: &fluxel_material::CompiledMaterialVariant,
     resources: &ForwardCaptureResources,
+    instance: Option<&MaterialInstance>,
     texture: &str,
     source: ForwardDrawSource,
 ) -> Result<SceneRefractionBinding, ForwardPreparationError> {
     let invalid = ForwardPreparationError::InvalidSceneRefractionSource { source };
     let bindings = &material.contribution().bindings;
+    let texture_alias = instance.and_then(|instance| instance.resource(texture)).unwrap_or(texture);
     if material.transmission_extensions().is_none()
         || !bindings.iter().any(|binding| {
             binding.name == texture && binding.kind == MaterialResourceKind::Texture2dF32
         })
         || !resources.textures.iter().any(|binding| {
-            binding.resource == texture
+            binding.resource == texture_alias
                 && matches!(binding.source, ForwardTextureSource::CaptureSlot(_))
         })
     {

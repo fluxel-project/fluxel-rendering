@@ -390,7 +390,7 @@ fn prepare_draw(
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
     }
-    if instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
+    if view.emissive_enabled && instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
         return Err(ForwardPreparationError::InvalidTint { source });
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
@@ -408,7 +408,7 @@ fn prepare_draw(
         .map_err(ForwardPreparationError::Material)?;
     forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
-    let resources = resolve_resource_aliases(resources, instance, prepared.material(), source)?;
+    let resources = resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
     let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
     let textures = resolve_asset_textures(&resources, &schema, assets, source)?;
     let sampler = super::forward_sampler::resolve_sampler_binding(

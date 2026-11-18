@@ -52,6 +52,11 @@ pub(super) fn material_request(
     } else {
         request
     };
+    let request = if !view.emissive_enabled && has_effects {
+        crate::pbr::without_emissive(request)
+    } else {
+        request
+    };
     if transmission {
         if !specular {
             return Err(

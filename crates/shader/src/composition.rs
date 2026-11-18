@@ -222,6 +222,23 @@ pub(super) fn build(
                 binding: x.binding,
             });
         }
+        let unused_optional = x.optional_use
+            && !bs
+                .iter()
+                .any(|binding| (binding.group, binding.binding) == (x.group, x.binding))
+            && {
+                let mut matches = m.global_variables.iter().filter_map(|(_, global)| {
+                    global
+                        .binding
+                        .filter(|binding| (binding.group, binding.binding) == (x.group, x.binding))
+                        .map(|_| global)
+                });
+                matches.next().is_some_and(|global| {
+                    kind(&m, global).ok() == Some(x.kind)
+                        && x.shape
+                            .is_none_or(|shape| binding_shape(&m, global) == Some(shape))
+                }) && matches.next().is_none()
+            };
         if !bs.iter().any(|b| {
             b.group == x.group
                 && b.binding == x.binding
@@ -239,7 +256,8 @@ pub(super) fn build(
                             atomic: b.atomic,
                         }
                 })
-        }) {
+        }) && !unused_optional
+        {
             return Err(ShaderError::BindingMismatch {
                 group: x.group,
                 binding: x.binding,

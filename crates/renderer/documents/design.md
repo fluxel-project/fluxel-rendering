@@ -259,6 +259,13 @@ consumer adds emissive and then clamps the summed RGB to zero at the low end. A 
 attachment: its zero alpha would incorrectly remove diffuse irradiance.
 Without effects, multiple draws retain the two-color-attachment requirement.
 
+A scene-wide emissive override applies to current and future scene views.
+A standalone view can select the same specialization. With emissive disabled,
+PBR supplies zero emissive and preserves ambient occlusion. Material binding
+still validates the authored schema. The prepared layout and graph consume
+only the bindings reached by the selected entry points, including textures
+and samplers shared with the remaining surface effects.
+
 Graph imports actual owners once and declares each draw's physical fetch,
 uniform, and sampled-image accesses. A cached plan consumes this frame's full
 declaration and binding set. Completed publication records map every geometry

@@ -11,6 +11,9 @@ pub(crate) struct MaterialBindingSchema {
     pub(crate) textures: Vec<MaterialTextureBinding>,
     pub(crate) sampler: Option<u32>,
     pub(crate) sampler_name: Option<String>,
+    pub(crate) unused_textures: Vec<String>,
+    pub(crate) unused_samplers: Vec<String>,
+    pub(crate) legacy_tint_compatible: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,15 +45,15 @@ pub(crate) fn material_binding_schema(
         textures: Vec::new(),
         sampler: None,
         sampler_name: None,
+        unused_textures: Vec::new(),
+        unused_samplers: Vec::new(),
+        legacy_tint_compatible: false,
     };
-    if reflected
-        .iter()
-        .filter(|binding| binding.group == 0)
-        .count()
-        != contribution.bindings.len()
-    {
-        return Err(invalid());
-    }
+    let mut active_count = 0;
+    let mut original_uniforms = 0;
+    let mut original_vec4 = false;
+    let mut original_textures = 0;
+    let mut original_samplers = 0;
     for binding in &contribution.bindings {
         if binding.location.group != 0 {
             return Err(invalid());
@@ -58,8 +61,32 @@ pub(crate) fn material_binding_schema(
         let location = binding.location.binding;
         let actual = reflected
             .iter()
-            .find(|actual| actual.group == 0 && actual.binding == location)
-            .ok_or_else(invalid)?;
+            .find(|actual| actual.group == 0 && actual.binding == location);
+        match binding.kind {
+            MaterialResourceKind::Texture2dF32 => original_textures += 1,
+            MaterialResourceKind::Sampler { comparison: false } => original_samplers += 1,
+            kind if kind.uniform_material_type().is_some() => {
+                original_uniforms += 1;
+                original_vec4 |= kind.uniform_material_type() == Some(MaterialType::Vec4);
+            }
+            _ => return Err(invalid()),
+        }
+        let Some(actual) = actual else {
+            if !prepared.emissive_disabled() {
+                return Err(invalid());
+            }
+            match binding.kind {
+                MaterialResourceKind::Texture2dF32 => {
+                    schema.unused_textures.push(binding.name.clone())
+                }
+                MaterialResourceKind::Sampler { .. } => {
+                    schema.unused_samplers.push(binding.name.clone())
+                }
+                _ => {}
+            }
+            continue;
+        };
+        active_count += 1;
         if !(actual.read || actual.query)
             || actual.write
             || actual.visibility.len() != 1
@@ -123,5 +150,15 @@ pub(crate) fn material_binding_schema(
     schema
         .textures
         .sort_unstable_by_key(|texture| texture.binding);
+    if reflected
+        .iter()
+        .filter(|binding| binding.group == 0)
+        .count()
+        != active_count
+    {
+        return Err(invalid());
+    }
+    schema.legacy_tint_compatible =
+        original_uniforms == 1 && original_vec4 && original_textures != 0 && original_samplers <= 1;
     Ok(schema)
 }

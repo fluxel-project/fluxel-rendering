@@ -38,6 +38,7 @@ pub(super) fn materials(
             || input.view().shading_camera != first.view().shading_camera
             || input.view().directional_light != first.view().directional_light
             || input.view().mirrored != first.view().mirrored
+            || input.view().emissive_enabled != first.view().emissive_enabled
     }) {
         return Err(Error::InvalidRange.into());
     }
@@ -70,6 +71,11 @@ pub(super) fn materials(
         ))?;
         let request = if pbr && input.view().mirrored {
             crate::pbr::with_mirrored_view(request)
+        } else {
+            request
+        };
+        let request = if effects && !input.view().emissive_enabled {
+            crate::pbr::without_emissive(request)
         } else {
             request
         };

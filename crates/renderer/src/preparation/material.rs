@@ -30,6 +30,7 @@ pub struct PreparedMaterial {
     specular_ibl: bool,
     transmission: bool,
     scene_refraction: bool,
+    emissive_disabled: bool,
     oit_fragment: Option<(OitDrawStage, OitDepthPrecision)>,
     binding_schema: Option<MaterialBindingSchema>,
 }
@@ -73,6 +74,10 @@ impl PreparedMaterial {
 
     pub(crate) fn uses_environment_irradiance(&self) -> bool {
         self.environment_irradiance
+    }
+
+    pub(crate) fn emissive_disabled(&self) -> bool {
+        self.emissive_disabled
     }
 
     pub(crate) fn binding_schema(&self) -> Option<&MaterialBindingSchema> {
@@ -163,6 +168,10 @@ pub(super) fn prepare_compiled_material(
     composer: &mut ShaderComposer,
     mut request: ShaderCompositionRequest,
 ) -> Result<PreparedMaterial, MaterialPreparationError> {
+    let emissive_disabled = request
+        .static_options
+        .get("renderer.emissive")
+        .is_some_and(|value| value == "disabled");
     let contribution = material.contribution();
     for (name, value) in contribution.shader_static_options() {
         if let Some(existing) = request.static_options.get(&name) {
@@ -174,7 +183,13 @@ pub(super) fn prepare_compiled_material(
         }
     }
     request.source_units.extend(contribution.source_units());
-    request.bindings.extend(contribution.binding_declarations());
+    request.bindings.extend(contribution.binding_declarations().into_iter().map(|binding| {
+        if emissive_disabled && binding.group == 0 {
+            binding.with_optional_use()
+        } else {
+            binding
+        }
+    }));
     request
         .callables
         .extend(contribution.callable_declarations());
@@ -270,6 +285,7 @@ pub(super) fn prepare_compiled_material(
         specular_ibl,
         transmission,
         scene_refraction,
+        emissive_disabled,
         oit_fragment,
         binding_schema: None,
     })

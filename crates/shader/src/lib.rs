@@ -86,6 +86,12 @@ pub struct BindingDeclaration {
     pub visibility: Option<BTreeSet<ShaderStage>>,
     /// Optional exact entry-reachable access flags.
     pub access: Option<BindingAccess>,
+    /// Whether the declaration may be unused by every selected entry point.
+    ///
+    /// An optional declaration still requires a matching WGSL global binding.
+    /// If a selected entry point uses that global, its kind, shape, visibility,
+    /// and access are checked exactly as for a required declaration.
+    pub optional_use: bool,
 }
 impl BindingDeclaration {
     /// Declares a binding and its broad resource class.
@@ -97,6 +103,7 @@ impl BindingDeclaration {
             shape: None,
             visibility: None,
             access: None,
+            optional_use: false,
         }
     }
     /// Requires a particular reflected resource shape.
@@ -112,6 +119,15 @@ impl BindingDeclaration {
     /// Requires exact reflected access flags.
     pub fn with_access(mut self, access: BindingAccess) -> Self {
         self.access = Some(access);
+        self
+    }
+    /// Allows this declared WGSL binding to be unused by selected entry points.
+    ///
+    /// This only permits zero selected-entry uses. The global must still be
+    /// declared by the composed WGSL with the requested kind and shape; any
+    /// selected-entry use remains subject to all normal validation.
+    pub const fn with_optional_use(mut self) -> Self {
+        self.optional_use = true;
         self
     }
 }

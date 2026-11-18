@@ -255,6 +255,8 @@ pub struct RenderView {
     pub directional_light: super::DirectionalLight,
     /// Whether this view is rendering a reflected camera.
     pub mirrored: bool,
+    /// Whether PBR surface emissive contribution is enabled for this view.
+    pub emissive_enabled: bool,
 }
 
 impl RenderView {
@@ -280,6 +282,16 @@ impl RenderView {
         self
     }
 
+    /// Selects whether PBR surface emissive contribution is evaluated for this view.
+    ///
+    /// This only selects the renderer's PBR specialization. It does not modify
+    /// material-owned emissive parameters or the view transform.
+    #[must_use]
+    pub fn with_emissive_enabled(mut self, enabled: bool) -> Self {
+        self.emissive_enabled = enabled;
+        self
+    }
+
     /// Creates a view with a nonempty extent and the default directional light.
     pub fn new(transform: RenderTransform, extent: [u32; 2]) -> Result<Self, SceneError> {
         if extent.contains(&0) {
@@ -291,6 +303,7 @@ impl RenderView {
                 shading_camera: None,
                 directional_light: super::DirectionalLight::default(),
                 mirrored: false,
+                emissive_enabled: true,
             })
         }
     }
