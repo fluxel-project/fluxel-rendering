@@ -95,9 +95,7 @@ where
     ///
     /// Submission assembly copies its concrete GPU owner into pending work, so
     /// replacing this selection cannot change an in-flight frame.
-    environment_specular: Option<
-        AssetSnapshot<crate::EnvironmentSpecularIblAsset, crate::EnvironmentSpecularIblData>,
-    >,
+    environment_specular: Option<lighting::SelectedSpecularEnvironment>,
     environment_irradiance:
         Option<AssetSnapshot<crate::EnvironmentIrradianceAsset, crate::EnvironmentIrradianceData>>,
     output_processing: Option<OutputProcessing>,
@@ -268,6 +266,25 @@ where
             AssetSnapshot<crate::EnvironmentSpecularIblAsset, crate::EnvironmentSpecularIblData>,
         >,
     ) -> Result<(), RendererError> {
+        self.set_environment_specular_ibl_with_reflection_matrix(
+            environment,
+            crate::RenderTransform::identity(),
+        )
+    }
+
+    /// Selects a specular environment and its equirectangular reflection matrix.
+    ///
+    /// The upper 3×3 maps a reflected world-space direction into the radiance
+    /// map's direction space before longitude and latitude are computed.
+    /// Translation has no effect. The texture rows use Fluxel's north-first
+    /// convention. This selection applies to subsequent submissions.
+    pub fn set_environment_specular_ibl_with_reflection_matrix(
+        &mut self,
+        environment: Option<
+            AssetSnapshot<crate::EnvironmentSpecularIblAsset, crate::EnvironmentSpecularIblData>,
+        >,
+        reflection_matrix: crate::RenderTransform,
+    ) -> Result<(), RendererError> {
         self.ensure_open()?;
         if environment
             .as_ref()
@@ -275,7 +292,11 @@ where
         {
             return Err(Error::InvalidRange.into());
         }
-        self.environment_specular = environment;
+        self.environment_specular =
+            environment.map(|snapshot| lighting::SelectedSpecularEnvironment {
+                snapshot,
+                reflection_matrix,
+            });
         Ok(())
     }
 

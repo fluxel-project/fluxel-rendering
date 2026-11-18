@@ -36,6 +36,7 @@ struct PbrSpecularIblCamera {
     lod_params: vec4<f32>,
     light_direction_and_roughness: vec4<f32>,
     light_radiance: vec4<f32>,
+    reflection_matrix: mat4x4<f32>,
 };
 struct PbrSpecularIblResult {
     radiance: vec3<f32>,
@@ -63,8 +64,7 @@ fn pbr_specular_view_direction(
     return select(perspective, orthographic_direction, orthographic);
 }
 
-fn pbr_specular_latlong_uv(direction: vec3<f32>) -> vec2<f32> {
-    let unit = pbr_normal(direction);
+fn pbr_specular_latlong_uv(unit: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(fract(atan2(unit.z, unit.x) / 6.283185307179586 + 0.5),
                       acos(clamp(unit.y, -1.0, 1.0)) / 3.141592653589793);
 }
@@ -132,7 +132,9 @@ fn pbr_specular_ibl(
     let ndotv = abs(ndotv_unclamped) + 0.0000001;
     let f0 = pbr_specular_metallic_roughness_f0(base_color, metallic, dielectric_f0);
     let f90 = vec3<f32>(1.0);
-    let reflection = reflect(-view, normal);
+    // Babylon equirectangular mapping transforms a direction with w=0.
+    let reflection = (pbr_specular_camera.reflection_matrix
+        * vec4<f32>(pbr_normal(reflect(-view, normal)), 0.0)).xyz;
     let lod = pbr_specular_linear_lod(
         clamp(perceptual_roughness, 0.0, 1.0), radiance, max_lod, lod_scale, lod_offset);
     let environment = textureSampleLevel(
@@ -301,7 +303,9 @@ fn forward_specular_request_inner(
         .iter_mut()
         .find(|binding| binding.group == 1 && binding.binding == 0)
     {
-        *binding = binding.clone().with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
+        *binding = binding
+            .clone()
+            .with_visibility([ShaderStage::Vertex, ShaderStage::Fragment]);
     }
     let request = if transmission {
         request.source_units.push(SourceUnit::new(

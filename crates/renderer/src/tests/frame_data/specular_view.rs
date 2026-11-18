@@ -22,7 +22,8 @@ fn view_inverse_and_camera_bytes_follow_the_actual_uniform_layout() {
     )
     .unwrap()
     .with_shading_camera(ShadingCamera::perspective([3., 4., 5.]).unwrap());
-    let data = floats(&pack_specular_view(&view, 3., 3., -0.25).unwrap());
+    let data =
+        floats(&pack_specular_view(&view, 3., 3., -0.25, RenderTransform::identity()).unwrap());
     assert_eq!(
         &data[..16],
         &[
@@ -39,14 +40,14 @@ fn view_inverse_and_camera_bytes_follow_the_actual_uniform_layout() {
 fn missing_camera_or_singular_projection_refuses_uniform_preparation() {
     let view = RenderView::new(RenderTransform::identity(), [4, 4]).unwrap();
     assert!(matches!(
-        pack_specular_view(&view, 2., 2., 0.),
+        pack_specular_view(&view, 2., 2., 0., RenderTransform::identity()),
         Err(Error::InvalidState)
     ));
     let view = RenderView::new(RenderTransform::from_columns([[0.; 4]; 4]).unwrap(), [4, 4])
         .unwrap()
         .with_shading_camera(ShadingCamera::orthographic([0., 0., 1.]).unwrap());
     assert!(matches!(
-        pack_specular_view(&view, 2., 2., 0.),
+        pack_specular_view(&view, 2., 2., 0., RenderTransform::identity()),
         Err(Error::InvalidRange)
     ));
 }
@@ -66,7 +67,9 @@ fn invalid_maximum_or_nonfinite_lod_metadata_is_refused() {
         .unwrap()
         .with_shading_camera(ShadingCamera::orthographic([0., 0., 1.]).unwrap());
     for (max, scale, offset) in [(-1., 1., 0.), (2., f32::NAN, 0.), (2., 1., f32::NAN)] {
-        assert!(pack_specular_view(&view, max, scale, offset).is_err());
+        assert!(
+            pack_specular_view(&view, max, scale, offset, RenderTransform::identity()).is_err()
+        );
     }
 }
 
@@ -75,7 +78,8 @@ fn finite_signed_lod_conversion_survives_the_uniform_boundary() {
     let view = RenderView::new(RenderTransform::identity(), [4, 4])
         .unwrap()
         .with_shading_camera(ShadingCamera::orthographic([0., 0., 1.]).unwrap());
-    let values = floats(&pack_specular_view(&view, 4., -2., 3.).unwrap());
+    let values =
+        floats(&pack_specular_view(&view, 4., -2., 3., RenderTransform::identity()).unwrap());
     assert_eq!(&values[24..28], &[-2., 3., 0., 0.]);
     let lod = crate::LinearSpecularLod {
         scale: -2.,

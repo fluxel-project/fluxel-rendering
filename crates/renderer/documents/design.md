@@ -180,6 +180,9 @@ The LOD rule selects Babylon's `LINEARSPECULARREFLECTION` branch. It uses
 `clamp(log2(base_width) * perceptual_roughness * scale + offset, 0, max_lod)`.
 The shader reads the bound radiance texture's base-level width. The authored
 chain's final mip index limits the result after the convolution scale and offset.
+A selected reflection matrix acts on the normalized world-space reflection
+with `w=0` before equirectangular projection. The ordinary environment setter
+uses the identity matrix. The radiance layout remains north-first in both cases.
 Environment refraction uses the same mapping with the IOR-adjusted `alphaG`.
 Scale and offset are finite signed metadata. Radiance repeats U, clamps V, and uses linear spatial
 and mip filtering. The LUT clamps both axes at LOD zero. Its UV is

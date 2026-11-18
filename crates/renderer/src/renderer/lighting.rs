@@ -4,6 +4,14 @@ use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use crate::residency::{EnvironmentFrameOwner, SpecularEnvironmentFrameOwner};
 use fluxel_rhi::{api::*, backend::ResourceBackend};
 
+pub(super) struct SelectedSpecularEnvironment {
+    pub(super) snapshot: fluxel_assets::AssetSnapshot<
+        crate::EnvironmentSpecularIblAsset,
+        crate::EnvironmentSpecularIblData,
+    >,
+    pub(super) reflection_matrix: crate::RenderTransform,
+}
+
 pub(super) fn layout_entries(diffuse: bool, specular: bool) -> Vec<BindGroupLayoutEntry> {
     let entry = |binding, ty| BindGroupLayoutEntry {
         binding,
@@ -105,13 +113,10 @@ pub(super) fn bind_group<B: ResourceBackend>(
 
 pub(super) fn allocate_specular<B: ResourceBackend>(
     device: &Device<B>,
-    snapshot: &fluxel_assets::AssetSnapshot<
-        crate::EnvironmentSpecularIblAsset,
-        crate::EnvironmentSpecularIblData,
-    >,
+    environment: &SelectedSpecularEnvironment,
     view: &crate::RenderView,
 ) -> Result<SpecularEnvironmentFrameOwner<B>> {
-    let data = snapshot.value();
+    let data = environment.snapshot.value();
     if !data.is_valid() {
         return Err(Error::InvalidRange);
     }
@@ -121,6 +126,7 @@ pub(super) fn allocate_specular<B: ResourceBackend>(
         max_lod,
         data.lod.scale,
         data.lod.offset,
+        environment.reflection_matrix,
     )?;
     SpecularEnvironmentFrameOwner::allocate(device, data, &bytes)
 }

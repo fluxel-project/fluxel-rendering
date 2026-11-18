@@ -52,7 +52,7 @@ fn pbr_environment_transmission(
     let environment = textureSampleLevel(
         pbr_specular_radiance,
         pbr_specular_radiance_sampler,
-        pbr_specular_latlong_uv(refracted),
+        pbr_specular_latlong_uv(pbr_normal(refracted)),
         lod,
     ).rgb;
     let sigma = -log(material_attenuation_color())

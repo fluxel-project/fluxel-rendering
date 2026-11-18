@@ -2,13 +2,14 @@
 
 use fluxel_rhi::api::{Error, Result};
 
-pub(crate) const SPECULAR_VIEW_BYTES: u64 = 144;
+pub(crate) const SPECULAR_VIEW_BYTES: u64 = 208;
 
 pub(crate) fn pack_specular_view(
     view: &crate::RenderView,
     max_lod: f32,
     lod_scale: f32,
     lod_offset: f32,
+    reflection_matrix: crate::RenderTransform,
 ) -> Result<[u8; SPECULAR_VIEW_BYTES as usize]> {
     if view.extent.contains(&0)
         || !max_lod.is_finite()
@@ -26,6 +27,7 @@ pub(crate) fn pack_specular_view(
     values.extend([view.extent[0] as f32, view.extent[1] as f32, max_lod, 0.0]);
     values.extend([lod_scale, lod_offset, 0.0, 0.0]);
     values.extend(view.directional_light.uniform());
+    values.extend(reflection_matrix.columns().into_iter().flatten());
     let mut bytes = [0; SPECULAR_VIEW_BYTES as usize];
     for (index, value) in values.into_iter().enumerate() {
         bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
