@@ -12,17 +12,22 @@ pub(crate) struct DeferredCaptureDeclaration {
 }
 
 impl<B: ResourceBackend> DeferredCapturePlan<B> {
-    pub(crate) fn declare<F>(
+    pub(crate) fn declare<F, C>(
         device: &Device<B>,
         producer: &DeferredFrame<B>,
         producer_overlay: Option<&super::capture_producer::DeferredCaptureOverlay<'_, B>>,
         receiver: &DeferredFrame<B>,
         image: Option<&fluxel_rhi::api::SurfaceImage<B>>,
         producer_contribute: F,
+        mut overlay_contribute: C,
+        overlay_error: &mut Option<crate::PipelineError>,
     ) -> Result<DeferredCaptureDeclaration>
     where
         F: FnOnce(
             &mut crate::DeferredPhaseContext<'_, '_>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+        C: FnMut(
+            &mut crate::graph::ForwardOitReadContext<'_, '_>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
         super::validation::validate_frame_inputs(device, producer)?;
@@ -52,12 +57,14 @@ impl<B: ResourceBackend> DeferredCapturePlan<B> {
         )?;
         let producer_composition = producer_overlay
             .map(|overlay| {
-                super::capture_producer::declare_capture_producer_composition(
+                super::capture_producer::declare_capture_producer_composition_with_reads(
                     device,
                     &mut producer_prefix,
                     producer,
                     overlay,
                     None,
+                    &mut overlay_contribute,
+                    overlay_error,
                 )
             })
             .transpose()?;

@@ -8,6 +8,8 @@ mod cache;
 mod capture_empty_prepare;
 mod capture_entry;
 mod capture_execute;
+mod capture_feature;
+mod capture_feature_entry;
 mod capture_forward_execute;
 mod capture_oit_entry;
 mod capture_prepare;

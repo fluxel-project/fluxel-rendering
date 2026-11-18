@@ -21,6 +21,8 @@ where
         producer: CaptureOitSide<B>,
         receiver: DeferredFrame<B>,
         surface: Option<SurfaceImage<B>>,
+        producer_reads: &impl super::capture_feature::CaptureProducerReads<B>,
+        groups: &super::capture_feature::CaptureDrawGroups,
     ) -> Result<Submission, RendererError> {
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
@@ -38,14 +40,21 @@ where
         let mut present = surface.map(PresentBinding::new);
         let image = present.as_ref().map(PresentBinding::image);
         let input = producer.graph_input();
-        let declaration = crate::graph::ForwardDeferredCapturePlan::declare(
+        let declaration = crate::graph::ForwardDeferredCapturePlan::declare_with_contribution(
             &self.device,
             &producer.frame,
             input.as_ref(),
             &receiver,
             image,
+            |context| producer_reads.sorted(context, groups),
+            &mut |context| producer_reads.overlay(context, groups),
         )
-        .map_err(|error| self.observe_rhi_error(error))?;
+        .map_err(|error| match error {
+            crate::graph::ForwardPlanBuildError::Rhi(error) => self.observe_rhi_error(error),
+            crate::graph::ForwardPlanBuildError::Pipeline(error) => {
+                RendererError::ForwardPipeline(error)
+            }
+        })?;
         let ordinal = crate::atomic::claim_next(&super::super::NEXT_PLAN_ORDINAL)
             .ok_or(RendererError::IdentityExhausted)?;
         let plan = Arc::new(

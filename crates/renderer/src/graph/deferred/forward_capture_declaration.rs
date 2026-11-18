@@ -22,7 +22,7 @@ pub(crate) struct DeferredForwardCaptureDeclaration {
 
 impl<B: ResourceBackend> super::DeferredForwardCapturePlan<B> {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn declare<F>(
+    pub(crate) fn declare<F, C>(
         device: &Device<B>,
         producer: &DeferredFrame<B>,
         producer_overlay: Option<&super::capture_producer::DeferredCaptureOverlay<'_, B>>,
@@ -31,10 +31,15 @@ impl<B: ResourceBackend> super::DeferredForwardCapturePlan<B> {
         scene_refraction: bool,
         image: Option<&fluxel_rhi::api::SurfaceImage<B>>,
         producer_contribute: F,
+        mut overlay_contribute: C,
+        overlay_error: &mut Option<crate::PipelineError>,
     ) -> Result<DeferredForwardCaptureDeclaration>
     where
         F: FnOnce(
             &mut crate::DeferredPhaseContext<'_, '_>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+        C: FnMut(
+            &mut crate::graph::ForwardOitReadContext<'_, '_>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
         super::validation::validate_frame_inputs(device, producer)?;
@@ -63,12 +68,14 @@ impl<B: ResourceBackend> super::DeferredForwardCapturePlan<B> {
         )?;
         let composition = producer_overlay
             .map(|overlay| {
-                super::capture_producer::declare_capture_producer_composition(
+                super::capture_producer::declare_capture_producer_composition_with_reads(
                     device,
                     &mut prefix,
                     producer,
                     overlay,
                     Some(&mut shared),
+                    &mut overlay_contribute,
+                    overlay_error,
                 )
             })
             .transpose()?;

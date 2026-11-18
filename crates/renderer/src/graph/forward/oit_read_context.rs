@@ -29,7 +29,7 @@ impl<'pass, 'builder> ForwardOitReadContext<'pass, 'builder> {
             .to_vec();
         Ok(Self {
             pass,
-            reads: ForwardReadState::new(streams, uniform, textures, local),
+            reads: ForwardReadState::new(streams, uniform, textures, local)?,
             stage,
             full_draw_count: draws.len(),
         })

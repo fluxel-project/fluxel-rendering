@@ -7,6 +7,7 @@ mod composition_pair;
 pub use composition_pair::{ForwardPairCompositionContext, ForwardPairCompositionPass};
 mod policy;
 pub use policy::FramePipeline;
+pub(crate) use policy::read_all;
 mod sorted_phase;
 pub use sorted_phase::SortedForwardPass;
 mod deferred;

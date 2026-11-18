@@ -72,27 +72,24 @@ pub(in crate::graph) fn declare_overlay_prefix_with_shared<B: ResourceBackend>(
 }
 
 impl OverlayPrefix {
-    pub(in crate::graph) fn declare_reads(
-        &self,
-        pass: &mut PassBuilder<'_>,
-    ) -> std::result::Result<(), GraphError> {
-        self.declare_draw_reads(pass, 0..self.spec.draws.len())
-    }
-
-    pub(in crate::graph) fn declare_draw_reads(
+    /// Declares the concrete reads for one ordered subset of this overlay.
+    ///
+    /// The contribution runs while `pass` is the real Graph pass that
+    /// consumes this range.  It therefore cannot accidentally declare a
+    /// preflight-only read or widen its draw authority beyond `draws`.
+    pub(in crate::graph) fn declare_draw_reads_with<C>(
         &self,
         pass: &mut PassBuilder<'_>,
         draws: Range<usize>,
-    ) -> std::result::Result<(), GraphError> {
+        contribute: &mut C,
+        contribution_error: &mut Option<PipelineError>,
+    ) -> std::result::Result<(), GraphError>
+    where
+        C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+    {
         let reads =
             super::oit_draw_reads::OitDrawReads::from_capture_handles(&self.handles, &self.spec);
-        let mut failure = None;
-        reads.declare_with(
-            pass,
-            draws,
-            &mut |context| context.all_reads(),
-            &mut failure,
-        )
+        reads.declare_with(pass, draws, contribute, contribution_error)
     }
 }
 

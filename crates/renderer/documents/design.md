@@ -616,7 +616,9 @@ offscreen frame allocation, so an unused readback-buffer capacity may remain,
 but that buffer is neither bound, copied nor mapped. Pending work retains both
 sides, optional OIT owners, composite and an unhanded/failed present binding
 until completion covers every command step and the accepted present. It does
-not add a CPU transfer or scheduler. Capture typed Feature remains unfinished.
+not add a CPU transfer or scheduler. Single-Feature Forward capture uses
+`submit_forward_capture_with_feature` for sorting and the typed OIT capture
+entry points for peeling.
 Shader composition and compilation
 are static evidence only; the local actual-constructor Naga matrix accepts
 1360 ordinary/OIT combinations, including every independent cull/lighting
@@ -1015,8 +1017,21 @@ prefix, the already-prepared inputs create a real Forward producer namespace.
 Its ordinary target or OIT final output feeds either a Deferred opaque/masked
 receiver or the existing Forward blend receiver. This does not allocate a dummy
 G-buffer or prepare the producer again. Both terminals retain one Graph and
-submission. Typed capture Features remain unfinished. Shared read-only resources are
-merged only after complete owner-fact comparison; OIT resolves their canonical
+submission.
+
+`submit_deferred_capture_with_feature` and
+`submit_deferred_capture_surface_with_feature` add one statically bound producer
+Feature. Built-in draws and the Feature declare disjoint reads for the actual
+G-buffer geometry pass and the Forward sorted, peel, and excluded passes. The
+opaque-free Forward fallback consumes the same Feature contribution on its
+actual producer passes. The renderer derives phase-local draw indices after
+ordering. Geometry requires full coverage of vertex, uniform, and sampled reads
+before it can finish. Each capture consumes the producer's final color with one
+receiver or a projected Blend/MaskBlend receiver batch. M1 behavior acceptance
+covers mixed scene and Feature draws, missing and duplicate claims, the
+opaque-free fallback, and both receiver terminals.
+
+Shared read-only resources are merged only after complete owner-fact comparison; OIT resolves their canonical
 installed references for native recording, preserving pointer-exact guards on
 attachments, depth, and product targets.
 Capture blur and the wider PBR reflection and refraction combinations still

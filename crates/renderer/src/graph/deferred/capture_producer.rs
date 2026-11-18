@@ -249,31 +249,48 @@ fn validate_oit_commands<B: ResourceBackend>(
     }
 }
 
-pub(super) fn declare_capture_producer_composition<B: ResourceBackend>(
+/// Builds the capture producer's Forward suffix with a feature-owned read
+/// declaration for every actual transparent pass.  Callers inspect
+/// `contribution_error` to preserve the typed phase diagnostic rather than
+/// flattening it into Graph construction failure.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn declare_capture_producer_composition_with_reads<B, C>(
     device: &Device<B>,
     prefix: &mut super::prefix::DeferredGraphPrefix,
     producer: &DeferredFrame<B>,
     overlay: &DeferredCaptureOverlay<'_, B>,
     shared: Option<&mut crate::graph::forward::SharedResidentImports>,
-) -> Result<DeferredCaptureProducerComposition> {
+    contribute: &mut C,
+    contribution_error: &mut Option<crate::PipelineError>,
+) -> Result<DeferredCaptureProducerComposition>
+where
+    B: ResourceBackend,
+    C: FnMut(
+        &mut crate::graph::ForwardOitReadContext<'_, '_>,
+    ) -> std::result::Result<(), crate::PipelineError>,
+{
     match overlay.oit.as_ref() {
-        Some(input) => super::oit_declaration::declare_oit_composition_with_shared(
+        Some(input) => super::oit_declaration::declare_oit_composition_with_shared_and_reads(
             device,
             prefix,
             producer,
             overlay.frame,
             input,
             shared,
+            contribute,
+            contribution_error,
         )
         .map(DeferredCaptureProducerComposition::Oit),
         None => {
             if producer.deformation.is_some() {
                 return Err(Error::Unsupported("deferred transparent deformation"));
             }
-            super::transparent_declaration::declare_transparent_composition_with_shared(
+            super::transparent_declaration::declare_transparent_composition_with_shared_and_reads(
                 prefix,
                 overlay.frame,
                 shared,
+                contribute,
+                contribution_error,
             )
             .map(DeferredCaptureProducerComposition::Ordinary)
         }

@@ -138,6 +138,34 @@ pub(super) fn declare_transparent_composition_with_shared<B: ResourceBackend>(
     transparent: &ForwardFrame<B>,
     shared: Option<&mut crate::graph::forward::SharedResidentImports>,
 ) -> Result<DeferredTransparentComposition> {
+    let mut contribute =
+        |context: &mut crate::graph::ForwardOitReadContext<'_, '_>| context.all_reads();
+    let mut contribution_error = None;
+    declare_transparent_composition_with_shared_and_reads(
+        prefix,
+        transparent,
+        shared,
+        &mut contribute,
+        &mut contribution_error,
+    )
+}
+
+/// Variant whose material reads are declared by the caller inside the actual
+/// overlay raster pass.  The ordered full-frame indices presented by the
+/// callback are narrowed by `ForwardOitReadContext` to this pass's range.
+pub(super) fn declare_transparent_composition_with_shared_and_reads<B, C>(
+    prefix: &mut super::prefix::DeferredGraphPrefix,
+    transparent: &ForwardFrame<B>,
+    shared: Option<&mut crate::graph::forward::SharedResidentImports>,
+    contribute: &mut C,
+    contribution_error: &mut Option<crate::PipelineError>,
+) -> Result<DeferredTransparentComposition>
+where
+    B: ResourceBackend,
+    C: FnMut(
+        &mut crate::graph::ForwardOitReadContext<'_, '_>,
+    ) -> std::result::Result<(), crate::PipelineError>,
+{
     if transparent.extent != prefix.extent {
         return Err(Error::InvalidState);
     }
@@ -169,7 +197,12 @@ pub(super) fn declare_transparent_composition_with_shared<B: ResourceBackend>(
         .add_pass("deferred-transparent-overlay", |pass| {
             pass.depends_on(prefix.lighting_pass)?;
             pass.depends_on(overlay_dependency)?;
-            overlay_prefix.declare_reads(pass)?;
+            overlay_prefix.declare_draw_reads_with(
+                pass,
+                0..transparent.draws.len(),
+                contribute,
+                contribution_error,
+            )?;
             let depth = if overlay_writes_depth {
                 pass.write_texture_with_use(
                     prefix.gbuffer[2],
@@ -222,6 +255,9 @@ pub(super) fn declare_transparent_composition_with_shared<B: ResourceBackend>(
             Ok((scene_color, depth))
         })
         .map_err(|_| Error::InvalidState)?;
+    if contribution_error.is_some() {
+        return Err(Error::InvalidState);
+    }
     prefix.gbuffer[2] = depth;
     Ok(DeferredTransparentComposition {
         overlay: overlay_prefix.slots,

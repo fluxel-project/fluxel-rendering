@@ -73,21 +73,21 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
     pub(crate) fn read_vertex_streams(&mut self) -> std::result::Result<(), ()> {
         self.mark(VERTEX_READS)?;
         self.reads.begin_global_reads()?;
-        let indices: Vec<_> = (0..self.reads.draws.len()).collect();
+        let indices: Vec<_> = (0..self.reads.draw_count()).collect();
         self.reads.read_vertex_streams_for(self.pass, &indices)
     }
 
     pub(crate) fn read_frame_uniforms(&mut self) -> std::result::Result<(), ()> {
         self.mark(UNIFORM_READS)?;
         self.reads.begin_global_reads()?;
-        let indices: Vec<_> = (0..self.reads.draws.len()).collect();
+        let indices: Vec<_> = (0..self.reads.draw_count()).collect();
         self.reads.read_frame_uniforms_for(self.pass, &indices)
     }
 
     pub(crate) fn read_sampled_textures(&mut self) -> std::result::Result<(), ()> {
         self.mark(TEXTURE_READS)?;
         self.reads.begin_global_reads()?;
-        let indices: Vec<_> = (0..self.reads.draws.len()).collect();
+        let indices: Vec<_> = (0..self.reads.draw_count()).collect();
         self.reads.read_sampled_textures_for(self.pass, &indices)
     }
 
@@ -372,7 +372,8 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     target,
                     depth,
                     declared: 0,
-                    reads: ForwardReadState::new(streams, uniform, textures, draws),
+                    reads: ForwardReadState::new(streams, uniform, textures, draws)
+                        .map_err(|_| crate::graph::definition::GraphError::InvalidRange)?,
                     environment,
                     specular_radiance,
                     specular_brdf_lut,

@@ -15,7 +15,7 @@ where
         + PipelineBackend
         + ShaderBackend,
 {
-    pub(super) async fn execute_deferred_capture<F>(
+    pub(super) async fn execute_deferred_capture<F, C>(
         &mut self,
         retained: PendingInputs,
         producer: DeferredFrame<B>,
@@ -23,9 +23,13 @@ where
         receiver: DeferredFrame<B>,
         surface: Option<SurfaceImage<B>>,
         contribute: F,
+        overlay_contribute: C,
     ) -> Result<Submission, RendererError>
     where
         F: FnOnce(&mut crate::DeferredPhaseContext<'_, '_>) -> Result<(), crate::PipelineError>,
+        C: FnMut(
+            &mut crate::graph::ForwardOitReadContext<'_, '_>,
+        ) -> Result<(), crate::PipelineError>,
     {
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
@@ -45,6 +49,7 @@ where
         let mut present = surface.map(PresentBinding::new);
         let image = present.as_ref().map(PresentBinding::image);
         let mut contribution_error = None;
+        let mut overlay_error = None;
         let overlay = composition
             .as_ref()
             .map(|composition| composition.graph_input());
@@ -59,8 +64,10 @@ where
                     contribution_error = Some(error.clone());
                 })
             },
+            overlay_contribute,
+            &mut overlay_error,
         )
-        .map_err(|error| match contribution_error {
+        .map_err(|error| match contribution_error.or(overlay_error) {
             Some(error) => RendererError::DeferredPipeline(error),
             None => self.observe_rhi_error(error),
         })?;

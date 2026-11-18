@@ -2,11 +2,18 @@
 use super::phase::{TEXTURE_READS, UNIFORM_READS, VERTEX_READS};
 use super::*;
 
-pub(super) struct ForwardReadState {
+pub(crate) struct DrawReads {
+    pub(crate) vertex_streams: Vec<usize>,
+    pub(crate) accesses: Vec<Option<std::ops::Range<u64>>>,
+    pub(crate) uniform_ranges: Vec<std::ops::Range<u64>>,
+    pub(crate) textures: Vec<usize>,
+}
+
+pub(crate) struct ForwardReadState {
     pub(super) streams: Vec<crate::graph::definition::BufferHandle>,
     pub(super) uniform: crate::graph::definition::BufferHandle,
     pub(super) textures: Vec<crate::graph::definition::TextureHandle>,
-    pub(super) draws: Vec<ForwardGraphDraw>,
+    draws: Vec<DrawReads>,
     vertex_covered: Vec<bool>,
     uniform_covered: Vec<bool>,
     texture_covered: Vec<bool>,
@@ -30,6 +37,32 @@ impl ForwardReadState {
         uniform: crate::graph::definition::BufferHandle,
         textures: Vec<crate::graph::definition::TextureHandle>,
         draws: Vec<ForwardGraphDraw>,
+    ) -> std::result::Result<Self, PipelineError> {
+        for draw in &draws {
+            validate_graph_draw(draw, streams.len())
+                .map_err(|_| PipelineError::InvalidPhaseContribution)?;
+        }
+        Ok(Self::with_draw_reads(
+            streams,
+            uniform,
+            textures,
+            draws
+                .into_iter()
+                .map(|draw| DrawReads {
+                    vertex_streams: draw.vertex_streams,
+                    accesses: draw.accesses,
+                    uniform_ranges: draw.uniform_ranges,
+                    textures: draw.textures,
+                })
+                .collect(),
+        ))
+    }
+
+    pub(crate) fn with_draw_reads(
+        streams: Vec<crate::graph::definition::BufferHandle>,
+        uniform: crate::graph::definition::BufferHandle,
+        textures: Vec<crate::graph::definition::TextureHandle>,
+        draws: Vec<DrawReads>,
     ) -> Self {
         let count = draws.len();
         Self {
@@ -46,7 +79,7 @@ impl ForwardReadState {
             scopes_pending_finish: 0,
         }
     }
-    pub(super) fn begin_global_reads(&mut self) -> std::result::Result<(), ()> {
+    pub(crate) fn begin_global_reads(&mut self) -> std::result::Result<(), ()> {
         if self.scopes_started != 0 {
             return Err(());
         }
@@ -71,7 +104,7 @@ impl ForwardReadState {
         self.scopes_pending_finish += 1;
         Ok(selected)
     }
-    pub(super) fn scope<'scope, 'builder>(
+    pub(crate) fn scope<'scope, 'builder>(
         &'scope mut self,
         pass: &'scope mut crate::graph::definition::PassBuilder<'builder>,
         indices: &[usize],
@@ -84,7 +117,7 @@ impl ForwardReadState {
             declared: 0,
         })
     }
-    pub(super) fn read_vertex_streams_for(
+    pub(crate) fn read_vertex_streams_for(
         &mut self,
         pass: &mut crate::graph::definition::PassBuilder<'_>,
         indices: &[usize],
@@ -92,7 +125,9 @@ impl ForwardReadState {
         Self::ensure_uncovered(indices, &self.vertex_covered)?;
         for &draw_index in indices {
             let draw = self.draws.get(draw_index).ok_or(())?;
-            validate_graph_draw(draw, self.streams.len()).map_err(|_| ())?;
+            if draw.vertex_streams.len() != draw.accesses.len() {
+                return Err(());
+            }
             for (index, range) in draw.vertex_streams.iter().zip(&draw.accesses) {
                 if let Some(range) = range {
                     pass.read_with_use(
@@ -108,7 +143,7 @@ impl ForwardReadState {
         Self::mark_covered(indices, &mut self.vertex_covered);
         Ok(())
     }
-    pub(super) fn read_frame_uniforms_for(
+    pub(crate) fn read_frame_uniforms_for(
         &mut self,
         pass: &mut crate::graph::definition::PassBuilder<'_>,
         indices: &[usize],
@@ -129,7 +164,7 @@ impl ForwardReadState {
         Self::mark_covered(indices, &mut self.uniform_covered);
         Ok(())
     }
-    pub(super) fn read_sampled_textures_for(
+    pub(crate) fn read_sampled_textures_for(
         &mut self,
         pass: &mut crate::graph::definition::PassBuilder<'_>,
         indices: &[usize],
@@ -156,16 +191,19 @@ impl ForwardReadState {
         Self::mark_covered(indices, &mut self.texture_covered);
         Ok(())
     }
-    pub(super) fn complete(&self) -> bool {
+    pub(crate) fn complete(&self) -> bool {
         self.scopes_pending_finish == 0
             && self.vertex_covered.iter().all(|x| *x)
             && self.uniform_covered.iter().all(|x| *x)
             && self.texture_covered.iter().all(|x| *x)
     }
-    pub(super) fn scopes_started(&self) -> bool {
+    pub(crate) fn scopes_started(&self) -> bool {
         self.scopes_started != 0
     }
-    pub(super) fn finish_scope(&mut self) -> std::result::Result<(), ()> {
+    pub(crate) fn draw_count(&self) -> usize {
+        self.draws.len()
+    }
+    pub(crate) fn finish_scope(&mut self) -> std::result::Result<(), ()> {
         if self.scopes_pending_finish == 0 {
             return Err(());
         }

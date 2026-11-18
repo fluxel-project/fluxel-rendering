@@ -340,37 +340,6 @@ fn declare_surface_terminal(
     })
 }
 
-pub(super) fn declare_side<B>(
-    graph: &mut GraphBuilder,
-    spec: &ForwardGraphSpec,
-    handles: &FrameHandles,
-    upload: GraphPass,
-    dependency: GraphPass,
-    oit: Option<&ForwardOitInput<'_, B>>,
-) -> std::result::Result<
-    (
-        GraphPass,
-        crate::graph::definition::TextureHandle,
-        Option<crate::graph::definition::TextureHandle>,
-        Option<super::oit_plan::ForwardOitPlan>,
-    ),
-    ForwardPlanBuildError,
->
-where
-    B: ResourceBackend,
-{
-    declare_side_with_contribution(
-        graph,
-        spec,
-        handles,
-        upload,
-        dependency,
-        oit,
-        ordinary_reads::<B>,
-        &mut |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads(),
-    )
-}
-
 pub(super) fn declare_side_with_contribution<B, N, C>(
     graph: &mut GraphBuilder,
     spec: &ForwardGraphSpec,

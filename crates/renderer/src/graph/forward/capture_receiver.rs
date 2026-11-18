@@ -52,6 +52,50 @@ pub(in crate::graph) fn declare_forward_capture_namespace<B>(
 where
     B: ResourceBackend,
 {
+    declare_forward_capture_namespace_with_contribution(
+        device,
+        graph,
+        frame,
+        capture_source,
+        scene_refraction,
+        oit_input,
+        shared,
+        |context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>| {
+            context.sorted(|pass| {
+                pass.depends_on_uploads()?;
+                pass.read_vertex_streams()?;
+                pass.read_frame_uniforms()?;
+                pass.read_sampled_textures()?;
+                pass.write_selected_depth()?;
+                pass.read_write_main_color()
+            })
+        },
+        &mut |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads(),
+    )
+}
+
+/// Appends a producer namespace using its explicit sorted and OIT read
+/// declarations. Capture receivers retain the legacy declaration policy; the
+/// contribution callbacks are consumed only by a standalone producer.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::graph) fn declare_forward_capture_namespace_with_contribution<B, N, C>(
+    device: &Device<B>,
+    graph: &mut GraphBuilder,
+    frame: &ForwardFrame<B>,
+    capture_source: Option<TextureHandle>,
+    scene_refraction: Option<TextureHandle>,
+    oit_input: Option<&ForwardOitInput<'_, B>>,
+    shared: &mut SharedResidentImports,
+    ordinary: N,
+    contribute: &mut C,
+) -> std::result::Result<ForwardCaptureReceiver, ForwardPlanBuildError>
+where
+    B: ResourceBackend,
+    N: FnOnce(
+        &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
+    ) -> std::result::Result<(), crate::PipelineError>,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), crate::PipelineError>,
+{
     validate_resident_texture_devices(&frame.resident, device.id())?;
     let spec = ForwardGraphSpec::from_frame(frame)?;
     if spec.device != device.id() || frame.extent.contains(&0) {
@@ -136,9 +180,10 @@ where
             )?;
             (pass, color, None)
         } else {
-            let (raster, color, _, oit) = super::capture_oit_declaration::declare_side(
-                graph, &spec, &handles, upload, dependency, oit_input,
-            )?;
+            let (raster, color, _, oit) =
+                super::capture_oit_declaration::declare_side_with_contribution(
+                    graph, &spec, &handles, upload, dependency, oit_input, ordinary, contribute,
+                )?;
             (raster, color, oit)
         };
     Ok(ForwardReceiverComposition {

@@ -32,6 +32,8 @@ where
         producer_slot: CaptureTextureSlot,
         retained_assets: &ForwardAssets,
         surface: Option<SurfaceImage<B>>,
+        producer_reads: &impl super::capture_feature::CaptureProducerReads<B>,
+        groups: &super::capture_feature::CaptureDrawGroups,
     ) -> Result<Submission, RendererError> {
         let extent = match &receiver {
             CaptureReceiverInput::Forward { partition, .. } => {
@@ -100,7 +102,14 @@ where
                 None => OitExecutionTarget::Readback,
             };
             return self
-                .execute_capture_oit(producer, receiver, target, started)
+                .execute_capture_oit_with_capture_contribution(
+                    producer,
+                    receiver,
+                    target,
+                    started,
+                    |context| producer_reads.sorted(context, groups),
+                    |context| producer_reads.overlay(context, groups),
+                )
                 .await;
         }
 
@@ -119,6 +128,8 @@ where
             producer,
             receiver,
             surface,
+            producer_reads,
+            groups,
         )
         .await
     }

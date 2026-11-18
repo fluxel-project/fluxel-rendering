@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     graph::{
         ForwardOitInput,
-        forward::{SharedResidentImports, declare_forward_capture_namespace},
+        forward::{SharedResidentImports, declare_forward_capture_namespace_with_contribution},
     },
     residency::ForwardFrame,
 };
@@ -16,31 +16,42 @@ pub(crate) struct ForwardDeferredCaptureDeclaration {
 }
 
 impl<B: ResourceBackend> ForwardDeferredCapturePlan<B> {
-    pub(crate) fn declare(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn declare_with_contribution<N, C>(
         device: &Device<B>,
         producer: &ForwardFrame<B>,
         producer_oit: Option<&ForwardOitInput<'_, B>>,
         receiver: &DeferredFrame<B>,
         image: Option<&fluxel_rhi::api::SurfaceImage<B>>,
-    ) -> Result<ForwardDeferredCaptureDeclaration> {
+        ordinary: N,
+        contribute: &mut C,
+    ) -> std::result::Result<ForwardDeferredCaptureDeclaration, crate::graph::ForwardPlanBuildError>
+    where
+        N: FnOnce(
+            &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+        C: FnMut(
+            &mut crate::graph::ForwardOitReadContext<'_, '_>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+    {
         super::validation::validate_frame_inputs(device, receiver)?;
         if producer.extent != receiver.extent || receiver.deformation.is_some() {
-            return Err(Error::InvalidState);
+            return Err(Error::InvalidState.into());
         }
         if let Some(image) = image {
             if image.device() != device.id() {
-                return Err(Error::WrongDevice);
+                return Err(Error::WrongDevice.into());
             }
             if !image.is_current() {
-                return Err(Error::SurfaceOutdated);
+                return Err(Error::SurfaceOutdated.into());
             }
             if image.extent() != receiver.extent {
-                return Err(Error::InvalidRange);
+                return Err(Error::InvalidRange.into());
             }
         }
         let mut shared = SharedResidentImports::default();
         let mut graph = GraphBuilder::default();
-        let producer = declare_forward_capture_namespace(
+        let producer = declare_forward_capture_namespace_with_contribution(
             device,
             &mut graph,
             producer,
@@ -48,8 +59,9 @@ impl<B: ResourceBackend> ForwardDeferredCapturePlan<B> {
             None,
             producer_oit,
             &mut shared,
-        )
-        .map_err(|_| Error::InvalidState)?;
+            ordinary,
+            contribute,
+        )?;
         let aliases =
             super::capture_declaration::receiver_aliases(receiver, producer.final_handle)?;
         let mut prefix = DeferredPlan::declare_prefix_in_graph(

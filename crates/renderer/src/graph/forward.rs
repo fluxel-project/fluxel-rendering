@@ -43,8 +43,9 @@ pub(in crate::graph) use capture_depth_alias::{same_buffer_owner_desc, same_text
 mod overlay;
 pub(in crate::graph) use capture_declaration::SharedResidentImports;
 pub(in crate::graph) use capture_receiver::{
-    ForwardCaptureReceiver, ForwardReceiverTerminal, declare_forward_capture_namespace,
-    declare_receiver_after_deferred, declare_receiver_terminal,
+    ForwardCaptureReceiver, ForwardReceiverTerminal,
+    declare_forward_capture_namespace_with_contribution, declare_receiver_after_deferred,
+    declare_receiver_terminal,
 };
 pub(in crate::graph) use overlay::{
     OverlaySlots, declare_overlay_prefix, declare_overlay_prefix_with_shared,
@@ -58,8 +59,7 @@ mod surface_record;
 mod validation;
 use access_contracts::*;
 pub(crate) use phase::{ClearForwardPass, ForwardPhaseDriver, OpaqueForwardPass};
-pub(crate) use read_scope::ForwardReadScope;
-use read_scope::ForwardReadState;
+pub(crate) use read_scope::{DrawReads, ForwardReadScope, ForwardReadState};
 pub(crate) use spec::{
     BufferGraphFact, ForwardDrawShape, ForwardGraphDraw, ForwardGraphSpec,
     ForwardGraphTextureUpload, ForwardGraphUniformUpload, ForwardGraphVertexUpload, ForwardShape,

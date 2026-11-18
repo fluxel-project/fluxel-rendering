@@ -170,7 +170,7 @@ pub trait FramePipeline<R> {
     }
 }
 
-fn read_all(pass: &mut super::ForwardFeaturePass<'_, '_>) -> Result<(), PipelineError> {
+pub(crate) fn read_all(pass: &mut super::ForwardFeaturePass<'_, '_>) -> Result<(), PipelineError> {
     pass.read_vertex_streams()?;
     pass.read_frame_uniforms()?;
     pass.read_sampled_textures()

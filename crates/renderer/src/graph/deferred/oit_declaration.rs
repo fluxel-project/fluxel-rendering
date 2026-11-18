@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     graph::{
         forward,
-        oit::{declare_dual_depth_peeling_rounds, DualDepthPeelInputs, OitPeelSide},
+        oit::{DualDepthPeelInputs, OitPeelSide, declare_dual_depth_peeling_rounds},
         oit_record::OitRecordSlots,
     },
     residency::{ForwardFrame, OitTextureOwner},
@@ -169,6 +169,39 @@ pub(super) fn declare_oit_composition_with_shared<B: ResourceBackend>(
     input: &crate::graph::ForwardOitInput<'_, B>,
     shared: Option<&mut crate::graph::forward::SharedResidentImports>,
 ) -> Result<DeferredOitComposition> {
+    let mut contribute =
+        |context: &mut crate::graph::ForwardOitReadContext<'_, '_>| context.all_reads();
+    let mut contribution_error = None;
+    declare_oit_composition_with_shared_and_reads(
+        device,
+        prefix,
+        opaque,
+        overlay,
+        input,
+        shared,
+        &mut contribute,
+        &mut contribution_error,
+    )
+}
+
+/// Variant whose material reads are declared inside each real peel or sorted
+/// fallback pass.  The context receives the pass's actual ordered draw range.
+pub(super) fn declare_oit_composition_with_shared_and_reads<B, C>(
+    device: &Device<B>,
+    prefix: &mut super::prefix::DeferredGraphPrefix,
+    opaque: &DeferredFrame<B>,
+    overlay: &ForwardFrame<B>,
+    input: &crate::graph::ForwardOitInput<'_, B>,
+    shared: Option<&mut crate::graph::forward::SharedResidentImports>,
+    contribute: &mut C,
+    contribution_error: &mut Option<crate::PipelineError>,
+) -> Result<DeferredOitComposition>
+where
+    B: ResourceBackend,
+    C: FnMut(
+        &mut crate::graph::ForwardOitReadContext<'_, '_>,
+    ) -> std::result::Result<(), crate::PipelineError>,
+{
     if opaque.deformation.is_some() {
         return Err(Error::Unsupported("deferred OIT deformation"));
     }
@@ -233,9 +266,17 @@ pub(super) fn declare_oit_composition_with_shared<B: ResourceBackend>(
                 pass.depends_on(dependency)?;
                 first = false;
             }
-            overlay_prefix.declare_draw_reads(pass, 0..input.peel_count)
+            overlay_prefix.declare_draw_reads_with(
+                pass,
+                0..input.peel_count,
+                contribute,
+                contribution_error,
+            )
         })
         .map_err(|_| Error::InvalidState)?;
+    if contribution_error.is_some() {
+        return Err(Error::InvalidState);
+    }
     let mut final_source = product.output;
     let mut fallback = None;
     if input.peel_count < overlay.draws.len() {
@@ -243,7 +284,12 @@ pub(super) fn declare_oit_composition_with_shared<B: ResourceBackend>(
             .graph
             .add_pass("deferred-oit-sorted-fallback", |pass| {
                 pass.depends_on(product.passes.final_composite)?;
-                overlay_prefix.declare_draw_reads(pass, input.peel_count..overlay.draws.len())?;
+                overlay_prefix.declare_draw_reads_with(
+                    pass,
+                    input.peel_count..overlay.draws.len(),
+                    contribute,
+                    contribution_error,
+                )?;
                 pass.read_texture_with_use(
                     prefix.gbuffer[2],
                     whole_depth(),
@@ -276,6 +322,9 @@ pub(super) fn declare_oit_composition_with_shared<B: ResourceBackend>(
                 )
             })
             .map_err(|_| Error::InvalidState)?;
+        if contribution_error.is_some() {
+            return Err(Error::InvalidState);
+        }
         fallback = Some(pass);
         final_source = output;
     }

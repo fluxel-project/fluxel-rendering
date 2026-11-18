@@ -1,6 +1,7 @@
 //! Transaction-scoped Deferred phase capabilities.
 
 use super::*;
+use crate::graph::{DrawReads, ForwardReadScope, ForwardReadState};
 
 const UPLOAD: u8 = 1;
 const VERTEX: u8 = 2;
@@ -43,6 +44,17 @@ pub(super) struct DeferredGraphDraw {
     pub(super) textures: Vec<usize>,
 }
 
+impl DeferredGraphDraw {
+    fn into_draw_reads(self) -> DrawReads {
+        DrawReads {
+            vertex_streams: self.streams,
+            uniform_ranges: vec![self.tint, self.transform],
+            textures: self.textures,
+            accesses: self.accesses,
+        }
+    }
+}
+
 /// Private owner of the two real Deferred Graph transactions.
 pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) graph: &'graph mut GraphBuilder,
@@ -80,10 +92,7 @@ pub(crate) struct DeferredDeformationPass<'pass, 'builder> {
 pub(crate) struct DeferredGeometryPass<'pass, 'builder> {
     pass: &'pass mut super::super::definition::PassBuilder<'builder>,
     upload: GraphPass,
-    streams: &'pass [super::super::definition::BufferHandle],
-    draws: &'pass [DeferredGraphDraw],
-    uniform: super::super::definition::BufferHandle,
-    materials: &'pass [super::super::definition::TextureHandle],
+    reads: ForwardReadState,
     gbuffer: [super::super::definition::TextureHandle; 3],
     effects: Option<super::super::definition::TextureHandle>,
     declared: u8,
@@ -174,10 +183,15 @@ impl DeferredPhaseDriver<'_> {
                 let mut geometry = DeferredGeometryPass {
                     pass,
                     upload,
-                    streams: &streams,
-                    draws: &draws,
-                    uniform,
-                    materials: &materials,
+                    reads: ForwardReadState::with_draw_reads(
+                        streams,
+                        uniform,
+                        materials,
+                        draws
+                            .into_iter()
+                            .map(DeferredGraphDraw::into_draw_reads)
+                            .collect(),
+                    ),
                     gbuffer,
                     effects,
                     declared: 0,
@@ -321,63 +335,21 @@ impl DeferredGeometryPass<'_, '_> {
     }
     pub(crate) fn read_vertex_streams(&mut self) -> std::result::Result<(), ()> {
         self.mark(VERTEX)?;
-        for draw in self.draws {
-            if draw.streams.len() != draw.accesses.len() {
-                return Err(());
-            }
-            for (&index, range) in draw.streams.iter().zip(&draw.accesses) {
-                let stream = self.streams.get(index).ok_or(())?;
-                if let Some(range) = range {
-                    self.pass
-                        .read_with_use(
-                            *stream,
-                            range.clone(),
-                            vertex_read().uses,
-                            BufferUsage::VERTEX,
-                        )
-                        .map_err(|_| ())?;
-                }
-            }
-        }
-        Ok(())
+        self.reads.begin_global_reads()?;
+        let indices: Vec<_> = (0..self.reads.draw_count()).collect();
+        self.reads.read_vertex_streams_for(self.pass, &indices)
     }
     pub(crate) fn read_frame_uniforms(&mut self) -> std::result::Result<(), ()> {
         self.mark(UNIFORM)?;
-        for draw in self.draws {
-            for range in [&draw.tint, &draw.transform] {
-                self.pass
-                    .read_with_use(
-                        self.uniform,
-                        range.clone(),
-                        uniform_read().uses,
-                        BufferUsage::UNIFORM,
-                    )
-                    .map_err(|_| ())?;
-            }
-        }
-        Ok(())
+        self.reads.begin_global_reads()?;
+        let indices: Vec<_> = (0..self.reads.draw_count()).collect();
+        self.reads.read_frame_uniforms_for(self.pass, &indices)
     }
     pub(crate) fn read_sampled_textures(&mut self) -> std::result::Result<(), ()> {
         self.mark(MATERIAL)?;
-        for draw in self.draws {
-            if draw.textures.is_empty() {
-                return Err(());
-            }
-            for texture in &draw.textures {
-                self.pass
-                    .read_texture_with_use(
-                        *self.materials.get(*texture).ok_or(())?,
-                        self.pass
-                            .full_texture_range(*self.materials.get(*texture).ok_or(())?)
-                            .map_err(|_| ())?,
-                        sampled_read().uses,
-                        ImageLayout::ShaderReadOnly,
-                        TextureUsage::TEXTURE_BINDING,
-                    )
-                    .map_err(|_| ())?;
-            }
-        }
-        Ok(())
+        self.reads.begin_global_reads()?;
+        let indices: Vec<_> = (0..self.reads.draw_count()).collect();
+        self.reads.read_sampled_textures_for(self.pass, &indices)
     }
     pub(crate) fn write_gbuffer(&mut self) -> std::result::Result<(), ()> {
         self.mark(GBUFFER)?;
@@ -435,10 +407,24 @@ impl DeferredGeometryPass<'_, '_> {
         ),
         (),
     > {
-        if self.declared != UPLOAD | VERTEX | UNIFORM | MATERIAL | GBUFFER {
+        let reads_complete = if self.reads.scopes_started() {
+            self.reads.complete()
+        } else {
+            self.declared & (VERTEX | UNIFORM | MATERIAL) == VERTEX | UNIFORM | MATERIAL
+        };
+        if self.declared & (UPLOAD | GBUFFER) != UPLOAD | GBUFFER || !reads_complete {
             return Err(());
         }
         Ok((self.gbuffer, self.effects))
+    }
+}
+
+impl<'pass, 'builder> DeferredGeometryPass<'pass, 'builder> {
+    pub(crate) fn read_scope<'scope>(
+        &'scope mut self,
+        indices: &[usize],
+    ) -> std::result::Result<ForwardReadScope<'scope, 'builder>, ()> {
+        self.reads.scope(&mut *self.pass, indices)
     }
 }
 

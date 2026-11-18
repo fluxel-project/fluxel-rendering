@@ -14,7 +14,7 @@ use fluxel_rhi::api::{
 
 fn empty_reads(graph: &mut GraphBuilder) -> ForwardReadState {
     let uniform = graph.import_buffer(16).expect("synthetic defined uniform");
-    ForwardReadState::new(Vec::new(), uniform, Vec::new(), Vec::new())
+    ForwardReadState::new(Vec::new(), uniform, Vec::new(), Vec::new()).expect("empty read state")
 }
 
 fn nonempty_reads(graph: &mut GraphBuilder) -> ForwardReadState {
@@ -62,6 +62,7 @@ fn nonempty_reads(graph: &mut GraphBuilder) -> ForwardReadState {
         textures,
         vec![draw(0..16, 0..8, 0), draw(16..32, 8..16, 1)],
     )
+    .expect("valid read state")
 }
 
 fn complete_scope(scope: &mut ForwardReadScope<'_, '_>) {

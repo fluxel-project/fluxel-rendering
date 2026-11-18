@@ -1,5 +1,6 @@
 //! Deferred capture with real opaque or transparent-only producer namespaces.
 
+use super::capture_feature::{CaptureDrawGroups, CaptureProducerReads, SceneCaptureProducer};
 use super::*;
 use crate::renderer::forward::{CaptureReceivers, CaptureTextureOwner, CaptureTextureSlot};
 use std::{num::NonZeroU32, time::Instant};
@@ -235,10 +236,14 @@ where
             &mut fluxel_shader::ShaderComposer::new(),
             receiver_config,
         )?;
+        let producer_reads = SceneCaptureProducer {
+            pipeline,
+            selected: &selected,
+        };
         self.submit_deferred_capture_prepared(
             pipeline,
             snapshot.clone(),
-            selected,
+            &selected,
             assets,
             producer_slot,
             receiver,
@@ -247,16 +252,18 @@ where
             producer_config,
             receiver_config,
             surface,
+            Vec::new(),
+            &producer_reads,
         )
         .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn submit_deferred_capture_prepared<V>(
+    pub(super) async fn submit_deferred_capture_prepared<V>(
         &mut self,
         pipeline: &crate::DeferredCpuPipeline<V>,
         snapshot: FrameSnapshot<ForwardResources>,
-        selected: crate::PreparedFrame<'_, ForwardResources>,
+        selected: &crate::PreparedFrame<'_, ForwardResources>,
         assets: &ForwardAssets,
         producer_slot: CaptureTextureSlot,
         partition: crate::preparation::OitDrawPartition,
@@ -265,19 +272,22 @@ where
         producer_config: Option<&crate::DualDepthPeelingConfig>,
         receiver_config: Option<&crate::DualDepthPeelingConfig>,
         surface: Option<SurfaceImage<B>>,
+        additional_producer_draws: Vec<crate::ForwardDrawInput>,
+        producer_reads: &impl CaptureProducerReads<B>,
     ) -> Result<Submission, RendererError>
     where
         V: crate::VisibilityProvider<ForwardResources>,
     {
         let extent = selected.view_record().extent;
-        let producer_inputs = crate::preparation::prepare_forward_with_lighting(
-            &selected,
+        let mut producer_inputs = crate::preparation::prepare_forward_with_lighting(
+            selected,
             assets,
             &mut fluxel_shader::ShaderComposer::new(),
             self.environment_irradiance.is_some(),
             self.environment_specular.is_some(),
         )
         .map_err(RendererError::ForwardPreparation)?;
+        producer_inputs.extend(additional_producer_draws);
         if producer_inputs.is_empty() {
             return Err(Error::Unsupported("Deferred capture requires visible geometry").into());
         }
@@ -319,7 +329,7 @@ where
             Some(config) => {
                 let partition = super::super::forward::order_forward_oit_draws(
                     pipeline,
-                    &selected,
+                    selected,
                     producer_inputs,
                     config,
                 )
@@ -334,7 +344,7 @@ where
             None => {
                 let ordered = super::super::forward::order_forward_draws(
                     pipeline,
-                    &selected,
+                    selected,
                     producer_inputs,
                     crate::FrameTopology::SortedForward,
                 )
@@ -352,6 +362,12 @@ where
                 (opaque, opaque_count, 0, NonZeroU32::MIN)
             }
         };
+        let handle = producer_reads.feature_handle();
+        let opaque_groups = CaptureDrawGroups::from_draws(&producer_inputs[..opaque_count], handle)
+            .map_err(RendererError::DeferredPipeline)?;
+        let overlay_groups =
+            CaptureDrawGroups::from_draws(&producer_inputs[opaque_count..], handle)
+                .map_err(RendererError::DeferredPipeline)?;
         if opaque_count == 0 {
             return self
                 .submit_forward_only_capture_producer(
@@ -364,6 +380,8 @@ where
                     producer_slot,
                     &retained_assets,
                     surface,
+                    producer_reads,
+                    &overlay_groups,
                 )
                 .await;
         }
@@ -425,7 +443,8 @@ where
                     receiver,
                     surface,
                     scene_refraction,
-                    |context| pipeline.contribute_deferred(&selected, context),
+                    |context| producer_reads.deferred(context, &opaque_groups),
+                    |context| producer_reads.overlay(context, &overlay_groups),
                 )
                 .await;
         }
@@ -446,7 +465,8 @@ where
             composition,
             receiver,
             surface,
-            |context| pipeline.contribute_deferred(&selected, context),
+            |context| producer_reads.deferred(context, &opaque_groups),
+            |context| producer_reads.overlay(context, &overlay_groups),
         )
         .await
     }

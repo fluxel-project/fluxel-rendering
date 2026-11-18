@@ -34,7 +34,7 @@ pub trait RenderFeature {
     /// Borrows the feature's own logical draw requests, not scene record IDs.
     fn draws<'a>(&self, prepared: &'a Self::Prepared) -> &'a [ForwardDrawRequest];
 
-    /// Declares this batch's actual accesses inside the real Forward Graph pass.
+    /// Declares this batch's actual accesses in the active Graph pass.
     ///
     /// The scope cannot name another feature's draws or declare output writes.
     /// All three read classes must be declared once, including an empty batch.

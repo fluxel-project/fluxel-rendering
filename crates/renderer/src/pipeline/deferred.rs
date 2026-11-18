@@ -27,6 +27,22 @@ pub struct DeferredDeformationPass<'callback, 'pass, 'builder> {
 }
 
 impl DeferredGeometryPass<'_, '_, '_> {
+    /// Opens one disjoint prepared-draw scope in the real G-buffer pass.
+    /// Every draw must belong to exactly one completed scope when this API is
+    /// used; the legacy whole-draw read methods cannot be mixed with scopes.
+    pub fn scope<D>(&mut self, indices: &[usize], declare: D) -> Result<(), PipelineError>
+    where
+        D: FnOnce(&mut super::ForwardFeaturePass<'_, '_>) -> Result<(), PipelineError>,
+    {
+        let scope = self
+            .pass
+            .read_scope(indices)
+            .map_err(|_| PipelineError::InvalidPhaseContribution)?;
+        let mut pass = super::ForwardFeaturePass::new(scope);
+        declare(&mut pass)?;
+        pass.finish()
+    }
+
     /// Makes the geometry transaction depend on the already-declared upload pass.
     pub fn depends_on_uploads(&mut self) -> Result<(), PipelineError> {
         self.pass
